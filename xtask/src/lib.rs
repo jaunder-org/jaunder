@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use clap::{Parser, Subcommand};
 
 mod adr;
@@ -301,7 +303,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let mut result = CommandResult::new("validate");
             // Clean-tree backstop: refuse a dirty tree so what is measured equals the
             // committed tip (== what CI sees). Fail fast before the expensive steps.
-            let precheck = clean_tree_precheck(&sh, allow_dirty);
+            let precheck = clean_tree_precheck(allow_dirty);
             let blocked = !precheck.ok && !precheck.skipped;
             result.push(precheck);
             if blocked {
@@ -446,10 +448,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
 /// already, so fresh clones and new worktrees wire up on first run. Best-effort — a
 /// failure here must never block the actual command.
 pub fn ensure_hooks_installed() {
-    let Ok(sh) = xshell::Shell::new() else {
-        return;
-    };
-    match git::ensure_hooks_path(&sh) {
+    match git::ensure_hooks_path(Path::new(".")) {
         Ok(true) => eprintln!("xtask: set core.hooksPath = {}", git::HOOKS_PATH),
         Ok(false) => {}
         Err(e) => eprintln!("xtask: warning: could not set core.hooksPath: {e:#}"),
@@ -469,11 +468,11 @@ fn finalize(result: &mut CommandResult, start: std::time::Instant) {
 /// status) or when git cannot be queried — the gate refuses to certify a tree it
 /// cannot prove clean. `check` deliberately has no such precheck (Fix-mode runs on a
 /// dirty tree by design).
-fn clean_tree_precheck(sh: &xshell::Shell, allow_dirty: bool) -> StepResult {
+fn clean_tree_precheck(allow_dirty: bool) -> StepResult {
     if allow_dirty {
         return StepResult::skip("clean-tree").detail("--allow-dirty");
     }
-    match git::working_tree_status(sh) {
+    match git::working_tree_status(Path::new(".")) {
         Ok(status) if git::porcelain_is_dirty(&status) => {
             StepResult::fail("clean-tree").detail(format!(
                 "working tree is dirty — commit/stash or pass --allow-dirty:\n{}",

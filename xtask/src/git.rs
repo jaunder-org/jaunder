@@ -5,7 +5,6 @@ use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result};
-use xshell::{cmd, Shell};
 
 /// Repo-relative hooks directory the gate routes git to. Relative (not absolute)
 /// so each worktree resolves to its own `.githooks` checkout.
@@ -49,33 +48,20 @@ pub fn needs_hooks_path(current: Option<&str>) -> bool {
 }
 
 /// `git status --porcelain` text. Errors only if git itself cannot run.
-pub fn working_tree_status(sh: &Shell) -> Result<String> {
-    cmd!(sh, "git status --porcelain")
-        .quiet()
-        .read()
-        .context("running `git status --porcelain`")
+pub fn working_tree_status(dir: &Path) -> Result<String> {
+    output(dir, &["status", "--porcelain"])
 }
 
-/// Current `core.hooksPath`, or `None` when unset/blank. `--get` exits non-zero when
-/// the key is missing, so the status is ignored and an empty read maps to `None`.
-pub fn hooks_path(sh: &Shell) -> Option<String> {
-    cmd!(sh, "git config --get core.hooksPath")
-        .quiet()
-        .ignore_status()
-        .read()
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+/// Current `core.hooksPath`, or `None` when unset/blank (see [`config_get`]).
+pub fn hooks_path(dir: &Path) -> Result<Option<String>> {
+    config_get(dir, "core.hooksPath")
 }
 
 /// Ensure `core.hooksPath` points at [`HOOKS_PATH`]; set it if unset/wrong. Returns
 /// `true` when it changed the config.
-pub fn ensure_hooks_path(sh: &Shell) -> Result<bool> {
-    if needs_hooks_path(hooks_path(sh).as_deref()) {
-        cmd!(sh, "git config core.hooksPath {HOOKS_PATH}")
-            .quiet()
-            .run()
-            .context("setting core.hooksPath")?;
+pub fn ensure_hooks_path(dir: &Path) -> Result<bool> {
+    if needs_hooks_path(hooks_path(dir)?.as_deref()) {
+        config_set(dir, "core.hooksPath", HOOKS_PATH)?;
         Ok(true)
     } else {
         Ok(false)
@@ -197,6 +183,19 @@ pub(crate) fn toplevel(dir: &Path) -> Result<String> {
     output(dir, &["rev-parse", "--show-toplevel"])
 }
 
+/// `git config --get <key>` → the value, or `None` when unset (exit 1) or blank.
+/// Bails on any other non-zero (e.g. exit 128 = corrupt config): a broken config
+/// surfaces as an error rather than being silently treated as "unset" (see
+/// [`output_or`]).
+pub(crate) fn config_get(dir: &Path, key: &str) -> Result<Option<String>> {
+    Ok(output_or(dir, &["config", "--get", key], 1)?.filter(|s| !s.is_empty()))
+}
+
+/// `git config <key> <value>`.
+pub(crate) fn config_set(dir: &Path, key: &str, value: &str) -> Result<()> {
+    run(dir, &["config", key, value])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,6 +310,27 @@ mod tests {
             std::fs::canonicalize(&root).unwrap(),
             std::fs::canonicalize(&dir).unwrap()
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn config_get_none_when_unset_some_after_set() {
+        let dir = temp_repo("config");
+        assert_eq!(config_get(&dir, "core.hooksPath").unwrap(), None);
+        config_set(&dir, "core.hooksPath", ".githooks").unwrap();
+        assert_eq!(
+            config_get(&dir, "core.hooksPath").unwrap(),
+            Some(".githooks".to_string())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ensure_hooks_path_sets_then_is_noop() {
+        let dir = temp_repo("ensure-hooks");
+        assert!(ensure_hooks_path(&dir).unwrap(), "first call sets it");
+        assert!(!ensure_hooks_path(&dir).unwrap(), "second call is a no-op");
+        assert_eq!(hooks_path(&dir).unwrap(), Some(HOOKS_PATH.to_string()));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
