@@ -6,6 +6,9 @@
 //! [`Invalidator::patched`] extends it to a keyed `reactive_stores` list (design record:
 //! `docs/adr/0061-web-keyed-list-reactive-store.md`): a refetch `patch`es the store in
 //! place so unchanged rows keep their DOM, and [`ListState`] tracks the list's load status.
+//! [`Invalidator::sticky`] is its flat peer: it stickily retains a resolved `Result` across
+//! refetches (no keyed store), surfacing a fetch error to the caller rather than flashing to
+//! "Loading…" or swallowing it into a default.
 
 use leptos::prelude::*;
 use leptos::server_fn::ServerFn;
@@ -112,6 +115,39 @@ impl Invalidator {
             Some(Err(e)) => state.set(ListState::Error(e.to_string())),
         });
         state.into()
+    }
+
+    /// A [`Signal`] that stickily retains the latest resolved *result* of a refetch of `fetch`
+    /// (revalidated by this invalidator): `None` until the first resolve, then `Some(Ok(v))`
+    /// on success or `Some(Err(msg))` on failure — retained across a pending refetch, so a
+    /// mutation-triggered refetch never blanks the view back to "Loading…". The fetch error is
+    /// **surfaced** (`Err`) for the caller to render, never swallowed into a default: a
+    /// swallowed error silently misrepresents state (#346). The flat peer of
+    /// [`patched`](Self::patched), which is for keyed stores.
+    #[must_use]
+    pub fn sticky<T, Fut, E>(
+        &self,
+        fetch: impl Fn() -> Fut + Send + Sync + 'static,
+    ) -> Signal<Option<Result<T, String>>>
+    where
+        T: Clone + serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static,
+        E: Clone
+            + std::fmt::Display
+            + serde::Serialize
+            + serde::de::DeserializeOwned
+            + Send
+            + Sync
+            + 'static,
+        Fut: std::future::Future<Output = Result<T, E>> + Send + 'static,
+    {
+        let resource = self.resource(fetch);
+        let signal = RwSignal::new(None::<Result<T, String>>);
+        Effect::new(move |_| {
+            if let Some(result) = resource.get() {
+                signal.set(Some(result.map_err(|e| e.to_string())));
+            }
+        });
+        signal.into()
     }
     // cov:ignore-stop
 }
