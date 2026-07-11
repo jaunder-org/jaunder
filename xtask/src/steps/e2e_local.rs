@@ -20,12 +20,14 @@
 //! capture paths (via `test-support capture-path`) the server writes, and
 //! `seed.ts`'s bare-`test-support` `seedPostsViaTool` resolves the same binary +
 //! DB — VM parity for the mail/websub/pagination specs.
+use std::path::Path;
 use std::process::{Child, Command};
 use std::thread::sleep;
 use std::time::Duration;
 
 use xshell::{cmd, Shell};
 
+use crate::git;
 use crate::result::{CommandResult, StepResult};
 
 /// Parse the server's `runtime.json` (`{"ip","port"}`, ADR-0035) into a base URL.
@@ -60,11 +62,10 @@ pub fn run(sh: &Shell, result: &mut CommandResult, test_filter: Option<&str>) {
     if !result.ok {
         return; // build_csr already recorded the failing step
     }
-    let Ok(root) = cmd!(sh, "git rev-parse --show-toplevel").quiet().read() else {
+    let Ok(root) = git::toplevel(Path::new(".")) else {
         result.push(StepResult::fail("e2e-local").detail("cannot locate repo root".to_owned()));
         return;
     };
-    let root = root.trim().to_owned();
 
     // The server bin and the out-of-process seed impl.
     for (pkg, label) in [

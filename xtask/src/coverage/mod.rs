@@ -10,11 +10,12 @@
 //! gated against a fixed threshold (see [`crap`]), minus in-source `crap:allow`
 //! overrides. There is no baseline, anchor, or manifest.
 
-use std::process::Command;
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde::Serialize;
 
+use crate::git;
 use crate::result::StepResult;
 
 pub mod crap;
@@ -87,7 +88,7 @@ fn run_inner(out_dir: &str) -> Result<(StepResult, Option<CoverageReport>)> {
         }
     };
 
-    let repo_root = git_repo_root()?;
+    let repo_root = git::toplevel(Path::new("."))?;
     let current = report::parse_text_report(&report, &repo_root)?;
 
     // The stateless coverage gate (#231): an executable line fails iff uncovered,
@@ -225,14 +226,6 @@ fn failure_report(verdict: &gate::Verdict, crap_fails: &[crap::CrapFail]) -> Str
         );
     }
     s
-}
-
-fn git_repo_root() -> Result<String> {
-    let out = Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
-        .context("running git rev-parse --show-toplevel")?;
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 #[cfg(test)]

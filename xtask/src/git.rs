@@ -192,6 +192,11 @@ pub(crate) fn add(dir: &Path, path: &str) -> Result<()> {
     run(dir, &["add", path])
 }
 
+/// `git rev-parse --show-toplevel` — the working tree's root.
+pub(crate) fn toplevel(dir: &Path) -> Result<String> {
+    output(dir, &["rev-parse", "--show-toplevel"])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,6 +297,19 @@ mod tests {
         assert_eq!(
             diff_added(&dir, &range, "docs").unwrap(),
             vec!["docs/new.md".to_string()]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn toplevel_returns_repo_root() {
+        let dir = temp_repo("toplevel");
+        commit(&dir, "a.txt", "x\n");
+        let root = toplevel(&dir).unwrap();
+        // Compare canonically — /tmp may be a symlink.
+        assert_eq!(
+            std::fs::canonicalize(&root).unwrap(),
+            std::fs::canonicalize(&dir).unwrap()
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
