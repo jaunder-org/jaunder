@@ -1,7 +1,7 @@
 # Plan — atompub: content-based ETag (#78)
 
 **Spec:**
-[`2026-07-11-issue-78-content-etag.md`](../specs/2026-07-11-issue-78-content-etag.md).
+[`2026-07-11-issue-78-content-etag-spec.md`](./2026-07-11-issue-78-content-etag-spec.md).
 Behavior, hash domain, and AC1–AC9 live there; this plan is **how**.
 
 ## Review header
