@@ -4,6 +4,7 @@ members = [
   "common",
   "csr",
   "host",
+  "macros",
   "server",
   "storage",
   "test-support",
