@@ -18,21 +18,28 @@ use thiserror::Error;
 use crate::{resolved_postgres_options, DbConnectOptions};
 pub use common::backup::BackupMode;
 
-// Ordered so a restore can insert tables in array order without tripping a
-// foreign key: a referenced table (`users`, `posts`, `tags`) always precedes the
-// tables that point at it (`sessions`, `post_revisions`, `post_tags`).
-pub(crate) const TABLES_IN_EXPORT_ORDER: &[&str] = &[
-    "site_config",
-    "users",
-    "sessions",
-    "invites",
-    "email_verifications",
-    "password_resets",
-    "posts",
-    "post_revisions",
-    "tags",
-    "post_tags",
-];
+// Tables deliberately excluded from backup: `_sqlx_migrations` is schema state
+// re-applied by migrations on the restore target, and `feed_cache` is a
+// regenerable HTTP response cache. Every other live table is backed up by
+// default, so a table added by a future migration is picked up automatically
+// rather than silently dropped.
+pub(crate) const TABLES_EXCLUDED_FROM_BACKUP: &[&str] = &["_sqlx_migrations", "feed_cache"];
+
+/// The set of tables to back up, derived from the live schema: every table
+/// except the `SQLite`-internal `sqlite_%` tables and the explicit
+/// [`TABLES_EXCLUDED_FROM_BACKUP`] denylist, sorted for a reproducible manifest.
+/// Restore no longer depends on the order (foreign keys are deferred on Postgres
+/// and off on `SQLite` during import), so alphabetical is sufficient.
+pub(crate) fn backup_table_set(live: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut tables: Vec<String> = live
+        .into_iter()
+        .filter(|table| {
+            !table.starts_with("sqlite_") && !TABLES_EXCLUDED_FROM_BACKUP.contains(&table.as_str())
+        })
+        .collect();
+    tables.sort();
+    tables
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupManifest {
@@ -240,24 +247,20 @@ pub(crate) fn build_manifest(
     }
 }
 
-pub(crate) fn order_by_clause(table: &str, quote_identifier: fn(&str) -> String) -> String {
-    // Sort each table by its real primary/unique key (falling back to `rowid`)
-    // so the exported NDJSON is row-stable: re-exporting unchanged data yields
-    // byte-identical files, keeping successive backups diffable.
-    let columns = match table {
-        "site_config" => &["key"][..],
-        "users" => &["user_id"],
-        "sessions" | "email_verifications" | "password_resets" => &["token_hash"],
-        "invites" => &["code"],
-        "posts" => &["post_id"],
-        "post_revisions" => &["revision_id"],
-        "tags" => &["tag_id"],
-        "post_tags" => &["post_id", "tag_id"],
-        _ => &["rowid"],
-    };
+pub(crate) fn order_by_clause(
+    columns: &[ColumnInfo],
+    quote_identifier: fn(&str) -> String,
+) -> String {
+    // Order by every column, in schema order, so the exported NDJSON is
+    // row-stable: re-exporting unchanged data yields byte-identical files,
+    // keeping successive backups diffable. Ordering by all columns — rather than
+    // a hand-maintained per-table key — needs no bespoke entry for a newly added
+    // table and works on Postgres, which has no `rowid` to fall back on. (For a
+    // table with a leading unique column, e.g. a primary key, this reproduces the
+    // old key-only order, since ties never reach the trailing columns.)
     columns
         .iter()
-        .map(|column| quote_identifier(column))
+        .map(|column| quote_identifier(&column.name))
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -594,7 +597,9 @@ mod tests {
     // module, so `#[expect]` self-removes if the names ever diverge. (#94)
     #![expect(clippy::similar_names)]
     use super::*;
-    use crate::test_support::{backends, recorded_postgres_url, sqlite_only, sqlite_url, Backend};
+    use crate::test_support::{
+        backends, recorded_postgres_url, sqlite_only, sqlite_url, Backend, CloseablePool,
+    };
     use rstest::*;
     use rstest_reuse::*;
     use std::str::FromStr;
@@ -618,44 +623,131 @@ mod tests {
     }
 
     #[test]
-    fn order_by_clause_uses_stable_table_keys() {
+    fn order_by_clause_orders_by_every_column_in_schema_order() {
+        let columns = [
+            ColumnInfo {
+                name: "post_id".to_owned(),
+                type_name: "integer".to_owned(),
+            },
+            ColumnInfo {
+                name: "tag_id".to_owned(),
+                type_name: "integer".to_owned(),
+            },
+        ];
         assert_eq!(
-            order_by_clause("users", quote_test_identifier),
-            "\"user_id\""
-        );
-        assert_eq!(
-            order_by_clause("post_tags", quote_test_identifier),
+            order_by_clause(&columns, quote_test_identifier),
             "\"post_id\", \"tag_id\""
         );
+
+        let single = [ColumnInfo {
+            name: "user_id".to_owned(),
+            type_name: "integer".to_owned(),
+        }];
         assert_eq!(
-            order_by_clause("sessions", quote_test_identifier),
-            "\"token_hash\""
+            order_by_clause(&single, quote_test_identifier),
+            "\"user_id\""
         );
+    }
+
+    #[test]
+    fn backup_table_set_drops_internal_and_denylisted_and_sorts() {
+        let live = [
+            "posts",
+            "users",
+            "feed_cache",
+            "_sqlx_migrations",
+            "sqlite_sequence",
+            "channels",
+        ]
+        .into_iter()
+        .map(str::to_owned);
         assert_eq!(
-            order_by_clause("email_verifications", quote_test_identifier),
-            "\"token_hash\""
+            backup_table_set(live),
+            vec![
+                "channels".to_owned(),
+                "posts".to_owned(),
+                "users".to_owned()
+            ]
         );
+    }
+
+    // Guardrail: a real export of a fresh database backs up exactly the expected
+    // set of tables, and every live table is either backed up or a deliberate
+    // exclusion. A migration that adds a table trips the golden assertion (if
+    // auto-included) or the count assertion (if denylisted), forcing the coverage
+    // decision to be made consciously rather than by omission.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn backup_covers_every_table_or_deliberately_excludes_it(
+        #[case] backend: Backend,
+    ) -> Result<(), BackupError> {
+        let env = backend.setup().await;
+        let temp = TempDir::new()?;
+        let media = temp.path().join("media");
+        fs::create_dir_all(&media)?;
+        let db = backup_db_options(backend, &env.base)?;
+        let manifest = export_backup(BackupExportOptions {
+            database: &db,
+            media_path: &media,
+            destination_path: &temp.path().join("backup"),
+            mode: BackupMode::Directory,
+        })
+        .await?;
+
+        let mut tables = manifest.tables.clone();
+        tables.sort();
+        let expected: Vec<String> = [
+            "audience_members",
+            "audiences",
+            "channels",
+            "email_verifications",
+            "feed_events",
+            "invites",
+            "media",
+            "password_resets",
+            "post_audiences",
+            "post_revisions",
+            "post_tags",
+            "posts",
+            "sessions",
+            "site_config",
+            "subscription_statuses",
+            "subscriptions",
+            "tags",
+            "target_kinds",
+            "user_config",
+            "users",
+        ]
+        .iter()
+        .map(|table| (*table).to_owned())
+        .collect();
         assert_eq!(
-            order_by_clause("password_resets", quote_test_identifier),
-            "\"token_hash\""
+            tables, expected,
+            "backup set drifted — add the new table to the golden list or to TABLES_EXCLUDED_FROM_BACKUP"
         );
+
+        // Bidirectional: the whole schema is 20 backed-up tables + feed_cache +
+        // _sqlx_migrations. A table added and then denylisted (so the manifest
+        // stays 20) still trips this count.
+        let live_count: i64 = match env.base.pool() {
+            CloseablePool::Sqlite(pool) => sqlx::query_scalar(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+            )
+            .fetch_one(pool)
+            .await?,
+            CloseablePool::Postgres(pool) => sqlx::query_scalar(
+                "SELECT COUNT(*) FROM information_schema.tables \
+                 WHERE table_schema = 'public' AND table_type = 'BASE TABLE'",
+            )
+            .fetch_one(pool)
+            .await?,
+        };
         assert_eq!(
-            order_by_clause("invites", quote_test_identifier),
-            "\"code\""
+            live_count, 22,
+            "a table was added or removed — update the golden set and denylist deliberately"
         );
-        assert_eq!(
-            order_by_clause("posts", quote_test_identifier),
-            "\"post_id\""
-        );
-        assert_eq!(
-            order_by_clause("post_revisions", quote_test_identifier),
-            "\"revision_id\""
-        );
-        assert_eq!(order_by_clause("tags", quote_test_identifier), "\"tag_id\"");
-        assert_eq!(
-            order_by_clause("unknown", quote_test_identifier),
-            "\"rowid\""
-        );
+
+        Ok(())
     }
 
     #[test]

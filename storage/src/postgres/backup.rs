@@ -1,5 +1,4 @@
 use std::{
-    collections::HashSet,
     fs::File,
     io::{BufWriter, Write},
     path::Path,
@@ -10,8 +9,8 @@ use sha2::{Digest, Sha256};
 use sqlx::{PgConnection, PgPool, Row};
 
 use crate::backup::{
-    build_manifest, ensure_schema_version, json_value_as_restore_text, order_by_clause,
-    read_table_rows, BackupError, BackupManifest, BackupMode, ColumnInfo, TABLES_IN_EXPORT_ORDER,
+    backup_table_set, build_manifest, ensure_schema_version, json_value_as_restore_text,
+    order_by_clause, read_table_rows, BackupError, BackupManifest, BackupMode, ColumnInfo,
 };
 use crate::sql::quote_identifier;
 
@@ -91,6 +90,13 @@ pub(crate) async fn restore_database(
     ensure_schema_version(manifest, schema_version)?;
 
     sqlx::query("BEGIN").execute(&mut *connection).await?;
+    // Defer every foreign key to COMMIT so tables load in any order (the manifest
+    // is sorted alphabetically, not FK-topologically). Every FK is still checked,
+    // once, at COMMIT — a referentially-broken restore fails the whole
+    // transaction, matching SQLite's end-of-import `foreign_key_check`.
+    sqlx::query("SET CONSTRAINTS ALL DEFERRED")
+        .execute(&mut *connection)
+        .await?;
     let result = async {
         for table in &manifest.tables {
             let columns = columns(&mut connection, table).await?;
@@ -102,7 +108,15 @@ pub(crate) async fn restore_database(
 
     match result {
         Ok(()) => {
-            sqlx::query("COMMIT").execute(&mut *connection).await?;
+            // Deferred foreign keys are checked here, at COMMIT, so a dangling-FK
+            // restore fails on this statement (Postgres aborts the transaction
+            // automatically). Route it through `map_restore_error` so class-23
+            // surfaces as `ConstraintViolation`, identical to SQLite's
+            // end-of-import `foreign_key_check`, rather than a raw `Sqlx` error.
+            sqlx::query("COMMIT")
+                .execute(&mut *connection)
+                .await
+                .map_err(map_restore_error)?;
             Ok(())
         }
         Err(error) => {
@@ -120,15 +134,11 @@ async fn existing_export_tables(connection: &mut PgConnection) -> Result<Vec<Str
     )
     .fetch_all(&mut *connection)
     .await?;
-    let existing = rows
+    let names = rows
         .into_iter()
         .map(|row| row.try_get::<String, _>("table_name"))
-        .collect::<Result<HashSet<_>, _>>()?;
-    Ok(TABLES_IN_EXPORT_ORDER
-        .iter()
-        .filter(|table| existing.contains(**table))
-        .map(|table| (*table).to_owned())
-        .collect())
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(backup_table_set(names))
 }
 
 async fn import_table(
@@ -137,6 +147,15 @@ async fn import_table(
     table: &str,
     columns: &[ColumnInfo],
 ) -> Result<(), BackupError> {
+    // Authoritative replace: clear the target table before loading the backup's
+    // rows, so a table the target already seeds (the migration lookups) does not
+    // duplicate-key. Safe inside the FK-deferred restore transaction; empty
+    // backups still clear stale rows.
+    sqlx::query(&format!("DELETE FROM {}", quote_identifier(table)))
+        .execute(&mut *connection)
+        .await
+        .map_err(map_restore_error)?;
+
     let rows = read_table_rows(source_path, table)?;
     if rows.is_empty() {
         return Ok(());
@@ -282,7 +301,7 @@ fn json_select(table: &str, columns: &[ColumnInfo]) -> String {
     format!(
         "SELECT to_jsonb(export_row)::text FROM (SELECT {column_list} FROM {} ORDER BY {}) AS export_row",
         quote_identifier(table),
-        order_by_clause(table, quote_identifier)
+        order_by_clause(columns, quote_identifier)
     )
 }
 
@@ -422,7 +441,7 @@ mod tests {
     }
 
     #[test]
-    fn json_select_orders_by_table_key() {
+    fn json_select_orders_by_all_columns() {
         let sql = json_select(
             "post_tags",
             &[
