@@ -1158,4 +1158,55 @@ Lets the warning tests assert on emitted warnings without touching the real
   ;; publish path — the helper returns nil (skip), never errors.
   (should-not (jaunder--git-toplevel "/jaunder-no-such-dir-xyz/")))
 
+;;; #79 — create idempotency key + auto-retry
+
+(ert-deftest jaunder-idempotency-key-is-fresh-and-nonempty ()
+  ;; AC-C1/C6: each call yields a non-empty token, and two calls differ.
+  (let ((k1 (jaunder--idempotency-key))
+        (k2 (jaunder--idempotency-key)))
+    (should (stringp k1))
+    (should (> (length k1) 0))
+    (should-not (equal k1 k2))))
+
+(ert-deftest jaunder-create-retry-sends-key-and-retries-5xx ()
+  ;; AC-C2/C3/C4: a 5xx retries with the SAME key, then succeeds.
+  (let ((calls 0)
+        (keys nil))
+    (cl-letf (((symbol-function 'sleep-for) (lambda (&rest _) nil))
+              ((symbol-function 'jaunder--http-request)
+               (lambda (_method _url _body _ctype extra-headers)
+                 (setq calls (1+ calls))
+                 (push (cdr (assoc "Idempotency-Key" extra-headers)) keys)
+                 (if (= calls 1)
+                     '(:status 503 :body "")
+                   '(:status 201 :body "ok")))))
+             (let ((resp (jaunder--create-with-retry "http://x/posts" "<xml/>")))
+               (should (= (plist-get resp :status) 201))
+               (should (= calls 2))
+               (should (equal (nth 0 keys) (nth 1 keys)))
+               (should (> (length (nth 0 keys)) 0))))))
+
+(ert-deftest jaunder-create-retry-does-not-retry-4xx ()
+  ;; AC-C3: a 4xx returns immediately, no retry.
+  (let ((calls 0))
+    (cl-letf (((symbol-function 'sleep-for) (lambda (&rest _) nil))
+              ((symbol-function 'jaunder--http-request)
+               (lambda (&rest _)
+                 (setq calls (1+ calls))
+                 '(:status 400 :body ""))))
+             (let ((resp (jaunder--create-with-retry "http://x/posts" "<xml/>")))
+               (should (= (plist-get resp :status) 400))
+               (should (= calls 1))))))
+
+(ert-deftest jaunder-create-retry-exhausts-on-transport-error ()
+  ;; AC-C5: after 3 transient failures the publish errors.
+  (let ((calls 0))
+    (cl-letf (((symbol-function 'sleep-for) (lambda (&rest _) nil))
+              ((symbol-function 'jaunder--http-request)
+               (lambda (&rest _)
+                 (setq calls (1+ calls))
+                 (error "boom"))))
+             (should-error (jaunder--create-with-retry "http://x/posts" "<xml/>"))
+             (should (= calls 3)))))
+
 ;;; jaunder-test.el ends here
