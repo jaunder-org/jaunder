@@ -34,6 +34,7 @@
 (require 'jaunder-atom)
 (require 'jaunder-org)
 (require 'jaunder-transport)
+(require 'jaunder-service)
 (require 'jaunder-media)
 (require 'jaunder-publish)
 

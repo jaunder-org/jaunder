@@ -58,6 +58,13 @@ the document's repository.  See `jaunder--warn-untracked-media'."
   :type 'boolean
   :group 'jaunder)
 
+(defcustom jaunder-warn-missing-format-media-type t
+  "Whether to warn at publish when the server lacks the format-media-type feature.
+When non-nil, warn if the server's service document does not advertise the
+`format-media-type' feature.  See `jaunder--warn-missing-format-media-type'."
+  :type 'boolean
+  :group 'jaunder)
+
 (defun jaunder--blog-entry-for (file-or-dir)
   "Return the `jaunder-blogs' entry (DIRECTORY . PLIST) for FILE-OR-DIR, or nil.
 Longest-prefix match: the entry whose DIRECTORY is the longest prefix of
