@@ -75,7 +75,7 @@ Constraints). (c) The A1 guard generalizes for free — Task 3 touches no
 
 **Files:**
 
-- Create: `docs/adr/drafts/macros-crate-proc-macro-home.md` (numberless draft;
+- Create: `docs/adr/0062-macros-crate-proc-macro-home.md` (numberless draft;
   `cargo xtask adr promote` numbers it at ship — **`jaunder-adr`** flow).
 
 **Interfaces:** none (documentation).
@@ -100,7 +100,7 @@ Constraints). (c) The A1 guard generalizes for free — Task 3 touches no
     into instrumented test binaries, so it adds no coverage surface.
 
 - [x] **Step 2: Verify prettier-clean — NO commit (draft is out-of-git).** Ran
-      `prettier -w docs/adr/drafts/macros-crate-proc-macro-home.md`.
+      `prettier -w docs/adr/0062-macros-crate-proc-macro-home.md`.
       **Correction to the plan:** `docs/adr/drafts/*` is gitignored (ADR-0048
       out-of-git draft workflow) — the draft lives on disk untracked and
       `cargo xtask adr promote` numbers + commits it as `docs/adr/NNNN-*.md` at
