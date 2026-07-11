@@ -171,7 +171,6 @@ test("Audiences: CRUD + membership toggle re-fetch without list remount or flash
 // A read server-fn only `Err`s if the DB breaks, so these error nodes — which the
 // `#[component]`/`cov:ignore` exemptions push to e2e — were otherwise unexercised. The
 // server fn never runs; the client `Resource` resolves `Err` and the error branch renders.
-// (The subscriber-roster branch, `list_my_subscribers`, is #346's, not covered here.)
 
 test("Audiences: a list fetch error surfaces the error node, not an empty list", async ({
   page,
@@ -207,4 +206,67 @@ test("Audiences: a members fetch error surfaces the error node, not an empty che
   const friends = page.locator(".j-audience-item", { hasText: "Friends" });
   await expect(friends.locator("p.error")).toBeVisible();
   await expect(friends.getByText("No active subscribers yet.")).toHaveCount(0);
+});
+
+// #346: a failed `list_my_subscribers` fetch must surface an error, not masquerade as an
+// empty roster (which rendered every subscriber's row as "nobody is a member"). Uses the
+// shared `failServerFn` fault-injection helper (#383, which left this roster branch to #346).
+test("Audiences: a failed subscriber-roster fetch surfaces an error, not an empty roster", async ({
+  page,
+  browser,
+}, testInfo) => {
+  setTestBudget(120_000);
+  const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
+  const author = await register(page, firstNav);
+
+  // A real subscriber X, so an empty roster would be a lie — the exact #346 bug.
+  const xCtx = await browser.newContext();
+  const xPage = await xCtx.newPage();
+  await register(xPage, firstNav);
+  await subscribeTo(xPage, author);
+  await xCtx.close();
+
+  // Force the roster fetch to fail before the page loads it (the shared #383 helper).
+  await failServerFn(page, "list_my_subscribers");
+
+  await goto(page, "/audiences");
+
+  // AC1: the roster error surfaces once, at page level — visible even before any audience
+  // exists (zero audiences ⇒ no rows ⇒ no per-row checklist to carry the error).
+  await expect(page.getByText("Couldn't load your subscribers")).toBeVisible();
+
+  // Create an audience so a MemberChecklist mounts against the failed roster.
+  await page.fill('input[placeholder="Audience name"]', "Friends");
+  await click(page, 'button:has-text("Create")');
+  await expect(
+    page.locator(".j-audience-item", { hasText: "Friends" }),
+  ).toBeVisible();
+  // Let the checklist settle past its own members-loading state before asserting.
+  await expect(page.getByText("Loading members")).toHaveCount(0);
+
+  // AC2: the empty-roster lie is gone — no "No active subscribers yet." and no add/remove
+  // list, despite X being a real subscriber.
+  await expect(page.getByText("No active subscribers yet")).toHaveCount(0);
+  await expect(page.locator(".j-audience-members")).toHaveCount(0);
+});
+
+// #346 AC3: a genuinely empty roster (author with no subscribers) must stay distinct from
+// the error state — it still shows the empty message and no error node.
+test("Audiences: a genuinely empty roster still shows the empty message", async ({
+  page,
+}, testInfo) => {
+  setTestBudget(120_000);
+  const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
+  await register(page, firstNav);
+
+  await goto(page, "/audiences");
+  await page.fill('input[placeholder="Audience name"]', "Friends");
+  await click(page, 'button:has-text("Create")');
+  await expect(
+    page.locator(".j-audience-item", { hasText: "Friends" }),
+  ).toBeVisible();
+  await expect(page.getByText("Loading members")).toHaveCount(0);
+
+  await expect(page.getByText("No active subscribers yet")).toBeVisible();
+  await expect(page.getByText("Couldn't load your subscribers")).toHaveCount(0);
 });
