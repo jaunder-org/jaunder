@@ -54,6 +54,12 @@ pub struct SubscriberSummary {
     pub label: String,
 }
 
+/// The subscriber roster shared via context: a reactive signal over the roster's full
+/// resolved state — `None` while loading, `Some(Err)` on a fetch failure, `Some(Ok)`
+/// once loaded — so consumers distinguish an error from a genuinely empty roster (#346).
+/// Provided by `AudiencesPage`, read by each `MemberChecklist`.
+type RosterSignal = Signal<Option<WebResult<Vec<SubscriberSummary>>>>;
+
 /// Creates a named audience owned by the authenticated author.
 #[server(endpoint = "/create_audience")]
 pub async fn create_audience(name: String) -> WebResult<i64> {
@@ -254,15 +260,11 @@ pub fn AudiencesPage() -> impl IntoView {
     let state = list.patched(list_my_audiences, move |rows| store.audiences().patch(rows));
 
     // The subscriber roster: fetched once (constant source — never refetched, so no sticky
-    // retention is needed), derived straight from the resource and provided as a signal so
-    // each `MemberChecklist` reflects it reactively when it resolves, without rebuilding rows.
+    // retention is needed), provided as a `RosterSignal` so one source of truth drives both
+    // the page-level error node below and each `MemberChecklist`, without rebuilding rows.
+    // A fetch error is surfaced, never swallowed into an empty roster (#346).
     let subscribers_res = crate::server_resource(|| (), |()| list_my_subscribers());
-    let subscribers = Signal::derive(move || {
-        subscribers_res
-            .get()
-            .and_then(Result::ok)
-            .unwrap_or_default()
-    });
+    let subscribers: RosterSignal = Signal::derive(move || subscribers_res.get());
     provide_context(subscribers);
 
     view! {
@@ -280,6 +282,21 @@ pub fn AudiencesPage() -> impl IntoView {
                             </div>
                         </div>
                     </div>
+                    // Roster fetch error: surfaced once here (the roster feeds every
+                    // checklist), mirroring the audience-list error sibling below. Silent
+                    // while loading and on success (#346).
+                    {move || {
+                        subscribers
+                            .get()
+                            .and_then(Result::err)
+                            .map(|e| {
+                                view! {
+                                    <p class="error">
+                                        {format!("Couldn't load your subscribers: {e}")}
+                                    </p>
+                                }
+                            })
+                    }}
                     // Mounted unconditionally: never inside a load/error branch that could
                     // tear it down, so only keyed reconciliation ever touches rows.
                     <ul class="j-audience-list">
@@ -384,9 +401,11 @@ fn AudienceHeader(audience_id: i64, name: String) -> impl IntoView {
 /// on a toggle — never the whole list.
 #[component]
 fn MemberChecklist(audience_id: i64) -> impl IntoView {
-    // The subscriber roster, reactive: it updates the checklist in place when it resolves,
-    // without the row being rebuilt (provided by `AudiencesPage`).
-    let subscribers = expect_context::<Signal<Vec<SubscriberSummary>>>();
+    // The subscriber roster, reactive (provided by `AudiencesPage`): it carries the full
+    // resolved state and updates the checklist in place when it resolves, without the row
+    // being rebuilt. A fetch error renders nothing here (surfaced once at page level), not
+    // an empty roster (#346).
+    let subscribers = expect_context::<RosterSignal>();
     // Local to this checklist: an add/remove here refetches only this audience's members,
     // not every audience's (and never the list). `sticky` retains the last member list across
     // that refetch so a toggle never flashes "Loading members…" (`None` until first resolve).
@@ -397,7 +416,6 @@ fn MemberChecklist(audience_id: i64) -> impl IntoView {
 
     view! {
         {move || {
-            let subscribers = subscribers.get();
             match member_ids.get() {
                 None => view! { <p class="j-loading">"Loading members\u{2026}"</p> }.into_any(),
                 Some(Err(e)) => {
@@ -408,6 +426,9 @@ fn MemberChecklist(audience_id: i64) -> impl IntoView {
                         .into_any()
                 }
                 Some(Ok(member_ids)) => {
+                    let Some(Ok(subscribers)) = subscribers.get() else {
+                        return ().into_any();
+                    };
                     if subscribers.is_empty() {
                         return view! { <p class="j-sub">"No active subscribers yet."</p> }
                             .into_any();
