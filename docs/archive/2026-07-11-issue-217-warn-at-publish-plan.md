@@ -1,7 +1,7 @@
 # Plan — three "warn at publish" warnings (#217, #206, #216)
 
 **Spec:**
-[`docs/superpowers/specs/2026-07-11-issue-217-warn-at-publish.md`](../specs/2026-07-11-issue-217-warn-at-publish.md).
+[`2026-07-11-issue-217-warn-at-publish-spec.md`](./2026-07-11-issue-217-warn-at-publish-spec.md).
 All behavior, edge cases, and acceptance criteria (AC-\*) live there; this plan
 is **how**, not what/why.
 
