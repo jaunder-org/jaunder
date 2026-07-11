@@ -6,7 +6,7 @@ use std::{
 
 use sqlx::postgres::PgConnectOptions;
 
-use crate::cli::StorageArgs;
+use crate::cli::{Commands, StorageArgs};
 use crate::mailer::LettreMailSender;
 use crate::runtime_file;
 use common::backup::BackupMode;
@@ -20,6 +20,81 @@ use storage::{
     export_backup, restore_backup, BackupExportOptions, BackupRestoreOptions, DbConnectOptions,
 };
 use storage::{init_storage, open_database, open_existing_database};
+
+/// Parse a CLI username string into the validated [`Username`] newtype, surfacing
+/// the validation error as an `anyhow` message.
+fn parse_username(s: &str) -> anyhow::Result<Username> {
+    s.parse().map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+/// Parse an optional CLI password string into `Option<Password>` (`None` stays
+/// `None`), surfacing the validation error as an `anyhow` message.
+fn parse_password(p: Option<String>) -> anyhow::Result<Option<Password>> {
+    p.map(|p| p.parse::<Password>())
+        .transpose()
+        .map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+impl Commands {
+    /// Dispatch this parsed subcommand to its handler. A flat match-expression:
+    /// each arm evaluates to the command's `Result<()>`, so there is no `?` on the
+    /// dispatch call and no trailing `Ok(())` (the two arms that parse a CLI
+    /// newtype still `?` on that parse) — keeping any single function's cyclomatic
+    /// complexity (and thus CRAP) low as subcommands are added (#147).
+    ///
+    /// # Errors
+    ///
+    /// Propagates the selected command's failure.
+    pub async fn execute(self) -> anyhow::Result<()> {
+        match self {
+            Commands::Init {
+                storage,
+                skip_if_exists,
+            } => cmd_init(&storage, skip_if_exists).await,
+            Commands::CreatePgDb { pg } => {
+                cmd_create_pg_db(&pg.bootstrap_db, &pg.app_db, &pg.app_role_password).await
+            }
+            Commands::Serve {
+                storage,
+                bind,
+                environment,
+                runtime_file,
+            } => cmd_serve(&storage, bind, environment.is_prod(), runtime_file).await,
+            Commands::UserCreate {
+                storage,
+                username,
+                password,
+                display_name,
+                operator,
+            } => {
+                cmd_user_create(
+                    &storage,
+                    &parse_username(&username)?,
+                    parse_password(password)?,
+                    display_name.as_deref(),
+                    operator,
+                )
+                .await
+            }
+            Commands::AppPasswordCreate {
+                storage,
+                username,
+                label,
+            } => cmd_app_password_create(&storage, &parse_username(&username)?, &label).await,
+            Commands::UserInvite {
+                storage,
+                expires_in,
+            } => cmd_user_invite(&storage, expires_in).await,
+            Commands::SmtpTest { storage, to } => cmd_smtp_test(&storage, &to).await,
+            Commands::Backup {
+                storage,
+                mode,
+                path,
+            } => cmd_backup(&storage, mode.into(), path).await.map(drop),
+            Commands::Restore { storage, path } => cmd_restore(&storage, &path).await,
+        }
+    }
+}
 
 /// Initializes the application's storage directory and database.
 ///
@@ -611,6 +686,29 @@ mod tests {
     use super::*;
     use storage::DbConnectOptions;
     use tempfile::TempDir;
+
+    #[test]
+    fn parse_username_accepts_valid_and_rejects_invalid() {
+        assert!(parse_username("alice").is_ok());
+        let err = parse_username("invalid username").unwrap_err().to_string();
+        assert!(err.contains("username must be"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_password_none_is_ok_none() {
+        assert!(parse_password(None).unwrap().is_none());
+    }
+
+    #[test]
+    fn parse_password_validates_some() {
+        assert!(parse_password(Some("password123".to_owned()))
+            .unwrap()
+            .is_some());
+        let err = parse_password(Some("short".to_owned()))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("at least 8 characters"), "got: {err}");
+    }
 
     #[test]
     fn describe_bootstrap_error_role_exists_message() {
