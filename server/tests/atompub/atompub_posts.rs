@@ -1329,6 +1329,128 @@ async fn update_with_matching_if_match_succeeds(#[case] backend: Backend) {
     assert_eq!(updated.status(), StatusCode::OK);
 }
 
+const ETAG_POST_XML: &str = r#"<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>T</title>
+  <category term="rust"/>
+  <content type="text">body</content>
+</entry>"#;
+
+/// POST `ETAG_POST_XML` as alice and return the create response's `ETag`.
+async fn create_etag(app: axum::Router, token: &str) -> String {
+    app.oneshot(
+        Request::builder()
+            .method("POST")
+            .uri("/atompub/alice/posts")
+            .header(header::CONTENT_TYPE, "application/atom+xml")
+            .header(header::AUTHORIZATION, basic_header("alice", token))
+            .body(Body::from(ETAG_POST_XML))
+            .unwrap(),
+    )
+    .await
+    .unwrap()
+    .headers()
+    .get(header::ETAG)
+    .unwrap()
+    .to_str()
+    .unwrap()
+    .to_string()
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn etag_is_content_hash_format(#[case] backend: Backend) {
+    // AC1: the emitted ETag is a strong, quoted "sha256-<64 lowercase hex>" token.
+    let TestEnv { state, base } = backend.setup().await;
+    let (_user_id, token) = seed_alice(&state).await;
+    let app = make_app(state, &base);
+
+    let etag = create_etag(app, &token).await;
+    let hex = etag
+        .strip_prefix("\"sha256-")
+        .and_then(|s| s.strip_suffix('"'))
+        .expect("ETag is a quoted sha256- token");
+    assert_eq!(hex.len(), 64);
+    assert!(hex
+        .chars()
+        .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)));
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn identical_posts_share_etag(#[case] backend: Backend) {
+    // AC2: two distinct posts with identical content get the same ETag — the
+    // per-post id / tag ids / slug are excluded from the hash.
+    let TestEnv { state, base } = backend.setup().await;
+    let (_user_id, token) = seed_alice(&state).await;
+    let app = make_app(state, &base);
+
+    let e1 = create_etag(app.clone(), &token).await;
+    let e2 = create_etag(app, &token).await;
+    assert_eq!(e1, e2);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn idempotent_reput_keeps_etag(#[case] backend: Backend) {
+    // AC3 + AC5: re-PUT byte-identical content → the ETag is unchanged (a
+    // timestamp ETag would have bumped on the write).
+    let TestEnv { state, base } = backend.setup().await;
+    let (_user_id, token) = seed_alice(&state).await;
+    let app = make_app(state, &base);
+
+    let created = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/atompub/alice/posts")
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(ETAG_POST_XML))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let location = created
+        .headers()
+        .get(header::LOCATION)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let e1 = created
+        .headers()
+        .get(header::ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    let updated = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(&location)
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::IF_MATCH, &e1)
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::from(ETAG_POST_XML))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.status(), StatusCode::OK);
+    let e2 = updated
+        .headers()
+        .get(header::ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(e1, e2);
+}
+
 #[apply(backends)]
 #[tokio::test]
 async fn update_preserves_non_public_targeting(#[case] backend: Backend) {

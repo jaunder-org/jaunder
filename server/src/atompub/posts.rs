@@ -6,7 +6,8 @@ use axum::extract::{Path, Query};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use common::atompub::{entry_from_xml, entry_to_xml, render_feed, FeedMeta};
 use common::visibility::ViewerIdentity;
@@ -24,9 +25,36 @@ const ENTRY_CONTENT_TYPE: &str = "application/atom+xml;type=entry;charset=utf-8"
 const DEFAULT_PAGE_SIZE: u32 = 25;
 const MAX_PAGE_SIZE: u32 = 50;
 
-/// A strong `ETag` for a post, derived from its last-update time.
+/// A strong, content-hash `ETag` for a post: `"sha256-<hex>"` over the post's
+/// content fields (title, stored body, format, summary, tag display names, and
+/// the draft flag) — never a timestamp. So identical content yields an identical
+/// `ETag` and an idempotent re-publish does not change it, removing the time-based
+/// divergence false-positive (#78).
 pub(crate) fn etag_for(post: &PostRecord) -> String {
-    format!("\"{}\"", post.updated_at.timestamp_millis())
+    /// The content projection that the `ETag` hashes.  Every field is reduced to a
+    /// plain, `Serialize`-able primitive; `PostFormat`/`PostTag` are never hashed
+    /// directly (the latter carries DB-assigned ids that would differ between two
+    /// identical-content posts).  `draft` is time-independent (`published_at`
+    /// presence, not its value).
+    #[derive(Serialize)]
+    struct EtagContent<'a> {
+        title: Option<&'a str>,
+        body: &'a str,
+        format: String,
+        summary: Option<&'a str>,
+        tags: Vec<&'a str>,
+        draft: bool,
+    }
+    let content = EtagContent {
+        title: post.title.as_deref(),
+        body: &post.body,
+        format: post.format.to_string(),
+        summary: post.summary.as_deref(),
+        tags: post.tags.iter().map(|t| t.tag_display.as_str()).collect(),
+        draft: post.published_at.is_none(),
+    };
+    let bytes = serde_json::to_vec(&content).unwrap_or_else(|_| Vec::new());
+    format!("\"sha256-{:x}\"", Sha256::digest(&bytes))
 }
 
 /// Keyset-paging query parameters for the collection.
@@ -420,4 +448,106 @@ pub async fn member_put(
         xml,
     )
         .into_response())
+}
+
+#[cfg(test)]
+mod etag_tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+    use storage::{PostFormat, PostTag};
+
+    fn mk_tag(post_id: i64, tag_id: i64, slug: &str, display: &str) -> PostTag {
+        PostTag {
+            post_id,
+            tag_id,
+            tag_slug: slug.parse().expect("parse tag slug"),
+            tag_display: display.to_string(),
+        }
+    }
+
+    fn base_post() -> PostRecord {
+        let t = Utc
+            .timestamp_opt(1_000_000, 0)
+            .single()
+            .expect("valid time");
+        PostRecord {
+            post_id: 1,
+            user_id: 1,
+            author_username: "alice".parse().expect("parse username"),
+            title: Some("Title".to_string()),
+            slug: "my-post".parse().expect("parse slug"),
+            body: "Body text.".to_string(),
+            format: PostFormat::Org,
+            rendered_html: "<p>Body text.</p>".to_string(),
+            created_at: t,
+            updated_at: t,
+            published_at: Some(t),
+            deleted_at: None,
+            summary: Some("Summary".to_string()),
+            tags: vec![mk_tag(1, 1, "rust", "Rust"), mk_tag(1, 2, "emacs", "Emacs")],
+        }
+    }
+
+    #[test]
+    fn etag_for_is_quoted_sha256() {
+        let e = etag_for(&base_post());
+        let hex = e
+            .strip_prefix("\"sha256-")
+            .and_then(|s| s.strip_suffix('"'))
+            .expect("etag is a quoted sha256- token");
+        assert_eq!(hex.len(), 64);
+        assert!(hex
+            .chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)));
+    }
+
+    #[test]
+    fn etag_for_is_deterministic() {
+        assert_eq!(etag_for(&base_post()), etag_for(&base_post()));
+    }
+
+    #[test]
+    fn etag_for_ignores_identity_and_timestamps() {
+        // AC2/AC5: nothing outside the content fields moves the ETag — including a
+        // published_at whose *value* advances while staying Some (non-draft).
+        let e = etag_for(&base_post());
+        let later = Utc
+            .timestamp_opt(9_000_000, 0)
+            .single()
+            .expect("valid time");
+        let mut p = base_post();
+        p.post_id = 999;
+        p.user_id = 42;
+        p.slug = "other-slug".parse().expect("parse slug");
+        p.created_at = later;
+        p.updated_at = later;
+        p.published_at = Some(later);
+        p.rendered_html = "<p>totally different</p>".to_string();
+        p.tags = vec![
+            mk_tag(999, 55, "rust", "Rust"),
+            mk_tag(999, 56, "emacs", "Emacs"),
+        ];
+        assert_eq!(etag_for(&p), e);
+    }
+
+    #[test]
+    fn etag_for_changes_on_each_content_field() {
+        let e = etag_for(&base_post());
+        let flip = |f: &dyn Fn(&mut PostRecord)| {
+            let mut p = base_post();
+            f(&mut p);
+            etag_for(&p)
+        };
+        assert_ne!(flip(&|p| p.title = Some("Other".to_string())), e); // title value
+        assert_ne!(flip(&|p| p.title = None), e); // title present->absent
+        assert_ne!(flip(&|p| p.body = "Different body.".to_string()), e); // body
+        assert_ne!(flip(&|p| p.summary = Some("Other".to_string())), e); // summary value
+        assert_ne!(flip(&|p| p.summary = None), e); // summary present->absent
+        assert_ne!(flip(&|p| p.format = PostFormat::Markdown), e); // format
+        assert_ne!(
+            flip(&|p| p.tags = vec![mk_tag(1, 1, "rust", "Rust"), mk_tag(1, 2, "lisp", "Lisp")]),
+            e
+        ); // tag display set
+        assert_ne!(flip(&|p| p.published_at = None), e); // draft flip
+    }
 }
