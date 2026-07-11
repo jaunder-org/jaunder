@@ -90,6 +90,28 @@ export async function waitForSelector(
 }
 
 // ---------------------------------------------------------------------------
+// Fault injection
+// ---------------------------------------------------------------------------
+
+/**
+ * Force a server-fn (`#[server(endpoint = "/name")]`, POSTed to `/api/name`) to fail,
+ * without touching the backend: Playwright fulfils the request in the browser with a 500,
+ * so the client `Resource` resolves `Err` and the component's error branch renders.
+ *
+ * The server fn never executes — this exercises the *client* error UI only. Register the
+ * route **before** the intercepted fetch fires (e.g. before `goto` for a page-load resource,
+ * before creating the row whose child fetches for a nested one).
+ */
+export async function failServerFn(
+  page: Page,
+  endpoint: string,
+): Promise<void> {
+  await page.route(`**/api/${endpoint}`, (route) =>
+    route.fulfill({ status: 500, body: "boom" }),
+  );
+}
+
+// ---------------------------------------------------------------------------
 // High-level flows
 // ---------------------------------------------------------------------------
 

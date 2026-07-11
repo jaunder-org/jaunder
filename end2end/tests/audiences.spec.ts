@@ -4,7 +4,7 @@ import {
   setTestBudget,
   slowBrowserFirstNavigationTimeoutMs,
 } from "./fixtures";
-import { goto, click, register, subscribeTo } from "./helpers";
+import { goto, click, register, subscribeTo, failServerFn } from "./helpers";
 
 // Audiences management UI (`/audiences`, converged into `web::audiences`).
 //
@@ -165,4 +165,46 @@ test("Audiences: CRUD + membership toggle re-fetch without list remount or flash
   // coupled to the exact store message (rewording it shouldn't hang this to a timeout).
   await expect(page.locator("p.error")).toBeVisible();
   expect(listFetches).toBe(beforeDup);
+});
+
+// #383: fetch-error UI branches, driven by Playwright route interception (`failServerFn`).
+// A read server-fn only `Err`s if the DB breaks, so these error nodes — which the
+// `#[component]`/`cov:ignore` exemptions push to e2e — were otherwise unexercised. The
+// server fn never runs; the client `Resource` resolves `Err` and the error branch renders.
+// (The subscriber-roster branch, `list_my_subscribers`, is #346's, not covered here.)
+
+test("Audiences: a list fetch error surfaces the error node, not an empty list", async ({
+  page,
+}, testInfo) => {
+  const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
+  await register(page, firstNav);
+
+  // Force the audience-list resource to fail before the page loads it.
+  await failServerFn(page, "list_my_audiences");
+  await goto(page, "/audiences");
+
+  // `ListState::Error` renders `<p class="error">` — NOT the empty-state "No audiences yet."
+  // (which would mean the error was swallowed to an empty list).
+  await expect(page.locator("p.error")).toBeVisible();
+  await expect(page.getByText("No audiences yet.")).toHaveCount(0);
+});
+
+test("Audiences: a members fetch error surfaces the error node, not an empty checklist", async ({
+  page,
+}, testInfo) => {
+  const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
+  await register(page, firstNav);
+  await goto(page, "/audiences");
+
+  // Force the members resource to fail, then create an audience whose checklist will fetch.
+  await failServerFn(page, "list_audience_members");
+  await page.fill('input[placeholder="Audience name"]', "Friends");
+  await click(page, 'button:has-text("Create")');
+
+  // `MemberChecklist`'s `sticky` resolves `Some(Err)` → its error node renders (the branch
+  // #372 added), NOT an empty checklist / "No active subscribers yet." (which would mean the
+  // error was swallowed to an empty member set — the #346 defect class this guards against).
+  const friends = page.locator(".j-audience-item", { hasText: "Friends" });
+  await expect(friends.locator("p.error")).toBeVisible();
+  await expect(friends.getByText("No active subscribers yet.")).toHaveCount(0);
 });
