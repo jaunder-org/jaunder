@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Path, Query};
+use axum::extract::rejection::ExtensionRejection;
+use axum::extract::{FromRequestParts, Path, Query};
+use axum::http::request::Parts;
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
@@ -24,6 +26,39 @@ const FEED_CONTENT_TYPE: &str = "application/atom+xml;type=feed;charset=utf-8";
 const ENTRY_CONTENT_TYPE: &str = "application/atom+xml;type=entry;charset=utf-8";
 const DEFAULT_PAGE_SIZE: u32 = 25;
 const MAX_PAGE_SIZE: u32 = 50;
+
+/// The storage dependencies the post handlers share, bundled into one extractor
+/// so a handler stays under the argument limit without suppressing the lint.
+/// Each field is pulled from the request `Extension`s the app router layers.
+pub struct PostServices {
+    posts: Arc<dyn PostStorage>,
+    subscriptions: Arc<dyn SubscriptionStorage>,
+    user_config: Arc<dyn UserConfigStorage>,
+    site_config: Arc<dyn SiteConfigStorage>,
+}
+
+impl<S: Send + Sync> FromRequestParts<S> for PostServices {
+    type Rejection = ExtensionRejection;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        Ok(Self {
+            posts: Extension::<Arc<dyn PostStorage>>::from_request_parts(parts, state)
+                .await?
+                .0,
+            subscriptions: Extension::<Arc<dyn SubscriptionStorage>>::from_request_parts(
+                parts, state,
+            )
+            .await?
+            .0,
+            user_config: Extension::<Arc<dyn UserConfigStorage>>::from_request_parts(parts, state)
+                .await?
+                .0,
+            site_config: Extension::<Arc<dyn SiteConfigStorage>>::from_request_parts(parts, state)
+                .await?
+                .0,
+        })
+    }
+}
 
 /// A strong, content-hash `ETag` for a post: `"sha256-<hex>"` over the post's
 /// content fields (title, stored body, format, summary, tag display names, and
@@ -303,14 +338,17 @@ pub async fn member_delete(
 /// Returns `500` if storage fails.
 #[tracing::instrument(name = "atompub.posts.collection_post", skip_all)]
 pub async fn collection_post(
-    Extension(posts): Extension<Arc<dyn PostStorage>>,
-    Extension(subscriptions): Extension<Arc<dyn SubscriptionStorage>>,
-    Extension(user_config): Extension<Arc<dyn UserConfigStorage>>,
-    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
+    services: PostServices,
     auth_user: AuthUser,
     Path(username): Path<String>,
     body: String,
 ) -> Result<Response, HandlerError> {
+    let PostServices {
+        posts,
+        subscriptions,
+        user_config,
+        site_config,
+    } = services;
     super::require_user_match(&auth_user, &username)?;
     let entry = entry_from_xml(&body)?;
     let default_format =
@@ -382,20 +420,19 @@ pub async fn collection_post(
 /// Returns `412` if `If-Match` is present and stale.
 /// Returns `500` if storage fails.
 #[tracing::instrument(name = "atompub.posts.member_put", skip_all)]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "axum extractor handler; each argument is a separate request extractor and cannot be bundled"
-)]
 pub async fn member_put(
-    Extension(posts): Extension<Arc<dyn PostStorage>>,
-    Extension(subscriptions): Extension<Arc<dyn SubscriptionStorage>>,
-    Extension(user_config): Extension<Arc<dyn UserConfigStorage>>,
-    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
+    services: PostServices,
     auth_user: AuthUser,
     Path((username, post_id)): Path<(String, i64)>,
     headers: HeaderMap,
     body: String,
 ) -> Result<Response, HandlerError> {
+    let PostServices {
+        posts,
+        subscriptions,
+        user_config,
+        site_config,
+    } = services;
     let current = owned_post(
         posts.as_ref(),
         subscriptions.as_ref(),
