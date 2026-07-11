@@ -80,62 +80,169 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // crap:allow: test harness entrypoint; real fix tracked in #232
-    let cli = Cli::parse();
+    run(Cli::parse()).await
+}
+
+/// Dispatch the parsed subcommand to its handler. A flat match: each arm
+/// evaluates to the handler's `Result<()>`, so `main` stays a thin shell and each
+/// command is a small, individually-covered unit (#232).
+async fn run(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
-        // cov:ignore-start -- these three arms open a live database, which a
-        // plain subprocess can't reach; `tests/cli.rs` drives the no-DB
-        // `reset-mail` subcommand and so covers main's entry, `Cli::parse`, this
-        // dispatch, the `ResetMail` arm, and the final `Ok(())`. #232.
         Commands::SeedPosts {
             db,
             username,
             count,
             body_prefix,
             published,
-        } => {
-            let state = storage::open_existing_database(&db).await?;
-            let ids =
-                seed_posts_for_user(&state, &username, count, published, &body_prefix).await?;
-            eprintln!("seeded {} posts for {username}", ids.len());
-        }
+        } => cmd_seed_posts(&db, &username, count, &body_prefix, published).await,
         Commands::CreateUser {
             db,
             username,
             password,
             display_name,
             operator,
-        } => {
-            let state = storage::open_existing_database(&db).await?;
-            let id = create_user(
-                &state,
-                &username,
-                &password,
-                display_name.as_deref(),
-                operator,
-            )
-            .await?;
-            eprintln!("created user {username} with id {id}");
-        }
-        Commands::SetSiteConfig { db, key, value } => {
-            let state = storage::open_existing_database(&db).await?;
-            set_site_config(&state, &key, &value).await?;
-            eprintln!("set site_config {key} = {value}");
-        }
-        // cov:ignore-stop
-        Commands::ResetMail => {
-            let path = capture::file(capture::Stream::Mail)
-                .ok_or_else(|| anyhow::anyhow!("JAUNDER_CAPTURE_DIR is not set"))?;
-            reset_mail(&path)?;
-            eprintln!("reset mail-capture file {}", path.display());
-        }
-        Commands::CapturePath { stream } => {
-            let stream = capture::Stream::parse(&stream)
-                .ok_or_else(|| anyhow::anyhow!("unknown capture stream {stream:?}"))?;
-            let path = capture::file(stream)
-                .ok_or_else(|| anyhow::anyhow!("JAUNDER_CAPTURE_DIR is not set"))?;
-            println!("{}", path.display());
-        }
+        } => cmd_create_user(&db, &username, &password, display_name.as_deref(), operator).await,
+        Commands::SetSiteConfig { db, key, value } => cmd_set_site_config(&db, &key, &value).await,
+        Commands::ResetMail => cmd_reset_mail(),
+        Commands::CapturePath { stream } => cmd_capture_path(&stream),
     }
+}
+
+/// Seed `count` posts for `username` through the real storage path.
+async fn cmd_seed_posts(
+    db: &DbConnectOptions,
+    username: &str,
+    count: usize,
+    body_prefix: &str,
+    published: bool,
+) -> anyhow::Result<()> {
+    let state = storage::open_existing_database(db).await?;
+    let ids = seed_posts_for_user(&state, username, count, published, body_prefix).await?;
+    eprintln!("seeded {} posts for {username}", ids.len());
     Ok(())
+}
+
+/// Create a fixture user through the real storage path.
+async fn cmd_create_user(
+    db: &DbConnectOptions,
+    username: &str,
+    password: &str,
+    display_name: Option<&str>,
+    operator: bool,
+) -> anyhow::Result<()> {
+    let state = storage::open_existing_database(db).await?;
+    let id = create_user(&state, username, password, display_name, operator).await?;
+    eprintln!("created user {username} with id {id}");
+    Ok(())
+}
+
+/// Set a `site_config` key/value (an upsert) through the real storage path.
+async fn cmd_set_site_config(db: &DbConnectOptions, key: &str, value: &str) -> anyhow::Result<()> {
+    let state = storage::open_existing_database(db).await?;
+    set_site_config(&state, key, value).await?;
+    eprintln!("set site_config {key} = {value}");
+    Ok(())
+}
+
+/// Reset the mail-capture file (delete it; missing is fine).
+fn cmd_reset_mail() -> anyhow::Result<()> {
+    let path = capture::file(capture::Stream::Mail)
+        .ok_or_else(|| anyhow::anyhow!("JAUNDER_CAPTURE_DIR is not set"))?;
+    reset_mail(&path)?;
+    eprintln!("reset mail-capture file {}", path.display());
+    Ok(())
+}
+
+/// Print the resolved capture-file path for a stream (`mail`/`websub`/`diag`).
+fn cmd_capture_path(stream: &str) -> anyhow::Result<()> {
+    let stream = capture::Stream::parse(stream)
+        .ok_or_else(|| anyhow::anyhow!("unknown capture stream {stream:?}"))?;
+    let path =
+        capture::file(stream).ok_or_else(|| anyhow::anyhow!("JAUNDER_CAPTURE_DIR is not set"))?;
+    println!("{}", path.display());
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use storage::test_support::sqlite_url;
+    use tempfile::TempDir;
+
+    fn cli(command: Commands) -> Cli {
+        Cli { command }
+    }
+
+    /// A temp `SQLite` DB, created + migrated. The migrating pool is dropped before
+    /// return (unbound temporary), so each `run` below opens its own connection.
+    /// The returned `TempDir` must outlive the test — dropping it unlinks the file.
+    async fn temp_db() -> (TempDir, DbConnectOptions) {
+        let dir = TempDir::new().unwrap();
+        let db = sqlite_url(&dir);
+        storage::open_database(&db).await.unwrap();
+        (dir, db)
+    }
+
+    #[tokio::test]
+    async fn run_dispatches_db_commands_against_a_temp_db() {
+        let (_dir, db) = temp_db().await;
+
+        run(cli(Commands::CreateUser {
+            db: db.clone(),
+            username: "alice".to_owned(),
+            password: "password123".to_owned(),
+            display_name: None,
+            operator: false,
+        }))
+        .await
+        .expect("create-user should dispatch and succeed");
+
+        run(cli(Commands::SeedPosts {
+            db: db.clone(),
+            username: "alice".to_owned(),
+            count: 1,
+            body_prefix: "Post".to_owned(),
+            published: true,
+        }))
+        .await
+        .expect("seed-posts should dispatch and succeed");
+
+        run(cli(Commands::SetSiteConfig {
+            db: db.clone(),
+            key: "site.registration_policy".to_owned(),
+            value: "open".to_owned(),
+        }))
+        .await
+        .expect("set-site-config should dispatch and succeed");
+
+        // Read back through a fresh connection to prove the dispatch wired each
+        // command's arguments through to storage (not merely returned Ok): the
+        // seeded post is published and attributed to alice, and the config upserted.
+        let state = storage::open_existing_database(&db).await.unwrap();
+        let published = state
+            .posts
+            .list_published_by_user(
+                &"alice".parse().unwrap(),
+                None,
+                10,
+                &common::visibility::ViewerIdentity::Anonymous,
+                chrono::Utc::now(),
+            )
+            .await
+            .expect("list ok");
+        assert_eq!(
+            published.len(),
+            1,
+            "seed-posts should publish 1 post for alice"
+        );
+        assert_eq!(
+            state
+                .site_config
+                .get("site.registration_policy")
+                .await
+                .unwrap(),
+            Some("open".to_owned()),
+            "set-site-config should upsert the value",
+        );
+    }
 }
