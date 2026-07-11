@@ -38,6 +38,33 @@ compatibility but not used in v1 — org is the only converter)."
                 :value-type (plist :key-type symbol :value-type string))
   :group 'jaunder)
 
+;;; Publish-time warning toggles.
+;; Soft, suppressible authoring-hygiene warnings emitted during publish; each
+;; never blocks (a check that cannot run, or is disabled here, simply stays
+;; silent).  The shared primitive is `jaunder--warn' (see jaunder-warn.el); the
+;; domain deciders live in their feature modules.
+
+(defcustom jaunder-warn-zone-mismatch t
+  "Whether to warn at publish on a machine-zone / JAUNDER_DATE_TZ mismatch.
+When non-nil, warn if the recorded JAUNDER_DATE_TZ differs from the machine's
+current zone.  See `jaunder--warn-zone-mismatch'."
+  :type 'boolean
+  :group 'jaunder)
+
+(defcustom jaunder-warn-untracked-media t
+  "Whether to warn at publish about referenced media not tracked by git.
+When non-nil, warn for each referenced local media file not tracked by git in
+the document's repository.  See `jaunder--warn-untracked-media'."
+  :type 'boolean
+  :group 'jaunder)
+
+(defcustom jaunder-warn-missing-format-media-type t
+  "Whether to warn at publish when the server lacks the format-media-type feature.
+When non-nil, warn if the server's service document does not advertise the
+`format-media-type' feature.  See `jaunder--warn-missing-format-media-type'."
+  :type 'boolean
+  :group 'jaunder)
+
 (defun jaunder--blog-entry-for (file-or-dir)
   "Return the `jaunder-blogs' entry (DIRECTORY . PLIST) for FILE-OR-DIR, or nil.
 Longest-prefix match: the entry whose DIRECTORY is the longest prefix of

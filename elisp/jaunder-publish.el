@@ -29,6 +29,7 @@
 (require 'jaunder-atom)
 (require 'jaunder-org)
 (require 'jaunder-transport)
+(require 'jaunder-service)
 (require 'jaunder-media)
 
 (defun jaunder--validate-publish (entry status date-raw tz)
@@ -168,6 +169,14 @@ file pristine."
                           ;; recorded zone on later machines.  A first-publish's org->atom above
                           ;; already used the local zone, which equals the captured name.
                           (jaunder--ensure-date-tz)
+                          ;; Authoring-hygiene warning: `tz' is the zone recorded
+                          ;; *before* the capture above, so a difference means the
+                          ;; author moved machines since recording it.
+                          (jaunder--warn-zone-mismatch tz)
+                          ;; Warn (once per session per blog) if the server won't
+                          ;; honour the per-entry text/org content type.
+                          (jaunder--warn-missing-format-media-type
+                           (jaunder--active-base-url))
                           (setf (jaunder-entry-body entry)
                                 (jaunder--localize-media (jaunder-entry-body entry)))
                           (let* ((xml (jaunder--atom-entry->xml entry))

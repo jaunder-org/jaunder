@@ -827,4 +827,335 @@
               (kill-buffer buf))))
       (delete-directory dir t))))
 
+;;; Publish-time warnings (shared idiom) ----------------------------------
+
+(defmacro jaunder-test--capturing-warnings (&rest body)
+  "Run BODY with `display-warning' captured; return the list of (TYPE MSG LEVEL).
+Lets the warning tests assert on emitted warnings without touching the real
+`*Warnings*' buffer."
+  (declare (indent 0))
+  `(let (jaunder-test--warnings)
+     (cl-letf (((symbol-function 'display-warning)
+                (lambda (type message &optional level &rest _)
+                  (push (list type message level) jaunder-test--warnings))))
+              ,@body)
+     (nreverse jaunder-test--warnings)))
+
+;;; #217 — zone-mismatch warning
+
+(ert-deftest jaunder-zone-offset-p-recognizes-offsets ()
+  (should (jaunder--zone-offset-p "-0400"))
+  (should (jaunder--zone-offset-p "+0000"))
+  (should-not (jaunder--zone-offset-p "America/New_York"))
+  (should-not (jaunder--zone-offset-p nil)))
+
+(ert-deftest jaunder-warn-zone-mismatch-fires-on-difference ()
+  ;; AC-217a: recorded IANA zone differs from the machine's current zone.
+  (cl-letf (((symbol-function 'jaunder--current-zone-name)
+             (lambda () "Europe/London")))
+           (let ((warnings (jaunder-test--capturing-warnings
+                            (jaunder--warn-zone-mismatch "America/New_York"))))
+             (should (= (length warnings) 1))
+             (pcase-let ((`(,type ,message ,level) (car warnings)))
+               (should (eq type 'jaunder))
+               (should (eq level :warning))
+               (should (string-prefix-p "jaunder: " message))
+               (should (string-match-p "America/New_York" message))
+               (should (string-match-p "Europe/London" message))))))
+
+(ert-deftest jaunder-warn-zone-mismatch-silent-when-unset ()
+  ;; AC-217b: no recorded zone yet (captured this publish) → nothing to warn about.
+  (cl-letf (((symbol-function 'jaunder--current-zone-name)
+             (lambda () "Europe/London")))
+           (should-not (jaunder-test--capturing-warnings
+                        (jaunder--warn-zone-mismatch nil)))))
+
+(ert-deftest jaunder-warn-zone-mismatch-silent-when-equal ()
+  ;; AC-217c (IANA): recorded == current.
+  (cl-letf (((symbol-function 'jaunder--current-zone-name)
+             (lambda () "America/New_York")))
+           (should-not (jaunder-test--capturing-warnings
+                        (jaunder--warn-zone-mismatch "America/New_York")))))
+
+(ert-deftest jaunder-warn-zone-mismatch-silent-both-offsets ()
+  ;; AC-217c (offset): two numeric offsets differ only across DST on one machine.
+  (cl-letf (((symbol-function 'jaunder--current-zone-name)
+             (lambda () "-0400")))
+           (should-not (jaunder-test--capturing-warnings
+                        (jaunder--warn-zone-mismatch "-0500")))))
+
+(ert-deftest jaunder-warn-zone-mismatch-suppressed ()
+  ;; AC-217d: the defcustom silences it even on a real difference.
+  (cl-letf (((symbol-function 'jaunder--current-zone-name)
+             (lambda () "Europe/London")))
+           (let ((jaunder-warn-zone-mismatch nil))
+             (should-not (jaunder-test--capturing-warnings
+                          (jaunder--warn-zone-mismatch "America/New_York"))))))
+
+;;; #206 — untracked-media warning
+
+(ert-deftest jaunder-warn-untracked-media-one-per-untracked ()
+  ;; AC-206a: one committed + one untracked → exactly one warning, the untracked.
+  (cl-letf (((symbol-function 'jaunder--git-toplevel) (lambda (_dir) "/repo"))
+            ((symbol-function 'jaunder--git-tracked-p)
+             (lambda (_top path) (equal path "/repo/a.png"))))
+           (let ((warnings (jaunder-test--capturing-warnings
+                            (jaunder--warn-untracked-media
+                             (list (list :path "/repo/a.png")
+                                   (list :path "/repo/b.png"))))))
+             (should (= (length warnings) 1))
+             (should (eq (nth 0 (car warnings)) 'jaunder))
+             (should (string-prefix-p "jaunder: " (nth 1 (car warnings))))
+             (should (string-match-p "/repo/b.png" (nth 1 (car warnings)))))))
+
+(ert-deftest jaunder-warn-untracked-media-all-tracked ()
+  ;; AC-206d
+  (cl-letf (((symbol-function 'jaunder--git-toplevel) (lambda (_dir) "/repo"))
+            ((symbol-function 'jaunder--git-tracked-p) (lambda (_top _path) t)))
+           (should-not (jaunder-test--capturing-warnings
+                        (jaunder--warn-untracked-media (list (list :path "/repo/a.png")))))))
+
+(ert-deftest jaunder-warn-untracked-media-skips-non-repo ()
+  ;; AC-206e: no repo (or no git) → skip entirely.
+  (cl-letf (((symbol-function 'jaunder--git-toplevel) (lambda (_dir) nil)))
+           (should-not (jaunder-test--capturing-warnings
+                        (jaunder--warn-untracked-media (list (list :path "/x/a.png")))))))
+
+(ert-deftest jaunder-warn-untracked-media-suppressed ()
+  ;; AC-206f
+  (cl-letf (((symbol-function 'jaunder--git-toplevel) (lambda (_dir) "/repo"))
+            ((symbol-function 'jaunder--git-tracked-p) (lambda (_top _path) nil)))
+           (let ((jaunder-warn-untracked-media nil))
+             (should-not (jaunder-test--capturing-warnings
+                          (jaunder--warn-untracked-media (list (list :path "/repo/a.png"))))))))
+
+(ert-deftest jaunder-warn-untracked-media-dedups ()
+  ;; AC-206g: the same untracked path referenced twice warns once.
+  (cl-letf (((symbol-function 'jaunder--git-toplevel) (lambda (_dir) "/repo"))
+            ((symbol-function 'jaunder--git-tracked-p) (lambda (_top _path) nil)))
+           (let ((warnings (jaunder-test--capturing-warnings
+                            (jaunder--warn-untracked-media
+                             (list (list :path "/repo/a.png")
+                                   (list :path "/repo/a.png"))))))
+             (should (= (length warnings) 1)))))
+
+(ert-deftest jaunder-git-tracked-p-real-repo ()
+  ;; AC-206b/c deterministic: pin git's actual exit code for gitignored and
+  ;; outside-tree paths (and toplevel resolution from a subdirectory), rather
+  ;; than assuming it.  Staging (git add) suffices for `ls-files --error-unmatch',
+  ;; so no commit/identity setup is needed.
+  (skip-unless (executable-find "git"))
+  ;; Strip inherited GIT_* vars (a pre-commit/CI hook exports GIT_DIR /
+  ;; GIT_WORK_TREE) so the temp repo's git subprocesses stay hermetic and do not
+  ;; resolve against the ambient work tree.
+  (let* ((process-environment
+          (seq-remove (lambda (v) (string-prefix-p "GIT_" v))
+                      process-environment))
+         (root (file-truename (make-temp-file "jaunder-git-" t)))
+         (default-directory root))
+    (unwind-protect
+        (progn
+          (should (zerop (call-process "git" nil nil nil "init")))
+          (with-temp-file (expand-file-name "tracked.png" root) (insert "x"))
+          (should (zerop (call-process "git" nil nil nil "add" "tracked.png")))
+          (with-temp-file (expand-file-name ".gitignore" root) (insert "ignored.png\n"))
+          (with-temp-file (expand-file-name "ignored.png" root) (insert "y"))
+          (let ((outside (make-temp-file "jaunder-outside-" nil ".png")))
+            (unwind-protect
+                (progn
+                  (should (jaunder--git-tracked-p
+                           root (expand-file-name "tracked.png" root)))
+                  (should-not (jaunder--git-tracked-p
+                               root (expand-file-name "ignored.png" root)))
+                  (should-not (jaunder--git-tracked-p root outside)))
+              (delete-file outside)))
+          (let ((sub (expand-file-name "sub/deep" root)))
+            (make-directory sub t)
+            (should (equal (file-truename (jaunder--git-toplevel sub))
+                           (file-truename root)))))
+      (delete-directory root t))))
+
+;;; #216 — missing-format-media-type warning
+
+(defconst jaunder-test--service-doc-with-feature
+  (concat "<?xml version=\"1.0\"?>"
+          "<service xmlns=\"http://www.w3.org/2007/app\""
+          " xmlns:j=\"https://jaunder.org/ns/atompub\">"
+          "<workspace><j:extension version=\"1\""
+          " features=\"format-media-type slug\"/></workspace></service>")
+  "A service document advertising the format-media-type feature.")
+
+(ert-deftest jaunder-parse-service-features-reads-features-attr ()
+  (should (equal (jaunder--parse-service-features
+                  jaunder-test--service-doc-with-feature)
+                 '("format-media-type" "slug"))))
+
+(ert-deftest jaunder-parse-service-features-absent-is-empty ()
+  ;; Parses fine but advertises nothing → empty list, not `unknown'.
+  (should (equal (jaunder--parse-service-features
+                  (concat "<service xmlns=\"http://www.w3.org/2007/app\">"
+                          "<workspace/></service>"))
+                 '())))
+
+(ert-deftest jaunder-parse-service-features-ignores-incidental-text ()
+  ;; AC-216e: the token in a title text node is not the `features' attribute.
+  (should-not
+   (member "format-media-type"
+           (jaunder--parse-service-features
+            (concat "<service xmlns=\"http://www.w3.org/2007/app\">"
+                    "<workspace><atom:title"
+                    " xmlns:atom=\"http://www.w3.org/2005/Atom\">"
+                    "format-media-type</atom:title></workspace></service>")))))
+
+(ert-deftest jaunder-parse-service-features-unparseable-is-unknown ()
+  ;; AC-216d: a 2xx body that is not parseable XML → unknown, not "absent".
+  (should (eq (jaunder--parse-service-features "garbage, not xml") 'unknown)))
+
+(ert-deftest jaunder-warn-missing-fmt-fires-when-absent ()
+  ;; AC-216a
+  (let ((jaunder--service-doc-cache nil))
+    (cl-letf (((symbol-function 'jaunder--fetch-service-features)
+               (lambda (_base) '("slug"))))
+             (let ((warnings (jaunder-test--capturing-warnings
+                              (jaunder--warn-missing-format-media-type "https://blog"))))
+               (should (= (length warnings) 1))
+               (should (eq (nth 0 (car warnings)) 'jaunder))
+               (should (string-prefix-p "jaunder: " (nth 1 (car warnings))))
+               (should (string-match-p "format-media-type" (nth 1 (car warnings))))
+               (should (string-match-p "https://blog" (nth 1 (car warnings))))))))
+
+(ert-deftest jaunder-warn-missing-fmt-caches-once-per-blog ()
+  ;; AC-216b: a second publish neither re-warns nor re-fetches.
+  (let ((jaunder--service-doc-cache nil) (fetches 0))
+    (cl-letf (((symbol-function 'jaunder--fetch-service-features)
+               (lambda (_base) (cl-incf fetches) '("slug"))))
+             (let ((first (jaunder-test--capturing-warnings
+                           (jaunder--warn-missing-format-media-type "https://blog")))
+                   (second (jaunder-test--capturing-warnings
+                            (jaunder--warn-missing-format-media-type "https://blog"))))
+               (should (= (length first) 1))
+               (should (null second))
+               (should (= fetches 1))))))
+
+(ert-deftest jaunder-warn-missing-fmt-silent-when-present ()
+  ;; AC-216c
+  (let ((jaunder--service-doc-cache nil))
+    (cl-letf (((symbol-function 'jaunder--fetch-service-features)
+               (lambda (_base) '("format-media-type" "slug"))))
+             (should-not (jaunder-test--capturing-warnings
+                          (jaunder--warn-missing-format-media-type "https://blog"))))))
+
+(ert-deftest jaunder-warn-missing-fmt-unknown-not-cached ()
+  ;; AC-216d: unknown → no warning and no cache entry (a later publish retries).
+  (let ((jaunder--service-doc-cache nil))
+    (cl-letf (((symbol-function 'jaunder--fetch-service-features)
+               (lambda (_base) 'unknown)))
+             (should-not (jaunder-test--capturing-warnings
+                          (jaunder--warn-missing-format-media-type "https://blog")))
+             (should-not (assoc "https://blog" jaunder--service-doc-cache)))))
+
+(ert-deftest jaunder-fetch-service-features-catches-signal ()
+  ;; AC-216d seam: a transport signal becomes `unknown', never propagates.
+  (cl-letf (((symbol-function 'jaunder--http-request)
+             (lambda (&rest _) (error "boom"))))
+           (should (eq (jaunder--fetch-service-features "https://blog") 'unknown))))
+
+(ert-deftest jaunder-warn-missing-fmt-suppressed ()
+  ;; AC-216f: disabled → no fetch, no warning.
+  (let ((jaunder--service-doc-cache nil) (fetches 0))
+    (cl-letf (((symbol-function 'jaunder--fetch-service-features)
+               (lambda (_base) (cl-incf fetches) '("slug"))))
+             (let ((jaunder-warn-missing-format-media-type nil))
+               (should-not (jaunder-test--capturing-warnings
+                            (jaunder--warn-missing-format-media-type "https://blog")))
+               (should (= fetches 0))))))
+
+;;; Cross-cutting shared-idiom tests
+
+(ert-deftest jaunder-publish-warnings-are-independent ()
+  ;; AC-S2: suppressing one warning leaves the other two firing.
+  (let ((jaunder--service-doc-cache nil))
+    (cl-letf (((symbol-function 'jaunder--current-zone-name)
+               (lambda () "Europe/London"))
+              ((symbol-function 'jaunder--git-toplevel) (lambda (_dir) "/repo"))
+              ((symbol-function 'jaunder--git-tracked-p) (lambda (_top _path) nil))
+              ((symbol-function 'jaunder--fetch-service-features)
+               (lambda (_base) '("slug"))))
+             (let* ((jaunder-warn-zone-mismatch nil)
+                    (msgs (mapcar
+                           (lambda (w) (nth 1 w))
+                           (jaunder-test--capturing-warnings
+                            (jaunder--warn-zone-mismatch "America/New_York")
+                            (jaunder--warn-untracked-media
+                             (list (list :path "/repo/a.png")))
+                            (jaunder--warn-missing-format-media-type "https://blog")))))
+               (should (= (length msgs) 2))
+               (should-not (seq-find (lambda (m) (string-match-p "timezone" m)) msgs))
+               (should (seq-find (lambda (m) (string-match-p "not tracked" m)) msgs))
+               (should (seq-find (lambda (m) (string-match-p "format-media-type" m)) msgs))))))
+
+(ert-deftest jaunder-publish-request-identical-with-warnings ()
+  ;; AC-S1: the publish request/return is byte-identical whether the warnings
+  ;; fire or are all suppressed — they are side-effect-free on the publish path.
+  (let* ((dir (file-truename (make-temp-file "jaunder-s1-" t)))
+         (file (expand-file-name "post.org" dir))
+         (jaunder-blogs (list (cons dir (list :base-url "https://blog.example"
+                                              :username "alice"))))
+         (captured nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'jaunder--current-zone-name)
+                   (lambda () "Europe/London"))
+                  ((symbol-function 'jaunder--fetch-service-features)
+                   (lambda (_base) '("slug")))
+                  ((symbol-function 'jaunder--write-back) (lambda (&rest _) nil))
+                  ((symbol-function 'jaunder--http-request)
+                   (lambda (method _url &optional body &rest _)
+                     (when (member method '("POST" "PUT"))
+                       (setq captured body))
+                     (jaunder-test--response 201 nil ""))))
+                 (cl-flet ((do-publish ()
+                             (with-temp-buffer
+                               (org-mode)
+                               (insert (concat "#+TITLE: T\n"
+                                               "#+PROPERTY: JAUNDER_DATE_TZ America/New_York\n"
+                                               "\nBody.\n"))
+                               (set-visited-file-name file nil t)
+                               (setq captured nil)
+                               (jaunder-publish)
+                               (set-buffer-modified-p nil)
+                               captured)))
+                          ;; All three warnings WANT to fire here (recorded zone differs,
+                          ;; service doc lacks the feature).
+                          (let ((body-enabled (let ((jaunder--service-doc-cache nil))
+                                                (do-publish)))
+                                (body-suppressed
+                                 (let ((jaunder-warn-zone-mismatch nil)
+                                       (jaunder-warn-untracked-media nil)
+                                       (jaunder-warn-missing-format-media-type nil)
+                                       (jaunder--service-doc-cache nil))
+                                   (do-publish))))
+                            (should (stringp body-enabled))
+                            (should (equal body-enabled body-suppressed)))))
+      (delete-directory dir t))))
+
+;;; Review follow-ups
+
+(ert-deftest jaunder-parse-service-features-non-service-root-is-unknown ()
+  ;; A 2xx HTML/error page from a proxy parses to a non-service root → unknown
+  ;; (skip + no cache), not a false "feature absent".
+  (should (eq (jaunder--parse-service-features
+               "<html><body>Error 500</body></html>")
+              'unknown)))
+
+(ert-deftest jaunder-fetch-service-features-non-2xx-is-unknown ()
+  ;; AC-216d: a 4xx/5xx status → unknown (never a "feature absent").
+  (cl-letf (((symbol-function 'jaunder--http-request)
+             (lambda (&rest _) (jaunder-test--response 404 nil "nope"))))
+           (should (eq (jaunder--fetch-service-features "https://blog") 'unknown))))
+
+(ert-deftest jaunder-git-toplevel-skips-on-unenterable-dir ()
+  ;; Best-effort: an unenterable `default-directory' must not signal on the
+  ;; publish path — the helper returns nil (skip), never errors.
+  (should-not (jaunder--git-toplevel "/jaunder-no-such-dir-xyz/")))
+
 ;;; jaunder-test.el ends here

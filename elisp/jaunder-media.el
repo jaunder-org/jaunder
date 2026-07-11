@@ -26,6 +26,7 @@
 (require 'jaunder-atom)
 (require 'jaunder-config)
 (require 'jaunder-transport)
+(require 'jaunder-warn)
 
 (defconst jaunder--media-image-types
   '(("png" . "image/png")
@@ -105,6 +106,49 @@ are missing, signals one error listing them all — fail-fast, upload nothing."
       (error "jaunder: media file(s) not found: %s"
              (mapconcat #'identity missing ", ")))))
 
+(defun jaunder--git-toplevel (dir)
+  "Return the git work-tree toplevel containing DIR, or nil.
+Best-effort: nil when DIR is nil, git is unavailable, or DIR is not inside a
+work tree — so the untracked-media check simply skips rather than erroring.
+`call-process' itself signals when DIR is unenterable (e.g. a remote TRAMP
+`default-directory'), so the invocation is wrapped to skip on any signal too."
+  (when (and dir (executable-find "git"))
+    (ignore-errors
+      (let ((default-directory dir))
+        (with-temp-buffer
+          (when (zerop (call-process "git" nil (list t nil) nil
+                                     "rev-parse" "--show-toplevel"))
+            (string-trim (buffer-string))))))))
+
+(defun jaunder--git-tracked-p (toplevel path)
+  "Return non-nil when PATH is tracked by git in the TOPLEVEL work tree.
+Untracked, gitignored, and outside-the-tree paths all report nil — `ls-files
+--error-unmatch' exits non-zero for each."
+  (let ((default-directory toplevel))
+    (zerop (call-process "git" nil nil nil
+                         "ls-files" "--error-unmatch" "--" path))))
+
+(defun jaunder--warn-untracked-media (records)
+  "Warn once per distinct untracked media `:path' in RECORDS.
+Anchored on the git repository containing the current buffer's file; skips
+entirely when that buffer is not in a work tree or git is unavailable.  A soft
+authoring-hygiene nudge (a fresh clone would lack local preview) that never
+blocks the publish.  Gated by `jaunder-warn-untracked-media'."
+  (when jaunder-warn-untracked-media
+    (let ((toplevel (jaunder--git-toplevel
+                     (and buffer-file-name
+                          (file-name-directory buffer-file-name)))))
+      (when toplevel
+        (let (seen)
+          (dolist (r records)
+            (let ((path (plist-get r :path)))
+              (when (and path (not (member path seen)))
+                (push path seen)
+                (unless (jaunder--git-tracked-p toplevel path)
+                  (jaunder--warn
+                   "referenced media %s is not tracked by git in this document's repository; a fresh clone will lack local preview"
+                   path))))))))))
+
 (defun jaunder--localize-media (body)
   "Upload the current buffer's local images and return BODY with links localized.
 Detects qualifying media links in the buffer's body region, pre-flights that all
@@ -113,6 +157,7 @@ sha256-dedups), and rewrites those links in BODY — the sent body — to the
 harvested server URLs, in order.  The authoring buffer is never modified."
   (let ((records (jaunder--collect-media-links)))
     (jaunder--media-preflight records)
+    (jaunder--warn-untracked-media records)
     (let ((cache (make-hash-table :test 'equal)))
       (dolist (r records)
         (let ((path (plist-get r :path)))

@@ -23,6 +23,8 @@
 ;;; Code:
 
 (require 'org)
+(require 'jaunder-config)
+(require 'jaunder-warn)
 
 (defun jaunder--offset->seconds (offset)
   "Parse a numeric UTC OFFSET string (\"±HHMM\" or \"±HH:MM\") to integer seconds.
@@ -80,6 +82,26 @@ trusts a non-empty, non-`:'-prefixed value as an IANA name; a POSIX-style TZ
         (and link (string-match "zoneinfo/\\(.+\\)\\'" link)
              (match-string 1 link)))
       (format-time-string "%z")))
+
+(defun jaunder--zone-offset-p (zone)
+  "Return non-nil when ZONE is a numeric offset like \"-0400\", not an IANA name."
+  (and (stringp zone) (string-match-p "\\`[+-][0-9]" zone)))
+
+(defun jaunder--warn-zone-mismatch (recorded)
+  "Warn when RECORDED zone differs from the machine's current zone.
+RECORDED is the pre-existing JAUNDER_DATE_TZ (nil when unset).  No warning when
+RECORDED is nil, equals the current zone, or when both are numeric offsets — a
+same-machine DST offset flip (e.g. -0500 -> -0400) is not a real zone change, so
+comparing offsets would only false-positive.  Gated by
+`jaunder-warn-zone-mismatch'."
+  (when (and jaunder-warn-zone-mismatch recorded)
+    (let ((current (jaunder--current-zone-name)))
+      (unless (or (string= recorded current)
+                  (and (jaunder--zone-offset-p recorded)
+                       (jaunder--zone-offset-p current)))
+        (jaunder--warn
+         "recorded timezone %s differs from this machine's zone %s; #+DATE: will be interpreted in the recorded zone %s"
+         recorded current recorded)))))
 
 (provide 'jaunder-datetime)
 ;;; jaunder-datetime.el ends here
