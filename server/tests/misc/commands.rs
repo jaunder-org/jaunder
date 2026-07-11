@@ -615,7 +615,7 @@ async fn cmd_restore_restores_directory_backup(#[case] backend: Backend) {
     let base = TempDir::new().expect("temp dir");
     let (source_args, _pg_source) = storage_args(backend, &base).await;
     cmd_init(&source_args, false).await.expect("init source");
-    let post_id = populate_backup_fixture(&source_args).await;
+    let ids = populate_backup_fixture(&source_args).await;
 
     let backup_path = base.path().join("backup");
     cmd_backup(
@@ -633,7 +633,7 @@ async fn cmd_restore_restores_directory_backup(#[case] backend: Backend) {
         .await
         .expect("restore");
 
-    assert_backup_fixture_restored(&target_args, post_id).await;
+    assert_backup_fixture_restored(&target_args, &ids).await;
 }
 
 // #136: a backup with a dangling foreign key is rejected uniformly (DEC-C) —
@@ -644,7 +644,7 @@ async fn cmd_restore_rejects_dangling_foreign_key(#[case] backend: Backend) {
     let base = TempDir::new().expect("temp dir");
     let (source_args, _pg_source) = storage_args(backend, &base).await;
     cmd_init(&source_args, false).await.expect("init source");
-    let post_id = populate_backup_fixture(&source_args).await;
+    let ids = populate_backup_fixture(&source_args).await;
 
     let backup_path = base.path().join("backup");
     cmd_backup(
@@ -664,7 +664,8 @@ async fn cmd_restore_rejects_dangling_foreign_key(#[case] backend: Backend) {
     let mut contents = std::fs::read_to_string(&post_tags).expect("read post_tags");
     writeln!(
         contents,
-        "{{\"post_id\":{post_id},\"tag_id\":999999,\"tag_display\":\"Dangling\"}}"
+        "{{\"post_id\":{},\"tag_id\":999999,\"tag_display\":\"Dangling\"}}",
+        ids.public_post
     )
     .expect("append dangling row");
     std::fs::write(&post_tags, contents).expect("write tampered post_tags");
@@ -766,7 +767,7 @@ async fn cmd_restore_restores_archive_backup(#[case] backend: Backend) {
     let base = TempDir::new().expect("temp dir");
     let (source_args, _pg_source) = storage_args(backend, &base).await;
     cmd_init(&source_args, false).await.expect("init source");
-    let post_id = populate_backup_fixture(&source_args).await;
+    let ids = populate_backup_fixture(&source_args).await;
 
     let archive_path = base.path().join("backup.tar.gz");
     cmd_backup(
@@ -785,7 +786,7 @@ async fn cmd_restore_restores_archive_backup(#[case] backend: Backend) {
         .await
         .expect("restore");
 
-    assert_backup_fixture_restored(&target_args, post_id).await;
+    assert_backup_fixture_restored(&target_args, &ids).await;
 }
 
 #[apply(backends)]
