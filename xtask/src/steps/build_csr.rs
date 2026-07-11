@@ -7,19 +7,21 @@
 //! Output lands in `target/site/pkg/` (`jaunder.{js,wasm}` + wasm-bindgen's
 //! `.d.ts`/`snippets`), where `jaunder serve` serves it from `site_root`.
 
+use std::path::Path;
+
 use xshell::{cmd, Shell};
 
+use crate::git;
 use crate::result::{CommandResult, StepResult};
 
 /// Build `csr` to wasm and post-process it into the served bundle. `release`
 /// selects the optimized profile (CI parity); the default debug build is faster
 /// for the dev loop.
 pub fn run(sh: &Shell, result: &mut CommandResult, release: bool) {
-    let Ok(root) = cmd!(sh, "git rev-parse --show-toplevel").quiet().read() else {
+    let Ok(root) = git::toplevel(Path::new(".")) else {
         result.push(StepResult::fail("build-csr").detail("cannot locate repo root".to_owned()));
         return;
     };
-    let root = root.trim().to_owned();
     sh.change_dir(&root);
 
     let profile = if release { "release" } else { "debug" };

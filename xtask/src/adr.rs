@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use crate::git;
 use crate::ids;
 use crate::result::StepResult;
 
@@ -68,37 +69,6 @@ pub fn renumber() -> StepResult {
     }
 }
 
-/// Trimmed stdout of a git command in `repo`. A non-zero exit is an error, except
-/// that when `allow_no_match` is set, exit code 1 is tolerated and yields empty
-/// output — that is `git grep`'s "no match" signal. Any other non-zero (notably
-/// 128 on a real grep error) still fails, so a genuine failure is never mistaken
-/// for "nothing to rewrite".
-fn git_out(repo: &Path, args: &[&str], allow_no_match: bool) -> Result<String> {
-    let out = crate::git::at(repo)
-        .args(args)
-        .output()
-        .with_context(|| format!("running git {args:?}"))?;
-    if !out.status.success() {
-        let no_match = out.status.code() == Some(1);
-        if !(allow_no_match && no_match) {
-            anyhow::bail!(
-                "git {args:?} failed: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
-        }
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
-/// Non-empty lines of a git command's stdout.
-fn git_lines(repo: &Path, args: &[&str], allow_no_match: bool) -> Result<Vec<String>> {
-    Ok(git_out(repo, args, allow_no_match)?
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(str::to_string)
-        .collect())
-}
-
 /// ADR filenames currently in `repo`'s `docs/adr`.
 fn adr_filenames(repo: &Path) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(repo.join(ADR_DIR)) else {
@@ -127,29 +97,17 @@ fn rewrite_file(repo: &Path, rel: &str, f: impl Fn(&str) -> String) -> Result<()
 /// references. `main_ref` is the integration branch (`origin/main` in practice;
 /// a local `main` in tests). Returns a human summary of the moves.
 fn run_renumber(repo: &Path, main_ref: &str) -> Result<String> {
-    let base = git_out(repo, &["merge-base", main_ref, "HEAD"], false)
-        .context("finding merge-base with main")?;
+    let base = git::merge_base(repo, main_ref, "HEAD").context("finding merge-base with main")?;
     let range = format!("{base}..HEAD");
 
     // ADR files this branch ADDED (filenames only).
-    let added: Vec<String> = git_lines(
-        repo,
-        &[
-            "diff",
-            "--diff-filter=A",
-            "--name-only",
-            &range,
-            "--",
-            ADR_DIR,
-        ],
-        false,
-    )?
-    .into_iter()
-    .filter_map(|p| p.rsplit('/').next().map(str::to_string))
-    .collect();
+    let added: Vec<String> = git::diff_added(repo, &range, ADR_DIR)?
+        .into_iter()
+        .filter_map(|p| p.rsplit('/').next().map(str::to_string))
+        .collect();
 
     // Files this branch touched at all — the scope for bare-ref rewrites.
-    let touched: Vec<String> = git_lines(repo, &["diff", "--name-only", &range], false)?;
+    let touched: Vec<String> = git::diff_names(repo, &range)?;
 
     let mut all = adr_filenames(repo);
     let mut summary = Vec::new();
@@ -176,17 +134,17 @@ fn run_renumber(repo: &Path, main_ref: &str) -> Result<String> {
         let new_rel = format!("{ADR_DIR}/{new_name}");
 
         // 1. Move the colliding newcomer.
-        git_out(repo, &["mv", &old_rel, &new_rel], false)?;
+        git::mv(repo, &old_rel, &new_rel)?;
 
         // 2. Path-form (slug-bearing) refs: rewrite repo-wide.
-        for file in git_lines(repo, &["grep", "-l", "--fixed-strings", &old_stem], true)? {
+        for file in git::grep_files(repo, &old_stem)? {
             rewrite_file(repo, &file, |c| rewrite_stem(c, &old_stem, &new_stem))?;
         }
 
         // 3. Bare `ADR-NNNN` refs: rewrite only in branch-touched files (the moved
         //    ADR's own content counts — match its old and new paths too).
         let bare_token = format!("ADR-{}", pad(num));
-        for file in git_lines(repo, &["grep", "-l", "--fixed-strings", &bare_token], true)? {
+        for file in git::grep_files(repo, &bare_token)? {
             let touched_by_branch =
                 touched.iter().any(|t| t == &file) || file == new_rel || file == old_rel;
             if touched_by_branch {
@@ -294,7 +252,7 @@ fn run_promote(repo: &Path) -> Result<String> {
             .with_context(|| format!("writing {new_rel}"))?;
         std::fs::remove_file(repo.join(&draft_rel))
             .with_context(|| format!("removing {draft_rel}"))?;
-        git_out(repo, &["add", &new_rel], false)?;
+        git::add(repo, &new_rel)?;
     }
 
     // Pass C — rewrite path-form references repo-wide. `drafts/<slug>` carries the
@@ -305,9 +263,9 @@ fn run_promote(repo: &Path) -> Result<String> {
     for (slug, num, new_name) in &assigned {
         let draft_stem = format!("drafts/{slug}");
         let new_stem = format!("{}-{slug}", pad(*num));
-        for file in git_lines(repo, &["grep", "-l", "--fixed-strings", &draft_stem], true)? {
+        for file in git::grep_files(repo, &draft_stem)? {
             rewrite_file(repo, &file, |c| rewrite_stem(c, &draft_stem, &new_stem))?;
-            git_out(repo, &["add", &file], false)?;
+            git::add(repo, &file)?;
         }
         summary.push(format!("{DRAFTS_DIR}/{slug}.md -> {ADR_DIR}/{new_name}"));
     }
@@ -316,7 +274,7 @@ fn run_promote(repo: &Path) -> Result<String> {
     // from its heading. Tolerate a markerless README (a scratch/test repo).
     let table_note = if crate::adr_readme::readme_has_markers(repo)? {
         let note = crate::adr_readme::sync_readme_at(repo)?;
-        git_out(repo, &["add", crate::adr_readme::README], false)?;
+        git::add(repo, crate::adr_readme::README)?;
         format!("README table synced ({note})")
     } else {
         "README table not synced (no adr-table markers)".to_string()
