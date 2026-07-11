@@ -219,6 +219,7 @@ fn insert_sql(table: &str, columns: &[ColumnInfo]) -> String {
 fn restore_type(column: &ColumnInfo) -> &'static str {
     match column.type_name.as_str() {
         "bool" => "BOOLEAN",
+        "int4" => "INTEGER",
         "int8" => "BIGINT",
         "timestamptz" => "TIMESTAMPTZ",
         _ => "TEXT",
@@ -230,13 +231,21 @@ fn restore_type(column: &ColumnInfo) -> &'static str {
 /// without this the next INSERT would reuse an existing id and hit a unique
 /// violation. The third `setval` arg (`COUNT(*) > 0`) leaves the sequence
 /// "uncalled" for an empty table, so the first inserted row still gets id 1.
+///
+/// The serial/identity columns are derived from the catalog rather than
+/// hand-listed, so a newly backed-up table's sequence is repaired automatically.
 async fn repair_sequences(connection: &mut PgConnection) -> Result<(), BackupError> {
-    for (table, column) in [
-        ("users", "user_id"),
-        ("posts", "post_id"),
-        ("post_revisions", "revision_id"),
-        ("tags", "tag_id"),
-    ] {
+    let serial_columns = sqlx::query(
+        "SELECT table_name, column_name
+         FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND (is_identity = 'YES' OR column_default LIKE 'nextval(%')",
+    )
+    .fetch_all(&mut *connection)
+    .await?;
+    for row in serial_columns {
+        let table: String = row.try_get("table_name")?;
+        let column: String = row.try_get("column_name")?;
         let sql = format!(
             "SELECT setval(
                 pg_get_serial_sequence('{table}', '{column}'),
