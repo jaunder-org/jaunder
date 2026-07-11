@@ -12,6 +12,7 @@
 
 use leptos::prelude::*;
 use leptos::server_fn::ServerFn;
+use macros::client_only;
 
 /// A revalidation handle. A committed mutation [`notify`](Self::notify)s it; the resources
 /// that [`track`](Self::track) it refetch.
@@ -42,11 +43,13 @@ impl Invalidator {
         self.0.get()
     }
 
-    // cov:ignore-start — client-only reactive plumbing: the resource's fetch and the
-    // action's gating `Effect` run only in the browser (exercised by the audiences e2e).
     /// A [`Resource`] that refetches whenever this invalidator fires. The fetcher is
     /// nullary — the counter is an internal detail callers never see.
+    ///
+    /// Client-only: the `server_resource` fetch runs only in the browser, so it is
+    /// exercised by the audiences e2e, not host tests.
     #[must_use]
+    #[client_only]
     pub fn resource<T, Fut>(&self, fetch: impl Fn() -> Fut + Send + Sync + 'static) -> Resource<T>
     where
         T: serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static,
@@ -59,7 +62,11 @@ impl Invalidator {
     /// A [`ServerAction`] that fires this invalidator on **success** — after the mutation
     /// commits (`Some(Ok(_))`), never on dispatch or on failure. The gating `Effect` is
     /// wired internally, so no caller writes it.
+    ///
+    /// Client-only: the success-gating `Effect` fires only in the browser, so it is
+    /// exercised by the audiences e2e, not host tests.
     #[must_use]
+    #[client_only]
     pub fn action<A>(&self) -> ServerAction<A>
     where
         A: ServerFn + Send + Sync + Clone + 'static,
@@ -82,7 +89,11 @@ impl Invalidator {
     /// **in-place** `patch` (a generic bound would instead resolve to the unkeyed, positional
     /// patch and lose per-row identity). Returns the list's [`ListState`]; a pending or failed
     /// refetch never patches, so the last-good rows are retained.
+    ///
+    /// Client-only: it drives a `server_resource` refetch through a browser-only `Effect`,
+    /// so it is exercised by the audiences e2e, not host tests.
     #[must_use]
+    #[client_only]
     pub fn patched<T, Fut, E>(
         &self,
         fetch: impl Fn() -> Fut + Send + Sync + 'static,
@@ -124,7 +135,11 @@ impl Invalidator {
     /// **surfaced** (`Err`) for the caller to render, never swallowed into a default: a
     /// swallowed error silently misrepresents state (#346). The flat peer of
     /// [`patched`](Self::patched), which is for keyed stores.
+    ///
+    /// Client-only: it drives a `server_resource` refetch through a browser-only `Effect`,
+    /// so it is exercised by the audiences e2e, not host tests.
     #[must_use]
+    #[client_only]
     pub fn sticky<T, Fut, E>(
         &self,
         fetch: impl Fn() -> Fut + Send + Sync + 'static,
@@ -149,7 +164,6 @@ impl Invalidator {
         });
         signal.into()
     }
-    // cov:ignore-stop
 }
 
 impl Default for Invalidator {
