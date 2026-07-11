@@ -51,6 +51,13 @@ current zone.  See `jaunder--warn-zone-mismatch'."
   :type 'boolean
   :group 'jaunder)
 
+(defcustom jaunder-warn-untracked-media t
+  "Whether to warn at publish about referenced media not tracked by git.
+When non-nil, warn for each referenced local media file not tracked by git in
+the document's repository.  See `jaunder--warn-untracked-media'."
+  :type 'boolean
+  :group 'jaunder)
+
 (defun jaunder--blog-entry-for (file-or-dir)
   "Return the `jaunder-blogs' entry (DIRECTORY . PLIST) for FILE-OR-DIR, or nil.
 Longest-prefix match: the entry whose DIRECTORY is the longest prefix of

@@ -892,4 +892,87 @@ Lets the warning tests assert on emitted warnings without touching the real
              (should-not (jaunder-test--capturing-warnings
                           (jaunder--warn-zone-mismatch "America/New_York"))))))
 
+;;; #206 — untracked-media warning
+
+(ert-deftest jaunder-warn-untracked-media-one-per-untracked ()
+  ;; AC-206a: one committed + one untracked → exactly one warning, the untracked.
+  (cl-letf (((symbol-function 'jaunder--git-toplevel) (lambda (_dir) "/repo"))
+            ((symbol-function 'jaunder--git-tracked-p)
+             (lambda (_top path) (equal path "/repo/a.png"))))
+           (let ((warnings (jaunder-test--capturing-warnings
+                            (jaunder--warn-untracked-media
+                             (list (list :path "/repo/a.png")
+                                   (list :path "/repo/b.png"))))))
+             (should (= (length warnings) 1))
+             (should (eq (nth 0 (car warnings)) 'jaunder))
+             (should (string-prefix-p "jaunder: " (nth 1 (car warnings))))
+             (should (string-match-p "/repo/b.png" (nth 1 (car warnings)))))))
+
+(ert-deftest jaunder-warn-untracked-media-all-tracked ()
+  ;; AC-206d
+  (cl-letf (((symbol-function 'jaunder--git-toplevel) (lambda (_dir) "/repo"))
+            ((symbol-function 'jaunder--git-tracked-p) (lambda (_top _path) t)))
+           (should-not (jaunder-test--capturing-warnings
+                        (jaunder--warn-untracked-media (list (list :path "/repo/a.png")))))))
+
+(ert-deftest jaunder-warn-untracked-media-skips-non-repo ()
+  ;; AC-206e: no repo (or no git) → skip entirely.
+  (cl-letf (((symbol-function 'jaunder--git-toplevel) (lambda (_dir) nil)))
+           (should-not (jaunder-test--capturing-warnings
+                        (jaunder--warn-untracked-media (list (list :path "/x/a.png")))))))
+
+(ert-deftest jaunder-warn-untracked-media-suppressed ()
+  ;; AC-206f
+  (cl-letf (((symbol-function 'jaunder--git-toplevel) (lambda (_dir) "/repo"))
+            ((symbol-function 'jaunder--git-tracked-p) (lambda (_top _path) nil)))
+           (let ((jaunder-warn-untracked-media nil))
+             (should-not (jaunder-test--capturing-warnings
+                          (jaunder--warn-untracked-media (list (list :path "/repo/a.png"))))))))
+
+(ert-deftest jaunder-warn-untracked-media-dedups ()
+  ;; AC-206g: the same untracked path referenced twice warns once.
+  (cl-letf (((symbol-function 'jaunder--git-toplevel) (lambda (_dir) "/repo"))
+            ((symbol-function 'jaunder--git-tracked-p) (lambda (_top _path) nil)))
+           (let ((warnings (jaunder-test--capturing-warnings
+                            (jaunder--warn-untracked-media
+                             (list (list :path "/repo/a.png")
+                                   (list :path "/repo/a.png"))))))
+             (should (= (length warnings) 1)))))
+
+(ert-deftest jaunder-git-tracked-p-real-repo ()
+  ;; AC-206b/c deterministic: pin git's actual exit code for gitignored and
+  ;; outside-tree paths (and toplevel resolution from a subdirectory), rather
+  ;; than assuming it.  Staging (git add) suffices for `ls-files --error-unmatch',
+  ;; so no commit/identity setup is needed.
+  (skip-unless (executable-find "git"))
+  ;; Strip inherited GIT_* vars (a pre-commit/CI hook exports GIT_DIR /
+  ;; GIT_WORK_TREE) so the temp repo's git subprocesses stay hermetic and do not
+  ;; resolve against the ambient work tree.
+  (let* ((process-environment
+          (seq-remove (lambda (v) (string-prefix-p "GIT_" v))
+                      process-environment))
+         (root (file-truename (make-temp-file "jaunder-git-" t)))
+         (default-directory root))
+    (unwind-protect
+        (progn
+          (should (zerop (call-process "git" nil nil nil "init")))
+          (with-temp-file (expand-file-name "tracked.png" root) (insert "x"))
+          (should (zerop (call-process "git" nil nil nil "add" "tracked.png")))
+          (with-temp-file (expand-file-name ".gitignore" root) (insert "ignored.png\n"))
+          (with-temp-file (expand-file-name "ignored.png" root) (insert "y"))
+          (let ((outside (make-temp-file "jaunder-outside-" nil ".png")))
+            (unwind-protect
+                (progn
+                  (should (jaunder--git-tracked-p
+                           root (expand-file-name "tracked.png" root)))
+                  (should-not (jaunder--git-tracked-p
+                               root (expand-file-name "ignored.png" root)))
+                  (should-not (jaunder--git-tracked-p root outside)))
+              (delete-file outside)))
+          (let ((sub (expand-file-name "sub/deep" root)))
+            (make-directory sub t)
+            (should (equal (file-truename (jaunder--git-toplevel sub))
+                           (file-truename root)))))
+      (delete-directory root t))))
+
 ;;; jaunder-test.el ends here
