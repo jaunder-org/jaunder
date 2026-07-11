@@ -1059,7 +1059,7 @@ mod tests {
         let err = PerformCreationError::InvalidSlug(InvalidSlug);
         assert_eq!(
             err.to_string(),
-            "slug must be non-empty, at most 80 characters, and contain only Unicode letters/digits and '-'"
+            "slug must be non-empty, at most 80 characters, and contain only Unicode letters/digits (with their combining marks) and '-'"
         );
 
         let err = PerformCreationError::Exhausted(10);

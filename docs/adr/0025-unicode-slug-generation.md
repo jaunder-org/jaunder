@@ -61,3 +61,20 @@ wrong, and the exact second-class treatment we want to avoid.
   identical but distinct; per-author-per-day scoping bounds the impact; revisit
   only if abused. Requires verifying Leptos percent-decodes the slug path
   segment to UTF-8 before `Slug` parsing.
+
+## Amendment (2026-07-10, #120): per-grapheme charset
+
+Decision Outcome point 2 stated the charset as literal `char::is_alphanumeric()`
+per scalar. That silently dropped combining marks **without** the Unicode
+Alphabetic property — notably the virama/halant/pulli class (U+094D, U+0BCD, …)
+that forms Indic conjuncts — so `नमस्ते` → `नमस-ते`, `हिन्दी` → `हिन-दी`. (Vowel
+signs and Arabic harakat carry `Other_Alphabetic`, so they already survived —
+the original "preserve Unicode letters/digits" framing was imprecise here.)
+
+Refined rule: the charset is defined **per extended grapheme cluster** — a
+cluster is kept iff its base scalar is `is_alphanumeric()`, carrying its
+attached combining marks. `slugify_title` and `Slug::from_str` share the one
+predicate (`base_is_alphanumeric`), and truncation is cluster-aligned. This
+remains a strict superset of the old charset (ASCII/CJK/precomposed-Latin
+clusters are single scalars → unchanged), so **no data migration**. (#120,
+`unicode-segmentation`.)
