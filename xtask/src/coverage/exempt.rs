@@ -1,11 +1,17 @@
 //! Structural coverage exemption: parse a Rust source file with `syn` and return
-//! the 1-based line numbers that are exempt from coverage. Two constructs are
+//! the 1-based line numbers that are exempt from coverage. Three constructs are
 //! recognized:
 //!
 //! - a `#[component]` function, signature AND body — Leptos component bodies
 //!   render only in the browser, and the `#[component]` macro generates a prop
 //!   struct/builder from the parameter list whose code is attributed to the
-//!   signature lines and is likewise never exercised host-side; and
+//!   signature lines and is likewise never exercised host-side;
+//! - a `#[client_only]` function OR method, signature AND body — client-only
+//!   reactive helpers that aren't components (e.g. `web::reactive::Invalidator`'s
+//!   `resource`/`action`, a `server_resource` fetch or a browser-only gating
+//!   `Effect`), exercised by e2e, not host tests. It generalizes the `#[component]`
+//!   rule to non-component helpers and to `impl` methods (`ImplItemFn`), via the
+//!   `macros::client_only` identity attribute; and
 //! - a literal `unreachable!(<message>)` invocation — a provably-dead line whose
 //!   exemption is *self-enforcing*: reaching it panics ⇒ the test fails ⇒
 //!   `cargo llvm-cov` exits non-zero ⇒ no report. A message **argument** is
@@ -48,17 +54,17 @@ struct ExemptVisitor<'a> {
 
 impl<'ast> syn::visit::Visit<'ast> for ExemptVisitor<'_> {
     fn visit_item_fn(&mut self, f: &'ast syn::ItemFn) {
-        if has_component_attr(&f.attrs) {
-            // Exempt the WHOLE component fn, signature + body. The body renders only
-            // in the browser; and the `#[component]` macro generates a prop
-            // struct/builder from the parameter list whose code is attributed back
-            // to the SIGNATURE lines and is likewise never exercised host-side.
-            // Body-only exemption forced hand-marking the prop list — a `cov:ignore`
-            // on a function declaration, which is exactly the wrong shape (#245).
-            add_span(self.out, f.sig.span()); // signature + macro-generated prop code
-            add_span(self.out, f.block.span()); // body
-        }
+        exempt_marked_fn(self.out, &f.attrs, f.sig.span(), f.block.span());
         syn::visit::visit_item_fn(self, f);
+    }
+
+    /// The client-only `web::reactive::Invalidator` helpers are `#[client_only]` METHODS
+    /// (`ImplItemFn`), not free fns — this arm reaches them. (Components are always free
+    /// functions, so `#[component]` never lands here; the shared helper keeps both rules
+    /// byte-identical regardless.)
+    fn visit_impl_item_fn(&mut self, f: &'ast syn::ImplItemFn) {
+        exempt_marked_fn(self.out, &f.attrs, f.sig.span(), f.block.span());
+        syn::visit::visit_impl_item_fn(self, f);
     }
     /// A literal `unreachable!(<non-empty message>)` invocation is dropped from
     /// the executable set — self-enforcing (reaching it panics ⇒ the test fails ⇒
@@ -78,10 +84,35 @@ impl<'ast> syn::visit::Visit<'ast> for ExemptVisitor<'_> {
     }
 }
 
-/// Matches `#[component]` AND `#[component(...)]` — path-anchored, not a substring
-/// scan, so an attribute like `#[my::component_thing]` does not falsely match.
-fn has_component_attr(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|a| a.path().is_ident("component"))
+/// Matches `#[component]`/`#[component(...)]` OR `#[client_only]`/`#[client_only(...)]`
+/// — path-anchored, not a substring scan, so `#[my::component_thing]` /
+/// `#[my::client_only_thing]` do not falsely match.
+fn has_exempt_attr(attrs: &[syn::Attribute]) -> bool {
+    attrs
+        .iter()
+        .any(|a| a.path().is_ident("component") || a.path().is_ident("client_only"))
+}
+
+/// Exempt a whole marked fn/method — its signature span AND body span — when it carries
+/// `#[component]` or `#[client_only]`. Shared by the free-fn (`ItemFn`) and method
+/// (`ImplItemFn`) arms so the two rules stay byte-identical.
+///
+/// The SIGNATURE span is exempted, not just the body: for `#[component]` the macro
+/// generates a prop struct/builder from the parameter list whose code is attributed back to
+/// the signature lines and is likewise never exercised host-side — body-only exemption
+/// forced hand-marking the prop list, a `cov:ignore` on a function declaration, exactly the
+/// wrong shape (#245). `#[client_only]` gets the same treatment: its body is browser-only
+/// and its signature lines are equally un-exercised host-side.
+fn exempt_marked_fn(
+    out: &mut BTreeSet<u32>,
+    attrs: &[syn::Attribute],
+    sig: proc_macro2::Span,
+    block: proc_macro2::Span,
+) {
+    if has_exempt_attr(attrs) {
+        add_span(out, sig); // signature + any macro-generated prop code
+        add_span(out, block); // body
+    }
 }
 
 /// Insert every 1-based line the span covers (inclusive) into `out`.
@@ -316,5 +347,75 @@ fn pick(n: u8) -> u8 {
             exempt_lines(src).is_err(),
             "an unparseable file must return Err (fail-closed)"
         );
+    }
+
+    #[test]
+    fn exempts_client_only_method() {
+        // Client-only helpers are METHODS (ImplItemFn), not free fns — the visitor must
+        // reach them via visit_impl_item_fn, exempting signature + body like #[component].
+        let src = "\
+struct S;
+impl S {
+    #[client_only]
+    fn helper(&self) -> u32 {
+        let x = 1;
+        x
+    }
+}
+";
+        let ex = exempt_lines(src).unwrap();
+        // Line 4 is the `fn helper(&self) -> u32 {` SIGNATURE line; the body braces span
+        // 4..=7 with interior statements on 5, 6. All must be exempt — asserting the
+        // signature line pins that the method arm exempts `sig.span()`, not just the body.
+        assert!(
+            ex.contains(&4),
+            "client_only method signature exempt: {ex:?}"
+        );
+        assert!(ex.contains(&5), "client_only method body exempt: {ex:?}");
+        assert!(ex.contains(&6), "client_only method body exempt: {ex:?}");
+    }
+
+    #[test]
+    fn exempts_client_only_free_fn() {
+        let src = "\
+#[client_only]
+fn helper() -> u32 {
+    let x = 1;
+    x
+}
+";
+        let ex = exempt_lines(src).unwrap();
+        assert!(ex.contains(&3), "client_only free-fn body exempt: {ex:?}");
+        assert!(ex.contains(&4), "client_only free-fn body exempt: {ex:?}");
+    }
+
+    #[test]
+    fn does_not_exempt_unmarked_method() {
+        let src = "\
+struct S;
+impl S {
+    fn helper(&self) -> u32 {
+        let x = 1;
+        x
+    }
+}
+";
+        let ex = exempt_lines(src).unwrap();
+        assert!(ex.is_empty(), "unmarked method stays measured: {ex:?}");
+    }
+
+    #[test]
+    fn does_not_exempt_non_ident_client_only_path() {
+        // Path-anchored (is_ident), matching #[component] recognition: a multi-segment
+        // path must NOT match, so the bare-ident marker is the only recognized form.
+        let src = "\
+#[foo::client_only]
+fn helper() -> u32 {
+    let x = 1;
+    x
+}
+";
+        let ex = exempt_lines(src).unwrap();
+        assert!(ex.is_empty(), "#[foo::client_only] must not match: {ex:?}");
     }
 }
