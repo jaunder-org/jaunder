@@ -57,6 +57,16 @@ pub(crate) fn etag_for(post: &PostRecord) -> String {
     format!("\"sha256-{:x}\"", Sha256::digest(&bytes))
 }
 
+/// Whether a request's `If-Match` precondition is satisfied for a post with ETAG.
+/// An absent (or non-UTF-8) header is unconditional; `*` matches any current
+/// representation; otherwise the value must equal ETAG. Shared by PUT and DELETE.
+fn if_match_satisfied(headers: &HeaderMap, etag: &str) -> bool {
+    match headers.get(header::IF_MATCH).and_then(|v| v.to_str().ok()) {
+        Some(if_match) => if_match == "*" || if_match == etag,
+        None => true,
+    }
+}
+
 /// Keyset-paging query parameters for the collection.
 #[derive(Debug, Deserialize)]
 pub struct CollectionPaging {
@@ -256,6 +266,7 @@ async fn apply_categories(
 ///
 /// Returns `403` if the authenticated user attempts to delete another user's post.
 /// Returns `404` if the post is not found, is already soft-deleted, or belongs to another user.
+/// Returns `412` if an `If-Match` header is present and does not match the post's `ETag`.
 /// Returns `500` if storage fails.
 #[tracing::instrument(name = "atompub.posts.member_delete", skip_all)]
 pub async fn member_delete(
@@ -263,6 +274,7 @@ pub async fn member_delete(
     Extension(subscriptions): Extension<Arc<dyn SubscriptionStorage>>,
     auth_user: AuthUser,
     Path((username, post_id)): Path<(String, i64)>,
+    headers: HeaderMap,
 ) -> Result<Response, HandlerError> {
     let post = owned_post(
         posts.as_ref(),
@@ -272,6 +284,12 @@ pub async fn member_delete(
         post_id,
     )
     .await?;
+
+    // Conditional delete: honour `If-Match` against the content ETag, as `member_put` does.
+    if !if_match_satisfied(&headers, &etag_for(&post)) {
+        return Err(HandlerError::PreconditionFailed);
+    }
+
     posts.soft_delete_post(post.post_id).await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
@@ -387,10 +405,8 @@ pub async fn member_put(
     )
     .await?;
 
-    if let Some(if_match) = headers.get(header::IF_MATCH).and_then(|v| v.to_str().ok()) {
-        if if_match != "*" && if_match != etag_for(&current) {
-            return Err(HandlerError::PreconditionFailed);
-        }
+    if !if_match_satisfied(&headers, &etag_for(&current)) {
+        return Err(HandlerError::PreconditionFailed);
     }
 
     let entry = entry_from_xml(&body)?;
