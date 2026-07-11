@@ -82,9 +82,219 @@ pub fn ensure_hooks_path(sh: &Shell) -> Result<bool> {
     }
 }
 
+/// Trimmed stdout of a git command in `dir`; bail on any non-zero exit. The one
+/// place the capture-and-check plumbing (formerly `adr::git_out`) lives.
+pub(crate) fn output(dir: &Path, args: &[&str]) -> Result<String> {
+    let out = at(dir)
+        .args(args)
+        .output()
+        .with_context(|| format!("running git {args:?}"))?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Non-empty lines of [`output`].
+pub(crate) fn lines(dir: &Path, args: &[&str]) -> Result<Vec<String>> {
+    Ok(output(dir, args)?
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+/// Run a git command in `dir` for effect (no capture); bail on non-zero exit.
+pub(crate) fn run(dir: &Path, args: &[&str]) -> Result<()> {
+    let ok = at(dir)
+        .args(args)
+        .status()
+        .with_context(|| format!("running git {args:?}"))?
+        .success();
+    if !ok {
+        anyhow::bail!("git {args:?} failed");
+    }
+    Ok(())
+}
+
+/// Trimmed stdout of a git command, or `None` when it exits with `tolerated`
+/// instead of bailing — the shared core of the two helpers that read one exit
+/// code as a valid "nothing" answer (`grep`'s exit 1 = no match, `config --get`'s
+/// exit 1 = unset). Any other non-zero still bails.
+fn output_or(dir: &Path, args: &[&str], tolerated: i32) -> Result<Option<String>> {
+    let out = at(dir)
+        .args(args)
+        .output()
+        .with_context(|| format!("running git {args:?}"))?;
+    match out.status.code() {
+        Some(0) => Ok(Some(
+            String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        )),
+        Some(c) if c == tolerated => Ok(None),
+        _ => anyhow::bail!(
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ),
+    }
+}
+
+/// `git merge-base <a> <b>`.
+pub(crate) fn merge_base(dir: &Path, a: &str, b: &str) -> Result<String> {
+    output(dir, &["merge-base", a, b])
+}
+
+/// `git diff --name-only <range>` — every file touched in the range.
+pub(crate) fn diff_names(dir: &Path, range: &str) -> Result<Vec<String>> {
+    lines(dir, &["diff", "--name-only", range])
+}
+
+/// `git diff --diff-filter=A --name-only <range> -- <pathspec>` — files ADDED in
+/// the range, scoped to `pathspec`.
+pub(crate) fn diff_added(dir: &Path, range: &str, pathspec: &str) -> Result<Vec<String>> {
+    lines(
+        dir,
+        &[
+            "diff",
+            "--diff-filter=A",
+            "--name-only",
+            range,
+            "--",
+            pathspec,
+        ],
+    )
+}
+
+/// `git grep -l --fixed-strings <pattern>` — files containing `pattern`.
+/// Grep's exit 1 = no match → `Ok(vec![])`; exit 128 (or any other non-zero) =
+/// real error → `Err` (see [`output_or`]).
+pub(crate) fn grep_files(dir: &Path, pattern: &str) -> Result<Vec<String>> {
+    let matched = output_or(dir, &["grep", "-l", "--fixed-strings", pattern], 1)?;
+    Ok(match matched {
+        Some(out) => out
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(str::to_string)
+            .collect(),
+        None => Vec::new(),
+    })
+}
+
+/// `git mv <from> <to>`.
+pub(crate) fn mv(dir: &Path, from: &str, to: &str) -> Result<()> {
+    run(dir, &["mv", from, to])
+}
+
+/// `git add <path>`.
+pub(crate) fn add(dir: &Path, path: &str) -> Result<()> {
+    run(dir, &["add", path])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fresh git repo under a pid-scoped temp dir, identity configured.
+    fn temp_repo(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("jaunder-git-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for args in [
+            &["init", "-q", "-b", "main"][..],
+            &["config", "user.email", "t@t"],
+            &["config", "user.name", "t"],
+        ] {
+            assert!(at(&dir).args(args).status().unwrap().success());
+        }
+        dir
+    }
+
+    /// Write `rel` under `dir`, then `git add` + `git commit` it.
+    fn commit(dir: &Path, rel: &str, body: &str) {
+        let p = dir.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, body).unwrap();
+        assert!(at(dir).args(["add", rel]).status().unwrap().success());
+        assert!(at(dir)
+            .args(["commit", "-qm", "c"])
+            .status()
+            .unwrap()
+            .success());
+    }
+
+    #[test]
+    fn output_returns_trimmed_stdout_and_bails_on_error() {
+        let dir = temp_repo("output");
+        commit(&dir, "a.txt", "x\n");
+        let head = output(&dir, &["rev-parse", "HEAD"]).unwrap();
+        assert_eq!(head.len(), 40, "full sha, trimmed: {head:?}");
+        assert!(output(&dir, &["not-a-subcommand"]).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lines_drops_blank_lines() {
+        let dir = temp_repo("lines");
+        commit(&dir, "a.txt", "1\n");
+        commit(&dir, "b.txt", "2\n");
+        let subjects = lines(&dir, &["log", "--format=%s"]).unwrap();
+        assert_eq!(subjects, vec!["c".to_string(), "c".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_ok_on_success_err_on_failure() {
+        let dir = temp_repo("run");
+        commit(&dir, "a.txt", "x\n");
+        assert!(run(&dir, &["status", "--porcelain"]).is_ok());
+        assert!(run(&dir, &["mv", "nope", "nowhere"]).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn grep_files_match_no_match_and_error() {
+        let dir = temp_repo("grep");
+        commit(&dir, "hay.txt", "a needle here\n");
+        commit(&dir, "other.txt", "nothing\n");
+        assert_eq!(
+            grep_files(&dir, "needle").unwrap(),
+            vec!["hay.txt".to_string()]
+        );
+        assert!(grep_files(&dir, "absent-token").unwrap().is_empty()); // exit 1
+                                                                       // A nonexistent dir → git can't chdir → exit 128 → Err (NOT an empty
+                                                                       // match). Deterministic regardless of whether $TMPDIR sits under a repo.
+        let missing =
+            std::env::temp_dir().join(format!("jaunder-git-missing-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&missing);
+        assert!(grep_files(&missing, "x").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn merge_base_diff_added_and_diff_names() {
+        let dir = temp_repo("diff");
+        commit(&dir, "base.txt", "b\n");
+        let base = output(&dir, &["rev-parse", "HEAD"]).unwrap();
+        assert!(at(&dir)
+            .args(["checkout", "-q", "-b", "feature"])
+            .status()
+            .unwrap()
+            .success());
+        commit(&dir, "docs/new.md", "n\n");
+        let range = format!("{base}..HEAD");
+        assert_eq!(merge_base(&dir, "main", "HEAD").unwrap(), base);
+        assert_eq!(
+            diff_names(&dir, &range).unwrap(),
+            vec!["docs/new.md".to_string()]
+        );
+        assert_eq!(
+            diff_added(&dir, &range, "docs").unwrap(),
+            vec!["docs/new.md".to_string()]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn porcelain_blank_is_clean() {
