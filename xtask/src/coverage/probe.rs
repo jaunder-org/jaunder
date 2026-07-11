@@ -95,19 +95,14 @@ impl Drop for WorktreeGuard {
 }
 
 /// Run a git subcommand in `dir` with hooks disabled; bail on a non-zero exit.
-/// Hooks are disabled defensively — `worktree add` can fire a `post-checkout` hook,
-/// and we never want the repo's gate hooks running inside the probe.
+/// Hooks are disabled defensively — `worktree add` can fire a `post-checkout`
+/// hook, and we never want the repo's gate hooks running inside the probe. The
+/// `-c core.hooksPath=` prefix is the only probe-specific bit; the run-and-check
+/// plumbing lives in [`git::run`].
 fn git_run(dir: &Path, args: &[&str]) -> Result<()> {
-    let ok = git::at(dir)
-        .args(["-c", "core.hooksPath="])
-        .args(args)
-        .status()
-        .with_context(|| format!("running git {args:?} in {}", dir.display()))?
-        .success();
-    if !ok {
-        anyhow::bail!("git {args:?} failed in {}", dir.display());
-    }
-    Ok(())
+    let mut full = vec!["-c", "core.hooksPath="];
+    full.extend_from_slice(args);
+    git::run(dir, &full)
 }
 
 /// The user-facing step: measure the three coverage drvPaths and apply
@@ -192,6 +187,21 @@ fn run_probe() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn git_run_succeeds_and_fails() {
+        let dir = std::env::temp_dir().join(format!("jaunder-probe-gitrun-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(git::at(&dir)
+            .args(["init", "-q"])
+            .status()
+            .unwrap()
+            .success());
+        assert!(git_run(&dir, &["status", "--porcelain"]).is_ok());
+        assert!(git_run(&dir, &["mv", "nope", "nowhere"]).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn holds_when_junk_excluded_and_source_measured() {
