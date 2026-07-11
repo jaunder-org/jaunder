@@ -270,3 +270,43 @@ test("Audiences: a genuinely empty roster still shows the empty message", async 
   await expect(page.getByText("No active subscribers yet")).toBeVisible();
   await expect(page.getByText("Couldn't load your subscribers")).toHaveCount(0);
 });
+
+// #347: the subscriber roster is fetched once at page load; a mid-session new subscriber
+// must be pullable via the in-page refresh control (no full reload). Real subscribe event
+// in a second context — no fault injection.
+test("Audiences: refresh pulls a mid-session new subscriber into the checklists", async ({
+  page,
+  browser,
+}, testInfo) => {
+  setTestBudget(120_000);
+  const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
+  const author = await register(page, firstNav);
+
+  await goto(page, "/audiences");
+  await page.fill('input[placeholder="Audience name"]', "Friends");
+  await click(page, 'button:has-text("Create")');
+  const friends = page.locator(".j-audience-item", { hasText: "Friends" });
+  await expect(friends).toBeVisible();
+  // Roster fetched empty at load: once the checklist settles it shows the empty message.
+  await expect(page.getByText("Loading members")).toHaveCount(0);
+  await expect(friends.getByText("No active subscribers yet.")).toBeVisible();
+
+  // A subscriber arrives mid-session (another user's session).
+  const xCtx = await browser.newContext();
+  const xPage = await xCtx.newPage();
+  const userX = await register(xPage, firstNav);
+  await subscribeTo(xPage, author);
+  await xCtx.close();
+
+  // The once-fetched roster is stale — X hasn't appeared, so the checklist still shows the
+  // empty message. (Asserting the absent candidate `<ul>` would pass vacuously: an empty
+  // roster renders `<p>`, not a `<ul class="j-audience-members">`.)
+  await expect(friends.getByText("No active subscribers yet.")).toBeVisible();
+
+  // Click the refresh control (by accessible name); X appears as an "Add" candidate — no reload.
+  await page.getByRole("button", { name: "Refresh subscribers" }).click();
+  const friendsX = friends
+    .locator(".j-audience-members li")
+    .filter({ hasText: userX });
+  await expect(friendsX.locator('button:has-text("Add")')).toBeVisible();
+});

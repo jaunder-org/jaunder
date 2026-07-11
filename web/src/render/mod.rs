@@ -575,6 +575,7 @@ impl Icons {
     pub const SHIELD: &'static str = "M10 3l6 2v4c0 4-2.4 7.1-6 8-3.6-.9-6-4-6-8V5l6-2z";
     pub const MEDIA: &'static str =
         "M3 5h14v10H3z M7 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2z M5 13l3-3 2 2 3-3 5 5H3z";
+    pub const REFRESH: &'static str = "M15.5 8A6 6 0 1 0 16 11.5 M15.5 4v4h-4";
 }
 
 /// Sidebar nav items: `(key, label, icon_path, href, auth_required)`. Shared by

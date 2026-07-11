@@ -625,6 +625,21 @@
 .j-tag-chip-remove:hover {
     color: var(--ink);
 }
+.j-icon-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--muted-soft);
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+}
+.j-icon-btn:hover {
+    color: var(--ink);
+}
+.j-card-head .j-icon-btn {
+    margin-left: auto;
+}
 .j-tag-text {
     flex: 1;
     min-width: 120px;
