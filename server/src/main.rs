@@ -1,7 +1,5 @@
 use clap::Parser;
-use common::password::Password;
-use common::username::Username;
-use jaunder::cli::{Cli, Commands};
+use jaunder::cli::Cli;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -46,84 +44,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     // clap without initializing telemetry it would never use; bound at function
     // scope so the guard outlives the dispatch below.
     let _telemetry = jaunder::observability::init_tracing(cli.verbose);
-    match command {
-        Commands::Init {
-            storage,
-            skip_if_exists,
-        } => {
-            jaunder::commands::cmd_init(&storage, skip_if_exists).await?;
-        }
-        Commands::CreatePgDb { pg } => {
-            jaunder::commands::cmd_create_pg_db(
-                &pg.bootstrap_db,
-                &pg.app_db,
-                &pg.app_role_password,
-            )
-            .await?;
-        }
-        Commands::Serve {
-            storage,
-            bind,
-            environment,
-            runtime_file,
-        } => {
-            jaunder::commands::cmd_serve(&storage, bind, environment.is_prod(), runtime_file)
-                .await?;
-        }
-        Commands::UserCreate {
-            storage,
-            username,
-            password,
-            display_name,
-            operator,
-        } => {
-            let username = username
-                .parse::<Username>()
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
-            let password = password
-                .map(|p| p.parse::<Password>())
-                .transpose()
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
-            jaunder::commands::cmd_user_create(
-                &storage,
-                &username,
-                password,
-                display_name.as_deref(),
-                operator,
-            )
-            .await?;
-        }
-        Commands::AppPasswordCreate {
-            storage,
-            username,
-            label,
-        } => {
-            let username = username
-                .parse::<Username>()
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
-            jaunder::commands::cmd_app_password_create(&storage, &username, &label).await?;
-        }
-        Commands::UserInvite {
-            storage,
-            expires_in,
-        } => {
-            jaunder::commands::cmd_user_invite(&storage, expires_in).await?;
-        }
-        Commands::SmtpTest { storage, to } => {
-            jaunder::commands::cmd_smtp_test(&storage, &to).await?;
-        }
-        Commands::Backup {
-            storage,
-            mode,
-            path,
-        } => {
-            jaunder::commands::cmd_backup(&storage, mode.into(), path).await?;
-        }
-        Commands::Restore { storage, path } => {
-            jaunder::commands::cmd_restore(&storage, &path).await?;
-        }
-    }
-    Ok(())
+    command.execute().await
 }
 
 #[cfg(test)]
