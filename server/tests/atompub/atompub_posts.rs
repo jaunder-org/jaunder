@@ -1959,3 +1959,100 @@ async fn update_with_future_published_schedules_post(#[case] backend: Backend) {
         "update must honor the wire <published> timestamp"
     );
 }
+
+/// POST a create as alice, optionally with an `Idempotency-Key`.
+async fn create_post_keyed(
+    app: axum::Router,
+    token: &str,
+    xml: &str,
+    idempotency_key: Option<&str>,
+) -> axum::response::Response {
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri("/atompub/alice/posts")
+        .header(header::CONTENT_TYPE, "application/atom+xml")
+        .header(header::AUTHORIZATION, basic_header("alice", token));
+    if let Some(key) = idempotency_key {
+        builder = builder.header("Idempotency-Key", key);
+    }
+    app.oneshot(builder.body(Body::from(xml.to_string())).unwrap())
+        .await
+        .unwrap()
+}
+
+fn location_of(response: &axum::response::Response) -> String {
+    response
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .expect("response has a Location header")
+        .to_string()
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn create_with_same_idempotency_key_dedups(#[case] backend: Backend) {
+    // AC-S1: the same key creates one post; the retry returns it as 200.
+    let TestEnv { state, base } = backend.setup().await;
+    let (_user_id, token) = seed_alice(&state).await;
+    let app = make_app(state, &base);
+    let xml = entry_xml("Hello", "text", "the body");
+
+    let first = create_post_keyed(app.clone(), &token, &xml, Some("idem-1")).await;
+    assert_eq!(first.status(), StatusCode::CREATED);
+    let loc1 = location_of(&first);
+    let etag1 = etag_of(&first);
+    let body1 = body_string(first).await;
+
+    let second = create_post_keyed(app, &token, &xml, Some("idem-1")).await;
+    assert_eq!(second.status(), StatusCode::OK);
+    assert_eq!(
+        location_of(&second),
+        loc1,
+        "retry returns the original post"
+    );
+    assert_eq!(etag_of(&second), etag1, "retry returns the same ETag");
+    assert_eq!(
+        body_string(second).await,
+        body1,
+        "retry returns the same body"
+    );
+}
+
+fn etag_of(response: &axum::response::Response) -> String {
+    response
+        .headers()
+        .get(header::ETAG)
+        .and_then(|v| v.to_str().ok())
+        .expect("response has an ETag header")
+        .to_string()
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn create_with_fresh_idempotency_key_is_201(#[case] backend: Backend) {
+    // AC-S2: distinct keys create distinct posts.
+    let TestEnv { state, base } = backend.setup().await;
+    let (_user_id, token) = seed_alice(&state).await;
+    let app = make_app(state, &base);
+    let xml = entry_xml("Hello", "text", "the body");
+
+    let first = create_post_keyed(app.clone(), &token, &xml, Some("k-a")).await;
+    assert_eq!(first.status(), StatusCode::CREATED);
+    let second = create_post_keyed(app, &token, &xml, Some("k-b")).await;
+    assert_eq!(second.status(), StatusCode::CREATED);
+    assert_ne!(location_of(&first), location_of(&second));
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn create_without_idempotency_key_is_201(#[case] backend: Backend) {
+    // AC-S3: no header → create as today.
+    let TestEnv { state, base } = backend.setup().await;
+    let (_user_id, token) = seed_alice(&state).await;
+    let app = make_app(state, &base);
+    let xml = entry_xml("Hello", "text", "the body");
+
+    let response = create_post_keyed(app, &token, &xml, None).await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+}
