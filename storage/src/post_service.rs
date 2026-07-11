@@ -39,6 +39,8 @@ pub struct RenderedPostContent {
     pub summary: Option<String>,
     /// Audience targeting for the new post.
     pub audiences: Vec<AudienceTarget>,
+    /// Owned idempotency key to register with the post, or `None`.
+    pub idempotency_key: Option<String>,
 }
 
 /// Renders `body` according to `format` and creates the post via storage.
@@ -68,6 +70,7 @@ pub fn render_post_input(content: RenderedPostContent) -> CreatePostInput {
         published_at,
         summary,
         audiences,
+        idempotency_key,
     } = content;
     let rendered_html = render(&body, &format);
     CreatePostInput {
@@ -80,6 +83,7 @@ pub fn render_post_input(content: RenderedPostContent) -> CreatePostInput {
         published_at,
         summary,
         audiences,
+        idempotency_key,
     }
 }
 
@@ -105,6 +109,7 @@ pub fn seed_post_input(user_id: i64, slug: Slug, body: String, published: bool) 
         published_at: published.then(Utc::now),
         summary: None,
         audiences: vec![AudienceTarget::Public],
+        idempotency_key: None,
     })
 }
 
@@ -347,6 +352,10 @@ pub enum PerformCreationError {
     Exhausted(usize),
     #[error("created post not found")]
     CreatedNotFound,
+    /// The idempotency key was already used to create a post for this user; the
+    /// create is a duplicate and no new post was written.
+    #[error("idempotency key already used for this user")]
+    IdempotencyConflict,
     #[error("storage error: {0}")]
     Storage(#[source] sqlx::Error),
 }
@@ -365,7 +374,13 @@ impl From<PerformCreationError> for host::error::InternalError {
             // Carry the typed error as the operator source (its `Display` renders the real
             // attempt count) rather than a hardcoded literal that lies when the retry bound
             // isn't 100. Wire projection is unchanged (kind `Internal` → "server operation failed").
-            PerformCreationError::Exhausted(_) => InternalError::server(error),
+            //
+            // `IdempotencyConflict` is unreachable in practice — the AtomPub handler
+            // intercepts the conflict and returns the original post as `200` before this
+            // conversion — but shares the same internal-failure projection.
+            PerformCreationError::Exhausted(_) | PerformCreationError::IdempotencyConflict => {
+                InternalError::server(error)
+            }
             PerformCreationError::CreatedNotFound => {
                 InternalError::server_message("created post not found")
             }
@@ -412,6 +427,9 @@ pub struct PostCreation<'a> {
     /// Audience targeting for the new post. An empty vec (or `[Private]`) makes
     /// the post author-only.
     pub audiences: Vec<AudienceTarget>,
+    /// Client-supplied idempotency key (already trimmed / non-empty), or `None`
+    /// to create without deduplication.
+    pub idempotency_key: Option<&'a str>,
 }
 
 /// Validates inputs, computes the slug, renders the body, and atomically
@@ -435,6 +453,7 @@ pub async fn perform_post_creation(
         max_attempts,
         summary,
         audiences,
+        idempotency_key,
     } = input;
     let metadata =
         derive_post_metadata(title, &body, &format).ok_or(PerformCreationError::EmptyPost)?;
@@ -473,6 +492,7 @@ pub async fn perform_post_creation(
                 published_at,
                 summary: summary.clone(),
                 audiences: audiences.clone(),
+                idempotency_key: idempotency_key.map(str::to_owned),
             },
         )
         .await
@@ -492,6 +512,12 @@ pub async fn perform_post_creation(
                 return Ok(record);
             }
             Err(CreatePostError::SlugConflict) => {}
+            // A duplicate idempotency key is not a slug collision — do not retry;
+            // the whole create (post included) rolled back. The caller looks up
+            // and returns the original post.
+            Err(CreatePostError::IdempotencyConflict) => {
+                return Err(PerformCreationError::IdempotencyConflict);
+            }
             Err(CreatePostError::Internal(e)) => {
                 return Err(PerformCreationError::Storage(e));
             }
@@ -532,6 +558,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
             },
         )
         .await
@@ -564,6 +591,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
             },
         )
         .await
@@ -591,6 +619,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
             },
         )
         .await
@@ -617,6 +646,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
             },
         )
         .await
@@ -643,6 +673,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
             },
         )
         .await
@@ -676,6 +707,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
             },
         )
         .await
@@ -704,6 +736,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
             },
         )
         .await
@@ -732,6 +765,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
             },
         )
         .await
@@ -781,6 +815,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
             },
         )
         .await
@@ -798,6 +833,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
             },
         )
         .await
@@ -815,6 +851,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
             },
         )
         .await
@@ -844,6 +881,7 @@ mod tests {
                 max_attempts: 2,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
             },
         )
         .await
@@ -861,6 +899,7 @@ mod tests {
                 max_attempts: 2,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
             },
         )
         .await
@@ -881,6 +920,7 @@ mod tests {
                 max_attempts: 2,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
             },
         )
         .await
@@ -909,6 +949,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
             },
         )
         .await
@@ -944,6 +985,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
             },
         )
         .await
@@ -1002,6 +1044,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
             },
         )
         .await
@@ -1031,6 +1074,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
             },
         )
         .await
@@ -1047,6 +1091,134 @@ mod tests {
             "rendered html double-renders the title: {:?}",
             record.rendered_html
         );
+    }
+
+    // -- idempotency-key tests --
+
+    /// Builds a minimal public Markdown [`PostCreation`] carrying `key`, so the
+    /// dedup tests vary only the user, body, and key.
+    fn creation_with_key<'a>(user_id: i64, body: &str, key: Option<&'a str>) -> PostCreation<'a> {
+        PostCreation {
+            user_id,
+            body: body.to_owned(),
+            title: None,
+            format: PostFormat::Markdown,
+            slug_override: None,
+            published_at: None,
+            max_attempts: 100,
+            summary: None,
+            audiences: vec![AudienceTarget::Public],
+            idempotency_key: key,
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn perform_post_creation_dedups_on_idempotency_key(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let storage = &*env.state.posts;
+
+        let first =
+            perform_post_creation(storage, creation_with_key(user_id, "First body", Some("k")))
+                .await
+                .unwrap();
+
+        // A second create with the same (user, key) is a duplicate: the DB unique
+        // constraint fires in the create transaction, rolling the whole thing back.
+        let err = perform_post_creation(
+            storage,
+            creation_with_key(user_id, "Second body", Some("k")),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, PerformCreationError::IdempotencyConflict));
+
+        // No second post row committed — the user still has exactly one post.
+        let posts = storage
+            .list_collection_by_user(user_id, None, 50)
+            .await
+            .unwrap();
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts[0].post_id, first.post_id);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn post_id_for_idempotency_key_maps(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let storage = &*env.state.posts;
+
+        let record = perform_post_creation(storage, creation_with_key(user_id, "Body", Some("k")))
+            .await
+            .unwrap();
+
+        let mapped = storage
+            .post_id_for_idempotency_key(user_id, "k")
+            .await
+            .unwrap();
+        assert_eq!(mapped, Some(record.post_id));
+
+        let missing = storage
+            .post_id_for_idempotency_key(user_id, "unknown")
+            .await
+            .unwrap();
+        assert_eq!(missing, None);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn idempotency_key_is_per_user(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_a = seed_user(&env.state).await;
+        let user_b = env
+            .state
+            .users
+            .create_user(
+                &"userb".parse().unwrap(),
+                &"password123".parse().unwrap(),
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+        let storage = &*env.state.posts;
+
+        // The same key string from two users creates two independent posts.
+        let post_a = perform_post_creation(storage, creation_with_key(user_a, "A body", Some("k")))
+            .await
+            .unwrap();
+        let post_b = perform_post_creation(storage, creation_with_key(user_b, "B body", Some("k")))
+            .await
+            .unwrap();
+        assert_ne!(post_a.post_id, post_b.post_id);
+
+        assert_eq!(
+            storage
+                .post_id_for_idempotency_key(user_a, "k")
+                .await
+                .unwrap(),
+            Some(post_a.post_id)
+        );
+        assert_eq!(
+            storage
+                .post_id_for_idempotency_key(user_b, "k")
+                .await
+                .unwrap(),
+            Some(post_b.post_id)
+        );
+    }
+
+    #[test]
+    fn idempotency_conflict_converts_to_internal_error() {
+        use host::error::{ErrorKind, InternalError};
+
+        // Covers the otherwise-unreachable `From` arm (the handler intercepts the
+        // conflict before this conversion) so the coverage gate stays green.
+        let err: InternalError = PerformCreationError::IdempotencyConflict.into();
+        assert_eq!(err.kind(), ErrorKind::Internal);
+        assert_eq!(err.public_message(), "server operation failed");
     }
 
     #[test]

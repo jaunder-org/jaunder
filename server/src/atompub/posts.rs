@@ -377,6 +377,7 @@ pub async fn collection_post(
             max_attempts: 100,
             summary: fields.summary,
             audiences: vec![default_audience],
+            idempotency_key: None,
         },
     )
     .await?;

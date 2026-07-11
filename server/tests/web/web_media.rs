@@ -350,6 +350,7 @@ async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend:
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("create_post failed");

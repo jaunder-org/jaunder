@@ -128,6 +128,10 @@ pub enum CreatePostError {
     /// A post with the same slug already exists for this user on this day.
     #[error("slug already taken for this user on this date")]
     SlugConflict,
+    /// The `(user_id, idempotency_key)` pair has already been used to create a
+    /// post; the create is a duplicate of an earlier one.
+    #[error("idempotency key already used for this user")]
+    IdempotencyConflict,
     /// An unexpected database error occurred.
     #[error(transparent)]
     Internal(#[from] sqlx::Error),
@@ -197,6 +201,10 @@ pub struct CreatePostInput {
     /// Audience targeting for the post. Each entry becomes a `post_audiences`
     /// row; `Private` and an empty vec produce no rows (the post is private).
     pub audiences: Vec<AudienceTarget>,
+    /// If `Some`, register this idempotency key against the new post in the
+    /// same transaction. A `(user_id, key)` collision maps to
+    /// [`CreatePostError::IdempotencyConflict`] and rolls the whole create back.
+    pub idempotency_key: Option<String>,
 }
 
 /// Input for updating an existing post.
@@ -530,6 +538,15 @@ pub trait PostStorage: Send + Sync {
     /// is a no-op returning an empty vec without opening a transaction.
     async fn create_posts(&self, inputs: &[CreatePostInput]) -> Result<Vec<i64>, CreatePostError>;
 
+    /// Returns the `post_id` a `(user_id, key)` idempotency pair maps to, or
+    /// `None` if the key was never used by that user. Used to look up the
+    /// original post on an [`CreatePostError::IdempotencyConflict`] retry.
+    async fn post_id_for_idempotency_key(
+        &self,
+        user_id: i64,
+        key: &str,
+    ) -> Result<Option<i64>, sqlx::Error>;
+
     /// Fetches a post by its ID, applying the viewer-resolution filter: the post
     /// is returned only if `viewer` is the author or a targeted audience admits
     /// them. See ADR-0020.
@@ -855,6 +872,25 @@ where
         }
         tx.commit().await?;
         Ok(ids)
+    }
+
+    #[tracing::instrument(
+        name = "storage.posts.post_id_for_idempotency_key",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn post_id_for_idempotency_key(
+        &self,
+        user_id: i64,
+        key: &str,
+    ) -> Result<Option<i64>, sqlx::Error> {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT post_id FROM idempotency_keys WHERE user_id = $1 AND key = $2",
+        )
+        .bind(user_id)
+        .bind(key)
+        .fetch_optional(&self.pool)
+        .await
     }
 
     #[tracing::instrument(
@@ -1783,6 +1819,19 @@ fn audience_target_from_row(kind: &str, audience_id: Option<i64>) -> Option<Audi
     }
 }
 
+/// Maps an error from the idempotency-key `INSERT`. A `(user_id, key)` unique
+/// violation is a [`CreatePostError::IdempotencyConflict`] (a duplicate create),
+/// distinct from the post `INSERT`'s `SlugConflict` — attribution is by which
+/// statement's mapper runs. Any other error passes through as `Internal`.
+fn map_idempotency_insert_error(e: sqlx::Error) -> CreatePostError {
+    match e {
+        sqlx::Error::Database(db) if db.is_unique_violation() => {
+            CreatePostError::IdempotencyConflict
+        }
+        e => CreatePostError::Internal(e),
+    }
+}
+
 /// Writes one post row and its audience rows onto a caller-supplied transaction
 /// connection, so it joins whatever transaction is open.
 ///
@@ -1833,6 +1882,22 @@ where
     })?;
 
     replace_post_audiences::<DB>(conn, post_id, &input.audiences).await?;
+
+    // Register the idempotency key in the same transaction as the post. This
+    // INSERT has its own unique-violation mapping — a `(user_id, key)` clash is
+    // an `IdempotencyConflict` (a duplicate create), distinct from the post
+    // INSERT's `SlugConflict` above. Attribution is by which statement's
+    // `map_err` fires, not by inspecting the constraint name.
+    if let Some(key) = input.idempotency_key.as_deref() {
+        sqlx::query("INSERT INTO idempotency_keys (user_id, key, post_id) VALUES ($1, $2, $3)")
+            .bind(input.user_id)
+            .bind(key)
+            .bind(post_id)
+            .execute(&mut *conn)
+            .await
+            .map_err(map_idempotency_insert_error)?;
+    }
+
     Ok(post_id)
 }
 
@@ -2133,6 +2198,14 @@ mod tests {
     use rstest_reuse::*;
 
     #[test]
+    fn map_idempotency_insert_error_passes_non_unique_errors_through() {
+        // A unique violation becomes IdempotencyConflict (covered by the create
+        // dedup integration test); any other error passes through as Internal.
+        let mapped = map_idempotency_insert_error(sqlx::Error::PoolClosed);
+        assert!(matches!(mapped, CreatePostError::Internal(_)));
+    }
+
+    #[test]
     fn audience_target_from_row_maps_every_kind() {
         // Each lookup-table kind maps to its target; `named` carries the id.
         assert_eq!(
@@ -2300,6 +2373,7 @@ mod tests {
             published_at: None,
             summary: Some("the summary".into()),
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         };
 
         let post_id = posts.create_post(&input).await.unwrap();
@@ -2327,6 +2401,7 @@ mod tests {
             published_at: None,
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         };
         let result = env.state.posts.create_post(&input).await;
         assert!(result.is_err());
@@ -2376,6 +2451,7 @@ mod tests {
                 published_at: None,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
             })
             .await
             .unwrap();
@@ -2412,6 +2488,7 @@ mod tests {
             published_at: published.then_some(now - chrono::Duration::minutes(30)),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         };
 
         // Post 1: draft. Post 2: published. Post 3: soft-deleted (excluded).
@@ -2638,6 +2715,7 @@ mod tests {
                 published_at: None,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
             })
             .await
             .unwrap();

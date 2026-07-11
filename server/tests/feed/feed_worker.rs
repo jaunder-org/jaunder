@@ -69,6 +69,7 @@ async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub(#[case] bac
             published_at: Some(now),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("create post");
@@ -125,6 +126,7 @@ async fn worker_pings_hub_when_configured(#[case] backend: Backend) {
             published_at: Some(now),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("create post");
@@ -181,6 +183,7 @@ async fn worker_groups_duplicate_events_into_single_regen(#[case] backend: Backe
             published_at: Some(now),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("create post");
@@ -284,6 +287,7 @@ async fn worker_applies_backoff_on_ping_failure(#[case] backend: Backend) {
             published_at: Some(now),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("create post");
@@ -375,6 +379,7 @@ async fn startup_catchup_regenerates_feed_for_go_live_while_down(#[case] backend
             published_at: Some(t1),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("create post");
@@ -430,6 +435,7 @@ async fn steady_state_window_enqueues_newly_live_posts(#[case] backend: Backend)
             published_at: Some(go_live),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("create post");
@@ -480,6 +486,7 @@ async fn worker_marks_exhausted_after_backoff_attempts_are_used_up(#[case] backe
             published_at: Some(now),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("create post");

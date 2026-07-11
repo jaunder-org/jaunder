@@ -36,6 +36,7 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> i64 {
             published_at: Some(fixture_published_at()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("create post");

@@ -67,6 +67,7 @@ async fn collection_lists_user_posts(#[case] backend: Backend) {
             max_attempts: 100,
             summary: None,
             audiences: vec![common::visibility::AudienceTarget::Public],
+            idempotency_key: None,
         },
     )
     .await
@@ -84,6 +85,7 @@ async fn collection_lists_user_posts(#[case] backend: Backend) {
             max_attempts: 100,
             summary: None,
             audiences: vec![common::visibility::AudienceTarget::Public],
+            idempotency_key: None,
         },
     )
     .await
@@ -161,6 +163,7 @@ async fn member_returns_native_source_with_etag(#[case] backend: Backend) {
             max_attempts: 100,
             summary: None,
             audiences: vec![common::visibility::AudienceTarget::Public],
+            idempotency_key: None,
         },
     )
     .await
@@ -264,6 +267,7 @@ async fn delete_then_get_is_404(#[case] backend: Backend) {
             max_attempts: 100,
             summary: None,
             audiences: vec![common::visibility::AudienceTarget::Public],
+            idempotency_key: None,
         },
     )
     .await
@@ -335,6 +339,7 @@ async fn collection_paging_emits_next_link(#[case] backend: Backend) {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![common::visibility::AudienceTarget::Public],
+                idempotency_key: None,
             },
         )
         .await
@@ -426,6 +431,7 @@ async fn collection_cursor_validation(
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![common::visibility::AudienceTarget::Public],
+                idempotency_key: None,
             },
         )
         .await
@@ -763,6 +769,7 @@ async fn update_replaces_post_body(#[case] backend: Backend) {
             max_attempts: 100,
             summary: None,
             audiences: vec![common::visibility::AudienceTarget::Public],
+            idempotency_key: None,
         },
     )
     .await
@@ -810,6 +817,7 @@ async fn update_with_stale_if_match_returns_412(#[case] backend: Backend) {
             max_attempts: 100,
             summary: None,
             audiences: vec![common::visibility::AudienceTarget::Public],
+            idempotency_key: None,
         },
     )
     .await
@@ -876,6 +884,7 @@ async fn update_removes_categories_not_in_new_entry(#[case] backend: Backend) {
             max_attempts: 100,
             summary: None,
             audiences: vec![common::visibility::AudienceTarget::Public],
+            idempotency_key: None,
         },
     )
     .await
@@ -928,6 +937,7 @@ async fn update_with_put_returns_200_and_etag(#[case] backend: Backend) {
             max_attempts: 100,
             summary: None,
             audiences: vec![common::visibility::AudienceTarget::Public],
+            idempotency_key: None,
         },
     )
     .await
@@ -1004,6 +1014,7 @@ async fn empty_entry_returns_400(backend: Backend, #[case] op: EmptyEntryOp) {
                     max_attempts: 100,
                     summary: None,
                     audiences: vec![common::visibility::AudienceTarget::Public],
+                    idempotency_key: None,
                 },
             )
             .await
@@ -1104,6 +1115,7 @@ async fn member_carries_read_only_j_slug(#[case] backend: Backend) {
             max_attempts: 100,
             summary: None,
             audiences: vec![common::visibility::AudienceTarget::Public],
+            idempotency_key: None,
         },
     )
     .await
@@ -1649,6 +1661,7 @@ async fn update_preserves_non_public_targeting(#[case] backend: Backend) {
             max_attempts: 100,
             summary: None,
             audiences: vec![common::visibility::AudienceTarget::Subscribers],
+            idempotency_key: None,
         },
     )
     .await
@@ -1704,6 +1717,7 @@ async fn member_get_serves_owner_non_public_post(#[case] backend: Backend) {
             max_attempts: 100,
             summary: None,
             audiences: vec![common::visibility::AudienceTarget::Subscribers],
+            idempotency_key: None,
         },
     )
     .await
@@ -1908,6 +1922,7 @@ async fn update_with_future_published_schedules_post(#[case] backend: Backend) {
             max_attempts: 100,
             summary: None,
             audiences: vec![common::visibility::AudienceTarget::Public],
+            idempotency_key: None,
         },
     )
     .await

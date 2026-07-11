@@ -57,6 +57,7 @@ async fn seed_tagged_post(state: &Arc<storage::AppState>) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .unwrap();
@@ -85,6 +86,7 @@ async fn seed_published_post(state: &Arc<storage::AppState>) -> (String, i32, u3
             published_at: Some(now),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .unwrap();

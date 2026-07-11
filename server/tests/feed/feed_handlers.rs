@@ -66,6 +66,7 @@ async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_typ
             published_at: Some(now),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("create post");
@@ -146,6 +147,7 @@ async fn handler_serves_site_tag_feed_with_200(#[case] backend: Backend) {
             published_at: Some(now),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("create post");
@@ -341,6 +343,7 @@ async fn handler_returns_correct_content_type_per_format(#[case] backend: Backen
             published_at: Some(now),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("create post");
