@@ -1,6 +1,9 @@
 use crate::auth::{get_registration_policy, Login, Logout, Register};
 use crate::error::WebError;
+use crate::forms::{Field, ValidatedInput};
 use crate::pages::Topbar;
+use common::password::Password;
+use common::username::Username;
 use leptos::prelude::*;
 
 /// Registration page.
@@ -97,13 +100,14 @@ pub fn RegisterPage() -> impl IntoView {
 #[component]
 pub fn LoginPage() -> impl IntoView {
     let login_action = ServerAction::<Login>::new();
-    let username = RwSignal::new(String::new());
+    let username = Field::<Username>::new();
+    let password = Field::<Password>::new();
 
     // Mirror the session into the advisory auth marker on a successful login
     // (#181, ADR-0044) — the client's synchronous pre-paint boot source. wasm-only.
     Effect::new(move |_| {
         if let Some(Ok(_)) = login_action.value().get() {
-            crate::auth::marker::set(&username.get_untracked());
+            crate::auth::marker::set(&username.value.get_untracked());
         }
     });
 
@@ -116,31 +120,31 @@ pub fn LoginPage() -> impl IntoView {
                         <h2>"Sign in"</h2>
                     </div>
                     <div class="j-form-body">
-                        <label class="j-form-field">
-                            <span class="j-form-label">"Username"</span>
-                            <input
-                                class="j-form-input"
-                                type="text"
-                                name="username"
-                                autocomplete="username"
-                                prop:value=username
-                                on:input=move |ev| {
-                                    username.set(event_target_value(&ev).to_lowercase());
-                                }
-                            />
-                        </label>
-                        <label class="j-form-field">
-                            <span class="j-form-label">"Password"</span>
-                            <input
-                                class="j-form-input"
-                                type="password"
-                                name="password"
-                                autocomplete="current-password"
-                            />
-                        </label>
+                        <ValidatedInput<
+                        Username,
+                    >
+                            label="Username"
+                            name="username"
+                            autocomplete="username"
+                            field=username
+                            transform=str::to_lowercase
+                        />
+                        <ValidatedInput<
+                        Password,
+                    >
+                            label="Password"
+                            name="password"
+                            input_type="password"
+                            autocomplete="current-password"
+                            field=password
+                        />
                     </div>
                     <div class="j-form-actions">
-                        <button type="submit" class="j-btn is-primary">
+                        <button
+                            type="submit"
+                            class="j-btn is-primary"
+                            prop:disabled=move || !(username.is_valid() && password.is_valid())
+                        >
                             "Login"
                         </button>
                     </div>

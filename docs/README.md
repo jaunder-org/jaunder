@@ -92,6 +92,7 @@ convention). See the Status column below for each ADR's current status.
 | [0062](adr/0062-macros-crate-proc-macro-home.md)                   | A `macros` crate as the workspace's proc-macro home                                                          | accepted   |
 | [0063](adr/0063-domain-value-newtype-convention.md)                | Domain-value newtypes — when to introduce one, and the standard trailer                                      | proposed   |
 | [0064](adr/0064-backup-target-auto-derivation.md)                  | Backup target set auto-derived from the live schema; restore defers FK checks                                | accepted   |
+| [0065](adr/0065-client-side-domain-validation.md)                  | Typed `#[server]` wire args with client-side pre-validation via the shared newtype                           | proposed   |
 
 <!-- adr-table:end -->
 

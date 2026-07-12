@@ -1,4 +1,7 @@
 use crate::error::WebResult;
+// `Username` is ungated: it's the type of `login`'s wire arg, so the `#[server]`-generated
+// `Login` struct references it on both the client and server builds.
+use common::username::Username;
 use leptos::prelude::*;
 
 /// The client-side advisory auth marker (#181, ADR-0044). Pure encode/decode are
@@ -18,7 +21,7 @@ pub use server::{require_auth, AuthRejection, AuthUser, CookieSettings};
 #[cfg(feature = "server")]
 use {
     crate::error::InternalError,
-    common::{password::Password, username::Username},
+    common::password::Password,
     std::sync::Arc,
     storage::{
         load_registration_policy, AtomicOps, RegistrationPolicy, SessionStorage, SiteConfigStorage,
@@ -144,14 +147,16 @@ pub async fn register(
     feature = "server",
     tracing::instrument(name = "web.auth.login", skip(password, label))
 )]
-pub async fn login(username: String, password: String, label: Option<String>) -> WebResult<String> {
+pub async fn login(
+    username: Username,
+    password: String,
+    label: Option<String>,
+) -> WebResult<String> {
     boundary!("login", {
         let users = expect_context::<Arc<dyn UserStorage>>();
         let sessions = expect_context::<Arc<dyn SessionStorage>>();
-        let username = {
-            let _phase = tracing::info_span!("web.auth.login.parse_username").entered();
-            username.to_lowercase().parse::<Username>()?
-        };
+        // `username` arrives already validated + lowercased: its serde bridge routes through
+        // `Username::from_str`, and the client pre-validates via `<ValidatedInput<Username>>`.
         let password = {
             let _phase = tracing::info_span!("web.auth.login.parse_password").entered();
             password.parse::<Password>()?
