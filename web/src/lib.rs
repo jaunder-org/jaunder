@@ -25,6 +25,7 @@ pub mod email;
 pub mod error;
 pub mod feed_discovery;
 pub mod feed_events;
+pub mod forms;
 pub mod invites;
 pub mod media;
 #[cfg(target_arch = "wasm32")]
