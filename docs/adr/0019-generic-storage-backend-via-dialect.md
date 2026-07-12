@@ -88,5 +88,5 @@ a generic store.
 
 The rule of thumb: dedup when the dialect would be small relative to the shared
 body; leave separate when the "shared store" would be a thin shell over a
-near-total dialect. (Decided in jaunder-p8ea after the §1.1 rollout deduped the
-other ten traits.)
+near-total dialect. (Decided in jaunder-p8ea, pre-GitHub bead tracker, after the
+§1.1 rollout deduped the other ten traits.)

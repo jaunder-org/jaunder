@@ -50,7 +50,7 @@ already follow it.
 - An audit of every explicit-transaction SQLite path against this rule found
   three remaining read-then-write sites too substantial for a mechanical
   collapse (`create_user_with_invite`, `update_post`, `tag_post`); they are
-  tracked as follow-up issues rather than reshaped here.
+  tracked as follow-up issues rather than reshaped here (since done).
 - Builds on ADR-0001 (storage backends) and ADR-0019 (generic store + per-trait
   dialect): this is transaction _discipline within_ a SQLite dialect, distinct
   from ADR-0019's structural mechanism.

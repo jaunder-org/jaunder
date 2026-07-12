@@ -47,7 +47,7 @@ present-and-wrong-password path and the absent-user path take comparable time.
 **The absent-user authentication path MUST perform an equalizing Argon2
 verification.** Do not remove it as a "fast path" optimization, and preserve it
 when the two backends' `authenticate` bodies are merged under analysis §1.1
-(recorded on `jaunder-kq8w.3`).
+(recorded on `jaunder-kq8w.3`, pre-GitHub bead tracker).
 
 ### Scope boundary
 

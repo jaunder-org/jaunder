@@ -74,24 +74,24 @@ convention). See the Status column below for each ADR's current status.
 | [0044](adr/0044-authenticated-owner-flash-free-enhancement.md)     | Authenticated-owner flash-free enhancement (pre-paint marker + additive decoration)                          | accepted   |
 | [0045](adr/0045-emacs-media-content-src.md)                        | Emacs client harvests media URLs from the response `<content src>`                                           | accepted   |
 | [0046](adr/0046-test-support-seed-binary.md)                       | A `test-support` binary that links `storage` for out-of-process e2e seeding                                  | accepted   |
-| [0047](adr/0047-emacs-publish-orchestration.md)                    | The Emacs Publish Orchestration — Multi-Blog Config via Dynamic Specials, ID-First Safe-to-Resume Write-Back | proposed   |
-| [0048](adr/0048-adr-out-of-git-draft-workflow.md)                  | ADRs drafted out of git, numbered at ship                                                                    | proposed   |
+| [0047](adr/0047-emacs-publish-orchestration.md)                    | The Emacs Publish Orchestration — Multi-Blog Config via Dynamic Specials, ID-First Safe-to-Resume Write-Back | accepted   |
+| [0048](adr/0048-adr-out-of-git-draft-workflow.md)                  | ADRs drafted out of git, numbered at ship                                                                    | accepted   |
 | [0049](adr/0049-app-driven-scoped-server-diagnostics.md)           | App-driven scoped server-diagnostics capture                                                                 | accepted   |
 | [0050](adr/0050-stateless-coverage-gate.md)                        | Stateless coverage gate — `cov:ignore` + `#[component]` exemption + CRAP threshold                           | accepted   |
-| [0051](adr/0051-single-playwright-config.md)                       | One Playwright config for host and CI                                                                        | proposed   |
+| [0051](adr/0051-single-playwright-config.md)                       | One Playwright config for host and CI                                                                        | accepted   |
 | [0052](adr/0052-devtool-unifies-static-checks.md)                  | devtool is the single implementation of the non-compiling static checks                                      | accepted   |
-| [0053](adr/0053-storage-test-homing-and-dual-backend.md)           | Storage test homing and the dual-backend presumption                                                         | proposed   |
+| [0053](adr/0053-storage-test-homing-and-dual-backend.md)           | Storage test homing and the dual-backend presumption                                                         | accepted   |
 | [0054](adr/0054-backup-test-homing-and-uniform-restore-failure.md) | Backup test homing and the uniform restore-failure contract                                                  | accepted   |
 | [0055](adr/0055-web-host-wasm-boundary-module-level.md)            | web host/wasm boundary is module-level, not line-level                                                       | superseded |
 | [0056](adr/0056-web-canonical-colocated-leptos.md)                 | web converges on the canonical co-located Leptos CSR layout                                                  | accepted   |
 | [0057](adr/0057-e2e-capture-dir-contract.md)                       | Single `JAUNDER_CAPTURE_DIR` output-dir contract for e2e capture                                             | accepted   |
 | [0058](adr/0058-host-crate-layering.md)                            | A `host` crate for strictly-host-focused shared code                                                         | accepted   |
-| [0059](adr/0059-thin-web-shell-error-layering.md)                  | The thin web shell and the T1→T2→T3 error pipeline                                                           | proposed   |
-| [0060](adr/0060-web-invalidator-revalidation-idiom.md)             | web revalidation goes through the `Invalidator` primitive, not `action.version()`                            | proposed   |
-| [0061](adr/0061-web-keyed-list-reactive-store.md)                  | Web keyed lists render via a reactive Store, patch-fed                                                       | proposed   |
-| [0062](adr/0062-macros-crate-proc-macro-home.md)                   | A `macros` crate as the workspace's proc-macro home                                                          | proposed   |
+| [0059](adr/0059-thin-web-shell-error-layering.md)                  | The thin web shell and the T1→T2→T3 error pipeline                                                           | accepted   |
+| [0060](adr/0060-web-invalidator-revalidation-idiom.md)             | web revalidation goes through the `Invalidator` primitive, not `action.version()`                            | accepted   |
+| [0061](adr/0061-web-keyed-list-reactive-store.md)                  | Web keyed lists render via a reactive Store, patch-fed                                                       | accepted   |
+| [0062](adr/0062-macros-crate-proc-macro-home.md)                   | A `macros` crate as the workspace's proc-macro home                                                          | accepted   |
 | [0063](adr/0063-domain-value-newtype-convention.md)                | Domain-value newtypes — when to introduce one, and the standard trailer                                      | proposed   |
-| [0064](adr/0064-backup-target-auto-derivation.md)                  | Backup target set auto-derived from the live schema; restore defers FK checks                                | proposed   |
+| [0064](adr/0064-backup-target-auto-derivation.md)                  | Backup target set auto-derived from the live schema; restore defers FK checks                                | accepted   |
 
 <!-- adr-table:end -->
 

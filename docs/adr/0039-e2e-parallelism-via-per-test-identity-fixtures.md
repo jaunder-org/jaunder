@@ -96,4 +96,4 @@ landed with the flip.
   accounts; `verifiedUser` self-provisions, so those tests are heavier and the
   `password_reset` flow carries a wider per-test timeout.
 - The local `end2end/playwright.config.ts` is intentionally left diverging;
-  deduping the two configs is #153.
+  deduping the two configs is #153 (since done: ADR-0051 unified the configs).

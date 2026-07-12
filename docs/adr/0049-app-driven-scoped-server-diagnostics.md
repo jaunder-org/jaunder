@@ -15,9 +15,9 @@
 
 Diagnosing an e2e failure meant grovelling the full systemd journal inside the
 VM: kernel boot spam plus every INFO request line bury the actual signal (the
-panic or the error). [ADR-0032](../0032-e2e-zero-panic-gate.md) (the zero-panic
+panic or the error). [ADR-0032](0032-e2e-zero-panic-gate.md) (the zero-panic
 gate) already had to grep that whole journal for `panicked at`, and
-[ADR-0037](../0037-e2e-failure-diagnostics-capture.md) established the
+[ADR-0037](0037-e2e-failure-diagnostics-capture.md) established the
 capture-before-fail / recover-from-`--keep-failed` machinery — but 0037 is "the
 harness copies whatever the VM already produced." Nothing produced a small,
 low-noise artifact scoped to the server's own errors and panics. (Surfaced
@@ -95,6 +95,6 @@ them:
   `JAUNDER_DIAG_LOG_FILE`) should consolidate into a single output-dir contract
   (#227); a configurable diag level and a dedicated `analyze-*` tool over the
   diag JSONL are left open (the JSONL format keeps both cheap later).
-- Ancestors extended: [ADR-0032](../0032-e2e-zero-panic-gate.md) (gate mechanism
-  changed here) and [ADR-0037](../0037-e2e-failure-diagnostics-capture.md) (this
+- Ancestors extended: [ADR-0032](0032-e2e-zero-panic-gate.md) (gate mechanism
+  changed here) and [ADR-0037](0037-e2e-failure-diagnostics-capture.md) (this
   adds one artifact to its copy-all set).

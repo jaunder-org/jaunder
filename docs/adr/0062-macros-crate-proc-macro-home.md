@@ -1,6 +1,6 @@
 # ADR-0062: A `macros` crate as the workspace's proc-macro home
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-11
 - Issue: [#370](https://github.com/jaunder-org/jaunder/issues/370)
 

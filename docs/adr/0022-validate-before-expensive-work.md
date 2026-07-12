@@ -49,7 +49,8 @@ dividing line is the **entropy of the thing being validated**:
   ADR-0021, so the hash runs inside the immediate transaction on the success
   path only (issue #51).
 - `confirm_password_reset` currently hashes the new password _before_ validating
-  the reset token — it violates this ADR and is tracked as a follow-up issue.
+  the reset token — it violates this ADR and is tracked as a follow-up issue
+  (since fixed: the atomic token claim now precedes hashing).
 - ADR-0018 carries a scope-boundary cross-reference to this ADR so the boundary
   is discoverable from both sides; its decision and durable invariant are
   unchanged.

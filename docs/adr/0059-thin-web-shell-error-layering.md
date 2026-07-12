@@ -1,6 +1,6 @@
 # ADR-0059: The thin web shell and the T1→T2→T3 error pipeline
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-09
 - Issue: [#334](https://github.com/jaunder-org/jaunder/issues/334)
 

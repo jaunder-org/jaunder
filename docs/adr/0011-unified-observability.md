@@ -59,15 +59,15 @@ standard way to correlate spans across different environments and languages.
 - Bad: Adds some complexity to the test runner and backend initialization.
 - Bad: Generates large trace files that require specialized analysis scripts.
 
-## Addendum (2026-06-18): Event metrics pipeline (jaunder-kq8w.21)
+## Addendum (2026-06-18): Event metrics pipeline (jaunder-kq8w.21, pre-GitHub bead tracker)
 
 Traces answer "what happened in this one request"; they do not answer "how
 often, and is the rate abnormal". This addendum adds an OpenTelemetry
 **metrics** pipeline alongside the existing tracer for operational signals —
 auth abuse, silent email/WebSub failures, backup health, upload pressure, and an
 overall error rate. The full instrument catalog lives in the design spec
-(`docs/superpowers/specs/2026-06-18-otel-metrics-pipeline-design.md`); this
-records the conventions and architecture.
+(`docs/archive/2026-06-18-otel-metrics-pipeline-design.md`); this records the
+conventions and architecture.
 
 ### Pipeline
 

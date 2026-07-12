@@ -1,6 +1,6 @@
 # ADR-0048: ADRs drafted out of git, numbered at ship
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-03
 - Issue: [#219](https://github.com/jaunder-org/jaunder/issues/219)
 

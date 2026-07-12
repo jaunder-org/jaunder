@@ -15,12 +15,13 @@ an outbound-HTTP publisher with no storage role. It is built once by
 The web layer is already well-segregated: server functions retrieve only the
 per-trait context they need (`expect_context::<Arc<dyn UserStorage>>()`), not
 the whole bundle. The remaining whole-`AppState` consumers are the feed worker,
-the media manager, and the backup worker. The structural problem (analysis doc
-§1.9) is **drift**: `AppState` is _both_ (a) a type capable of holding any
-dependency _and_ (b) routinely passed beyond the composition root. Any type with
-both properties accretes junk — the `websub` field is the proof (it was added as
-the lowest-friction way to reach the publisher from the feed worker, _despite_
-an in-source comment that the mailer "deliberately lives outside this bundle").
+the media manager, and the backup worker. The structural problem (analysis doc —
+`docs/archive/2026-06-12-code-analysis.md` — §1.9) is **drift**: `AppState` is
+_both_ (a) a type capable of holding any dependency _and_ (b) routinely passed
+beyond the composition root. Any type with both properties accretes junk — the
+`websub` field is the proof (it was added as the lowest-friction way to reach
+the publisher from the feed worker, _despite_ an in-source comment that the
+mailer "deliberately lives outside this bundle").
 
 This ADR resolves the dependency-injection shape so the dependent refactors —
 §1.1 (storage dedup), §1.9 (dissolve the omnibus), §1.10 (relocate `websub` out

@@ -1,6 +1,6 @@
 # ADR-0051: One Playwright config for host and CI
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-04
 - Issue: [#153](https://github.com/jaunder-org/jaunder/issues/153)
 

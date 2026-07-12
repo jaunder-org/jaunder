@@ -20,9 +20,10 @@ not use the `Location` header (that is the edit URL) and does not reconstruct
 the path from the sha client-side. The server is authoritative about URL layout.
 
 To parse the entry, introduce a shared primitive `jaunder--atom-entry-fields`
-(entry XML → alist, on `libxml`/`dom`), **pulled forward from C4 (#162) into
-C3**. C3 consumes its `content-src`/`content-type`; C4 and Unit D extend the
-field set (slug, published, ETag).
+(shipped as `jaunder--harvest-response-fields`) (entry XML → alist, on
+`libxml`/`dom`), **pulled forward from C4 (#162) into C3**. C3 consumes its
+`content-src`/`content-type`; C4 and Unit D extend the field set (slug,
+published, ETag).
 
 ## Consequences
 
