@@ -113,8 +113,10 @@ pub fn ValidatedInput<T>(
     field: Field<T>,
     #[prop(default = "text")] input_type: &'static str,
     #[prop(optional)] autocomplete: Option<&'static str>,
-    /// Live input massaging before validation/display, e.g. `str::to_lowercase` for a
-    /// username. `fn(&str) -> String` so `str::to_lowercase` binds directly.
+    /// Live input massaging before validation/display, e.g. `transform=str::to_lowercase`
+    /// for a username. `fn(&str) -> String`; a call site passes the bare fn (leptos wraps the
+    /// optional prop, and the fn-item coerces to the pointer at the known type — an `into`
+    /// on the prop would instead block that coercion).
     #[prop(optional)]
     transform: Option<fn(&str) -> String>,
 ) -> impl IntoView
