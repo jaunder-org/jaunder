@@ -110,24 +110,42 @@ idiom for a smart-string — and is sanctioned **only** for `str`-backed newtype
 nowhere else.
 
 **Secret-bearing exception.** A newtype wrapping a secret (`RawToken`,
-`Password`) implements a **redacting `Debug`** (and no `Display` that prints the
-secret), so it cannot leak into a log or span in violation of ADR-0011's
-no-secrets-in-telemetry rule. The type system then makes the safe thing the
-default.
+`Password`), selected with `#[str_newtype(secret)]`, exposes a deliberately
+**tight** surface: a **redacting `Debug`**, explicit borrowed access via
+**`AsRef<str>` only**, and construction via `TryFrom<String>`. It **omits**
+`Display`, the serde bridge, `Deref<str>` **and** `Borrow<str>`,
+`From<Self> for String`, and `PartialEq<str>`/`<&str>`. So a secret cannot
+render, (de)serialize, implicitly coerce to `&str` (via `Deref`, which would
+also reopen owned extraction through `str::to_owned`/`to_string`), hand out an
+owned plaintext `String`, or be value-compared in non-constant time. The result
+is readable-for-hashing but un-leakable — it satisfies ADR-0011's
+no-secrets-in-telemetry rule **by construction** rather than by discipline.
 
 **Numeric IDs** take the same idea with a numeric trailer: `struct UserId(i64)`
 deriving `Clone, Copy, Debug, PartialEq, Eq, Hash`, plus `From<i64>` /
-`Into<i64>` and `Display` — no `str` traits.
+`Into<i64>`, `Display`, and a **transparent-i64 serde bridge** — no `str`
+traits. The serde bridge keeps the wire form a bare integer, so a DTO field can
+adopt the type without changing any serialized shape; deserialize is an
+infallible wrap (an id has no value invariant, only the transposition
+guarantee).
 
 ### 3. The trailer is generated, not hand-written
 
 The trailer is mechanical and identical across types, so it lives in a
 `#[derive(StrNewtype)]` (and `#[derive(IdNewtype)]`) proc-macro in the
 **`macros` crate** (ADR-0062) — its second tenant. The derive generates
-everything except `FromStr`, which stays hand-written because the validation
-rule is the one genuinely per-type part. A new domain newtype is then a struct,
-a derive, and a `FromStr` — not 40 lines of boilerplate that drift apart over
-time.
+everything except `FromStr` **and the std `#[derive]`s**
+(`Clone`/`Debug`/`PartialEq`/`Eq`/`Hash`/`Ord`/`Copy`). `FromStr` stays
+hand-written because the validation/normalization rule is the one genuinely
+per-type part; the std derives stay in the user's `#[derive(...)]` list so
+per-type variation is expressed idiomatically (Slug omits `Hash`, Tag adds
+`Ord`, a secret omits `Debug` so the generated redacting one applies). The serde
+bridge is emitted as **direct `Serialize`/`Deserialize` impls**, not a
+`#[serde(try_from/into)]` attribute (serialize borrows instead of cloning into a
+`String`; deserialize routes through `FromStr` so invalid input is rejected on
+the wire). No inherent `as_str()` is generated — the `str` traits replace it. A
+new domain newtype is then a struct, a derive, and a `FromStr` — not 40 lines of
+boilerplate that drift apart over time.
 
 ### 4. Boundary rule
 
