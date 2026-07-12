@@ -107,7 +107,7 @@ _Every task's requirements implicitly include this section._
 
 **Files:**
 
-- Create: `docs/adr/drafts/backup-target-auto-derivation.md` (numberless draft;
+- Create: `docs/adr/0064-backup-target-auto-derivation.md` (numberless draft;
   `cargo xtask adr promote` numbers it at ship)
 
 **Interfaces:** none (documentation).
