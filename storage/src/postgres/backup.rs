@@ -1,5 +1,4 @@
 use std::{
-    collections::HashSet,
     fs::File,
     io::{BufWriter, Write},
     path::Path,
@@ -10,8 +9,8 @@ use sha2::{Digest, Sha256};
 use sqlx::{PgConnection, PgPool, Row};
 
 use crate::backup::{
-    build_manifest, ensure_schema_version, json_value_as_restore_text, order_by_clause,
-    read_table_rows, BackupError, BackupManifest, BackupMode, ColumnInfo, TABLES_IN_EXPORT_ORDER,
+    backup_table_set, build_manifest, ensure_schema_version, json_value_as_restore_text,
+    order_by_clause, read_table_rows, BackupError, BackupManifest, BackupMode, ColumnInfo,
 };
 use crate::sql::quote_identifier;
 
@@ -91,7 +90,26 @@ pub(crate) async fn restore_database(
     ensure_schema_version(manifest, schema_version)?;
 
     sqlx::query("BEGIN").execute(&mut *connection).await?;
+    // Defer every foreign key to COMMIT so tables load in any order (the manifest
+    // is sorted alphabetically, not FK-topologically). Every FK is still checked,
+    // once, at COMMIT — a referentially-broken restore fails the whole
+    // transaction, matching SQLite's end-of-import `foreign_key_check`.
+    sqlx::query("SET CONSTRAINTS ALL DEFERRED")
+        .execute(&mut *connection)
+        .await?;
     let result = async {
+        // Clear every table before loading any. `SET CONSTRAINTS` defers foreign-key
+        // *checks*, not `ON DELETE CASCADE` *actions* — so a per-table DELETE could
+        // fire a cascade that wipes a row already loaded for an earlier table in the
+        // alphabetical manifest. A full clear-then-load avoids that entirely; restore
+        // is an authoritative replace of a database the emptiness preflight already
+        // proved unused.
+        for table in &manifest.tables {
+            sqlx::query(&format!("DELETE FROM {}", quote_identifier(table)))
+                .execute(&mut *connection)
+                .await
+                .map_err(map_restore_error)?;
+        }
         for table in &manifest.tables {
             let columns = columns(&mut connection, table).await?;
             import_table(&mut connection, source_path, table, &columns).await?;
@@ -102,7 +120,15 @@ pub(crate) async fn restore_database(
 
     match result {
         Ok(()) => {
-            sqlx::query("COMMIT").execute(&mut *connection).await?;
+            // Deferred foreign keys are checked here, at COMMIT, so a dangling-FK
+            // restore fails on this statement (Postgres aborts the transaction
+            // automatically). Route it through `map_restore_error` so class-23
+            // surfaces as `ConstraintViolation`, identical to SQLite's
+            // end-of-import `foreign_key_check`, rather than a raw `Sqlx` error.
+            sqlx::query("COMMIT")
+                .execute(&mut *connection)
+                .await
+                .map_err(map_restore_error)?;
             Ok(())
         }
         Err(error) => {
@@ -120,15 +146,11 @@ async fn existing_export_tables(connection: &mut PgConnection) -> Result<Vec<Str
     )
     .fetch_all(&mut *connection)
     .await?;
-    let existing = rows
+    let names = rows
         .into_iter()
         .map(|row| row.try_get::<String, _>("table_name"))
-        .collect::<Result<HashSet<_>, _>>()?;
-    Ok(TABLES_IN_EXPORT_ORDER
-        .iter()
-        .filter(|table| existing.contains(**table))
-        .map(|table| (*table).to_owned())
-        .collect())
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(backup_table_set(names))
 }
 
 async fn import_table(
@@ -200,6 +222,7 @@ fn insert_sql(table: &str, columns: &[ColumnInfo]) -> String {
 fn restore_type(column: &ColumnInfo) -> &'static str {
     match column.type_name.as_str() {
         "bool" => "BOOLEAN",
+        "int4" => "INTEGER",
         "int8" => "BIGINT",
         "timestamptz" => "TIMESTAMPTZ",
         _ => "TEXT",
@@ -211,13 +234,21 @@ fn restore_type(column: &ColumnInfo) -> &'static str {
 /// without this the next INSERT would reuse an existing id and hit a unique
 /// violation. The third `setval` arg (`COUNT(*) > 0`) leaves the sequence
 /// "uncalled" for an empty table, so the first inserted row still gets id 1.
+///
+/// The serial/identity columns are derived from the catalog rather than
+/// hand-listed, so a newly backed-up table's sequence is repaired automatically.
 async fn repair_sequences(connection: &mut PgConnection) -> Result<(), BackupError> {
-    for (table, column) in [
-        ("users", "user_id"),
-        ("posts", "post_id"),
-        ("post_revisions", "revision_id"),
-        ("tags", "tag_id"),
-    ] {
+    let serial_columns = sqlx::query(
+        "SELECT table_name, column_name
+         FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND (is_identity = 'YES' OR column_default LIKE 'nextval(%')",
+    )
+    .fetch_all(&mut *connection)
+    .await?;
+    for row in serial_columns {
+        let table: String = row.try_get("table_name")?;
+        let column: String = row.try_get("column_name")?;
         let sql = format!(
             "SELECT setval(
                 pg_get_serial_sequence('{table}', '{column}'),
@@ -282,7 +313,7 @@ fn json_select(table: &str, columns: &[ColumnInfo]) -> String {
     format!(
         "SELECT to_jsonb(export_row)::text FROM (SELECT {column_list} FROM {} ORDER BY {}) AS export_row",
         quote_identifier(table),
-        order_by_clause(table, quote_identifier)
+        order_by_clause(columns, quote_identifier)
     )
 }
 
@@ -422,7 +453,7 @@ mod tests {
     }
 
     #[test]
-    fn json_select_orders_by_table_key() {
+    fn json_select_orders_by_all_columns() {
         let sql = json_select(
             "post_tags",
             &[

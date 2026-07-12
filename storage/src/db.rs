@@ -129,19 +129,28 @@ pub async fn open_existing_database(opts: &DbConnectOptions) -> sqlx::Result<Arc
     }
 }
 
-/// Returns `true` if the target database already contains at least one user.
+/// Tables that migrations seed with constant lookup rows; they are non-empty
+/// even in a pristine database, so an emptiness check must ignore them.
+pub(crate) const MIGRATION_SEEDED_TABLES: &[&str] =
+    &["channels", "subscription_statuses", "target_kinds"];
+
+/// Returns `true` if the database holds no user data — every table except the
+/// migration-seeded lookups ([`MIGRATION_SEEDED_TABLES`]) is empty.
 ///
-/// Used as a restore preflight: refusing to restore into a non-empty database.
+/// Used as a restore preflight: refusing to overwrite a database that is already
+/// in use. This is stricter than checking for users alone — it also catches data
+/// held before any user exists (site config, unused invites, a populated feed
+/// cache).
 ///
 /// # Errors
 ///
-/// Returns the underlying [`sqlx::Error`] if the database cannot be reached or
-/// the query fails.
-pub async fn database_has_users(options: &DbConnectOptions) -> sqlx::Result<bool> {
+/// Returns the underlying [`sqlx::Error`] if the database cannot be reached or a
+/// query fails.
+pub async fn database_is_empty(options: &DbConnectOptions) -> sqlx::Result<bool> {
     match options {
-        DbConnectOptions::Sqlite(options) => crate::sqlite::database_has_users(options).await,
+        DbConnectOptions::Sqlite(options) => crate::sqlite::database_is_empty(options).await,
         DbConnectOptions::Postgres { options, .. } => {
-            crate::postgres::database_has_users(options).await
+            crate::postgres::database_is_empty(options).await
         }
     }
 }
@@ -262,13 +271,13 @@ mod tests {
 
     // guard:no-backend — asserts DbConnectOptions→backend routing; connects lazily, no live pool
     #[tokio::test]
-    async fn database_has_users_routes_to_postgres_backend() {
+    async fn database_is_empty_routes_to_postgres_backend() {
         let opts = "postgres://localhost:1/db"
             .parse::<DbConnectOptions>()
             .unwrap();
         let _ = tokio::time::timeout(
             std::time::Duration::from_millis(50),
-            database_has_users(&opts),
+            database_is_empty(&opts),
         )
         .await;
     }

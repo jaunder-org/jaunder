@@ -47,7 +47,7 @@ async fn sqlite_backup_restores_into_postgres(#[case] backend: Backend) {
     cmd_init(&source_args, false)
         .await
         .expect("init sqlite source");
-    let post_id = populate_backup_fixture(&source_args).await;
+    let ids = populate_backup_fixture(&source_args).await;
 
     let backup_path = base.path().join("sqlite-backup");
     cmd_backup(
@@ -66,7 +66,7 @@ async fn sqlite_backup_restores_into_postgres(#[case] backend: Backend) {
         .await
         .expect("restore into postgres");
 
-    assert_backup_fixture_restored(&target_args, post_id).await;
+    assert_backup_fixture_restored(&target_args, &ids).await;
 }
 
 #[apply(postgres_only)]
@@ -81,7 +81,7 @@ async fn postgres_backup_restores_into_sqlite(#[case] backend: Backend) {
     cmd_init(&source_args, false)
         .await
         .expect("init postgres source");
-    let post_id = populate_backup_fixture(&source_args).await;
+    let ids = populate_backup_fixture(&source_args).await;
 
     let backup_path = base.path().join("postgres-backup");
     cmd_backup(
@@ -100,7 +100,7 @@ async fn postgres_backup_restores_into_sqlite(#[case] backend: Backend) {
         .await
         .expect("restore into sqlite");
 
-    assert_backup_fixture_restored(&target_args, post_id).await;
+    assert_backup_fixture_restored(&target_args, &ids).await;
 }
 
 /// Assert two backup directories are byte-identical over `db/*.ndjson` and
@@ -161,7 +161,7 @@ async fn backup_round_trips_full_cycle_across_backends(#[case] backend: Backend)
     // P1 (postgres): seed, export E_P1.
     let (p1, _pg_p1) = postgres_storage_args(&base, "p1").await;
     cmd_init(&p1, false).await.expect("init p1");
-    let post_id = populate_backup_fixture(&p1).await;
+    let ids = populate_backup_fixture(&p1).await;
     let dir_p1 = base.path().join("dir-p1");
     cmd_backup(&p1, BackupMode::Directory, Some(dir_p1.clone()))
         .await
@@ -171,7 +171,7 @@ async fn backup_round_trips_full_cycle_across_backends(#[case] backend: Backend)
     let s1 = sqlite_storage_args(&base, "s1");
     cmd_init(&s1, false).await.expect("init s1");
     cmd_restore(&s1, &dir_p1).await.expect("restore into s1");
-    assert_backup_fixture_restored(&s1, post_id).await;
+    assert_backup_fixture_restored(&s1, &ids).await;
     let dir_s1 = base.path().join("dir-s1");
     cmd_backup(&s1, BackupMode::Directory, Some(dir_s1.clone()))
         .await
@@ -181,7 +181,7 @@ async fn backup_round_trips_full_cycle_across_backends(#[case] backend: Backend)
     let (p2, _pg_p2) = postgres_storage_args(&base, "p2").await;
     cmd_init(&p2, false).await.expect("init p2");
     cmd_restore(&p2, &dir_s1).await.expect("restore into p2");
-    assert_backup_fixture_restored(&p2, post_id).await;
+    assert_backup_fixture_restored(&p2, &ids).await;
     let dir_p2 = base.path().join("dir-p2");
     cmd_backup(&p2, BackupMode::Directory, Some(dir_p2.clone()))
         .await
@@ -191,7 +191,7 @@ async fn backup_round_trips_full_cycle_across_backends(#[case] backend: Backend)
     let s2 = sqlite_storage_args(&base, "s2");
     cmd_init(&s2, false).await.expect("init s2");
     cmd_restore(&s2, &dir_p2).await.expect("restore into s2");
-    assert_backup_fixture_restored(&s2, post_id).await;
+    assert_backup_fixture_restored(&s2, &ids).await;
     let dir_s2 = base.path().join("dir-s2");
     cmd_backup(&s2, BackupMode::Directory, Some(dir_s2.clone()))
         .await

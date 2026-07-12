@@ -391,7 +391,7 @@ fn default_backup_path(storage: &StorageArgs, mode: BackupMode) -> PathBuf {
 }
 
 async fn ensure_restore_target_empty(storage: &StorageArgs) -> anyhow::Result<()> {
-    if storage::database_has_users(&storage.db).await? {
+    if !storage::database_is_empty(&storage.db).await? {
         return Err(anyhow::anyhow!(
             "refusing to restore into a non-empty database"
         ));

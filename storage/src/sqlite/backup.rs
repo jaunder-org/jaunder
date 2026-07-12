@@ -1,5 +1,4 @@
 use std::{
-    collections::HashSet,
     fs::File,
     io::{BufWriter, Write},
     path::Path,
@@ -10,8 +9,8 @@ use sha2::{Digest, Sha256};
 use sqlx::{Row, SqliteConnection, SqlitePool};
 
 use crate::backup::{
-    build_manifest, ensure_schema_version, order_by_clause, read_table_rows, BackupError,
-    BackupManifest, BackupMode, ColumnInfo, TABLES_IN_EXPORT_ORDER,
+    backup_table_set, build_manifest, ensure_schema_version, order_by_clause, read_table_rows,
+    BackupError, BackupManifest, BackupMode, ColumnInfo,
 };
 use crate::sql::{quote_identifier, quote_literal};
 
@@ -85,6 +84,15 @@ pub(crate) async fn restore_database(
         .await?;
 
     let result = async {
+        // Clear every table before loading any (authoritative replace), keeping the
+        // two backends' restore shape identical. FK enforcement is off here, so a
+        // DELETE never cascades; the clear-then-load split matches Postgres, where
+        // deferral does not suppress cascade actions.
+        for table in &manifest.tables {
+            sqlx::query(&format!("DELETE FROM {}", quote_identifier(table)))
+                .execute(&mut *connection)
+                .await?;
+        }
         for table in &manifest.tables {
             let columns = columns(&mut connection, table).await?;
             import_table(&mut connection, source_path, table, &columns).await?;
@@ -121,15 +129,11 @@ async fn existing_export_tables(
     let rows = sqlx::query("SELECT name FROM sqlite_master WHERE type = 'table'")
         .fetch_all(&mut *connection)
         .await?;
-    let existing = rows
+    let names = rows
         .into_iter()
         .map(|row| row.try_get::<String, _>("name"))
-        .collect::<Result<HashSet<_>, _>>()?;
-    Ok(TABLES_IN_EXPORT_ORDER
-        .iter()
-        .filter(|table| existing.contains(**table))
-        .map(|table| (*table).to_owned())
-        .collect())
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(backup_table_set(names))
 }
 
 async fn import_table(
@@ -274,7 +278,7 @@ fn json_select(table: &str, columns: &[ColumnInfo]) -> String {
     format!(
         "SELECT json_object({json_args}) FROM {} ORDER BY {}",
         quote_identifier(table),
-        order_by_clause(table, quote_identifier)
+        order_by_clause(columns, quote_identifier)
     )
 }
 

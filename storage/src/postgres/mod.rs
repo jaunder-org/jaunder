@@ -275,13 +275,33 @@ pub(crate) async fn open_postgres_database(
     Ok(open_postgres_database_with_pool(options).await?.0)
 }
 
-/// Returns `true` if the `PostgreSQL` database already contains at least one user.
-pub(crate) async fn database_has_users(options: &PgConnectOptions) -> sqlx::Result<bool> {
+/// Returns `true` if the `PostgreSQL` database holds no user data — every table
+/// except the migration-seeded lookups is empty.
+pub(crate) async fn database_is_empty(options: &PgConnectOptions) -> sqlx::Result<bool> {
     let options = resolved_postgres_options(options)?;
     let pool = PgPool::connect_with(options).await?;
-    sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM users LIMIT 1)")
+    let tables = sqlx::query_scalar::<_, String>(
+        "SELECT table_name FROM information_schema.tables \
+         WHERE table_schema = 'public' AND table_type = 'BASE TABLE' \
+           AND table_name <> '_sqlx_migrations'",
+    )
+    .fetch_all(&pool)
+    .await?;
+    for table in tables {
+        if crate::db::MIGRATION_SEEDED_TABLES.contains(&table.as_str()) {
+            continue;
+        }
+        let has_row = sqlx::query_scalar::<_, bool>(&format!(
+            "SELECT EXISTS(SELECT 1 FROM {} LIMIT 1)",
+            crate::sql::quote_identifier(&table)
+        ))
         .fetch_one(&pool)
-        .await
+        .await?;
+        if has_row {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 #[cfg(test)]

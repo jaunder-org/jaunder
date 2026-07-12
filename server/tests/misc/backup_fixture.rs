@@ -3,7 +3,30 @@ use common::password::Password;
 use common::username::Username;
 use common::visibility::{AudienceTarget, ViewerIdentity};
 use jaunder::cli::StorageArgs;
-use storage::{open_existing_database, CreatePostInput, PostFormat};
+use storage::{
+    open_existing_database, AppState, CreatePostInput, MediaRecord, MediaSource, PostFormat,
+};
+
+/// SHA-256 the media-table fixture row is keyed by; any stable value works, since
+/// the media *files* are mirrored separately from the media *table*.
+const FIXTURE_MEDIA_SHA256: &str =
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+/// Identifiers returned by [`populate_backup_fixture`] so
+/// [`assert_backup_fixture_restored`] can check non-author visibility fidelity
+/// (a `Named`-audience post must survive restore visible to its subscriber, not
+/// silently Private — the bug in issue #4).
+pub struct BackupFixtureIds {
+    /// The operator who authors the fixture posts and owns the audience.
+    pub author: i64,
+    /// A second, non-operator account subscribed to the author and a member of
+    /// the `Named` audience — the viewer who must still see the private post.
+    pub viewer: i64,
+    /// A `Public` post (visible to everyone, including anonymous).
+    pub public_post: i64,
+    /// A post targeted at a `Named` audience the viewer belongs to.
+    pub named_post: i64,
+}
 
 /// Fixed microsecond-precision publish time: deterministic and safe from
 /// Postgres's µs quantization, so a restored value can be asserted exactly (DEC-D).
@@ -13,21 +36,21 @@ pub fn fixture_published_at() -> DateTime<Utc> {
         .expect("valid fixture timestamp")
 }
 
-pub async fn populate_backup_fixture(args: &StorageArgs) -> i64 {
+pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
     let state = open_existing_database(&args.db)
         .await
         .expect("open database");
     let username: Username = "backupuser".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");
-    let user_id = state
+    let author = state
         .users
         .create_user(&username, &password, Some("Backup User"), true)
         .await
         .expect("create user");
-    let post_id = state
+    let public_post = state
         .posts
         .create_post(&CreatePostInput {
-            user_id,
+            user_id: author,
             title: Some("Restored Post".to_owned()),
             slug: "restored-post".parse().expect("valid slug"),
             body: "body text".to_owned(),
@@ -42,15 +65,106 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> i64 {
         .expect("create post");
     state
         .posts
-        .tag_post(post_id, "Backup-Test")
+        .tag_post(public_post, "Backup-Test")
         .await
         .expect("tag post");
+
+    let (viewer, named_post) = seed_named_audience_post(&state, author, &password).await;
+    seed_side_tables(&state, author).await;
+
     std::fs::write(args.storage_path.join("media").join("avatar.txt"), "media")
         .expect("write media");
-    post_id
+    BackupFixtureIds {
+        author,
+        viewer,
+        public_post,
+        named_post,
+    }
 }
 
-pub async fn assert_backup_fixture_restored(args: &StorageArgs, post_id: i64) {
+/// Seeds a non-author subscriber and a `Named`-audience post they belong to,
+/// returning `(viewer_id, named_post_id)`. These visibility rows
+/// (`subscriptions`, `audiences`, `audience_members`, `post_audiences`) must
+/// survive restore so the subscriber still resolves the private post (issue #4).
+async fn seed_named_audience_post(
+    state: &AppState,
+    author: i64,
+    password: &Password,
+) -> (i64, i64) {
+    let viewer_name: Username = "viewer".parse().expect("valid username");
+    let viewer = state
+        .users
+        .create_user(&viewer_name, password, Some("Viewer"), false)
+        .await
+        .expect("create viewer");
+    let local = state
+        .subscriptions
+        .local_channel_id()
+        .await
+        .expect("local channel");
+    let subscription = state
+        .subscriptions
+        .subscribe(author, local, &viewer.to_string())
+        .await
+        .expect("subscribe viewer");
+    let audience = state
+        .audiences
+        .create_audience(author, "friends")
+        .await
+        .expect("create audience");
+    state
+        .audiences
+        .add_member(author, audience, subscription)
+        .await
+        .expect("add audience member");
+    let named_post = state
+        .posts
+        .create_post(&CreatePostInput {
+            user_id: author,
+            title: Some("Friends Only".to_owned()),
+            slug: "friends-only".parse().expect("valid slug"),
+            body: "secret body".to_owned(),
+            format: PostFormat::Markdown,
+            rendered_html: "<p>secret body</p>".to_owned(),
+            published_at: Some(fixture_published_at()),
+            summary: None,
+            audiences: vec![AudienceTarget::Named(audience)],
+        })
+        .await
+        .expect("create named post");
+    (viewer, named_post)
+}
+
+/// Seeds the previously-unbacked side tables: a `user_config` row, a media-table
+/// row, and a `feed_events` row.
+async fn seed_side_tables(state: &AppState, author: i64) {
+    state
+        .user_config
+        .set(author, "editor.theme", "dark")
+        .await
+        .expect("set user config");
+    state
+        .media
+        .create_media(&MediaRecord {
+            user_id: author,
+            sha256: FIXTURE_MEDIA_SHA256.to_owned(),
+            filename: "photo.jpg".to_owned(),
+            source: MediaSource::Upload,
+            content_type: "image/jpeg".to_owned(),
+            size_bytes: 4,
+            source_url: None,
+            created_at: fixture_published_at(),
+        })
+        .await
+        .expect("create media row");
+    state
+        .feed_events
+        .enqueue("https://example.com/feed.xml")
+        .await
+        .expect("enqueue feed event");
+}
+
+pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixtureIds) {
     let state = open_existing_database(&args.db)
         .await
         .expect("open restored database");
@@ -64,18 +178,16 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, post_id: i64) {
     assert!(user.is_operator);
     assert_eq!(user.display_name.as_deref(), Some("Backup User"));
 
-    // View as the restored post's author. Backup/restore does not yet carry the
-    // `post_audiences` rows (the `TABLES_IN_EXPORT_ORDER` gap tracked in issue #4),
-    // so an Anonymous viewer would be filtered out by the resolution predicate; the
-    // owner is always admitted via the author branch, which is the correct viewer here.
     let local = state
         .subscriptions
         .local_channel_id()
         .await
         .expect("local channel id");
+
+    // The public post resolves for its author.
     let post = state
         .posts
-        .get_post_by_id(post_id, &ViewerIdentity::local(user.user_id, local))
+        .get_post_by_id(ids.public_post, &ViewerIdentity::local(ids.author, local))
         .await
         .expect("get post")
         .expect("restored post");
@@ -86,12 +198,59 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, post_id: i64) {
 
     let tags = state
         .posts
-        .get_tags_for_post(post_id)
+        .get_tags_for_post(ids.public_post)
         .await
         .expect("get tags");
     assert_eq!(tags.len(), 1);
     assert_eq!(tags[0].tag_slug.as_str(), "backup-test");
     assert_eq!(tags[0].tag_display, "Backup-Test");
+
+    // #4 closed: the Named-audience post survives restore visible to its
+    // non-author subscriber — its post_audiences / subscriptions / audience_members
+    // rows are carried — and correctly invisible to an anonymous viewer.
+    assert!(
+        state
+            .posts
+            .get_post_by_id(ids.named_post, &ViewerIdentity::local(ids.viewer, local))
+            .await
+            .expect("get named post")
+            .is_some(),
+        "restored Named-audience post must be visible to its subscriber"
+    );
+    assert!(
+        state
+            .posts
+            .get_post_by_id(ids.named_post, &ViewerIdentity::Anonymous)
+            .await
+            .expect("get named post as anonymous")
+            .is_none(),
+        "a Named-audience post must not be visible to anonymous"
+    );
+
+    // The previously-unbacked tables survived the round trip.
+    assert_eq!(
+        state
+            .user_config
+            .get(ids.author, "editor.theme")
+            .await
+            .expect("get user config")
+            .as_deref(),
+        Some("dark")
+    );
+    assert!(
+        state
+            .media
+            .get_media(
+                ids.author,
+                FIXTURE_MEDIA_SHA256,
+                "photo.jpg",
+                &MediaSource::Upload
+            )
+            .await
+            .expect("get media")
+            .is_some(),
+        "restored media table row must be present"
+    );
 
     assert_eq!(
         std::fs::read_to_string(args.storage_path.join("media").join("avatar.txt"))
