@@ -1,7 +1,7 @@
 # Plan — atompub: idempotency key for post create (#79)
 
 **Spec:**
-[`2026-07-11-issue-79-idempotency-key.md`](../specs/2026-07-11-issue-79-idempotency-key.md).
+[`2026-07-11-issue-79-idempotency-key-spec.md`](./2026-07-11-issue-79-idempotency-key-spec.md).
 Behavior, dedup model, and AC-S1–6 / AC-C1–6 live there; this plan is **how**.
 
 ## Review header
