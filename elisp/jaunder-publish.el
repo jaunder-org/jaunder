@@ -143,6 +143,38 @@ minimal template and visits the file."
 (defconst jaunder--entry-content-type "application/atom+xml;type=entry"
   "Request Content-Type for an AtomPub <entry> POST/PUT.")
 
+(defun jaunder--idempotency-key ()
+  "Return a fresh opaque idempotency key.
+Self-contained (no `org-id' dependency): an md5 of local entropy."
+  (md5 (format "%s%s%s" (random) (float-time) (emacs-pid))))
+
+(defun jaunder--create-with-retry (url xml)
+  "POST XML to URL as a create, retrying transient failures with one key.
+Sends a stable `Idempotency-Key' header so the server dedups a retried create.
+Retries a signalled transport error or a 5xx status, up to 3 attempts total
+(backoff ~1s then ~2s); a 4xx or 2xx returns immediately.  Returns the
+`jaunder--http-request' response plist.  The ephemeral key lives only for this
+call — a later re-publish gets a fresh key, so an edit is never mistaken for a
+retry."
+  (let ((key (jaunder--idempotency-key))
+        (delays '(1 2))
+        (attempt 0)
+        resp)
+    (while (null resp)
+      (setq attempt (1+ attempt))
+      (let ((r (condition-case err
+                   (jaunder--http-request "POST" url xml jaunder--entry-content-type
+                                          (list (cons "Idempotency-Key" key)))
+                 (error (if (< attempt 3) 'retry (signal (car err) (cdr err)))))))
+        (cond
+         ((eq r 'retry) (sleep-for (pop delays)))
+         ((and (integerp (plist-get r :status))
+               (<= 500 (plist-get r :status) 599)
+               (< attempt 3))
+          (sleep-for (pop delays)))
+         (t (setq resp r)))))
+    resp))
+
 (defun jaunder-publish (&optional force-draft)
   "Publish the current buffer's org post over AtomPub.
 Resolves the blog from the buffer's file, records the machine zone when unset,
@@ -187,11 +219,10 @@ file pristine."
                                                                 (jaunder--active-username) "posts" id)
                                             xml jaunder--entry-content-type
                                             (when synced (list (cons "If-Match" synced))))
-                                         (jaunder--http-request
-                                          "POST"
+                                         (jaunder--create-with-retry
                                           (jaunder--build-url (jaunder--active-base-url) "atompub"
                                                               (jaunder--active-username) "posts")
-                                          xml jaunder--entry-content-type)))
+                                          xml)))
                                  (code (plist-get resp :status)))
                             (unless (memq code '(200 201))
                               (error "jaunder: publish failed (HTTP %s)" code))

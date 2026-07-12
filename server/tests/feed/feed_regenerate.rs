@@ -37,6 +37,7 @@ async fn regenerate_writes_cache_row_for_user_feed(#[case] backend: Backend) {
             published_at: Some(now),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("create post 1");
@@ -53,6 +54,7 @@ async fn regenerate_writes_cache_row_for_user_feed(#[case] backend: Backend) {
             published_at: Some(now),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("create post 2");
@@ -216,6 +218,7 @@ async fn regenerate_writes_each_format(#[case] backend: Backend) {
             published_at: Some(now),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("create post");
@@ -273,6 +276,7 @@ async fn feed_contains_only_public_posts(#[case] backend: Backend) {
         published_at: Some(now),
         summary: None,
         audiences,
+        idempotency_key: None,
     };
 
     state

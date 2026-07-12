@@ -264,6 +264,7 @@ pub async fn create_post(
                 max_attempts: 100,
                 summary: normalized_summary,
                 audiences,
+                idempotency_key: None,
             },
         )
         .await?;

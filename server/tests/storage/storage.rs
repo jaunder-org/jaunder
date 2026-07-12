@@ -2048,6 +2048,7 @@ fn make_create_post_input(user_id: i64, slug: &str) -> CreatePostInput {
         published_at: None,
         summary: None,
         audiences: vec![AudienceTarget::Public],
+        idempotency_key: None,
     }
 }
 
@@ -2080,6 +2081,7 @@ async fn seed_post_published_at(
             published_at: Some(published_at),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         },
     )
     .await
@@ -2409,6 +2411,7 @@ async fn post_slug_conflict_returns_slug_conflict(#[case] backend: Backend) {
         published_at: Some(now),
         summary: None,
         audiences: vec![AudienceTarget::Public],
+        idempotency_key: None,
     };
     state.posts.create_post(&pub_input.clone()).await.unwrap();
 
@@ -2513,6 +2516,7 @@ async fn post_update_by_non_owner_returns_unauthorized(#[case] backend: Backend)
             published_at: None,
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -3494,6 +3498,7 @@ async fn multiple_tags_on_single_post(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -3555,6 +3560,7 @@ async fn empty_tag_list(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -3596,6 +3602,7 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -3612,6 +3619,7 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -3682,6 +3690,7 @@ async fn invalid_tag_input(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -3729,6 +3738,7 @@ async fn tag_list_pagination(#[case] backend: Backend) {
                 published_at: Some(Utc::now()),
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
             })
             .await
             .expect("post creation failed");
@@ -3792,6 +3802,7 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -3808,6 +3819,7 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -3885,6 +3897,7 @@ async fn selective_untag(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -3959,6 +3972,7 @@ async fn numeric_tag(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -4020,6 +4034,7 @@ async fn retag_same_post_with_same_tag_fails(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -4142,6 +4157,7 @@ async fn many_tags_many_posts(#[case] backend: Backend) {
                 published_at: Some(Utc::now()),
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
             })
             .await
             .expect("post creation failed");
@@ -4204,6 +4220,7 @@ async fn tag_all_numeric(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -4259,6 +4276,7 @@ async fn tag_hyphen_boundaries(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -4326,6 +4344,7 @@ async fn tag_with_long_display(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -4375,6 +4394,7 @@ async fn tag_list_ordering(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -4391,6 +4411,7 @@ async fn tag_list_ordering(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -4467,6 +4488,7 @@ async fn tags_for_multiple_posts(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -4483,6 +4505,7 @@ async fn tags_for_multiple_posts(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -4537,6 +4560,7 @@ async fn tag_mixed_alphanumeric(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -4597,6 +4621,7 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -4673,6 +4698,7 @@ async fn tag_creation_and_retrieval(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -4717,6 +4743,7 @@ async fn tag_normalization(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -4766,6 +4793,7 @@ async fn untag_post(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -4826,6 +4854,7 @@ async fn duplicate_tag_error(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -4880,6 +4909,7 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -4896,6 +4926,7 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -4962,6 +4993,7 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -4978,6 +5010,7 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -4994,6 +5027,7 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -5079,6 +5113,7 @@ async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -5095,6 +5130,7 @@ async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -5169,6 +5205,7 @@ async fn untag_nonexistent_tag_error(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -5211,6 +5248,7 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
             published_at: None, // Draft,
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -5227,6 +5265,7 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -5278,6 +5317,7 @@ async fn post_update_invalid_slug(#[case] backend: Backend) {
             published_at: None,
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -5294,6 +5334,7 @@ async fn post_update_invalid_slug(#[case] backend: Backend) {
             published_at: None,
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -5356,6 +5397,7 @@ async fn list_published_cursor_boundary(#[case] backend: Backend) {
                 published_at: Some(now),
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
             })
             .await
             .expect("post creation failed");
@@ -5420,6 +5462,7 @@ async fn list_drafts_cursor_boundary(#[case] backend: Backend) {
                 published_at: None,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
             })
             .await
             .expect("post creation failed");
@@ -5484,6 +5527,7 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
                 published_at: Some(now),
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
             })
             .await
             .expect("post creation failed");
@@ -5563,6 +5607,7 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
                 published_at: Some(now),
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
             })
             .await
             .expect("post creation failed");
@@ -5638,6 +5683,7 @@ async fn soft_delete_then_operations(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -5701,6 +5747,7 @@ async fn tag_post_multiple_attempts(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -5810,6 +5857,7 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
             published_at: Some(created_at),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -5883,6 +5931,7 @@ async fn update_soft_deleted_post(#[case] backend: Backend) {
             published_at: None,
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -5951,6 +6000,7 @@ async fn tag_edge_case_formats(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -6034,6 +6084,7 @@ async fn list_published_with_cursor_same_timestamp(#[case] backend: Backend) {
                 published_at: Some(now),
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
             })
             .await
             .expect("post creation failed");
@@ -6090,6 +6141,7 @@ async fn post_revisions_created(#[case] backend: Backend) {
             published_at: None,
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -6147,6 +6199,7 @@ async fn tag_display_preservation(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -6196,6 +6249,7 @@ async fn untag_preserves_other_tags(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -6403,6 +6457,7 @@ async fn create_rendered_post_markdown_renders_and_stores(#[case] backend: Backe
             published_at: None,
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         },
     )
     .await
@@ -6449,6 +6504,7 @@ async fn create_rendered_post_org_renders_and_stores(#[case] backend: Backend) {
             published_at: None,
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         },
     )
     .await
@@ -6500,6 +6556,7 @@ async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backen
             published_at: Some(now),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         },
     )
     .await
@@ -6517,6 +6574,7 @@ async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backen
             published_at: Some(now),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         },
     )
     .await
@@ -6553,6 +6611,7 @@ async fn create_post_foreign_key_violation_maps_to_internal(#[case] backend: Bac
         published_at: Some(Utc::now()),
         summary: None,
         audiences: vec![AudienceTarget::Public],
+        idempotency_key: None,
     };
 
     let err = state.posts.create_post(&input).await.unwrap_err();
@@ -6601,6 +6660,7 @@ async fn create_posts_batches_all_rows_in_order(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .collect();
 
@@ -6646,6 +6706,7 @@ async fn create_posts_conflict_rolls_back_whole_batch(#[case] backend: Backend) 
         published_at: Some(Utc::now()),
         summary: None,
         audiences: vec![AudienceTarget::Public],
+        idempotency_key: None,
     };
     // Rows 0 and 2 collide on slug — the batch must fail on row 2 and undo 0/1.
     let inputs = vec![mk("dup", 0), mk("unique", 1), mk("dup", 2)];
@@ -7274,6 +7335,7 @@ async fn list_tags_returns_alphabetical_with_prefix(#[case] backend: Backend) {
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("post creation failed");
@@ -7344,6 +7406,7 @@ async fn post_record_carries_tags(#[case] backend: Backend) {
                 published_at: Some(Utc::now()),
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
             })
             .await
             .expect("post creation failed");
@@ -7573,6 +7636,7 @@ async fn resolution_matrix(#[case] backend: Backend) {
         published_at: Some(Utc::now()),
         summary: None,
         audiences,
+        idempotency_key: None,
     };
     let p_public = state
         .posts

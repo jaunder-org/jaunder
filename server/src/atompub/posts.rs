@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Path, Query};
+use axum::extract::rejection::ExtensionRejection;
+use axum::extract::{FromRequestParts, Path, Query};
+use axum::http::request::Parts;
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
@@ -24,6 +26,39 @@ const FEED_CONTENT_TYPE: &str = "application/atom+xml;type=feed;charset=utf-8";
 const ENTRY_CONTENT_TYPE: &str = "application/atom+xml;type=entry;charset=utf-8";
 const DEFAULT_PAGE_SIZE: u32 = 25;
 const MAX_PAGE_SIZE: u32 = 50;
+
+/// The storage dependencies the post handlers share, bundled into one extractor
+/// so a handler stays under the argument limit without suppressing the lint.
+/// Each field is pulled from the request `Extension`s the app router layers.
+pub struct PostServices {
+    posts: Arc<dyn PostStorage>,
+    subscriptions: Arc<dyn SubscriptionStorage>,
+    user_config: Arc<dyn UserConfigStorage>,
+    site_config: Arc<dyn SiteConfigStorage>,
+}
+
+impl<S: Send + Sync> FromRequestParts<S> for PostServices {
+    type Rejection = ExtensionRejection;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        Ok(Self {
+            posts: Extension::<Arc<dyn PostStorage>>::from_request_parts(parts, state)
+                .await?
+                .0,
+            subscriptions: Extension::<Arc<dyn SubscriptionStorage>>::from_request_parts(
+                parts, state,
+            )
+            .await?
+            .0,
+            user_config: Extension::<Arc<dyn UserConfigStorage>>::from_request_parts(parts, state)
+                .await?
+                .0,
+            site_config: Extension::<Arc<dyn SiteConfigStorage>>::from_request_parts(parts, state)
+                .await?
+                .0,
+        })
+    }
+}
 
 /// A strong, content-hash `ETag` for a post: `"sha256-<hex>"` over the post's
 /// content fields (title, stored body, format, summary, tag display names, and
@@ -303,14 +338,18 @@ pub async fn member_delete(
 /// Returns `500` if storage fails.
 #[tracing::instrument(name = "atompub.posts.collection_post", skip_all)]
 pub async fn collection_post(
-    Extension(posts): Extension<Arc<dyn PostStorage>>,
-    Extension(subscriptions): Extension<Arc<dyn SubscriptionStorage>>,
-    Extension(user_config): Extension<Arc<dyn UserConfigStorage>>,
-    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
+    services: PostServices,
     auth_user: AuthUser,
     Path(username): Path<String>,
+    headers: HeaderMap,
     body: String,
 ) -> Result<Response, HandlerError> {
+    let PostServices {
+        posts,
+        subscriptions,
+        user_config,
+        site_config,
+    } = services;
     super::require_user_match(&auth_user, &username)?;
     let entry = entry_from_xml(&body)?;
     let default_format =
@@ -327,6 +366,13 @@ pub async fn collection_post(
     // AtomPub has no audience picker; new posts adopt the instance default.
     let default_audience = site_config.get_default_audience().await?;
 
+    // A client-supplied idempotency key dedups a retried create (duplicate-on-retry).
+    let idem = headers
+        .get("idempotency-key")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
     let created = storage::perform_post_creation(
         posts.as_ref(),
         storage::PostCreation {
@@ -339,35 +385,68 @@ pub async fn collection_post(
             max_attempts: 100,
             summary: fields.summary,
             audiences: vec![default_audience],
+            idempotency_key: idem,
         },
     )
-    .await?;
+    .await;
 
-    apply_categories(posts.as_ref(), created.post_id, &fields.categories).await?;
-
-    // Re-fetch so the response entry includes the freshly applied tags. Load as
-    // the authenticated owner so a non-Public default audience is not hidden.
+    let base = base_url(site_config.as_ref()).await;
+    // Re-fetch as the authenticated owner so a non-Public default audience is not
+    // hidden, and so the response entry carries the post's tags.
     let viewer = owner_viewer(subscriptions.as_ref(), &auth_user).await?;
+
+    // A reused idempotency key returns the original post as `200` — skipping category
+    // re-application (the original already carries its tags).
+    if let Err(storage::PerformCreationError::IdempotencyConflict) = &created {
+        let key = idem.ok_or(HandlerError::Internal)?;
+        let post_id = posts
+            .post_id_for_idempotency_key(auth_user.user_id, key)
+            .await?
+            .ok_or(HandlerError::Internal)?;
+        // If the original was soft-deleted between the create and this replay, a
+        // stale-key retry deserves a 404 rather than a 500.
+        let post = posts
+            .get_post_by_id(post_id, &viewer)
+            .await?
+            .ok_or(HandlerError::NotFound)?;
+        return Ok(post_entry_response(StatusCode::OK, &post, &base, &username));
+    }
+
+    // Fresh create: a non-conflict error propagates via `?`.
+    let created = created?;
+    apply_categories(posts.as_ref(), created.post_id, &fields.categories).await?;
     let post = posts
         .get_post_by_id(created.post_id, &viewer)
         .await?
         .ok_or(HandlerError::Internal)?;
-
-    let base = base_url(site_config.as_ref()).await;
-    let location = format!("{base}/atompub/{username}/posts/{}", post.post_id);
-    let entry_out = post_to_entry(&post, &base);
-    let xml = entry_to_xml(&entry_out);
-
-    Ok((
+    Ok(post_entry_response(
         StatusCode::CREATED,
+        &post,
+        &base,
+        &username,
+    ))
+}
+
+/// Builds a member-entry response (used by create `201` and the idempotent-replay
+/// `200`): the atom entry body plus `Location` and content-hash `ETag` headers.
+fn post_entry_response(
+    status: StatusCode,
+    post: &PostRecord,
+    base: &str,
+    username: &str,
+) -> Response {
+    let location = format!("{base}/atompub/{username}/posts/{}", post.post_id);
+    let xml = entry_to_xml(&post_to_entry(post, base));
+    (
+        status,
         [
             (header::CONTENT_TYPE, ENTRY_CONTENT_TYPE.to_string()),
             (header::LOCATION, location),
-            (header::ETAG, etag_for(&post)),
+            (header::ETAG, etag_for(post)),
         ],
         xml,
     )
-        .into_response())
+        .into_response()
 }
 
 /// `PUT /atompub/{username}/posts/{post_id}` — replace a post from an `AtomPub` entry.
@@ -382,20 +461,19 @@ pub async fn collection_post(
 /// Returns `412` if `If-Match` is present and stale.
 /// Returns `500` if storage fails.
 #[tracing::instrument(name = "atompub.posts.member_put", skip_all)]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "axum extractor handler; each argument is a separate request extractor and cannot be bundled"
-)]
 pub async fn member_put(
-    Extension(posts): Extension<Arc<dyn PostStorage>>,
-    Extension(subscriptions): Extension<Arc<dyn SubscriptionStorage>>,
-    Extension(user_config): Extension<Arc<dyn UserConfigStorage>>,
-    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
+    services: PostServices,
     auth_user: AuthUser,
     Path((username, post_id)): Path<(String, i64)>,
     headers: HeaderMap,
     body: String,
 ) -> Result<Response, HandlerError> {
+    let PostServices {
+        posts,
+        subscriptions,
+        user_config,
+        site_config,
+    } = services;
     let current = owned_post(
         posts.as_ref(),
         subscriptions.as_ref(),

@@ -75,6 +75,7 @@ async fn seed_user_and_tagged_post(
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
         })
         .await
         .expect("create_post failed");

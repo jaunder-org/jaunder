@@ -1526,6 +1526,7 @@ async fn list_drafts_surfaces_scheduled_with_marker_excludes_live(#[case] backen
             published_at: Some(published_at),
             summary: None,
             audiences: vec![common::visibility::AudienceTarget::Public],
+            idempotency_key: None,
         };
     let now = chrono::Utc::now();
     let sched_id = state
@@ -3262,6 +3263,7 @@ async fn create_targeted_post(
             published_at: Some(chrono::Utc::now()),
             summary: None,
             audiences,
+            idempotency_key: None,
         })
         .await
         .unwrap()
