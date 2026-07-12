@@ -1,7 +1,7 @@
 //! Client-side domain-value form validation (#414): validate a field by parsing input
 //! into a domain newtype — the same `FromStr` the typed `#[server]`-arg `Deserialize`
 //! routes through — and surface the newtype's own message inline. See ADR (draft):
-//! `docs/adr/drafts/client-side-domain-validation.md`.
+//! `docs/adr/0065-client-side-domain-validation.md`.
 
 use std::fmt::Display;
 use std::marker::PhantomData;

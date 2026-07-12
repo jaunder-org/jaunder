@@ -69,7 +69,7 @@ initial `error` or the empty form submits.
 filing.
 
 **ADR:** already authored (design phase) at
-[`docs/adr/drafts/client-side-domain-validation.md`](../../adr/drafts/client-side-domain-validation.md)
+[`docs/adr/0065-client-side-domain-validation.md`](../../adr/0065-client-side-domain-validation.md)
 — numberless; `cargo xtask adr promote` numbers it at ship. **No writing task**
 (AC7's "ADR drafted" is already satisfied); keep it current if a task surfaces a
 new decision.
