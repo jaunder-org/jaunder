@@ -34,8 +34,8 @@ Two recurring failure modes motivated recording a durable policy:
 This ADR records the error-handling conventions that are now **decided and
 implemented**. The further structural reshape of the internal carrier — a
 `kind`/`ErrorClass`/`context` structure with field emission at the boundary
-(analysis §3.1-B/C, tracked as `jaunder-kq8w.16`) — is **forthcoming** and will
-build on, not replace, this ADR.
+(analysis §3.1-B/C, tracked as `jaunder-kq8w.16`, pre-GitHub bead tracker) — is
+**forthcoming** and will build on, not replace, this ADR.
 
 ## Decision Drivers
 

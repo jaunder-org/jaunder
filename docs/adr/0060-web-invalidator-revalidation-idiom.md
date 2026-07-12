@@ -1,6 +1,6 @@
 # ADR-0060: web revalidation goes through the `Invalidator` primitive, not `action.version()`
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-10
 - Issue: [#359](https://github.com/jaunder-org/jaunder/issues/359)
 

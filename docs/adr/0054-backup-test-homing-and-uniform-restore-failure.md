@@ -88,7 +88,8 @@ booleans already are) is a deliberate non-goal.
 - The `post_audiences` / visibility-table backup gap remains out of scope,
   tracked in [#4](https://github.com/jaunder-org/jaunder/issues/4) (expanded to
   add the missing tables **and** a schema-completeness anti-regression guard).
-  #136's tests keep the author-viewer workaround until #4 lands.
+  #136's tests keep the author-viewer workaround until #4 lands (#4 has since
+  landed).
 - Amends the ADR-0053 backup carve-out by settling the placement it deferred.
 
 ## References

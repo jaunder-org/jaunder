@@ -1,6 +1,6 @@
 # ADR-0061: Web keyed lists render via a reactive Store, patch-fed
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-10
 - Issue: [#348](https://github.com/jaunder-org/jaunder/issues/348)
 

@@ -1,6 +1,6 @@
 # ADR-0053: Storage test homing and the dual-backend presumption
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-05
 - Deciders: Michael Alan Dorman
 - Issue: [#135](https://github.com/jaunder-org/jaunder/issues/135)

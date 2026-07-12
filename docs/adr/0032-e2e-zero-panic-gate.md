@@ -28,9 +28,9 @@ discoverable without a rebuild.**
    `jaunder.service` journal, copies it into the check's `$out`, and asserts the
    journal contains no `panicked at` line. A panic therefore fails the
    _derivation_ — so it cannot be cached "green" and cannot silently reappear.
-   The check is **default-deny**: an explicit, commented `ALLOWED_PANICS` list
-   is the only seam for a proven-benign exception, so the bar never moves
-   silently.
+   The check is **default-deny**: an explicit, commented `ALLOWED_PANICS`
+   (shipped as `allowed_panics`) list is the only seam for a proven-benign
+   exception, so the bar never moves silently.
 
 2. **Visible-by-default journal.** The journal lives in `$out` (surviving
    cache-hits), and the `xtask` e2e step copies it from the realized output into

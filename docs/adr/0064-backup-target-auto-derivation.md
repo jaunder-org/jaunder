@@ -1,6 +1,6 @@
 # ADR-0064: Backup target set auto-derived from the live schema; restore defers FK checks
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-11
 - Issue: [#4](https://github.com/jaunder-org/jaunder/issues/4)
 

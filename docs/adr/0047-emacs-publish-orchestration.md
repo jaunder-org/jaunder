@@ -1,6 +1,6 @@
 # ADR-0047: The Emacs Publish Orchestration — Multi-Blog Config via Dynamic Specials, ID-First Safe-to-Resume Write-Back
 
-- Status: proposed
+- Status: accepted
 - Deciders: mdorman, Claude
 - Date: 2026-07-03
 
@@ -46,7 +46,7 @@ decisions govern the orchestration and outlive this issue — how a buffer's
 target blog is chosen and threaded to the already-shipped transport, and how the
 publish sequence stays safe to retry. This ADR records them; the command
 surface, field mapping, and server contract live in the issue spec
-(`docs/superpowers/specs/2026-07-03-issue-162-emacs-publish-flow.md`).
+(`docs/archive/2026-07-03-issue-162-emacs-publish-flow-spec.md`).
 
 ## Decision Drivers
 
