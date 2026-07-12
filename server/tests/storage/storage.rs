@@ -7501,7 +7501,7 @@ async fn raw_scalar_i64(backend: Backend, env: &TestEnv, sql: &str) -> i64 {
 
 // Every foreign key must be DEFERRABLE so a restore can `SET CONSTRAINTS ALL
 // DEFERRED` and bulk-load rows in any order, with integrity verified once at
-// COMMIT. This pins that migration 0023 left no NOT DEFERRABLE foreign key
+// COMMIT. This pins that migration 0024 left no NOT DEFERRABLE foreign key
 // behind — the invariant the order-independent Postgres restore relies on.
 #[apply(postgres_only)]
 // reason: FK deferrability is a Postgres catalog property (pg_constraint.condeferrable);

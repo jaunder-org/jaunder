@@ -702,6 +702,7 @@ mod tests {
             "channels",
             "email_verifications",
             "feed_events",
+            "idempotency_keys",
             "invites",
             "media",
             "password_resets",
@@ -726,9 +727,9 @@ mod tests {
             "backup set drifted — add the new table to the golden list or to TABLES_EXCLUDED_FROM_BACKUP"
         );
 
-        // Bidirectional: the whole schema is 20 backed-up tables + feed_cache +
+        // Bidirectional: the whole schema is 21 backed-up tables + feed_cache +
         // _sqlx_migrations. A table added and then denylisted (so the manifest
-        // stays 20) still trips this count.
+        // stays 21) still trips this count.
         let live_count: i64 = match env.base.pool() {
             CloseablePool::Sqlite(pool) => sqlx::query_scalar(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
@@ -743,7 +744,7 @@ mod tests {
             .await?,
         };
         assert_eq!(
-            live_count, 22,
+            live_count, 23,
             "a table was added or removed — update the golden set and denylist deliberately"
         );
 

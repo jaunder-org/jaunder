@@ -129,6 +129,7 @@ async fn seed_named_audience_post(
             published_at: Some(fixture_published_at()),
             summary: None,
             audiences: vec![AudienceTarget::Named(audience)],
+            idempotency_key: None,
         })
         .await
         .expect("create named post");
