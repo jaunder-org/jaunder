@@ -28,12 +28,15 @@ pub struct Field<T: 'static> {
     pub value: RwSignal<String>,
     pub error: RwSignal<Option<String>>,
     touched: RwSignal<bool>,
-    _ty: PhantomData<T>,
+    // `fn() -> T`, not `T`: a phantom marker that owns no `T`, so `Field<T>` is
+    // unconditionally `Send`/`Sync`/`Copy` (the reactive closures leptos builds must be
+    // `Send`) — `PhantomData<T>` would spuriously couple those to `T`'s own bounds.
+    _ty: PhantomData<fn() -> T>,
 }
 
-// Hand-written, unconditional: `Field` holds no `T` by value (only `PhantomData<T>`), so it
-// is `Copy` for every `T`. A `#[derive]` would wrongly demand `T: Copy`/`T: Clone`, which the
-// `String`-backed newtypes don't satisfy.
+// Hand-written, unconditional: `Field` holds no `T` by value (only the `fn() -> T` phantom),
+// so it is `Copy` for every `T`. A `#[derive]` would wrongly demand `T: Copy`/`T: Clone`,
+// which the `String`-backed newtypes don't satisfy.
 impl<T> Copy for Field<T> {}
 impl<T> Clone for Field<T> {
     fn clone(&self) -> Self {
@@ -97,6 +100,57 @@ where
         self.value.set(String::new());
         self.error.set(field_error::<T>(""));
         self.touched.set(false);
+    }
+}
+
+/// A labelled input bound to a [`Field<T>`]: validates on input via [`field_error`], and
+/// shows the newtype's own message inline once the field is touched (blur). `name` MUST match
+/// the `#[server]` struct field and the e2e selector.
+#[component]
+pub fn ValidatedInput<T>(
+    label: &'static str,
+    name: &'static str,
+    field: Field<T>,
+    #[prop(default = "text")] input_type: &'static str,
+    #[prop(optional)] autocomplete: Option<&'static str>,
+    /// Live input massaging before validation/display, e.g. `str::to_lowercase` for a
+    /// username. `fn(&str) -> String` so `str::to_lowercase` binds directly.
+    #[prop(optional)]
+    transform: Option<fn(&str) -> String>,
+) -> impl IntoView
+where
+    T: FromStr + 'static,
+    T::Err: Display,
+{
+    let on_input = move |ev| {
+        let raw = event_target_value(&ev);
+        let v = match transform {
+            Some(f) => f(&raw),
+            None => raw,
+        };
+        field.value.set(v.clone());
+        field.error.set(field_error::<T>(&v));
+    };
+    view! {
+        <label class="j-form-field">
+            <span class="j-form-label">{label}</span>
+            <input
+                class="j-form-input"
+                type=input_type
+                name=name
+                autocomplete=autocomplete
+                prop:value=field.value
+                on:input=on_input
+                on:blur=move |_| field.touch()
+            />
+            {move || {
+                field
+                    .is_touched()
+                    .then(|| field.error.get())
+                    .flatten()
+                    .map(|msg| view! { <p class="error">{msg}</p> })
+            }}
+        </label>
     }
 }
 
