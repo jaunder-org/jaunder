@@ -13,11 +13,13 @@
 //! `backend` fixture). Pure synchronous `#[test]` unit tests have no
 //! `#[tokio::test]` attribute and are never flagged.
 //!
-//! Beyond that template-or-marker rule (`violations`), #418 adds two more,
-//! enforcing ADR-0053: **homing** (`homing_violations`) — a `*_only` template
-//! must live in its `sqlite/`/`postgres/` dialect dir and a dual template must
-//! not; and **param-honesty** (`param_honesty_violations`) — a templated test
-//! must use its injected `backend`, never discard it with `let _ = backend;`.
+//! Beyond that template-or-marker rule (`violations`), the guard adds three more
+//! (ADR-0053): **homing** (`homing_violations`) — a `*_only` template must live in
+//! its `sqlite/`/`postgres/` dialect dir and a dual template must not;
+//! **param-honesty** (`param_honesty_violations`) — a templated test must use its
+//! injected `backend`, never discard it with `let _ = backend;`; and **reason**
+//! (`reason_violations`, #419) — a single-backend keep carries a `// reason:` and
+//! each `guard:*` marker a non-empty `— <reason>`.
 //!
 //! This guard (introduced in #54 for `storage.rs`) is widened here (#127) to
 //! the whole `server/tests` tree; #135 widened it again to the `storage/src`
@@ -56,6 +58,11 @@ fn is_apply_sqlite_only(trimmed: &str) -> bool {
 /// True when a line applies the `postgres_only` single-backend template.
 fn is_apply_postgres_only(trimmed: &str) -> bool {
     trimmed.contains("#[apply(postgres_only)]")
+}
+
+/// True when a line applies either single-backend template.
+fn is_apply_single(trimmed: &str) -> bool {
+    is_apply_sqlite_only(trimmed) || is_apply_postgres_only(trimmed)
 }
 
 /// True for the bare `#[tokio::test]` and any parameterized
@@ -150,7 +157,7 @@ fn homing_violations(path: &str, source: &str) -> Vec<(usize, &'static str)> {
             } else {
                 None
             }
-        } else if is_apply_sqlite_only(t) || is_apply_postgres_only(t) {
+        } else if is_apply_single(t) {
             Some("single-backend template in a generic file — a *_only test must live in its sqlite/ or postgres/ dialect dir (ADR-0053 §1/§2)")
         } else {
             None
@@ -180,6 +187,66 @@ fn param_honesty_violations(source: &str) -> Vec<usize> {
     out
 }
 
+/// The trimmed reason text after a `// guard:no-backend`/`// guard:low-level-db`
+/// marker — what follows the keyword once a `—`/`-`/`:` separator and surrounding
+/// whitespace are stripped. Empty when the marker carries no reason.
+fn marker_reason(trimmed: &str) -> &str {
+    trimmed
+        .trim_start_matches("// guard:no-backend")
+        .trim_start_matches("// guard:low-level-db")
+        .trim_start_matches(['—', '-', ':', ' '])
+        .trim()
+}
+
+/// True when a `// reason:` comment sits in a single-backend template's cluster:
+/// the contiguous attribute/comment block above the `#[apply(*_only)]` line, or the
+/// attributes + fn signature below it through the line that opens the body (`{`) —
+/// where a reason placed in the `#[case]` param list lives.
+fn cluster_has_reason(lines: &[&str], apply_idx: usize) -> bool {
+    let mut j = apply_idx;
+    while j > 0 && !is_cluster_boundary(lines[j - 1].trim()) {
+        j -= 1;
+        if lines[j].trim().starts_with("// reason:") {
+            return true;
+        }
+    }
+    // Downward: through the attributes and fn signature to the body-opening `{`.
+    // Also stop at a cluster boundary, so an inline/empty-body test (whose line
+    // ends `}`, not `{`) can't run on and borrow a *following* test's reason.
+    for line in &lines[apply_idx..] {
+        let t = line.trim();
+        if t.starts_with("// reason:") {
+            return true;
+        }
+        if t.ends_with('{') || is_cluster_boundary(t) {
+            break;
+        }
+    }
+    false
+}
+
+/// 1-based line numbers of every single-backend keep missing a `// reason:`, and
+/// every `guard:*` marker missing a non-empty reason (#419): ADR-0053 requires a
+/// deliberate single-backend test — and each guard exemption — to carry a decisive
+/// justification. A *presence* check cannot catch a *false* reason; that stays a
+/// review concern. Pure given the source, so it is unit-tested directly.
+fn reason_violations(source: &str) -> Vec<usize> {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut out = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim();
+        if is_apply_single(t) && !cluster_has_reason(&lines, i) {
+            out.push(i + 1);
+        }
+        if (t.starts_with("// guard:no-backend") || t.starts_with("// guard:low-level-db"))
+            && marker_reason(t).is_empty()
+        {
+            out.push(i + 1);
+        }
+    }
+    out
+}
+
 /// The failure detail for all offending tests across the scanned files, or
 /// `None` when every tokio test is tagged/exempt. Pure given the
 /// `(path, source)` pairs, so it is unit-tested directly.
@@ -199,6 +266,13 @@ pub fn problems(scanned: &[(String, String)]) -> Option<String> {
                 "{path}:{ln}: backend template with a discarded backend (`let _ = backend;`) — \
                  use the injected backend, or drop the template for a bare #[tokio::test] + \
                  // guard:low-level-db (ADR-0053 §2)"
+            ));
+        }
+        for ln in reason_violations(source) {
+            lines.push(format!(
+                "{path}:{ln}: missing reason — a single-backend keep needs a // reason: comment, \
+                 and a // guard:no-backend/// guard:low-level-db marker needs a non-empty \
+                 — <reason> (ADR-0053 §2, #419)"
             ));
         }
     }
@@ -489,5 +563,88 @@ async fn discards(#[case] backend: Backend) {
             "async fn f(#[case] backend: Backend) { let _e = backend.setup(); }\n"
         )
         .is_empty());
+    }
+
+    // ── Reason requirement (#419) ───────────────────────────────────────────
+
+    #[test]
+    fn single_backend_without_reason_is_flagged() {
+        let src = "\
+#[apply(sqlite_only)]
+#[tokio::test]
+async fn foo(#[case] backend: Backend) {}
+";
+        assert_eq!(reason_violations(src), vec![1]);
+    }
+
+    #[test]
+    fn single_backend_reason_above_the_template_is_clean() {
+        let src = "\
+// reason: SQLite-specific per-connection PRAGMA behavior.
+#[apply(sqlite_only)]
+#[tokio::test]
+async fn foo(#[case] backend: Backend) {}
+";
+        assert!(reason_violations(src).is_empty());
+    }
+
+    #[test]
+    fn single_backend_reason_below_the_template_is_clean() {
+        let src = "\
+#[apply(postgres_only)]
+// reason: a Postgres catalog property with no SQLite analog.
+#[tokio::test]
+async fn foo(#[case] backend: Backend) {}
+";
+        assert!(reason_violations(src).is_empty());
+    }
+
+    #[test]
+    fn single_backend_reason_in_the_param_list_is_clean() {
+        let src = "\
+#[apply(sqlite_only)]
+#[tokio::test]
+async fn foo(
+    #[case] backend: Backend,
+    // reason: exercises a SQLite-only path.
+) {}
+";
+        assert!(reason_violations(src).is_empty());
+    }
+
+    #[test]
+    fn bare_guard_marker_without_reason_is_flagged() {
+        assert_eq!(
+            reason_violations("// guard:no-backend\n#[tokio::test]\nasync fn f() {}\n"),
+            vec![1]
+        );
+        assert_eq!(
+            reason_violations("// guard:low-level-db\n#[tokio::test]\nasync fn f() {}\n"),
+            vec![1]
+        );
+    }
+
+    #[test]
+    fn guard_marker_with_reason_is_clean() {
+        assert!(reason_violations(EXEMPT).is_empty());
+        assert!(reason_violations(LOW_LEVEL_DB).is_empty());
+    }
+
+    #[test]
+    fn inline_body_keep_does_not_borrow_a_following_reason() {
+        // A reasonless *_only with an inline body (line ends `}`, not `{`) must
+        // stop at its own item's boundary, not scan on and borrow the next test's
+        // // reason:. Only the first template (line 1) is flagged.
+        let src = "\
+#[apply(sqlite_only)]
+#[tokio::test]
+async fn no_reason(#[case] backend: Backend) { let _e = backend.setup(); }
+
+// reason: a different, later test's justification.
+#[apply(sqlite_only)]
+#[tokio::test]
+async fn has_reason(#[case] backend: Backend) {}
+";
+        assert_eq!(reason_violations(src), vec![1]);
     }
 }

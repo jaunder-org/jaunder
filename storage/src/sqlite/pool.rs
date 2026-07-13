@@ -28,7 +28,7 @@ mod tests {
         pool
     }
 
-    // Foreign-key enforcement is per-connection in SQLite. sqlx's
+    // reason: Foreign-key enforcement is per-connection in SQLite. sqlx's
     // `SqliteConnectOptions` defaults `foreign_keys` to ON, so every pooled
     // connection (app and test) enforces FKs. The composite same-owner FKs added in
     // later content-visibility phases depend on that, so this is a regression guard:

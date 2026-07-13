@@ -723,11 +723,13 @@ to `storage/src` in #135). Every DB-touching test must carry exactly one of:
   `backend: Backend`). Use this when `#[apply(backends)]` would collide with
   local `#[case]` rows.
 - `#[apply(sqlite_only)]` / `#[apply(postgres_only)]` — a deliberately
-  single-backend test. It MUST carry a `// reason:` comment stating the
-  backend-specific behavior the other backend can't exhibit (e.g. a SQLite
-  lock-flake reproduction, a Postgres-only `pg_database` teardown). "It
-  currently hardcodes SQLite" is NOT a valid reason — convert such a test
-  instead.
+  single-backend test. It MUST live in the matching `sqlite/` or `postgres/`
+  dialect directory (ADR-0053 §1 "home by what it proves"; a dual
+  `#[apply(backends…)]` test conversely must NOT live in a dialect dir), and it
+  MUST carry a `// reason:` comment stating the backend-specific behavior the
+  other backend can't exhibit (e.g. a SQLite lock-flake reproduction, a
+  Postgres-only `pg_database` teardown). "It currently hardcodes SQLite" is NOT
+  a valid reason — convert such a test instead.
 
 A genuinely **non-DB** async test (touches no live pool) is exempt via a
 `// guard:no-backend — <reason>` comment immediately above its `#[tokio::test]`
@@ -735,8 +737,21 @@ A genuinely **non-DB** async test (touches no live pool) is exempt via a
 a `storage` async unit test over a mock store, `DbConnectOptions` routing, or
 password hashing. A `server` test that is really a **unit test** (a pure
 function/extractor, no router or DB) belongs in a `#[cfg(test)] mod tests` in
-the owning crate, not in `server/tests`. Pure synchronous `#[test]` unit tests
-are never flagged.
+the owning crate, not in `server/tests`.
+
+A test that does **low-level DB work that cannot go through the `backend`
+fixture** — bootstrap-admin DDL (`CREATE ROLE`/`CREATE DATABASE`), a
+from-scratch `unique_postgres_url()` database, or driving both engines in one
+body (cross-backend interop) — is instead a bare `#[tokio::test]` carrying
+`// guard:low-level-db — <reason>` (no backend template). Home it by what it
+proves: a one-database low-level test in its dialect dir, a cross-backend one in
+a generic module.
+
+Finally, a templated test MUST **use** its injected `#[case] backend` — a
+`let _ = backend;` (or `#[case] _backend`) discard is rejected. Either use the
+backend, or drop the template for a `// guard:low-level-db` bare test per above.
+
+Pure synchronous `#[test]` unit tests are never flagged.
 
 ## NixOS integration
 
