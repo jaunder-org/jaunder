@@ -21,9 +21,9 @@ pub struct CookieSettings {
 pub struct Credential {
     /// The raw session token to authenticate.
     pub token: String,
-    /// For Basic auth, the username supplied alongside the token, which must
-    /// match the authenticated session's user. `None` for cookie/Bearer auth.
-    pub expected_username: Option<String>,
+    /// For Basic auth, the validated username supplied alongside the token, which
+    /// must match the authenticated session's user. `None` for cookie/Bearer auth.
+    pub expected_username: Option<common::username::Username>,
 }
 
 /// Resolves the session credential from request headers.
