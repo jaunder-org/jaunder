@@ -97,9 +97,7 @@ fn pg_error_code_matches(code: Option<&str>, expected: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{postgres_bootstrap_url, postgres_only, Backend};
-    use rstest::*;
-    use rstest_reuse::*;
+    use crate::test_support::postgres_bootstrap_url;
     use std::time::Duration;
 
     /// A process-unique suffix for admin-created role/database identifiers, so
@@ -115,11 +113,10 @@ mod tests {
         format!("{nanos}_{n}")
     }
 
-    // reason: exercises CREATE ROLE/CREATE DATABASE admin DDL; no SQLite analog
-    #[apply(postgres_only)]
+    // guard:low-level-db — exercises CREATE ROLE/CREATE DATABASE admin DDL via a
+    // bootstrap admin connection, below the backend fixture; no SQLite analog.
     #[tokio::test]
-    async fn create_postgres_database_and_role_attempts_admin_connection(#[case] backend: Backend) {
-        let _ = backend;
+    async fn create_postgres_database_and_role_attempts_admin_connection() {
         // Drives the bootstrap routine far enough to exercise the admin
         // connection attempt; the connection itself fails fast against an
         // unused port. The DDL execution past the connection requires a live
@@ -133,11 +130,10 @@ mod tests {
         .await;
     }
 
-    // reason: exercises the DatabaseExists arm of admin CREATE DATABASE DDL; no SQLite analog
-    #[apply(postgres_only)]
+    // guard:low-level-db — exercises the DatabaseExists arm of admin CREATE DATABASE
+    // DDL via a bootstrap admin connection, below the backend fixture; no SQLite analog.
     #[tokio::test]
-    async fn create_postgres_database_and_role_reports_existing_database(#[case] backend: Backend) {
-        let _ = backend;
+    async fn create_postgres_database_and_role_reports_existing_database() {
         let bootstrap: PgConnectOptions = postgres_bootstrap_url().parse().expect("bootstrap url");
         let mut admin = PgConnection::connect_with(&bootstrap)
             .await
@@ -169,11 +165,10 @@ mod tests {
             .await;
     }
 
-    // reason: exercises execute_utility's non-benign error passthrough over admin DDL; no SQLite analog
-    #[apply(postgres_only)]
+    // guard:low-level-db — exercises execute_utility's non-benign error passthrough
+    // over admin DDL via a bootstrap admin connection, below the backend fixture; no SQLite analog.
     #[tokio::test]
-    async fn execute_utility_propagates_unexpected_errors(#[case] backend: Backend) {
-        let _ = backend;
+    async fn execute_utility_propagates_unexpected_errors() {
         let bootstrap: PgConnectOptions = postgres_bootstrap_url().parse().expect("bootstrap url");
         let mut admin = PgConnection::connect_with(&bootstrap)
             .await

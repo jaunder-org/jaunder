@@ -598,7 +598,7 @@ mod tests {
     #![expect(clippy::similar_names)]
     use super::*;
     use crate::test_support::{
-        backends, recorded_postgres_url, sqlite_only, sqlite_url, Backend, CloseablePool,
+        backends, recorded_postgres_url, sqlite_url, Backend, CloseablePool,
     };
     use rstest::*;
     use rstest_reuse::*;
@@ -944,12 +944,10 @@ mod tests {
         Ok(())
     }
 
-    #[apply(sqlite_only)]
+    #[apply(backends)]
     #[tokio::test]
     async fn export_propagates_media_mirror_failure(
         #[case] backend: Backend,
-        // reason: the media-mirror `?` propagation in `export_directory_backup` is
-        // backend-independent filesystem code; SQLite exercises it fully.
     ) -> Result<(), BackupError> {
         let source = backend.setup().await;
         let temp = TempDir::new()?;
