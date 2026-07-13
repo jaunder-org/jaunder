@@ -434,7 +434,7 @@ fn post_entry_response(
     status: StatusCode,
     post: &PostRecord,
     base: &str,
-    username: &str,
+    username: &Username,
 ) -> Response {
     let location = format!("{base}/atompub/{username}/posts/{}", post.post_id);
     let xml = entry_to_xml(&post_to_entry(post, base));
