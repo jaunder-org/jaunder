@@ -4,6 +4,7 @@ use std::{net::SocketAddr, path::PathBuf};
 use clap::{Args, Parser, Subcommand};
 
 use common::backup::BackupMode;
+use common::username::Username;
 use storage::DbConnectOptions;
 
 #[derive(Parser, Clone)]
@@ -145,7 +146,7 @@ pub enum Commands {
 
         /// Username for the new account (must match [a-z0-9_-]+).
         #[arg(long)]
-        username: String,
+        username: Username,
 
         /// Password for the new account. If omitted, you will be prompted
         /// interactively (input is hidden).
@@ -170,7 +171,7 @@ pub enum Commands {
 
         /// Username to mint the app password for.
         #[arg(long)]
-        username: String,
+        username: Username,
 
         /// Label recorded with the session (shown in the sessions UI).
         #[arg(long, default_value = "app-password")]
@@ -527,6 +528,15 @@ mod tests {
     fn user_create_missing_username_is_clap_error() {
         let _guard = ENV_LOCK.lock().expect("env lock");
         let result = Cli::try_parse_from(["jaunder", "user-create", "--password", "secret123"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn user_create_malformed_username_is_clap_error() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        // The `Username` value parser rejects a bad username at parse time, before
+        // any handler runs, rather than surfacing it as a later runtime error.
+        let result = Cli::try_parse_from(["jaunder", "user-create", "--username", "bad name"]);
         assert!(result.is_err());
     }
 

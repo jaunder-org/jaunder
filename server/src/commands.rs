@@ -21,12 +21,6 @@ use storage::{
 };
 use storage::{init_storage, open_database, open_existing_database};
 
-/// Parse a CLI username string into the validated [`Username`] newtype, surfacing
-/// the validation error as an `anyhow` message.
-fn parse_username(s: &str) -> anyhow::Result<Username> {
-    s.parse().map_err(|e| anyhow::anyhow!("{e}"))
-}
-
 /// Parse an optional CLI password string into `Option<Password>` (`None` stays
 /// `None`), surfacing the validation error as an `anyhow` message.
 fn parse_password(p: Option<String>) -> anyhow::Result<Option<Password>> {
@@ -69,7 +63,7 @@ impl Commands {
             } => {
                 cmd_user_create(
                     &storage,
-                    &parse_username(&username)?,
+                    &username,
                     parse_password(password)?,
                     display_name.as_deref(),
                     operator,
@@ -80,7 +74,7 @@ impl Commands {
                 storage,
                 username,
                 label,
-            } => cmd_app_password_create(&storage, &parse_username(&username)?, &label).await,
+            } => cmd_app_password_create(&storage, &username, &label).await,
             Commands::UserInvite {
                 storage,
                 expires_in,
@@ -686,13 +680,6 @@ mod tests {
     use super::*;
     use storage::DbConnectOptions;
     use tempfile::TempDir;
-
-    #[test]
-    fn parse_username_accepts_valid_and_rejects_invalid() {
-        assert!(parse_username("alice").is_ok());
-        let err = parse_username("invalid username").unwrap_err().to_string();
-        assert!(err.contains("username must be"), "got: {err}");
-    }
 
     #[test]
     fn parse_password_none_is_ok_none() {
