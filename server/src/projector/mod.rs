@@ -207,8 +207,9 @@ async fn profile(
     headers: HeaderMap,
     Path(username): Path<String>,
 ) -> Response {
-    // An unparseable username, an unknown user, or a storage error is never public
-    // content — serve the shell and let the client route it.
+    // An unparseable username or a storage error is never public content — serve the
+    // shell and let the client route it. A valid username (even an unknown one, which
+    // yields an empty profile) is cached like any other public page.
     let seed = match username.parse::<Username>() {
         Ok(username) => fetch_user_posts(
             posts.as_ref(),
