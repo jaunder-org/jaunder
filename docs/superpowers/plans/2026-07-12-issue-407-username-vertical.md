@@ -35,30 +35,42 @@ one cohesive value class, ADR-0063). No new ADR (both decisions apply ADR-0063
 §4 / ADR-0065). The storage bind sweep is **in** scope (spec §H) — nothing
 mechanical is deferred.
 
-**Tasks (one line each):**
+**Tasks** (progress ticked in real time):
 
-1. `common`: adopt `StrNewtype` on `Username`, extend trailer tests, sweep all
-   forced `.as_str()` sites (common + storage + server compare/format).
-2. `host`: type the Basic-auth claim —
-   `parse_basic_auth → Option<(Username, String)>`,
-   `expected_username: Option<Username>`, collapse `basic_username_matches`.
-3. `server` atompub: `Path<Username>` across all handlers +
-   `require_user_match(&Username)`; malformed path → 400 test.
-4. `server` CLI: `UserCreate.username` / `MintAppPassword.username` →
-   `Username`.
-5. `web` posts slice: DTO fields (`PostResponse`, `TimelinePostSummary`),
-   `PostView`, `get_post`/`list_user_posts*` args + internal helpers +
-   `PostPage`/`render` plumbing.
-6. `web` subscriptions + `current_user`: subscribe/unsubscribe/is-subscribed
-   args + `resolve_author`, `current_user() → Option<Username>`,
-   `SubscribeButton`, cockpit/`InlineComposer` plumbing.
-7. `web` profile slice: `ProfileData`, `PageSeed::{Profile,UserTag}`, profile
-   page, `RsdDiscovery`, render-seed threading.
-8. `web` register form (ADR-0065): `register(username: Username, …)` +
-   `RegisterPage` → `<ValidatedInput<Username>>`.
-9. `web` forgot-password form (ADR-0065):
-   `request_password_reset(username: Username)` + `ForgotPasswordPage` →
-   `<ValidatedInput<Username>>`.
+- [x] **T1** `common`: adopt `StrNewtype` on `Username`, sweep all forced
+      `.as_str()` sites (common + storage + server compare/format). — `5bb354d9`
+- [x] **T2** `host`: type the Basic-auth claim —
+      `parse_basic_auth → Option<(Username, String)>`,
+      `expected_username: Option<Username>`, collapse `basic_username_matches`
+      (inlined into `verify_basic_username`).
+- [x] **T3** `server` atompub: `Path<Username>` across all handlers +
+      `require_user_match(&Username)`, `owned_post`/`media_link_entry` typed;
+      malformed path → 400 test.
+- [x] **T4** `server` CLI: `UserCreate.username` / `AppPasswordCreate.username`
+      → `Username` (clap parses via `FromStr`); retire
+      `commands::parse_username`.
+
+  > **T5–T7 landed as one commit** — the DTO fields ripple across the "slices",
+  > so splitting them would force throwaway cross-slice `String` adapters.
+  > Threaded as one cohesive mechanical change (also caught a cross-crate
+  > consumer: `server`'s public projector handlers, parsed-with-shell-fallback,
+  > not `Path<Username>`).
+
+- [x] **T5** `web` posts slice: DTO fields (`PostResponse`,
+      `TimelinePostSummary`), `PostView`, `get_post`/`list_user_posts*` args +
+      internal helpers + `PostPage`/`render` plumbing.
+- [x] **T6** `web` subscriptions + `current_user`:
+      subscribe/unsubscribe/is-subscribed args + `resolve_author`,
+      `current_user() → Option<Username>`, `SubscribeButton`,
+      cockpit/`InlineComposer` (+ `PostCreateForm`) plumbing.
+- [x] **T7** `web` profile slice: `ProfileData`, `PageSeed::{Profile,UserTag}`,
+      profile page, `RsdDiscovery`, render-seed threading.
+- [x] **T8** `web` register form (ADR-0065): `register(username: Username, …)` +
+      `RegisterPage` → `<ValidatedInput<Username>>`, submit gated on
+      `is_valid()`.
+- [x] **T9** `web` forgot-password form (ADR-0065):
+      `request_password_reset(username: Username)` + `ForgotPasswordPage` →
+      `<ValidatedInput<Username>>`, submit gated on `is_valid()`.
 
 **Key risks/decisions:**
 
