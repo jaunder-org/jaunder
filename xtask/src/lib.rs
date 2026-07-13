@@ -19,6 +19,7 @@ mod steps {
     pub mod host_tests;
     pub mod nix;
     pub mod sequence_check;
+    pub mod server_fn_registrar_check;
     pub mod static_checks;
     pub mod test_pattern_check;
 }
@@ -287,6 +288,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::sequence_check::run(&mut result);
             steps::adr_check::run(&mut result);
             steps::test_pattern_check::run(&mut result);
+            steps::server_fn_registrar_check::run(&mut result);
             steps::host_tests::run(&sh, &mut result);
             if !no_test {
                 steps::nix::coverage(&mut result);
@@ -314,6 +316,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::sequence_check::run(&mut result);
             steps::adr_check::run(&mut result);
             steps::test_pattern_check::run(&mut result);
+            steps::server_fn_registrar_check::run(&mut result);
             steps::host_tests::run(&sh, &mut result);
             steps::nix::coverage(&mut result);
             if !no_e2e {
