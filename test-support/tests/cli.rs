@@ -73,3 +73,49 @@ fn capture_path_prints_the_derived_absolute_path() {
         capture_dir.join("mail.jsonl").to_string_lossy()
     );
 }
+
+/// An unknown stream key is a caller error, not a silent empty path: `capture-path`
+/// must reject it loudly so a typo in a Playwright reader fails fast rather than
+/// shelling out to a bogus filename.
+#[test]
+fn capture_path_errors_on_unknown_stream() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let capture_dir = dir.path().join("capture");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_test-support"))
+        .args(["capture-path", "zzz-bogus"])
+        .env("JAUNDER_CAPTURE_DIR", &capture_dir)
+        .output()
+        .expect("spawn test-support binary");
+
+    assert!(
+        !out.status.success(),
+        "capture-path must exit non-zero for an unknown stream"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("unknown capture stream"),
+        "stderr should name the unknown-stream failure, got: {stderr}"
+    );
+}
+
+/// As with `reset-mail`, an unset `JAUNDER_CAPTURE_DIR` is a misconfiguration:
+/// `capture-path` must fail loudly rather than derive a path from an empty base.
+#[test]
+fn capture_path_errors_without_capture_dir() {
+    let out = Command::new(env!("CARGO_BIN_EXE_test-support"))
+        .args(["capture-path", "mail"])
+        .env_remove("JAUNDER_CAPTURE_DIR")
+        .output()
+        .expect("spawn test-support binary");
+
+    assert!(
+        !out.status.success(),
+        "capture-path must exit non-zero when JAUNDER_CAPTURE_DIR is unset"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("JAUNDER_CAPTURE_DIR is not set"),
+        "stderr should name the unset-dir failure, got: {stderr}"
+    );
+}
