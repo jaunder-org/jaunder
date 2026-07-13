@@ -100,11 +100,10 @@ async fn cmd_init_fails_on_invalid_path(#[case] backend: Backend) {
     assert!(result.is_err());
 }
 
-#[apply(postgres_only)]
+// guard:no-backend — rejects a non-Postgres bootstrap URL before any DB work; a
+// pure URL-validation error path that never provisions or connects.
 #[tokio::test]
-async fn cmd_create_pg_db_rejects_non_postgres_urls(#[case] backend: Backend) {
-    // reason: provisions a Postgres role/database (needs PG admin/bootstrap); intrinsically Postgres.
-    let _ = backend;
+async fn cmd_create_pg_db_rejects_non_postgres_urls() {
     let err = cmd_create_pg_db(
         "sqlite:/tmp/bootstrap.db",
         "postgres://jaunder@localhost/jaunder",

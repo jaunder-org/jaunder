@@ -41,9 +41,15 @@ fn is_tokio_test(trimmed: &str) -> bool {
 }
 
 /// True when a line in the attribute block satisfies the guard: an accepted
-/// backend template, or the non-DB exemption marker.
+/// backend template, or an exemption marker. Two markers exempt a bare
+/// `#[tokio::test]`: `// guard:no-backend` (touches no database) and
+/// `// guard:low-level-db` (does low-level DB work — bootstrap admin,
+/// `unique_postgres_url`, or both engines at once — that cannot go through the
+/// `backend` fixture, so it wears no backend template).
 fn is_exempt_or_tagged(trimmed: &str) -> bool {
-    is_backend_apply(trimmed) || trimmed.starts_with("// guard:no-backend")
+    is_backend_apply(trimmed)
+        || trimmed.starts_with("// guard:no-backend")
+        || trimmed.starts_with("// guard:low-level-db")
 }
 
 /// Bounds the upward attribute-cluster scan: a blank line (rustfmt always
@@ -186,6 +192,11 @@ async fn good_param(#[case] backend: Backend) {}
 #[tokio::test]
 async fn no_db() {}
 ";
+    const LOW_LEVEL_DB: &str = "\
+// guard:low-level-db — provisions a Postgres role/database via bootstrap admin.
+#[tokio::test]
+async fn provisions() {}
+";
     const DOC_GAP: &str = "\
 #[apply(backends)]
 /// doc comment between the template and the test
@@ -244,6 +255,11 @@ async fn good_multiline(backend: Backend, #[case] a: &str, #[case] b: &str) {}
     #[test]
     fn no_backend_marker_exempts() {
         assert!(violations(EXEMPT).is_empty());
+    }
+
+    #[test]
+    fn low_level_db_marker_exempts() {
+        assert!(violations(LOW_LEVEL_DB).is_empty());
     }
 
     #[test]
