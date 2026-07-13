@@ -93,6 +93,7 @@ convention). See the Status column below for each ADR's current status.
 | [0063](adr/0063-domain-value-newtype-convention.md)                | Domain-value newtypes — when to introduce one, and the standard trailer                                      | proposed   |
 | [0064](adr/0064-backup-target-auto-derivation.md)                  | Backup target set auto-derived from the live schema; restore defers FK checks                                | accepted   |
 | [0065](adr/0065-client-side-domain-validation.md)                  | Typed `#[server]` wire args with client-side pre-validation via the shared newtype                           | proposed   |
+| [0066](adr/0066-server-fn-test-registrar-guard.md)                 | Guard the server-fn test registrar with an xtask check                                                       | proposed   |
 
 <!-- adr-table:end -->
 

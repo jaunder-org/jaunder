@@ -23,7 +23,7 @@ a new `syn`-based `xtask` check (sibling of `test_pattern_check`) enumerates
 `docs/superpowers/specs/2026-07-13-issue-426-server-fn-registrar-guard.md` — the
 "what/why". This plan is the "how"; read the spec's Design §1–§4 and Acceptance
 criteria alongside it. **ADR draft:**
-`docs/adr/drafts/server-fn-test-registrar-guard.md` (already written; numbered
+`docs/adr/0066-server-fn-test-registrar-guard.md` (already written; numbered
 at ship by `cargo xtask adr promote`).
 
 ## Global Constraints
@@ -572,7 +572,7 @@ gate, so a clean run also re-proves AC#3.
 - Spec §2 (reconcile drift) → Task 2 (register the 10).
 - Spec §3 (the gate) → Task 3 (create + unit-test + wire).
 - Spec §4 (ADR) → already drafted at
-  `docs/adr/drafts/server-fn-test-registrar-guard.md` (no task; promoted at
+  `docs/adr/0066-server-fn-test-registrar-guard.md` (no task; promoted at
   ship).
 - AC#1 (gate catches omission) → Task 3 Step 7. AC#2 (one list) → Task 1 Step 5.
   AC#3 (reconciled tree green) → Task 3 Step 6/8. AC#4 (relocated tests assert
