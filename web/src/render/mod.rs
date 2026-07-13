@@ -406,7 +406,7 @@ fn render_posts(posts: &[TimelinePostSummary], tag_ctx: &TagCtx) -> String {
 /// The fields needed to render one post, borrowed from a `PostResponse` or a
 /// `TimelinePostSummary`. `time` is already formatted (see [`format_post_time`]).
 pub(crate) struct PostView<'a> {
-    pub username: &'a str,
+    pub username: &'a Username,
     pub title: Option<&'a str>,
     pub banner: Option<&'a str>,
     pub summary: Option<&'a str>,
@@ -818,8 +818,9 @@ mod tests {
         // render_post_inner wraps. render_post_content is viewer-independent, so the
         // authed re-render cannot diverge from the paint — no localized flash.
         let ctx = TagCtx::ForUser("alice".parse::<Username>().unwrap());
+        let author: Username = "alice".parse().unwrap();
         let view = PostView {
-            username: "alice",
+            username: &author,
             title: Some("T"),
             banner: None,
             summary: None,
@@ -1194,8 +1195,9 @@ mod tests {
         // for every viewer, so the owner's own-post content column coincides with
         // the projector's anonymous paint (the action column is purely additive).
         let ctx = TagCtx::SiteWide;
+        let author: Username = "bob".parse().unwrap();
         let view = PostView {
-            username: "bob",
+            username: &author,
             title: None,
             banner: None,
             summary: None,
@@ -1212,8 +1214,9 @@ mod tests {
     #[test]
     fn post_content_renders_draft_banner_when_present() {
         let ctx = TagCtx::SiteWide;
+        let author: Username = "bob".parse().unwrap();
         let view = PostView {
-            username: "bob",
+            username: &author,
             title: None,
             banner: Some("Draft - visible only to you"),
             summary: Some("An excerpt"),
@@ -1237,8 +1240,9 @@ mod tests {
     #[test]
     fn post_article_wraps_inner_in_j_post_article() {
         let ctx = TagCtx::SiteWide;
+        let author: Username = "bob".parse().unwrap();
         let view = PostView {
-            username: "bob",
+            username: &author,
             title: Some("T"),
             banner: None,
             summary: None,
