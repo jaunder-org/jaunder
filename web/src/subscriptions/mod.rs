@@ -10,18 +10,20 @@
 //! Self-subscription is rejected — an author cannot subscribe to themselves.
 
 use crate::error::WebResult;
+// `Username` is ungated: it types the `#[server]` wire args below, so the generated
+// arg structs reference it on both the client and server builds.
+use common::username::Username;
 use leptos::prelude::*;
 
 #[cfg(feature = "server")]
 use {
     crate::auth::require_auth,
     crate::error::InternalError,
-    common::username::Username,
     std::sync::Arc,
     storage::{SubscriptionStorage, UserStorage},
 };
 
-/// Resolves an author `user_id` from a (trimmed) username, rejecting the
+/// Resolves an author `user_id` from a validated username, rejecting the
 /// caller's own username (self-subscribe) and an unknown username.
 ///
 /// Takes the `users` handle as a parameter rather than reading it from context,
@@ -29,16 +31,11 @@ use {
 #[cfg(feature = "server")]
 async fn resolve_author(
     users: &dyn UserStorage,
-    author_username: &str,
+    author_username: &Username,
     viewer_user_id: i64,
 ) -> Result<i64, InternalError> {
-    let username = author_username
-        .trim()
-        .strip_prefix('~')
-        .unwrap_or_else(|| author_username.trim())
-        .parse::<Username>()?;
     let author = users
-        .get_user_by_username(&username)
+        .get_user_by_username(author_username)
         .await?
         .ok_or_else(|| InternalError::not_found("user"))?;
     if author.user_id == viewer_user_id {
@@ -53,7 +50,7 @@ async fn resolve_author(
 /// Requires an authenticated local account (Layer A). Rejects a self-subscribe
 /// and an unknown author. Idempotent: subscribing twice is a no-op.
 #[server(endpoint = "/subscribe_to")]
-pub async fn subscribe_to(author_username: String) -> WebResult<()> {
+pub async fn subscribe_to(author_username: Username) -> WebResult<()> {
     boundary!("subscribe_to", {
         let subscriptions = expect_context::<Arc<dyn SubscriptionStorage>>();
         let users = expect_context::<Arc<dyn UserStorage>>();
@@ -71,7 +68,7 @@ pub async fn subscribe_to(author_username: String) -> WebResult<()> {
 ///
 /// Mirror of [`subscribe_to`]. A no-op if no subscription exists.
 #[server(endpoint = "/unsubscribe_from")]
-pub async fn unsubscribe_from(author_username: String) -> WebResult<()> {
+pub async fn unsubscribe_from(author_username: Username) -> WebResult<()> {
     boundary!("unsubscribe_from", {
         let subscriptions = expect_context::<Arc<dyn SubscriptionStorage>>();
         let users = expect_context::<Arc<dyn UserStorage>>();
@@ -91,7 +88,7 @@ pub async fn unsubscribe_from(author_username: String) -> WebResult<()> {
 /// Returns `false` for an anonymous viewer or when viewing one's own profile
 /// (self-subscription is impossible), so the caller can hide the control.
 #[server(endpoint = "/is_subscribed_to")]
-pub async fn is_subscribed_to(author_username: String) -> WebResult<bool> {
+pub async fn is_subscribed_to(author_username: Username) -> WebResult<bool> {
     boundary!("is_subscribed_to", {
         let subscriptions = expect_context::<Arc<dyn SubscriptionStorage>>();
         let users = expect_context::<Arc<dyn UserStorage>>();
@@ -153,7 +150,7 @@ mod tests {
 
         // `resolve_author` rejects the self-target, so the fn short-circuits to
         // `Ok(false)` without ever consulting the subscription store.
-        let result = is_subscribed_to("alice".to_string()).await;
+        let result = is_subscribed_to("alice".parse::<Username>().unwrap()).await;
         drop(owner);
         assert!(!result.unwrap());
     }

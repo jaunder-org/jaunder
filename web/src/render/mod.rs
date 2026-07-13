@@ -16,6 +16,7 @@
 use crate::posts::{PostResponse, TimelinePage, TimelinePostSummary};
 use crate::tags::TagSummary;
 use crate::ui::topbar::render_topbar;
+use common::username::Username;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
 
@@ -57,7 +58,7 @@ pub const SPA_SHELL: &str = include_str!("../../../csr/index.html");
 pub enum PageSeed {
     SiteTimeline(TimelinePage),
     Profile {
-        username: String,
+        username: Username,
         page: TimelinePage,
     },
     SiteTag {
@@ -65,7 +66,7 @@ pub enum PageSeed {
         page: TimelinePage,
     },
     UserTag {
-        username: String,
+        username: Username,
         tag: String,
         page: TimelinePage,
     },
@@ -79,7 +80,7 @@ pub enum PageSeed {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TagCtx {
     SiteWide,
-    ForUser(String),
+    ForUser(Username),
 }
 
 /// Derives `(initials, hue)` from a display name. `initials`: first character of
@@ -191,7 +192,7 @@ pub fn render_head(seed: &PageSeed) -> String {
 /// re-add identical links; the duplicates are invisible.
 fn render_discovery(seed: &PageSeed) -> String {
     use common::feed::{canonicalize, FeedFormat, FeedSurface};
-    use common::{tag::Tag, username::Username};
+    use common::tag::Tag;
 
     let mut out = String::new();
 
@@ -201,15 +202,15 @@ fn render_discovery(seed: &PageSeed) -> String {
             .parse::<Tag>()
             .ok()
             .map(|tag| FeedSurface::SiteTag { tag }),
-        PageSeed::Profile { username, .. } => username
-            .parse::<Username>()
-            .ok()
-            .map(|username| FeedSurface::User { username }),
-        PageSeed::UserTag { username, tag, .. } => username
-            .parse::<Username>()
-            .ok()
-            .zip(tag.parse::<Tag>().ok())
-            .map(|(username, tag)| FeedSurface::UserTag { username, tag }),
+        PageSeed::Profile { username, .. } => Some(FeedSurface::User {
+            username: username.clone(),
+        }),
+        PageSeed::UserTag { username, tag, .. } => {
+            tag.parse::<Tag>().ok().map(|tag| FeedSurface::UserTag {
+                username: username.clone(),
+                tag,
+            })
+        }
         // The reactive permalink page renders no discovery links.
         PageSeed::Permalink(_) => None,
     };
@@ -816,7 +817,7 @@ mod tests {
         // render_post_content into the same content <div> the projector's anonymous
         // render_post_inner wraps. render_post_content is viewer-independent, so the
         // authed re-render cannot diverge from the paint — no localized flash.
-        let ctx = TagCtx::ForUser("alice".into());
+        let ctx = TagCtx::ForUser("alice".parse::<Username>().unwrap());
         let view = PostView {
             username: "alice",
             title: Some("T"),
@@ -871,7 +872,7 @@ mod tests {
     fn sample_post() -> PostResponse {
         PostResponse {
             post_id: 7,
-            username: "alice".into(),
+            username: "alice".parse::<Username>().unwrap(),
             title: Some("Hello & <World>".into()),
             slug: "hello".into(),
             body: "raw".into(),
@@ -893,7 +894,7 @@ mod tests {
     fn sample_summary() -> TimelinePostSummary {
         TimelinePostSummary {
             post_id: 1,
-            username: "bob".into(),
+            username: "bob".parse::<Username>().unwrap(),
             title: Some("First".into()),
             summary: Some("An excerpt".into()),
             slug: "first".into(),
@@ -952,7 +953,7 @@ mod tests {
             has_more: false,
         };
         let html = render_body(&PageSeed::Profile {
-            username: "bob".into(),
+            username: "bob".parse::<Username>().unwrap(),
             page,
         });
         assert!(html.contains("Posts by bob"), "expected heading: {html}");
@@ -990,7 +991,7 @@ mod tests {
             ),
             (
                 PageSeed::Profile {
-                    username: "bob".into(),
+                    username: "bob".parse::<Username>().unwrap(),
                     page: one_post_page(),
                 },
                 "<title>Posts by bob</title>",
@@ -1004,7 +1005,7 @@ mod tests {
             ),
             (
                 PageSeed::UserTag {
-                    username: "bob".into(),
+                    username: "bob".parse::<Username>().unwrap(),
                     tag: "rust".into(),
                     page: one_post_page(),
                 },
@@ -1033,7 +1034,7 @@ mod tests {
         assert!(site.contains("First"), "expected post rendered: {site}");
 
         let user = render_body(&PageSeed::UserTag {
-            username: "bob".into(),
+            username: "bob".parse::<Username>().unwrap(),
             tag: "rust".into(),
             page: one_post_page(),
         });
@@ -1100,7 +1101,7 @@ mod tests {
             has_more: false,
         };
         let profile = render_body(&PageSeed::Profile {
-            username: "bob".into(),
+            username: "bob".parse::<Username>().unwrap(),
             page: empty.clone(),
         });
         assert!(profile.contains("<p>No posts yet.</p>"), "{profile}");
@@ -1170,7 +1171,10 @@ mod tests {
             slug: "rust".into(),
             display: "Rust".into(),
         }];
-        let html = render_tag_list(&tags, &TagCtx::ForUser("alice".into()));
+        let html = render_tag_list(
+            &tags,
+            &TagCtx::ForUser("alice".parse::<Username>().unwrap()),
+        );
         assert!(
             html.contains(
                 "<a class=\"j-tag-here\" href=\"/~alice/tags/rust\" title=\"On this blog\">"

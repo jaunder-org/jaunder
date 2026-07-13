@@ -5,6 +5,7 @@
 //! into the feed with zero clicks. An anonymous / expired visitor bounces to
 //! `/login`. This is the former `home.rs` Feed branch moved to its proper home.
 
+use common::username::Username;
 use leptos::prelude::*;
 use leptos_router::components::Redirect;
 
@@ -17,7 +18,7 @@ use crate::posts::list_home_feed;
 #[component]
 pub fn CockpitPage() -> impl IntoView {
     let state = TimelineState::default();
-    let username = RwSignal::new(None::<String>);
+    let username = RwSignal::new(None::<Username>);
     let bounce = RwSignal::new(false);
 
     let refresh_version = RwSignal::new(0u32);

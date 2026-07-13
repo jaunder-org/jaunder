@@ -19,6 +19,8 @@ use server::{not_found_error, private_post_not_found_error};
 #[cfg(feature = "server")]
 pub use server::post_response;
 
+use common::username::Username;
+
 use crate::error::WebResult;
 use crate::tags::TagSummary;
 
@@ -30,7 +32,7 @@ use {
     crate::feed_events::enqueue_feed_events,
     crate::viewer::viewer_identity,
     chrono::{DateTime, Utc},
-    common::{slug::Slug, tag::Tag, username::Username},
+    common::{slug::Slug, tag::Tag},
     std::{collections::BTreeSet, sync::Arc},
     storage::{
         apply_post_tag_diff, fetch_post_record, find_draft_by_permalink_for_user,
@@ -174,7 +176,7 @@ pub struct PublishPostResult {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PostResponse {
     pub post_id: i64,
-    pub username: String,
+    pub username: Username,
     pub title: Option<String>,
     pub slug: String,
     pub body: String,
@@ -304,7 +306,7 @@ pub async fn create_post(
 /// Retrieves a post by its permalink.
 #[server(endpoint = "/get_post")]
 pub async fn get_post(
-    username: String,
+    username: Username,
     year: i32,
     month: u32,
     day: u32,
@@ -313,14 +315,13 @@ pub async fn get_post(
     boundary!("get_post", {
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
-        let username_parsed = username.parse::<Username>()?;
         let slug_parsed = slug.parse::<Slug>()?;
 
         let viewer = viewer_identity().await;
         if let Some(post) = fetch_post_record(
             posts.as_ref(),
             &viewer,
-            &username_parsed,
+            &username,
             year,
             month,
             day,
@@ -342,7 +343,7 @@ pub async fn get_post(
         let auth = require_auth()
             .await
             .map_err(|e| private_post_not_found_error(&e))?;
-        if auth.username != username_parsed {
+        if auth.username != username {
             return Err(not_found_error());
         }
 

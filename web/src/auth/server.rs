@@ -193,9 +193,9 @@ pub fn clear_session_cookie() {
 
 /// Maps a `require_auth` result to the `current_user` response shape:
 /// `Ok` → username, `Unauthorized` error → `None`, other errors propagate.
-pub fn classify_current_user(result: InternalResult<AuthUser>) -> InternalResult<Option<String>> {
+pub fn classify_current_user(result: InternalResult<AuthUser>) -> InternalResult<Option<Username>> {
     match result {
-        Ok(auth) => Ok(Some(auth.username.to_string())),
+        Ok(auth) => Ok(Some(auth.username)),
         Err(error) if error.kind() == crate::error::ErrorKind::Auth => Ok(None),
         Err(error) => Err(error),
     }

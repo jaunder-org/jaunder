@@ -51,7 +51,7 @@ pub async fn get_registration_policy() -> WebResult<String> {
     feature = "server",
     tracing::instrument(name = "web.auth.current_user")
 )]
-pub async fn current_user() -> WebResult<Option<String>> {
+pub async fn current_user() -> WebResult<Option<Username>> {
     boundary!("current_user", {
         classify_current_user(require_auth().await)
     })

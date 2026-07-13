@@ -9,6 +9,7 @@ use crate::posts::{
     TimelinePostSummary, UnpublishPost,
 };
 use crate::tags::TagSummary;
+use common::username::Username;
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
 
@@ -323,7 +324,7 @@ pub fn PostDisplay(
             let inner_content = crate::render::render_post_content(&view);
             view! {
                 <article class="j-post">
-                    <Avatar name=post.username.clone() size=38 />
+                    <Avatar name=post.username.to_string() size=38 />
                     <div style="min-width:0;display:flex;gap:8px;align-items:flex-start">
                         <div style="flex:1;min-width:0" inner_html=inner_content></div>
                         {children()}
@@ -557,7 +558,7 @@ fn audience_checkbox(
 #[component]
 pub fn PostCreateForm(
     compact: bool,
-    #[prop(optional)] username: Option<String>,
+    #[prop(optional)] username: Option<Username>,
     #[prop(into)] on_success: Callback<CreatePostResult>,
     #[prop(default = 6)] rows: u32,
     #[prop(default = "What\u{2019}s on your mind?")] placeholder: &'static str,
@@ -630,7 +631,7 @@ pub fn PostCreateForm(
         };
         view! {
             <div class="j-composer-row">
-                <Avatar name=username.unwrap_or_default() size=36 />
+                <Avatar name=username.map(String::from).unwrap_or_default() size=36 />
                 <div class="j-composer-body">
                     <ComposerFields
                         body=body
@@ -872,7 +873,7 @@ pub fn PostCreateForm(
 // ─── 3.8 InlineComposer ───────────────────────────────────────
 
 #[component]
-pub fn InlineComposer(username: String, on_publish: WriteSignal<u32>) -> impl IntoView {
+pub fn InlineComposer(username: Username, on_publish: WriteSignal<u32>) -> impl IntoView {
     let flash: RwSignal<Option<(String, String)>> = RwSignal::new(None);
 
     let on_success = Callback::new(move |created: CreatePostResult| {
@@ -993,6 +994,7 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
         if let Some(res) = reconcile.get() {
             match res {
                 Ok(Some(u)) => {
+                    let u = u.to_string();
                     crate::auth::marker::set(&u);
                     if owner.get_untracked().as_deref() != Some(u.as_str()) {
                         owner.set(Some(u));

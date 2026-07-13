@@ -3067,7 +3067,7 @@ async fn list_posts_by_tag_returns_matching_posts_from_all_users(#[case] backend
     // Three posts carry the "rust" tag, across both authors.
     assert_eq!(page.posts.len(), 3);
     let usernames: std::collections::HashSet<&str> =
-        page.posts.iter().map(|p| p.username.as_str()).collect();
+        page.posts.iter().map(|p| p.username.as_ref()).collect();
     assert!(usernames.contains("alice"));
     assert!(usernames.contains("bob"));
 }

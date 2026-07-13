@@ -1,4 +1,5 @@
 use common::feed::{canonicalize, FeedFormat, FeedSurface};
+use common::username::Username;
 use leptos::prelude::*;
 use leptos_meta::Link;
 
@@ -44,7 +45,7 @@ pub fn FeedDiscovery(surface: FeedSurface) -> impl IntoView {
     reason = "Leptos #[component] props are stored by the framework and must be owned; \
               the borrow clippy suggests isn't expressible in a component signature"
 )]
-pub fn RsdDiscovery(username: String) -> impl IntoView {
+pub fn RsdDiscovery(username: Username) -> impl IntoView {
     view! {
         <Link
             rel="EditURI"
@@ -56,7 +57,7 @@ pub fn RsdDiscovery(username: String) -> impl IntoView {
 }
 
 /// Returns the `RSD` discovery URL for a user's page.
-fn rsd_href(username: &str) -> String {
+fn rsd_href(username: &Username) -> String {
     format!("/~{username}/rsd.xml")
 }
 
@@ -81,7 +82,10 @@ mod tests {
 
     #[test]
     fn rsd_href_targets_user_discovery_doc() {
-        assert_eq!(rsd_href("alice"), "/~alice/rsd.xml");
+        assert_eq!(
+            rsd_href(&"alice".parse::<Username>().unwrap()),
+            "/~alice/rsd.xml"
+        );
     }
 
     #[test]

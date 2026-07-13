@@ -7,6 +7,8 @@
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use common::username::Username;
+
 use crate::error::WebResult;
 use crate::tags::TagSummary;
 
@@ -18,7 +20,6 @@ use {
     crate::viewer::viewer_identity,
     common::{
         tag::Tag,
-        username::Username,
         visibility::{viewer_user_id, ViewerIdentity},
     },
     std::sync::Arc,
@@ -32,7 +33,7 @@ use {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TimelinePostSummary {
     pub post_id: i64,
-    pub username: String,
+    pub username: Username,
     pub title: Option<String>,
     pub summary: Option<String>,
     pub slug: String,
@@ -83,23 +84,22 @@ fn page_from_rows(
 ///
 /// # Errors
 ///
-/// Returns a validation error for an unparseable username or cursor, or a
-/// storage error if the listing query fails.
+/// Returns a validation error for an unparseable cursor, or a storage error if
+/// the listing query fails.
 #[cfg(feature = "server")]
 pub async fn fetch_user_posts(
     posts: &dyn PostStorage,
     viewer: &ViewerIdentity,
-    username: &str,
+    username: &Username,
     cursor_created_at: Option<String>,
     cursor_post_id: Option<i64>,
     limit: Option<u32>,
 ) -> InternalResult<TimelinePage> {
-    let username = username.trim().parse::<Username>()?;
     let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
     let page_size = limit.unwrap_or(50).clamp(1, 50);
     let rows = posts
         .list_published_by_user(
-            &username,
+            username,
             cursor.as_ref(),
             page_size.saturating_add(1),
             viewer,
@@ -140,7 +140,7 @@ pub async fn fetch_local_timeline(
 /// Lists published, non-deleted posts for a user using cursor pagination.
 #[server(endpoint = "/list_user_posts")]
 pub async fn list_user_posts(
-    username: String,
+    username: Username,
     cursor_created_at: Option<String>,
     cursor_post_id: Option<i64>,
     limit: Option<u32>,
@@ -263,22 +263,21 @@ pub async fn fetch_posts_by_tag(
 ///
 /// # Errors
 ///
-/// Returns a validation error for an unparseable username/tag/cursor, a
-/// not-found error for an unknown user, or a storage error.
+/// Returns a validation error for an unparseable tag/cursor, a not-found error
+/// for an unknown user, or a storage error.
 #[cfg(feature = "server")]
 pub async fn fetch_user_posts_by_tag(
     posts: &dyn PostStorage,
     users: &dyn UserStorage,
     viewer: &ViewerIdentity,
-    username: &str,
+    username: &Username,
     tag: &str,
     cursor: Option<PostCursor>,
     limit: Option<u32>,
 ) -> InternalResult<TimelinePage> {
-    let username = username.trim().parse::<Username>()?;
     let tag_slug = tag.trim().parse::<Tag>()?;
     let author = users
-        .get_user_by_username(&username)
+        .get_user_by_username(username)
         .await?
         .ok_or_else(|| InternalError::not_found("user"))?;
     let page_size = limit.unwrap_or(50).clamp(1, 50);
@@ -323,7 +322,7 @@ pub async fn list_posts_by_tag(
 /// Lists published, non-deleted posts by `username` carrying `tag`.
 #[server(endpoint = "/list_user_posts_by_tag")]
 pub async fn list_user_posts_by_tag(
-    username: String,
+    username: Username,
     tag: String,
     cursor_created_at: Option<String>,
     cursor_post_id: Option<i64>,
@@ -402,7 +401,7 @@ mod tests {
             &posts,
             &users,
             &ViewerIdentity::Anonymous,
-            "author",
+            &"author".parse::<Username>().unwrap(),
             "rust",
             None,
             None,
