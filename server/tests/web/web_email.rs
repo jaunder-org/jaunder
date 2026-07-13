@@ -1,52 +1,14 @@
 use std::sync::Arc;
 
-use axum::{
-    body::Body,
-    http::{header, Request, StatusCode},
-};
+use axum::http::StatusCode;
 use chrono::Utc;
 use common::mailer::test_utils::CapturingMailSender;
 use common::username::Username;
-use storage::AppState;
-use tower::ServiceExt;
 
-use crate::helpers::{backends, ensure_server_fns_registered, test_options, Backend, TestEnv};
+use crate::helpers::{backends, post_form_with_mailer, Backend, TestEnv};
 
 use rstest::*;
 use rstest_reuse::*;
-
-async fn post_form(
-    state: Arc<AppState>,
-    mailer: Arc<dyn common::mailer::MailSender>,
-    uri: &str,
-    body: impl Into<String>,
-    cookie: Option<&str>,
-) -> (StatusCode, String) {
-    ensure_server_fns_registered();
-
-    let mut builder = Request::builder()
-        .method("POST")
-        .uri(uri)
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
-    if let Some(c) = cookie {
-        builder = builder.header(header::COOKIE, c);
-    }
-    let request = builder.body(Body::from(body.into())).unwrap();
-
-    let app = jaunder::create_router(
-        test_options(),
-        state,
-        mailer,
-        true,
-        crate::helpers::tmp_storage_path(),
-    );
-    let response = app.oneshot(request).await.unwrap();
-    let status = response.status();
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    (status, String::from_utf8(bytes.to_vec()).unwrap())
-}
 
 // M3.10.7: request_email_verification creates a row and sends an email via CapturingMailSender.
 #[apply(backends)]
@@ -72,7 +34,7 @@ async fn request_email_verification_creates_row_and_sends_email(#[case] backend:
         .unwrap();
     let cookie = format!("session={raw_token}");
 
-    let (status, _body) = post_form(
+    let (status, _body) = post_form_with_mailer(
         Arc::clone(&state),
         mailer.clone() as Arc<dyn common::mailer::MailSender>,
         "/api/request_email_verification",
@@ -119,7 +81,7 @@ async fn verify_email_with_valid_token_sets_email_verified(#[case] backend: Back
         .await
         .unwrap();
 
-    let (status, _body) = post_form(
+    let (status, _body) = post_form_with_mailer(
         Arc::clone(&state),
         mailer.clone() as Arc<dyn common::mailer::MailSender>,
         "/api/verify_email",
@@ -163,7 +125,7 @@ async fn verify_email_with_expired_token_returns_error(#[case] backend: Backend)
         .await
         .unwrap();
 
-    let (status, _body) = post_form(
+    let (status, _body) = post_form_with_mailer(
         Arc::clone(&state),
         mailer.clone() as Arc<dyn common::mailer::MailSender>,
         "/api/verify_email",
@@ -182,7 +144,7 @@ async fn verify_email_with_unknown_token_returns_error(#[case] backend: Backend)
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let (status, _body) = post_form(
+    let (status, _body) = post_form_with_mailer(
         Arc::clone(&state),
         mailer.clone() as Arc<dyn common::mailer::MailSender>,
         "/api/verify_email",
@@ -200,7 +162,7 @@ async fn request_email_verification_unauthorized_returns_error(#[case] backend: 
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let (status, _) = post_form(
+    let (status, _) = post_form_with_mailer(
         state,
         mailer.clone() as Arc<dyn common::mailer::MailSender>,
         "/api/request_email_verification",
@@ -232,7 +194,7 @@ async fn request_email_verification_invalid_email_returns_error(#[case] backend:
         .unwrap();
     let cookie_header = format!("session={raw_token}");
 
-    let (status, _) = post_form(
+    let (status, _) = post_form_with_mailer(
         state,
         mailer.clone() as Arc<dyn common::mailer::MailSender>,
         "/api/request_email_verification",
