@@ -51,7 +51,7 @@ pub async fn get_registration_policy() -> WebResult<String> {
     feature = "server",
     tracing::instrument(name = "web.auth.current_user")
 )]
-pub async fn current_user() -> WebResult<Option<String>> {
+pub async fn current_user() -> WebResult<Option<Username>> {
     boundary!("current_user", {
         classify_current_user(require_auth().await)
     })
@@ -65,7 +65,7 @@ pub async fn current_user() -> WebResult<Option<String>> {
     tracing::instrument(name = "web.auth.register", skip(password, invite_code))
 )]
 pub async fn register(
-    username: String,
+    username: Username,
     password: String,
     invite_code: Option<String>,
 ) -> WebResult<String> {
@@ -74,10 +74,8 @@ pub async fn register(
         let users = expect_context::<Arc<dyn UserStorage>>();
         let atomic = expect_context::<Arc<dyn AtomicOps>>();
         let sessions = expect_context::<Arc<dyn SessionStorage>>();
-        let username = {
-            let _phase = tracing::info_span!("web.auth.register.parse_username").entered();
-            username.to_lowercase().parse::<Username>()?
-        };
+        // `username` arrives already validated + lowercased (typed wire arg,
+        // client-pre-validated via `<ValidatedInput<Username>>`, per ADR-0065).
         let password = {
             let _phase = tracing::info_span!("web.auth.register.parse_password").entered();
             password.parse::<Password>()?

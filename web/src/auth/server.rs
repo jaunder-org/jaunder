@@ -69,7 +69,7 @@ where
         match sessions.authenticate(&credential.token).await {
             Ok(record) => {
                 host::metrics::session_validation(host::metrics::SessionOutcome::Ok);
-                verify_basic_username(&record.username, credential.expected_username.as_deref())?;
+                verify_basic_username(&record.username, credential.expected_username.as_ref())?;
                 Ok(AuthUser {
                     user_id: record.user_id,
                     username: record.username,
@@ -147,12 +147,10 @@ fn auth_rejection_error(error: AuthRejection) -> InternalError {
 /// does not match the authenticated session's user.
 fn verify_basic_username(
     authenticated: &Username,
-    expected: Option<&str>,
+    expected: Option<&Username>,
 ) -> Result<(), AuthRejection> {
     match expected {
-        Some(expected) if !common::auth::basic_username_matches(authenticated, expected) => {
-            Err(AuthRejection::BasicUsernameMismatch)
-        }
+        Some(expected) if authenticated != expected => Err(AuthRejection::BasicUsernameMismatch),
         _ => Ok(()),
     }
 }
@@ -195,9 +193,9 @@ pub fn clear_session_cookie() {
 
 /// Maps a `require_auth` result to the `current_user` response shape:
 /// `Ok` → username, `Unauthorized` error → `None`, other errors propagate.
-pub fn classify_current_user(result: InternalResult<AuthUser>) -> InternalResult<Option<String>> {
+pub fn classify_current_user(result: InternalResult<AuthUser>) -> InternalResult<Option<Username>> {
     match result {
-        Ok(auth) => Ok(Some(auth.username.to_string())),
+        Ok(auth) => Ok(Some(auth.username)),
         Err(error) if error.kind() == crate::error::ErrorKind::Auth => Ok(None),
         Err(error) => Err(error),
     }
@@ -217,14 +215,16 @@ mod tests {
     #[test]
     fn verify_basic_username_passes_on_match() {
         let user: Username = "alice".parse().unwrap();
-        assert!(verify_basic_username(&user, Some("alice")).is_ok());
+        let expected: Username = "alice".parse().unwrap();
+        assert!(verify_basic_username(&user, Some(&expected)).is_ok());
     }
 
     #[test]
     fn verify_basic_username_rejects_mismatch() {
         let user: Username = "alice".parse().unwrap();
+        let expected: Username = "mallory".parse().unwrap();
         assert!(matches!(
-            verify_basic_username(&user, Some("mallory")),
+            verify_basic_username(&user, Some(&expected)),
             Err(AuthRejection::BasicUsernameMismatch)
         ));
     }

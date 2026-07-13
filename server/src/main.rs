@@ -92,7 +92,7 @@ mod tests {
         let cli = Cli {
             command: Some(Commands::UserCreate {
                 storage,
-                username: "alice".to_string(),
+                username: "alice".parse().unwrap(),
                 password: Some("password123".to_string()),
                 display_name: None,
                 operator: false,
@@ -172,7 +172,7 @@ mod tests {
         run(Cli {
             command: Some(Commands::UserCreate {
                 storage: storage.clone(),
-                username: "alice".to_string(),
+                username: "alice".parse().unwrap(),
                 password: Some("password123".to_string()),
                 display_name: None,
                 operator: false,
@@ -185,7 +185,7 @@ mod tests {
         run(Cli {
             command: Some(Commands::AppPasswordCreate {
                 storage,
-                username: "alice".to_string(),
+                username: "alice".parse().unwrap(),
                 label: "ert".to_string(),
             }),
             verbose: false,
@@ -249,31 +249,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_user_create_rejects_invalid_username() {
-        let base = TempDir::new().unwrap();
-        let storage = test_storage_args(&base);
-        let cli = Cli {
-            command: Some(Commands::UserCreate {
-                storage,
-                username: "invalid username".to_string(),
-                password: Some("password123".to_string()),
-                display_name: None,
-                operator: false,
-            }),
-            verbose: false,
-        };
-        let err = run(cli).await.unwrap_err();
-        assert!(err.to_string().contains("username must be non-empty"));
-    }
-
-    #[tokio::test]
     async fn run_user_create_rejects_invalid_password() {
         let base = TempDir::new().unwrap();
         let storage = test_storage_args(&base);
         let cli = Cli {
             command: Some(Commands::UserCreate {
                 storage,
-                username: "alice".to_string(),
+                username: "alice".parse().unwrap(),
                 password: Some("short".to_string()),
                 display_name: None,
                 operator: false,

@@ -3,7 +3,6 @@ use {
     chrono::Duration,
     common::mailer::{EmailMessage, MailSender},
     common::password::Password,
-    common::username::Username,
     std::sync::Arc,
     storage::{AtomicOps, PasswordResetStorage, UserStorage},
 };
@@ -11,18 +10,21 @@ use {
 #[cfg(feature = "server")]
 use crate::error::InternalError;
 use crate::error::WebResult;
+// `Username` is ungated: it types the `request_password_reset` wire arg, so the
+// generated arg struct references it on both the client and server builds.
+use common::username::Username;
 use leptos::prelude::*;
 
 #[server(endpoint = "/request_password_reset")]
-pub async fn request_password_reset(username: String) -> WebResult<()> {
+pub async fn request_password_reset(username: Username) -> WebResult<()> {
     boundary!("request_password_reset", {
         let users = expect_context::<Arc<dyn UserStorage>>();
         let password_resets = expect_context::<Arc<dyn PasswordResetStorage>>();
         let mailer = expect_context::<Arc<dyn MailSender>>();
 
-        let parsed_username = username.to_lowercase().parse::<Username>()?;
-
-        let user = users.get_user_by_username(&parsed_username).await?;
+        // `username` arrives already validated + lowercased (typed wire arg,
+        // client-pre-validated via `<ValidatedInput<Username>>`, per ADR-0065).
+        let user = users.get_user_by_username(&username).await?;
 
         // Extract user_id and verified email together. Return the same "contact
         // operator" error whether the user is missing or lacks a verified email,

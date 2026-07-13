@@ -1,6 +1,8 @@
 use crate::error::WebError;
+use crate::forms::{Field, ValidatedInput};
 use crate::pages::Topbar;
 use crate::password_reset::{ConfirmPasswordReset, RequestPasswordReset};
+use common::username::Username;
 use leptos::prelude::*;
 use leptos_router::components::Redirect;
 
@@ -11,14 +13,27 @@ use leptos_router::components::Redirect;
 #[component]
 pub fn ForgotPasswordPage() -> impl IntoView {
     let request_action = ServerAction::<RequestPasswordReset>::new();
+    let username = Field::<Username>::new();
 
     view! {
         <Topbar title="Forgot Password".to_string() sub="Recover access".to_string() />
         <div class="j-scroll">
             <div class="j-page">
                 <ActionForm action=request_action>
-                    <label>"Username" <input type="text" name="username" /></label>
-                    <button type="submit" class="j-btn is-primary">
+                    <ValidatedInput<
+                    Username,
+                >
+                        label="Username"
+                        name="username"
+                        autocomplete="username"
+                        field=username
+                        transform=str::to_lowercase
+                    />
+                    <button
+                        type="submit"
+                        class="j-btn is-primary"
+                        prop:disabled=move || !username.is_valid()
+                    >
                         "Send reset link"
                     </button>
                 </ActionForm>

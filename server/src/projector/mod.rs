@@ -26,6 +26,7 @@ use axum::{
     routing::get,
     Router,
 };
+use common::username::Username;
 use common::visibility::ViewerIdentity;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -206,19 +207,26 @@ async fn profile(
     headers: HeaderMap,
     Path(username): Path<String>,
 ) -> Response {
-    match fetch_user_posts(
-        posts.as_ref(),
-        &ViewerIdentity::Anonymous,
-        &username,
-        None,
-        None,
-        Some(50),
-    )
-    .await
-    {
-        Ok(page) => cacheable(&headers, &PageSeed::Profile { username, page }),
-        // An unparseable username is never public content — let the client route it.
-        Err(_) => shell_response(&shell),
+    // An unparseable username or a storage error is never public content — serve the
+    // shell and let the client route it. A valid username (even an unknown one, which
+    // yields an empty profile) is cached like any other public page.
+    let seed = match username.parse::<Username>() {
+        Ok(username) => fetch_user_posts(
+            posts.as_ref(),
+            &ViewerIdentity::Anonymous,
+            &username,
+            None,
+            None,
+            Some(50),
+        )
+        .await
+        .ok()
+        .map(|page| PageSeed::Profile { username, page }),
+        Err(_) => None,
+    };
+    match seed {
+        Some(seed) => cacheable(&headers, &seed),
+        None => shell_response(&shell),
     }
 }
 
@@ -255,27 +263,30 @@ async fn user_tag(
     Path((username, tag)): Path<(String, String)>,
 ) -> Response {
     let tag = tag.to_lowercase();
-    match fetch_user_posts_by_tag(
-        posts.as_ref(),
-        users.as_ref(),
-        &ViewerIdentity::Anonymous,
-        &username,
-        &tag,
-        None,
-        Some(50),
-    )
-    .await
-    {
-        Ok(page) => cacheable(
-            &headers,
-            &PageSeed::UserTag {
-                username,
-                tag,
-                page,
-            },
-        ),
-        // Unparseable username/tag, or an unknown user — let the client route it.
-        Err(_) => shell_response(&shell),
+    // An unparseable username, an unknown user, or a storage error is never public
+    // content — serve the shell and let the client route it.
+    let seed = match username.parse::<Username>() {
+        Ok(username) => fetch_user_posts_by_tag(
+            posts.as_ref(),
+            users.as_ref(),
+            &ViewerIdentity::Anonymous,
+            &username,
+            &tag,
+            None,
+            Some(50),
+        )
+        .await
+        .ok()
+        .map(|page| PageSeed::UserTag {
+            username,
+            tag,
+            page,
+        }),
+        Err(_) => None,
+    };
+    match seed {
+        Some(seed) => cacheable(&headers, &seed),
+        None => shell_response(&shell),
     }
 }
 

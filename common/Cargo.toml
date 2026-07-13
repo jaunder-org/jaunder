@@ -11,6 +11,7 @@ base64.workspace = true
 email_address.workspace = true
 chrono.workspace = true
 croner.workspace = true
+macros = { path = "../macros" }
 orgize.workspace = true
 pulldown-cmark.workspace = true
 serde = { workspace = true, features = ["derive"] }

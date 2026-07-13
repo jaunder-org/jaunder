@@ -24,7 +24,7 @@ pub fn timeline_post_summary(
     } = post;
     Some(super::TimelinePostSummary {
         post_id,
-        username: author_username.to_string(),
+        username: author_username,
         title,
         summary,
         slug: slug.to_string(),
@@ -66,7 +66,7 @@ pub fn post_response(post: PostRecord, is_author: bool) -> super::PostResponse {
     } = post;
     super::PostResponse {
         post_id,
-        username: author_username.to_string(),
+        username: author_username,
         title,
         slug: slug.to_string(),
         body,

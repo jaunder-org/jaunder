@@ -20,7 +20,7 @@ pub fn ProfilePage() -> impl IntoView {
                         match profile.await {
                             Ok(data) => {
                                 view! {
-                                    <p>"Username: " {data.username.clone()}</p>
+                                    <p>"Username: " {data.username.to_string()}</p>
                                     <ActionForm action=update_action>
                                         <label>
                                             "Display Name"

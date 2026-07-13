@@ -115,7 +115,7 @@ pub fn entry_to_post_fields(entry: &Entry, default_format: PostFormat) -> PostFi
 /// edit URI; a public `rel="alternate"` link is added only for published posts.
 #[must_use]
 pub fn post_to_entry(post: &PostRecord, base_url: &str) -> Entry {
-    let username = post.author_username.as_str();
+    let username = &*post.author_username;
     let edit_uri = format!("{base_url}/atompub/{username}/posts/{}", post.post_id);
 
     // Content: the post's format becomes the wire media `type` (native source form).

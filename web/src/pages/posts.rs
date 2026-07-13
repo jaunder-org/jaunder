@@ -146,7 +146,9 @@ pub fn PostPage() -> impl IntoView {
     let post_data = move || {
         let params = params.get();
         let raw_username = params.get("username").unwrap_or_default();
-        let username = raw_username.strip_prefix('~').map(str::to_string);
+        let username = raw_username
+            .strip_prefix('~')
+            .and_then(|s| s.parse::<Username>().ok());
         let year = params
             .get("year")
             .and_then(|v| v.parse::<i32>().ok())
@@ -165,21 +167,18 @@ pub fn PostPage() -> impl IntoView {
 
     let post = crate::server_resource(
         post_data,
-        |(username, year, month, day, slug): (Option<String>, i32, u32, u32, String)| async move {
-            let username = match username {
-                Some(value) if !value.is_empty() => value,
-                _ => {
-                    // This is not a post permalink segment (it didn't start with '~').
-                    // It may be a server-handled URL (e.g. /media/…) that the SPA
-                    // router matched here because it has the same number of segments.
-                    // Reload the page so the server can handle it properly.
-                    if let Some(window) = web_sys::window() {
-                        if let Ok(href) = window.location().href() {
-                            let _ = window.location().replace(&href);
-                        }
+        |(username, year, month, day, slug): (Option<Username>, i32, u32, u32, String)| async move {
+            let Some(username) = username else {
+                // This is not a post permalink segment (it didn't start with '~').
+                // It may be a server-handled URL (e.g. /media/…) that the SPA
+                // router matched here because it has the same number of segments.
+                // Reload the page so the server can handle it properly.
+                if let Some(window) = web_sys::window() {
+                    if let Ok(href) = window.location().href() {
+                        let _ = window.location().replace(&href);
                     }
-                    return Err(WebError::validation("Invalid permalink"));
                 }
+                return Err(WebError::validation("Invalid permalink"));
             };
             get_post(username, year, month, day, slug).await
         },
@@ -246,7 +245,7 @@ pub fn PostPage() -> impl IntoView {
 /// Otherwise renders Subscribe when not subscribed and Unsubscribe when
 /// subscribed, querying state via `is_subscribed_to`.
 #[component]
-fn SubscribeButton(username: String) -> impl IntoView {
+fn SubscribeButton(username: Username) -> impl IntoView {
     let subscribe = ServerAction::<SubscribeTo>::new();
     let unsubscribe = ServerAction::<UnsubscribeFrom>::new();
 
@@ -280,10 +279,13 @@ fn SubscribeButton(username: String) -> impl IntoView {
                         return ().into_any();
                     }
                     if subscribed {
-                        let username = username.clone();
                         view! {
                             <ActionForm action=unsubscribe>
-                                <input type="hidden" name="author_username" value=username />
+                                <input
+                                    type="hidden"
+                                    name="author_username"
+                                    value=username.to_string()
+                                />
                                 <button type="submit" class="j-btn">
                                     "Unsubscribe"
                                 </button>
@@ -293,7 +295,11 @@ fn SubscribeButton(username: String) -> impl IntoView {
                     } else {
                         view! {
                             <ActionForm action=subscribe>
-                                <input type="hidden" name="author_username" value=username />
+                                <input
+                                    type="hidden"
+                                    name="author_username"
+                                    value=username.to_string()
+                                />
                                 <button type="submit" class="j-btn is-primary">
                                     "Subscribe"
                                 </button>
@@ -315,14 +321,15 @@ fn SubscribeButton(username: String) -> impl IntoView {
 #[component]
 pub fn UserTimelinePage() -> impl IntoView {
     let params = use_params_map();
+    // Parse the `~username` route segment into `Username` once, at the source; an
+    // invalid segment is `None` and every consumer handles the absence.
     let username = Memo::new(move |_| {
         params
             .get()
             .get("username")
             .unwrap_or_default()
             .strip_prefix('~')
-            .unwrap_or_default()
-            .to_string()
+            .and_then(|s| s.parse::<Username>().ok())
     });
 
     let mutate_version = RwSignal::new(0u32);
@@ -331,9 +338,7 @@ pub fn UserTimelinePage() -> impl IntoView {
     let initial_page = crate::server_resource(
         move || (username.get(), mutate_version.get()),
         |(username, _)| async move {
-            if username.is_empty() {
-                return Err(WebError::validation("Invalid username"));
-            }
+            let username = username.ok_or_else(|| WebError::validation("Invalid username"))?;
             list_user_posts(username, None, None, Some(50)).await
         },
     );
@@ -355,7 +360,7 @@ pub fn UserTimelinePage() -> impl IntoView {
         page,
     }) = use_context::<Option<crate::render::PageSeed>>().flatten()
     {
-        if seed_user == username.get_untracked() {
+        if username.get_untracked().as_ref() == Some(&seed_user) {
             next_cursor_created_at.set(page.next_cursor_created_at);
             next_cursor_post_id.set(page.next_cursor_post_id);
             has_more.set(page.has_more);
@@ -409,8 +414,10 @@ pub fn UserTimelinePage() -> impl IntoView {
     });
 
     let on_load_more = move |_| {
-        let username = username.get_untracked();
-        if username.is_empty() || !has_more.get_untracked() {
+        let Some(username) = username.get_untracked() else {
+            return;
+        };
+        if !has_more.get_untracked() {
             return;
         }
         load_more_action.dispatch(ListUserPosts {
@@ -421,7 +428,9 @@ pub fn UserTimelinePage() -> impl IntoView {
         });
     };
 
-    let display_username = move || read_signal!(username);
+    // The heading shows the canonical (parsed, lowercased) username, or empty for an
+    // invalid segment — the page renders a validation error in that case anyway.
+    let display_username = move || username.get().map(String::from).unwrap_or_default();
     let read_error = move || read_signal!(error);
     let read_initial_loaded = move || read_signal!(initial_loaded);
     let read_timeline = move || read_signal!(timeline);
@@ -430,16 +439,16 @@ pub fn UserTimelinePage() -> impl IntoView {
 
     view! {
         {move || {
-            view! {
-                {username
-                    .get()
-                    .parse::<Username>()
-                    .ok()
-                    .map(|username| {
-                        view! { <FeedDiscovery surface=FeedSurface::User { username } /> }
-                    })}
-                <RsdDiscovery username=username.get() />
-            }
+            username
+                .get()
+                .map(|username| {
+                    view! {
+                        <FeedDiscovery surface=FeedSurface::User {
+                            username: username.clone(),
+                        } />
+                        <RsdDiscovery username=username />
+                    }
+                })
         }}
         <Topbar
             title=move || format!("Posts by {}", display_username())
@@ -448,8 +457,7 @@ pub fn UserTimelinePage() -> impl IntoView {
         <div class="j-scroll">
             <div class="j-page">
                 {move || {
-                    let username = username.get();
-                    (!username.is_empty()).then(|| view! { <SubscribeButton username=username /> })
+                    username.get().map(|username| view! { <SubscribeButton username=username /> })
                 }}
                 {move || {
                     if let Some(err) = read_error() {
@@ -1219,14 +1227,15 @@ pub fn SiteTagPage() -> impl IntoView {
 #[component]
 pub fn UserTagPage() -> impl IntoView {
     let params = use_params_map();
+    // Parse the `~username` route segment into `Username` once, at the source; an
+    // invalid segment is `None` and every consumer handles the absence.
     let username = Memo::new(move |_| {
         params
             .get()
             .get("username")
             .unwrap_or_default()
             .strip_prefix('~')
-            .unwrap_or_default()
-            .to_string()
+            .and_then(|s| s.parse::<Username>().ok())
     });
     let tag = Memo::new(move |_| params.get().get("tag").unwrap_or_default().to_lowercase());
 
@@ -1236,9 +1245,7 @@ pub fn UserTagPage() -> impl IntoView {
     let initial_page = crate::server_resource(
         move || (username.get(), tag.get(), mutate_version.get()),
         |(username, tag, _)| async move {
-            if username.is_empty() {
-                return Err(WebError::validation("Invalid username"));
-            }
+            let username = username.ok_or_else(|| WebError::validation("Invalid username"))?;
             if tag.is_empty() {
                 return Err(WebError::validation("Invalid tag"));
             }
@@ -1261,7 +1268,8 @@ pub fn UserTagPage() -> impl IntoView {
         page,
     }) = use_context::<Option<crate::render::PageSeed>>().flatten()
     {
-        if seed_user == username.get_untracked() && seed_tag == tag.get_untracked() {
+        if username.get_untracked().as_ref() == Some(&seed_user) && seed_tag == tag.get_untracked()
+        {
             next_cursor_created_at.set(page.next_cursor_created_at);
             next_cursor_post_id.set(page.next_cursor_post_id);
             has_more.set(page.has_more);
@@ -1309,9 +1317,11 @@ pub fn UserTagPage() -> impl IntoView {
     });
 
     let on_load_more = move |_| {
-        let username_value = username.get_untracked();
+        let Some(username_value) = username.get_untracked() else {
+            return;
+        };
         let tag_value = tag.get_untracked();
-        if username_value.is_empty() || tag_value.is_empty() || !has_more.get_untracked() {
+        if tag_value.is_empty() || !has_more.get_untracked() {
             return;
         }
         load_more_action.dispatch(ListUserPostsByTag {
@@ -1323,7 +1333,9 @@ pub fn UserTagPage() -> impl IntoView {
         });
     };
 
-    let read_username = move || read_signal!(username);
+    // Canonical (parsed, lowercased) username for the heading, or empty for an
+    // invalid segment — the page renders a validation error in that case anyway.
+    let read_username = move || username.get().map(String::from).unwrap_or_default();
     let read_tag = move || read_signal!(tag);
     let read_error = move || read_signal!(error);
     let read_initial_loaded = move || read_signal!(initial_loaded);
@@ -1336,8 +1348,6 @@ pub fn UserTagPage() -> impl IntoView {
             view! {
                 {username
                     .get()
-                    .parse::<Username>()
-                    .ok()
                     .zip(tag.get().parse::<Tag>().ok())
                     .map(|(username, tag)| {
                         view! {

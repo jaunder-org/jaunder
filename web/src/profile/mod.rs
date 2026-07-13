@@ -1,5 +1,6 @@
 // Shared imports (no cfg needed)
 use crate::error::WebResult;
+use common::username::Username;
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -19,7 +20,7 @@ use {
 /// Profile data returned by [`get_profile`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileData {
-    pub username: String,
+    pub username: Username,
     pub display_name: Option<String>,
     pub bio: Option<String>,
     pub email: Option<String>,
@@ -37,7 +38,7 @@ pub async fn get_profile() -> WebResult<ProfileData> {
             .await?
             .ok_or_else(|| InternalError::not_found("user"))?;
         Ok(ProfileData {
-            username: user.username.to_string(),
+            username: user.username,
             display_name: user.display_name,
             bio: user.bio,
             email: user.email.map(|e| e.to_string()),

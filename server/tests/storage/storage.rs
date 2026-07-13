@@ -755,7 +755,7 @@ async fn create_user_duplicate_and_authenticate_work(#[case] backend: Backend) {
         .authenticate(&username, &initial_password)
         .await
         .unwrap();
-    assert_eq!(authed.username.as_str(), "alice");
+    assert_eq!(authed.username, "alice");
     assert!(authed.last_authenticated_at.is_some());
 }
 
@@ -777,7 +777,7 @@ async fn session_lifecycle_works(#[case] backend: Backend) {
         .unwrap();
     let record = state.sessions.authenticate(&raw_token).await.unwrap();
     assert_eq!(record.user_id, user_id);
-    assert_eq!(record.username.as_str(), "bob");
+    assert_eq!(record.username, "bob");
 
     let sessions = state.sessions.list_sessions(user_id).await.unwrap();
     assert_eq!(sessions.len(), 1);
@@ -810,7 +810,7 @@ async fn invite_and_atomic_registration_work(#[case] backend: Backend) {
         .await
         .unwrap();
     let created = state.users.get_user(user_id).await.unwrap().unwrap();
-    assert_eq!(created.username.as_str(), "carol");
+    assert_eq!(created.username, "carol");
 
     let err = state
         .atomic
@@ -1011,7 +1011,7 @@ async fn create_user_succeeds_and_get_by_username_returns_record(#[case] backend
         .unwrap()
         .unwrap();
     assert_eq!(record.user_id, user_id);
-    assert_eq!(record.username.as_str(), "alice");
+    assert_eq!(record.username, "alice");
     assert_eq!(record.display_name.as_deref(), Some("Alice"));
 }
 
@@ -1054,7 +1054,7 @@ async fn authenticate_correct_password_returns_record_and_sets_last_authenticate
         .authenticate(&username("bob"), &password("secret_password"))
         .await
         .unwrap();
-    assert_eq!(record.username.as_str(), "bob");
+    assert_eq!(record.username, "bob");
     assert!(record.last_authenticated_at.is_some());
 
     let fetched = state.users.get_user(record.user_id).await.unwrap().unwrap();
@@ -1166,7 +1166,7 @@ async fn create_session_then_authenticate_returns_correct_record(#[case] backend
     let record = state.sessions.authenticate(&raw_token).await.unwrap();
 
     assert_eq!(record.user_id, user_id);
-    assert_eq!(record.username.as_str(), "alice");
+    assert_eq!(record.username, "alice");
     assert_eq!(record.label, "test");
     assert!(!record.token_hash.is_empty());
 }
@@ -1404,7 +1404,7 @@ async fn create_user_with_invite_creates_user_and_marks_invite_used(#[case] back
         .unwrap();
 
     let record = state.users.get_user(user_id).await.unwrap().unwrap();
-    assert_eq!(record.username.as_str(), "alice");
+    assert_eq!(record.username, "alice");
     assert_eq!(record.display_name.as_deref(), Some("Alice"));
 
     // Invite was marked used

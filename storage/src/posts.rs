@@ -76,7 +76,7 @@ impl PostRecord {
         let timestamp = self.published_at.unwrap_or(self.created_at);
         format!(
             "/~{}/{:04}/{:02}/{:02}/{}",
-            self.author_username.as_str(),
+            self.author_username,
             timestamp.year(),
             timestamp.month(),
             timestamp.day(),
@@ -977,7 +977,7 @@ where
             date_clause = DB::PERMALINK_DATE_CLAUSE,
         );
         let query = sqlx::query_as::<_, PostRow>(&sql)
-            .bind(username.as_str())
+            .bind(username.as_ref())
             .bind(slug.as_str())
             .bind(date_str.as_str())
             .bind(now);
@@ -1062,7 +1062,7 @@ where
                  LIMIT ${limit_idx}"
             );
             let query = sqlx::query_as::<_, PostRow>(&sql)
-                .bind(username.as_str())
+                .bind(username.as_ref())
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
                 .bind(cursor.post_id)
@@ -1091,7 +1091,7 @@ where
                  LIMIT ${limit_idx}"
             );
             let query = sqlx::query_as::<_, PostRow>(&sql)
-                .bind(username.as_str())
+                .bind(username.as_ref())
                 .bind(now);
             binds
                 .bind_onto(query)
@@ -1979,7 +1979,7 @@ where
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRow>(&sql)
                 .bind(now)
-                .bind(username.as_str())
+                .bind(username.as_ref())
                 .bind(min_items)
                 .bind(cutoff);
             binds.bind_onto(query).fetch_all(pool).await
@@ -2002,7 +2002,7 @@ where
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRow>(&sql)
                 .bind(now)
-                .bind(username.as_str())
+                .bind(username.as_ref())
                 .bind(tag.as_str())
                 .bind(min_items)
                 .bind(cutoff);
@@ -2152,7 +2152,7 @@ where
                  ORDER BY p.published_at DESC LIMIT 1",
             )
             .bind(now)
-            .bind(username.as_str())
+            .bind(username.as_ref())
             .fetch_optional(pool)
             .await?
         }
@@ -2181,7 +2181,7 @@ where
                  ORDER BY p.published_at DESC LIMIT 1",
             )
             .bind(now)
-            .bind(username.as_str())
+            .bind(username.as_ref())
             .bind(tag.as_str())
             .fetch_optional(pool)
             .await?

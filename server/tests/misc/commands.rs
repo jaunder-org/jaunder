@@ -295,7 +295,7 @@ async fn cmd_user_create_creates_retrievable_user(#[case] backend: Backend) {
         .await
         .expect("db query");
     assert!(user.is_some(), "user should exist after creation");
-    assert_eq!(user.expect("user present").username.as_str(), "alice");
+    assert_eq!(user.expect("user present").username, "alice");
 }
 
 // M6.1.7: creating a user with --operator sets is_operator to true.

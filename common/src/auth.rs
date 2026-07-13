@@ -7,10 +7,12 @@
 
 use crate::username::Username;
 
-/// Parses an HTTP `Authorization: Basic` header value into `(username, password)`.
-/// Returns `None` for non-Basic schemes or malformed/undecodable credentials.
+/// Parses an HTTP `Authorization: Basic` header value into `(username, password)`,
+/// with the username parsed into a validated [`Username`] at this decode boundary.
+/// Returns `None` for non-Basic schemes, malformed/undecodable credentials, or a
+/// username that fails validation.
 #[must_use]
-pub fn parse_basic_auth(header: &str) -> Option<(String, String)> {
+pub fn parse_basic_auth(header: &str) -> Option<(Username, String)> {
     use base64::Engine as _;
 
     let rest = header.strip_prefix("Basic ")?;
@@ -19,16 +21,7 @@ pub fn parse_basic_auth(header: &str) -> Option<(String, String)> {
         .ok()?;
     let credentials = String::from_utf8(decoded).ok()?;
     let (username, password) = credentials.split_once(':')?;
-    Some((username.to_string(), password.to_string()))
-}
-
-/// Whether an app-password (Basic auth) request authenticated as the user it
-/// claimed: the authenticated session's username must equal the supplied Basic
-/// username. Cookie/Bearer requests carry no expected username and are handled
-/// by the caller.
-#[must_use]
-pub fn basic_username_matches(authenticated: &Username, expected: &str) -> bool {
-    authenticated.as_str() == expected
+    Some((username.parse().ok()?, password.to_string()))
 }
 
 #[cfg(test)]
@@ -40,7 +33,7 @@ mod tests {
         // base64("alice:tok123") == "YWxpY2U6dG9rMTIz"
         assert_eq!(
             parse_basic_auth("Basic YWxpY2U6dG9rMTIz"),
-            Some(("alice".to_string(), "tok123".to_string()))
+            Some(("alice".parse().unwrap(), "tok123".to_string()))
         );
     }
 
@@ -55,14 +48,11 @@ mod tests {
     }
 
     #[test]
-    fn basic_username_matches_true_on_match() {
-        let user: Username = "alice".parse().unwrap();
-        assert!(basic_username_matches(&user, "alice"));
-    }
-
-    #[test]
-    fn basic_username_matches_false_on_mismatch() {
-        let user: Username = "alice".parse().unwrap();
-        assert!(!basic_username_matches(&user, "mallory"));
+    fn parse_basic_auth_rejects_invalid_username() {
+        use base64::Engine as _;
+        // decodes to "a b:tok" — the space makes the username invalid, so the
+        // whole credential is unrecognized rather than yielding a bad username.
+        let bad_user = base64::engine::general_purpose::STANDARD.encode("a b:tok");
+        assert_eq!(parse_basic_auth(&format!("Basic {bad_user}")), None);
     }
 }
