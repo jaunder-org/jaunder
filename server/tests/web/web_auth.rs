@@ -1,145 +1,16 @@
 use std::sync::Arc;
 
-use axum::{
-    body::Body,
-    http::{header, Request, StatusCode},
-};
+use axum::http::StatusCode;
 use chrono::Utc;
 use common::username::Username;
-use tower::ServiceExt;
 
 use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{
-    backends, backends_matrix, ensure_server_fns_registered, test_options, Backend, TestEnv,
+    backends, backends_matrix, post_form_with_bearer, post_form_with_secure_flag,
+    post_form_with_ua, Backend, TestEnv,
 };
-
-/// Sends a form-encoded POST request through a fresh router built from `state`.
-/// Returns (status, Set-Cookie header value, response body).
-async fn post_form(
-    state: Arc<storage::AppState>,
-    uri: &str,
-    body: impl Into<String>,
-    cookie: Option<&str>,
-    secure_cookies: bool,
-) -> (StatusCode, Option<String>, String) {
-    ensure_server_fns_registered();
-
-    let mut builder = Request::builder()
-        .method("POST")
-        .uri(uri)
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
-    if let Some(c) = cookie {
-        builder = builder.header(header::COOKIE, c);
-    }
-    let request = builder.body(Body::from(body.into())).unwrap();
-
-    let app = jaunder::create_router(
-        test_options(),
-        state,
-        crate::helpers::noop_mailer(),
-        secure_cookies,
-        crate::helpers::tmp_storage_path(),
-    );
-    let response = app.oneshot(request).await.unwrap();
-
-    let status = response.status();
-    let set_cookie = response
-        .headers()
-        .get(header::SET_COOKIE)
-        .map(|v| v.to_str().unwrap().to_string());
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let body_str = String::from_utf8(bytes.to_vec()).unwrap();
-
-    (status, set_cookie, body_str)
-}
-
-async fn post_form_with_ua(
-    state: Arc<storage::AppState>,
-    uri: &str,
-    body: impl Into<String>,
-    cookie: Option<&str>,
-    user_agent: &str,
-    secure_cookies: bool,
-) -> (StatusCode, Option<String>, String) {
-    ensure_server_fns_registered();
-
-    let mut builder = Request::builder()
-        .method("POST")
-        .uri(uri)
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .header("user-agent", user_agent);
-    if let Some(c) = cookie {
-        builder = builder.header(header::COOKIE, c);
-    }
-    let request = builder.body(Body::from(body.into())).unwrap();
-
-    let app = jaunder::create_router(
-        test_options(),
-        state,
-        crate::helpers::noop_mailer(),
-        secure_cookies,
-        crate::helpers::tmp_storage_path(),
-    );
-    let response = app.oneshot(request).await.unwrap();
-
-    let status = response.status();
-    let set_cookie = response
-        .headers()
-        .get(header::SET_COOKIE)
-        .map(|v| v.to_str().unwrap().to_string());
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let body_str = String::from_utf8(bytes.to_vec()).unwrap();
-
-    (status, set_cookie, body_str)
-}
-
-/// Sends a form-encoded POST request through a fresh router built from `state`,
-/// attaching an `Authorization: Bearer <token>` header instead of a cookie.
-/// Returns (status, Set-Cookie header value, response body).
-async fn post_form_with_bearer(
-    state: Arc<storage::AppState>,
-    uri: &str,
-    body: impl Into<String>,
-    bearer_token: &str,
-) -> (StatusCode, Option<String>, String) {
-    ensure_server_fns_registered();
-
-    let request = Request::builder()
-        .method("POST")
-        .uri(uri)
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .header(header::AUTHORIZATION, format!("Bearer {bearer_token}"))
-        .body(Body::from(body.into()))
-        .expect("failed to build request with bearer token");
-
-    let app = jaunder::create_router(
-        test_options(),
-        state,
-        crate::helpers::noop_mailer(),
-        true,
-        crate::helpers::tmp_storage_path(),
-    );
-    let response = app.oneshot(request).await.expect("router oneshot failed");
-
-    let status = response.status();
-    let set_cookie = response.headers().get(header::SET_COOKIE).map(|v| {
-        v.to_str()
-            .expect("Set-Cookie header is not valid UTF-8")
-            .to_string()
-    });
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("failed to read response body");
-    let body_str = String::from_utf8(bytes.to_vec()).expect("response body is not valid UTF-8");
-
-    (status, set_cookie, body_str)
-}
 
 /// Extracts a raw token from a server-function JSON response body.
 /// Successful server functions return a JSON string: `"<token>"`.
@@ -163,7 +34,7 @@ async fn register_open_creates_user_sets_cookie_returns_token(#[case] backend: B
         .await
         .unwrap();
 
-    let (status, set_cookie, body) = post_form(
+    let (status, set_cookie, body) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/register",
         "username=alice&password=password123",
@@ -198,7 +69,7 @@ async fn register_duplicate_username_returns_error(#[case] backend: Backend) {
         .unwrap();
 
     // Register alice once.
-    post_form(
+    post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/register",
         "username=alice&password=password123",
@@ -208,7 +79,7 @@ async fn register_duplicate_username_returns_error(#[case] backend: Backend) {
     .await;
 
     // Register alice again.
-    let (status, _, _) = post_form(
+    let (status, _, _) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/register",
         "username=alice&password=otherpassword",
@@ -233,7 +104,7 @@ async fn register_invite_only_valid_code_creates_user_marks_invite_used(#[case] 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
     let code = state.invites.create_invite(expires_at).await.unwrap();
 
-    let (status, _set_cookie, body) = post_form(
+    let (status, _set_cookie, body) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/register",
         format!("username=bob&password=password123&invite_code={code}"),
@@ -272,7 +143,7 @@ async fn register_invite_only_missing_code_returns_error(#[case] backend: Backen
         .await
         .unwrap();
 
-    let (status, _set_cookie, _body) = post_form(
+    let (status, _set_cookie, _body) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/register",
         "username=carol&password=password123",
@@ -305,7 +176,7 @@ async fn register_invite_only_invalid_code_returns_error(#[case] backend: Backen
         .await
         .unwrap();
 
-    let (status, _, _) = post_form(
+    let (status, _, _) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/register",
         "username=alice&password=password123&invite_code=invalid-code",
@@ -332,7 +203,7 @@ async fn register_invite_only_expired_code_returns_error(#[case] backend: Backen
     let expires_at = Utc::now() - chrono::Duration::hours(1);
     let code = state.invites.create_invite(expires_at).await.unwrap();
 
-    let (status, _, _) = post_form(
+    let (status, _, _) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/register",
         format!("username=alice&password=password123&invite_code={code}"),
@@ -351,7 +222,7 @@ async fn register_closed_policy_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     // Default policy is Closed; no need to set it explicitly.
 
-    let (status, _set_cookie, _body) = post_form(
+    let (status, _set_cookie, _body) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/register",
         "username=dave&password=password123",
@@ -383,7 +254,7 @@ async fn login_correct_password_sets_cookie_and_returns_token(#[case] backend: B
         .set("site.registration_policy", "open")
         .await
         .unwrap();
-    post_form(
+    post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/register",
         "username=eve&password=password123",
@@ -392,7 +263,7 @@ async fn login_correct_password_sets_cookie_and_returns_token(#[case] backend: B
     )
     .await;
 
-    let (status, set_cookie, body) = post_form(
+    let (status, set_cookie, body) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/login",
         "username=eve&password=password123",
@@ -418,7 +289,7 @@ async fn login_correct_password_sets_cookie_and_returns_token(#[case] backend: B
 async fn login_unknown_user_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, _, _) = post_form(
+    let (status, _, _) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/login",
         "username=nobody&password=password123",
@@ -439,7 +310,7 @@ async fn login_with_label_creates_session_with_label(#[case] backend: Backend) {
         .set("site.registration_policy", "open")
         .await
         .unwrap();
-    post_form(
+    post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/register",
         "username=alice&password=password123",
@@ -448,7 +319,7 @@ async fn login_with_label_creates_session_with_label(#[case] backend: Backend) {
     )
     .await;
 
-    let (status, _, body) = post_form(
+    let (status, _, body) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/login",
         "username=alice&password=password123&label=my-device",
@@ -472,7 +343,7 @@ async fn login_with_empty_label_creates_session_without_label(#[case] backend: B
         .set("site.registration_policy", "open")
         .await
         .unwrap();
-    post_form(
+    post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/register",
         "username=alice&password=password123",
@@ -481,7 +352,7 @@ async fn login_with_empty_label_creates_session_without_label(#[case] backend: B
     )
     .await;
 
-    let (status, _, body) = post_form(
+    let (status, _, body) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/login",
         "username=alice&password=password123&label=",
@@ -507,7 +378,7 @@ async fn login_truncates_long_user_agent(#[case] backend: Backend) {
         .set("site.registration_policy", "open")
         .await
         .unwrap();
-    post_form(
+    post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/register",
         "username=alice&password=password123",
@@ -547,7 +418,7 @@ async fn login_wrong_password_returns_error(#[case] backend: Backend) {
         .set("site.registration_policy", "open")
         .await
         .unwrap();
-    post_form(
+    post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/register",
         "username=frank&password=correctpassword",
@@ -556,7 +427,7 @@ async fn login_wrong_password_returns_error(#[case] backend: Backend) {
     )
     .await;
 
-    let (status, _set_cookie, _body) = post_form(
+    let (status, _set_cookie, _body) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/login",
         "username=frank&password=wrongpassword",
@@ -599,7 +470,7 @@ async fn logout_revokes_session_and_clears_cookie(#[case] backend: Backend) {
     );
 
     let cookie_header = format!("session={raw_token}");
-    let (status, set_cookie, _body) = post_form(
+    let (status, set_cookie, _body) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/logout",
         "",
@@ -636,7 +507,7 @@ async fn register_invalid_username_returns_error(#[case] backend: Backend) {
 
     // "alice doe" lowercases to "alice doe" which fails Username parse
     // because Username only allows [a-z0-9_-]+.
-    let (status, _set_cookie, _body) = post_form(
+    let (status, _set_cookie, _body) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/register",
         "username=alice%20doe&password=password123",
@@ -663,7 +534,7 @@ async fn register_short_password_returns_error(#[case] backend: Backend) {
         .await
         .expect("failed to set registration policy");
 
-    let (status, _set_cookie, _body) = post_form(
+    let (status, _set_cookie, _body) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/register",
         "username=alice&password=short",
@@ -695,7 +566,7 @@ async fn register_short_password_returns_error(#[case] backend: Backend) {
 async fn login_invalid_username_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, _set_cookie, _body) = post_form(
+    let (status, _set_cookie, _body) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/login",
         "username=alice%20doe&password=password123",
@@ -779,7 +650,7 @@ async fn logout_without_session_still_clears_cookie(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, set_cookie, _body) =
-        post_form(Arc::clone(&state), "/api/logout", "", None, true).await;
+        post_form_with_secure_flag(Arc::clone(&state), "/api/logout", "", None, true).await;
 
     assert_eq!(status, StatusCode::OK);
     let clear_cookie = set_cookie.expect("Set-Cookie header should be present on logout");
@@ -796,7 +667,8 @@ async fn debug_api_routes_exist(#[case] backend: Backend) {
 
     // Send a request with no body to /api/register — if route exists we get
     // something other than 404 (probably a 400/422 for missing fields).
-    let (status, _, _) = post_form(Arc::clone(&state), "/api/register", "", None, true).await;
+    let (status, _, _) =
+        post_form_with_secure_flag(Arc::clone(&state), "/api/register", "", None, true).await;
     assert_ne!(
         status,
         StatusCode::NOT_FOUND,
@@ -815,7 +687,7 @@ async fn get_registration_policy_returns_correct_value(#[case] backend: Backend)
         .unwrap();
 
     // Server functions are POST by default.
-    let (status, _, body) = post_form(
+    let (status, _, body) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/get_registration_policy",
         "",
@@ -838,7 +710,8 @@ async fn get_registration_policy_returns_correct_value(#[case] backend: Backend)
 async fn auth_user_extraction_fails(backend: Backend, #[case] cookie: Option<&str>) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, _, _) = post_form(Arc::clone(&state), "/api/get_profile", "", cookie, true).await;
+    let (status, _, _) =
+        post_form_with_secure_flag(Arc::clone(&state), "/api/get_profile", "", cookie, true).await;
 
     // Leptos server functions return 500 for ServerFnError.
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
@@ -865,7 +738,7 @@ async fn logout_clears_cookie_without_secure_attribute_when_disabled(#[case] bac
         .unwrap();
 
     let cookie_header = format!("session={raw_token}");
-    let (status, set_cookie, _) = post_form(
+    let (status, set_cookie, _) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/logout",
         "",
@@ -901,7 +774,7 @@ async fn current_user_returns_username_when_authenticated(#[case] backend: Backe
         .unwrap();
 
     let cookie_header = format!("session={raw_token}");
-    let (status, _, body) = post_form(
+    let (status, _, body) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/current_user",
         "",
@@ -920,7 +793,7 @@ async fn current_user_returns_null_when_unauthenticated(#[case] backend: Backend
     let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, _, body) =
-        post_form(Arc::clone(&state), "/api/current_user", "", None, true).await;
+        post_form_with_secure_flag(Arc::clone(&state), "/api/current_user", "", None, true).await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body.trim(), "null");
@@ -936,7 +809,7 @@ async fn register_sets_cookie_without_secure_attribute_when_disabled(#[case] bac
         .await
         .unwrap();
 
-    let (status, set_cookie, _) = post_form(
+    let (status, set_cookie, _) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/register",
         "username=insecure&password=password123",

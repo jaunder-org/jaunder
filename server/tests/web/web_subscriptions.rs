@@ -1,49 +1,13 @@
 use std::sync::Arc;
 
-use axum::{
-    body::Body,
-    http::{header, Request, StatusCode},
-};
+use axum::http::StatusCode;
 use common::username::Username;
 use common::visibility::ViewerIdentity;
-use tower::ServiceExt;
 
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{backends, ensure_server_fns_registered, test_options, Backend, TestEnv};
-
-async fn post_form(
-    state: Arc<storage::AppState>,
-    uri: &str,
-    body: impl Into<String>,
-    cookie: Option<&str>,
-) -> (StatusCode, String) {
-    ensure_server_fns_registered();
-
-    let mut builder = Request::builder()
-        .method("POST")
-        .uri(uri)
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
-    if let Some(c) = cookie {
-        builder = builder.header(header::COOKIE, c);
-    }
-    let request = builder.body(Body::from(body.into())).unwrap();
-
-    let app = jaunder::create_router(
-        test_options(),
-        state,
-        crate::helpers::noop_mailer(),
-        true,
-        crate::helpers::tmp_storage_path(),
-    );
-    let response = app.oneshot(request).await.unwrap();
-    let status = response.status();
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    (status, String::from_utf8(bytes.to_vec()).unwrap())
-}
+use crate::helpers::{backends, post_form, Backend, TestEnv};
 
 async fn make_user(state: &Arc<storage::AppState>, name: &str) -> i64 {
     state

@@ -1,57 +1,16 @@
 use std::sync::Arc;
 
-use axum::{
-    body::Body,
-    http::{header, Request, StatusCode},
-};
+use axum::http::StatusCode;
 use common::backup::{BackupConfig, BackupMode};
 use common::{password::Password, username::Username};
 use storage::{
     BACKUP_DESTINATION_PATH_KEY, BACKUP_MODE_KEY, BACKUP_RETENTION_COUNT_KEY, BACKUP_SCHEDULE_KEY,
 };
-use tower::ServiceExt;
 
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{backends, backends_matrix, Backend, TestEnv};
-
-use crate::helpers::{ensure_server_fns_registered, test_options};
-
-async fn post_form(
-    state: Arc<storage::AppState>,
-    uri: &str,
-    body: impl Into<String>,
-    cookie: Option<&str>,
-) -> (StatusCode, String) {
-    ensure_server_fns_registered();
-
-    let mut builder = Request::builder()
-        .method("POST")
-        .uri(uri)
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
-    if let Some(c) = cookie {
-        builder = builder.header(header::COOKIE, c);
-    }
-    let request = builder.body(Body::from(body.into())).unwrap();
-
-    let app = jaunder::create_router(
-        test_options(),
-        state,
-        crate::helpers::noop_mailer(),
-        true,
-        crate::helpers::tmp_storage_path(),
-    );
-    let response = app.oneshot(request).await.unwrap();
-
-    let status = response.status();
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let body_str = String::from_utf8(bytes.to_vec()).unwrap();
-
-    (status, body_str)
-}
+use crate::helpers::{backends, backends_matrix, post_form, Backend, TestEnv};
 
 #[apply(backends)]
 #[tokio::test]

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use axum::{
     body::Body,
-    http::{header, Request, StatusCode},
+    http::{Request, StatusCode},
 };
 use tower::ServiceExt;
 use web::media::{DeleteMediaResult, MediaItem, MediaUsageData};
@@ -14,49 +14,7 @@ use storage::{CreateMediaError, MediaRecord, MediaSource};
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{backends, backends_matrix, Backend, TestEnv};
-
-use crate::helpers::{ensure_server_fns_registered, test_options};
-
-async fn post_form(
-    state: Arc<storage::AppState>,
-    uri: &str,
-    body: impl Into<String>,
-    cookie: Option<&str>,
-) -> (StatusCode, String) {
-    ensure_server_fns_registered();
-    server_fn::axum::register_explicit::<web::media::ListMyMedia>();
-    server_fn::axum::register_explicit::<web::media::MediaUsage>();
-    server_fn::axum::register_explicit::<web::media::DeleteMedia>();
-
-    let mut builder = Request::builder()
-        .method("POST")
-        .uri(uri)
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
-    if let Some(c) = cookie {
-        builder = builder.header(header::COOKIE, c);
-    }
-    let request = builder
-        .body(Body::from(body.into()))
-        .expect("failed to build request");
-
-    let app = jaunder::create_router(
-        test_options(),
-        state,
-        crate::helpers::noop_mailer(),
-        true,
-        crate::helpers::tmp_storage_path(),
-    );
-    let response = app.oneshot(request).await.expect("router oneshot failed");
-
-    let status = response.status();
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("failed to read response body");
-    let body_str = String::from_utf8(bytes.to_vec()).expect("response body is not UTF-8");
-
-    (status, body_str)
-}
+use crate::helpers::{backends, backends_matrix, post_form, test_options, Backend, TestEnv};
 
 // ─── media_usage ──────────────────────────────────────────────
 

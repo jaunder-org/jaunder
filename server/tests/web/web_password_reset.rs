@@ -1,52 +1,15 @@
 use std::sync::Arc;
 
-use axum::{
-    body::Body,
-    http::{header, Request, StatusCode},
-};
+use axum::http::StatusCode;
 use chrono::Utc;
 use common::mailer::test_utils::CapturingMailSender;
 use common::username::Username;
 use storage::AppState;
-use tower::ServiceExt;
 
-use crate::helpers::{backends, ensure_server_fns_registered, test_options, Backend, TestEnv};
+use crate::helpers::{backends, post_form_with_mailer, Backend, TestEnv};
 
 use rstest::*;
 use rstest_reuse::*;
-
-async fn post_form(
-    state: Arc<AppState>,
-    mailer: Arc<dyn common::mailer::MailSender>,
-    uri: &str,
-    body: impl Into<String>,
-    cookie: Option<&str>,
-) -> (StatusCode, String) {
-    ensure_server_fns_registered();
-
-    let mut builder = Request::builder()
-        .method("POST")
-        .uri(uri)
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
-    if let Some(c) = cookie {
-        builder = builder.header(header::COOKIE, c);
-    }
-    let request = builder.body(Body::from(body.into())).unwrap();
-
-    let app = jaunder::create_router(
-        test_options(),
-        state,
-        mailer,
-        true,
-        crate::helpers::tmp_storage_path(),
-    );
-    let response = app.oneshot(request).await.unwrap();
-    let status = response.status();
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    (status, String::from_utf8(bytes.to_vec()).unwrap())
-}
 
 /// Creates a user with a verified email address. Returns (`user_id`, `raw_session_token`).
 async fn create_user_with_verified_email(
@@ -87,7 +50,7 @@ async fn request_password_reset_sends_email_for_verified_user(#[case] backend: B
 
     create_user_with_verified_email(&state, "alice", "alice@example.com").await;
 
-    let (status, _body) = post_form(
+    let (status, _body) = post_form_with_mailer(
         Arc::clone(&state),
         mailer.clone() as Arc<dyn common::mailer::MailSender>,
         "/api/request_password_reset",
@@ -129,7 +92,7 @@ async fn request_password_reset_returns_error_for_user_without_verified_email(
         .await
         .unwrap();
 
-    let (status, _body) = post_form(
+    let (status, _body) = post_form_with_mailer(
         Arc::clone(&state),
         mailer.clone() as Arc<dyn common::mailer::MailSender>,
         "/api/request_password_reset",
@@ -147,7 +110,7 @@ async fn request_password_reset_invalid_username_returns_error(#[case] backend: 
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let (status, _) = post_form(
+    let (status, _) = post_form_with_mailer(
         state,
         mailer.clone() as Arc<dyn common::mailer::MailSender>,
         "/api/request_password_reset",
@@ -165,7 +128,7 @@ async fn request_password_reset_returns_error_for_unknown_username(#[case] backe
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let (status, _body) = post_form(
+    let (status, _body) = post_form_with_mailer(
         Arc::clone(&state),
         mailer.clone() as Arc<dyn common::mailer::MailSender>,
         "/api/request_password_reset",
@@ -201,7 +164,7 @@ async fn confirm_password_reset_sets_password_and_revokes_sessions(#[case] backe
         .unwrap();
 
     let body = format!("token={raw_token}&new_password=newpassword456");
-    let (status, _body) = post_form(
+    let (status, _body) = post_form_with_mailer(
         Arc::clone(&state),
         mailer.clone() as Arc<dyn common::mailer::MailSender>,
         "/api/confirm_password_reset",
@@ -254,7 +217,7 @@ async fn confirm_password_reset_with_expired_token_returns_error(#[case] backend
         .unwrap();
 
     let body = format!("token={raw_token}&new_password=newpassword456");
-    let (status, _body) = post_form(
+    let (status, _body) = post_form_with_mailer(
         Arc::clone(&state),
         mailer.clone() as Arc<dyn common::mailer::MailSender>,
         "/api/confirm_password_reset",
@@ -273,7 +236,7 @@ async fn confirm_password_reset_with_invalid_token_returns_error(#[case] backend
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let (status, _body) = post_form(
+    let (status, _body) = post_form_with_mailer(
         Arc::clone(&state),
         mailer.clone() as Arc<dyn common::mailer::MailSender>,
         "/api/confirm_password_reset",
@@ -304,7 +267,7 @@ async fn confirm_password_reset_with_used_token_returns_error(#[case] backend: B
     let body = format!("token={raw_token}&new_password=newpassword456");
 
     // Use it once — should succeed
-    let (status, _) = post_form(
+    let (status, _) = post_form_with_mailer(
         Arc::clone(&state),
         mailer.clone() as Arc<dyn common::mailer::MailSender>,
         "/api/confirm_password_reset",
@@ -315,7 +278,7 @@ async fn confirm_password_reset_with_used_token_returns_error(#[case] backend: B
     assert_eq!(status, StatusCode::OK);
 
     // Use it again — should fail
-    let (status, _) = post_form(
+    let (status, _) = post_form_with_mailer(
         Arc::clone(&state),
         mailer.clone() as Arc<dyn common::mailer::MailSender>,
         "/api/confirm_password_reset",

@@ -15,7 +15,10 @@ use web::posts::{
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{backends, backends_matrix, Backend, TestBase, TestEnv};
+use crate::helpers::{
+    backends, backends_matrix, ensure_server_fns_registered, post_form, test_options, Backend,
+    TestBase, TestEnv,
+};
 
 async fn unpublish_post_form(
     state: Arc<storage::AppState>,
@@ -29,43 +32,6 @@ async fn unpublish_post_form(
         cookie,
     )
     .await
-}
-
-use crate::helpers::{ensure_server_fns_registered, test_options};
-
-async fn post_form(
-    state: Arc<storage::AppState>,
-    uri: &str,
-    body: impl Into<String>,
-    cookie: Option<&str>,
-) -> (StatusCode, String) {
-    ensure_server_fns_registered();
-
-    let mut builder = Request::builder()
-        .method("POST")
-        .uri(uri)
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
-    if let Some(c) = cookie {
-        builder = builder.header(header::COOKIE, c);
-    }
-    let request = builder.body(Body::from(body.into())).unwrap();
-
-    let app = jaunder::create_router(
-        test_options(),
-        state,
-        crate::helpers::noop_mailer(),
-        true,
-        crate::helpers::tmp_storage_path(),
-    );
-    let response = app.oneshot(request).await.unwrap();
-
-    let status = response.status();
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let body_str = String::from_utf8(bytes.to_vec()).unwrap();
-
-    (status, body_str)
 }
 
 async fn create_post_json(

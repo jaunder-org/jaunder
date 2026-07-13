@@ -1,56 +1,13 @@
 use std::sync::Arc;
 
-use axum::{
-    body::Body,
-    http::{header, Request, StatusCode},
-};
+use axum::http::StatusCode;
 use common::username::Username;
 use storage::ProfileUpdate;
-use tower::ServiceExt;
 
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{backends, ensure_server_fns_registered, test_options, Backend, TestEnv};
-
-async fn post_form(
-    state: Arc<storage::AppState>,
-    uri: &str,
-    body: impl Into<String>,
-    cookie: Option<&str>,
-) -> (StatusCode, Option<String>, String) {
-    ensure_server_fns_registered();
-
-    let mut builder = Request::builder()
-        .method("POST")
-        .uri(uri)
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
-    if let Some(c) = cookie {
-        builder = builder.header(header::COOKIE, c);
-    }
-    let request = builder.body(Body::from(body.into())).unwrap();
-
-    let app = jaunder::create_router(
-        test_options(),
-        state,
-        crate::helpers::noop_mailer(),
-        true,
-        crate::helpers::tmp_storage_path(),
-    );
-    let response = app.oneshot(request).await.unwrap();
-
-    let status = response.status();
-    let set_cookie = response
-        .headers()
-        .get(header::SET_COOKIE)
-        .map(|v| v.to_str().unwrap().to_string());
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let body_str = String::from_utf8(bytes.to_vec()).unwrap();
-
-    (status, set_cookie, body_str)
-}
+use crate::helpers::{backends, post_form, Backend, TestEnv};
 
 // ── Profile tests (M2.10.5, M2.10.6) ─────────────────────────────────────
 
@@ -87,8 +44,7 @@ async fn get_profile_returns_display_name_and_bio(#[case] backend: Backend) {
         .unwrap();
     let cookie = format!("session={token}");
 
-    let (status, _, body) =
-        post_form(Arc::clone(&state), "/api/get_profile", "", Some(&cookie)).await;
+    let (status, body) = post_form(Arc::clone(&state), "/api/get_profile", "", Some(&cookie)).await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(body.contains("Alice Smith"), "display_name missing: {body}");
@@ -121,7 +77,7 @@ async fn get_profile_with_email_returns_email(#[case] backend: Backend) {
         .unwrap();
     let cookie_header = format!("session={raw_token}");
 
-    let (status, _, body) = post_form(state, "/api/get_profile", "", Some(&cookie_header)).await;
+    let (status, body) = post_form(state, "/api/get_profile", "", Some(&cookie_header)).await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("user@example.com"));
 }
@@ -148,7 +104,7 @@ async fn update_profile_persists_changes(#[case] backend: Backend) {
         .unwrap();
     let cookie = format!("session={token}");
 
-    let (status, _, _) = post_form(
+    let (status, _) = post_form(
         Arc::clone(&state),
         "/api/update_profile",
         "display_name=Robert&bio=My+bio",
@@ -157,8 +113,7 @@ async fn update_profile_persists_changes(#[case] backend: Backend) {
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    let (status, _, body) =
-        post_form(Arc::clone(&state), "/api/get_profile", "", Some(&cookie)).await;
+    let (status, body) = post_form(Arc::clone(&state), "/api/get_profile", "", Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(
         body.contains("Robert"),
@@ -209,7 +164,7 @@ async fn list_sessions_returns_only_authenticated_users_sessions(#[case] backend
         .unwrap();
 
     let cookie = format!("session={token1}");
-    let (status, _, body) =
+    let (status, body) =
         post_form(Arc::clone(&state), "/api/list_sessions", "", Some(&cookie)).await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
@@ -269,7 +224,7 @@ async fn revoke_session_removes_session_and_reauth_fails(#[case] backend: Backen
             })
             .collect::<String>()
     );
-    let (status, _, _) = post_form(
+    let (status, _) = post_form(
         Arc::clone(&state),
         "/api/revoke_session",
         body,
@@ -313,7 +268,7 @@ async fn create_invite_appears_in_list_invites(#[case] backend: Backend) {
         .unwrap();
     let cookie = format!("session={token}");
 
-    let (status, _, body) = post_form(
+    let (status, body) = post_form(
         Arc::clone(&state),
         "/api/create_invite",
         "expires_in_hours=24",
@@ -329,7 +284,7 @@ async fn create_invite_appears_in_list_invites(#[case] backend: Backend) {
     );
     let code = &trimmed[1..trimmed.len() - 1];
 
-    let (status, _, list_body) =
+    let (status, list_body) =
         post_form(Arc::clone(&state), "/api/list_invites", "", Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "list_invites failed: {list_body}");
     assert!(
@@ -344,7 +299,7 @@ async fn create_invite_appears_in_list_invites(#[case] backend: Backend) {
 async fn create_invite_unauthorized_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, _, _) = post_form(Arc::clone(&state), "/api/create_invite", "", None).await;
+    let (status, _) = post_form(Arc::clone(&state), "/api/create_invite", "", None).await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
@@ -371,7 +326,7 @@ async fn create_invite_large_hours_returns_error(#[case] backend: Backend) {
         .unwrap();
     let cookie = format!("session={token}");
 
-    let (status1, _, _) = post_form(
+    let (status1, _) = post_form(
         Arc::clone(&state),
         "/api/create_invite",
         "expires_in_hours=24",
@@ -381,7 +336,7 @@ async fn create_invite_large_hours_returns_error(#[case] backend: Backend) {
     assert_eq!(status1, StatusCode::OK);
 
     // This should fail due to u64 -> i64 conversion.
-    let (status2, _, _) = post_form(
+    let (status2, _) = post_form(
         Arc::clone(&state),
         "/api/create_invite",
         "expires_in_hours=18446744073709551615", // u64::MAX
@@ -414,7 +369,7 @@ async fn revoke_session_unknown_hash_returns_error(#[case] backend: Backend) {
         .unwrap();
     let cookie = format!("session={token}");
 
-    let (_status, _, _) = post_form(
+    let (_status, _) = post_form(
         Arc::clone(&state),
         "/api/revoke_session",
         "token_hash=nonexistenthash",
@@ -464,7 +419,7 @@ async fn revoke_session_other_user_hash_returns_error(#[case] backend: Backend) 
     let record2 = state.sessions.authenticate(&token2).await.unwrap();
 
     let cookie1 = format!("session={token1}");
-    let (status, _, _) = post_form(
+    let (status, _) = post_form(
         Arc::clone(&state),
         "/api/revoke_session",
         format!("token_hash={}", record2.token_hash),
@@ -499,8 +454,7 @@ async fn list_invites_returns_error_when_policy_not_invite_only(#[case] backend:
         .unwrap();
     let cookie = format!("session={token}");
 
-    let (status, _, _) =
-        post_form(Arc::clone(&state), "/api/list_invites", "", Some(&cookie)).await;
+    let (status, _) = post_form(Arc::clone(&state), "/api/list_invites", "", Some(&cookie)).await;
     assert_ne!(
         status,
         StatusCode::OK,
@@ -513,7 +467,7 @@ async fn list_invites_returns_error_when_policy_not_invite_only(#[case] backend:
 async fn get_profile_unauthorized_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, _, _) = post_form(state, "/api/get_profile", "", None).await;
+    let (status, _) = post_form(state, "/api/get_profile", "", None).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
 
@@ -522,7 +476,7 @@ async fn get_profile_unauthorized_returns_error(#[case] backend: Backend) {
 async fn update_profile_unauthorized_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, _, _) = post_form(
+    let (status, _) = post_form(
         state,
         "/api/update_profile",
         "display_name=New&bio=Bio",
@@ -567,7 +521,7 @@ async fn update_profile_with_empty_fields_sets_to_none(#[case] backend: Backend)
         .unwrap();
     let cookie_header = format!("session={raw_token}");
 
-    let (status, _, _) = post_form(
+    let (status, _) = post_form(
         Arc::clone(&state),
         "/api/update_profile",
         "display_name=&bio=",
