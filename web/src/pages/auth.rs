@@ -11,7 +11,7 @@ use leptos::prelude::*;
 pub fn RegisterPage() -> impl IntoView {
     let register_action = ServerAction::<Register>::new();
     let policy = crate::server_resource(|| (), |()| get_registration_policy());
-    let username = RwSignal::new(String::new());
+    let username = Field::<Username>::new();
 
     // Mirror the new session into the advisory auth marker (#181, ADR-0044): on a
     // successful register the client knows the submitted username, so pre-paint
@@ -19,7 +19,7 @@ pub fn RegisterPage() -> impl IntoView {
     // still owns the real session cookie.
     Effect::new(move |_| {
         if let Some(Ok(_)) = register_action.value().get() {
-            crate::auth::marker::set(&username.get_untracked());
+            crate::auth::marker::set(&username.value.get_untracked());
         }
     });
 
@@ -39,19 +39,15 @@ pub fn RegisterPage() -> impl IntoView {
                                     <h2>"Create an account"</h2>
                                 </div>
                                 <div class="j-form-body">
-                                    <label class="j-form-field">
-                                        <span class="j-form-label">"Username"</span>
-                                        <input
-                                            class="j-form-input"
-                                            type="text"
-                                            name="username"
-                                            autocomplete="username"
-                                            prop:value=username
-                                            on:input=move |ev| {
-                                                username.set(event_target_value(&ev).to_lowercase());
-                                            }
-                                        />
-                                    </label>
+                                    <ValidatedInput<
+                                    Username,
+                                >
+                                        label="Username"
+                                        name="username"
+                                        autocomplete="username"
+                                        field=username
+                                        transform=str::to_lowercase
+                                    />
                                     <label class="j-form-field">
                                         <span class="j-form-label">"Password"</span>
                                         <input
@@ -76,7 +72,11 @@ pub fn RegisterPage() -> impl IntoView {
                                         })}
                                 </div>
                                 <div class="j-form-actions">
-                                    <button type="submit" class="j-btn is-primary">
+                                    <button
+                                        type="submit"
+                                        class="j-btn is-primary"
+                                        prop:disabled=move || !username.is_valid()
+                                    >
                                         "Register"
                                     </button>
                                 </div>
