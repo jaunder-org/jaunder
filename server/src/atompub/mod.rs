@@ -5,6 +5,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
+use common::username::Username;
 use storage::SiteConfigStorage;
 use web::auth::AuthUser;
 
@@ -102,8 +103,11 @@ fn atompub_result(status: StatusCode) -> host::metrics::AtompubResult {
 /// `AtomPub` collection handlers are addressed by `{username}`; a user may only
 /// act on their own resources, so a mismatch yields `403 Forbidden`. The member
 /// handlers fold the same check into `owned_post`.
-pub(crate) fn require_user_match(auth_user: &AuthUser, username: &str) -> Result<(), HandlerError> {
-    if auth_user.username == username {
+pub(crate) fn require_user_match(
+    auth_user: &AuthUser,
+    username: &Username,
+) -> Result<(), HandlerError> {
+    if auth_user.username == *username {
         Ok(())
     } else {
         Err(HandlerError::Forbidden)

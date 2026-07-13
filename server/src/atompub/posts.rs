@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use common::atompub::{entry_from_xml, entry_to_xml, render_feed, FeedMeta};
+use common::username::Username;
 use common::visibility::ViewerIdentity;
 use storage::{
     CollectionCursor, PostRecord, PostStorage, SiteConfigStorage, SubscriptionStorage,
@@ -125,7 +126,7 @@ pub async fn collection_get(
     Extension(posts): Extension<Arc<dyn PostStorage>>,
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     auth_user: AuthUser,
-    Path(username): Path<String>,
+    Path(username): Path<Username>,
     Query(paging): Query<CollectionPaging>,
 ) -> Result<Response, HandlerError> {
     super::require_user_match(&auth_user, &username)?;
@@ -222,7 +223,7 @@ async fn owned_post(
     posts: &dyn PostStorage,
     subscriptions: &dyn SubscriptionStorage,
     auth_user: &AuthUser,
-    username: &str,
+    username: &Username,
     post_id: i64,
 ) -> Result<PostRecord, HandlerError> {
     super::require_user_match(auth_user, username)?;
@@ -250,7 +251,7 @@ pub async fn member_get(
     Extension(subscriptions): Extension<Arc<dyn SubscriptionStorage>>,
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     auth_user: AuthUser,
-    Path((username, post_id)): Path<(String, i64)>,
+    Path((username, post_id)): Path<(Username, i64)>,
 ) -> Result<Response, HandlerError> {
     let post = owned_post(
         posts.as_ref(),
@@ -308,7 +309,7 @@ pub async fn member_delete(
     Extension(posts): Extension<Arc<dyn PostStorage>>,
     Extension(subscriptions): Extension<Arc<dyn SubscriptionStorage>>,
     auth_user: AuthUser,
-    Path((username, post_id)): Path<(String, i64)>,
+    Path((username, post_id)): Path<(Username, i64)>,
     headers: HeaderMap,
 ) -> Result<Response, HandlerError> {
     let post = owned_post(
@@ -340,7 +341,7 @@ pub async fn member_delete(
 pub async fn collection_post(
     services: PostServices,
     auth_user: AuthUser,
-    Path(username): Path<String>,
+    Path(username): Path<Username>,
     headers: HeaderMap,
     body: String,
 ) -> Result<Response, HandlerError> {
@@ -464,7 +465,7 @@ fn post_entry_response(
 pub async fn member_put(
     services: PostServices,
     auth_user: AuthUser,
-    Path((username, post_id)): Path<(String, i64)>,
+    Path((username, post_id)): Path<(Username, i64)>,
     headers: HeaderMap,
     body: String,
 ) -> Result<Response, HandlerError> {

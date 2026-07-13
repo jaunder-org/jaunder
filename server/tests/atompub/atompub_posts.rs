@@ -566,6 +566,31 @@ async fn forbids_other_user(backend: Backend, #[case] request: ForbiddenRequest)
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
+// A malformed username path segment (`a@b` — `@` is outside `[a-z0-9_-]`) fails to
+// parse into `Username` at the axum boundary, so the request is rejected with 400
+// before any ownership check — contrast `forbids_other_user`, where a well-formed
+// but mismatched username reaches `require_user_match` and gets 403.
+#[apply(backends)]
+#[tokio::test]
+async fn malformed_username_path_returns_400(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
+    let (_user_id, token) = seed_alice(&state).await;
+    let app = make_app(state, &base);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/atompub/a@b/posts")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
 #[apply(backends)]
 #[tokio::test]
 async fn create_post_returns_201_and_is_retrievable(#[case] backend: Backend) {

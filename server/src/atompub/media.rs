@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 
 use common::atompub::{render_media_link_entry, MediaLinkEntry};
 use common::media::{media_url, sanitize_filename};
+use common::username::Username;
 use storage::{MediaRecord, MediaSource, MediaStorage, SiteConfigStorage};
 use web::auth::AuthUser;
 
@@ -20,7 +21,7 @@ use super::{base_url, HandlerError};
 const ENTRY_CONTENT_TYPE: &str = "application/atom+xml;type=entry;charset=utf-8";
 
 /// Builds the media-link entry for a stored media record.
-fn media_link_entry(record: &MediaRecord, base: &str, username: &str) -> MediaLinkEntry {
+fn media_link_entry(record: &MediaRecord, base: &str, username: &Username) -> MediaLinkEntry {
     let binary = format!(
         "{base}{}",
         media_url("upload", &record.sha256, &record.filename)
@@ -55,7 +56,7 @@ pub async fn collection_post(
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     Extension(storage_path): Extension<Arc<PathBuf>>,
     auth_user: AuthUser,
-    Path(username): Path<String>,
+    Path(username): Path<Username>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, HandlerError> {
@@ -127,7 +128,7 @@ pub async fn member_get(
     Extension(media): Extension<Arc<dyn MediaStorage>>,
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     auth_user: AuthUser,
-    Path((username, sha, filename)): Path<(String, String, String)>,
+    Path((username, sha, filename)): Path<(Username, String, String)>,
 ) -> Result<Response, HandlerError> {
     super::require_user_match(&auth_user, &username)?;
     let record = media
@@ -149,7 +150,7 @@ pub async fn member_get(
 pub async fn member_delete(
     Extension(media): Extension<Arc<dyn MediaStorage>>,
     auth_user: AuthUser,
-    Path((username, sha, filename)): Path<(String, String, String)>,
+    Path((username, sha, filename)): Path<(Username, String, String)>,
 ) -> Result<Response, HandlerError> {
     super::require_user_match(&auth_user, &username)?;
     media
