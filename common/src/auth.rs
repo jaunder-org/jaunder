@@ -28,7 +28,7 @@ pub fn parse_basic_auth(header: &str) -> Option<(String, String)> {
 /// by the caller.
 #[must_use]
 pub fn basic_username_matches(authenticated: &Username, expected: &str) -> bool {
-    authenticated.as_str() == expected
+    *authenticated == expected
 }
 
 #[cfg(test)]

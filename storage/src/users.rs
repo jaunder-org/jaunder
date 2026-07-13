@@ -232,7 +232,7 @@ where
     #[tracing::instrument(
         name = "storage.user.create_user",
         skip(self, password, display_name),
-        fields(username = %username.as_str(), db.system = DB::DB_SYSTEM)
+        fields(username = %username, db.system = DB::DB_SYSTEM)
     )]
     async fn create_user<'a>(
         &self,
@@ -256,7 +256,7 @@ where
              VALUES ($1, $2, $3, $4, $5)
              RETURNING user_id",
         )
-        .bind(username.as_str())
+        .bind(username.as_ref())
         .bind(password_hash.as_str())
         .bind(display_name)
         .bind(now)
@@ -280,7 +280,7 @@ where
     #[tracing::instrument(
         name = "storage.user.authenticate",
         skip(self, password),
-        fields(username = %username.as_str(), db.system = DB::DB_SYSTEM)
+        fields(username = %username, db.system = DB::DB_SYSTEM)
     )]
     async fn authenticate(
         &self,
@@ -306,7 +306,7 @@ where
                     password_hash, email, email_verified, is_operator
              FROM users WHERE username = $1",
         )
-        .bind(username.as_str())
+        .bind(username.as_ref())
         .fetch_optional(&self.pool)
         .instrument(tracing::info_span!(
             "storage.user.authenticate.lookup_user",
@@ -396,7 +396,7 @@ where
                     email, email_verified, is_operator
              FROM users WHERE username = $1",
         )
-        .bind(username.as_str())
+        .bind(username.as_ref())
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(user_record_from_row).transpose()?)

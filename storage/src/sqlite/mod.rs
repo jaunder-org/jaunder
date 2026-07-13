@@ -234,7 +234,7 @@ impl AtomicOps for SqliteAtomicOps {
                  VALUES ($1, $2, $3, $4, $5)
                  RETURNING user_id",
             )
-            .bind(username.as_str())
+            .bind(username.as_ref())
             .bind(&password_hash)
             .bind(display_name)
             .bind(now)

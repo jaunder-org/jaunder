@@ -27,7 +27,7 @@ pub async fn service_document(
     auth_user: AuthUser,
 ) -> Result<Response, HandlerError> {
     let base = base_url(site_config.as_ref()).await;
-    let username = auth_user.username.as_str();
+    let username = &*auth_user.username;
 
     let categories = posts
         .list_tags(None, 100)

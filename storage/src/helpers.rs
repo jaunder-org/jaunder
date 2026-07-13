@@ -428,7 +428,7 @@ mod tests {
         );
         let record = build_user_record(parts).unwrap();
         assert_eq!(record.user_id, 1);
-        assert_eq!(record.username.as_str(), "alice");
+        assert_eq!(record.username, "alice");
         assert_eq!(record.email.as_ref().unwrap().as_str(), "alice@example.com");
     }
 
@@ -445,7 +445,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(record.token_hash, "hash");
-        assert_eq!(record.username.as_str(), "alice");
+        assert_eq!(record.username, "alice");
     }
 
     #[test]
@@ -491,7 +491,7 @@ mod tests {
 
         assert_eq!(record.post_id, 10);
         assert_eq!(record.user_id, 20);
-        assert_eq!(record.author_username.as_str(), "alice");
+        assert_eq!(record.author_username, "alice");
         assert_eq!(record.slug.as_str(), "hello-world");
         assert_eq!(record.format, PostFormat::Markdown);
         assert_eq!(record.published_at, Some(now));
@@ -900,7 +900,7 @@ mod tests {
         );
         let record = user_record_from_row(row).unwrap();
         assert_eq!(record.user_id, 1);
-        assert_eq!(record.username.as_str(), "alice");
+        assert_eq!(record.username, "alice");
         assert_eq!(record.display_name, Some("Alice".to_string()));
         assert_eq!(record.bio, Some("Bio".to_string()));
         assert_eq!(record.created_at, now);

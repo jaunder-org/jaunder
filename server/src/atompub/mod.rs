@@ -103,7 +103,7 @@ fn atompub_result(status: StatusCode) -> host::metrics::AtompubResult {
 /// act on their own resources, so a mismatch yields `403 Forbidden`. The member
 /// handlers fold the same check into `owned_post`.
 pub(crate) fn require_user_match(auth_user: &AuthUser, username: &str) -> Result<(), HandlerError> {
-    if auth_user.username.as_str() == username {
+    if auth_user.username == username {
         Ok(())
     } else {
         Err(HandlerError::Forbidden)
