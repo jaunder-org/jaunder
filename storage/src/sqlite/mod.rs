@@ -50,6 +50,9 @@ pub use audiences::SqliteAudienceStorage;
 
 pub(crate) mod backup;
 
+#[cfg(test)]
+mod pool;
+
 use crate::db::sql_slow_query_threshold;
 use crate::{AppState, AtomicOps, ConfirmPasswordResetError, RegisterWithInviteError};
 use common::password::Password;

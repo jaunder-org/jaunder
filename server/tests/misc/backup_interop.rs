@@ -7,10 +7,7 @@ use tempfile::TempDir;
 
 use crate::backup_fixture::{assert_backup_fixture_restored, populate_backup_fixture};
 
-use rstest::*;
-use rstest_reuse::*;
-
-use crate::helpers::{postgres_only, unique_postgres_url, Backend, PostgresDbGuard};
+use crate::helpers::{unique_postgres_url, PostgresDbGuard};
 
 fn sqlite_storage_args(base: &TempDir, name: &str) -> StorageArgs {
     StorageArgs {
@@ -35,13 +32,9 @@ async fn postgres_storage_args(base: &TempDir, name: &str) -> (StorageArgs, Post
     )
 }
 
-#[apply(postgres_only)]
-// reason: cross-backend backup interop exercises BOTH engines in one test
-// (SQLite source restored into Postgres target), so it needs a live Postgres.
+// guard:low-level-db — cross-backend interop; drives both engines in one body and needs a live Postgres
 #[tokio::test]
-async fn sqlite_backup_restores_into_postgres(#[case] backend: Backend) {
-    let _ = backend;
-
+async fn sqlite_backup_restores_into_postgres() {
     let base = TempDir::new().expect("temp dir");
     let source_args = sqlite_storage_args(&base, "sqlite-source");
     cmd_init(&source_args, false)
@@ -69,13 +62,9 @@ async fn sqlite_backup_restores_into_postgres(#[case] backend: Backend) {
     assert_backup_fixture_restored(&target_args, &ids).await;
 }
 
-#[apply(postgres_only)]
-// reason: cross-backend backup interop exercises BOTH engines in one test
-// (Postgres source restored into SQLite target), so it needs a live Postgres.
+// guard:low-level-db — cross-backend interop; drives both engines in one body and needs a live Postgres
 #[tokio::test]
-async fn postgres_backup_restores_into_sqlite(#[case] backend: Backend) {
-    let _ = backend;
-
+async fn postgres_backup_restores_into_sqlite() {
     let base = TempDir::new().expect("temp dir");
     let (source_args, _pg_source) = postgres_storage_args(&base, "postgres-source").await;
     cmd_init(&source_args, false)
@@ -150,54 +139,65 @@ fn manifest_without_timestamp(dir: &Path) -> serde_json::Value {
 // dump pairs stay byte-identical. (Seeding from SQLite instead would lose sub-µs precision
 // of `created_at`/`updated_at` on the first SQLite→Postgres hop — see ADR-0054 DEC-D — and
 // only the Postgres pair would be byte-comparable.)
-#[apply(postgres_only)]
-// reason: the cross-backend cycle exercises BOTH engines in one test, so it needs a live Postgres.
+// guard:low-level-db — cross-backend interop; drives both engines in one body and needs a live Postgres
 #[tokio::test]
-async fn backup_round_trips_full_cycle_across_backends(#[case] backend: Backend) {
-    let _ = backend;
-
+async fn backup_round_trips_full_cycle_across_backends() {
     let base = TempDir::new().expect("temp dir");
 
     // P1 (postgres): seed, export E_P1.
     let (p1, _pg_p1) = postgres_storage_args(&base, "p1").await;
     cmd_init(&p1, false).await.expect("init p1");
     let ids = populate_backup_fixture(&p1).await;
-    let dir_p1 = base.path().join("dir-p1");
-    cmd_backup(&p1, BackupMode::Directory, Some(dir_p1.clone()))
+    let pg_seed_export = base.path().join("dir-p1");
+    cmd_backup(&p1, BackupMode::Directory, Some(pg_seed_export.clone()))
         .await
         .expect("backup p1");
 
     // S1 (sqlite): restore, assert, export E_S1.
     let s1 = sqlite_storage_args(&base, "s1");
     cmd_init(&s1, false).await.expect("init s1");
-    cmd_restore(&s1, &dir_p1).await.expect("restore into s1");
-    assert_backup_fixture_restored(&s1, &ids).await;
-    let dir_s1 = base.path().join("dir-s1");
-    cmd_backup(&s1, BackupMode::Directory, Some(dir_s1.clone()))
+    cmd_restore(&s1, &pg_seed_export)
         .await
-        .expect("backup s1");
+        .expect("restore into s1");
+    assert_backup_fixture_restored(&s1, &ids).await;
+    let sqlite_relay_export = base.path().join("dir-s1");
+    cmd_backup(
+        &s1,
+        BackupMode::Directory,
+        Some(sqlite_relay_export.clone()),
+    )
+    .await
+    .expect("backup s1");
 
     // P2 (postgres): restore, assert, export E_P2.
     let (p2, _pg_p2) = postgres_storage_args(&base, "p2").await;
     cmd_init(&p2, false).await.expect("init p2");
-    cmd_restore(&p2, &dir_s1).await.expect("restore into p2");
+    cmd_restore(&p2, &sqlite_relay_export)
+        .await
+        .expect("restore into p2");
     assert_backup_fixture_restored(&p2, &ids).await;
-    let dir_p2 = base.path().join("dir-p2");
-    cmd_backup(&p2, BackupMode::Directory, Some(dir_p2.clone()))
+    let pg_return_export = base.path().join("dir-p2");
+    cmd_backup(&p2, BackupMode::Directory, Some(pg_return_export.clone()))
         .await
         .expect("backup p2");
 
     // S2 (sqlite): restore, assert, export E_S2.
     let s2 = sqlite_storage_args(&base, "s2");
     cmd_init(&s2, false).await.expect("init s2");
-    cmd_restore(&s2, &dir_p2).await.expect("restore into s2");
-    assert_backup_fixture_restored(&s2, &ids).await;
-    let dir_s2 = base.path().join("dir-s2");
-    cmd_backup(&s2, BackupMode::Directory, Some(dir_s2.clone()))
+    cmd_restore(&s2, &pg_return_export)
         .await
-        .expect("backup s2");
+        .expect("restore into s2");
+    assert_backup_fixture_restored(&s2, &ids).await;
+    let sqlite_final_export = base.path().join("dir-s2");
+    cmd_backup(
+        &s2,
+        BackupMode::Directory,
+        Some(sqlite_final_export.clone()),
+    )
+    .await
+    .expect("backup s2");
 
     // Both same-backend dump pairs are byte-identical — nothing drifts across the cycle.
-    assert_backups_equal(&dir_p1, &dir_p2);
-    assert_backups_equal(&dir_s1, &dir_s2);
+    assert_backups_equal(&pg_seed_export, &pg_return_export);
+    assert_backups_equal(&sqlite_relay_export, &sqlite_final_export);
 }

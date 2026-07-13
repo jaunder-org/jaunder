@@ -52,6 +52,15 @@ pub use bootstrap::{create_postgres_database_and_role, PgBootstrapError};
 
 pub(crate) mod backup;
 
+#[cfg(test)]
+mod migrations;
+
+#[cfg(test)]
+mod schema;
+
+#[cfg(test)]
+mod teardown;
+
 use crate::{AtomicOps, ConfirmPasswordResetError, RegisterWithInviteError};
 use common::password::Password;
 use common::username::Username;

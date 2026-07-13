@@ -13,7 +13,6 @@ use jaunder::commands::{
     cmd_smtp_test, cmd_user_create, cmd_user_invite, prepare_server,
 };
 use leptos::prelude::LeptosOptions;
-use sqlx::Connection;
 use storage::{open_database, open_existing_database, BackupMode};
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -25,8 +24,7 @@ use crate::backup_fixture::{
     assert_backup_fixture_restored, assert_target_unmodified, populate_backup_fixture,
 };
 use crate::helpers::{
-    backends, nonexistent_postgres_url, postgres_bootstrap_url, postgres_only,
-    postgres_test_authority, sqlite_url, unique_postgres_url, Backend, PostgresDbGuard,
+    backends, nonexistent_postgres_url, sqlite_url, unique_postgres_url, Backend, PostgresDbGuard,
 };
 
 async fn storage_args(backend: Backend, base: &TempDir) -> (StorageArgs, Option<PostgresDbGuard>) {
@@ -112,124 +110,6 @@ async fn cmd_create_pg_db_rejects_non_postgres_urls() {
     .await
     .unwrap_err();
     assert!(err.to_string().contains("PostgreSQL URL"));
-}
-
-#[apply(postgres_only)]
-#[tokio::test]
-async fn cmd_create_pg_db_provisions_role_and_database(#[case] backend: Backend) {
-    // reason: provisions a Postgres role/database (needs PG admin/bootstrap); intrinsically Postgres.
-    let _ = backend;
-    let suffix = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let role_name = format!("jaunder_role_{suffix}");
-    let db_name = format!("jaunder_db_{suffix}");
-
-    let bootstrap = postgres_bootstrap_url();
-    let authority = postgres_test_authority();
-    let app = format!("postgres://{role_name}@{authority}/{db_name}");
-
-    let mut admin_conn = sqlx::PgConnection::connect(&bootstrap).await.unwrap();
-    sqlx::query(&format!("DROP DATABASE IF EXISTS \"{db_name}\""))
-        .execute(&mut admin_conn)
-        .await
-        .unwrap();
-    sqlx::query(&format!("DROP ROLE IF EXISTS \"{role_name}\""))
-        .execute(&mut admin_conn)
-        .await
-        .unwrap();
-
-    cmd_create_pg_db(&bootstrap, &app, "bootstrap-secret")
-        .await
-        .unwrap();
-
-    let role_exists =
-        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $1)")
-            .bind(&role_name)
-            .fetch_one(&mut admin_conn)
-            .await
-            .unwrap();
-    assert!(role_exists);
-
-    let owner = sqlx::query_scalar::<_, Option<String>>(
-        "SELECT owner.rolname
-         FROM pg_database db
-         JOIN pg_roles owner ON owner.oid = db.datdba
-         WHERE db.datname = $1",
-    )
-    .bind(&db_name)
-    .fetch_optional(&mut admin_conn)
-    .await
-    .unwrap()
-    .flatten();
-    assert_eq!(owner.as_deref(), Some(role_name.as_str()));
-
-    let storage_path = TempDir::new().unwrap();
-    let args = StorageArgs {
-        storage_path: storage_path.path().join("storage"),
-        db: app.parse().unwrap(),
-    };
-    cmd_init(&args, false).await.unwrap();
-
-    sqlx::query(&format!("DROP DATABASE IF EXISTS \"{db_name}\""))
-        .execute(&mut admin_conn)
-        .await
-        .unwrap();
-    sqlx::query(&format!("DROP ROLE IF EXISTS \"{role_name}\""))
-        .execute(&mut admin_conn)
-        .await
-        .unwrap();
-}
-
-#[apply(postgres_only)]
-#[tokio::test]
-async fn cmd_create_pg_db_fails_if_role_already_exists(#[case] backend: Backend) {
-    // reason: provisions a Postgres role/database (needs PG admin/bootstrap); intrinsically Postgres.
-    let _ = backend;
-    let suffix = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let role_name = format!("jaunder_role_{suffix}");
-    let db_name = format!("jaunder_db_{suffix}");
-
-    let bootstrap = postgres_bootstrap_url();
-    let authority = postgres_test_authority();
-    let app = format!("postgres://{role_name}@{authority}/{db_name}");
-
-    let mut admin_conn = sqlx::PgConnection::connect(&bootstrap).await.unwrap();
-    sqlx::query(&format!("DROP DATABASE IF EXISTS \"{db_name}\""))
-        .execute(&mut admin_conn)
-        .await
-        .unwrap();
-    sqlx::query(&format!("DROP ROLE IF EXISTS \"{role_name}\""))
-        .execute(&mut admin_conn)
-        .await
-        .unwrap();
-    sqlx::query(&format!("CREATE ROLE \"{role_name}\" LOGIN"))
-        .execute(&mut admin_conn)
-        .await
-        .unwrap();
-
-    let err = cmd_create_pg_db(&bootstrap, &app, "bootstrap-secret")
-        .await
-        .unwrap_err();
-    assert!(err.to_string().contains("already exists"));
-
-    let db_exists = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)",
-    )
-    .bind(&db_name)
-    .fetch_one(&mut admin_conn)
-    .await
-    .unwrap();
-    assert!(!db_exists);
-
-    sqlx::query(&format!("DROP ROLE IF EXISTS \"{role_name}\""))
-        .execute(&mut admin_conn)
-        .await
-        .unwrap();
 }
 
 // M1.5.4: cmd_serve fails with an appropriate error when the storage path has

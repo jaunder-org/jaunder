@@ -12,5 +12,5 @@ mod backup_interop;
 mod cli_subprocess;
 mod commands;
 mod media_handlers;
-mod pg_teardown;
+mod postgres;
 mod static_assets;

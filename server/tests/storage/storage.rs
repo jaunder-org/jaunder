@@ -8,10 +8,10 @@ use common::visibility::{
 use sqlx::{PgPool, SqlitePool};
 use std::sync::Arc;
 use storage::{
-    create_rendered_post, open_database, open_existing_database, perform_post_update,
-    update_rendered_post, AppState, AudienceError, ConfirmPasswordResetError, CreatePostError,
-    CreatePostInput, CreateUserError, DbConnectOptions, FeedCacheRow, GoLivePost, ListByTagError,
-    PermalinkDate, PostCursor, PostFormat, PostUpdate, ProfileUpdate, PublishUpdate,
+    create_rendered_post, open_database, perform_post_update, update_rendered_post, AppState,
+    AudienceError, ConfirmPasswordResetError, CreatePostError, CreatePostInput, CreateUserError,
+    DbConnectOptions, FeedCacheRow, GoLivePost, ListByTagError, PermalinkDate, PostCursor,
+    PostFormat, PostUpdate, PostgresSubscriptionStorage, ProfileUpdate, PublishUpdate,
     RegisterWithInviteError, RenderedPostContent, RenderedPostUpdate, SessionAuthError,
     SqliteSubscriptionStorage, SubscriptionStorage, TaggingError, UpdatePostError, UpdatePostInput,
     UseEmailVerificationError, UseInviteError, UsePasswordResetError, UserAuthError,
@@ -27,8 +27,8 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{
-    backends, postgres_only, recorded_postgres_url, sqlite_only, sqlite_url, template_postgres_url,
-    unique_postgres_url, Backend, PostgresDbGuard, TestEnv,
+    backends, recorded_postgres_url, sqlite_url, template_postgres_url, Backend, PostgresDbGuard,
+    TestEnv,
 };
 
 // The Postgres-backed cases below (the `::postgres` expansion of each
@@ -137,30 +137,6 @@ async fn statuses_seed_maps_to_enum(#[case] backend: Backend) {
     );
 }
 
-// Foreign-key enforcement is per-connection in SQLite. sqlx's
-// `SqliteConnectOptions` defaults `foreign_keys` to ON, so every pooled
-// connection (app and test) enforces FKs. The composite same-owner FKs added in
-// later content-visibility phases depend on that, so this is a regression guard:
-// a child-row insert referencing a non-existent parent must be rejected. It would
-// fail if anyone disabled `foreign_keys` on the pool or a sqlx change dropped the
-// default.
-#[apply(sqlite_only)]
-#[tokio::test]
-async fn sqlite_pool_enforces_foreign_keys(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let pool = open_pool(&env.base).await; // FK-enforcing pool (sqlx default)
-    let result = sqlx::query(
-        "INSERT INTO post_revisions (post_id, user_id, title, slug, body, format, rendered_html)
-         VALUES (999999, 999999, 't', 's', 'b', 'markdown', '<p>b</p>')",
-    )
-    .execute(&pool)
-    .await;
-    assert!(
-        result.is_err(),
-        "FK violation must be rejected when foreign_keys is ON"
-    );
-}
-
 // Sibling of `lookup_names`: a raw SELECT of the seeded `local` channel id.
 // The `local` channel is a lookup row present in every clone, so reading it via
 // the per-test recorded URL (Postgres) or the same DB file (SQLite) both work;
@@ -260,8 +236,7 @@ async fn subscribe_is_idempotent_and_active(#[case] backend: Backend) {
 // subscription a stricter policy left `pending` must NOT be admitted. The
 // default `state.subscriptions` uses `OpenSubscriptionPolicy` (always active),
 // so we construct the store directly with a stub policy returning `Pending`.
-// This is pure policy-dispatch + status resolution, so SQLite-only suffices.
-#[apply(sqlite_only)]
+#[apply(backends)]
 #[tokio::test]
 async fn pending_subscription_is_not_admitted(#[case] backend: Backend) {
     struct StubPending;
@@ -272,15 +247,32 @@ async fn pending_subscription_is_not_admitted(#[case] backend: Backend) {
     }
 
     let env = backend.setup().await;
-    let pool = open_pool(&env.base).await; // same DB file as env.state
-                                           // Only `active` is seeded this milestone (M13 adds `pending`). Seed the
-                                           // `pending` lookup row locally so `subscribe` can persist a pending row and
-                                           // we can prove `is_subscriber` still excludes it (the fail-closed property).
-    sqlx::query("INSERT INTO subscription_statuses (name) VALUES ('pending')")
-        .execute(&pool)
-        .await
-        .unwrap();
-    let store = SqliteSubscriptionStorage::new(pool, Arc::new(StubPending));
+    // Only `active` is seeded this milestone (M13 adds `pending`). Seed the
+    // `pending` lookup row locally so `subscribe` can persist a pending row and
+    // we can prove `is_subscriber` still excludes it (the fail-closed property).
+    // Build the store over the *same* per-test database as `env.state`, with the
+    // stub `Pending` policy, per backend.
+    let store: Box<dyn SubscriptionStorage> = match backend {
+        Backend::Sqlite => {
+            let pool = open_pool(&env.base).await; // same DB file as env.state
+            sqlx::query("INSERT INTO subscription_statuses (name) VALUES ('pending')")
+                .execute(&pool)
+                .await
+                .unwrap();
+            Box::new(SqliteSubscriptionStorage::new(pool, Arc::new(StubPending)))
+        }
+        Backend::Postgres => {
+            let pool = env.base.pool().postgres().clone(); // same DB as env.state
+            sqlx::query("INSERT INTO subscription_statuses (name) VALUES ('pending')")
+                .execute(&pool)
+                .await
+                .unwrap();
+            Box::new(PostgresSubscriptionStorage::new(
+                pool,
+                Arc::new(StubPending),
+            ))
+        }
+    };
     let author = env
         .state
         .users
@@ -963,50 +955,16 @@ fn unsupported_url_is_rejected_at_parse_time() {
     assert!(result.is_err());
 }
 
-#[apply(postgres_only)]
-#[tokio::test]
-async fn open_database_succeeds_on_postgres_test_vm(#[case] backend: Backend) {
-    // Backend-specific: exercises the Postgres migration path on a fresh DB,
-    // so it opens its own `unique_postgres_url()` rather than using `env.state`.
-    let _ = backend;
-    let (url, _pg) = unique_postgres_url().await;
-    open_database(&url).await.unwrap();
-}
-
-#[apply(postgres_only)]
-#[tokio::test]
-async fn open_database_runs_postgres_migrations_on_existing_empty_db(#[case] backend: Backend) {
-    // Backend-specific: exercises the Postgres migration path on a fresh DB,
-    // so it opens its own `unique_postgres_url()` rather than using `env.state`.
-    let _ = backend;
-    let (url, _pg) = unique_postgres_url().await;
-    let state = open_database(&url).await.unwrap();
-    assert_eq!(state.site_config.get("missing").await.unwrap(), None);
-}
-
-#[apply(postgres_only)]
-#[tokio::test]
-async fn open_existing_database_runs_postgres_migrations_on_unmigrated_db(
-    #[case] backend: Backend,
-) {
-    // Backend-specific: exercises the Postgres migration path on a fresh DB,
-    // so it opens its own `unique_postgres_url()` rather than using `env.state`.
-    let _ = backend;
-    let (url, _pg) = unique_postgres_url().await;
-    let state = open_existing_database(&url).await.unwrap();
-    assert_eq!(state.site_config.get("missing").await.unwrap(), None);
-}
-
-#[apply(postgres_only)]
+#[apply(backends)]
 #[tokio::test]
 async fn feed_events_marks_run(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let fe = &state.feed_events;
 
-    // Enqueue + claim to obtain real ids, then exercise every Postgres
-    // FeedEventDialect mark_* method. Each is an independent
-    // `UPDATE … WHERE id = ANY($n)`, so they all run regardless of row state.
+    // Enqueue + claim to obtain real ids, then exercise every
+    // FeedEventDialect mark_* method on this backend. Each is an independent
+    // `UPDATE … WHERE id IN (…)`, so they all run regardless of row state.
     fe.enqueue("/feed-marks.rss").await.unwrap();
     let claimed = fe
         .claim_pending_batch(50, chrono::Duration::minutes(5))
@@ -7497,30 +7455,6 @@ async fn raw_scalar_i64(backend: Backend, env: &TestEnv, sql: &str) -> i64 {
                 .unwrap()
         }
     }
-}
-
-// Every foreign key must be DEFERRABLE so a restore can `SET CONSTRAINTS ALL
-// DEFERRED` and bulk-load rows in any order, with integrity verified once at
-// COMMIT. This pins that migration 0024 left no NOT DEFERRABLE foreign key
-// behind — the invariant the order-independent Postgres restore relies on.
-#[apply(postgres_only)]
-// reason: FK deferrability is a Postgres catalog property (pg_constraint.condeferrable);
-// SQLite enforces FKs per-connection and has no equivalent, so this is Postgres-only.
-#[tokio::test]
-async fn every_foreign_key_is_deferrable(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let non_deferrable = raw_scalar_i64(
-        backend,
-        &env,
-        "SELECT COUNT(*) FROM pg_constraint \
-         WHERE contype = 'f' AND connamespace = 'public'::regnamespace \
-           AND NOT condeferrable",
-    )
-    .await;
-    assert_eq!(
-        non_deferrable, 0,
-        "every foreign key must be DEFERRABLE so restore can SET CONSTRAINTS ALL DEFERRED"
-    );
 }
 
 // The same-owner invariant (an audience and a subscription paired in
