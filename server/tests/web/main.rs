@@ -8,6 +8,7 @@
 mod helpers;
 
 mod audiences;
+mod router;
 mod web_account;
 mod web_auth;
 mod web_backup;
