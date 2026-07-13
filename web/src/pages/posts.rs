@@ -321,14 +321,15 @@ fn SubscribeButton(username: Username) -> impl IntoView {
 #[component]
 pub fn UserTimelinePage() -> impl IntoView {
     let params = use_params_map();
+    // Parse the `~username` route segment into `Username` once, at the source; an
+    // invalid segment is `None` and every consumer handles the absence.
     let username = Memo::new(move |_| {
         params
             .get()
             .get("username")
             .unwrap_or_default()
             .strip_prefix('~')
-            .unwrap_or_default()
-            .to_string()
+            .and_then(|s| s.parse::<Username>().ok())
     });
 
     let mutate_version = RwSignal::new(0u32);
@@ -337,9 +338,7 @@ pub fn UserTimelinePage() -> impl IntoView {
     let initial_page = crate::server_resource(
         move || (username.get(), mutate_version.get()),
         |(username, _)| async move {
-            let username = username
-                .parse::<Username>()
-                .map_err(|_| WebError::validation("Invalid username"))?;
+            let username = username.ok_or_else(|| WebError::validation("Invalid username"))?;
             list_user_posts(username, None, None, Some(50)).await
         },
     );
@@ -361,7 +360,7 @@ pub fn UserTimelinePage() -> impl IntoView {
         page,
     }) = use_context::<Option<crate::render::PageSeed>>().flatten()
     {
-        if seed_user == username.get_untracked().as_str() {
+        if username.get_untracked().as_ref() == Some(&seed_user) {
             next_cursor_created_at.set(page.next_cursor_created_at);
             next_cursor_post_id.set(page.next_cursor_post_id);
             has_more.set(page.has_more);
@@ -415,7 +414,7 @@ pub fn UserTimelinePage() -> impl IntoView {
     });
 
     let on_load_more = move |_| {
-        let Ok(username) = username.get_untracked().parse::<Username>() else {
+        let Some(username) = username.get_untracked() else {
             return;
         };
         if !has_more.get_untracked() {
@@ -429,7 +428,9 @@ pub fn UserTimelinePage() -> impl IntoView {
         });
     };
 
-    let display_username = move || read_signal!(username);
+    // The heading shows the canonical (parsed, lowercased) username, or empty for an
+    // invalid segment — the page renders a validation error in that case anyway.
+    let display_username = move || username.get().map(String::from).unwrap_or_default();
     let read_error = move || read_signal!(error);
     let read_initial_loaded = move || read_signal!(initial_loaded);
     let read_timeline = move || read_signal!(timeline);
@@ -440,8 +441,6 @@ pub fn UserTimelinePage() -> impl IntoView {
         {move || {
             username
                 .get()
-                .parse::<Username>()
-                .ok()
                 .map(|username| {
                     view! {
                         <FeedDiscovery surface=FeedSurface::User {
@@ -458,11 +457,7 @@ pub fn UserTimelinePage() -> impl IntoView {
         <div class="j-scroll">
             <div class="j-page">
                 {move || {
-                    username
-                        .get()
-                        .parse::<Username>()
-                        .ok()
-                        .map(|username| view! { <SubscribeButton username=username /> })
+                    username.get().map(|username| view! { <SubscribeButton username=username /> })
                 }}
                 {move || {
                     if let Some(err) = read_error() {
@@ -1232,14 +1227,15 @@ pub fn SiteTagPage() -> impl IntoView {
 #[component]
 pub fn UserTagPage() -> impl IntoView {
     let params = use_params_map();
+    // Parse the `~username` route segment into `Username` once, at the source; an
+    // invalid segment is `None` and every consumer handles the absence.
     let username = Memo::new(move |_| {
         params
             .get()
             .get("username")
             .unwrap_or_default()
             .strip_prefix('~')
-            .unwrap_or_default()
-            .to_string()
+            .and_then(|s| s.parse::<Username>().ok())
     });
     let tag = Memo::new(move |_| params.get().get("tag").unwrap_or_default().to_lowercase());
 
@@ -1249,9 +1245,7 @@ pub fn UserTagPage() -> impl IntoView {
     let initial_page = crate::server_resource(
         move || (username.get(), tag.get(), mutate_version.get()),
         |(username, tag, _)| async move {
-            let username = username
-                .parse::<Username>()
-                .map_err(|_| WebError::validation("Invalid username"))?;
+            let username = username.ok_or_else(|| WebError::validation("Invalid username"))?;
             if tag.is_empty() {
                 return Err(WebError::validation("Invalid tag"));
             }
@@ -1274,7 +1268,8 @@ pub fn UserTagPage() -> impl IntoView {
         page,
     }) = use_context::<Option<crate::render::PageSeed>>().flatten()
     {
-        if seed_user == username.get_untracked().as_str() && seed_tag == tag.get_untracked() {
+        if username.get_untracked().as_ref() == Some(&seed_user) && seed_tag == tag.get_untracked()
+        {
             next_cursor_created_at.set(page.next_cursor_created_at);
             next_cursor_post_id.set(page.next_cursor_post_id);
             has_more.set(page.has_more);
@@ -1322,7 +1317,7 @@ pub fn UserTagPage() -> impl IntoView {
     });
 
     let on_load_more = move |_| {
-        let Ok(username_value) = username.get_untracked().parse::<Username>() else {
+        let Some(username_value) = username.get_untracked() else {
             return;
         };
         let tag_value = tag.get_untracked();
@@ -1338,7 +1333,9 @@ pub fn UserTagPage() -> impl IntoView {
         });
     };
 
-    let read_username = move || read_signal!(username);
+    // Canonical (parsed, lowercased) username for the heading, or empty for an
+    // invalid segment — the page renders a validation error in that case anyway.
+    let read_username = move || username.get().map(String::from).unwrap_or_default();
     let read_tag = move || read_signal!(tag);
     let read_error = move || read_signal!(error);
     let read_initial_loaded = move || read_signal!(initial_loaded);
@@ -1351,8 +1348,6 @@ pub fn UserTagPage() -> impl IntoView {
             view! {
                 {username
                     .get()
-                    .parse::<Username>()
-                    .ok()
                     .zip(tag.get().parse::<Tag>().ok())
                     .map(|(username, tag)| {
                         view! {
