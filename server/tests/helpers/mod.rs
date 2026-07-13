@@ -51,8 +51,11 @@ pub fn ensure_server_fns_registered() {
         server_fn::axum::register_explicit::<web::email::VerifyEmail>();
         server_fn::axum::register_explicit::<web::profile::GetProfile>();
         server_fn::axum::register_explicit::<web::profile::UpdateProfile>();
+        server_fn::axum::register_explicit::<web::profile::GetDefaultPostFormat>();
+        server_fn::axum::register_explicit::<web::profile::SetDefaultPostFormat>();
         server_fn::axum::register_explicit::<web::sessions::ListSessions>();
         server_fn::axum::register_explicit::<web::sessions::RevokeSession>();
+        server_fn::axum::register_explicit::<web::sessions::CreateAppPassword>();
         server_fn::axum::register_explicit::<web::invites::CreateInvite>();
         server_fn::axum::register_explicit::<web::invites::ListInvites>();
         server_fn::axum::register_explicit::<web::password_reset::RequestPasswordReset>();
@@ -68,6 +71,10 @@ pub fn ensure_server_fns_registered() {
         server_fn::axum::register_explicit::<web::posts::ListHomeFeed>();
         server_fn::axum::register_explicit::<web::posts::ListPostsByTag>();
         server_fn::axum::register_explicit::<web::posts::ListUserPostsByTag>();
+        server_fn::axum::register_explicit::<web::posts::DeletePost>();
+        server_fn::axum::register_explicit::<web::posts::UnpublishPost>();
+        server_fn::axum::register_explicit::<web::posts::DefaultAudienceSelection>();
+        server_fn::axum::register_explicit::<web::posts::PostAudienceSelection>();
         server_fn::axum::register_explicit::<web::site::GetSiteIdentity>();
         server_fn::axum::register_explicit::<web::site::UpdateSiteIdentity>();
         server_fn::axum::register_explicit::<web::media::ListMyMedia>();
