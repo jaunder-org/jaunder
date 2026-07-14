@@ -31,7 +31,7 @@ enum_attr!(RegistrationPolicy { Open => "open", InviteOnly => "invite_only", Clo
 enum_attr!(RegistrationResult { Ok => "ok", Rejected => "rejected" });
 enum_attr!(InviteEvent { Created => "created", Redeemed => "redeemed" });
 enum_attr!(PasswordResetEvent { Requested => "requested", Completed => "completed" });
-enum_attr!(EmailKind { Verification => "verification", PasswordReset => "password_reset" });
+enum_attr!(EmailKind { Verification => "verification", PasswordReset => "password_reset", Invite => "invite" });
 enum_attr!(SendResult { Success => "success", Failure => "failure" });
 enum_attr!(UploadOutcome { Stored => "stored", Deduplicated => "deduplicated", QuotaExceeded => "quota_exceeded", TooLarge => "too_large", Invalid => "invalid", Error => "error" });
 enum_attr!(ServeResult { Ok => "ok", NotFound => "not_found", NotModified => "not_modified" });
@@ -256,6 +256,7 @@ mod tests {
         // no-op without a provider, so this only needs the helper to run.
         email_send_result(EmailKind::Verification, &Ok::<(), ()>(()));
         email_send_result(EmailKind::PasswordReset, &Err::<(), ()>(()));
+        email_send_result(EmailKind::Invite, &Ok::<(), ()>(()));
         provider.force_flush().expect("flush");
 
         let metrics = exporter.get_finished_metrics().expect("metrics");
