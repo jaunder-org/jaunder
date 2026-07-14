@@ -1,6 +1,8 @@
 use crate::error::WebResult;
-// `Username` is ungated: it's the type of `login`'s wire arg, so the `#[server]`-generated
-// `Login` struct references it on both the client and server builds.
+// `Username` / `ProfferedInviteCode` are ungated: they are wire-arg types of `login` /
+// `register`, so the `#[server]`-generated arg structs reference them on both the client
+// and server builds.
+use common::invite::ProfferedInviteCode;
 use common::username::Username;
 use leptos::prelude::*;
 
@@ -22,6 +24,7 @@ pub use server::{require_auth, AuthRejection, AuthUser, CookieSettings};
 use {
     crate::error::InternalError,
     common::password::Password,
+    host::invite::InviteCode,
     std::sync::Arc,
     storage::{
         load_registration_policy, AtomicOps, RegistrationPolicy, SessionStorage, SiteConfigStorage,
@@ -67,7 +70,7 @@ pub async fn current_user() -> WebResult<Option<Username>> {
 pub async fn register(
     username: Username,
     password: String,
-    invite_code: Option<String>,
+    invite_code: Option<ProfferedInviteCode>,
 ) -> WebResult<String> {
     boundary!("register", {
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
@@ -98,8 +101,12 @@ pub async fn register(
                 .await
                 .map_err(Into::into),
             RegistrationPolicy::InviteOnly => {
-                match invite_code.and_then(common::text::non_empty_owned) {
-                    Some(code) => {
+                // The client sends `None` for a blank field; a present code arrives already
+                // shape-validated (deserialized through `ProfferedInviteCode`).
+                match invite_code {
+                    Some(proffered) => {
+                        let code = InviteCode::try_from(proffered)
+                            .map_err(|_| InternalError::validation("invalid invite code"))?;
                         let result = atomic
                             .create_user_with_invite(&username, &password, None, false, &code)
                             .instrument(tracing::info_span!("web.auth.register.create_user_invite"))

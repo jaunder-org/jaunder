@@ -1436,6 +1436,7 @@ dependencies = [
  "anyhow",
  "common",
  "http",
+ "macros",
  "opentelemetry",
  "opentelemetry_sdk",
  "sqlx",

@@ -3,7 +3,9 @@ use crate::invites::{list_invites, CreateInvite};
 use crate::pages::Topbar;
 use leptos::prelude::*;
 
-/// Invites page — lists invite codes; allows creating new ones.
+/// Invites page — lists invites (metadata only; raw codes are never sent to the client,
+/// #400) and allows creating new ones. A created code is delivered out-of-band (the
+/// `jaunder user invite` CLI prints the invitation URL; #433 will email it).
 /// Returns 404 (via SSR response options) when the registration policy is not
 /// `invite_only`.
 #[component]
@@ -52,8 +54,7 @@ pub fn InvitesPage() -> impl IntoView {
                                             .map(|i| {
                                                 view! {
                                                     <li>
-                                                        "Code: " {i.code.clone()} " — expires: "
-                                                        {i.expires_at.clone()}
+                                                        "Expires: " {i.expires_at.clone()}
                                                         {i
                                                             .used_at
                                                             .clone()

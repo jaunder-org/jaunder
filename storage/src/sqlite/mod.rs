@@ -57,6 +57,7 @@ use crate::db::sql_slow_query_threshold;
 use crate::{AppState, AtomicOps, ConfirmPasswordResetError, RegisterWithInviteError};
 use common::password::Password;
 use common::username::Username;
+use host::invite::InviteCode;
 
 // ---------------------------------------------------------------------------
 // Database helpers
@@ -184,7 +185,7 @@ impl AtomicOps for SqliteAtomicOps {
         password: &Password,
         display_name: Option<&str>,
         is_operator: bool,
-        invite_code: &str,
+        invite_code: &InviteCode,
     ) -> Result<i64, RegisterWithInviteError> {
         // ADR-0021: take the write lock up front with BEGIN IMMEDIATE rather than a
         // deferred BEGIN, so the SELECT->INSERT step performs no shared->reserved lock
@@ -210,7 +211,7 @@ impl AtomicOps for SqliteAtomicOps {
             let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
                 "SELECT used_at, expires_at FROM invites WHERE code = $1",
             )
-            .bind(invite_code)
+            .bind(invite_code.as_ref())
             .fetch_optional(&mut *conn)
             .await?
             .ok_or(RegisterWithInviteError::InviteNotFound)?;
@@ -253,7 +254,7 @@ impl AtomicOps for SqliteAtomicOps {
             sqlx::query("UPDATE invites SET used_at = $1, used_by = $2 WHERE code = $3")
                 .bind(now)
                 .bind(user_id)
-                .bind(invite_code)
+                .bind(invite_code.as_ref())
                 .execute(&mut *conn)
                 .await?;
 

@@ -5,6 +5,7 @@ use thiserror::Error;
 
 use common::password::Password;
 use common::username::Username;
+use host::invite::InviteCode;
 
 /// Errors that can occur during atomic invite-and-user creation.
 #[derive(Debug, Error)]
@@ -89,7 +90,7 @@ pub trait AtomicOps: Send + Sync {
         password: &Password,
         display_name: Option<&str>,
         is_operator: bool,
-        invite_code: &str,
+        invite_code: &InviteCode,
     ) -> Result<i64, RegisterWithInviteError>;
 
     /// Atomically consumes a password-reset token and updates the user's password.
@@ -114,7 +115,7 @@ mod tests {
     use rstest::*;
     use rstest_reuse::*;
 
-    async fn seed_invite(state: &std::sync::Arc<crate::AppState>) -> String {
+    async fn seed_invite(state: &std::sync::Arc<crate::AppState>) -> InviteCode {
         state
             .invites
             .create_invite(chrono::Utc::now() + chrono::Duration::hours(1))
@@ -183,7 +184,13 @@ mod tests {
         assert!(env
             .state
             .atomic
-            .create_user_with_invite(&username, &password, Some("Alice"), false, "code")
+            .create_user_with_invite(
+                &username,
+                &password,
+                Some("Alice"),
+                false,
+                &"code".parse::<InviteCode>().unwrap(),
+            )
             .await
             .is_err());
         // `not-base64` fails token hashing before touching the pool, so the

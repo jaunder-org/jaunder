@@ -274,7 +274,12 @@ pub async fn cmd_user_invite(storage: &StorageArgs, expires_in: Option<u64>) -> 
 
     let code = state.invites.create_invite(expires_at).await?;
     host::metrics::invite(host::metrics::InviteEvent::Created);
-    println!("{code}");
+    // Deliberate operator-facing reveal via `AsRef` (InviteCode has no Display/serde). With a
+    // configured base URL, print a ready-to-send invitation link; otherwise the bare code.
+    match state.site_config.get_identity().await?.base_url {
+        Some(base_url) => println!("{base_url}/register?invite_code={}", code.as_ref()),
+        None => println!("{}", code.as_ref()),
+    }
     Ok(())
 }
 
@@ -831,6 +836,35 @@ mod tests {
             "invite must expire in the future, got: {}",
             invites[0].expires_at
         );
+    }
+
+    #[tokio::test]
+    async fn cmd_user_invite_with_base_url_configured_prints_link() {
+        // Exercises the base-URL branch of the reveal: when a base URL is set, the
+        // command prints a ready-to-send invitation link rather than the bare code.
+        let temp = TempDir::new().expect("temp dir");
+        let db_path = temp.path().join("jaunder.db");
+        let db_url = format!("sqlite:{}", db_path.display());
+        let opts: DbConnectOptions = db_url.parse().expect("parse sqlite url");
+
+        let state = storage::open_database(&opts).await.expect("open db");
+        state
+            .site_config
+            .set("site.base_url", "https://example.com")
+            .await
+            .expect("set base_url");
+
+        let storage_args = StorageArgs {
+            storage_path: temp.path().to_path_buf(),
+            db: opts,
+        };
+
+        cmd_user_invite(&storage_args, Some(24))
+            .await
+            .expect("create invite");
+
+        let invites = state.invites.list_invites().await.expect("list invites");
+        assert_eq!(invites.len(), 1, "exactly one invite must be created");
     }
 
     #[tokio::test]

@@ -11,7 +11,9 @@ use crate::{
 };
 use common::slug::Slug;
 use common::tag::Tag;
+use common::token::InvalidTokenShape;
 use common::username::Username;
+use host::invite::InviteCode;
 
 // ---------------------------------------------------------------------------
 // UserRecord helpers
@@ -96,14 +98,16 @@ pub(crate) fn build_invite_record(
     expires_at: DateTime<Utc>,
     used_at: Option<DateTime<Utc>>,
     used_by: Option<i64>,
-) -> InviteRecord {
-    InviteRecord {
-        code,
+) -> Result<InviteRecord, InvalidTokenShape> {
+    // The `code` column is written only by `create_invite` (canonical base64url), so a
+    // parse failure is a data-integrity condition; callers surface it as a storage error.
+    Ok(InviteRecord {
+        code: InviteCode::try_from(code)?,
         created_at,
         expires_at,
         used_at,
         used_by,
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -247,7 +251,7 @@ pub(crate) type InviteRow = (
     Option<i64>,
 );
 
-pub(crate) fn invite_record_from_row(row: InviteRow) -> InviteRecord {
+pub(crate) fn invite_record_from_row(row: InviteRow) -> Result<InviteRecord, InvalidTokenShape> {
     let (code, created_at, expires_at, used_at, used_by) = row;
     build_invite_record(code, created_at, expires_at, used_at, used_by)
 }
@@ -459,9 +463,10 @@ mod tests {
             expires_at,
             Some(used_at),
             Some(7),
-        );
+        )
+        .unwrap();
 
-        assert_eq!(record.code, "invite-code");
+        assert_eq!(record.code.as_ref(), "invite-code");
         assert_eq!(record.created_at, created_at);
         assert_eq!(record.expires_at, expires_at);
         assert_eq!(record.used_at, Some(used_at));
@@ -766,8 +771,8 @@ mod tests {
         assert_eq!(session_record.user_id, 1);
 
         let invite: InviteRow = ("code".to_string(), now, now, None, None);
-        let invite_record = invite_record_from_row(invite);
-        assert_eq!(invite_record.code, "code");
+        let invite_record = invite_record_from_row(invite).unwrap();
+        assert_eq!(invite_record.code.as_ref(), "code");
     }
 
     #[test]
@@ -913,8 +918,8 @@ mod tests {
     fn invite_record_from_row_maps_some_fields() {
         let now = Utc::now();
         let row: InviteRow = ("code".to_string(), now, now, Some(now), Some(1));
-        let record = invite_record_from_row(row);
-        assert_eq!(record.code, "code");
+        let record = invite_record_from_row(row).unwrap();
+        assert_eq!(record.code.as_ref(), "code");
         assert_eq!(record.created_at, now);
         assert_eq!(record.expires_at, now);
         assert_eq!(record.used_at, Some(now));

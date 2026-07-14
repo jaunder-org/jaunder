@@ -105,7 +105,10 @@ async fn register_invite_only_valid_code_creates_user_marks_invite_used(#[case] 
     let (status, _set_cookie, body) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/register",
-        format!("username=bob&password=password123&invite_code={code}"),
+        format!(
+            "username=bob&password=password123&invite_code={}",
+            code.as_ref()
+        ),
         None,
         true,
     )
@@ -126,7 +129,10 @@ async fn register_invite_only_valid_code_creates_user_marks_invite_used(#[case] 
     );
 
     let invites = state.invites.list_invites().await.unwrap();
-    let invite = invites.iter().find(|i| i.code == code).unwrap();
+    let invite = invites
+        .iter()
+        .find(|i| i.code.as_ref() == code.as_ref())
+        .unwrap();
     assert!(invite.used_at.is_some(), "invite should be marked as used");
 }
 
@@ -204,7 +210,10 @@ async fn register_invite_only_expired_code_returns_error(#[case] backend: Backen
     let (status, _, _) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/register",
-        format!("username=alice&password=password123&invite_code={code}"),
+        format!(
+            "username=alice&password=password123&invite_code={}",
+            code.as_ref()
+        ),
         None,
         true,
     )
