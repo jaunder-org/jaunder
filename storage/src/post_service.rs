@@ -391,9 +391,9 @@ impl From<PerformCreationError> for host::error::InternalError {
 
 /// Generates a unique slug attempt using a suffix for attempts > 0.
 #[must_use]
-pub fn candidate_slug(slug_seed: &str, attempt: usize) -> String {
+pub fn candidate_slug(slug_seed: &Slug, attempt: usize) -> String {
     if attempt == 0 {
-        return slug_seed.to_owned(); // already ≤ MAX_SLUG_CHARS from slugify_title
+        return slug_seed.to_string(); // already ≤ MAX_SLUG_CHARS (a valid Slug)
     }
     // Keep the suffixed candidate within the slug length cap: a seed already at
     // the cap plus "-{n}" would otherwise exceed it and be rejected by from_str.
@@ -467,12 +467,13 @@ pub async fn perform_post_creation(
         body
     };
 
-    let slug_seed = match slug_override.and_then(common::text::non_empty) {
-        Some(raw) => raw
-            .parse::<Slug>()
-            .map_err(PerformCreationError::InvalidSlug)?
-            .to_string(),
-        None => slugify_title(&metadata.slug_seed),
+    let slug_seed: Slug = match slug_override.and_then(common::text::non_empty) {
+        Some(raw) => raw.parse().map_err(PerformCreationError::InvalidSlug)?,
+        // slugify_title never fails, but funnel it through from_str (the single
+        // chokepoint) rather than bypass-constructing a Slug.
+        None => slugify_title(&metadata.slug_seed)
+            .parse()
+            .map_err(PerformCreationError::InvalidSlug)?,
     };
 
     for attempt in 0..max_attempts {
@@ -778,22 +779,27 @@ mod tests {
     fn candidate_slug_keeps_suffix_within_cap() {
         use common::slug::{Slug, MAX_SLUG_CHARS};
         // A seed already at the cap: the naive "{seed}-2" would be 82 chars and
-        // be rejected by from_str; candidate_slug truncates the base to fit.
-        let seed: String = "a".repeat(MAX_SLUG_CHARS);
+        // be rejected by from_str; candidate_slug truncates the base to fit. The
+        // seed is a valid Slug, so it is by construction ≤ MAX_SLUG_CHARS.
+        let seed: Slug = "a".repeat(MAX_SLUG_CHARS).parse().unwrap();
         let c = candidate_slug(&seed, 1);
         assert!(c.chars().count() <= MAX_SLUG_CHARS);
         assert!(c.ends_with("-2"));
         assert!(c.parse::<Slug>().is_ok());
 
-        // Truncation that would land on a '-' trims it so no "--" boundary forms.
-        let seed2 = format!("{}-{}", "a".repeat(77), "b".repeat(20));
+        // Truncation that would land on a '-' trims it so no "--" boundary forms:
+        // an at-cap seed whose 78th char (the base cutoff for a "-2" suffix) is '-'.
+        let seed2: Slug = format!("{}-{}", "a".repeat(77), "b".repeat(2))
+            .parse()
+            .unwrap();
         let c2 = candidate_slug(&seed2, 1);
         assert!(c2.chars().count() <= MAX_SLUG_CHARS);
         assert!(!c2.contains("--"));
         assert!(c2.parse::<Slug>().is_ok());
 
         // attempt 0 returns the seed unchanged.
-        assert_eq!(candidate_slug("hello", 0), "hello");
+        let hello: Slug = "hello".parse().unwrap();
+        assert_eq!(candidate_slug(&hello, 0), "hello");
     }
 
     #[apply(backends)]

@@ -672,6 +672,7 @@ mod tests {
         audience_selection_to_targets, audience_targets_or_public, targets_to_audience_selection,
         AudienceSelection,
     };
+    use common::slug::Slug;
     use common::visibility::AudienceTarget;
     use storage::candidate_slug;
 
@@ -773,13 +774,15 @@ mod tests {
 
     #[test]
     fn candidate_slug_returns_seed_for_first_attempt() {
-        assert_eq!(candidate_slug("hello-world", 0), "hello-world");
+        let base: Slug = "hello-world".parse().unwrap();
+        assert_eq!(candidate_slug(&base, 0), "hello-world");
     }
 
     #[test]
     fn candidate_slug_appends_numeric_suffix_after_conflict() {
-        assert_eq!(candidate_slug("hello-world", 1), "hello-world-2");
-        assert_eq!(candidate_slug("hello-world", 2), "hello-world-3");
+        let base: Slug = "hello-world".parse().unwrap();
+        assert_eq!(candidate_slug(&base, 1), "hello-world-2");
+        assert_eq!(candidate_slug(&base, 2), "hello-world-3");
     }
 
     #[cfg(feature = "server")]
