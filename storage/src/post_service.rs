@@ -250,7 +250,7 @@ impl PublishUpdate {
 /// Raw, front-end-supplied inputs to [`perform_post_update`].
 ///
 /// Grouping these into a struct keeps the easy-to-transpose pair
-/// (`title`/`slug_override`, both `Option<&str>`) named at every call site.
+/// (`title: Option<&str>` / `slug_override: Option<&Slug>`) named at every call site.
 pub struct PostUpdate<'a> {
     /// Post being edited.
     pub post_id: i64,
@@ -262,8 +262,9 @@ pub struct PostUpdate<'a> {
     pub title: Option<&'a str>,
     /// Markup format of `body`.
     pub format: PostFormat,
-    /// Explicit slug, or `None` to derive one from the title/body.
-    pub slug_override: Option<&'a str>,
+    /// Explicit slug (already validated at the wire/CLI boundary), or `None` to
+    /// derive one from the title/body.
+    pub slug_override: Option<&'a Slug>,
     /// What this update does to the post's publication state.
     pub publish: PublishUpdate,
     /// Optional summary/excerpt.
@@ -309,10 +310,10 @@ pub async fn perform_post_update(
         body
     };
 
-    let slug = match slug_override.and_then(common::text::non_empty) {
-        Some(raw) => raw
-            .parse::<Slug>()
-            .map_err(|_| PerformUpdateError::InvalidSlug)?,
+    let slug = match slug_override {
+        // Pre-validated at the boundary (wire/CLI); updates keep the slug as-is,
+        // no collision dedup.
+        Some(slug) => slug.clone(),
         None => slugify_title(&metadata.slug_seed)
             .parse::<Slug>()
             .map_err(|_| PerformUpdateError::InvalidSlug)?,
@@ -406,7 +407,7 @@ pub fn candidate_slug(slug_seed: &Slug, attempt: usize) -> String {
 /// Raw, front-end-supplied inputs to [`perform_post_creation`].
 ///
 /// Grouping these into a struct keeps the easy-to-transpose pair
-/// (`title`/`slug_override`, both `Option<&str>`) named at every call site.
+/// (`title: Option<&str>` / `slug_override: Option<&Slug>`) named at every call site.
 pub struct PostCreation<'a> {
     /// Author of the new post.
     pub user_id: i64,
@@ -416,8 +417,9 @@ pub struct PostCreation<'a> {
     pub title: Option<&'a str>,
     /// Markup format of `body`.
     pub format: PostFormat,
-    /// Explicit slug, or `None` to derive one from the title/body.
-    pub slug_override: Option<&'a str>,
+    /// Explicit slug (already validated at the wire/CLI boundary), or `None` to
+    /// derive one from the title/body.
+    pub slug_override: Option<&'a Slug>,
     /// Publication timestamp, or `None` to create as a draft.
     pub published_at: Option<DateTime<Utc>>,
     /// Maximum slug-collision retries before giving up.
@@ -467,8 +469,10 @@ pub async fn perform_post_creation(
         body
     };
 
-    let slug_seed: Slug = match slug_override.and_then(common::text::non_empty) {
-        Some(raw) => raw.parse().map_err(PerformCreationError::InvalidSlug)?,
+    let slug_seed: Slug = match slug_override {
+        // Pre-validated at the boundary (wire/CLI); a valid override is still fed
+        // through the collision-suffix generator below for uniqueness.
+        Some(slug) => slug.clone(),
         // slugify_title never fails, but funnel it through from_str (the single
         // chokepoint) rather than bypass-constructing a Slug.
         None => slugify_title(&metadata.slug_seed)
@@ -608,6 +612,10 @@ mod tests {
         let env = backend.setup().await;
         let user_id = seed_user(&env.state).await;
         let storage = &*env.state.posts;
+        // The override arrives already validated as a `Slug` (the wire/CLI boundary
+        // parses it); an invalid override can no longer reach this layer — that
+        // rejection now lives at the boundary (web `field_error` + the serde bridge).
+        let slug: Slug = "my-custom-slug".parse().unwrap();
         let record = perform_post_creation(
             storage,
             PostCreation {
@@ -615,7 +623,7 @@ mod tests {
                 body: "Hello, world!".to_owned(),
                 title: None,
                 format: PostFormat::Markdown,
-                slug_override: Some("my-custom-slug"),
+                slug_override: Some(&slug),
                 published_at: None,
                 max_attempts: 100,
                 summary: None,
@@ -627,33 +635,6 @@ mod tests {
         .unwrap();
 
         assert_eq!(record.slug, "my-custom-slug");
-    }
-
-    #[apply(backends)]
-    #[tokio::test]
-    async fn test_perform_post_creation_invalid_slug_override(#[case] backend: Backend) {
-        let env = backend.setup().await;
-        let user_id = seed_user(&env.state).await;
-        let storage = &*env.state.posts;
-        let err = perform_post_creation(
-            storage,
-            PostCreation {
-                user_id,
-                body: "Hello, world!".to_owned(),
-                title: None,
-                format: PostFormat::Markdown,
-                slug_override: Some("Invalid Slug!"),
-                published_at: None,
-                max_attempts: 100,
-                summary: None,
-                audiences: vec![AudienceTarget::Public],
-                idempotency_key: None,
-            },
-        )
-        .await
-        .unwrap_err();
-
-        assert!(matches!(err, PerformCreationError::InvalidSlug(_)));
     }
 
     #[apply(backends)]

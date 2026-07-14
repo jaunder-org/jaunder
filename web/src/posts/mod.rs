@@ -227,7 +227,7 @@ fn parse_publish_at(raw: Option<&str>) -> crate::error::InternalResult<Option<Da
 pub async fn create_post(
     body: String,
     format: String,
-    slug_override: Option<String>,
+    slug_override: Option<Slug>,
     publish: bool,
     publish_at: Option<String>,
     tags: Option<Vec<String>>,
@@ -261,7 +261,7 @@ pub async fn create_post(
                 body,
                 title: None,
                 format,
-                slug_override: slug_override.as_deref(),
+                slug_override: slug_override.as_ref(),
                 published_at,
                 max_attempts: 100,
                 summary: normalized_summary,
@@ -377,7 +377,7 @@ pub async fn update_post(
     post_id: i64,
     body: String,
     format: String,
-    slug_override: Option<String>,
+    slug_override: Option<Slug>,
     publish: bool,
     // Optional RFC3339 UTC instant from the editor's datetime control. See
     // `create_post` for why this crosses the boundary as a `String`.
@@ -419,7 +419,7 @@ pub async fn update_post(
                 body,
                 title: None,
                 format,
-                slug_override: slug_override.as_deref(),
+                slug_override: slug_override.as_ref(),
                 publish: if publish {
                     PublishUpdate::Publish { at: publish_at }
                 } else {

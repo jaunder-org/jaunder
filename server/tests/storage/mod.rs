@@ -1,5 +1,6 @@
 use chrono::{Datelike, Utc};
 use common::password::Password;
+use common::slug::Slug;
 use common::tag::Tag;
 use common::username::Username;
 use common::visibility::{
@@ -2508,7 +2509,7 @@ async fn post_update_by_non_owner_returns_unauthorized(#[case] backend: Backend)
 fn update_input(
     post_id: i64,
     editor_user_id: i64,
-    slug: &str,
+    slug: &Slug,
     publish: PublishUpdate,
 ) -> PostUpdate<'_> {
     PostUpdate {
@@ -2547,6 +2548,10 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
         .await
         .unwrap();
 
+    // Pinned override slugs (already valid, as they arrive at the storage layer).
+    let p: Slug = "p".parse().unwrap();
+    let q: Slug = "q".parse().unwrap();
+
     // Publish { at: Some(future) } on a draft => scheduled at that instant.
     let future = now + Duration::days(1);
     let rec = perform_post_update(
@@ -2554,7 +2559,7 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
         update_input(
             draft,
             alice,
-            "p",
+            &p,
             PublishUpdate::Publish { at: Some(future) },
         ),
     )
@@ -2569,7 +2574,7 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     // Publish { at: None } on an already-published post keeps the existing timestamp.
     let rec2 = perform_post_update(
         &*state.posts,
-        update_input(draft, alice, "p", PublishUpdate::Publish { at: None }),
+        update_input(draft, alice, &p, PublishUpdate::Publish { at: None }),
     )
     .await
     .unwrap();
@@ -2582,7 +2587,7 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     // Unpublish clears it.
     let rec3 = perform_post_update(
         &*state.posts,
-        update_input(draft, alice, "p", PublishUpdate::Unpublish),
+        update_input(draft, alice, &p, PublishUpdate::Unpublish),
     )
     .await
     .unwrap();
@@ -2596,7 +2601,7 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
         .unwrap();
     let rec4 = perform_post_update(
         &*state.posts,
-        update_input(draft2, alice, "q", PublishUpdate::Publish { at: None }),
+        update_input(draft2, alice, &q, PublishUpdate::Publish { at: None }),
     )
     .await
     .unwrap();

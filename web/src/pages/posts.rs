@@ -1,3 +1,4 @@
+use crate::forms::Field;
 use crate::subscriptions::{is_subscribed_to, SubscribeTo, UnsubscribeFrom};
 use crate::tags::TagSummary;
 use crate::{
@@ -628,7 +629,7 @@ pub fn EditPostPage() -> impl IntoView {
     let update_post_action = ServerAction::<UpdatePost>::new();
     let body = RwSignal::new(String::new());
     let format = RwSignal::new("markdown".to_string());
-    let slug_override = RwSignal::new(String::new());
+    let slug_field = Field::<Slug>::optional();
     let summary = RwSignal::new(String::new());
     // Optional scheduled-publish time for an unpublished/draft post (naive
     // local wall-clock from a `datetime-local` control); empty publishes now.
@@ -684,21 +685,18 @@ pub fn EditPostPage() -> impl IntoView {
                     Ok(fetched) => {
                         body.set(fetched.body.clone());
                         format.set(fetched.format.clone());
-                        slug_override.set(fetched.slug.to_string());
+                        slug_field.value.set(fetched.slug.to_string());
                         summary.set(fetched.summary.clone().unwrap_or_default());
                         post_tags.set(fetched.tags.clone());
                         let post_id = fetched.post_id;
                         let is_published = fetched.published_at.is_some();
                         let dispatch_update = move |publish: bool| {
-                            let slug = slug_override.get();
-                            let slug_override_arg = common::text::non_empty(&slug)
-                                .map(str::to_owned);
                             update_post_action
                                 .dispatch(UpdatePost {
                                     post_id,
                                     body: body.get(),
                                     format: format.get(),
-                                    slug_override: slug_override_arg,
+                                    slug_override: slug_field.parsed(),
                                     publish,
                                     publish_at: local_datetime_to_utc_rfc3339(&publish_at.get()),
                                     tags: Some(
@@ -738,11 +736,21 @@ pub fn EditPostPage() -> impl IntoView {
                                                             type="text"
                                                             name="slug_override"
                                                             class="j-field-val"
-                                                            prop:value=slug_override
+                                                            prop:value=slug_field.value
                                                             on:input=move |ev| {
-                                                                slug_override.set(event_target_value(&ev));
+                                                                let v = event_target_value(&ev);
+                                                                slug_field.value.set(v.clone());
+                                                                slug_field.error.set(slug_field.error_for(&v));
                                                             }
+                                                            on:blur=move |_| slug_field.touch()
                                                         />
+                                                        {move || {
+                                                            slug_field
+                                                                .is_touched()
+                                                                .then(|| slug_field.error.get())
+                                                                .flatten()
+                                                                .map(|msg| view! { <p class="error">{msg}</p> })
+                                                        }}
                                                     </div>
                                                     // Optional schedule for a draft: a future
                                                     // time schedules it; empty publishes now.
@@ -827,6 +835,7 @@ pub fn EditPostPage() -> impl IntoView {
                                                     type="button"
                                                     name="publish"
                                                     value="true"
+                                                    prop:disabled=move || !slug_field.is_valid()
                                                     on:click=move |_| dispatch_update(true)
                                                 >
                                                     "Save"
@@ -840,6 +849,7 @@ pub fn EditPostPage() -> impl IntoView {
                                                     type="button"
                                                     name="publish"
                                                     value="false"
+                                                    prop:disabled=move || !slug_field.is_valid()
                                                     on:click=move |_| dispatch_update(false)
                                                 >
                                                     "Save draft"
@@ -849,6 +859,7 @@ pub fn EditPostPage() -> impl IntoView {
                                                     type="button"
                                                     name="publish"
                                                     value="true"
+                                                    prop:disabled=move || !slug_field.is_valid()
                                                     on:click=move |_| dispatch_update(true)
                                                 >
                                                     "Publish"
