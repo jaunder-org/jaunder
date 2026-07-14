@@ -28,6 +28,9 @@ pub struct Field<T: 'static> {
     pub value: RwSignal<String>,
     pub error: RwSignal<Option<String>>,
     touched: RwSignal<bool>,
+    // When set, an *empty* input is valid (the field may be omitted, e.g. an
+    // auto-generated slug override). A non-empty value is validated as normal.
+    optional: bool,
     // `fn() -> T`, not `T`: a phantom marker that owns no `T`, so `Field<T>` is
     // unconditionally `Send`/`Sync`/`Copy` (the reactive closures leptos builds must be
     // `Send`) — `PhantomData<T>` would spuriously couple those to `T`'s own bounds.
@@ -72,7 +75,47 @@ where
             value: RwSignal::new(initial.to_owned()),
             error: RwSignal::new(field_error::<T>(initial)),
             touched: RwSignal::new(false),
+            optional: false,
             _ty: PhantomData,
+        }
+    }
+
+    /// An *optional* field: an empty value is valid (the field may be left blank),
+    /// so `is_valid()` leaves submit enabled for a pristine empty field. A non-empty
+    /// value is validated through the newtype's `FromStr` as normal. First adopter:
+    /// `slug_override` (#408).
+    #[must_use]
+    pub fn optional() -> Self {
+        Self::optional_prefilled("")
+    }
+
+    /// An optional field seeded from `initial` (empty ⇒ valid; non-empty validated).
+    #[must_use]
+    pub fn optional_prefilled(initial: &str) -> Self {
+        let field = Self {
+            value: RwSignal::new(initial.to_owned()),
+            error: RwSignal::new(None),
+            touched: RwSignal::new(false),
+            optional: true,
+            _ty: PhantomData,
+        };
+        // Seed validity through `error_for` (one empty-vs-validate rule, not two).
+        field.error.set(field.error_for(initial));
+        field
+    }
+
+    /// Optionality-aware validation: an empty *optional* field is valid (`None`);
+    /// otherwise the newtype's `FromStr` error via [`field_error`]. The component's
+    /// on-input handler routes through this so rendered validity honors optionality.
+    #[must_use]
+    pub fn error_for(&self, input: &str) -> Option<String> {
+        // Trim before the empty check so a whitespace-only optional field reads as
+        // "not provided" (valid) — matching the `common::text::non_empty` behavior
+        // the pre-typing `slug_override` form used.
+        if self.optional && input.trim().is_empty() {
+            None
+        } else {
+            field_error::<T>(input)
         }
     }
 
@@ -131,7 +174,7 @@ where
             None => raw,
         };
         field.value.set(v.clone());
-        field.error.set(field_error::<T>(&v));
+        field.error.set(field.error_for(&v));
     };
     view! {
         <label class="j-form-field">
@@ -230,6 +273,66 @@ mod tests {
         let owner = Owner::new();
         owner.set();
         assert!(!Field::<Username>::default().is_valid());
+        drop(owner);
+    }
+
+    // Optional fields (#408): empty is *valid* (e.g. an auto-generated slug
+    // override), so a pristine empty optional field leaves submit enabled, while a
+    // non-empty invalid entry still gates it.
+    #[test]
+    fn optional_empty_field_is_valid_and_submittable() {
+        let owner = Owner::new();
+        owner.set();
+        let f = Field::<Slug>::optional();
+        assert!(f.is_valid()); // empty optional ⇒ valid ⇒ submit not gated
+        assert_eq!(f.error_for(""), None); // the optional empty-is-valid branch
+        assert_eq!(f.error_for("   "), None); // whitespace-only ⇒ not provided ⇒ valid
+        assert!(!f.is_touched());
+        assert_eq!(f.parsed(), None); // Option<Slug> None for empty
+        drop(owner);
+    }
+
+    #[test]
+    fn optional_nonempty_invalid_shows_the_newtypes_message() {
+        let owner = Owner::new();
+        owner.set();
+        let f = Field::<Slug>::optional();
+        // Mimic on:input with a bad slug.
+        f.value.set("Bad Slug!".to_owned());
+        f.error.set(f.error_for("Bad Slug!"));
+        assert!(!f.is_valid());
+        assert!(f.error.get().is_some()); // exactly InvalidSlug's Display
+        drop(owner);
+    }
+
+    #[test]
+    fn optional_nonempty_valid_parses() {
+        let owner = Owner::new();
+        owner.set();
+        let f = Field::<Slug>::optional();
+        f.value.set("hello".to_owned());
+        f.error.set(f.error_for("hello"));
+        assert!(f.is_valid());
+        assert_eq!(f.parsed(), "hello".parse::<Slug>().ok());
+        drop(owner);
+    }
+
+    #[test]
+    fn optional_prefilled_seeds_valid_from_existing_slug() {
+        let owner = Owner::new();
+        owner.set();
+        let f = Field::<Slug>::optional_prefilled("my-post");
+        assert!(f.is_valid());
+        assert_eq!(f.value.get(), "my-post");
+        drop(owner);
+    }
+
+    #[test]
+    fn required_new_still_invalid_on_empty() {
+        // Regression: the required path is unchanged — an empty `new()` is invalid.
+        let owner = Owner::new();
+        owner.set();
+        assert!(!Field::<Slug>::new().is_valid());
         drop(owner);
     }
 }
