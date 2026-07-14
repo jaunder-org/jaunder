@@ -126,15 +126,38 @@ enum Auth<'a> {
     Bearer(&'a str),
 }
 
-/// The single implementation behind every `post_form*` helper: build a fresh
-/// router from `state` (with `mailer` and `secure_cookies`), send one
-/// form-encoded POST, and return `(status, Set-Cookie, body)`. The public
-/// wrappers below fix the arguments most callers don't vary.
-async fn post_form_inner(
+/// A POST body paired with its content type — the two always travel together, so
+/// they are one argument. `Form` is `application/x-www-form-urlencoded`, `Json` is
+/// `application/json`.
+enum PostBody {
+    Form(String),
+    Json(String),
+}
+
+impl PostBody {
+    fn content_type(&self) -> &'static str {
+        match self {
+            PostBody::Form(_) => "application/x-www-form-urlencoded",
+            PostBody::Json(_) => "application/json",
+        }
+    }
+
+    fn into_string(self) -> String {
+        match self {
+            PostBody::Form(s) | PostBody::Json(s) => s,
+        }
+    }
+}
+
+/// The single implementation behind every `post_form*`/`post_json` helper: build
+/// a fresh router from `state` (with `mailer` and `secure_cookies`), send one POST
+/// with the given `body` (and its content type), and return `(status, Set-Cookie,
+/// body)`. The public wrappers below fix the arguments most callers don't vary.
+async fn post_inner(
     state: Arc<storage::AppState>,
     mailer: Arc<dyn MailSender>,
     uri: &str,
-    body: impl Into<String>,
+    body: PostBody,
     auth: Auth<'_>,
     user_agent: Option<&str>,
     secure_cookies: bool,
@@ -144,7 +167,7 @@ async fn post_form_inner(
     let mut builder = Request::builder()
         .method("POST")
         .uri(uri)
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+        .header(header::CONTENT_TYPE, body.content_type());
     match auth {
         Auth::None => {}
         Auth::Cookie(c) => builder = builder.header(header::COOKIE, c),
@@ -156,7 +179,7 @@ async fn post_form_inner(
         builder = builder.header(header::USER_AGENT, ua);
     }
     let request = builder
-        .body(Body::from(body.into()))
+        .body(Body::from(body.into_string()))
         .expect("failed to build request");
 
     let app = jaunder::create_router(
@@ -190,8 +213,16 @@ pub async fn post_form(
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
     let auth = cookie.map_or(Auth::None, Auth::Cookie);
-    let (status, _set_cookie, body) =
-        post_form_inner(state, noop_mailer(), uri, body, auth, None, true).await;
+    let (status, _set_cookie, body) = post_inner(
+        state,
+        noop_mailer(),
+        uri,
+        PostBody::Form(body.into()),
+        auth,
+        None,
+        true,
+    )
+    .await;
     (status, body)
 }
 
@@ -205,8 +236,16 @@ pub async fn post_form_with_mailer(
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
     let auth = cookie.map_or(Auth::None, Auth::Cookie);
-    let (status, _set_cookie, body) =
-        post_form_inner(state, mailer, uri, body, auth, None, true).await;
+    let (status, _set_cookie, body) = post_inner(
+        state,
+        mailer,
+        uri,
+        PostBody::Form(body.into()),
+        auth,
+        None,
+        true,
+    )
+    .await;
     (status, body)
 }
 
@@ -220,7 +259,16 @@ pub async fn post_form_with_secure_flag(
     secure_cookies: bool,
 ) -> (StatusCode, Option<String>, String) {
     let auth = cookie.map_or(Auth::None, Auth::Cookie);
-    post_form_inner(state, noop_mailer(), uri, body, auth, None, secure_cookies).await
+    post_inner(
+        state,
+        noop_mailer(),
+        uri,
+        PostBody::Form(body.into()),
+        auth,
+        None,
+        secure_cookies,
+    )
+    .await
 }
 
 /// Like [`post_form_with_secure_flag`], but also sets a `User-Agent` header.
@@ -233,11 +281,11 @@ pub async fn post_form_with_ua(
     secure_cookies: bool,
 ) -> (StatusCode, Option<String>, String) {
     let auth = cookie.map_or(Auth::None, Auth::Cookie);
-    post_form_inner(
+    post_inner(
         state,
         noop_mailer(),
         uri,
-        body,
+        PostBody::Form(body.into()),
         auth,
         Some(user_agent),
         secure_cookies,
@@ -253,14 +301,37 @@ pub async fn post_form_with_bearer(
     body: impl Into<String>,
     bearer: &str,
 ) -> (StatusCode, Option<String>, String) {
-    post_form_inner(
+    post_inner(
         state,
         noop_mailer(),
         uri,
-        body,
+        PostBody::Form(body.into()),
         Auth::Bearer(bearer),
         None,
         true,
     )
     .await
+}
+
+/// POST a JSON body (`Content-Type: application/json`) with secure cookies and
+/// optional cookie auth; returns `(status, body)` — drops `Set-Cookie`, like the
+/// canonical [`post_form`].
+pub async fn post_json(
+    state: Arc<storage::AppState>,
+    uri: &str,
+    body: serde_json::Value,
+    cookie: Option<&str>,
+) -> (StatusCode, String) {
+    let auth = cookie.map_or(Auth::None, Auth::Cookie);
+    let (status, _set_cookie, body) = post_inner(
+        state,
+        noop_mailer(),
+        uri,
+        PostBody::Json(body.to_string()),
+        auth,
+        None,
+        true,
+    )
+    .await;
+    (status, body)
 }

@@ -1,54 +1,13 @@
-use std::sync::Arc;
-
-use axum::{
-    body::Body,
-    http::{header, Request, StatusCode},
-};
+use axum::http::StatusCode;
 use common::password::Password;
 use common::username::Username;
 use serde_json::json;
-use tower::ServiceExt;
 
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{ensure_server_fns_registered, test_options};
-use storage::test_support::{backends, backends_matrix, noop_mailer, Backend, TestEnv};
-
-async fn post_json(
-    state: Arc<storage::AppState>,
-    uri: &str,
-    body: impl Into<String>,
-    cookie: Option<&str>,
-) -> (StatusCode, String) {
-    ensure_server_fns_registered();
-
-    let mut builder = Request::builder()
-        .method("POST")
-        .uri(uri)
-        .header(header::CONTENT_TYPE, "application/json");
-    if let Some(c) = cookie {
-        builder = builder.header(header::COOKIE, c);
-    }
-    let request = builder.body(Body::from(body.into())).unwrap();
-
-    let app = jaunder::create_router(
-        test_options(),
-        state,
-        noop_mailer(),
-        true,
-        crate::helpers::tmp_storage_path(),
-    );
-    let response = app.oneshot(request).await.unwrap();
-
-    let status = response.status();
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let body_str = String::from_utf8(bytes.to_vec()).unwrap();
-
-    (status, body_str)
-}
+use crate::helpers::{post_form, post_json};
+use storage::test_support::{backends, backends_matrix, Backend, TestEnv};
 
 fn create_session_cookie(token: &str) -> String {
     format!("session={token}")
@@ -91,13 +50,8 @@ async fn create_published_post_enqueues_expected_feeds(
         "tags": tags
     });
 
-    let (status, _response) = post_json(
-        state.clone(),
-        "/api/create_post",
-        body.to_string(),
-        Some(&cookie),
-    )
-    .await;
+    let (status, _response) =
+        post_json(state.clone(), "/api/create_post", body, Some(&cookie)).await;
 
     assert_eq!(status, StatusCode::OK);
 
@@ -145,7 +99,7 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
     let (status, create_response) = post_json(
         state.clone(),
         "/api/create_post",
-        create_body.to_string(),
+        create_body,
         Some(&cookie),
     )
     .await;
@@ -179,7 +133,7 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
     let (status, _) = post_json(
         state.clone(),
         "/api/update_post",
-        update_body.to_string(),
+        update_body,
         Some(&cookie),
     )
     .await;
@@ -231,7 +185,7 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend
     let (status, create_response) = post_json(
         state.clone(),
         "/api/create_post",
-        create_body.to_string(),
+        create_body,
         Some(&cookie),
     )
     .await;
@@ -253,7 +207,7 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend
         .expect("claim batch");
 
     let unpublish_body = format!("post_id={post_id}");
-    let (status, _) = post_json(
+    let (status, _) = post_form(
         state.clone(),
         "/api/unpublish_post",
         unpublish_body,
@@ -308,7 +262,7 @@ async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
     let (status, create_response) = post_json(
         state.clone(),
         "/api/create_post",
-        create_body.to_string(),
+        create_body,
         Some(&cookie),
     )
     .await;
@@ -330,7 +284,7 @@ async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
         .expect("claim batch");
 
     let delete_body = format!("post_id={post_id}");
-    let (status, _) = post_json(
+    let (status, _) = post_form(
         state.clone(),
         "/api/delete_post",
         delete_body,
@@ -385,7 +339,7 @@ async fn delete_draft_post_enqueues_nothing(#[case] backend: Backend) {
     let (status, create_response) = post_json(
         state.clone(),
         "/api/create_post",
-        create_body.to_string(),
+        create_body,
         Some(&cookie),
     )
     .await;
@@ -407,7 +361,7 @@ async fn delete_draft_post_enqueues_nothing(#[case] backend: Backend) {
         .expect("claim batch");
 
     let delete_body = format!("post_id={post_id}");
-    let (status, _) = post_json(
+    let (status, _) = post_form(
         state.clone(),
         "/api/delete_post",
         delete_body,
