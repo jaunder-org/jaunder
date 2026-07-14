@@ -1,12 +1,8 @@
 use std::sync::Arc;
 
-use axum::{
-    body::Body,
-    http::{header, Request, StatusCode},
-};
+use axum::http::StatusCode;
 use chrono::Datelike;
 use storage::PostFormat;
-use tower::ServiceExt;
 use web::posts::{
     AudienceSelection, CreatePostResult, DraftSummary, PublishPostResult, TimelinePage,
     UpdatePostResult,
@@ -15,8 +11,8 @@ use web::posts::{
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{ensure_server_fns_registered, post_form, test_options};
-use storage::test_support::{backends, backends_matrix, noop_mailer, Backend, TestBase, TestEnv};
+use crate::helpers::{post_form, post_json};
+use storage::test_support::{backends, backends_matrix, Backend, TestBase, TestEnv};
 
 async fn unpublish_post_form(
     state: Arc<storage::AppState>,
@@ -66,43 +62,6 @@ async fn update_post_json(
         "publish": publish,
     });
     post_json(state, "/api/update_post", payload, cookie).await
-}
-
-/// POST to a `#[server(input = Json)]` endpoint. Mirrors `post_form` but emits
-/// `application/json` so the JSON-encoded server fns deserialize correctly.
-async fn post_json(
-    state: Arc<storage::AppState>,
-    uri: &str,
-    body: serde_json::Value,
-    cookie: Option<&str>,
-) -> (StatusCode, String) {
-    ensure_server_fns_registered();
-
-    let mut builder = Request::builder()
-        .method("POST")
-        .uri(uri)
-        .header(header::CONTENT_TYPE, "application/json");
-    if let Some(c) = cookie {
-        builder = builder.header(header::COOKIE, c);
-    }
-    let request = builder.body(Body::from(body.to_string())).unwrap();
-
-    let app = jaunder::create_router(
-        test_options(),
-        state,
-        noop_mailer(),
-        true,
-        crate::helpers::tmp_storage_path(),
-    );
-    let response = app.oneshot(request).await.unwrap();
-
-    let status = response.status();
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let body_str = String::from_utf8(bytes.to_vec()).unwrap();
-
-    (status, body_str)
 }
 
 async fn get_post_form(

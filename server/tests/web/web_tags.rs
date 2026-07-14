@@ -1,52 +1,16 @@
 use common::visibility::AudienceTarget;
 use std::sync::Arc;
 
-use axum::{
-    body::Body,
-    http::{header, Request, StatusCode},
-};
+use axum::http::StatusCode;
 use chrono::Utc;
 use storage::{CreatePostInput, PostFormat};
-use tower::ServiceExt;
 use web::tags::TagSummary;
 
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{ensure_server_fns_registered, test_options};
-use storage::test_support::{backends, noop_mailer, Backend, TestEnv};
-
-async fn post_json(
-    state: Arc<storage::AppState>,
-    uri: &str,
-    body: serde_json::Value,
-) -> (StatusCode, String) {
-    ensure_server_fns_registered();
-
-    let request = Request::builder()
-        .method("POST")
-        .uri(uri)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(body.to_string()))
-        .unwrap();
-
-    let app = jaunder::create_router(
-        test_options(),
-        state,
-        noop_mailer(),
-        true,
-        crate::helpers::tmp_storage_path(),
-    );
-    let response = app.oneshot(request).await.unwrap();
-
-    let status = response.status();
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let body_str = String::from_utf8(bytes.to_vec()).unwrap();
-
-    (status, body_str)
-}
+use crate::helpers::post_json;
+use storage::test_support::{backends, Backend, TestEnv};
 
 async fn seed_user_and_tagged_post(
     state: &Arc<storage::AppState>,
@@ -91,7 +55,7 @@ async fn seed_user_and_tagged_post(
 async fn list_tags_returns_empty_when_no_tags(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, body) = post_json(state, "/api/list_tags", serde_json::json!({})).await;
+    let (status, body) = post_json(state, "/api/list_tags", serde_json::json!({}), None).await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let tags: Vec<TagSummary> = serde_json::from_str(&body).unwrap();
@@ -114,6 +78,7 @@ async fn list_tags_returns_all_when_prefix_absent(#[case] backend: Backend) {
         Arc::clone(&state),
         "/api/list_tags",
         serde_json::json!({ "prefix": null, "limit": null }),
+        None,
     )
     .await;
 
@@ -144,6 +109,7 @@ async fn list_tags_filters_by_prefix_case_insensitive(#[case] backend: Backend) 
         Arc::clone(&state),
         "/api/list_tags",
         serde_json::json!({ "prefix": "RUST" }),
+        None,
     )
     .await;
 
@@ -171,6 +137,7 @@ async fn list_tags_clamps_limit_to_max(#[case] backend: Backend) {
         Arc::clone(&state),
         "/api/list_tags",
         serde_json::json!({ "limit": 1000 }),
+        None,
     )
     .await;
 
@@ -192,8 +159,13 @@ async fn list_tags_uses_default_limit_when_unspecified(#[case] backend: Backend)
             .unwrap();
     }
 
-    let (status, body) =
-        post_json(Arc::clone(&state), "/api/list_tags", serde_json::json!({})).await;
+    let (status, body) = post_json(
+        Arc::clone(&state),
+        "/api/list_tags",
+        serde_json::json!({}),
+        None,
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let tags: Vec<TagSummary> = serde_json::from_str(&body).unwrap();

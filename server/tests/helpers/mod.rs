@@ -8,6 +8,7 @@ use axum::{
 use common::mailer::MailSender;
 use leptos::prelude::LeptosOptions;
 use std::sync::{Arc, OnceLock};
+use tempfile::TempDir;
 use tower::ServiceExt;
 
 // The both-backend test harness — `Backend`, `TestEnv`, per-test DB provisioning,
@@ -15,8 +16,9 @@ use tower::ServiceExt;
 // `storage::test_support` (gated by storage's `test-support` feature; ADR-0033) so
 // `storage`'s own tests can use it from the same crate instance. Test files import
 // what they need directly from `storage::test_support`; `helpers`' own bodies pull
-// in only `noop_mailer`.
-use storage::test_support::noop_mailer;
+// in `noop_mailer` (throughout) plus `Backend`/`TestEnv` (for `get_asset`, which
+// provisions its own Sqlite backend).
+use storage::test_support::{noop_mailer, Backend, TestEnv};
 
 mod websub_capturing;
 // The capturing WebSub client used by `feed_worker.rs`.
@@ -96,6 +98,27 @@ pub fn tmp_storage_path() -> std::path::PathBuf {
     std::env::temp_dir().join("jaunder-test-storage")
 }
 
+/// Read a response body fully and decode it as UTF-8.
+pub async fn body_string(response: axum::response::Response) -> String {
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    String::from_utf8(bytes.to_vec()).unwrap()
+}
+
+/// Build a fresh router from `state` over `storage` as the media root, with the
+/// noop mailer and insecure cookies. Always creates the `media/{upload,cached,tmp}`
+/// layout so upload-exercising and read-only tests share one helper (the dirs are
+/// harmless empty setup for tests that never upload).
+pub fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
+    ensure_server_fns_registered();
+    let storage_path = storage.path().to_path_buf();
+    std::fs::create_dir_all(storage_path.join("media").join("upload")).unwrap();
+    std::fs::create_dir_all(storage_path.join("media").join("cached")).unwrap();
+    std::fs::create_dir_all(storage_path.join("media").join("tmp")).unwrap();
+    jaunder::create_router(test_options(), state, noop_mailer(), false, storage_path)
+}
+
 /// How a `post_form` request authenticates. Cookie and bearer are mutually
 /// exclusive — no caller sends both — so they are one argument, not two.
 enum Auth<'a> {
@@ -104,15 +127,38 @@ enum Auth<'a> {
     Bearer(&'a str),
 }
 
-/// The single implementation behind every `post_form*` helper: build a fresh
-/// router from `state` (with `mailer` and `secure_cookies`), send one
-/// form-encoded POST, and return `(status, Set-Cookie, body)`. The public
-/// wrappers below fix the arguments most callers don't vary.
-async fn post_form_inner(
+/// A POST body paired with its content type — the two always travel together, so
+/// they are one argument. `Form` is `application/x-www-form-urlencoded`, `Json` is
+/// `application/json`.
+enum PostBody {
+    Form(String),
+    Json(String),
+}
+
+impl PostBody {
+    fn content_type(&self) -> &'static str {
+        match self {
+            PostBody::Form(_) => "application/x-www-form-urlencoded",
+            PostBody::Json(_) => "application/json",
+        }
+    }
+
+    fn into_string(self) -> String {
+        match self {
+            PostBody::Form(s) | PostBody::Json(s) => s,
+        }
+    }
+}
+
+/// The single implementation behind every `post_form*`/`post_json` helper: build
+/// a fresh router from `state` (with `mailer` and `secure_cookies`), send one POST
+/// with the given `body` (and its content type), and return `(status, Set-Cookie,
+/// body)`. The public wrappers below fix the arguments most callers don't vary.
+async fn post_inner(
     state: Arc<storage::AppState>,
     mailer: Arc<dyn MailSender>,
     uri: &str,
-    body: impl Into<String>,
+    body: PostBody,
     auth: Auth<'_>,
     user_agent: Option<&str>,
     secure_cookies: bool,
@@ -122,7 +168,7 @@ async fn post_form_inner(
     let mut builder = Request::builder()
         .method("POST")
         .uri(uri)
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+        .header(header::CONTENT_TYPE, body.content_type());
     match auth {
         Auth::None => {}
         Auth::Cookie(c) => builder = builder.header(header::COOKIE, c),
@@ -134,7 +180,7 @@ async fn post_form_inner(
         builder = builder.header(header::USER_AGENT, ua);
     }
     let request = builder
-        .body(Body::from(body.into()))
+        .body(Body::from(body.into_string()))
         .expect("failed to build request");
 
     let app = jaunder::create_router(
@@ -168,8 +214,16 @@ pub async fn post_form(
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
     let auth = cookie.map_or(Auth::None, Auth::Cookie);
-    let (status, _set_cookie, body) =
-        post_form_inner(state, noop_mailer(), uri, body, auth, None, true).await;
+    let (status, _set_cookie, body) = post_inner(
+        state,
+        noop_mailer(),
+        uri,
+        PostBody::Form(body.into()),
+        auth,
+        None,
+        true,
+    )
+    .await;
     (status, body)
 }
 
@@ -183,8 +237,16 @@ pub async fn post_form_with_mailer(
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
     let auth = cookie.map_or(Auth::None, Auth::Cookie);
-    let (status, _set_cookie, body) =
-        post_form_inner(state, mailer, uri, body, auth, None, true).await;
+    let (status, _set_cookie, body) = post_inner(
+        state,
+        mailer,
+        uri,
+        PostBody::Form(body.into()),
+        auth,
+        None,
+        true,
+    )
+    .await;
     (status, body)
 }
 
@@ -198,7 +260,16 @@ pub async fn post_form_with_secure_flag(
     secure_cookies: bool,
 ) -> (StatusCode, Option<String>, String) {
     let auth = cookie.map_or(Auth::None, Auth::Cookie);
-    post_form_inner(state, noop_mailer(), uri, body, auth, None, secure_cookies).await
+    post_inner(
+        state,
+        noop_mailer(),
+        uri,
+        PostBody::Form(body.into()),
+        auth,
+        None,
+        secure_cookies,
+    )
+    .await
 }
 
 /// Like [`post_form_with_secure_flag`], but also sets a `User-Agent` header.
@@ -211,11 +282,11 @@ pub async fn post_form_with_ua(
     secure_cookies: bool,
 ) -> (StatusCode, Option<String>, String) {
     let auth = cookie.map_or(Auth::None, Auth::Cookie);
-    post_form_inner(
+    post_inner(
         state,
         noop_mailer(),
         uri,
-        body,
+        PostBody::Form(body.into()),
         auth,
         Some(user_agent),
         secure_cookies,
@@ -231,14 +302,66 @@ pub async fn post_form_with_bearer(
     body: impl Into<String>,
     bearer: &str,
 ) -> (StatusCode, Option<String>, String) {
-    post_form_inner(
+    post_inner(
         state,
         noop_mailer(),
         uri,
-        body,
+        PostBody::Form(body.into()),
         Auth::Bearer(bearer),
         None,
         true,
     )
     .await
+}
+
+/// POST a JSON body (`Content-Type: application/json`) with secure cookies and
+/// optional cookie auth; returns `(status, body)` — drops `Set-Cookie`, like the
+/// canonical [`post_form`].
+pub async fn post_json(
+    state: Arc<storage::AppState>,
+    uri: &str,
+    body: serde_json::Value,
+    cookie: Option<&str>,
+) -> (StatusCode, String) {
+    let auth = cookie.map_or(Auth::None, Auth::Cookie);
+    let (status, _set_cookie, body) = post_inner(
+        state,
+        noop_mailer(),
+        uri,
+        PostBody::Json(body.to_string()),
+        auth,
+        None,
+        true,
+    )
+    .await;
+    (status, body)
+}
+
+/// GET a static asset and return `(status, Content-Type)`. Pins the Sqlite backend
+/// — static-asset serving never touches storage, so it need not run on both.
+pub async fn get_asset(uri: &str) -> (StatusCode, Option<String>) {
+    let TestEnv { state, base: _base } = Backend::Sqlite.setup().await;
+
+    let request = Request::builder()
+        .method("GET")
+        .uri(uri)
+        .body(Body::empty())
+        .unwrap();
+
+    let app = jaunder::create_router(
+        test_options(),
+        state,
+        noop_mailer(),
+        false,
+        tmp_storage_path(),
+    );
+    let response = app.oneshot(request).await.unwrap();
+
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .map(|v| v.to_str().unwrap().to_string());
+
+    (status, content_type)
 }

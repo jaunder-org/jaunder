@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use axum::{
     body::Body,
     http::{header, Request, StatusCode},
@@ -7,29 +5,15 @@ use axum::{
 use base64::Engine as _;
 use rstest::*;
 use rstest_reuse::*;
-use tempfile::TempDir;
 use tower::ServiceExt;
 
-use crate::helpers::{ensure_server_fns_registered, test_options};
-use storage::test_support::{backends, noop_mailer, Backend, TestEnv};
-
-fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
-    ensure_server_fns_registered();
-    let storage_path = storage.path().to_path_buf();
-    jaunder::create_router(test_options(), state, noop_mailer(), false, storage_path)
-}
+use crate::helpers::{body_string, make_app};
+use storage::test_support::{backends, Backend, TestEnv};
 
 fn basic_header(username: &str, password: &str) -> String {
     let raw = format!("{username}:{password}");
     let encoded = base64::engine::general_purpose::STANDARD.encode(raw);
     format!("Basic {encoded}")
-}
-
-async fn body_string(response: axum::response::Response) -> String {
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    String::from_utf8(bytes.to_vec()).unwrap()
 }
 
 #[apply(backends)]

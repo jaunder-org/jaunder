@@ -1,5 +1,4 @@
 use common::visibility::AudienceTarget;
-use std::sync::Arc;
 
 use axum::{
     body::Body,
@@ -9,26 +8,15 @@ use chrono::{Timelike, Utc};
 use common::password::Password;
 use common::slug::Slug;
 use common::username::Username;
-use tempfile::TempDir;
 use tower::ServiceExt;
 
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{ensure_server_fns_registered, test_options};
-use storage::test_support::{backends, backends_matrix, noop_mailer, Backend, TestEnv};
+use crate::helpers::make_app;
+use storage::test_support::{backends, backends_matrix, Backend, TestEnv};
 use storage::CreatePostInput;
 use storage::PostFormat;
-
-/// Build the router with a real temp storage directory.
-fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
-    ensure_server_fns_registered();
-    let storage_path = storage.path().to_path_buf();
-    std::fs::create_dir_all(storage_path.join("media").join("upload")).unwrap();
-    std::fs::create_dir_all(storage_path.join("media").join("cached")).unwrap();
-    std::fs::create_dir_all(storage_path.join("media").join("tmp")).unwrap();
-    jaunder::create_router(test_options(), state, noop_mailer(), false, storage_path)
-}
 
 #[apply(backends)]
 #[tokio::test]

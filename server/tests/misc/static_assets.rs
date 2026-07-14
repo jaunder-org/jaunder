@@ -1,40 +1,6 @@
-use axum::{
-    body::Body,
-    http::{Request, StatusCode},
-};
-use tower::ServiceExt;
+use axum::http::StatusCode;
 
-use crate::helpers::test_options;
-use storage::test_support::{noop_mailer, Backend, TestEnv};
-
-async fn get_asset(uri: &str) -> (StatusCode, Option<String>) {
-    // Static-asset serving never touches storage; pin a single backend so these
-    // stay plain (no need to run embedded-asset serving on both).
-    let TestEnv { state, base: _base } = Backend::Sqlite.setup().await;
-
-    let request = Request::builder()
-        .method("GET")
-        .uri(uri)
-        .body(Body::empty())
-        .unwrap();
-
-    let app = jaunder::create_router(
-        test_options(),
-        state,
-        noop_mailer(),
-        false,
-        crate::helpers::tmp_storage_path(),
-    );
-    let response = app.oneshot(request).await.unwrap();
-
-    let status = response.status();
-    let content_type = response
-        .headers()
-        .get(axum::http::header::CONTENT_TYPE)
-        .map(|v| v.to_str().unwrap().to_string());
-
-    (status, content_type)
-}
+use crate::helpers::get_asset;
 
 // guard:no-backend — drives the real asset router via create_router/oneshot to
 // serve an embedded static asset; exercises no database.
