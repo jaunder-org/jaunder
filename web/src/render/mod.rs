@@ -16,6 +16,7 @@
 use crate::posts::{PostResponse, TimelinePage, TimelinePostSummary};
 use crate::tags::TagSummary;
 use crate::ui::topbar::render_topbar;
+use common::tag::Tag;
 use common::username::Username;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
@@ -62,12 +63,12 @@ pub enum PageSeed {
         page: TimelinePage,
     },
     SiteTag {
-        tag: String,
+        tag: Tag,
         page: TimelinePage,
     },
     UserTag {
         username: Username,
-        tag: String,
+        tag: Tag,
         page: TimelinePage,
     },
     Permalink(PostResponse),
@@ -187,30 +188,23 @@ pub fn render_head(seed: &PageSeed) -> String {
 /// SSR render did (feed readers + `AtomPub` editors follow these). Each page emits
 /// exactly what its reactive counterpart does: the RSS/Atom/JSON feed links for
 /// its surface, and — only on the user-profile page — the RSD `EditURI` link. The
-/// permalink page renders none. A route param that fails to parse omits the feed
-/// links (mirrors the reactive `.ok()` guard). Post-boot the reactive components
-/// re-add identical links; the duplicates are invisible.
+/// permalink page renders none. Post-boot the reactive components re-add
+/// identical links; the duplicates are invisible.
 fn render_discovery(seed: &PageSeed) -> String {
     use common::feed::{canonicalize, FeedFormat, FeedSurface};
-    use common::tag::Tag;
 
     let mut out = String::new();
 
     let surface = match seed {
         PageSeed::SiteTimeline(_) => Some(FeedSurface::Site),
-        PageSeed::SiteTag { tag, .. } => tag
-            .parse::<Tag>()
-            .ok()
-            .map(|tag| FeedSurface::SiteTag { tag }),
+        PageSeed::SiteTag { tag, .. } => Some(FeedSurface::SiteTag { tag: tag.clone() }),
         PageSeed::Profile { username, .. } => Some(FeedSurface::User {
             username: username.clone(),
         }),
-        PageSeed::UserTag { username, tag, .. } => {
-            tag.parse::<Tag>().ok().map(|tag| FeedSurface::UserTag {
-                username: username.clone(),
-                tag,
-            })
-        }
+        PageSeed::UserTag { username, tag, .. } => Some(FeedSurface::UserTag {
+            username: username.clone(),
+            tag: tag.clone(),
+        }),
         // The reactive permalink page renders no discovery links.
         PageSeed::Permalink(_) => None,
     };
@@ -999,7 +993,7 @@ mod tests {
             ),
             (
                 PageSeed::SiteTag {
-                    tag: "rust".into(),
+                    tag: "rust".parse().unwrap(),
                     page: one_post_page(),
                 },
                 "<title>#rust</title>",
@@ -1007,7 +1001,7 @@ mod tests {
             (
                 PageSeed::UserTag {
                     username: "bob".parse::<Username>().unwrap(),
-                    tag: "rust".into(),
+                    tag: "rust".parse().unwrap(),
                     page: one_post_page(),
                 },
                 "<title>#rust by bob</title>",
@@ -1022,7 +1016,7 @@ mod tests {
     #[test]
     fn body_covers_tag_page_headings() {
         let site = render_body(&PageSeed::SiteTag {
-            tag: "rust".into(),
+            tag: "rust".parse().unwrap(),
             page: one_post_page(),
         });
         // Tag pages render the Topbar (h1 + sub), then j-scroll > j-page > posts.
@@ -1036,7 +1030,7 @@ mod tests {
 
         let user = render_body(&PageSeed::UserTag {
             username: "bob".parse::<Username>().unwrap(),
-            tag: "rust".into(),
+            tag: "rust".parse().unwrap(),
             page: one_post_page(),
         });
         assert!(user.contains("<h1>#rust</h1>"), "{user}");
@@ -1107,7 +1101,7 @@ mod tests {
         });
         assert!(profile.contains("<p>No posts yet.</p>"), "{profile}");
         let tag = render_body(&PageSeed::SiteTag {
-            tag: "rust".into(),
+            tag: "rust".parse().unwrap(),
             page: empty,
         });
         assert!(tag.contains("<p>No posts with this tag yet.</p>"), "{tag}");
