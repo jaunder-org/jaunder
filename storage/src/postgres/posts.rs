@@ -86,7 +86,7 @@ impl PostDialect for Postgres {
                        COALESCE((SELECT json_agg(json_build_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = posts.post_id), '[]'::json)::text AS tags",
         )
         .bind(&input.title)
-        .bind(input.slug.as_str())
+        .bind(input.slug.as_ref())
         .bind(&input.body)
         .bind(input.format.to_string())
         .bind(&input.rendered_html)

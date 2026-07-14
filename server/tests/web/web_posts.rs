@@ -195,7 +195,7 @@ async fn create_post_persists_rendered_published_post(#[case] backend: Backend) 
         published_at.year(),
         published_at.month(),
         published_at.day(),
-        record.slug.as_str()
+        record.slug.as_ref()
     );
     assert_eq!(
         created.permalink.as_deref(),
@@ -1933,7 +1933,7 @@ async fn get_post_finds_author_draft_across_multiple_pages(#[case] backend: Back
         record.created_at.year(),
         record.created_at.month(),
         record.created_at.day(),
-        record.slug.as_str(),
+        record.slug.as_ref(),
         Some(&cookie),
     )
     .await;

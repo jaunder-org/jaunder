@@ -193,7 +193,7 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
         .expect("get post")
         .expect("restored post");
     assert_eq!(post.title.as_deref(), Some("Restored Post"));
-    assert_eq!(post.slug.as_str(), "restored-post");
+    assert_eq!(post.slug, "restored-post");
     // Value interop (DEC-D): the timestamp survives with its value.
     assert_eq!(post.published_at, Some(fixture_published_at()));
 

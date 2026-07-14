@@ -161,7 +161,10 @@ pub fn post_to_entry(post: &PostRecord, base_url: &str) -> Entry {
 
     set_draft(&mut entry, post.published_at.is_none());
     // Read-only server slug (ADR-0023): emitted on every entry, draft or live.
-    set_j_slug(&mut entry, post.slug.as_str());
+    // `set_j_slug` takes `&str` — it is the generic AtomPub XML-extension writer
+    // (a serialization boundary, like the JSON serde bridge), not a slug-value
+    // carrier; the typed `Slug` is derefed to its text here.
+    set_j_slug(&mut entry, post.slug.as_ref());
     entry
 }
 

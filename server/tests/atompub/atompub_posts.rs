@@ -1164,7 +1164,7 @@ async fn member_carries_read_only_j_slug(#[case] backend: Backend) {
         "member should declare xmlns:j: {body}"
     );
     assert!(
-        body.contains(&format!("<j:slug>{}</j:slug>", post.slug.as_str())),
+        body.contains(&format!("<j:slug>{}</j:slug>", post.slug.as_ref())),
         "member should carry the post's slug as j:slug: {body}"
     );
 }
@@ -1210,8 +1210,7 @@ async fn incoming_j_slug_is_ignored(#[case] backend: Backend) {
         .unwrap()
         .unwrap();
     assert_ne!(
-        rec.slug.as_str(),
-        "client-supplied",
+        rec.slug, "client-supplied",
         "incoming j:slug must not become the stored slug"
     );
 }

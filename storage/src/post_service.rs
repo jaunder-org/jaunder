@@ -565,7 +565,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(record.user_id, user_id);
-        assert_eq!(record.slug.as_str(), "hello-world");
+        assert_eq!(record.slug, "hello-world");
         assert_eq!(record.body, "Hello, world!");
         assert_eq!(record.format, PostFormat::Markdown);
         assert!(record.rendered_html.contains("<p>Hello, world!</p>"));
@@ -598,7 +598,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(record.title.as_deref(), Some("Explicit Title"));
-        assert_eq!(record.slug.as_str(), "explicit-title");
+        assert_eq!(record.slug, "explicit-title");
     }
 
     #[apply(backends)]
@@ -625,7 +625,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(record.slug.as_str(), "my-custom-slug");
+        assert_eq!(record.slug, "my-custom-slug");
     }
 
     #[apply(backends)]
@@ -744,7 +744,7 @@ mod tests {
 
         // Never hard-fails: a title with no usable characters lands on the
         // synthetic `post` fallback rather than NoSlugFromPost.
-        assert_eq!(record.slug.as_str(), "post");
+        assert_eq!(record.slug, "post");
     }
 
     #[apply(backends)]
@@ -771,7 +771,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(record.slug.as_str(), "日本語");
+        assert_eq!(record.slug, "日本語");
     }
 
     #[test]
@@ -857,9 +857,9 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(r1.slug.as_str(), "hello-world");
-        assert_eq!(r2.slug.as_str(), "hello-world-2");
-        assert_eq!(r3.slug.as_str(), "hello-world-3");
+        assert_eq!(r1.slug, "hello-world");
+        assert_eq!(r2.slug, "hello-world-2");
+        assert_eq!(r3.slug, "hello-world-3");
     }
 
     #[apply(backends)]
@@ -905,8 +905,8 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(r1.slug.as_str(), "hello-world");
-        assert_eq!(r2.slug.as_str(), "hello-world-2");
+        assert_eq!(r1.slug, "hello-world");
+        assert_eq!(r2.slug, "hello-world-2");
 
         let err = perform_post_creation(
             storage,

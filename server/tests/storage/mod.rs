@@ -2339,7 +2339,7 @@ async fn post_create_and_get_by_id_works(#[case] backend: Backend) {
     assert_eq!(record.post_id, post_id);
     assert_eq!(record.user_id, user_id);
     assert_eq!(record.title.as_deref(), Some("Post hello-world"));
-    assert_eq!(record.slug.as_str(), "hello-world");
+    assert_eq!(record.slug, "hello-world");
     assert_eq!(record.format, PostFormat::Markdown);
     assert!(record.published_at.is_none());
     assert!(record.deleted_at.is_none());
@@ -3024,7 +3024,7 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
         .await
         .unwrap()
         .into_iter()
-        .find(|p| p.slug.as_str() == "alice-recent-1")
+        .find(|p| p.slug == "alice-recent-1")
         .unwrap();
     state
         .posts
@@ -3048,7 +3048,7 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
         .await
         .unwrap();
     assert_eq!(tag_site.len(), 1);
-    assert_eq!(tag_site[0].slug.as_str(), "alice-recent-1");
+    assert_eq!(tag_site[0].slug, "alice-recent-1");
 
     let tag_user = state
         .posts
@@ -3259,7 +3259,7 @@ async fn drafts_list_includes_scheduled_excludes_live(#[case] backend: Backend) 
         .list_drafts_by_user(user_id, None, 50, now)
         .await
         .unwrap();
-    let slugs: Vec<String> = rows.iter().map(|p| p.slug.as_str().to_string()).collect();
+    let slugs: Vec<String> = rows.iter().map(|p| p.slug.to_string()).collect();
     assert!(
         slugs.contains(&"a-draft".to_string()),
         "drafts must include true drafts: {slugs:?}"
