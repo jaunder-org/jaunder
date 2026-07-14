@@ -102,12 +102,6 @@ pub const MAX_TAGS_PER_POST: usize = 25;
 /// [`parse_and_validate_tags`].
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum TagValidationError {
-    /// A token did not match the canonical slug pattern after trimming.
-    #[error("invalid tag: {token:?} (must match [a-z0-9][a-z0-9-]*)")]
-    Invalid {
-        /// The trimmed token that failed [`Tag::from_str`].
-        token: String,
-    },
     /// The number of distinct tags exceeded [`MAX_TAGS_PER_POST`].
     #[error("too many tags ({count} > {max})")]
     TooMany {
@@ -118,40 +112,30 @@ pub enum TagValidationError {
     },
 }
 
-/// Validates a `Vec<String>` of author-provided tag display tokens.
+/// De-duplicates a list of already-validated [`TagLabel`]s and enforces the
+/// per-post cap.
 ///
-/// Trims whitespace, drops empty tokens, normalizes the canonical slug via
-/// [`Tag::from_str`] (which rejects anything outside
-/// `[a-z0-9][a-z0-9-]*` after lowercasing), de-duplicates by slug while
-/// preserving the first occurrence's display casing, and enforces the
+/// Each [`TagLabel`] is already non-empty and slug-valid (its `FromStr` ran at
+/// the boundary), so this only de-duplicates by canonical [`slug`](TagLabel::slug)
+/// — preserving the first occurrence's label casing — and enforces the
 /// [`MAX_TAGS_PER_POST`] cap.
 ///
-/// Returns the validated display tokens in input order with duplicates
-/// removed.
+/// Returns the deduplicated labels in input order.
 ///
 /// # Errors
 ///
-/// Returns [`TagValidationError::Invalid`] if any token fails
-/// [`Tag::from_str`], or [`TagValidationError::TooMany`] if the number of
-/// distinct tags exceeds [`MAX_TAGS_PER_POST`].
-pub fn parse_and_validate_tags(raw: Vec<String>) -> Result<Vec<String>, TagValidationError> {
+/// Returns [`TagValidationError::TooMany`] if the number of distinct tags
+/// exceeds [`MAX_TAGS_PER_POST`].
+pub fn parse_and_validate_tags(raw: Vec<TagLabel>) -> Result<Vec<TagLabel>, TagValidationError> {
     use std::collections::HashSet;
-    use std::str::FromStr;
 
-    // Dedup on the canonical Tag (Hash) while preserving the first
-    // occurrence's display casing in `out`.
+    // Dedup on the canonical Tag (Hash) while preserving the first occurrence's
+    // label casing in `out`.
     let mut seen: HashSet<Tag> = HashSet::new();
-    let mut out: Vec<String> = Vec::with_capacity(raw.len().min(MAX_TAGS_PER_POST));
-    for token in raw {
-        let trimmed = token.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let tag = Tag::from_str(trimmed).map_err(|_| TagValidationError::Invalid {
-            token: trimmed.to_string(),
-        })?;
-        if seen.insert(tag) {
-            out.push(trimmed.to_string());
+    let mut out: Vec<TagLabel> = Vec::with_capacity(raw.len().min(MAX_TAGS_PER_POST));
+    for label in raw {
+        if seen.insert(label.slug()) {
+            out.push(label);
         }
     }
     if out.len() > MAX_TAGS_PER_POST {
@@ -371,59 +355,31 @@ mod tests {
         assert!("9value".parse::<Tag>().is_ok());
     }
 
-    #[test]
-    fn parse_and_validate_tags_skips_empty_and_whitespace_only_tokens() {
-        let tags = parse_and_validate_tags(vec![
-            String::new(),
-            "   ".to_string(),
-            "rust".to_string(),
-            "\t".to_string(),
-        ])
-        .expect("non-empty tags should validate");
-        assert_eq!(tags, vec!["rust".to_string()]);
+    fn labels(v: &[&str]) -> Vec<TagLabel> {
+        v.iter().map(|s| s.parse().unwrap()).collect()
     }
 
     #[test]
     fn parse_and_validate_tags_deduplicates_repeated_tags() {
-        let tags = parse_and_validate_tags(vec![
-            "rust".to_string(),
-            "rust".to_string(),
-            "leptos".to_string(),
-        ])
-        .expect("valid tags should validate");
-        assert_eq!(tags, vec!["rust".to_string(), "leptos".to_string()]);
+        let tags = parse_and_validate_tags(labels(&["rust", "rust", "leptos"]))
+            .expect("valid tags should validate");
+        assert_eq!(tags, labels(&["rust", "leptos"]));
     }
 
     #[test]
-    fn parse_and_validate_tags_dedups_mixed_case_keeping_first_display() {
-        // Dedup is on the canonical (lowercased) Tag, so "Rust"/"rust"
-        // collapse to one entry; the first occurrence's display casing is
-        // preserved in the returned Vec<String>.
-        let tags = parse_and_validate_tags(vec![
-            "Rust".to_string(),
-            "rust".to_string(),
-            "LEPTOS".to_string(),
-        ])
-        .expect("valid tags should validate");
-        assert_eq!(tags, vec!["Rust".to_string(), "LEPTOS".to_string()]);
-    }
-
-    #[test]
-    fn parse_and_validate_tags_rejects_invalid_token() {
-        let err = parse_and_validate_tags(vec!["Not A Tag".to_string()]).unwrap_err();
-        assert_eq!(
-            err,
-            TagValidationError::Invalid {
-                token: "Not A Tag".to_string()
-            }
-        );
-        // Display message preserved for boundary stringification.
-        assert!(err.to_string().contains("invalid tag"));
+    fn parse_and_validate_tags_dedups_mixed_case_keeping_first_label() {
+        // Dedup is on the canonical (lowercased) slug, so "Rust"/"rust" collapse
+        // to one entry; the first occurrence's label casing is preserved.
+        let tags = parse_and_validate_tags(labels(&["Rust", "rust", "LEPTOS"]))
+            .expect("valid tags should validate");
+        assert_eq!(tags, labels(&["Rust", "LEPTOS"]));
     }
 
     #[test]
     fn parse_and_validate_tags_rejects_too_many_tags() {
-        let raw: Vec<String> = (0..=MAX_TAGS_PER_POST).map(|i| format!("tag{i}")).collect();
+        let raw: Vec<TagLabel> = (0..=MAX_TAGS_PER_POST)
+            .map(|i| format!("tag{i}").parse().unwrap())
+            .collect();
         let err = parse_and_validate_tags(raw).unwrap_err();
         assert_eq!(
             err,

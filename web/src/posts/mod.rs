@@ -32,7 +32,7 @@ use {
     crate::feed_events::enqueue_feed_events,
     crate::viewer::viewer_identity,
     chrono::{DateTime, Utc},
-    common::tag::Tag,
+    common::tag::{Tag, TagLabel},
     std::{collections::BTreeSet, sync::Arc},
     storage::{
         apply_post_tag_diff, fetch_post_record, find_draft_by_permalink_for_user,
@@ -238,7 +238,21 @@ pub async fn create_post(
         let auth = require_auth().await?;
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
-        let validated_tags = common::tag::parse_and_validate_tags(tags.unwrap_or_default())?;
+        // TEMP(T3): the wire arg stays Option<Vec<String>> until T3 types it as
+        // Option<Vec<TagLabel>>. Filter empty/whitespace tokens first (preserving
+        // today's silent empty-drop), then parse each to TagLabel — a parse failure
+        // maps to a Validation error (the current invalid-tag behavior), not the
+        // ADR-0065 arg-decode path T3 introduces.
+        let tag_labels = tags
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|t| !t.trim().is_empty())
+            .map(|t| {
+                t.parse::<TagLabel>()
+                    .map_err(|e| InternalError::validation(e.to_string()))
+            })
+            .collect::<Result<Vec<TagLabel>, _>>()?;
+        let validated_tags = common::tag::parse_and_validate_tags(tag_labels)?;
 
         let format = format.parse::<PostFormat>()?;
         // Publish + a supplied time = scheduled (future) or backdated (past);
@@ -287,8 +301,9 @@ pub async fn create_post(
             summary: record.summary,
         };
 
-        for display in &validated_tags {
-            posts.tag_post(created.post_id, display).await?;
+        // TEMP(T3): validated_tags is Vec<TagLabel>; tag_post takes &TagLabel.
+        for label in &validated_tags {
+            posts.tag_post(created.post_id, label).await?;
         }
 
         let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
@@ -401,7 +416,24 @@ pub async fn update_post(
 
         // Validate tags up-front so a malformed input rejects before any
         // post mutation lands.
-        let new_tags = tags.map(common::tag::parse_and_validate_tags).transpose()?;
+        // TEMP(T3): the wire arg stays Option<Vec<String>> until T3 types it as
+        // Option<Vec<TagLabel>>. Filter empty/whitespace tokens (preserving today's
+        // silent empty-drop), parse each to TagLabel (a parse failure → Validation,
+        // the current invalid-tag behavior), then run the dedup/cap validator.
+        let new_tags = match tags {
+            Some(tokens) => {
+                let labels = tokens
+                    .into_iter()
+                    .filter(|t| !t.trim().is_empty())
+                    .map(|t| {
+                        t.parse::<TagLabel>()
+                            .map_err(|e| InternalError::validation(e.to_string()))
+                    })
+                    .collect::<Result<Vec<TagLabel>, _>>()?;
+                Some(common::tag::parse_and_validate_tags(labels)?)
+            }
+            None => None,
+        };
 
         let format = format.parse::<PostFormat>()?;
         let normalized_summary = summary.and_then(common::text::non_empty_owned);

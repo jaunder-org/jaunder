@@ -4,7 +4,7 @@ use sqlx::{Pool, Sqlite};
 
 use crate::helpers::{post_record_from_row, PostRow};
 use crate::{PostDialect, PostRecord, PostStore, TaggingError, UpdatePostError, UpdatePostInput};
-use common::tag::Tag;
+use common::tag::{Tag, TagLabel};
 
 /// SQLite-backed post storage.
 pub type SqlitePostStorage = PostStore<Sqlite>;
@@ -123,11 +123,10 @@ impl PostDialect for Sqlite {
     async fn tag_post(
         pool: &Pool<Sqlite>,
         post_id: i64,
-        tag_display: &str,
+        tag: &TagLabel,
     ) -> Result<(), TaggingError> {
-        let tag: Tag = tag_display.parse().map_err(|_| {
-            TaggingError::Internal(sqlx::Error::Decode("invalid tag format".into()))
-        })?;
+        // The slug is the canonical key; the label carries the author's casing.
+        let slug = tag.slug();
 
         // ADR-0021: take the write lock up front with BEGIN IMMEDIATE rather than a
         // deferred BEGIN, so the SELECT->INSERT step performs no shared->reserved lock
@@ -149,13 +148,13 @@ impl PostDialect for Sqlite {
             }
 
             sqlx::query("INSERT OR IGNORE INTO tags (tag_slug) VALUES ($1)")
-                .bind(tag.as_ref())
+                .bind(slug.as_ref())
                 .execute(&mut *conn)
                 .await?;
 
             let tag_id: i64 =
                 sqlx::query_scalar::<_, i64>("SELECT tag_id FROM tags WHERE tag_slug = $1")
-                    .bind(tag.as_ref())
+                    .bind(slug.as_ref())
                     .fetch_one(&mut *conn)
                     .await?;
 
@@ -164,7 +163,7 @@ impl PostDialect for Sqlite {
             )
             .bind(post_id)
             .bind(tag_id)
-            .bind(tag_display)
+            .bind(tag.as_ref())
             .execute(&mut *conn)
             .await
             {

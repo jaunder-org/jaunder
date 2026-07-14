@@ -10,7 +10,7 @@ use crate::{
     UserRecord,
 };
 use common::slug::Slug;
-use common::tag::Tag;
+use common::tag::{Tag, TagLabel};
 use common::token::InvalidTokenShape;
 use common::username::Username;
 use host::invite::InviteCode;
@@ -139,27 +139,25 @@ pub(crate) type PostRecordParts = (
 #[derive(Deserialize)]
 struct PostTagJson {
     tag_id: i64,
-    tag_slug: String,
-    tag_display: String,
+    tag_slug: Tag,
+    tag_display: TagLabel,
 }
 
 fn parse_post_tags_json(json: &str, post_id: i64) -> sqlx::Result<Vec<PostTag>> {
+    // `Tag`/`TagLabel` validate on deserialize (the serde bridge), so this is a
+    // straight field-move: an invalid stored slug or label surfaces as a decode
+    // error from `from_str` above.
     let raw: Vec<PostTagJson> =
         serde_json::from_str(json).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-    raw.into_iter()
-        .map(|r| {
-            let tag_slug: Tag = r
-                .tag_slug
-                .parse()
-                .map_err(|_| sqlx::Error::Decode("invalid tag slug in db".into()))?;
-            Ok(PostTag {
-                post_id,
-                tag_id: r.tag_id,
-                tag_slug,
-                tag_display: r.tag_display,
-            })
+    Ok(raw
+        .into_iter()
+        .map(|r| PostTag {
+            post_id,
+            tag_id: r.tag_id,
+            tag_slug: r.tag_slug,
+            tag_display: r.tag_display,
         })
-        .collect()
+        .collect())
 }
 
 pub(crate) fn build_post_record(

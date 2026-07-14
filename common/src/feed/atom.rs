@@ -46,7 +46,7 @@ pub fn render_atom(meta: &FeedMetadata, items: &[FeedItem]) -> String {
                     .tags
                     .iter()
                     .map(|t| Category {
-                        term: t.clone(),
+                        term: t.to_string(),
                         ..Default::default()
                     })
                     .collect(),
@@ -99,7 +99,7 @@ mod tests {
             content_html: "<p>hi</p>".into(),
             published_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
             updated_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
-            tags: vec!["rust".into()],
+            tags: vec!["rust".parse().unwrap()],
         }
     }
 

@@ -10,6 +10,7 @@ use quick_xml::Writer;
 
 use super::xml::{write_empty_element, write_text_element};
 use super::{APP_NS, ATOM_NS, J_NS};
+use crate::tag::Tag;
 
 /// Declaration of a single collection (posts or media) in a workspace.
 #[derive(Debug, Clone)]
@@ -22,7 +23,7 @@ pub struct CollectionDecl {
     pub accept: Vec<String>,
     /// Category scheme/terms available for entries in this collection.
     /// When non-empty, an `app:categories` element with `fixed="no"` is emitted.
-    pub categories: Vec<String>,
+    pub categories: Vec<Tag>,
 }
 
 /// A complete Service Document describing the publishing surface for one workspace.
@@ -94,7 +95,7 @@ fn write_collection(writer: &mut Writer<Vec<u8>>, coll: &CollectionDecl) {
         let _ = writer.write_event(Event::Start(cat_elem));
 
         for term in &coll.categories {
-            write_empty_element(writer, "atom:category", &[("term", term.as_str())]);
+            write_empty_element(writer, "atom:category", &[("term", term.as_ref())]);
         }
 
         let _ = writer.write_event(Event::End(BytesEnd::new("app:categories")));
@@ -115,7 +116,7 @@ mod tests {
                 href: "https://h/atompub/alice/posts".into(),
                 title: "Posts".into(),
                 accept: vec!["application/atom+xml;type=entry".into()],
-                categories: vec!["rust".into(), "leptos".into()],
+                categories: vec!["rust".parse().unwrap(), "leptos".parse().unwrap()],
             },
             media_collection: CollectionDecl {
                 href: "https://h/atompub/alice/media".into(),

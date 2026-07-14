@@ -46,19 +46,19 @@ mod tests {
                 post_id: 1,
                 tag_id: 1,
                 tag_slug: "web".parse().unwrap(),
-                tag_display: "Web".to_string(),
+                tag_display: "Web".parse().unwrap(),
             },
             PostTag {
                 post_id: 1,
                 tag_id: 2,
                 tag_slug: "rust".parse().unwrap(),
-                tag_display: "Rust".to_string(),
+                tag_display: "Rust".parse().unwrap(),
             },
             PostTag {
                 post_id: 1,
                 tag_id: 1,
                 tag_slug: "web".parse().unwrap(),
-                tag_display: "Web".to_string(),
+                tag_display: "Web".parse().unwrap(),
             },
         ];
         let slugs = tag_slugs(&tags);

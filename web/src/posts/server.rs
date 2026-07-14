@@ -41,7 +41,8 @@ fn post_tags_to_summaries(tags: Vec<PostTag>) -> Vec<TagSummary> {
     tags.into_iter()
         .map(|t| TagSummary {
             slug: t.tag_slug.to_string(),
-            display: t.tag_display,
+            // TEMP(T3): TagSummary.display is still String this task; TagLabel → String.
+            display: t.tag_display.to_string(),
         })
         .collect()
 }

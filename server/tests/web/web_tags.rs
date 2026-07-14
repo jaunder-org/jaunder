@@ -1,3 +1,4 @@
+use common::tag::TagLabel;
 use common::visibility::AudienceTarget;
 use std::sync::Arc;
 
@@ -45,7 +46,11 @@ async fn seed_user_and_tagged_post(
         .await
         .expect("create_post failed");
     for display in tags {
-        state.posts.tag_post(post_id, display).await.unwrap();
+        state
+            .posts
+            .tag_post(post_id, &display.parse::<TagLabel>().unwrap())
+            .await
+            .unwrap();
     }
     post_id
 }
@@ -128,7 +133,7 @@ async fn list_tags_clamps_limit_to_max(#[case] backend: Backend) {
     for n in 0..60 {
         state
             .posts
-            .tag_post(post, &format!("tag{n:02}"))
+            .tag_post(post, &format!("tag{n:02}").parse::<TagLabel>().unwrap())
             .await
             .unwrap();
     }
@@ -154,7 +159,7 @@ async fn list_tags_uses_default_limit_when_unspecified(#[case] backend: Backend)
     for n in 0..20 {
         state
             .posts
-            .tag_post(post, &format!("tag{n:02}"))
+            .tag_post(post, &format!("tag{n:02}").parse::<TagLabel>().unwrap())
             .await
             .unwrap();
     }

@@ -1,7 +1,7 @@
 use chrono::{Datelike, Utc};
 use common::password::Password;
 use common::slug::Slug;
-use common::tag::Tag;
+use common::tag::{Tag, TagLabel};
 use common::username::Username;
 use common::visibility::{
     AudienceTarget, Channel, SubscriptionPolicy, SubscriptionStatus, TargetKind, ViewerIdentity,
@@ -2232,8 +2232,16 @@ async fn list_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backend) {
         .unwrap();
     let live = seed_post_published_at(state, user_id, "live-one", now - Duration::hours(1)).await;
     let sched = seed_post_published_at(state, user_id, "sched-one", now + Duration::hours(1)).await;
-    state.posts.tag_post(live, "scheduling").await.unwrap();
-    state.posts.tag_post(sched, "scheduling").await.unwrap();
+    state
+        .posts
+        .tag_post(live, &"scheduling".parse::<TagLabel>().unwrap())
+        .await
+        .unwrap();
+    state
+        .posts
+        .tag_post(sched, &"scheduling".parse::<TagLabel>().unwrap())
+        .await
+        .unwrap();
     let tag_slug: Tag = "scheduling".parse().unwrap();
 
     let at_now = state
@@ -2274,8 +2282,16 @@ async fn list_user_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backe
         .unwrap();
     let live = seed_post_published_at(state, user_id, "live-one", now - Duration::hours(1)).await;
     let sched = seed_post_published_at(state, user_id, "sched-one", now + Duration::hours(1)).await;
-    state.posts.tag_post(live, "scheduling").await.unwrap();
-    state.posts.tag_post(sched, "scheduling").await.unwrap();
+    state
+        .posts
+        .tag_post(live, &"scheduling".parse::<TagLabel>().unwrap())
+        .await
+        .unwrap();
+    state
+        .posts
+        .tag_post(sched, &"scheduling".parse::<TagLabel>().unwrap())
+        .await
+        .unwrap();
     let tag_slug: Tag = "scheduling".parse().unwrap();
 
     let at_now = state
@@ -3034,7 +3050,7 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
         .unwrap();
     state
         .posts
-        .tag_post(alice_recent_1.post_id, "rust")
+        .tag_post(alice_recent_1.post_id, &"rust".parse::<TagLabel>().unwrap())
         .await
         .unwrap();
 
@@ -3307,7 +3323,11 @@ async fn list_posts_gone_live_between_returns_only_window_with_tags(#[case] back
     // Inside the window (after, upto], tagged: must be returned with its tag.
     let inside =
         seed_post_published_at(state, alice, "in-window", after + Duration::minutes(30)).await;
-    state.posts.tag_post(inside, "scheduling").await.unwrap();
+    state
+        .posts
+        .tag_post(inside, &"scheduling".parse::<TagLabel>().unwrap())
+        .await
+        .unwrap();
     // Exactly at the inclusive upper bound: must be returned (untagged).
     seed_post_published_at(state, bob, "at-upto", upto).await;
     // Exactly at the exclusive lower bound: must be excluded.
@@ -3365,7 +3385,11 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
     // A live post, newer than t0, on the site/user feeds and — once tagged —
     // on the site-tag and user-tag feeds too.
     let post = seed_post_published_at(state, alice, "live-one", now - Duration::hours(1)).await;
-    state.posts.tag_post(post, "rust").await.unwrap();
+    state
+        .posts
+        .tag_post(post, &"rust".parse::<TagLabel>().unwrap())
+        .await
+        .unwrap();
 
     let mk_row = |feed_url: &str, generated_at| FeedCacheRow {
         feed_url: feed_url.to_string(),
@@ -3469,17 +3493,17 @@ async fn multiple_tags_on_single_post(#[case] backend: Backend) {
 
     state
         .posts
-        .tag_post(post_id, "rust")
+        .tag_post(post_id, &"rust".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
     state
         .posts
-        .tag_post(post_id, "performance")
+        .tag_post(post_id, &"performance".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
     state
         .posts
-        .tag_post(post_id, "systems-programming")
+        .tag_post(post_id, &"systems-programming".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
 
@@ -3591,12 +3615,12 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
     // Tag with different casings but same canonical form - should map to same slug
     state
         .posts
-        .tag_post(post1, "Web-Development")
+        .tag_post(post1, &"Web-Development".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post post1 failed");
     state
         .posts
-        .tag_post(post2, "WEB-DEVELOPMENT")
+        .tag_post(post2, &"WEB-DEVELOPMENT".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post post2 failed");
 
@@ -3624,52 +3648,6 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
         .expect("list_posts_by_tag failed");
 
     assert_eq!(posts.len(), 2);
-}
-
-#[apply(backends)]
-#[tokio::test]
-async fn invalid_tag_input(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("invalid_tag_user"),
-            &password("password"),
-            Some("Invalid"),
-            false,
-        )
-        .await
-        .expect("user creation failed");
-
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Test Post".to_string()),
-            slug: "invalid-test".parse().unwrap(),
-            body: "Content".to_string(),
-            format: PostFormat::Markdown,
-            rendered_html: "<p>Content</p>".to_string(),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
-
-    let result = state.posts.tag_post(post_id, "-invalid").await;
-    assert!(matches!(result, Err(TaggingError::Internal(_))));
-
-    let result = state.posts.tag_post(post_id, "invalid@tag").await;
-    assert!(matches!(result, Err(TaggingError::Internal(_))));
-
-    let result = state.posts.tag_post(post_id, "invalid tag").await;
-    assert!(matches!(result, Err(TaggingError::Internal(_))));
-
-    let result = state.posts.tag_post(post_id, "").await;
-    assert!(matches!(result, Err(TaggingError::Internal(_))));
 }
 
 #[apply(backends)]
@@ -3710,7 +3688,7 @@ async fn tag_list_pagination(#[case] backend: Backend) {
 
         state
             .posts
-            .tag_post(post_id, "pagination-test")
+            .tag_post(post_id, &"pagination-test".parse::<TagLabel>().unwrap())
             .await
             .expect("tag_post failed");
     }
@@ -3790,12 +3768,12 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
 
     state
         .posts
-        .tag_post(post1, "shared-tag")
+        .tag_post(post1, &"shared-tag".parse::<TagLabel>().unwrap())
         .await
         .expect("tag post1 failed");
     state
         .posts
-        .tag_post(post2, "shared-tag")
+        .tag_post(post2, &"shared-tag".parse::<TagLabel>().unwrap())
         .await
         .expect("tag post2 failed");
 
@@ -3868,17 +3846,17 @@ async fn selective_untag(#[case] backend: Backend) {
 
     state
         .posts
-        .tag_post(post_id, "tag-a")
+        .tag_post(post_id, &"tag-a".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
     state
         .posts
-        .tag_post(post_id, "tag-b")
+        .tag_post(post_id, &"tag-b".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
     state
         .posts
-        .tag_post(post_id, "tag-c")
+        .tag_post(post_id, &"tag-c".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
 
@@ -3943,17 +3921,17 @@ async fn numeric_tag(#[case] backend: Backend) {
 
     state
         .posts
-        .tag_post(post_id, "python3")
+        .tag_post(post_id, &"python3".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
     state
         .posts
-        .tag_post(post_id, "rust-2024")
+        .tag_post(post_id, &"rust-2024".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
     state
         .posts
-        .tag_post(post_id, "0day")
+        .tag_post(post_id, &"0day".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
 
@@ -4005,16 +3983,22 @@ async fn retag_same_post_with_same_tag_fails(#[case] backend: Backend) {
 
     state
         .posts
-        .tag_post(post_id, "learning")
+        .tag_post(post_id, &"learning".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
 
-    let result = state.posts.tag_post(post_id, "learning").await;
+    let result = state
+        .posts
+        .tag_post(post_id, &"learning".parse::<TagLabel>().unwrap())
+        .await;
     assert!(matches!(result, Err(TaggingError::AlreadyTagged)));
 
     // Dedup is case-insensitive: a different-cased form of an existing tag is
     // still AlreadyTagged (both canonicalize to the same slug).
-    let result = state.posts.tag_post(post_id, "LEARNING").await;
+    let result = state
+        .posts
+        .tag_post(post_id, &"LEARNING".parse::<TagLabel>().unwrap())
+        .await;
     assert!(matches!(result, Err(TaggingError::AlreadyTagged)));
 }
 
@@ -4130,7 +4114,7 @@ async fn many_tags_many_posts(#[case] backend: Backend) {
         for tag in &tags {
             state
                 .posts
-                .tag_post(post_id, tag)
+                .tag_post(post_id, &tag.parse::<TagLabel>().unwrap())
                 .await
                 .expect("tag_post failed");
         }
@@ -4191,12 +4175,12 @@ async fn tag_all_numeric(#[case] backend: Backend) {
 
     state
         .posts
-        .tag_post(post_id, "2024")
+        .tag_post(post_id, &"2024".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
     state
         .posts
-        .tag_post(post_id, "42")
+        .tag_post(post_id, &"42".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
 
@@ -4248,17 +4232,17 @@ async fn tag_hyphen_boundaries(#[case] backend: Backend) {
     // Valid: hyphens in the middle and at end
     state
         .posts
-        .tag_post(post_id, "web-development")
+        .tag_post(post_id, &"web-development".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
     state
         .posts
-        .tag_post(post_id, "a-b-c")
+        .tag_post(post_id, &"a-b-c".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
     state
         .posts
-        .tag_post(post_id, "end-")
+        .tag_post(post_id, &"end-".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
 
@@ -4270,14 +4254,10 @@ async fn tag_hyphen_boundaries(#[case] backend: Backend) {
 
     assert_eq!(tags.len(), 3);
 
-    // Invalid: hyphens at start should fail
-    let result = state.posts.tag_post(post_id, "-start").await;
-    assert!(matches!(result, Err(TaggingError::Internal(_))));
-
-    // Invalid: consecutive hyphens in the middle are allowed per the regex
-    // but let's test another boundary case: non-alphanumeric characters
-    let result = state.posts.tag_post(post_id, "tag_underscore").await;
-    assert!(matches!(result, Err(TaggingError::Internal(_))));
+    // Invalid slugs (leading hyphen, underscore) can no longer reach `tag_post`:
+    // its `&TagLabel` argument is validated at construction, so those cases are
+    // unconstructible here (they are rejected at the type boundary / atompub
+    // ingest filter instead).
 }
 
 #[apply(backends)]
@@ -4316,7 +4296,7 @@ async fn tag_with_long_display(#[case] backend: Backend) {
     let long_display = "very-long-technical-term-with-many-hyphens-and-lowercase-letters";
     state
         .posts
-        .tag_post(post_id, long_display)
+        .tag_post(post_id, &long_display.parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
 
@@ -4383,23 +4363,23 @@ async fn tag_list_ordering(#[case] backend: Backend) {
     // Tag in different orders
     state
         .posts
-        .tag_post(post1, "zebra")
+        .tag_post(post1, &"zebra".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
     state
         .posts
-        .tag_post(post1, "apple")
+        .tag_post(post1, &"apple".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
     state
         .posts
-        .tag_post(post1, "mango")
+        .tag_post(post1, &"mango".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
 
     state
         .posts
-        .tag_post(post2, "mango")
+        .tag_post(post2, &"mango".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
 
@@ -4477,7 +4457,7 @@ async fn tags_for_multiple_posts(#[case] backend: Backend) {
     // Only post2 is tagged; post1 stays untagged to assert the empty case.
     state
         .posts
-        .tag_post(post2, "featured")
+        .tag_post(post2, &"featured".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
 
@@ -4531,17 +4511,17 @@ async fn tag_mixed_alphanumeric(#[case] backend: Backend) {
 
     state
         .posts
-        .tag_post(post_id, "version-2-0-1")
+        .tag_post(post_id, &"version-2-0-1".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
     state
         .posts
-        .tag_post(post_id, "HTTP2")
+        .tag_post(post_id, &"HTTP2".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
     state
         .posts
-        .tag_post(post_id, "3D-Graphics")
+        .tag_post(post_id, &"3D-Graphics".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
 
@@ -4592,7 +4572,7 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
 
     state
         .posts
-        .tag_post(post_id, "test")
+        .tag_post(post_id, &"test".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
 
@@ -4669,7 +4649,7 @@ async fn tag_creation_and_retrieval(#[case] backend: Backend) {
 
     state
         .posts
-        .tag_post(post_id, "rust")
+        .tag_post(post_id, &"rust".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
 
@@ -4714,7 +4694,7 @@ async fn tag_normalization(#[case] backend: Backend) {
 
     state
         .posts
-        .tag_post(post_id, "Rust-Web")
+        .tag_post(post_id, &"Rust-Web".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
 
@@ -4764,7 +4744,7 @@ async fn untag_post(#[case] backend: Backend) {
 
     state
         .posts
-        .tag_post(post_id, "python")
+        .tag_post(post_id, &"python".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
 
@@ -4825,12 +4805,15 @@ async fn duplicate_tag_error(#[case] backend: Backend) {
 
     state
         .posts
-        .tag_post(post_id, "go")
+        .tag_post(post_id, &"go".parse::<TagLabel>().unwrap())
         .await
         .expect("first tag_post failed");
 
     // Try to tag with same tag again (case insensitive)
-    let result = state.posts.tag_post(post_id, "GO").await;
+    let result = state
+        .posts
+        .tag_post(post_id, &"GO".parse::<TagLabel>().unwrap())
+        .await;
     match result {
         Err(TaggingError::AlreadyTagged) => {
             // Expected
@@ -4897,12 +4880,12 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
 
     state
         .posts
-        .tag_post(post1, "javascript")
+        .tag_post(post1, &"javascript".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
     state
         .posts
-        .tag_post(post2, "javascript")
+        .tag_post(post2, &"javascript".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
 
@@ -4998,17 +4981,17 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
 
     state
         .posts
-        .tag_post(post1, "clojure")
+        .tag_post(post1, &"clojure".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
     state
         .posts
-        .tag_post(post2, "clojure")
+        .tag_post(post2, &"clojure".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
     state
         .posts
-        .tag_post(post3, "clojure")
+        .tag_post(post3, &"clojure".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
 
@@ -5101,12 +5084,12 @@ async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
 
     state
         .posts
-        .tag_post(post1, "haskell")
+        .tag_post(post1, &"haskell".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
     state
         .posts
-        .tag_post(post2, "haskell")
+        .tag_post(post2, &"haskell".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
 
@@ -5132,7 +5115,10 @@ async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
 async fn tag_post_nonexistent_post_error(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let result = state.posts.tag_post(99999, "nonexistent-post").await;
+    let result = state
+        .posts
+        .tag_post(99999, &"nonexistent-post".parse::<TagLabel>().unwrap())
+        .await;
     match result {
         Err(TaggingError::PostNotFound) => {
             // Expected
@@ -5236,12 +5222,12 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
 
     state
         .posts
-        .tag_post(post1, "kotlin")
+        .tag_post(post1, &"kotlin".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
     state
         .posts
-        .tag_post(post2, "kotlin")
+        .tag_post(post2, &"kotlin".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
 
@@ -5498,7 +5484,7 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
 
         state
             .posts
-            .tag_post(post_id, "cursor-tag")
+            .tag_post(post_id, &"cursor-tag".parse::<TagLabel>().unwrap())
             .await
             .expect("tag_post failed");
     }
@@ -5578,7 +5564,7 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
 
         state
             .posts
-            .tag_post(post_id, "global-tag")
+            .tag_post(post_id, &"global-tag".parse::<TagLabel>().unwrap())
             .await
             .expect("tag_post failed");
     }
@@ -5654,7 +5640,7 @@ async fn soft_delete_then_operations(#[case] backend: Backend) {
 
     state
         .posts
-        .tag_post(post_id, "delete-tag")
+        .tag_post(post_id, &"delete-tag".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
 
@@ -5718,17 +5704,20 @@ async fn tag_post_multiple_attempts(#[case] backend: Backend) {
 
     state
         .posts
-        .tag_post(post_id, "first-tag")
+        .tag_post(post_id, &"first-tag".parse::<TagLabel>().unwrap())
         .await
         .expect("first tag_post failed");
 
     state
         .posts
-        .tag_post(post_id, "second-tag")
+        .tag_post(post_id, &"second-tag".parse::<TagLabel>().unwrap())
         .await
         .expect("second tag_post failed");
 
-    let result = state.posts.tag_post(post_id, "first-tag").await;
+    let result = state
+        .posts
+        .tag_post(post_id, &"first-tag".parse::<TagLabel>().unwrap())
+        .await;
     match result {
         Err(TaggingError::AlreadyTagged) => {
             // Expected
@@ -5971,19 +5960,19 @@ async fn tag_edge_case_formats(#[case] backend: Backend) {
 
     state
         .posts
-        .tag_post(post_id, "123")
+        .tag_post(post_id, &"123".parse::<TagLabel>().unwrap())
         .await
         .expect("numeric tag failed");
 
     state
         .posts
-        .tag_post(post_id, "my-tag-here")
+        .tag_post(post_id, &"my-tag-here".parse::<TagLabel>().unwrap())
         .await
         .expect("hyphenated tag failed");
 
     state
         .posts
-        .tag_post(post_id, "MyTag")
+        .tag_post(post_id, &"MyTag".parse::<TagLabel>().unwrap())
         .await
         .expect("mixed case tag failed");
 
@@ -6170,7 +6159,7 @@ async fn tag_display_preservation(#[case] backend: Backend) {
 
     state
         .posts
-        .tag_post(post_id, "MySpecialTag")
+        .tag_post(post_id, &"MySpecialTag".parse::<TagLabel>().unwrap())
         .await
         .expect("tag_post failed");
 
@@ -6220,17 +6209,17 @@ async fn untag_preserves_other_tags(#[case] backend: Backend) {
 
     state
         .posts
-        .tag_post(post_id, "tag1")
+        .tag_post(post_id, &"tag1".parse::<TagLabel>().unwrap())
         .await
         .expect("tag1 failed");
     state
         .posts
-        .tag_post(post_id, "tag2")
+        .tag_post(post_id, &"tag2".parse::<TagLabel>().unwrap())
         .await
         .expect("tag2 failed");
     state
         .posts
-        .tag_post(post_id, "tag3")
+        .tag_post(post_id, &"tag3".parse::<TagLabel>().unwrap())
         .await
         .expect("tag3 failed");
 
@@ -7306,7 +7295,11 @@ async fn list_tags_returns_alphabetical_with_prefix(#[case] backend: Backend) {
 
     // Mixed-case display tokens — the slug should normalize to lowercase.
     for display in &["Rust", "rust-lang", "performance", "PostgreSQL", "web"] {
-        state.posts.tag_post(post, display).await.unwrap();
+        state
+            .posts
+            .tag_post(post, &display.parse::<TagLabel>().unwrap())
+            .await
+            .unwrap();
     }
 
     // No prefix → all tags, alphabetical by slug.
@@ -7379,9 +7372,21 @@ async fn post_record_carries_tags(#[case] backend: Backend) {
     let (p1, p2, p3) = (post_ids[0], post_ids[1], post_ids[2]);
 
     // p1: two tags; p2: one tag; p3: none.
-    state.posts.tag_post(p1, "Rust").await.unwrap();
-    state.posts.tag_post(p1, "web").await.unwrap();
-    state.posts.tag_post(p2, "performance").await.unwrap();
+    state
+        .posts
+        .tag_post(p1, &"Rust".parse::<TagLabel>().unwrap())
+        .await
+        .unwrap();
+    state
+        .posts
+        .tag_post(p1, &"web".parse::<TagLabel>().unwrap())
+        .await
+        .unwrap();
+    state
+        .posts
+        .tag_post(p2, &"performance".parse::<TagLabel>().unwrap())
+        .await
+        .unwrap();
 
     // Each loaded post carries its own tags from the same query that loaded
     // the rest of the row — no separate batch call.

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use axum::http::StatusCode;
 use chrono::Datelike;
+use common::tag::TagLabel;
 use storage::PostFormat;
 use web::posts::{
     AudienceSelection, CreatePostResult, DraftSummary, PublishPostResult, TimelinePage,
@@ -2676,8 +2677,16 @@ async fn list_user_posts_carries_tags_per_post(#[case] backend: Backend) {
     // Apply two tags via the storage layer (the create_post tags param lands
     // in tags.5; here we just verify the timeline surface threads them
     // through).
-    state.posts.tag_post(created.post_id, "Rust").await.unwrap();
-    state.posts.tag_post(created.post_id, "web").await.unwrap();
+    state
+        .posts
+        .tag_post(created.post_id, &"Rust".parse::<TagLabel>().unwrap())
+        .await
+        .unwrap();
+    state
+        .posts
+        .tag_post(created.post_id, &"web".parse::<TagLabel>().unwrap())
+        .await
+        .unwrap();
 
     let (status, body) =
         list_user_posts_form(Arc::clone(&state), "author", None, None, 50, Some(&cookie)).await;
@@ -2730,7 +2739,7 @@ async fn get_post_carries_tags(#[case] backend: Backend) {
 
     state
         .posts
-        .tag_post(created.post_id, "Performance")
+        .tag_post(created.post_id, &"Performance".parse::<TagLabel>().unwrap())
         .await
         .unwrap();
 
@@ -2832,7 +2841,10 @@ async fn create_post_rejects_invalid_tag_token(#[case] backend: Backend) {
     });
     let (status, body) = post_json(state, "/api/create_post", payload, Some(&cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("invalid tag"), "body: {body}");
+    // The invalid token is now rejected at the wire→TagLabel parse, surfacing
+    // InvalidTagLabel's own message (the single validation source) rather than the
+    // retired TagValidationError::Invalid.
+    assert!(body.contains("tag must be non-empty"), "body: {body}");
 }
 
 #[apply(backends)]

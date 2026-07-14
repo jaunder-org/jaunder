@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use common::password::Password;
+use common::tag::TagLabel;
 use common::username::Username;
 use common::visibility::{AudienceTarget, ViewerIdentity};
 use jaunder::cli::StorageArgs;
@@ -65,7 +66,7 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
         .expect("create post");
     state
         .posts
-        .tag_post(public_post, "Backup-Test")
+        .tag_post(public_post, &"Backup-Test".parse::<TagLabel>().unwrap())
         .await
         .expect("tag post");
 

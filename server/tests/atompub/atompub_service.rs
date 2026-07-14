@@ -3,6 +3,7 @@ use axum::{
     http::{header, Request, StatusCode},
 };
 use base64::Engine as _;
+use common::tag::TagLabel;
 use rstest::*;
 use rstest_reuse::*;
 use tower::ServiceExt;
@@ -54,7 +55,11 @@ async fn service_document_returns_200_with_app_password(#[case] backend: Backend
     )
     .await
     .unwrap();
-    state.posts.tag_post(post.post_id, "rust").await.unwrap();
+    state
+        .posts
+        .tag_post(post.post_id, &"rust".parse::<TagLabel>().unwrap())
+        .await
+        .unwrap();
     let app = make_app(state, &base);
 
     let response = app
