@@ -175,7 +175,7 @@ fn insert_sql(table: &str, columns: &[String]) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     let placeholders = (1..=columns.len())
-        .map(|index| format!("?{index}"))
+        .map(|index| format!("${index}"))
         .collect::<Vec<_>>()
         .join(", ");
     format!(
@@ -380,7 +380,7 @@ mod tests {
 
         assert_eq!(
             sql,
-            "INSERT INTO \"users\" (\"user_id\", \"username\", \"is_operator\") VALUES (?1, ?2, ?3)"
+            "INSERT INTO \"users\" (\"user_id\", \"username\", \"is_operator\") VALUES ($1, $2, $3)"
         );
     }
 
