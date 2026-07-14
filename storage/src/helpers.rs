@@ -351,7 +351,7 @@ pub(crate) async fn hash_password(password: common::password::Password) -> io::R
     // integration tests can exercise the `Internal` / validate-before-hash paths too;
     // absent from production builds, which enable neither.
     #[cfg(any(test, feature = "test-utils"))]
-    if password.as_str() == "force-hash-error-for-test-coverage" {
+    if password.as_ref() == "force-hash-error-for-test-coverage" {
         return Err(io::Error::other("forced hash error"));
     }
 
@@ -401,7 +401,7 @@ pub(crate) async fn verify_password(
     hash: String,
 ) -> io::Result<bool> {
     #[cfg(test)]
-    if password.as_str() == "force-verify-error-for-test-coverage" {
+    if password.as_ref() == "force-verify-error-for-test-coverage" {
         return Err(io::Error::other("forced verify error"));
     }
 

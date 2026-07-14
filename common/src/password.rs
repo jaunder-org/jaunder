@@ -1,5 +1,6 @@
-use std::{fmt, str::FromStr};
+use std::str::FromStr;
 
+use macros::StrNewtype;
 use thiserror::Error;
 
 const MIN_LENGTH: usize = 8;
@@ -10,9 +11,12 @@ const MIN_LENGTH: usize = 8;
 /// the boundary. Interior code works only with [`Password`] values and never
 /// with raw strings.
 ///
-/// [`Display`] is intentionally not implemented to prevent passwords from
-/// being accidentally logged or serialised.
-#[derive(Clone)]
+/// Adopts the [`StrNewtype`] `secret` surface (ADR-0063 §2): a redacting `Debug`
+/// and borrowed `AsRef<str>` access for hashing, with no `Display`, serde, or
+/// owned-`String` escape hatch — so a `Password` cannot be rendered, serialised,
+/// or leaked. The `macros` crate is the authoritative list of what `secret` emits.
+#[derive(Clone, StrNewtype)]
+#[str_newtype(secret)]
 pub struct Password(String);
 
 #[derive(Debug, Error)]
@@ -37,11 +41,6 @@ impl FromStr for Password {
 }
 
 impl Password {
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
     /// Hashes the password using Argon2id with default parameters.
     ///
     /// This is a CPU-intensive operation and should be called from a blocking
@@ -99,12 +98,6 @@ impl Password {
     }
 }
 
-impl fmt::Debug for Password {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("Password([redacted])")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,10 +125,10 @@ mod tests {
     }
 
     #[test]
-    fn as_str_returns_original_value() {
+    fn as_ref_returns_original_value() {
         let raw = "correct horse battery staple";
         let p: Password = raw.parse().expect("password meets minimum length");
-        assert_eq!(p.as_str(), raw);
+        assert_eq!(p.as_ref(), raw);
     }
 
     #[test]
@@ -157,7 +150,7 @@ mod tests {
         let p: Password = "a".repeat(10).parse().unwrap();
         let salt = SaltString::generate(&mut OsRng);
         let prod_hash = Argon2::default()
-            .hash_password(p.as_str().as_bytes(), &salt)
+            .hash_password(p.as_ref().as_bytes(), &salt)
             .unwrap()
             .to_string();
         assert!(
