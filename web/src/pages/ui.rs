@@ -3,12 +3,14 @@ use crate::audiences::{list_my_audiences, AudienceSummary};
 // wasm-only correction Effect.
 use crate::auth::current_user;
 use crate::backup::{backup_warning_visible, current_user_is_operator};
+use crate::forms::Field;
 use crate::pages::upload::MediaPanel;
 use crate::posts::{
     default_audience_selection, AudienceSelection, CreatePost, CreatePostResult, DeletePost,
     TimelinePostSummary, UnpublishPost,
 };
 use crate::tags::TagSummary;
+use common::slug::Slug;
 use common::username::Username;
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
@@ -720,14 +722,12 @@ pub fn PostCreateForm(
         }
         .into_any()
     } else {
-        let slug_override = RwSignal::new(String::new());
+        let slug_field = Field::<Slug>::optional();
         let dispatch_create = move |publish: bool| {
-            let slug = slug_override.get();
-            let slug_override = common::text::non_empty(&slug).map(str::to_owned);
             create_action.dispatch(CreatePost {
                 body: body.get(),
                 format: format.get(),
-                slug_override,
+                slug_override: slug_field.parsed(),
                 publish,
                 publish_at: local_datetime_to_utc_rfc3339(&publish_at.get()),
                 tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
@@ -761,9 +761,21 @@ pub fn PostCreateForm(
                                 name="slug_override"
                                 placeholder="auto"
                                 class="j-field-val"
-                                prop:value=slug_override
-                                on:input=move |ev| slug_override.set(event_target_value(&ev))
+                                prop:value=slug_field.value
+                                on:input=move |ev| {
+                                    let v = event_target_value(&ev);
+                                    slug_field.value.set(v.clone());
+                                    slug_field.error.set(slug_field.error_for(&v));
+                                }
+                                on:blur=move |_| slug_field.touch()
                             />
+                            {move || {
+                                slug_field
+                                    .is_touched()
+                                    .then(|| slug_field.error.get())
+                                    .flatten()
+                                    .map(|msg| view! { <p class="error">{msg}</p> })
+                            }}
                         </div>
                         <div style="margin-top:10px">
                             <label class="j-field-label" for="compose-summary">
@@ -842,6 +854,7 @@ pub fn PostCreateForm(
                             type="button"
                             name="publish"
                             value="false"
+                            prop:disabled=move || !slug_field.is_valid()
                             on:click=move |_| dispatch_create(false)
                         >
                             "Save draft"
@@ -851,6 +864,7 @@ pub fn PostCreateForm(
                             type="button"
                             name="publish"
                             value="true"
+                            prop:disabled=move || !slug_field.is_valid()
                             on:click=move |_| dispatch_create(true)
                         >
                             "Publish"

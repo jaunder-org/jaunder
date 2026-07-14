@@ -195,7 +195,7 @@ async fn create_post_persists_rendered_published_post(#[case] backend: Backend) 
         published_at.year(),
         published_at.month(),
         published_at.day(),
-        record.slug.as_str()
+        record.slug.as_ref()
     );
     assert_eq!(
         created.permalink.as_deref(),
@@ -460,11 +460,14 @@ Body text",
 
 // Shape B — create_post rejection cluster. Identical setup (author + session)
 // and assertion structure (INTERNAL_SERVER_ERROR + body substring); only the
-// request body/format/slug_override and the expected error message vary.
+// request body/format and the expected error message vary. (An invalid
+// `slug_override` is no longer an in-handler validation error: the typed
+// `Option<Slug>` wire arg rejects it at the serde boundary — client
+// pre-validation is the user-facing path, per ADR-0065; the serde-bridge
+// rejection is unit-tested in `common::slug`.)
 #[apply(backends_matrix)]
 #[case::empty_post("", "markdown", None, "post body is required")]
 #[case::invalid_format("body", "invalid_format", None, "post format must be")]
-#[case::invalid_slug_override("body", "markdown", Some("Not Valid"), "slug must be non-empty")]
 #[tokio::test]
 async fn create_post_rejects(
     backend: Backend,
@@ -1933,7 +1936,7 @@ async fn get_post_finds_author_draft_across_multiple_pages(#[case] backend: Back
         record.created_at.year(),
         record.created_at.month(),
         record.created_at.day(),
-        record.slug.as_str(),
+        record.slug.as_ref(),
         Some(&cookie),
     )
     .await;
@@ -3235,7 +3238,7 @@ async fn create_targeted_post(
 
 /// The set of post slugs visible in a local-timeline response.
 fn timeline_slugs(page: &TimelinePage) -> std::collections::BTreeSet<String> {
-    page.posts.iter().map(|p| p.slug.clone()).collect()
+    page.posts.iter().map(|p| p.slug.to_string()).collect()
 }
 
 #[apply(backends)]

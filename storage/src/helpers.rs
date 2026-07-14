@@ -492,7 +492,7 @@ mod tests {
         assert_eq!(record.post_id, 10);
         assert_eq!(record.user_id, 20);
         assert_eq!(record.author_username, "alice");
-        assert_eq!(record.slug.as_str(), "hello-world");
+        assert_eq!(record.slug, "hello-world");
         assert_eq!(record.format, PostFormat::Markdown);
         assert_eq!(record.published_at, Some(now));
         assert_eq!(record.deleted_at, None);

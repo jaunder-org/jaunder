@@ -80,7 +80,7 @@ impl PostRecord {
             timestamp.year(),
             timestamp.month(),
             timestamp.day(),
-            self.slug.as_str()
+            self.slug.as_ref()
         )
     }
 
@@ -978,7 +978,7 @@ where
         );
         let query = sqlx::query_as::<_, PostRow>(&sql)
             .bind(username.as_ref())
-            .bind(slug.as_str())
+            .bind(slug.as_ref())
             .bind(date_str.as_str())
             .bind(now);
         let row = binds.bind_onto(query).fetch_optional(&self.pool).await?;
@@ -1866,7 +1866,7 @@ where
     )
     .bind(input.user_id)
     .bind(input.title.clone())
-    .bind(input.slug.as_str())
+    .bind(input.slug.as_ref())
     .bind(input.body.as_str())
     .bind(format.as_str())
     .bind(input.rendered_html.as_str())

@@ -250,7 +250,7 @@ impl PublishUpdate {
 /// Raw, front-end-supplied inputs to [`perform_post_update`].
 ///
 /// Grouping these into a struct keeps the easy-to-transpose pair
-/// (`title`/`slug_override`, both `Option<&str>`) named at every call site.
+/// (`title: Option<&str>` / `slug_override: Option<&Slug>`) named at every call site.
 pub struct PostUpdate<'a> {
     /// Post being edited.
     pub post_id: i64,
@@ -262,8 +262,9 @@ pub struct PostUpdate<'a> {
     pub title: Option<&'a str>,
     /// Markup format of `body`.
     pub format: PostFormat,
-    /// Explicit slug, or `None` to derive one from the title/body.
-    pub slug_override: Option<&'a str>,
+    /// Explicit slug (already validated at the wire/CLI boundary), or `None` to
+    /// derive one from the title/body.
+    pub slug_override: Option<&'a Slug>,
     /// What this update does to the post's publication state.
     pub publish: PublishUpdate,
     /// Optional summary/excerpt.
@@ -309,10 +310,10 @@ pub async fn perform_post_update(
         body
     };
 
-    let slug = match slug_override.and_then(common::text::non_empty) {
-        Some(raw) => raw
-            .parse::<Slug>()
-            .map_err(|_| PerformUpdateError::InvalidSlug)?,
+    let slug = match slug_override {
+        // Pre-validated at the boundary (wire/CLI); updates keep the slug as-is,
+        // no collision dedup.
+        Some(slug) => slug.clone(),
         None => slugify_title(&metadata.slug_seed)
             .parse::<Slug>()
             .map_err(|_| PerformUpdateError::InvalidSlug)?,
@@ -391,9 +392,9 @@ impl From<PerformCreationError> for host::error::InternalError {
 
 /// Generates a unique slug attempt using a suffix for attempts > 0.
 #[must_use]
-pub fn candidate_slug(slug_seed: &str, attempt: usize) -> String {
+pub fn candidate_slug(slug_seed: &Slug, attempt: usize) -> String {
     if attempt == 0 {
-        return slug_seed.to_owned(); // already ≤ MAX_SLUG_CHARS from slugify_title
+        return slug_seed.to_string(); // already ≤ MAX_SLUG_CHARS (a valid Slug)
     }
     // Keep the suffixed candidate within the slug length cap: a seed already at
     // the cap plus "-{n}" would otherwise exceed it and be rejected by from_str.
@@ -406,7 +407,7 @@ pub fn candidate_slug(slug_seed: &str, attempt: usize) -> String {
 /// Raw, front-end-supplied inputs to [`perform_post_creation`].
 ///
 /// Grouping these into a struct keeps the easy-to-transpose pair
-/// (`title`/`slug_override`, both `Option<&str>`) named at every call site.
+/// (`title: Option<&str>` / `slug_override: Option<&Slug>`) named at every call site.
 pub struct PostCreation<'a> {
     /// Author of the new post.
     pub user_id: i64,
@@ -416,8 +417,9 @@ pub struct PostCreation<'a> {
     pub title: Option<&'a str>,
     /// Markup format of `body`.
     pub format: PostFormat,
-    /// Explicit slug, or `None` to derive one from the title/body.
-    pub slug_override: Option<&'a str>,
+    /// Explicit slug (already validated at the wire/CLI boundary), or `None` to
+    /// derive one from the title/body.
+    pub slug_override: Option<&'a Slug>,
     /// Publication timestamp, or `None` to create as a draft.
     pub published_at: Option<DateTime<Utc>>,
     /// Maximum slug-collision retries before giving up.
@@ -467,12 +469,15 @@ pub async fn perform_post_creation(
         body
     };
 
-    let slug_seed = match slug_override.and_then(common::text::non_empty) {
-        Some(raw) => raw
-            .parse::<Slug>()
-            .map_err(PerformCreationError::InvalidSlug)?
-            .to_string(),
-        None => slugify_title(&metadata.slug_seed),
+    let slug_seed: Slug = match slug_override {
+        // Pre-validated at the boundary (wire/CLI); a valid override is still fed
+        // through the collision-suffix generator below for uniqueness.
+        Some(slug) => slug.clone(),
+        // slugify_title never fails, but funnel it through from_str (the single
+        // chokepoint) rather than bypass-constructing a Slug.
+        None => slugify_title(&metadata.slug_seed)
+            .parse()
+            .map_err(PerformCreationError::InvalidSlug)?,
     };
 
     for attempt in 0..max_attempts {
@@ -565,7 +570,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(record.user_id, user_id);
-        assert_eq!(record.slug.as_str(), "hello-world");
+        assert_eq!(record.slug, "hello-world");
         assert_eq!(record.body, "Hello, world!");
         assert_eq!(record.format, PostFormat::Markdown);
         assert!(record.rendered_html.contains("<p>Hello, world!</p>"));
@@ -598,7 +603,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(record.title.as_deref(), Some("Explicit Title"));
-        assert_eq!(record.slug.as_str(), "explicit-title");
+        assert_eq!(record.slug, "explicit-title");
     }
 
     #[apply(backends)]
@@ -607,6 +612,10 @@ mod tests {
         let env = backend.setup().await;
         let user_id = seed_user(&env.state).await;
         let storage = &*env.state.posts;
+        // The override arrives already validated as a `Slug` (the wire/CLI boundary
+        // parses it); an invalid override can no longer reach this layer — that
+        // rejection now lives at the boundary (web `field_error` + the serde bridge).
+        let slug: Slug = "my-custom-slug".parse().unwrap();
         let record = perform_post_creation(
             storage,
             PostCreation {
@@ -614,7 +623,7 @@ mod tests {
                 body: "Hello, world!".to_owned(),
                 title: None,
                 format: PostFormat::Markdown,
-                slug_override: Some("my-custom-slug"),
+                slug_override: Some(&slug),
                 published_at: None,
                 max_attempts: 100,
                 summary: None,
@@ -625,34 +634,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(record.slug.as_str(), "my-custom-slug");
-    }
-
-    #[apply(backends)]
-    #[tokio::test]
-    async fn test_perform_post_creation_invalid_slug_override(#[case] backend: Backend) {
-        let env = backend.setup().await;
-        let user_id = seed_user(&env.state).await;
-        let storage = &*env.state.posts;
-        let err = perform_post_creation(
-            storage,
-            PostCreation {
-                user_id,
-                body: "Hello, world!".to_owned(),
-                title: None,
-                format: PostFormat::Markdown,
-                slug_override: Some("Invalid Slug!"),
-                published_at: None,
-                max_attempts: 100,
-                summary: None,
-                audiences: vec![AudienceTarget::Public],
-                idempotency_key: None,
-            },
-        )
-        .await
-        .unwrap_err();
-
-        assert!(matches!(err, PerformCreationError::InvalidSlug(_)));
+        assert_eq!(record.slug, "my-custom-slug");
     }
 
     #[apply(backends)]
@@ -744,7 +726,7 @@ mod tests {
 
         // Never hard-fails: a title with no usable characters lands on the
         // synthetic `post` fallback rather than NoSlugFromPost.
-        assert_eq!(record.slug.as_str(), "post");
+        assert_eq!(record.slug, "post");
     }
 
     #[apply(backends)]
@@ -771,29 +753,34 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(record.slug.as_str(), "日本語");
+        assert_eq!(record.slug, "日本語");
     }
 
     #[test]
     fn candidate_slug_keeps_suffix_within_cap() {
         use common::slug::{Slug, MAX_SLUG_CHARS};
         // A seed already at the cap: the naive "{seed}-2" would be 82 chars and
-        // be rejected by from_str; candidate_slug truncates the base to fit.
-        let seed: String = "a".repeat(MAX_SLUG_CHARS);
+        // be rejected by from_str; candidate_slug truncates the base to fit. The
+        // seed is a valid Slug, so it is by construction ≤ MAX_SLUG_CHARS.
+        let seed: Slug = "a".repeat(MAX_SLUG_CHARS).parse().unwrap();
         let c = candidate_slug(&seed, 1);
         assert!(c.chars().count() <= MAX_SLUG_CHARS);
         assert!(c.ends_with("-2"));
         assert!(c.parse::<Slug>().is_ok());
 
-        // Truncation that would land on a '-' trims it so no "--" boundary forms.
-        let seed2 = format!("{}-{}", "a".repeat(77), "b".repeat(20));
+        // Truncation that would land on a '-' trims it so no "--" boundary forms:
+        // an at-cap seed whose 78th char (the base cutoff for a "-2" suffix) is '-'.
+        let seed2: Slug = format!("{}-{}", "a".repeat(77), "b".repeat(2))
+            .parse()
+            .unwrap();
         let c2 = candidate_slug(&seed2, 1);
         assert!(c2.chars().count() <= MAX_SLUG_CHARS);
         assert!(!c2.contains("--"));
         assert!(c2.parse::<Slug>().is_ok());
 
         // attempt 0 returns the seed unchanged.
-        assert_eq!(candidate_slug("hello", 0), "hello");
+        let hello: Slug = "hello".parse().unwrap();
+        assert_eq!(candidate_slug(&hello, 0), "hello");
     }
 
     #[apply(backends)]
@@ -857,9 +844,9 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(r1.slug.as_str(), "hello-world");
-        assert_eq!(r2.slug.as_str(), "hello-world-2");
-        assert_eq!(r3.slug.as_str(), "hello-world-3");
+        assert_eq!(r1.slug, "hello-world");
+        assert_eq!(r2.slug, "hello-world-2");
+        assert_eq!(r3.slug, "hello-world-3");
     }
 
     #[apply(backends)]
@@ -905,8 +892,8 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(r1.slug.as_str(), "hello-world");
-        assert_eq!(r2.slug.as_str(), "hello-world-2");
+        assert_eq!(r1.slug, "hello-world");
+        assert_eq!(r2.slug, "hello-world-2");
 
         let err = perform_post_creation(
             storage,
