@@ -95,7 +95,7 @@ fn write_collection(writer: &mut Writer<Vec<u8>>, coll: &CollectionDecl) {
         let _ = writer.write_event(Event::Start(cat_elem));
 
         for term in &coll.categories {
-            write_empty_element(writer, "atom:category", &[("term", term.as_ref())]);
+            write_empty_element(writer, "atom:category", &[("term", term)]);
         }
 
         let _ = writer.write_event(Event::End(BytesEnd::new("app:categories")));

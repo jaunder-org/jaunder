@@ -53,6 +53,7 @@ pub fn TagList(tags: Vec<TagSummary>, context: TagContext) -> impl IntoView {
                 TagContext::SiteWide => None,
             };
             let chip_href = format!("/tags/{slug}");
+            // TagLabel isn't IntoRender/IntoAttributeValue — stringify for the view.
             view! {
                 <span class="j-tag-cell">
                     <a class="j-tag" href=chip_href>

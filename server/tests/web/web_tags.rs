@@ -94,7 +94,7 @@ async fn list_tags_returns_all_when_prefix_absent(#[case] backend: Backend) {
     // display currently mirrors the slug (M5's display-casing wiring lands in
     // tags.5 alongside the tags param on create/update).
     for tag in &tags {
-        assert_eq!(tag.display.as_ref(), tag.slug.as_ref());
+        assert_eq!(tag.display, tag.slug.as_ref());
     }
 }
 

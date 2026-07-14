@@ -157,6 +157,7 @@ pub fn post_to_entry(post: &PostRecord, base_url: &str) -> Entry {
             .tags
             .iter()
             .map(|t| Category {
+                // atom_syndication::Category.term is an external owned String — materialize the label.
                 term: t.tag_display.to_string(),
                 ..Default::default()
             })

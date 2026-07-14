@@ -46,6 +46,7 @@ pub fn render_atom(meta: &FeedMetadata, items: &[FeedItem]) -> String {
                     .tags
                     .iter()
                     .map(|t| Category {
+                        // atom_syndication::Category.term is an external owned String — materialize the label.
                         term: t.to_string(),
                         ..Default::default()
                     })

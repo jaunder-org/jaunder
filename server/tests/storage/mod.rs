@@ -3635,8 +3635,8 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
         .await
         .expect("get_tags_for_post post2 failed");
 
-    assert_eq!(tags1[0].tag_slug.as_ref(), "web-development");
-    assert_eq!(tags2[0].tag_slug.as_ref(), "web-development");
+    assert_eq!(tags1[0].tag_slug, "web-development");
+    assert_eq!(tags2[0].tag_slug, "web-development");
     assert_eq!(tags1[0].tag_display, "Web-Development");
     assert_eq!(tags2[0].tag_display, "WEB-DEVELOPMENT");
 
@@ -4401,7 +4401,7 @@ async fn tag_list_ordering(#[case] backend: Backend) {
         .expect("get_tags_for_post failed");
 
     assert_eq!(tags1_again.len(), 3);
-    assert_eq!(tags1_again[0].tag_slug.as_ref(), "apple");
+    assert_eq!(tags1_again[0].tag_slug, "apple");
 }
 
 #[apply(backends)]
@@ -4532,9 +4532,9 @@ async fn tag_mixed_alphanumeric(#[case] backend: Backend) {
         .expect("get_tags_for_post failed");
 
     assert_eq!(tags.len(), 3);
-    assert_eq!(tags[0].tag_slug.as_ref(), "3d-graphics");
-    assert_eq!(tags[1].tag_slug.as_ref(), "http2");
-    assert_eq!(tags[2].tag_slug.as_ref(), "version-2-0-1");
+    assert_eq!(tags[0].tag_slug, "3d-graphics");
+    assert_eq!(tags[1].tag_slug, "http2");
+    assert_eq!(tags[2].tag_slug, "version-2-0-1");
 }
 
 #[apply(backends)]
@@ -4660,7 +4660,7 @@ async fn tag_creation_and_retrieval(#[case] backend: Backend) {
         .expect("get_tags_for_post failed");
 
     assert_eq!(tags.len(), 1);
-    assert_eq!(tags[0].tag_slug.as_ref(), "rust");
+    assert_eq!(tags[0].tag_slug, "rust");
     assert_eq!(tags[0].tag_display, "rust");
 }
 
@@ -4705,7 +4705,7 @@ async fn tag_normalization(#[case] backend: Backend) {
         .expect("get_tags_for_post failed");
 
     assert_eq!(tags.len(), 1);
-    assert_eq!(tags[0].tag_slug.as_ref(), "rust-web"); // normalized
+    assert_eq!(tags[0].tag_slug, "rust-web"); // normalized
     assert_eq!(tags[0].tag_display, "Rust-Web"); // original preserved
 }
 
@@ -6171,7 +6171,7 @@ async fn tag_display_preservation(#[case] backend: Backend) {
 
     assert_eq!(tags.len(), 1);
     assert_eq!(tags[0].tag_display, "MySpecialTag");
-    assert_eq!(tags[0].tag_slug.as_ref(), "myspecialtag");
+    assert_eq!(tags[0].tag_slug, "myspecialtag");
 }
 
 #[apply(backends)]
@@ -7408,7 +7408,7 @@ async fn post_record_carries_tags(#[case] backend: Backend) {
         .expect("get_post_by_id p2")
         .expect("p2 should exist");
     assert_eq!(p2_record.tags.len(), 1);
-    assert_eq!(p2_record.tags[0].tag_slug.as_ref(), "performance");
+    assert_eq!(p2_record.tags[0].tag_slug, "performance");
     assert_eq!(p2_record.tags[0].tag_display, "performance");
 
     let p3_record = state

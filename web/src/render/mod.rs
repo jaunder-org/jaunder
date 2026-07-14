@@ -130,7 +130,8 @@ pub fn format_post_time(ts: &str) -> String {
 }
 
 /// Escape text for safe interpolation into HTML element or attribute content.
-pub(crate) fn escape_html(input: &str) -> String {
+pub(crate) fn escape_html<S: AsRef<str>>(input: S) -> String {
+    let input = input.as_ref();
     let mut out = String::with_capacity(input.len());
     for ch in input.chars() {
         match ch {
@@ -219,8 +220,8 @@ fn render_discovery(seed: &PageSeed) -> String {
             let _ = write!(
                 out,
                 "<link rel=\"alternate\" type=\"{mime}\" title=\"{title}\" href=\"{href}\" />",
-                title = escape_html(&format!("{label} ({suffix})")),
-                href = escape_html(&canonicalize(&surface, format)),
+                title = escape_html(format!("{label} ({suffix})")),
+                href = escape_html(canonicalize(&surface, format)),
             );
         }
     }
@@ -231,7 +232,7 @@ fn render_discovery(seed: &PageSeed) -> String {
         let _ = write!(
             out,
             "<link rel=\"EditURI\" type=\"application/rsd+xml\" title=\"AtomPub (RSD)\" href=\"{href}\" />",
-            href = escape_html(&format!("/~{username}/rsd.xml")),
+            href = escape_html(format!("/~{username}/rsd.xml")),
         );
     }
 
@@ -529,11 +530,11 @@ pub(crate) fn render_tag_list(tags: &[TagSummary], ctx: &TagCtx) -> String {
     }
     let mut out = String::from("<span class=\"j-tag-list\">");
     for tag in tags {
-        let slug = escape_html(tag.slug.as_ref());
+        let slug = escape_html(&tag.slug);
         let _ = write!(
             out,
             "<span class=\"j-tag-cell\"><a class=\"j-tag\" href=\"/tags/{slug}\">#{display}</a>",
-            display = escape_html(tag.display.as_ref()),
+            display = escape_html(&tag.display),
         );
         if let TagCtx::ForUser(username) = ctx {
             let _ = write!(

@@ -79,7 +79,7 @@ pub(crate) fn etag_for(post: &PostRecord) -> String {
         body: &'a str,
         format: String,
         summary: Option<&'a str>,
-        tags: Vec<&'a str>,
+        tags: Vec<&'a TagLabel>,
         draft: bool,
     }
     let content = EtagContent {
@@ -87,7 +87,7 @@ pub(crate) fn etag_for(post: &PostRecord) -> String {
         body: &post.body,
         format: post.format.to_string(),
         summary: post.summary.as_deref(),
-        tags: post.tags.iter().map(|t| t.tag_display.as_ref()).collect(),
+        tags: post.tags.iter().map(|t| &t.tag_display).collect(),
         draft: post.published_at.is_none(),
     };
     let bytes = serde_json::to_vec(&content).unwrap_or_else(|_| Vec::new());
