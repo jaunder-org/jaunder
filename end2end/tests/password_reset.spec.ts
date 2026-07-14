@@ -57,10 +57,26 @@ test("visiting reset-password with invalid token shows error", async ({
   page,
 }) => {
   await goto(page, "/reset-password?token=totally_invalid_token");
-  await page.fill('input[name="new_password"]', "somepassword123");
+  await page.fill(SEL.newPassword, "somepassword123");
   await click(page, SEL.submit);
   await waitForSelector(page, SEL.error);
   await expect(page.locator(SEL.error)).toBeVisible();
+});
+
+// #410: the new-password field validates client-side via ValidatedInput<Password>.
+test("reset-password rejects a too-short password client-side", async ({
+  page,
+}) => {
+  await goto(page, "/reset-password?token=any_token"); // token irrelevant; never submitted
+  const pw = page.locator(SEL.newPassword);
+  await pw.fill("short"); // < 8 chars
+  await pw.blur(); // touched → message shows
+
+  await expect(page.locator(SEL.error)).toBeVisible();
+  await expect(page.locator(SEL.submit)).toBeDisabled();
+
+  await pw.fill("longenough123");
+  await expect(page.locator(SEL.submit)).toBeEnabled();
 });
 
 // M3.11.15: /forgot-password for a user with no verified email shows the
