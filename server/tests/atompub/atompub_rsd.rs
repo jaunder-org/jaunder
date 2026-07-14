@@ -10,7 +10,7 @@ use tower::ServiceExt;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{ensure_server_fns_registered, test_options};
+use crate::helpers::{body_string, ensure_server_fns_registered, test_options};
 use storage::test_support::{backends_matrix, noop_mailer, Backend, TestEnv};
 
 // SPIKE (jaunder Task 1):
@@ -33,13 +33,6 @@ fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
     ensure_server_fns_registered();
     let storage_path = storage.path().to_path_buf();
     jaunder::create_router(test_options(), state, noop_mailer(), false, storage_path)
-}
-
-async fn body_string(response: axum::response::Response) -> String {
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    String::from_utf8(bytes.to_vec()).unwrap()
 }
 
 // Shape A — non-clustered behavior, backend-parametrized via cross-module apply.

@@ -13,7 +13,7 @@ use rstest_reuse::*;
 
 use storage::test_support::{backends, backends_matrix, noop_mailer, Backend, TestEnv};
 
-use crate::helpers::{ensure_server_fns_registered, test_options};
+use crate::helpers::{body_string, ensure_server_fns_registered, test_options};
 
 const PNG: &[u8] = &[
     0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
@@ -36,13 +36,6 @@ fn basic_header(username: &str, password: &str) -> String {
     let raw = format!("{username}:{password}");
     let encoded = base64::engine::general_purpose::STANDARD.encode(raw);
     format!("Basic {encoded}")
-}
-
-async fn body_string(response: axum::response::Response) -> String {
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    String::from_utf8(bytes.to_vec()).unwrap()
 }
 
 #[apply(backends)]

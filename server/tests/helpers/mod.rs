@@ -96,6 +96,14 @@ pub fn tmp_storage_path() -> std::path::PathBuf {
     std::env::temp_dir().join("jaunder-test-storage")
 }
 
+/// Read a response body fully and decode it as UTF-8.
+pub async fn body_string(response: axum::response::Response) -> String {
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    String::from_utf8(bytes.to_vec()).unwrap()
+}
+
 /// How a `post_form` request authenticates. Cookie and bearer are mutually
 /// exclusive — no caller sends both — so they are one argument, not two.
 enum Auth<'a> {
