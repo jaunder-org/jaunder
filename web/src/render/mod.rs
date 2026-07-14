@@ -535,11 +535,11 @@ pub(crate) fn render_tag_list(tags: &[TagSummary], ctx: &TagCtx) -> String {
     }
     let mut out = String::from("<span class=\"j-tag-list\">");
     for tag in tags {
-        let slug = escape_html(&tag.slug);
+        let slug = escape_html(tag.slug.as_ref());
         let _ = write!(
             out,
             "<span class=\"j-tag-cell\"><a class=\"j-tag\" href=\"/tags/{slug}\">#{display}</a>",
-            display = escape_html(&tag.display),
+            display = escape_html(tag.display.as_ref()),
         );
         if let TagCtx::ForUser(username) = ctx {
             let _ = write!(
@@ -885,8 +885,8 @@ mod tests {
             is_author: false,
             permalink: Some("/~alice/2026/01/02/hello".into()),
             tags: vec![TagSummary {
-                slug: "rust".into(),
-                display: "Rust".into(),
+                slug: "rust".parse().unwrap(),
+                display: "Rust".parse().unwrap(),
             }],
             summary: None,
         }
@@ -1155,8 +1155,8 @@ mod tests {
     #[test]
     fn tag_list_site_wide_has_hash_chip_and_no_here_link() {
         let tags = [TagSummary {
-            slug: "rust".into(),
-            display: "Rust".into(),
+            slug: "rust".parse().unwrap(),
+            display: "Rust".parse().unwrap(),
         }];
         let html = render_tag_list(&tags, &TagCtx::SiteWide);
         assert_eq!(
@@ -1169,8 +1169,8 @@ mod tests {
     #[test]
     fn tag_list_for_user_adds_here_link() {
         let tags = [TagSummary {
-            slug: "rust".into(),
-            display: "Rust".into(),
+            slug: "rust".parse().unwrap(),
+            display: "Rust".parse().unwrap(),
         }];
         let html = render_tag_list(
             &tags,

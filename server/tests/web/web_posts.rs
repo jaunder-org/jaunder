@@ -2694,7 +2694,7 @@ async fn list_user_posts_carries_tags_per_post(#[case] backend: Backend) {
     let page: TimelinePage = serde_json::from_str(&body).unwrap();
     assert_eq!(page.posts.len(), 1);
     let post = &page.posts[0];
-    let slugs: Vec<&str> = post.tags.iter().map(|t| t.slug.as_str()).collect();
+    let slugs: Vec<&str> = post.tags.iter().map(|t| t.slug.as_ref()).collect();
     assert_eq!(slugs, vec!["rust", "web"]);
     // Display casing is preserved (author-provided).
     assert!(post.tags.iter().any(|t| t.display == "Rust"));

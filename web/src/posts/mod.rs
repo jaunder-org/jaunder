@@ -19,7 +19,7 @@ use server::{not_found_error, private_post_not_found_error};
 #[cfg(feature = "server")]
 pub use server::post_response;
 
-use common::{slug::Slug, username::Username};
+use common::{slug::Slug, tag::TagLabel, username::Username};
 
 use crate::error::WebResult;
 use crate::tags::TagSummary;
@@ -32,7 +32,7 @@ use {
     crate::feed_events::enqueue_feed_events,
     crate::viewer::viewer_identity,
     chrono::{DateTime, Utc},
-    common::tag::{Tag, TagLabel},
+    common::tag::Tag,
     std::{collections::BTreeSet, sync::Arc},
     storage::{
         apply_post_tag_diff, fetch_post_record, find_draft_by_permalink_for_user,
@@ -230,7 +230,7 @@ pub async fn create_post(
     slug_override: Option<Slug>,
     publish: bool,
     publish_at: Option<String>,
-    tags: Option<Vec<String>>,
+    tags: Option<Vec<TagLabel>>,
     summary: Option<String>,
     audience: Option<AudienceSelection>,
 ) -> WebResult<CreatePostResult> {
@@ -238,21 +238,10 @@ pub async fn create_post(
         let auth = require_auth().await?;
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
-        // TEMP(T3): the wire arg stays Option<Vec<String>> until T3 types it as
-        // Option<Vec<TagLabel>>. Filter empty/whitespace tokens first (preserving
-        // today's silent empty-drop), then parse each to TagLabel — a parse failure
-        // maps to a Validation error (the current invalid-tag behavior), not the
-        // ADR-0065 arg-decode path T3 introduces.
-        let tag_labels = tags
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|t| !t.trim().is_empty())
-            .map(|t| {
-                t.parse::<TagLabel>()
-                    .map_err(|e| InternalError::validation(e.to_string()))
-            })
-            .collect::<Result<Vec<TagLabel>, _>>()?;
-        let validated_tags = common::tag::parse_and_validate_tags(tag_labels)?;
+        // The wire delivers `Vec<TagLabel>` directly: each tag is validated at
+        // arg-decode (ADR-0065) and a `TagLabel` is never empty, so the body only
+        // dedups and enforces the per-post cap.
+        let validated_tags = common::tag::parse_and_validate_tags(tags.unwrap_or_default())?;
 
         let format = format.parse::<PostFormat>()?;
         // Publish + a supplied time = scheduled (future) or backdated (past);
@@ -301,7 +290,6 @@ pub async fn create_post(
             summary: record.summary,
         };
 
-        // TEMP(T3): validated_tags is Vec<TagLabel>; tag_post takes &TagLabel.
         for label in &validated_tags {
             posts.tag_post(created.post_id, label).await?;
         }
@@ -397,7 +385,7 @@ pub async fn update_post(
     // Optional RFC3339 UTC instant from the editor's datetime control. See
     // `create_post` for why this crosses the boundary as a `String`.
     publish_at: Option<String>,
-    tags: Option<Vec<String>>,
+    tags: Option<Vec<TagLabel>>,
     summary: Option<String>,
     audience: Option<AudienceSelection>,
 ) -> WebResult<UpdatePostResult> {
@@ -415,23 +403,11 @@ pub async fn update_post(
             .unwrap_or_default();
 
         // Validate tags up-front so a malformed input rejects before any
-        // post mutation lands.
-        // TEMP(T3): the wire arg stays Option<Vec<String>> until T3 types it as
-        // Option<Vec<TagLabel>>. Filter empty/whitespace tokens (preserving today's
-        // silent empty-drop), parse each to TagLabel (a parse failure → Validation,
-        // the current invalid-tag behavior), then run the dedup/cap validator.
+        // post mutation lands. The wire delivers `Vec<TagLabel>` (validated at
+        // arg-decode per ADR-0065); the body only dedups and caps. `None` leaves
+        // the existing tags untouched.
         let new_tags = match tags {
-            Some(tokens) => {
-                let labels = tokens
-                    .into_iter()
-                    .filter(|t| !t.trim().is_empty())
-                    .map(|t| {
-                        t.parse::<TagLabel>()
-                            .map_err(|e| InternalError::validation(e.to_string()))
-                    })
-                    .collect::<Result<Vec<TagLabel>, _>>()?;
-                Some(common::tag::parse_and_validate_tags(labels)?)
-            }
+            Some(tokens) => Some(common::tag::parse_and_validate_tags(tokens)?),
             None => None,
         };
 
