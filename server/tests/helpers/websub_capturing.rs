@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use std::sync::Mutex;
 
 use jaunder::websub::{WebSubClient, WebSubError};
@@ -8,7 +7,6 @@ use jaunder::websub::{WebSubClient, WebSubError};
 pub struct CapturedPing {
     pub hub_url: String,
     pub feed_url: String,
-    pub sent_at: DateTime<Utc>,
 }
 
 #[derive(Default)]
@@ -36,7 +34,6 @@ impl WebSubClient for CapturingWebSubClient {
             .push(CapturedPing {
                 hub_url: hub_url.to_string(),
                 feed_url: feed_url.to_string(),
-                sent_at: Utc::now(),
             });
         Ok(())
     }

@@ -12,9 +12,8 @@ use tower::ServiceExt;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{
-    backends, backends_matrix, ensure_server_fns_registered, test_options, Backend, TestEnv,
-};
+use crate::helpers::{ensure_server_fns_registered, test_options};
+use storage::test_support::{backends, backends_matrix, noop_mailer, Backend, TestEnv};
 
 async fn post_json(
     state: Arc<storage::AppState>,
@@ -36,7 +35,7 @@ async fn post_json(
     let app = jaunder::create_router(
         test_options(),
         state,
-        crate::helpers::noop_mailer(),
+        noop_mailer(),
         true,
         crate::helpers::tmp_storage_path(),
     );

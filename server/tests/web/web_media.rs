@@ -14,7 +14,8 @@ use storage::{CreateMediaError, MediaRecord, MediaSource};
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{backends, backends_matrix, post_form, test_options, Backend, TestEnv};
+use crate::helpers::{post_form, test_options};
+use storage::test_support::{backends, backends_matrix, noop_mailer, Backend, TestEnv};
 
 // ─── media_usage ──────────────────────────────────────────────
 
@@ -350,7 +351,7 @@ async fn media_serve_get(state: Arc<storage::AppState>, uri: &str) -> StatusCode
     let app = jaunder::create_router(
         test_options(),
         state,
-        crate::helpers::noop_mailer(),
+        noop_mailer(),
         true,
         crate::helpers::tmp_storage_path(),
     );

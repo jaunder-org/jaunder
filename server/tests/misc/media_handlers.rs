@@ -10,7 +10,7 @@ use tower::ServiceExt;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{backends, backends_matrix, Backend, TestEnv};
+use storage::test_support::{backends, backends_matrix, noop_mailer, Backend, TestEnv};
 
 use crate::helpers::{ensure_server_fns_registered, test_options};
 
@@ -21,13 +21,7 @@ fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
     std::fs::create_dir_all(storage_path.join("media").join("upload")).unwrap();
     std::fs::create_dir_all(storage_path.join("media").join("cached")).unwrap();
     std::fs::create_dir_all(storage_path.join("media").join("tmp")).unwrap();
-    jaunder::create_router(
-        test_options(),
-        state,
-        crate::helpers::noop_mailer(),
-        false,
-        storage_path,
-    )
+    jaunder::create_router(test_options(), state, noop_mailer(), false, storage_path)
 }
 
 fn multipart_body(filename: &str, content_type: &str, data: &[u8]) -> (String, Vec<u8>) {

@@ -17,7 +17,7 @@ use tower::ServiceExt;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{backends, Backend, TestEnv};
+use storage::test_support::{backends, Backend, TestEnv};
 
 /// A recognizable stand-in for the real `index.html`, so tests can tell a
 /// shell-fallback response apart from a projected one.

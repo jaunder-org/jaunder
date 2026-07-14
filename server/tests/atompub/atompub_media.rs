@@ -11,9 +11,9 @@ use tower::ServiceExt;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{backends, backends_matrix, Backend, TestEnv};
+use storage::test_support::{backends, backends_matrix, noop_mailer, Backend, TestEnv};
 
-use crate::helpers::{ensure_server_fns_registered, noop_mailer, test_options};
+use crate::helpers::{ensure_server_fns_registered, test_options};
 
 const PNG: &[u8] = &[
     0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,

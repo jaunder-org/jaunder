@@ -1,9 +1,6 @@
-// Shared test helper `#[path]`-included into every integration-test crate; each crate
-// uses a different subset, so some helpers/re-exports read as dead/unused per-crate.
-// `#[expect]` can't be used (it would be "unfulfilled" in the crates that DO use them),
-// so these stay `#[allow]`. (#94)
-#![allow(dead_code)]
-
+// Shared test helpers for the server integration suite. Compiled once as the single
+// `mod helpers;` of the `integration` test binary, so every item is reachable from
+// some subsystem module and no dead-code/unused suppression is needed.
 use axum::{
     body::Body,
     http::{header, Request, StatusCode},
@@ -16,23 +13,13 @@ use tower::ServiceExt;
 // The both-backend test harness — `Backend`, `TestEnv`, per-test DB provisioning,
 // and the `backends`/`sqlite_only`/`postgres_only` rstest templates — lives in
 // `storage::test_support` (gated by storage's `test-support` feature; ADR-0033) so
-// `storage`'s own tests can use it from the same crate instance.
-// Re-exported here so existing `use crate::helpers::…` sites keep working unchanged.
-// `helpers` is compiled into every test binary and each uses a different subset,
-// so the union re-export reads as unused in some — same as `CapturingWebSubClient`
-// below.
-#[allow(unused_imports)]
-pub use storage::test_support::{
-    backends, backends_matrix, nonexistent_postgres_url, noop_mailer, postgres_bootstrap_url,
-    postgres_only, postgres_test_authority, recorded_postgres_url, seed_posts, sqlite_only,
-    sqlite_url, template_postgres_url, unique_postgres_url, Backend, CloseablePool,
-    PostgresDbGuard, TestBase, TestEnv, PG_URL_FILE,
-};
+// `storage`'s own tests can use it from the same crate instance. Test files import
+// what they need directly from `storage::test_support`; `helpers`' own bodies pull
+// in only `noop_mailer`.
+use storage::test_support::noop_mailer;
 
 mod websub_capturing;
-// Re-exported for `feed_worker.rs`; `helpers` is included into every test binary
-// and most don't use it, so the re-export reads as unused in those.
-#[allow(unused_imports)]
+// The capturing WebSub client used by `feed_worker.rs`.
 pub use websub_capturing::CapturingWebSubClient;
 
 pub fn ensure_server_fns_registered() {

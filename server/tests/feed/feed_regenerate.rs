@@ -9,7 +9,7 @@ use storage::{CreatePostInput, PostFormat};
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{backends, Backend, TestEnv};
+use storage::test_support::{backends, Backend, TestEnv};
 
 #[apply(backends)]
 #[tokio::test]
