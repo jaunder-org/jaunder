@@ -5,23 +5,43 @@
 use quote::quote;
 use syn::DeriveInput;
 
+/// The `#[str_newtype(...)]` options: the tight `secret` surface, and whether a
+/// secret re-opens the serde bridge (`secret, serde`) for an inbound wire value.
+struct Opts {
+    secret: bool,
+    serde: bool,
+}
+
 /// Expands `#[derive(StrNewtype)]` on a single-field tuple struct. On the wrong shape
-/// (or an unknown `str_newtype` option) it returns a spanned `compile_error!` instead of
-/// malformed impls. `#[str_newtype(secret)]` selects the tight secret surface.
+/// (or an unknown/invalid `str_newtype` option) it returns a spanned `compile_error!`
+/// instead of malformed impls. `#[str_newtype(secret)]` selects the tight secret
+/// surface; `#[str_newtype(secret, serde)]` adds the serde bridge back to it.
 pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
     if let Err(e) = crate::require_newtype_shape(input, "StrNewtype", "struct X(String)") {
         return e.to_compile_error();
     }
-    let secret = match is_secret(input) {
-        Ok(s) => s,
+    let opts = match parse_opts(input) {
+        Ok(o) => o,
         Err(e) => return e.to_compile_error(),
     };
     let name = &input.ident;
 
-    if secret {
-        return secret_trailer(name);
+    if opts.secret {
+        let trailer = secret_trailer(name);
+        // A secret re-opens serde only when it must cross the wire *inbound*
+        // (`secret, serde`); its inbound-only role is enforced by an xtask gate.
+        let serde = if opts.serde {
+            serde_impls(name)
+        } else {
+            quote! {}
+        };
+        return quote! {
+            #trailer
+            #serde
+        };
     }
 
+    let serde = serde_impls(name);
     quote! {
         #[automatically_derived]
         impl ::core::fmt::Display for #name {
@@ -81,9 +101,16 @@ pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
             }
         }
 
-        // serde bridge as direct impls (not `#[serde(try_from/into)]`): serialize borrows
-        // instead of cloning into a String, and deserialize routes through `FromStr` so
-        // invalid input is rejected on the wire.
+        #serde
+    }
+}
+
+/// The serde bridge as direct impls (not `#[serde(try_from/into)]`): serialize borrows
+/// instead of cloning into a String, and deserialize routes through `FromStr` so invalid
+/// input is rejected on the wire. Shared by the default trailer and the `secret, serde`
+/// variant.
+fn serde_impls(name: &syn::Ident) -> proc_macro2::TokenStream {
+    quote! {
         #[automatically_derived]
         impl ::serde::Serialize for #name {
             fn serialize<S: ::serde::Serializer>(
@@ -108,8 +135,9 @@ pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
 
 /// The **tight secret surface** (ADR-0063 secret exception, as amended by #403): a
 /// redacting `Debug`, explicit borrowed access via `AsRef<str>`, and construction via
-/// `TryFrom<String>` — and deliberately *none* of `Display`, serde, `Deref`, `Borrow`,
+/// `TryFrom<String>` — and deliberately *none* of `Display`, `Deref`, `Borrow`,
 /// `From<Self> for String`, or `PartialEq`, so a secret cannot leak or be value-compared.
+/// `#[str_newtype(secret, serde)]` layers the serde bridge back on for an inbound value.
 fn secret_trailer(name: &syn::Ident) -> proc_macro2::TokenStream {
     quote! {
         #[automatically_derived]
@@ -136,21 +164,33 @@ fn secret_trailer(name: &syn::Ident) -> proc_macro2::TokenStream {
     }
 }
 
-/// Reads `#[str_newtype(secret)]`. Returns `true` when present, errors on any other
-/// `str_newtype(...)` option so a typo fails loudly rather than silently un-redacting.
-fn is_secret(input: &DeriveInput) -> syn::Result<bool> {
+/// Reads `#[str_newtype(secret)]` / `#[str_newtype(secret, serde)]`. Errors on any other
+/// option so a typo fails loudly rather than silently un-redacting, and on a bare
+/// `serde` (the default trailer already has the serde bridge — `serde` is only meaningful
+/// as a re-opener for a `secret`).
+fn parse_opts(input: &DeriveInput) -> syn::Result<Opts> {
     let mut secret = false;
+    let mut serde = false;
     for attr in &input.attrs {
         if attr.path().is_ident("str_newtype") {
             attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("secret") {
                     secret = true;
                     Ok(())
+                } else if meta.path.is_ident("serde") {
+                    serde = true;
+                    Ok(())
                 } else {
-                    Err(meta.error("unknown `str_newtype` option (expected `secret`)"))
+                    Err(meta.error("unknown `str_newtype` option (expected `secret` or `serde`)"))
                 }
             })?;
-        } // cov:ignore `?`-fall-through closing brace; executed by the secret unit test but llvm-cov leaves the gap region unmarked
+        } // cov:ignore `?`-fall-through closing brace; executed by the secret unit tests but llvm-cov leaves the gap region unmarked
     }
-    Ok(secret)
+    if serde && !secret {
+        return Err(syn::Error::new_spanned(
+            input,
+            "`str_newtype(serde)` is only valid with `secret`; the default trailer already includes the serde bridge",
+        ));
+    }
+    Ok(Opts { secret, serde })
 }

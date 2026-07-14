@@ -134,3 +134,40 @@ fn secret_as_ref_and_try_from() {
     assert_eq!(bytes, "hunter2");
     assert!(Secret::try_from(String::new()).is_err());
 }
+
+// --- secret + serde variant -----------------------------------------------------------
+// `#[str_newtype(secret, serde)]` is the secret surface plus the validating serde bridge:
+// redacting `Debug` and `AsRef`, and (de)serialization, but still no Display/Deref/etc.
+// It is for a secret that must cross the wire *inbound*.
+
+#[derive(Clone, StrNewtype)] // no `Debug` derive — the macro generates a redacting one.
+#[str_newtype(secret, serde)]
+struct SecretWire(String);
+
+impl FromStr for SecretWire {
+    type Err = BadSecret;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.is_empty() {
+            return Err(BadSecret);
+        }
+        Ok(SecretWire(s.to_owned()))
+    }
+}
+
+#[test]
+fn secret_serde_roundtrips_and_validates_on_the_wire() {
+    let s = SecretWire::from_str("hunter2").unwrap();
+    assert_eq!(serde_json::to_string(&s).unwrap(), "\"hunter2\"");
+    let back: SecretWire = serde_json::from_str("\"hunter2\"").unwrap();
+    assert_eq!(back.as_ref(), "hunter2");
+    // Deserialize routes through FromStr, so invalid input is rejected on the wire.
+    assert!(serde_json::from_str::<SecretWire>("\"\"").is_err());
+}
+
+#[test]
+fn secret_serde_debug_still_redacts() {
+    let s = SecretWire::from_str("hunter2").unwrap();
+    let d = format!("{s:?}");
+    assert_eq!(d, "SecretWire([redacted])");
+    assert!(!d.contains("hunter2"));
+}
