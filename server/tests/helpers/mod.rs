@@ -16,8 +16,9 @@ use tower::ServiceExt;
 // `storage::test_support` (gated by storage's `test-support` feature; ADR-0033) so
 // `storage`'s own tests can use it from the same crate instance. Test files import
 // what they need directly from `storage::test_support`; `helpers`' own bodies pull
-// in only `noop_mailer`.
-use storage::test_support::noop_mailer;
+// in `noop_mailer` (throughout) plus `Backend`/`TestEnv` (for `get_asset`, which
+// provisions its own Sqlite backend).
+use storage::test_support::{noop_mailer, Backend, TestEnv};
 
 mod websub_capturing;
 // The capturing WebSub client used by `feed_worker.rs`.
@@ -334,4 +335,33 @@ pub async fn post_json(
     )
     .await;
     (status, body)
+}
+
+/// GET a static asset and return `(status, Content-Type)`. Pins the Sqlite backend
+/// — static-asset serving never touches storage, so it need not run on both.
+pub async fn get_asset(uri: &str) -> (StatusCode, Option<String>) {
+    let TestEnv { state, base: _base } = Backend::Sqlite.setup().await;
+
+    let request = Request::builder()
+        .method("GET")
+        .uri(uri)
+        .body(Body::empty())
+        .unwrap();
+
+    let app = jaunder::create_router(
+        test_options(),
+        state,
+        noop_mailer(),
+        false,
+        tmp_storage_path(),
+    );
+    let response = app.oneshot(request).await.unwrap();
+
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .map(|v| v.to_str().unwrap().to_string());
+
+    (status, content_type)
 }
