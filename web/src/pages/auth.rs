@@ -12,6 +12,7 @@ pub fn RegisterPage() -> impl IntoView {
     let register_action = ServerAction::<Register>::new();
     let policy = crate::server_resource(|| (), |()| get_registration_policy());
     let username = Field::<Username>::new();
+    let password = Field::<Password>::new();
 
     // Mirror the new session into the advisory auth marker (#181, ADR-0044): on a
     // successful register the client knows the submitted username, so pre-paint
@@ -48,15 +49,16 @@ pub fn RegisterPage() -> impl IntoView {
                                         field=username
                                         transform=str::to_lowercase
                                     />
-                                    <label class="j-form-field">
-                                        <span class="j-form-label">"Password"</span>
-                                        <input
-                                            class="j-form-input"
-                                            type="password"
-                                            name="password"
-                                            autocomplete="new-password"
-                                        />
-                                    </label>
+                                    <ValidatedInput<
+                                    Password,
+                                >
+                                        label="Password"
+                                        name="password"
+                                        input_type="password"
+                                        autocomplete="new-password"
+                                        field=password
+                                    />
+
                                     {is_invite_only
                                         .then(|| {
                                             view! {
@@ -82,7 +84,9 @@ pub fn RegisterPage() -> impl IntoView {
                                     <button
                                         type="submit"
                                         class="j-btn is-primary"
-                                        prop:disabled=move || !username.is_valid()
+                                        prop:disabled=move || {
+                                            !(username.is_valid() && password.is_valid())
+                                        }
                                     >
                                         "Register"
                                     </button>
