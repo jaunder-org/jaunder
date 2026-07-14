@@ -5,7 +5,7 @@
 > #404 umbrella; absorbs bug
 > [#416](https://github.com/jaunder-org/jaunder/issues/416)). Design settled in
 > interview 2026-07-14. Decision record:
-> `docs/adr/drafts/tag-identity-label-split.md`.
+> `docs/adr/0068-tag-identity-label-split.md`.
 
 ## North star
 
@@ -57,7 +57,7 @@ _(every task implicitly includes these)_
   (**jaunder-commit**). Storage changes follow the dual-backend template
   (`CONTRIBUTING.md`; both sqlite + postgres impls change together). **No
   `Co-Authored-By` trailer.**
-- **Governing:** `docs/adr/drafts/tag-identity-label-split.md` (this vertical's
+- **Governing:** `docs/adr/0068-tag-identity-label-split.md` (this vertical's
   decision), ADR-0063 (§4 boundary rule), ADR-0065 (typed wire args + client
   pre-validation), ADR-0023 (atompub emit-only wire extensions), ADR-0019
   (dual-dialect storage).
@@ -304,7 +304,7 @@ _(every task implicitly includes these)_
 
 ### §I ADR
 
-- **I1** `docs/adr/drafts/tag-identity-label-split.md` is promoted at ship
+- **I1** `docs/adr/0068-tag-identity-label-split.md` is promoted at ship
   (`cargo xtask adr promote`), numbering it and syncing the README table.
 
 ## Risks

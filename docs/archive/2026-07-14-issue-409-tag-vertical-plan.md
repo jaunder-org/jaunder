@@ -8,7 +8,7 @@
 **Spec:**
 [`2026-07-14-issue-409-tag-vertical.md`](../specs/2026-07-14-issue-409-tag-vertical.md)
 — this plan is "how"; the spec is "what/why". Decision record:
-`docs/adr/drafts/tag-identity-label-split.md`.
+`docs/adr/0068-tag-identity-label-split.md`.
 
 ---
 
@@ -519,7 +519,7 @@ Spec §H1. Confirms the north star and records what `jaunder-ship` must do.
       PASS (static + coverage + e2e).
 - [x] **Step 3: Ship notes (for `jaunder-ship`, not committed here).**
       `cargo     xtask adr promote` numbers
-      `docs/adr/drafts/tag-identity-label-split.md`; close **#416** as absorbed;
+      `docs/adr/0068-tag-identity-label-split.md`; close **#416** as absorbed;
       the PR references #409.
 
 ---
