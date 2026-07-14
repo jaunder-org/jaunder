@@ -24,6 +24,8 @@ export const SEL = {
   username: 'input[name="username"]',
   /** Login/register password field. */
   password: 'input[name="password"]',
+  /** Reset-password new-password field. */
+  newPassword: 'input[name="new_password"]',
   /** Top-bar page heading. */
   topbarHeading: ".j-topbar h1",
 } as const;

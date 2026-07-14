@@ -19,6 +19,21 @@ test("register page shows form", async ({ page }) => {
   await expect(page.locator(SEL.password)).toBeVisible();
 });
 
+test("register rejects a too-short password client-side", async ({ page }) => {
+  await goto(page, "/register");
+
+  await page.fill(SEL.username, "validusername");
+  await page.fill(SEL.password, "short"); // < 8 chars
+  await page.locator(SEL.password).blur(); // touched → message shows
+
+  await expect(page.locator(SEL.error)).toBeVisible();
+  await expect(page.locator(SEL.submit)).toBeDisabled();
+
+  // A valid password clears the error and enables submit.
+  await page.fill(SEL.password, "longenough123");
+  await expect(page.locator(SEL.submit)).toBeEnabled();
+});
+
 test("register with open policy succeeds", async ({ page }) => {
   const username = `newuser${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
   await goto(page, "/register");

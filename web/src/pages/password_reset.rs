@@ -2,6 +2,7 @@ use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::pages::Topbar;
 use crate::password_reset::{ConfirmPasswordReset, RequestPasswordReset};
+use common::password::Password;
 use common::username::Username;
 use leptos::prelude::*;
 use leptos_router::components::Redirect;
@@ -72,6 +73,7 @@ pub fn ResetPasswordPage() -> impl IntoView {
     let token = use_query_map().with_untracked(|q| q.get("token").unwrap_or_default());
 
     let confirm_action = ServerAction::<ConfirmPasswordReset>::new();
+    let new_password = Field::<Password>::new();
 
     view! {
         <Topbar title="Reset Password".to_string() sub="Set a new password".to_string() />
@@ -79,8 +81,20 @@ pub fn ResetPasswordPage() -> impl IntoView {
             <div class="j-page">
                 <ActionForm action=confirm_action>
                     <input type="hidden" name="token" value=token />
-                    <label>"New password" <input type="password" name="new_password" /></label>
-                    <button type="submit" class="j-btn is-primary">
+                    <ValidatedInput<
+                    Password,
+                >
+                        label="New password"
+                        name="new_password"
+                        input_type="password"
+                        autocomplete="new-password"
+                        field=new_password
+                    />
+                    <button
+                        type="submit"
+                        class="j-btn is-primary"
+                        prop:disabled=move || !new_password.is_valid()
+                    >
                         "Set new password"
                     </button>
                 </ActionForm>
