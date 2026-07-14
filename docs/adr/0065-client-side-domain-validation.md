@@ -46,6 +46,22 @@ pre-validation using the same newtype `FromStr` — never a re-implemented rule.
   is gated on a `touched` flag (set on blur). Submission is gated
   **disable-until-valid** (`prop:disabled` on the submit button), which keeps
   the pattern working inside the existing leptos `ActionForm`.
+- **Optional fields.** A field whose _empty_ state is valid (e.g. an
+  auto-generated `slug_override`) uses `Field::optional()` /
+  `optional_prefilled(initial)`: `error_for` treats empty input as valid
+  (`None`) and validates non-empty input through the newtype's `FromStr` as
+  before. The wire arg is `Option<T>` and the form reads
+  `field.parsed() -> Option<T>`. Because empty is valid, `is_valid()` leaves
+  submit **enabled** for a blank optional field while still gating a non-empty
+  invalid entry. First adopter: `slug_override` (#408).
+- **Rendering: component or direct bind.** The `<ValidatedInput<T>>` component
+  is the default renderer for a standard labelled field (and for `ActionForm`
+  name/value submission). A form with a bespoke layout or a programmatic
+  `.dispatch(...)` (e.g. the post compose/edit forms) may bind the same
+  `Field<T>` **directly** to its own `<input>` — `prop:value=field.value`, an
+  `on:input` that sets `field.error = field.error_for(&v)`, `on:blur` →
+  `field.touch()`, and the touched-gated inline error — keeping the single
+  validation source without the component's fixed markup.
 - **Defense-in-depth.** The typed-arg `Deserialize` still validates server-side;
   because legitimate clients pre-validate, the generic-`ServerFunction`-error
   path is only reachable by a malformed/malicious request.
