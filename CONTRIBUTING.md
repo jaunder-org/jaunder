@@ -340,19 +340,20 @@ Jaunder uses OpenTelemetry for deep performance analysis (see
 
 ### Targeted Rust tests
 
-When a change is confined to one area, run the relevant target directly.
+The server integration tests compile as a **single** `integration` binary, so
+run a subset by filtering on the module path rather than by picking a target.
+Test paths are `<subsystem>::<file>::<name>` — e.g. `web::web_auth::…`,
+`misc::commands::…`, or `storage::…`/`projector::…` (those two subsystems are a
+single file, so they have no file segment).
 
-- CLI and command behavior: `cargo test -p jaunder --test commands`
-- Storage behavior: `cargo test -p jaunder --test storage`
-- Web/server-function behavior:
-  - `cargo test -p jaunder --test web_auth`
-  - `cargo test -p jaunder --test web_account`
-  - `cargo test -p jaunder --test web_email`
-  - `cargo test -p jaunder --test web_password_reset`
-- Library-only tests: `cargo test -p jaunder --lib`
+- One subsystem: `cargo nextest run -p jaunder -E 'test(/^web::/)'` (or
+  `atompub`, `feed`, `misc`, `projector`, `storage`).
+- One file or test (substring match):
+  `cargo nextest run -p jaunder web::web_auth`.
+- Library/unit tests only: `cargo test -p jaunder --lib`.
 
-`cargo nextest list -p jaunder --tests` shows the currently registered Rust test
-targets if you need to confirm the target split.
+`cargo nextest list -p jaunder` shows every registered Rust test with its full
+`<subsystem>::…` path.
 
 ### PostgreSQL-backed Rust tests
 
@@ -360,19 +361,19 @@ The integration suite is backend-parametric via
 [`rstest`](https://docs.rs/rstest): a storage behavior is written **once** and
 annotated `#[apply(backends)]`, which expands it into two cases —
 `::case_1_sqlite` and `::case_2_postgres`. A `Backend` enum selects the backend
-through `Backend::setup()` (defined in `server/tests/helpers/mod.rs`); genuinely
-single-backend tests use `#[apply(sqlite_only)]` or `#[apply(postgres_only)]`.
-The HTTP-layer integration tests are backend-parametric too: they use the same
-`Backend::setup()` fixture (`#[apply(backends)]`, or a
-`#[values(Backend::Sqlite, Backend::Postgres)]` + `#[case]` matrix for clustered
-rejection/authorization tests), so the **whole** integration suite — storage and
-HTTP — runs on both backends per run; the old env-selected `test_state` harness
-is gone. Both cases run in the same single nextest pass. The consequence is that
-a bare `cargo nextest run` **requires a reachable PostgreSQL**: the postgres
-cases connect to `JAUNDER_PG_TEST_URL` (defaulting to
-`postgres://jaunder@127.0.0.1:55432/jaunder`) and fail if nothing is listening.
-Each test creates its own database — a clone of a once-migrated template (see
-`server/tests/helpers/mod.rs`) — so the cases run **in parallel**; no
+through `Backend::setup()` (defined in `storage::test_support` — ADR-0033 — and
+imported directly by the integration tests); genuinely single-backend tests use
+`#[apply(sqlite_only)]` or `#[apply(postgres_only)]`. The HTTP-layer integration
+tests are backend-parametric too: they use the same `Backend::setup()` fixture
+(`#[apply(backends)]`, or a `#[values(Backend::Sqlite, Backend::Postgres)]` +
+`#[case]` matrix for clustered rejection/authorization tests), so the **whole**
+integration suite — storage and HTTP — runs on both backends per run; the old
+env-selected `test_state` harness is gone. Both cases run in the same single
+nextest pass. The consequence is that a bare `cargo nextest run` **requires a
+reachable PostgreSQL**: the postgres cases connect to `JAUNDER_PG_TEST_URL`
+(defaulting to `postgres://jaunder@127.0.0.1:55432/jaunder`) and fail if nothing
+is listening. Each test creates its own database — a clone of a once-migrated
+template (see `storage::test_support`) — so the cases run **in parallel**; no
 `--test-threads=1` is needed. (The `#[template]`/`#[apply]` macros come from the
 `rstest_reuse` dev-dependency, which requires the bare `use rstest_reuse;`
 import at the top of any test file that uses them.)
