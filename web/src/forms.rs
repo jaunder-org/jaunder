@@ -203,6 +203,7 @@ where
 mod tests {
     use super::*;
     // `common` has no top-level re-exports — qualify by module.
+    use common::email::Email;
     use common::password::Password;
     use common::slug::Slug;
     use common::tag::Tag;
@@ -215,6 +216,7 @@ mod tests {
         assert_eq!(field_error::<Tag>("rust"), None);
         assert_eq!(field_error::<Slug>("hello"), None);
         assert_eq!(field_error::<Password>("hunter2!"), None); // >= 8 chars
+        assert_eq!(field_error::<Email>("user@example.com"), None);
     }
 
     #[test]
@@ -225,6 +227,10 @@ mod tests {
         assert_eq!(field_error::<Username>("").as_deref(), Some(expected));
         assert!(field_error::<Password>("short").is_some()); // < 8 chars
         assert!(field_error::<Tag>("Bad Tag").is_some());
+        // `Email`'s message carries the underlying `email_address` reason after our
+        // label, so assert the prefix rather than couple to the crate's wording.
+        assert!(field_error::<Email>("not-an-email")
+            .is_some_and(|m| m.starts_with("invalid email address")));
     }
 
     // `Field<T>`'s methods are signal-only (no `Effect`/`Resource`), so — like

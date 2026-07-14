@@ -2,13 +2,15 @@
 use {
     crate::auth::require_auth,
     crate::error::InternalError,
-    common::email::Email,
     common::mailer::{EmailMessage, MailSender},
     std::sync::Arc,
     storage::{EmailVerificationStorage, UserStorage},
 };
 
 use crate::error::WebResult;
+// Unconditional: `Email` is the typed `#[server]` argument, so the generated request
+// struct must carry it on both the client (serialize) and server (deserialize) sides.
+use common::email::Email;
 use leptos::prelude::*;
 
 /// Sends a verification email to `email`. Requires authentication.
@@ -16,28 +18,24 @@ use leptos::prelude::*;
 /// Creates a 24-hour verification token, sends a link to `/verify-email?token=…`
 /// via the configured mailer.
 #[server(endpoint = "/request_email_verification")]
-pub async fn request_email_verification(email: String) -> WebResult<()> {
+pub async fn request_email_verification(email: Email) -> WebResult<()> {
     boundary!("request_email_verification", {
+        // `email` is already validated/normalized: it arrives typed as `Email`, so the
+        // arg `Deserialize` ran its `FromStr`. Legitimate clients pre-validate the form
+        // field (ADR-0065), so an invalid value only reaches here from a non-browser caller.
         let auth = require_auth().await?;
         let email_verifications = expect_context::<Arc<dyn EmailVerificationStorage>>();
         let mailer = expect_context::<Arc<dyn MailSender>>();
 
-        // Parse error (`common::email::InvalidEmail`): keep the site-specific public message
-        // on the wire, but capture the typed source rather than flattening it with
-        // `.to_string()` (a blanket `From` would couple the `host` error floor to this validator).
-        let email_addr = email
-            .parse::<Email>()
-            .map_err(|e| InternalError::validation_source(e.to_string(), e))?;
-
         let expires_at = chrono::Utc::now() + chrono::Duration::hours(24);
         let raw_token = email_verifications
-            .create_email_verification(auth.user_id, &email_addr, expires_at)
+            .create_email_verification(auth.user_id, &email, expires_at)
             .await?;
 
         let link = format!("/verify-email?token={raw_token}");
         let message = EmailMessage {
             from: None,
-            to: vec![email_addr],
+            to: vec![email],
             subject: "Verify your email address".to_string(),
             body_text: format!(
                 "Click the link below to verify your email address:\n\n{link}\n\nThis link expires in 24 hours."
