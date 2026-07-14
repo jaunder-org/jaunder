@@ -19,7 +19,7 @@ use server::{not_found_error, private_post_not_found_error};
 #[cfg(feature = "server")]
 pub use server::post_response;
 
-use common::username::Username;
+use common::{slug::Slug, username::Username};
 
 use crate::error::WebResult;
 use crate::tags::TagSummary;
@@ -32,7 +32,7 @@ use {
     crate::feed_events::enqueue_feed_events,
     crate::viewer::viewer_identity,
     chrono::{DateTime, Utc},
-    common::{slug::Slug, tag::Tag},
+    common::tag::Tag,
     std::{collections::BTreeSet, sync::Arc},
     storage::{
         apply_post_tag_diff, fetch_post_record, find_draft_by_permalink_for_user,
@@ -46,7 +46,7 @@ use {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CreatePostResult {
     pub post_id: i64,
-    pub slug: String,
+    pub slug: Slug,
     pub created_at: String,
     pub published_at: Option<String>,
     pub preview_url: String,
@@ -58,7 +58,7 @@ pub struct CreatePostResult {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UpdatePostResult {
     pub post_id: i64,
-    pub slug: String,
+    pub slug: Slug,
     pub published_at: Option<String>,
     pub preview_url: String,
     pub permalink: Option<String>,
@@ -151,7 +151,7 @@ pub struct DraftSummary {
     pub post_id: i64,
     pub title: Option<String>,
     pub summary_label: String,
-    pub slug: String,
+    pub slug: Slug,
     pub created_at: String,
     pub updated_at: String,
     /// RFC3339 UTC publication instant for a *scheduled* post (`published_at`
@@ -167,7 +167,7 @@ pub struct DraftSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PublishPostResult {
     pub post_id: i64,
-    pub slug: String,
+    pub slug: Slug,
     pub published_at: String,
     pub permalink: String,
 }
@@ -178,7 +178,7 @@ pub struct PostResponse {
     pub post_id: i64,
     pub username: Username,
     pub title: Option<String>,
-    pub slug: String,
+    pub slug: Slug,
     pub body: String,
     pub format: String,
     pub rendered_html: String,
@@ -279,7 +279,7 @@ pub async fn create_post(
 
         let created = CreatePostResult {
             post_id: record.post_id,
-            slug: record.slug.to_string(),
+            slug: record.slug,
             created_at,
             published_at: published_at_str,
             preview_url,
@@ -310,24 +310,14 @@ pub async fn get_post(
     year: i32,
     month: u32,
     day: u32,
-    slug: String,
+    slug: Slug,
 ) -> WebResult<PostResponse> {
     boundary!("get_post", {
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
-        let slug_parsed = slug.parse::<Slug>()?;
-
         let viewer = viewer_identity().await;
-        if let Some(post) = fetch_post_record(
-            posts.as_ref(),
-            &viewer,
-            &username,
-            year,
-            month,
-            day,
-            &slug_parsed,
-        )
-        .await?
+        if let Some(post) =
+            fetch_post_record(posts.as_ref(), &viewer, &username, year, month, day, &slug).await?
         {
             let is_author = require_auth()
                 .await
@@ -347,16 +337,10 @@ pub async fn get_post(
             return Err(not_found_error());
         }
 
-        let draft = find_draft_by_permalink_for_user(
-            posts.as_ref(),
-            auth.user_id,
-            year,
-            month,
-            day,
-            &slug_parsed,
-        )
-        .await?
-        .ok_or_else(not_found_error)?;
+        let draft =
+            find_draft_by_permalink_for_user(posts.as_ref(), auth.user_id, year, month, day, &slug)
+                .await?
+                .ok_or_else(not_found_error)?;
 
         Ok(post_response(draft, true))
     })
@@ -470,7 +454,7 @@ pub async fn update_post(
         host::metrics::post(host::metrics::PostEvent::Updated);
         Ok(UpdatePostResult {
             post_id,
-            slug: record.slug.to_string(),
+            slug: record.slug,
             published_at: published_at_str,
             preview_url: format!("/draft/{post_id}/preview"),
             permalink,
@@ -550,7 +534,7 @@ pub async fn list_drafts(
                     post_id: draft.post_id,
                     title: draft.title.clone(),
                     summary_label: draft.fallback_summary_label(),
-                    slug: draft.slug.to_string(),
+                    slug: draft.slug.clone(),
                     created_at: draft.created_at.to_rfc3339(),
                     updated_at: draft.updated_at.to_rfc3339(),
                     scheduled_at,
@@ -614,7 +598,7 @@ pub async fn publish_post(post_id: i64) -> WebResult<PublishPostResult> {
         host::metrics::post(host::metrics::PostEvent::Published);
         Ok(PublishPostResult {
             post_id: updated.post_id,
-            slug: updated.slug.to_string(),
+            slug: updated.slug.clone(),
             published_at: published_at.to_rfc3339(),
             permalink: updated.permalink(),
         })

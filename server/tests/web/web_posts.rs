@@ -3235,7 +3235,7 @@ async fn create_targeted_post(
 
 /// The set of post slugs visible in a local-timeline response.
 fn timeline_slugs(page: &TimelinePage) -> std::collections::BTreeSet<String> {
-    page.posts.iter().map(|p| p.slug.clone()).collect()
+    page.posts.iter().map(|p| p.slug.to_string()).collect()
 }
 
 #[apply(backends)]

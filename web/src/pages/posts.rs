@@ -20,7 +20,7 @@ use crate::{
     },
 };
 use common::feed::FeedSurface;
-use common::{tag::Tag, username::Username};
+use common::{slug::Slug, tag::Tag, username::Username};
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 
@@ -55,7 +55,7 @@ pub fn CreatePostPage() -> impl IntoView {
                                         } else {
                                             "Draft saved."
                                         };
-                                        let slug_value = created.slug.clone();
+                                        let slug_value = created.slug.to_string();
                                         let slug_for_attr = slug_value.clone();
                                         view! {
                                             <div class="j-save-summary">
@@ -161,13 +161,17 @@ pub fn PostPage() -> impl IntoView {
             .get("day")
             .and_then(|v| v.parse::<u32>().ok())
             .unwrap_or_default();
-        let slug = params.get("slug").unwrap_or_default();
+        // Parse the slug segment client-side so get_post takes a typed Slug
+        // (ADR-0063 §4). A '~'-prefixed URL whose slug won't parse names no real
+        // post, so the fetch is skipped below and the client 404s — no server
+        // round-trip. The public projector backstops bare URLs with the SPA shell.
+        let slug = params.get("slug").and_then(|s| s.parse::<Slug>().ok());
         (username, year, month, day, slug)
     };
 
     let post = crate::server_resource(
         post_data,
-        |(username, year, month, day, slug): (Option<Username>, i32, u32, u32, String)| async move {
+        |(username, year, month, day, slug): (Option<Username>, i32, u32, u32, Option<Slug>)| async move {
             let Some(username) = username else {
                 // This is not a post permalink segment (it didn't start with '~').
                 // It may be a server-handled URL (e.g. /media/…) that the SPA
@@ -178,6 +182,12 @@ pub fn PostPage() -> impl IntoView {
                         let _ = window.location().replace(&href);
                     }
                 }
+                return Err(WebError::validation("Invalid permalink"));
+            };
+            // A '~'-prefixed permalink with an unparseable slug is a malformed
+            // permalink (not a server URL): 404 client-side without calling the
+            // server, matching the pre-typing behavior where get_post rejected it.
+            let Some(slug) = slug else {
                 return Err(WebError::validation("Invalid permalink"));
             };
             get_post(username, year, month, day, slug).await
@@ -674,7 +684,7 @@ pub fn EditPostPage() -> impl IntoView {
                     Ok(fetched) => {
                         body.set(fetched.body.clone());
                         format.set(fetched.format.clone());
-                        slug_override.set(fetched.slug.clone());
+                        slug_override.set(fetched.slug.to_string());
                         summary.set(fetched.summary.clone().unwrap_or_default());
                         post_tags.set(fetched.tags.clone());
                         let post_id = fetched.post_id;
@@ -862,7 +872,7 @@ pub fn EditPostPage() -> impl IntoView {
                 .get()
                 .map(|result: Result<UpdatePostResult, WebError>| match result {
                     Ok(updated) if updated.published_at.is_none() => {
-                        let slug_value = updated.slug.clone();
+                        let slug_value = updated.slug.to_string();
                         let slug_for_attr = slug_value.clone();
                         view! {
                             <div class="j-save-summary">
@@ -983,7 +993,7 @@ fn render_draft_row(
                 <div class="j-draft-row-content">
                     <strong>{label}</strong>
                     " ("
-                    {draft.slug}
+                    {draft.slug.to_string()}
                     ") "
                     {scheduled_badge}
                     " "

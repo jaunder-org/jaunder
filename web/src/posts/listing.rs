@@ -7,7 +7,7 @@
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use common::username::Username;
+use common::{slug::Slug, username::Username};
 
 use crate::error::WebResult;
 use crate::tags::TagSummary;
@@ -36,7 +36,7 @@ pub struct TimelinePostSummary {
     pub username: Username,
     pub title: Option<String>,
     pub summary: Option<String>,
-    pub slug: String,
+    pub slug: Slug,
     pub rendered_html: String,
     pub created_at: String,
     pub published_at: String,

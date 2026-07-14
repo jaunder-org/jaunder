@@ -133,6 +133,12 @@ async fn permalink(
     Extension(posts): Extension<Arc<dyn PostStorage>>,
     Extension(shell): Extension<Shell>,
     headers: HeaderMap,
+    // The username/slug segments stay `String` (not a typed `Path<(Username, ..,
+    // Slug)>` extractor) so a malformed segment is parsed *inside* the handler and
+    // falls back to the SPA shell (client-rendered 404) below — a typed extractor
+    // would reject it with a 400 *before* the handler runs. This is the deliberate
+    // projector-vs-atompub boundary split (ADR-0063 §4): atompub handlers are
+    // typed (400-on-malformed API); the public projector serves the shell.
     Path((username, year, month, day, slug)): Path<(String, i32, u32, u32, String)>,
 ) -> Response {
     let (Ok(username), Ok(slug)) = (username.parse(), slug.parse()) else {
