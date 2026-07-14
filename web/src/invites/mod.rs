@@ -3,6 +3,7 @@ use {
     crate::auth::require_auth,
     crate::error::InternalError,
     chrono::Utc,
+    common::email::Email,
     common::mailer::{EmailMessage, MailSender},
     std::sync::Arc,
     storage::{load_registration_policy, InviteStorage, RegistrationPolicy, SiteConfigStorage},
@@ -46,7 +47,7 @@ pub async fn create_invite(
             InternalError::validation("set the site base URL before emailing invites")
         })?;
         let recipient = recipient_email
-            .parse::<email_address::EmailAddress>()
+            .parse::<Email>()
             .map_err(|_| InternalError::validation("invalid recipient email address"))?;
 
         let hours = expires_in_hours.unwrap_or(168);

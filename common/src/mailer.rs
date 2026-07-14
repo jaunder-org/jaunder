@@ -12,6 +12,8 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
+use crate::email::Email;
+
 /// A transport-neutral representation of an outbound email message.
 ///
 /// `LettreMailSender` converts this to a `lettre::Message` internally.
@@ -21,9 +23,9 @@ use thiserror::Error;
 pub struct EmailMessage {
     /// Sender address (e.g. `"Jaunder <noreply@example.com>"`).
     /// When `None`, the sender address from `SmtpConfig` is used.
-    pub from: Option<email_address::EmailAddress>,
+    pub from: Option<Email>,
     /// Recipient addresses. Must contain at least one entry.
-    pub to: Vec<email_address::EmailAddress>,
+    pub to: Vec<Email>,
     /// The message subject line.
     pub subject: String,
     /// The plain-text body of the message.
@@ -133,11 +135,7 @@ pub mod test_utils {
 mod tests {
     use super::*;
     use crate::mailer::test_utils::CapturingMailSender;
-
-    fn parse_email(s: &str) -> email_address::EmailAddress {
-        s.parse::<email_address::EmailAddress>()
-            .expect("valid email")
-    }
+    use crate::test_support::parse_email;
 
     fn create_test_message(from: Option<&str>, to: Vec<&str>, subject: &str) -> EmailMessage {
         EmailMessage {
@@ -197,10 +195,7 @@ mod tests {
             subject: "Hello".to_string(),
             body_text: "Hi there!".to_string(),
         };
-        assert_eq!(
-            msg.from.as_ref().map(email_address::EmailAddress::as_str),
-            Some("sender@example.com")
-        );
+        assert_eq!(msg.from, Some(parse_email("sender@example.com")));
         assert_eq!(
             msg.to,
             vec![

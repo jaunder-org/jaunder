@@ -1,5 +1,6 @@
 // Shared imports (no cfg needed)
 use crate::error::WebResult;
+use common::email::Email;
 use common::username::Username;
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -23,7 +24,7 @@ pub struct ProfileData {
     pub username: Username,
     pub display_name: Option<String>,
     pub bio: Option<String>,
-    pub email: Option<String>,
+    pub email: Option<Email>,
     pub email_verified: bool,
 }
 
@@ -41,7 +42,7 @@ pub async fn get_profile() -> WebResult<ProfileData> {
             username: user.username,
             display_name: user.display_name,
             bio: user.bio,
-            email: user.email.map(|e| e.to_string()),
+            email: user.email,
             email_verified: user.email_verified,
         })
     })

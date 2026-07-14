@@ -30,6 +30,9 @@ getrandom = { version = "0.2", features = ["js"] }
 [features]
 test-utils = ["cheap-kdf"]
 cheap-kdf = []
+# Compiles `common::test_support` (shared test fixtures) for downstream test crates;
+# `common`'s own tests get it via `cfg(test)`. Pulls no extra deps.
+test-support = []
 
 [dev-dependencies]
 axum = { workspace = true }

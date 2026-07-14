@@ -2,6 +2,7 @@
 use {
     crate::auth::require_auth,
     crate::error::InternalError,
+    common::email::Email,
     common::mailer::{EmailMessage, MailSender},
     std::sync::Arc,
     storage::{EmailVerificationStorage, UserStorage},
@@ -21,11 +22,11 @@ pub async fn request_email_verification(email: String) -> WebResult<()> {
         let email_verifications = expect_context::<Arc<dyn EmailVerificationStorage>>();
         let mailer = expect_context::<Arc<dyn MailSender>>();
 
-        // External parse error (`email_address`): keep the site-specific public message on
-        // the wire, but capture the typed source rather than flattening it with `.to_string()`
-        // (a blanket `From` would need an `email_address` dep on the `host` floor).
+        // Parse error (`common::email::InvalidEmail`): keep the site-specific public message
+        // on the wire, but capture the typed source rather than flattening it with
+        // `.to_string()` (a blanket `From` would couple the `host` error floor to this validator).
         let email_addr = email
-            .parse::<email_address::EmailAddress>()
+            .parse::<Email>()
             .map_err(|e| InternalError::validation_source(e.to_string(), e))?;
 
         let expires_at = chrono::Utc::now() + chrono::Duration::hours(24);

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use chrono::Utc;
 use common::mailer::test_utils::CapturingMailSender;
+use common::test_support::parse_email;
 use common::username::Username;
 
 use crate::helpers::post_form_with_mailer;
@@ -49,7 +50,7 @@ async fn request_email_verification_creates_row_and_sends_email(#[case] backend:
     let sent = mailer.sent();
     assert_eq!(sent.len(), 1, "expected one email to be sent");
     assert_eq!(sent[0].to.len(), 1);
-    assert_eq!(sent[0].to[0].as_str(), "alice@example.com");
+    assert_eq!(sent[0].to[0], "alice@example.com");
     assert!(
         sent[0].body_text.contains("/verify-email?token="),
         "email body should contain verification link, got: {}",
@@ -75,10 +76,11 @@ async fn verify_email_with_valid_token_sets_email_verified(#[case] backend: Back
         .await
         .unwrap();
 
+    let email = parse_email("bob@example.com");
     let expires_at = Utc::now() + chrono::Duration::hours(24);
     let raw_token = state
         .email_verifications
-        .create_email_verification(user_id, &"bob@example.com".parse().unwrap(), expires_at)
+        .create_email_verification(user_id, &email, expires_at)
         .await
         .unwrap();
 
@@ -94,10 +96,7 @@ async fn verify_email_with_valid_token_sets_email_verified(#[case] backend: Back
     assert_eq!(status, StatusCode::OK);
 
     let user = state.users.get_user(user_id).await.unwrap().unwrap();
-    assert_eq!(
-        user.email.as_ref().map(email_address::EmailAddress::as_str),
-        Some("bob@example.com")
-    );
+    assert_eq!(user.email, Some(email));
     assert!(user.email_verified, "email should be marked as verified");
 }
 

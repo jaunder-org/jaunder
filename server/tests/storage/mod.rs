@@ -2,6 +2,7 @@ use chrono::{Datelike, Utc};
 use common::password::Password;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
+use common::test_support::parse_email;
 use common::username::Username;
 use common::visibility::{
     AudienceTarget, Channel, SubscriptionPolicy, SubscriptionStatus, TargetKind, ViewerIdentity,
@@ -855,7 +856,7 @@ async fn email_verification_and_password_reset_work(#[case] backend: Backend) {
         .await
         .unwrap();
     assert_eq!(verified_user_id, user_id);
-    assert_eq!(verified_email.as_str(), "dave@example.com");
+    assert_eq!(verified_email, "dave@example.com");
 
     state
         .users
@@ -1593,7 +1594,7 @@ async fn set_email_persists_and_get_user_reflects_it(#[case] backend: Backend) {
         .await
         .unwrap();
 
-    let addr: email_address::EmailAddress = "alice@example.com".parse().unwrap();
+    let addr = parse_email("alice@example.com");
     state
         .users
         .set_email(user_id, Some(&addr), true)
@@ -1601,13 +1602,7 @@ async fn set_email_persists_and_get_user_reflects_it(#[case] backend: Backend) {
         .unwrap();
 
     let record = state.users.get_user(user_id).await.unwrap().unwrap();
-    assert_eq!(
-        record
-            .email
-            .as_ref()
-            .map(email_address::EmailAddress::as_str),
-        Some("alice@example.com")
-    );
+    assert_eq!(record.email, Some(addr));
     assert!(record.email_verified);
 }
 
@@ -1623,7 +1618,7 @@ async fn set_email_clears_previously_set_email(#[case] backend: Backend) {
         .await
         .unwrap();
 
-    let addr: email_address::EmailAddress = "bob@example.com".parse().unwrap();
+    let addr = parse_email("bob@example.com");
     state
         .users
         .set_email(user_id, Some(&addr), true)
@@ -1665,7 +1660,7 @@ async fn create_email_verification_and_use_returns_user_id_and_email(#[case] bac
         .unwrap();
 
     assert_eq!(returned_user_id, user_id);
-    assert_eq!(returned_email.as_str(), "alice@example.com");
+    assert_eq!(returned_email, "alice@example.com");
 }
 
 #[apply(backends)]
@@ -1784,7 +1779,7 @@ async fn second_email_verification_supersedes_first(#[case] backend: Backend) {
         .await
         .unwrap();
     assert_eq!(uid, user_id);
-    assert_eq!(email.as_str(), "alice2@example.com");
+    assert_eq!(email, "alice2@example.com");
 
     // First token is now either NotFound or Expired.
     let err = state

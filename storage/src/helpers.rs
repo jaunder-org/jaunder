@@ -432,7 +432,7 @@ mod tests {
         let record = build_user_record(parts).unwrap();
         assert_eq!(record.user_id, 1);
         assert_eq!(record.username, "alice");
-        assert_eq!(record.email.as_ref().unwrap().as_str(), "alice@example.com");
+        assert_eq!(record.email.unwrap(), "alice@example.com");
     }
 
     #[test]
@@ -909,7 +909,7 @@ mod tests {
         assert_eq!(record.bio, Some("Bio".to_string()));
         assert_eq!(record.created_at, now);
         assert_eq!(record.last_authenticated_at, Some(now));
-        assert_eq!(record.email.as_ref().unwrap().as_str(), "alice@example.com");
+        assert_eq!(record.email.unwrap(), "alice@example.com");
         assert!(record.email_verified);
     }
 

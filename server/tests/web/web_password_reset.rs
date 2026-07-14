@@ -3,6 +3,7 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use chrono::Utc;
 use common::mailer::test_utils::CapturingMailSender;
+use common::test_support::parse_email;
 use common::username::Username;
 use storage::AppState;
 
@@ -28,7 +29,7 @@ async fn create_user_with_verified_email(
         )
         .await
         .unwrap();
-    let email_addr: email_address::EmailAddress = email.parse().unwrap();
+    let email_addr = parse_email(email);
     state
         .users
         .set_email(user_id, Some(&email_addr), true)
@@ -65,7 +66,7 @@ async fn request_password_reset_sends_email_for_verified_user(#[case] backend: B
     let sent = mailer.sent();
     assert_eq!(sent.len(), 1, "expected one reset email to be sent");
     assert_eq!(sent[0].to.len(), 1);
-    assert_eq!(sent[0].to[0].as_str(), "alice@example.com");
+    assert_eq!(sent[0].to[0], "alice@example.com");
     assert!(
         sent[0].body_text.contains("/reset-password?token="),
         "email body should contain reset link, got: {}",

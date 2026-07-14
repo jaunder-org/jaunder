@@ -56,6 +56,8 @@ impl MailSender for FileMailSender {
 
 #[cfg(test)]
 mod tests {
+    use common::test_support::parse_email;
+
     use super::*;
 
     #[tokio::test]
@@ -66,9 +68,7 @@ mod tests {
 
         let msg = EmailMessage {
             from: None,
-            to: vec!["bob@example.com"
-                .parse::<email_address::EmailAddress>()
-                .unwrap()],
+            to: vec![parse_email("bob@example.com")],
             subject: "Hello".to_string(),
             body_text: "World".to_string(),
         };
@@ -89,14 +89,8 @@ mod tests {
         let sender = FileMailSender::new(&path);
 
         let msg = EmailMessage {
-            from: Some(
-                "sender@example.com"
-                    .parse::<email_address::EmailAddress>()
-                    .unwrap(),
-            ),
-            to: vec!["bob@example.com"
-                .parse::<email_address::EmailAddress>()
-                .unwrap()],
+            from: Some(parse_email("sender@example.com")),
+            to: vec![parse_email("bob@example.com")],
             subject: "Test".to_string(),
             body_text: String::new(),
         };
@@ -116,9 +110,7 @@ mod tests {
         for i in 0..3u8 {
             let msg = EmailMessage {
                 from: None,
-                to: vec!["x@example.com"
-                    .parse::<email_address::EmailAddress>()
-                    .unwrap()],
+                to: vec![parse_email("x@example.com")],
                 subject: format!("msg{i}"),
                 body_text: String::new(),
             };

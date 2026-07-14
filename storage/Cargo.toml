@@ -36,6 +36,10 @@ rstest_reuse = { workspace = true, optional = true }
 mockall = { workspace = true, optional = true }
 
 [dev-dependencies]
+# Enable `common`'s `test-support` feature for `storage`'s own `cfg(test)` build so
+# its tests can use `common::test_support` (external test crates get it via the
+# `test-support` feature above).
+common = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true
 rstest.workspace = true
 rstest_reuse.workspace = true
@@ -47,7 +51,7 @@ test-utils = ["dep:mockall"]
 # and pulls NO extra deps, so the `test-support` binary can link the recipe
 # without the heavy scaffolding. `test-support` implies it.
 seed-posts = []
-test-support = ["seed-posts", "dep:tempfile", "dep:rstest_reuse"]
+test-support = ["seed-posts", "dep:tempfile", "dep:rstest_reuse", "common/test-support"]
 
 [lints]
 workspace = true
