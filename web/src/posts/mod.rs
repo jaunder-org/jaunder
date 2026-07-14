@@ -406,10 +406,7 @@ pub async fn update_post(
         // post mutation lands. The wire delivers `Vec<TagLabel>` (validated at
         // arg-decode per ADR-0065); the body only dedups and caps. `None` leaves
         // the existing tags untouched.
-        let new_tags = match tags {
-            Some(tokens) => Some(common::tag::parse_and_validate_tags(tokens)?),
-            None => None,
-        };
+        let new_tags = tags.map(common::tag::parse_and_validate_tags).transpose()?;
 
         let format = format.parse::<PostFormat>()?;
         let normalized_summary = summary.and_then(common::text::non_empty_owned);

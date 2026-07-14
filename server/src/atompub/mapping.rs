@@ -83,10 +83,13 @@ pub fn entry_to_post_fields(entry: &Entry, default_format: PostFormat) -> PostFi
         (!trimmed.is_empty()).then(|| trimmed.to_string())
     };
     let summary = entry.summary().map(|t| t.as_str().to_string());
-    // `entry_to_post_fields` is infallible, so an invalid `<category term>` is
-    // silently skipped here (the sole ingest skip — `post_tag_diff` no longer
-    // filters, since every `TagLabel` it receives is already valid). Dropping a
-    // malformed term keeps one bad category from failing the whole entry (R5).
+    // atom `<category term>` values are arbitrary RFC-4287 protocol strings (the
+    // atom `Entry` model holds them as `String`, not our domain tag) — this is the
+    // boundary where a conforming term becomes a `TagLabel`. `entry_to_post_fields`
+    // is infallible, so an invalid term is silently skipped here (the sole ingest
+    // skip — `post_tag_diff` no longer filters, since every `TagLabel` it receives
+    // is already valid). Dropping a malformed term keeps one bad category from
+    // failing the whole entry (R5).
     let categories = entry
         .categories()
         .iter()

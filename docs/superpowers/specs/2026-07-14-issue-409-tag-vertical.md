@@ -125,7 +125,7 @@ _(every task implicitly includes these)_
    the constraints.
 
 7. **Deliberately-untyped boundaries (justified in a comment at each site) —
-   two, not three.**
+   three.**
    - `list_tags(prefix: Option<String>)` — a _search fragment_ (a partial,
      matched with SQL `LIKE prefix%`; `None`/empty ⇒ all tags), not a complete
      tag value; typing it `Tag` would misrepresent a query input.
@@ -134,6 +134,12 @@ _(every task implicitly includes these)_
      `Tag` inside the handler so a malformed tag serves the SPA shell / a
      not-found feed rather than an axum 400 before the handler runs (the
      projector-vs-atompub boundary split, ADR-0063 §4; mirrors #408 Decision 1).
+   - The atom `Entry`/`Category` model (`common/src/atompub/entry.rs`) — atom
+     `<category term>` values are arbitrary RFC-4287 protocol strings (not
+     constrained to our tag rule), so the wire model holds them as `String`;
+     `entry_to_post_fields` is the boundary that parses each conforming term
+     into a `TagLabel` (skipping the rest, R5). (Surfaced in review; unlike
+     `PostTagJson` below this is _external_ input, so it stays `String`.)
 
    `PostTagJson` is **typed** (not kept as `String`): it is trusted internal
    data deserialized via serde, so deserializing straight into the newtypes _is_

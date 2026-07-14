@@ -34,6 +34,10 @@ pub struct TagSummary {
 /// `prefix` is a case-insensitive prefix match against the canonical slug;
 /// `None` or whitespace-only returns the alphabetically-first tags. `limit`
 /// defaults to [`DEFAULT_TAG_LIMIT`] and is clamped at [`MAX_TAG_LIMIT`].
+///
+/// `prefix` stays `String` (not `Tag`): it is a partial search fragment matched
+/// with SQL `LIKE prefix%`, not a complete tag value — typing it `Tag` would
+/// reject valid partials (ADR-0063 §4 boundary policy; #409 Decision 7).
 #[server(endpoint = "/list_tags", input = Json)]
 pub async fn list_tags(prefix: Option<String>, limit: Option<u32>) -> WebResult<Vec<TagSummary>> {
     boundary!("list_tags", {
