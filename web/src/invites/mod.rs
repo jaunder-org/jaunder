@@ -3,6 +3,7 @@ use {
     crate::auth::require_auth,
     crate::error::InternalError,
     chrono::Utc,
+    common::mailer::{EmailMessage, MailSender},
     std::sync::Arc,
     storage::{load_registration_policy, InviteStorage, RegistrationPolicy, SiteConfigStorage},
 };
@@ -24,29 +25,60 @@ pub struct InviteInfo {
     pub used_by: Option<i64>,
 }
 
-/// Creates an invite code expiring in `expires_in_hours` (default 168 = 7 days).
-/// Requires authentication. The code is **not** returned to the client (#400); it is
-/// delivered out-of-band (CLI now, email in #433).
+/// Creates an invite code expiring in `expires_in_hours` (default 168 = 7 days) and
+/// **emails the invitation link** to `recipient_email`. Requires authentication. The
+/// code is never returned to the client (#400) — it is delivered only as the link in
+/// the email (mirrors `request_password_reset`).
 #[server(endpoint = "/create_invite")]
-pub async fn create_invite(expires_in_hours: Option<u64>) -> WebResult<()> {
+pub async fn create_invite(
+    expires_in_hours: Option<u64>,
+    recipient_email: String,
+) -> WebResult<()> {
     boundary!("create_invite", {
         let _auth = require_auth().await?;
         let invites = expect_context::<Arc<dyn InviteStorage>>();
+        let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
+        let mailer = expect_context::<Arc<dyn MailSender>>();
+
+        // Validate the base URL and the recipient up front, before creating the invite:
+        // a failure here must not leave an undelivered invite behind (no orphan).
+        let base_url = site_config.get_identity().await?.base_url.ok_or_else(|| {
+            InternalError::validation("set the site base URL before emailing invites")
+        })?;
+        let recipient = recipient_email
+            .parse::<email_address::EmailAddress>()
+            .map_err(|_| InternalError::validation("invalid recipient email address"))?;
+
         let hours = expires_in_hours.unwrap_or(168);
         let duration = i64::try_from(hours)
             .ok()
             .and_then(chrono::Duration::try_hours)
             .ok_or_else(|| InternalError::validation("expires_in_hours too large"))?;
         let expires_at = Utc::now() + duration;
-        let created = invites
+
+        let code = invites
             .create_invite(expires_at)
             .await
-            .map_err(InternalError::storage);
-        if created.is_ok() {
-            host::metrics::invite(host::metrics::InviteEvent::Created);
-        }
-        // The InviteCode is intentionally discarded — never returned to a client.
-        created.map(|_| ())
+            .map_err(InternalError::storage)?;
+        host::metrics::invite(host::metrics::InviteEvent::Created);
+
+        // Deliberate egress of the secret via `AsRef` (InviteCode has no Display/serde).
+        let link = format!("{base_url}/register?invite_code={}", code.as_ref());
+        let message = EmailMessage {
+            from: None,
+            to: vec![recipient],
+            subject: "You've been invited to Jaunder".to_string(),
+            body_text: format!(
+                "You've been invited to create an account. Click the link below to register:\n\n{link}\n\nThis invitation expires in {hours} hours."
+            ),
+        };
+        let started = std::time::Instant::now();
+        let send_result = mailer.send_email(&message).await;
+        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        host::metrics::email_send_duration_ms(elapsed_ms);
+        host::metrics::email_send_result(host::metrics::EmailKind::Invite, &send_result);
+        send_result?;
+        Ok(())
     })
 }
 

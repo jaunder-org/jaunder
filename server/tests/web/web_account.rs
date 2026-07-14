@@ -1,13 +1,15 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
+use common::mailer::test_utils::CapturingMailSender;
+use common::mailer::MailSender;
 use common::username::Username;
-use storage::ProfileUpdate;
+use storage::{AppState, ProfileUpdate};
 
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::post_form;
+use crate::helpers::{post_form, post_form_with_mailer};
 use storage::test_support::{backends, Backend, TestEnv};
 
 // ── Profile tests (M2.10.5, M2.10.6) ─────────────────────────────────────
@@ -239,23 +241,14 @@ async fn revoke_session_removes_session_and_reauth_fails(#[case] backend: Backen
     assert!(result.is_err(), "revoked session should not authenticate");
 }
 
-// ── Invites tests (M2.10.9) ───────────────────────────────────────────────
+// ── Invites tests (M2.10.9, #433) ─────────────────────────────────────────
 
-// M2.10.9: create_invite returns a code that appears in a subsequent list_invites.
-#[apply(backends)]
-#[tokio::test]
-async fn create_invite_appears_in_list_invites(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set("site.registration_policy", "invite_only")
-        .await
-        .unwrap();
-
+/// Create an authenticated operator and return its `session=` cookie header.
+async fn operator_cookie(state: &Arc<AppState>, username: &str) -> String {
     let user_id = state
         .users
         .create_user(
-            &"frank".parse::<Username>().unwrap(),
+            &username.parse::<Username>().unwrap(),
             &"password123".parse().unwrap(),
             None,
             false,
@@ -267,27 +260,53 @@ async fn create_invite_appears_in_list_invites(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={token}");
+    format!("session={token}")
+}
 
-    let (status, body) = post_form(
+// #433: create_invite emails the invitation link to the recipient and records the invite.
+#[apply(backends)]
+#[tokio::test]
+async fn create_invite_emails_link_and_appears_in_list(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    state
+        .site_config
+        .set("site.registration_policy", "invite_only")
+        .await
+        .unwrap();
+    state
+        .site_config
+        .set("site.base_url", "https://example.com")
+        .await
+        .unwrap();
+    let cookie = operator_cookie(&state, "frank").await;
+    let mailer = Arc::new(CapturingMailSender::new());
+
+    let (status, body) = post_form_with_mailer(
         Arc::clone(&state),
+        mailer.clone() as Arc<dyn MailSender>,
         "/api/create_invite",
-        "expires_in_hours=24",
+        "expires_in_hours=24&recipient_email=invitee@example.com",
         Some(&cookie),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create_invite failed: {body}");
-    // create_invite no longer returns the code — a capability token is never sent
-    // server->client (#400); the operator obtains it out-of-band (CLI / email #433).
+
+    let sent = mailer.sent();
+    assert_eq!(sent.len(), 1, "expected one invite email");
+    assert_eq!(sent[0].to.len(), 1);
+    assert_eq!(sent[0].to[0].as_str(), "invitee@example.com");
     assert!(
-        !body.contains("invite_code") && body.trim() != "\"\"",
-        "create_invite must not return a code: {body}"
+        sent[0]
+            .body_text
+            .contains("https://example.com/register?invite_code="),
+        "email should contain the invite link, got: {}",
+        sent[0].body_text
     );
 
+    // The invite is tracked — as metadata only, never the raw code.
     let (status, list_body) =
         post_form(Arc::clone(&state), "/api/list_invites", "", Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "list_invites failed: {list_body}");
-    // The invite appears as metadata, but the raw code is never exposed to the client.
     assert!(
         list_body.contains("expires_at"),
         "created invite not in list: {list_body}"
@@ -298,58 +317,128 @@ async fn create_invite_appears_in_list_invites(#[case] backend: Backend) {
     );
 }
 
-// create_invite requires authentication.
+// create_invite requires authentication (valid body, but no session cookie).
 #[apply(backends)]
 #[tokio::test]
 async fn create_invite_unauthorized_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, _) = post_form(Arc::clone(&state), "/api/create_invite", "", None).await;
+    let (status, _) = post_form(
+        Arc::clone(&state),
+        "/api/create_invite",
+        "recipient_email=invitee@example.com",
+        None,
+    )
+    .await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
 
-// create_invite with extremely large hours (causing overflow in i64)?
+// create_invite errors when the site base URL is unset — and sends no email (no orphan).
+#[apply(backends)]
+#[tokio::test]
+async fn create_invite_without_base_url_errors_and_sends_nothing(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = operator_cookie(&state, "frank").await;
+    let mailer = Arc::new(CapturingMailSender::new());
+
+    let (status, _) = post_form_with_mailer(
+        Arc::clone(&state),
+        mailer.clone() as Arc<dyn MailSender>,
+        "/api/create_invite",
+        "expires_in_hours=24&recipient_email=invitee@example.com",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_ne!(status, StatusCode::OK, "a missing base URL must error");
+    assert!(
+        mailer.sent().is_empty(),
+        "no email must be sent when the base URL is unset"
+    );
+}
+
+// create_invite rejects a malformed recipient address before creating any invite.
+#[apply(backends)]
+#[tokio::test]
+async fn create_invite_invalid_recipient_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    state
+        .site_config
+        .set("site.base_url", "https://example.com")
+        .await
+        .unwrap();
+    let cookie = operator_cookie(&state, "frank").await;
+    let mailer = Arc::new(CapturingMailSender::new());
+
+    let (status, _) = post_form_with_mailer(
+        Arc::clone(&state),
+        mailer.clone() as Arc<dyn MailSender>,
+        "/api/create_invite",
+        "expires_in_hours=24&recipient_email=not-an-email",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_ne!(status, StatusCode::OK, "a malformed recipient must error");
+    assert!(
+        mailer.sent().is_empty(),
+        "no email must be sent for a malformed recipient"
+    );
+}
+
+// create_invite propagates a mail-send failure (the noop mailer reports NotConfigured).
+#[apply(backends)]
+#[tokio::test]
+async fn create_invite_send_failure_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    state
+        .site_config
+        .set("site.base_url", "https://example.com")
+        .await
+        .unwrap();
+    let cookie = operator_cookie(&state, "frank").await;
+
+    // `post_form` uses the noop mailer, whose `send_email` fails with NotConfigured.
+    let (status, _) = post_form(
+        Arc::clone(&state),
+        "/api/create_invite",
+        "expires_in_hours=24&recipient_email=invitee@example.com",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_ne!(status, StatusCode::OK, "a mail-send failure must error");
+}
+
+// create_invite with an out-of-range expiry (u64::MAX hours) errors before emailing.
 #[apply(backends)]
 #[tokio::test]
 async fn create_invite_large_hours_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let user_id = state
-        .users
-        .create_user(
-            &"alice".parse::<Username>().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
+    state
+        .site_config
+        .set("site.base_url", "https://example.com")
         .await
         .unwrap();
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
-    let cookie = format!("session={token}");
+    let cookie = operator_cookie(&state, "alice").await;
+    let mailer = Arc::new(CapturingMailSender::new());
 
-    let (status1, _) = post_form(
+    let (status, _) = post_form_with_mailer(
         Arc::clone(&state),
+        mailer.clone() as Arc<dyn MailSender>,
         "/api/create_invite",
-        "expires_in_hours=24",
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(status1, StatusCode::OK);
-
-    // This should fail due to u64 -> i64 conversion.
-    let (status2, _) = post_form(
-        Arc::clone(&state),
-        "/api/create_invite",
-        "expires_in_hours=18446744073709551615", // u64::MAX
+        "expires_in_hours=18446744073709551615&recipient_email=invitee@example.com", // u64::MAX
         Some(&cookie),
     )
     .await;
 
-    assert_eq!(status2, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    // The overflow must be caught before any email is attempted (proves ordering).
+    assert!(
+        mailer.sent().is_empty(),
+        "an out-of-range expiry must error before emailing"
+    );
 }
 
 // M2.10.10: revoke_session returns error when target session does not exist.
