@@ -149,13 +149,13 @@ impl PostDialect for Sqlite {
             }
 
             sqlx::query("INSERT OR IGNORE INTO tags (tag_slug) VALUES ($1)")
-                .bind(tag.as_str())
+                .bind(tag.as_ref())
                 .execute(&mut *conn)
                 .await?;
 
             let tag_id: i64 =
                 sqlx::query_scalar::<_, i64>("SELECT tag_id FROM tags WHERE tag_slug = $1")
-                    .bind(tag.as_str())
+                    .bind(tag.as_ref())
                     .fetch_one(&mut *conn)
                     .await?;
 
@@ -199,7 +199,7 @@ impl PostDialect for Sqlite {
              WHERE post_id = $1 AND tag_id = (SELECT tag_id FROM tags WHERE tag_slug = $2)",
         )
         .bind(post_id)
-        .bind(tag_slug.as_str())
+        .bind(tag_slug.as_ref())
         .execute(pool)
         .await?
         .rows_affected();

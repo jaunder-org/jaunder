@@ -3333,7 +3333,7 @@ async fn list_posts_gone_live_between_returns_only_window_with_tags(#[case] back
     let slugs: Vec<String> = alice_live
         .tag_slugs
         .iter()
-        .map(|t| t.as_str().to_string())
+        .map(ToString::to_string)
         .collect();
     assert_eq!(slugs, vec!["scheduling".to_string()], "tags are hydrated");
 
@@ -3490,7 +3490,7 @@ async fn multiple_tags_on_single_post(#[case] backend: Backend) {
         .expect("get_tags_for_post failed");
 
     assert_eq!(tags.len(), 3);
-    let tag_slugs: Vec<&str> = tags.iter().map(|t| t.tag_slug.as_str()).collect();
+    let tag_slugs: Vec<&str> = tags.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert!(tag_slugs.contains(&"rust"));
     assert!(tag_slugs.contains(&"performance"));
     assert!(tag_slugs.contains(&"systems-programming"));
@@ -3611,8 +3611,8 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
         .await
         .expect("get_tags_for_post post2 failed");
 
-    assert_eq!(tags1[0].tag_slug.as_str(), "web-development");
-    assert_eq!(tags2[0].tag_slug.as_str(), "web-development");
+    assert_eq!(tags1[0].tag_slug.as_ref(), "web-development");
+    assert_eq!(tags2[0].tag_slug.as_ref(), "web-development");
     assert_eq!(tags1[0].tag_display, "Web-Development");
     assert_eq!(tags2[0].tag_display, "WEB-DEVELOPMENT");
 
@@ -3902,7 +3902,7 @@ async fn selective_untag(#[case] backend: Backend) {
         .await
         .expect("get_tags_for_post failed");
     assert_eq!(tags.len(), 2);
-    let tag_slugs: Vec<&str> = tags.iter().map(|t| t.tag_slug.as_str()).collect();
+    let tag_slugs: Vec<&str> = tags.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert!(!tag_slugs.contains(&"tag-b"));
     assert!(tag_slugs.contains(&"tag-a"));
     assert!(tag_slugs.contains(&"tag-c"));
@@ -3964,7 +3964,7 @@ async fn numeric_tag(#[case] backend: Backend) {
         .expect("get_tags_for_post failed");
 
     assert_eq!(tags.len(), 3);
-    let tag_slugs: Vec<&str> = tags.iter().map(|t| t.tag_slug.as_str()).collect();
+    let tag_slugs: Vec<&str> = tags.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert!(tag_slugs.contains(&"python3"));
     assert!(tag_slugs.contains(&"rust-2024"));
     assert!(tag_slugs.contains(&"0day"));
@@ -4207,7 +4207,7 @@ async fn tag_all_numeric(#[case] backend: Backend) {
         .expect("get_tags_for_post failed");
 
     assert_eq!(tags.len(), 2);
-    let tag_slugs: Vec<&str> = tags.iter().map(|t| t.tag_slug.as_str()).collect();
+    let tag_slugs: Vec<&str> = tags.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert!(tag_slugs.contains(&"2024"));
     assert!(tag_slugs.contains(&"42"));
 }
@@ -4410,7 +4410,7 @@ async fn tag_list_ordering(#[case] backend: Backend) {
         .expect("get_tags_for_post failed");
 
     assert_eq!(tags1.len(), 3);
-    let slugs1: Vec<&str> = tags1.iter().map(|t| t.tag_slug.as_str()).collect();
+    let slugs1: Vec<&str> = tags1.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert_eq!(slugs1, vec!["apple", "mango", "zebra"]);
 
     // Verify consistency on multiple calls
@@ -4421,7 +4421,7 @@ async fn tag_list_ordering(#[case] backend: Backend) {
         .expect("get_tags_for_post failed");
 
     assert_eq!(tags1_again.len(), 3);
-    assert_eq!(tags1_again[0].tag_slug.as_str(), "apple");
+    assert_eq!(tags1_again[0].tag_slug.as_ref(), "apple");
 }
 
 #[apply(backends)]
@@ -4552,9 +4552,9 @@ async fn tag_mixed_alphanumeric(#[case] backend: Backend) {
         .expect("get_tags_for_post failed");
 
     assert_eq!(tags.len(), 3);
-    assert_eq!(tags[0].tag_slug.as_str(), "3d-graphics");
-    assert_eq!(tags[1].tag_slug.as_str(), "http2");
-    assert_eq!(tags[2].tag_slug.as_str(), "version-2-0-1");
+    assert_eq!(tags[0].tag_slug.as_ref(), "3d-graphics");
+    assert_eq!(tags[1].tag_slug.as_ref(), "http2");
+    assert_eq!(tags[2].tag_slug.as_ref(), "version-2-0-1");
 }
 
 #[apply(backends)]
@@ -4680,7 +4680,7 @@ async fn tag_creation_and_retrieval(#[case] backend: Backend) {
         .expect("get_tags_for_post failed");
 
     assert_eq!(tags.len(), 1);
-    assert_eq!(tags[0].tag_slug.as_str(), "rust");
+    assert_eq!(tags[0].tag_slug.as_ref(), "rust");
     assert_eq!(tags[0].tag_display, "rust");
 }
 
@@ -4725,7 +4725,7 @@ async fn tag_normalization(#[case] backend: Backend) {
         .expect("get_tags_for_post failed");
 
     assert_eq!(tags.len(), 1);
-    assert_eq!(tags[0].tag_slug.as_str(), "rust-web"); // normalized
+    assert_eq!(tags[0].tag_slug.as_ref(), "rust-web"); // normalized
     assert_eq!(tags[0].tag_display, "Rust-Web"); // original preserved
 }
 
@@ -6182,7 +6182,7 @@ async fn tag_display_preservation(#[case] backend: Backend) {
 
     assert_eq!(tags.len(), 1);
     assert_eq!(tags[0].tag_display, "MySpecialTag");
-    assert_eq!(tags[0].tag_slug.as_str(), "myspecialtag");
+    assert_eq!(tags[0].tag_slug.as_ref(), "myspecialtag");
 }
 
 #[apply(backends)]
@@ -6254,7 +6254,7 @@ async fn untag_preserves_other_tags(#[case] backend: Backend) {
         .await
         .expect("get_tags_for_post failed");
     assert_eq!(tags.len(), 2);
-    let tag_slugs: Vec<_> = tags.iter().map(|t| t.tag_slug.as_str()).collect();
+    let tag_slugs: Vec<_> = tags.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert!(!tag_slugs.contains(&"tag2"));
 }
 
@@ -7311,7 +7311,7 @@ async fn list_tags_returns_alphabetical_with_prefix(#[case] backend: Backend) {
 
     // No prefix → all tags, alphabetical by slug.
     let all = state.posts.list_tags(None, 50).await.unwrap();
-    let slugs: Vec<&str> = all.iter().map(|t| t.tag_slug.as_str()).collect();
+    let slugs: Vec<&str> = all.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert_eq!(
         slugs,
         vec!["performance", "postgresql", "rust", "rust-lang", "web"]
@@ -7319,12 +7319,12 @@ async fn list_tags_returns_alphabetical_with_prefix(#[case] backend: Backend) {
 
     // Prefix "rust" → "rust" and "rust-lang", still alphabetical.
     let rs = state.posts.list_tags(Some("rust"), 50).await.unwrap();
-    let rs_slugs: Vec<&str> = rs.iter().map(|t| t.tag_slug.as_str()).collect();
+    let rs_slugs: Vec<&str> = rs.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert_eq!(rs_slugs, vec!["rust", "rust-lang"]);
 
     // Prefix case-insensitive: "RUST" matches the same set.
     let upper = state.posts.list_tags(Some("RUST"), 50).await.unwrap();
-    let upper_slugs: Vec<&str> = upper.iter().map(|t| t.tag_slug.as_str()).collect();
+    let upper_slugs: Vec<&str> = upper.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert_eq!(upper_slugs, vec!["rust", "rust-lang"]);
 
     // Limit clamps the result.
@@ -7391,7 +7391,7 @@ async fn post_record_carries_tags(#[case] backend: Backend) {
         .await
         .expect("get_post_by_id p1")
         .expect("p1 should exist");
-    let p1_slugs: Vec<&str> = p1_record.tags.iter().map(|t| t.tag_slug.as_str()).collect();
+    let p1_slugs: Vec<&str> = p1_record.tags.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert_eq!(p1_slugs, vec!["rust", "web"]);
     // Display casing is preserved.
     assert!(p1_record.tags.iter().any(|t| t.tag_display == "Rust"));
@@ -7403,7 +7403,7 @@ async fn post_record_carries_tags(#[case] backend: Backend) {
         .expect("get_post_by_id p2")
         .expect("p2 should exist");
     assert_eq!(p2_record.tags.len(), 1);
-    assert_eq!(p2_record.tags[0].tag_slug.as_str(), "performance");
+    assert_eq!(p2_record.tags[0].tag_slug.as_ref(), "performance");
     assert_eq!(p2_record.tags[0].tag_display, "performance");
 
     let p3_record = state

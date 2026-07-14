@@ -1352,7 +1352,7 @@ where
     ) -> Result<Vec<PostRecord>, ListByTagError> {
         let tag_exists: bool =
             sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = $1")
-                .bind(tag_slug.as_str())
+                .bind(tag_slug.as_ref())
                 .fetch_one(&self.pool)
                 .await?;
 
@@ -1384,7 +1384,7 @@ where
                  LIMIT ${limit_idx}"
             );
             let query = sqlx::query_as::<_, PostRow>(&sql)
-                .bind(tag_slug.as_str())
+                .bind(tag_slug.as_ref())
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
                 .bind(cursor.post_id)
@@ -1415,7 +1415,7 @@ where
                  LIMIT ${limit_idx}"
             );
             let query = sqlx::query_as::<_, PostRow>(&sql)
-                .bind(tag_slug.as_str())
+                .bind(tag_slug.as_ref())
                 .bind(now);
             binds
                 .bind_onto(query)
@@ -1446,7 +1446,7 @@ where
     ) -> Result<Vec<PostRecord>, ListByTagError> {
         let tag_exists: bool =
             sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = $1")
-                .bind(tag_slug.as_str())
+                .bind(tag_slug.as_ref())
                 .fetch_one(&self.pool)
                 .await?;
 
@@ -1480,7 +1480,7 @@ where
             );
             let query = sqlx::query_as::<_, PostRow>(&sql)
                 .bind(user_id)
-                .bind(tag_slug.as_str())
+                .bind(tag_slug.as_ref())
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
                 .bind(cursor.post_id)
@@ -1513,7 +1513,7 @@ where
             );
             let query = sqlx::query_as::<_, PostRow>(&sql)
                 .bind(user_id)
-                .bind(tag_slug.as_str())
+                .bind(tag_slug.as_ref())
                 .bind(now);
             binds
                 .bind_onto(query)
@@ -1990,7 +1990,7 @@ where
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRow>(&sql)
                 .bind(now)
-                .bind(tag.as_str())
+                .bind(tag.as_ref())
                 .bind(min_items)
                 .bind(cutoff);
             binds.bind_onto(query).fetch_all(pool).await
@@ -2003,7 +2003,7 @@ where
             let query = sqlx::query_as::<_, PostRow>(&sql)
                 .bind(now)
                 .bind(username.as_ref())
-                .bind(tag.as_str())
+                .bind(tag.as_ref())
                 .bind(min_items)
                 .bind(cutoff);
             binds.bind_onto(query).fetch_all(pool).await
@@ -2166,7 +2166,7 @@ where
                  ORDER BY p.published_at DESC LIMIT 1",
             )
             .bind(now)
-            .bind(tag.as_str())
+            .bind(tag.as_ref())
             .fetch_optional(pool)
             .await?
         }
@@ -2182,7 +2182,7 @@ where
             )
             .bind(now)
             .bind(username.as_ref())
-            .bind(tag.as_str())
+            .bind(tag.as_ref())
             .fetch_optional(pool)
             .await?
         }
@@ -2249,8 +2249,8 @@ mod tests {
         let diff = post_tag_diff(&existing, &desired);
 
         assert_eq!(diff.to_add, vec!["wasm"]);
-        let removed: Vec<&str> = diff.to_remove.iter().map(|t| t.as_str()).collect();
-        assert_eq!(removed, vec!["leptos"]);
+        let removed: Vec<String> = diff.to_remove.iter().map(ToString::to_string).collect();
+        assert_eq!(removed, vec!["leptos".to_string()]);
     }
 
     #[test]

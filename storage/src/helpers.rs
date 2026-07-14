@@ -671,7 +671,7 @@ mod tests {
         .unwrap();
         assert_eq!(record.tags.len(), 1);
         assert_eq!(record.tags[0].tag_id, 1);
-        assert_eq!(record.tags[0].tag_slug.as_str(), "rust");
+        assert_eq!(record.tags[0].tag_slug, "rust");
         assert_eq!(record.tags[0].tag_display, "Rust");
     }
 

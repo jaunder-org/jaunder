@@ -203,7 +203,7 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
         .await
         .expect("get tags");
     assert_eq!(tags.len(), 1);
-    assert_eq!(tags[0].tag_slug.as_str(), "backup-test");
+    assert_eq!(tags[0].tag_slug.as_ref(), "backup-test");
     assert_eq!(tags[0].tag_display, "Backup-Test");
 
     // #4 closed: the Named-audience post survives restore visible to its

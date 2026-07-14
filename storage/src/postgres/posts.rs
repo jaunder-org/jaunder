@@ -131,13 +131,13 @@ impl PostDialect for Postgres {
         }
 
         sqlx::query("INSERT INTO tags (tag_slug) VALUES ($1) ON CONFLICT DO NOTHING")
-            .bind(tag.as_str())
+            .bind(tag.as_ref())
             .execute(&mut *tx)
             .await?;
 
         let tag_id: i64 =
             sqlx::query_scalar::<_, i64>("SELECT tag_id FROM tags WHERE tag_slug = $1")
-                .bind(tag.as_str())
+                .bind(tag.as_ref())
                 .fetch_one(&mut *tx)
                 .await?;
 
@@ -175,7 +175,7 @@ impl PostDialect for Postgres {
              WHERE post_id = $1 AND tag_id = (SELECT tag_id FROM tags WHERE tag_slug = $2)",
         )
         .bind(post_id)
-        .bind(tag_slug.as_str())
+        .bind(tag_slug.as_ref())
         .execute(pool)
         .await?
         .rows_affected();

@@ -2813,7 +2813,7 @@ async fn create_post_applies_tags_from_param(#[case] backend: Backend) {
         .get_tags_for_post(created.post_id)
         .await
         .unwrap();
-    let slugs: Vec<&str> = stored_tags.iter().map(|t| t.tag_slug.as_str()).collect();
+    let slugs: Vec<&str> = stored_tags.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert_eq!(slugs, vec!["rust", "web-dev"]);
     assert!(stored_tags.iter().any(|t| t.tag_display == "Rust"));
 }
@@ -2899,7 +2899,7 @@ async fn update_post_applies_tag_set_diff(#[case] backend: Backend) {
         .get_tags_for_post(created.post_id)
         .await
         .unwrap();
-    let slugs: Vec<&str> = stored.iter().map(|t| t.tag_slug.as_str()).collect();
+    let slugs: Vec<&str> = stored.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert_eq!(slugs, vec!["new-tag", "rust"]);
 }
 
@@ -3114,7 +3114,7 @@ async fn update_post_with_tags_unset_leaves_existing_tags_alone(#[case] backend:
         .get_tags_for_post(created.post_id)
         .await
         .unwrap();
-    let slugs: Vec<&str> = stored.iter().map(|t| t.tag_slug.as_str()).collect();
+    let slugs: Vec<&str> = stored.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert_eq!(slugs, vec!["keep"]);
 }
 

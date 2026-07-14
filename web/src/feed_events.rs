@@ -9,13 +9,11 @@ use storage::{FeedEventError, FeedEventStorage};
 #[cfg(test)]
 use storage::PostTag;
 
-/// Extract tag slugs from a slice of `PostTag` records, returning them as a
-/// deduplicated, sorted set of lowercased slug strings.
+/// Extract the canonical tag slugs from a slice of `PostTag` records, returning
+/// them as a deduplicated, sorted set.
 #[cfg(test)]
-fn tag_slugs(tags: &[PostTag]) -> BTreeSet<String> {
-    tags.iter()
-        .map(|t| t.tag_slug.as_str().to_string())
-        .collect()
+fn tag_slugs(tags: &[PostTag]) -> BTreeSet<Tag> {
+    tags.iter().map(|t| t.tag_slug.clone()).collect()
 }
 
 /// Enqueue feed-regeneration events for every feed surface a post mutation
@@ -66,7 +64,13 @@ mod tests {
         let slugs = tag_slugs(&tags);
         let mut sorted: Vec<_> = slugs.into_iter().collect();
         sorted.sort();
-        assert_eq!(sorted, vec!["rust".to_string(), "web".to_string()]);
+        assert_eq!(
+            sorted,
+            vec![
+                "rust".parse::<Tag>().unwrap(),
+                "web".parse::<Tag>().unwrap()
+            ]
+        );
     }
 
     #[test]
