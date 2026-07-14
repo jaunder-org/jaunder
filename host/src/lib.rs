@@ -13,4 +13,5 @@
 pub mod auth;
 pub mod capture;
 pub mod error;
+pub mod invite;
 pub mod metrics;
