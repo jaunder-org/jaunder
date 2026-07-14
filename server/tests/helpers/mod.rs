@@ -8,6 +8,7 @@ use axum::{
 use common::mailer::MailSender;
 use leptos::prelude::LeptosOptions;
 use std::sync::{Arc, OnceLock};
+use tempfile::TempDir;
 use tower::ServiceExt;
 
 // The both-backend test harness — `Backend`, `TestEnv`, per-test DB provisioning,
@@ -102,6 +103,19 @@ pub async fn body_string(response: axum::response::Response) -> String {
         .await
         .unwrap();
     String::from_utf8(bytes.to_vec()).unwrap()
+}
+
+/// Build a fresh router from `state` over `storage` as the media root, with the
+/// noop mailer and insecure cookies. Always creates the `media/{upload,cached,tmp}`
+/// layout so upload-exercising and read-only tests share one helper (the dirs are
+/// harmless empty setup for tests that never upload).
+pub fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
+    ensure_server_fns_registered();
+    let storage_path = storage.path().to_path_buf();
+    std::fs::create_dir_all(storage_path.join("media").join("upload")).unwrap();
+    std::fs::create_dir_all(storage_path.join("media").join("cached")).unwrap();
+    std::fs::create_dir_all(storage_path.join("media").join("tmp")).unwrap();
+    jaunder::create_router(test_options(), state, noop_mailer(), false, storage_path)
 }
 
 /// How a `post_form` request authenticates. Cookie and bearer are mutually

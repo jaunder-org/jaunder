@@ -1,17 +1,14 @@
-use std::sync::Arc;
-
 use axum::{
     body::Body,
     http::{header, Request, StatusCode},
 };
-use tempfile::TempDir;
 use tower::ServiceExt;
 
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{body_string, ensure_server_fns_registered, test_options};
-use storage::test_support::{backends_matrix, noop_mailer, Backend, TestEnv};
+use crate::helpers::{body_string, make_app};
+use storage::test_support::{backends_matrix, Backend, TestEnv};
 
 // SPIKE (jaunder Task 1):
 // - Shape A below (`rsd_document_advertises_service_url`) confirms cross-module
@@ -28,12 +25,6 @@ use storage::test_support::{backends_matrix, noop_mailer, Backend, TestEnv};
 //   `#[case::name(..)]` rows, then `#[tokio::test]`.
 //   It generates rows × 2 cases (2 rows × 2 backends = 4).
 use storage::test_support::backends;
-
-fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
-    ensure_server_fns_registered();
-    let storage_path = storage.path().to_path_buf();
-    jaunder::create_router(test_options(), state, noop_mailer(), false, storage_path)
-}
 
 // Shape A — non-clustered behavior, backend-parametrized via cross-module apply.
 #[apply(backends)]

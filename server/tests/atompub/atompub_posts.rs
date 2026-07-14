@@ -5,20 +5,13 @@ use axum::{
     http::{header, Request, StatusCode},
 };
 use base64::Engine as _;
-use tempfile::TempDir;
 use tower::ServiceExt;
 
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{body_string, ensure_server_fns_registered, test_options};
-use storage::test_support::{backends, backends_matrix, noop_mailer, Backend, TestEnv};
-
-fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
-    ensure_server_fns_registered();
-    let storage_path = storage.path().to_path_buf();
-    jaunder::create_router(test_options(), state, noop_mailer(), false, storage_path)
-}
+use crate::helpers::{body_string, make_app};
+use storage::test_support::{backends, backends_matrix, Backend, TestEnv};
 
 fn basic_header(username: &str, password: &str) -> String {
     let raw = format!("{username}:{password}");

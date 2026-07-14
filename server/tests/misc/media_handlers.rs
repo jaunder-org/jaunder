@@ -10,19 +10,9 @@ use tower::ServiceExt;
 use rstest::*;
 use rstest_reuse::*;
 
-use storage::test_support::{backends, backends_matrix, noop_mailer, Backend, TestEnv};
+use storage::test_support::{backends, backends_matrix, Backend, TestEnv};
 
-use crate::helpers::{ensure_server_fns_registered, test_options};
-
-/// Build the router with a real temp storage directory.
-fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
-    ensure_server_fns_registered();
-    let storage_path = storage.path().to_path_buf();
-    std::fs::create_dir_all(storage_path.join("media").join("upload")).unwrap();
-    std::fs::create_dir_all(storage_path.join("media").join("cached")).unwrap();
-    std::fs::create_dir_all(storage_path.join("media").join("tmp")).unwrap();
-    jaunder::create_router(test_options(), state, noop_mailer(), false, storage_path)
-}
+use crate::helpers::make_app;
 
 fn multipart_body(filename: &str, content_type: &str, data: &[u8]) -> (String, Vec<u8>) {
     let boundary = "----testboundary1234";
