@@ -29,6 +29,20 @@ pub fn client_only(_attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// `#[str_newtype(secret)]` selects the tight secret surface (redacting `Debug`,
 /// `AsRef` + `TryFrom` only; no `Display`/serde/`Deref`/`Borrow`/owned-`String`/`PartialEq`).
+/// `#[str_newtype(secret, serde)]` adds the validating serde bridge back onto that surface
+/// for a secret that must cross the wire *inbound* (client→server) — still no `Display`/`Deref`:
+///
+/// ```
+/// # use macros::StrNewtype;
+/// # use std::str::FromStr;
+/// # #[derive(Clone, StrNewtype)]
+/// # #[str_newtype(secret, serde)]
+/// # struct Wire(String);
+/// # impl FromStr for Wire { type Err = std::convert::Infallible; fn from_str(s: &str) -> Result<Self, Self::Err> { Ok(Wire(s.to_owned())) } }
+/// let w = Wire("x".to_owned());
+/// assert_eq!(serde_json::to_string(&w).unwrap(), "\"x\""); // serde is back
+/// let _back: Wire = serde_json::from_str("\"x\"").unwrap();
+/// ```
 ///
 /// Applying the derive to anything but a single-field tuple struct is a compile error:
 ///
@@ -235,7 +249,7 @@ mod tests {
 
     #[test]
     fn str_newtype_secret_selects_redacting_trailer() {
-        // Drives `is_secret`'s success path and the secret branch of `expand`: a redacting
+        // Drives `parse_opts`'s success path and the secret branch of `expand`: a redacting
         // Debug is emitted and the serde bridge is not.
         let input: DeriveInput = parse_quote! {
             #[str_newtype(secret)]
@@ -244,6 +258,32 @@ mod tests {
         let out = str_newtype::expand(&input).to_string();
         assert!(out.contains("redacted"));
         assert!(!out.contains("Serialize"));
+    }
+
+    #[test]
+    fn str_newtype_secret_serde_adds_the_serde_bridge_to_the_redacting_trailer() {
+        // `secret, serde`: the redacting Debug AND the serde bridge, but not the full
+        // trailer (no Display).
+        let input: DeriveInput = parse_quote! {
+            #[str_newtype(secret, serde)]
+            struct X(String);
+        };
+        let out = str_newtype::expand(&input).to_string();
+        assert!(out.contains("redacted"));
+        assert!(out.contains("Serialize"));
+        assert!(!out.contains("Display"));
+    }
+
+    #[test]
+    fn str_newtype_serde_without_secret_emits_compile_error() {
+        // A bare `serde` is invalid — the default trailer already has the serde bridge.
+        let input: DeriveInput = parse_quote! {
+            #[str_newtype(serde)]
+            struct X(String);
+        };
+        assert!(str_newtype::expand(&input)
+            .to_string()
+            .contains("compile_error"));
     }
 
     #[test]

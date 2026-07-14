@@ -11,10 +11,13 @@ use crate::error::WebResult;
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// Invite info returned by [`list_invites`].
+/// Invite metadata returned by [`list_invites`].
+///
+/// The raw code is deliberately **not** included — a capability token is never sent
+/// server→client (#400). Codes are delivered out-of-band (the `jaunder user invite` CLI
+/// prints the invitation URL; #433 will email them).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InviteInfo {
-    pub code: String,
     pub created_at: String,
     pub expires_at: String,
     pub used_at: Option<String>,
@@ -22,9 +25,10 @@ pub struct InviteInfo {
 }
 
 /// Creates an invite code expiring in `expires_in_hours` (default 168 = 7 days).
-/// Requires authentication.
+/// Requires authentication. The code is **not** returned to the client (#400); it is
+/// delivered out-of-band (CLI now, email in #433).
 #[server(endpoint = "/create_invite")]
-pub async fn create_invite(expires_in_hours: Option<u64>) -> WebResult<String> {
+pub async fn create_invite(expires_in_hours: Option<u64>) -> WebResult<()> {
     boundary!("create_invite", {
         let _auth = require_auth().await?;
         let invites = expect_context::<Arc<dyn InviteStorage>>();
@@ -34,19 +38,20 @@ pub async fn create_invite(expires_in_hours: Option<u64>) -> WebResult<String> {
             .and_then(chrono::Duration::try_hours)
             .ok_or_else(|| InternalError::validation("expires_in_hours too large"))?;
         let expires_at = Utc::now() + duration;
-        let result = invites
+        let created = invites
             .create_invite(expires_at)
             .await
             .map_err(InternalError::storage);
-        if result.is_ok() {
+        if created.is_ok() {
             host::metrics::invite(host::metrics::InviteEvent::Created);
         }
-        result
+        // The InviteCode is intentionally discarded — never returned to a client.
+        created.map(|_| ())
     })
 }
 
-/// Returns all invite codes. Requires `invite_only` registration policy;
-/// returns an error otherwise.
+/// Returns invite metadata (never the raw codes). Requires `invite_only` registration
+/// policy; returns an error otherwise.
 #[server(endpoint = "/list_invites")]
 pub async fn list_invites() -> WebResult<Vec<InviteInfo>> {
     boundary!("list_invites", {
@@ -61,7 +66,6 @@ pub async fn list_invites() -> WebResult<Vec<InviteInfo>> {
         Ok(records
             .into_iter()
             .map(|r| InviteInfo {
-                code: r.code,
                 created_at: r.created_at.to_rfc3339(),
                 expires_at: r.expires_at.to_rfc3339(),
                 used_at: r.used_at.map(|t| t.to_rfc3339()),

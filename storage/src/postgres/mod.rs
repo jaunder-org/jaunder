@@ -64,6 +64,7 @@ mod teardown;
 use crate::{AtomicOps, ConfirmPasswordResetError, RegisterWithInviteError};
 use common::password::Password;
 use common::username::Username;
+use host::invite::InviteCode;
 
 // ---------------------------------------------------------------------------
 // AtomicOps
@@ -88,13 +89,13 @@ impl AtomicOps for PostgresAtomicOps {
         password: &Password,
         display_name: Option<&str>,
         is_operator: bool,
-        invite_code: &str,
+        invite_code: &InviteCode,
     ) -> Result<i64, RegisterWithInviteError> {
         let mut tx = self.pool.begin().await?;
         let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
             "SELECT used_at, expires_at FROM invites WHERE code = $1",
         )
-        .bind(invite_code)
+        .bind(invite_code.as_ref())
         .fetch_optional(&mut *tx)
         .await?
         .ok_or(RegisterWithInviteError::InviteNotFound)?;
@@ -140,7 +141,7 @@ impl AtomicOps for PostgresAtomicOps {
         sqlx::query("UPDATE invites SET used_at = $1, used_by = $2 WHERE code = $3")
             .bind(now)
             .bind(user_id)
-            .bind(invite_code)
+            .bind(invite_code.as_ref())
             .execute(&mut *tx)
             .await?;
 

@@ -2,6 +2,7 @@ pub mod atompub;
 pub mod auth;
 pub mod backup;
 pub mod feed;
+pub mod invite;
 pub mod mailer;
 pub mod media;
 pub mod password;
@@ -10,6 +11,7 @@ pub mod site;
 pub mod slug;
 pub mod tag;
 pub mod text;
+pub mod token;
 pub mod username;
 pub mod visibility;
 

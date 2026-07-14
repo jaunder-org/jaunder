@@ -6,6 +6,7 @@ use common::username::Username;
 use common::visibility::{
     AudienceTarget, Channel, SubscriptionPolicy, SubscriptionStatus, TargetKind, ViewerIdentity,
 };
+use host::invite::InviteCode;
 use sqlx::{PgPool, SqlitePool};
 use std::sync::Arc;
 use storage::{
@@ -1293,7 +1294,7 @@ async fn create_invite_and_list_invites_includes_it(#[case] backend: Backend) {
 
     let list = state.invites.list_invites().await.unwrap();
     assert_eq!(list.len(), 1);
-    assert_eq!(list[0].code, code);
+    assert_eq!(list[0].code.as_ref(), code.as_ref());
     assert!(list[0].used_at.is_none());
 }
 
@@ -1334,7 +1335,7 @@ async fn use_invite_with_unknown_code_returns_not_found(#[case] backend: Backend
 
     let err = state
         .invites
-        .use_invite("no-such-code", user_id)
+        .use_invite(&"no-such-code".parse::<InviteCode>().unwrap(), user_id)
         .await
         .unwrap_err();
     assert!(matches!(err, UseInviteError::NotFound));
@@ -1503,7 +1504,7 @@ async fn create_user_with_invite_unknown_code_returns_not_found(#[case] backend:
             &password("password123"),
             None,
             false,
-            "no-such-code",
+            &"no-such-code".parse::<InviteCode>().unwrap(),
         )
         .await
         .unwrap_err();

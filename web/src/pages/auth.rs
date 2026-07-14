@@ -62,10 +62,17 @@ pub fn RegisterPage() -> impl IntoView {
                                             view! {
                                                 <label class="j-form-field">
                                                     <span class="j-form-label">"Invite code"</span>
+                                                    // `required`: the field renders only in
+                                                    // invite-only mode, where a code is
+                                                    // mandatory — this blocks an empty submit
+                                                    // client-side so the typed wire arg
+                                                    // (`Option<ProfferedInviteCode>`) only ever
+                                                    // sees `None` (open mode) or a filled value.
                                                     <input
                                                         class="j-form-input"
                                                         type="text"
                                                         name="invite_code"
+                                                        required=true
                                                     />
                                                 </label>
                                             }

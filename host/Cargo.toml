@@ -11,6 +11,7 @@ opentelemetry.workspace = true
 sqlx.workspace = true
 tracing.workspace = true
 common = { path = "../common" }
+macros = { path = "../macros" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

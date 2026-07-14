@@ -277,20 +277,24 @@ async fn create_invite_appears_in_list_invites(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create_invite failed: {body}");
-    // Body is a JSON string: "<code>"
-    let trimmed = body.trim();
+    // create_invite no longer returns the code — a capability token is never sent
+    // server->client (#400); the operator obtains it out-of-band (CLI / email #433).
     assert!(
-        trimmed.starts_with('"') && trimmed.ends_with('"'),
-        "expected JSON string, got: {trimmed}"
+        !body.contains("invite_code") && body.trim() != "\"\"",
+        "create_invite must not return a code: {body}"
     );
-    let code = &trimmed[1..trimmed.len() - 1];
 
     let (status, list_body) =
         post_form(Arc::clone(&state), "/api/list_invites", "", Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "list_invites failed: {list_body}");
+    // The invite appears as metadata, but the raw code is never exposed to the client.
     assert!(
-        list_body.contains(code),
-        "created code {code} not in list: {list_body}"
+        list_body.contains("expires_at"),
+        "created invite not in list: {list_body}"
+    );
+    assert!(
+        !list_body.contains("\"code\""),
+        "list_invites must not expose an invite code: {list_body}"
     );
 }
 

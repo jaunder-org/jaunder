@@ -121,6 +121,22 @@ owned plaintext `String`, or be value-compared in non-constant time. The result
 is readable-for-hashing but un-leakable — it satisfies ADR-0011's
 no-secrets-in-telemetry rule **by construction** rather than by discipline.
 
+**Inbound-secret variant.** A secret is sometimes _submitted by a client_ — it
+must cross the `#[server]` boundary client→server — while still never being
+_rendered_ or _returned_. `#[str_newtype(secret, serde)]` re-opens **only** the
+validating serde bridge on the secret surface (redacting `Debug`, `AsRef<str>`,
+`TryFrom<String>`), keeping every other restriction: no `Display`, `Deref`,
+`Borrow`, owned-`String`, or `PartialEq`. Serde encodes/decodes _operations_,
+not a _direction_ (a `#[server]` payload needs both `Serialize` and
+`Deserialize` regardless of which way it flows), so "inbound only" cannot be a
+property of the type's traits — it is enforced **structurally**: the inbound
+type is a **distinct** newtype, paired with a plain-`secret` domain type it
+converts into, and an `xtask` gate pins the inbound type to `#[server]`
+**parameter** positions so it can never be a return type or DTO field. Placing
+the domain type in a server-only crate (never built for wasm) makes "never
+client-side" a compile fact. `ProfferedInviteCode` (#400), paired with the
+domain `InviteCode`, is the first user.
+
 **Numeric IDs** take the same idea with a numeric trailer: `struct UserId(i64)`
 deriving `Clone, Copy, Debug, PartialEq, Eq, Hash`, plus `From<i64>` /
 `Into<i64>`, `Display`, and a **transparent-i64 serde bridge** — no `str`
