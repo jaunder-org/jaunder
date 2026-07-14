@@ -20,7 +20,7 @@ use tower::ServiceExt;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::backup_fixture::{
+use crate::misc::backup_fixture::{
     assert_backup_fixture_restored, assert_target_unmodified, populate_backup_fixture,
 };
 use storage::test_support::{

@@ -5,7 +5,7 @@ use jaunder::commands::{cmd_backup, cmd_init, cmd_restore};
 use storage::BackupMode;
 use tempfile::TempDir;
 
-use crate::backup_fixture::{assert_backup_fixture_restored, populate_backup_fixture};
+use crate::misc::backup_fixture::{assert_backup_fixture_restored, populate_backup_fixture};
 
 use storage::test_support::{unique_postgres_url, PostgresDbGuard};
 

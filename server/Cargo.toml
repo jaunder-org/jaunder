@@ -3,10 +3,18 @@ name = "jaunder"
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-only"
+# The integration tests are one binary (tests/main.rs), declared explicitly below;
+# disable auto-discovery so the per-subsystem tests/<x>/mod.rs files are not picked
+# up as stray targets. Unit tests (--lib/--bin) are unaffected.
+autotests = false
 
 [[bin]]
 name = "jaunder"
 path = "src/main.rs"
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"
 
 [lib]
 path = "src/lib.rs"

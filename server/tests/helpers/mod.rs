@@ -1,9 +1,6 @@
-// Shared test helper `#[path]`-included into every integration-test crate; each crate
-// uses a different subset, so some helpers/re-exports read as dead/unused per-crate.
-// `#[expect]` can't be used (it would be "unfulfilled" in the crates that DO use them),
-// so these stay `#[allow]`. (#94)
-#![allow(dead_code)]
-
+// Shared test helpers for the server integration suite. Compiled once as the single
+// `mod helpers;` of the `integration` test binary, so every item is reachable from
+// some subsystem module and no dead-code/unused suppression is needed.
 use axum::{
     body::Body,
     http::{header, Request, StatusCode},
@@ -22,9 +19,7 @@ use tower::ServiceExt;
 use storage::test_support::noop_mailer;
 
 mod websub_capturing;
-// Re-exported for `feed_worker.rs`; `helpers` is included into every test binary
-// and most don't use it, so the re-export reads as unused in those.
-#[allow(unused_imports)]
+// The capturing WebSub client used by `feed_worker.rs`.
 pub use websub_capturing::CapturingWebSubClient;
 
 pub fn ensure_server_fns_registered() {
