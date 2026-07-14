@@ -149,7 +149,7 @@ tests — the trailer is tested in `macros/tests/str_newtype.rs`, spec R1).
   }
   ```
 
-- [ ] **Step 1: Write `TagLabel` unit tests** (`common/src/tag.rs` `mod tests`):
+- [x] **Step 1: Write `TagLabel` unit tests** (`common/src/tag.rs` `mod tests`):
 
   ```rust
   #[test]
@@ -183,7 +183,7 @@ tests — the trailer is tested in `macros/tests/str_newtype.rs`, spec R1).
   Run: `devtool run -- cargo nextest run -p common tag::` — Expected: FAIL
   (`TagLabel` undefined).
 
-- [ ] **Step 2: Adopt the `Tag` derive + add `TagLabel`** in
+- [x] **Step 2: Adopt the `Tag` derive + add `TagLabel`** in
       `common/src/tag.rs`.
   - `use macros::StrNewtype;`. Replace
     `#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)] #[serde(try_from="String", into="String")]`
@@ -197,13 +197,13 @@ tests — the trailer is tested in `macros/tests/str_newtype.rs`, spec R1).
   - Add `TagLabel`, `InvalidTagLabel`, its `FromStr`/`slug`/`From<Tag>` per the
     interface above.
 
-- [ ] **Step 3: Sweep the in-file `Tag` tests.**
+- [x] **Step 3: Sweep the in-file `Tag` tests.**
       `x.parse::<Tag>().unwrap()     .as_str()` → compare via `PartialEq<&str>`
       (`assert_eq!(…, "rust")`); the `tag_normalizes_*`/`as_str` asserts fold
       into `PartialEq`/`to_string` (Display). Leave `parse_and_validate_tags`
       tests (unchanged in T1).
 
-- [ ] **Step 4: Sweep production `Tag::as_str`.** `storage/src/posts.rs` tag
+- [x] **Step 4: Sweep production `Tag::as_str`.** `storage/src/posts.rs` tag
       binds `.bind(x.as_str())` → `.bind(x.as_ref())`;
       `web/src/feed_events.rs:15-17` →
       `fn tag_slugs(tags: &[PostTag]) ->     BTreeSet<Tag> { tags.iter().map(|t| t.tag_slug.clone()).collect() }`
@@ -211,9 +211,9 @@ tests — the trailer is tested in `macros/tests/str_newtype.rs`, spec R1).
       `rg 'as_str\(\)'` over `storage`/`web`/`server`/`common` and fix each
       `Tag` site the build flags.
 
-- [ ] **Step 5: Gate.** `devtool run -- cargo xtask check` — Expected: PASS.
+- [x] **Step 5: Gate.** `devtool run -- cargo xtask check` — Expected: PASS.
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
       `git add common/src/tag.rs storage/src/posts.rs web/src/feed_events.rs` (+
       any swept file) —
       `refactor(common): Tag adopts StrNewtype; add TagLabel; sweep .as_str()`
@@ -264,7 +264,7 @@ bodies keep a **temporary wire-boundary parse** (`Vec<String>` →
   `apply_categories(.., desired: &[TagLabel])`;
   `CollectionDecl.categories: Vec<Tag>`; `FeedItem.tags: Vec<TagLabel>`.
 
-- [ ] **Step 1: Retype `parse_and_validate_tags`** (`common/src/tag.rs`, spec
+- [x] **Step 1: Retype `parse_and_validate_tags`** (`common/src/tag.rs`, spec
       Decision 6) to
       `Vec<TagLabel> -> Result<Vec<TagLabel>, TagValidationError>`: dedup on
       `TagLabel::slug` via `HashSet<Tag>` (keep the first occurrence's label),
@@ -274,11 +274,11 @@ bodies keep a **temporary wire-boundary parse** (`Vec<String>` →
       `rg     'TagValidationError::Invalid'` shows no other constructor — the
       `Invalid` variant (R4).
 
-- [ ] **Step 2: `common` DTOs.** `FeedItem.tags: Vec<TagLabel>` (+ json/rss/
+- [x] **Step 2: `common` DTOs.** `FeedItem.tags: Vec<TagLabel>` (+ json/rss/
       metadata test fixtures build labels; feed JSON output byte-identical);
       `CollectionDecl.categories: Vec<Tag>`.
 
-- [ ] **Step 3: `storage` structs + read path.**
+- [x] **Step 3: `storage` structs + read path.**
       `PostTag.tag_display: TagLabel`;
       `PostTagJson { tag_slug: Tag, tag_display: TagLabel }` and collapse
       `parse_post_tags_json` to a field-move map (delete the manual `.parse()` +
@@ -287,7 +287,7 @@ bodies keep a **temporary wire-boundary parse** (`Vec<String>` →
       a stored tagging reads back with slug + label intact on sqlite **and**
       postgres.
 
-- [ ] **Step 4: `storage` write signatures.**
+- [x] **Step 4: `storage` write signatures.**
       `PostTagDiff.to_add: Vec<&TagLabel>`;
       `post_tag_diff(desired: &[TagLabel])` with internal `HashSet<Tag>` (drop
       the `.to_string()` round-trips and the `filter_map(Tag::from_str)` skip —
@@ -298,7 +298,7 @@ bodies keep a **temporary wire-boundary parse** (`Vec<String>` →
       derive the slug via `tag.slug()`, bind the label via `tag.as_ref()` — no
       internal `parse::<Tag>()`.
 
-- [ ] **Step 5: `server` atompub emit/service.**
+- [x] **Step 5: `server` atompub emit/service.**
       `apply_categories(desired:     &[TagLabel])` (calls unchanged —
       `&fields.categories` is now `&Vec<TagLabel>`); ETag content read
       `posts.rs:89` `t.tag_display.as_ref()`; the **emit** `atom:category`
@@ -310,7 +310,7 @@ bodies keep a **temporary wire-boundary parse** (`Vec<String>` →
       (`media` stays empty). **Verify:** service-doc + entry `atom:category`
       output byte-identical.
 
-- [ ] **Step 6: `server` atompub ingest + skip test (R5).**
+- [x] **Step 6: `server` atompub ingest + skip test (R5).**
       `PostFields.categories:     Vec<TagLabel>`; `entry_to_post_fields`
       (`mapping.rs:85`) `filter_map(|c|     c.term()…parse::<TagLabel>().ok())`
       — **this is where the invalid-`<category>` silent-skip now lives** (Step 4
@@ -318,7 +318,7 @@ bodies keep a **temporary wire-boundary parse** (`Vec<String>` →
       `Vec<TagLabel>`. **New test:** an entry with one valid + one invalid
       category yields exactly one `TagLabel` (not an ingest failure).
 
-- [ ] **Step 7: web temporary adapters (removed in T3).**
+- [x] **Step 7: web temporary adapters (removed in T3).**
   - `create_post`/`update_post` (`mod.rs:233,385`): keep the wire arg
     `Option<Vec<String>>`; at the top of the body **filter out empty/whitespace
     tokens** (preserving today's empty-drop, see the empty-token note below)
@@ -343,10 +343,10 @@ bodies keep a **temporary wire-boundary parse** (`Vec<String>` →
     `display: t.tag_display .to_string()` (`TagSummary` still `String`).
     `// TEMP(T3):`.
 
-- [ ] **Step 8: Gate.** `devtool run -- cargo xtask check` — Expected: PASS
+- [x] **Step 8: Gate.** `devtool run -- cargo xtask check` — Expected: PASS
       (dual-backend storage tests green; wire unchanged).
 
-- [ ] **Step 9: Commit.**
+- [x] **Step 9: Commit.**
       `refactor(storage,server): thread Tag/TagLabel through the tag storage surface + atompub`
 
 ---
@@ -377,7 +377,7 @@ TDD for the new casing + agreement tests; the DTO retype is compiler-forced.
   `Serialize/Deserialize/ PartialEq/Eq`); `create_post`/`update_post`
   `tags: Option<Vec<TagLabel>>`.
 
-- [ ] **Step 1: `TagInput` tests (TDD)** — in `web/src/tags` (host-tested pure
+- [x] **Step 1: `TagInput` tests (TDD)** — in `web/src/tags` (host-tested pure
       helper) or `pages/ui.rs`:
   - **Agreement (#416):** a token divergent under the old split validates
     identically client/server now — e.g. `"Rust".parse::<TagLabel>().is_ok()`
@@ -386,7 +386,7 @@ TDD for the new casing + agreement tests; the DTO retype is compiler-forced.
     `TagSummary { slug: "rust", display: "Rust" }` (assert `slug`/`display`).
     Run: `devtool run -- cargo nextest run -p web tags::` — Expected: FAIL.
 
-- [ ] **Step 2: Type `TagSummary` + `list_tags` builder + drop T2 adapters.**
+- [x] **Step 2: Type `TagSummary` + `list_tags` builder + drop T2 adapters.**
       `TagSummary { slug: Tag, display: TagLabel }`. `list_tags`
       (`tags/mod.rs:44`):
       `slug: rec.tag_slug.clone(), display: TagLabel::from(rec.tag_slug)`
@@ -397,13 +397,13 @@ TDD for the new casing + agreement tests; the DTO retype is compiler-forced.
       directly. (Per ADR-0065 the invalid-arg path is now arg-decode; the cap
       still surfaces as `Validation` via `parse_and_validate_tags`.)
 
-- [ ] **Step 3: Render sweeps.** `render_tag_list` (`render/mod.rs:538,542`):
+- [x] **Step 3: Render sweeps.** `render_tag_list` (`render/mod.rs:538,542`):
       `escape_html(tag.slug.as_ref())`, `escape_html(tag.display.as_ref())`;
       `/tags/{slug}` hrefs use `tag.slug.as_ref()`/`Display`. `TagList` chips
       (`ui.rs:59,1284-1351`) render `{tag.display.to_string()}` (a newtype is
       not `IntoRender`); hidden-input `value=tag.display.to_string()`.
 
-- [ ] **Step 4: `TagInput` — delete the re-impl; preserve casing (#416 +
+- [x] **Step 4: `TagInput` — delete the re-impl; preserve casing (#416 +
       Decision 4).** In the commit path (`ui.rs:1224-1246`): drop
       `normalize_tag_token`/`is_valid_tag_slug`; match
       `input_text.get()     .parse::<TagLabel>()`:
@@ -429,12 +429,12 @@ TDD for the new casing + agreement tests; the DTO retype is compiler-forced.
   `Display` (Task 1) keeps the e2e `.j-tag-error` assertion satisfiable — align
   the e2e string to it in Task 5 if the wording differs.
 
-- [ ] **Step 5: Gate.** `devtool run -- cargo xtask check` — Expected: PASS. Fix
+- [x] **Step 5: Gate.** `devtool run -- cargo xtask check` — Expected: PASS. Fix
       any `server/tests/web/web_tags.rs` display assertion the retype flags
       (slugs unaffected; `display` now `TagLabel` — `list_tags` display still
       mirrors slug, so those asserts hold).
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
       `feat(web): typed TagSummary/wire (Tag+TagLabel); TagInput preserves casing (#416)`
 
 ---
@@ -470,18 +470,18 @@ already does.
   `PageSeed::SiteTag { tag: Tag, page }`,
   `PageSeed::UserTag { username, tag: Tag, page }`.
 
-- [ ] **Step 1: `listing.rs`.** `fetch_*_by_tag(tag: &Tag)` — delete the
+- [x] **Step 1: `listing.rs`.** `fetch_*_by_tag(tag: &Tag)` — delete the
       internal `tag.trim().parse::<Tag>()` (`:244,278`).
       `#[server] list_*_by_tag(tag: Tag)` — pass `&tag`.
 
-- [ ] **Step 2: `PageSeed` + `render`.** `PageSeed::SiteTag { tag: Tag, page }`,
+- [x] **Step 2: `PageSeed` + `render`.** `PageSeed::SiteTag { tag: Tag, page }`,
       `PageSeed::UserTag { username, tag: Tag, page }`. In `render_discovery`
       (`:201,209`) drop `tag.parse::<Tag>()` → use the typed `tag` (clone) for
       `FeedSurface::{SiteTag,UserTag}`. `render_head`/`render_body` matches use
       `tag` via `Display` (unchanged). Confirm the `PageSeed` serde round-trip
       test (`:1267`) still passes (`Tag` serializes as the same string).
 
-- [ ] **Step 3: Projector (Decision 7).** `site_tag`/`user_tag`
+- [x] **Step 3: Projector (Decision 7).** `site_tag`/`user_tag`
       (`projector/mod.rs:239,264`): keep `Path<String>`; parse
       `tag.parse::<Tag>()`, on `Err` return `shell_response` (the existing
       "unparseable tag is never public content" branch). `Tag::from_str`
@@ -489,17 +489,17 @@ already does.
       `PageSeed::SiteTag { tag, page }` with the parsed `Tag`. Add the
       Decision-7 justification comment on the extractor.
 
-- [ ] **Step 4: SPA pages.** `SiteTagPage`/`UserTagPage` (`posts.rs:1087,1249`):
+- [x] **Step 4: SPA pages.** `SiteTagPage`/`UserTagPage` (`posts.rs:1087,1249`):
       read the typed `PageSeed` `tag`; on the CSR route-param path parse
       `params.get("tag").and_then(|s| s.parse::<Tag>().ok())` and skip the fetch
       (client 404) when it fails — mirror the #408 `PostPage` route-parse.
 
-- [ ] **Step 5: Gate + affected e2e.** `devtool run -- cargo xtask check` —
+- [x] **Step 5: Gate + affected e2e.** `devtool run -- cargo xtask check` —
       Expected: PASS. Then `devtool run -- cargo xtask validate` — e2e green for
       tag-chip navigation + `/tags/:slug` listing (watch the known
       `posts.spec.ts` csr flake; re-run once).
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
       `refactor(web): thread Tag through browse args + PageSeed routing + projector parse`
 
 ---
@@ -508,16 +508,16 @@ already does.
 
 Spec §H1. Confirms the north star and records what `jaunder-ship` must do.
 
-- [ ] **Step 1: North-star sweep.**
+- [x] **Step 1: North-star sweep.**
       `rg -n 'tag.*: ?String|tags: ?Vec<String>|     tag.*&str|HashSet<String>|BTreeSet<String>'`
       across `common storage server     web host` (all five crates — §C1
       confirms `host` has no tag-value sites) for tag values. The **only**
       permitted hits: `list_tags` `prefix` (`web/src/tags/mod.rs`) and the
       projector `Path<String>` (`server/src/     projector/mod.rs`) — each
       carrying its Decision-7 justification comment. Anything else → thread it.
-- [ ] **Step 2: Full gate.** `devtool run -- cargo xtask validate` — Expected:
+- [x] **Step 2: Full gate.** `devtool run -- cargo xtask validate` — Expected:
       PASS (static + coverage + e2e).
-- [ ] **Step 3: Ship notes (for `jaunder-ship`, not committed here).**
+- [x] **Step 3: Ship notes (for `jaunder-ship`, not committed here).**
       `cargo     xtask adr promote` numbers
       `docs/adr/drafts/tag-identity-label-split.md`; close **#416** as absorbed;
       the PR references #409.
