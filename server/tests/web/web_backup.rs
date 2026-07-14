@@ -10,7 +10,8 @@ use storage::{
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{backends, backends_matrix, post_form, Backend, TestEnv};
+use crate::helpers::post_form;
+use storage::test_support::{backends, backends_matrix, Backend, TestEnv};
 
 #[apply(backends)]
 #[tokio::test]

@@ -10,15 +10,14 @@ use tower::ServiceExt;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{
-    backends_matrix, ensure_server_fns_registered, noop_mailer, test_options, Backend, TestEnv,
-};
+use crate::helpers::{ensure_server_fns_registered, test_options};
+use storage::test_support::{backends_matrix, noop_mailer, Backend, TestEnv};
 
 // SPIKE (jaunder Task 1):
 // - Shape A below (`rsd_document_advertises_service_url`) confirms cross-module
 //   `#[apply]` resolves a `#[template]` defined in the `helpers` module simply by
-//   importing it into scope (`use crate::helpers::backends;`) and then `#[apply(backends)]`.
-//   No `#[apply(crate::helpers::backends)]` path and no `pub use` re-export are needed:
+//   importing it into scope (`use storage::test_support::backends;`) and then `#[apply(backends)]`.
+//   No `#[apply(storage::test_support::backends)]` path and no `pub use` re-export are needed:
 //   a `#[template]` expands to a name-mangled `macro_rules!` brought into scope by
 //   the plain `use`, and `#[apply]` resolves it by bare name.
 // - Shape B below (`user_page_includes_rsd_autodiscovery_link`) confirms the
@@ -28,7 +27,7 @@ use crate::helpers::{
 //   rows. Attribute ordering: `#[apply(backends_matrix)]` first, then the
 //   `#[case::name(..)]` rows, then `#[tokio::test]`.
 //   It generates rows × 2 cases (2 rows × 2 backends = 4).
-use crate::helpers::backends;
+use storage::test_support::backends;
 
 fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
     ensure_server_fns_registered();

@@ -7,7 +7,8 @@ use storage::ProfileUpdate;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{backends, post_form, Backend, TestEnv};
+use crate::helpers::post_form;
+use storage::test_support::{backends, Backend, TestEnv};
 
 // ── Profile tests (M2.10.5, M2.10.6) ─────────────────────────────────────
 

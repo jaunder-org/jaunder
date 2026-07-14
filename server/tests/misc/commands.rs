@@ -23,8 +23,9 @@ use rstest_reuse::*;
 use crate::backup_fixture::{
     assert_backup_fixture_restored, assert_target_unmodified, populate_backup_fixture,
 };
-use crate::helpers::{
-    backends, nonexistent_postgres_url, sqlite_url, unique_postgres_url, Backend, PostgresDbGuard,
+use storage::test_support::{
+    backends, nonexistent_postgres_url, noop_mailer, sqlite_url, unique_postgres_url, Backend,
+    PostgresDbGuard,
 };
 
 async fn storage_args(backend: Backend, base: &TempDir) -> (StorageArgs, Option<PostgresDbGuard>) {
@@ -145,7 +146,7 @@ async fn after_init_server_responds_to_health_check(#[case] backend: Backend) {
     let router = jaunder::create_router(
         leptos_options,
         db,
-        crate::helpers::noop_mailer(),
+        noop_mailer(),
         true,
         args.storage_path.clone(),
     );

@@ -3,7 +3,7 @@ use jaunder::commands::{cmd_create_pg_db, cmd_init};
 use sqlx::Connection;
 use tempfile::TempDir;
 
-use crate::helpers::{postgres_bootstrap_url, postgres_test_authority};
+use storage::test_support::{postgres_bootstrap_url, postgres_test_authority};
 
 // guard:low-level-db — provisions a Postgres role/database via bootstrap admin; no standard backend fixture
 #[tokio::test]

@@ -11,10 +11,8 @@ use tower::ServiceExt;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{
-    backends, backends_matrix, ensure_server_fns_registered, noop_mailer, test_options, Backend,
-    TestEnv,
-};
+use crate::helpers::{ensure_server_fns_registered, test_options};
+use storage::test_support::{backends, backends_matrix, noop_mailer, Backend, TestEnv};
 
 fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
     ensure_server_fns_registered();

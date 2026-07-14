@@ -15,9 +15,8 @@ use tower::ServiceExt;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{
-    backends, backends_matrix, ensure_server_fns_registered, test_options, Backend, TestEnv,
-};
+use crate::helpers::{ensure_server_fns_registered, test_options};
+use storage::test_support::{backends, backends_matrix, noop_mailer, Backend, TestEnv};
 use storage::CreatePostInput;
 use storage::PostFormat;
 
@@ -28,13 +27,7 @@ fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
     std::fs::create_dir_all(storage_path.join("media").join("upload")).unwrap();
     std::fs::create_dir_all(storage_path.join("media").join("cached")).unwrap();
     std::fs::create_dir_all(storage_path.join("media").join("tmp")).unwrap();
-    jaunder::create_router(
-        test_options(),
-        state,
-        crate::helpers::noop_mailer(),
-        false,
-        storage_path,
-    )
+    jaunder::create_router(test_options(), state, noop_mailer(), false, storage_path)
 }
 
 #[apply(backends)]

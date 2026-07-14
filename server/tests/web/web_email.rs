@@ -5,7 +5,8 @@ use chrono::Utc;
 use common::mailer::test_utils::CapturingMailSender;
 use common::username::Username;
 
-use crate::helpers::{backends, post_form_with_mailer, Backend, TestEnv};
+use crate::helpers::post_form_with_mailer;
+use storage::test_support::{backends, Backend, TestEnv};
 
 use rstest::*;
 use rstest_reuse::*;

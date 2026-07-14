@@ -15,10 +15,8 @@ use web::posts::{
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{
-    backends, backends_matrix, ensure_server_fns_registered, post_form, test_options, Backend,
-    TestBase, TestEnv,
-};
+use crate::helpers::{ensure_server_fns_registered, post_form, test_options};
+use storage::test_support::{backends, backends_matrix, noop_mailer, Backend, TestBase, TestEnv};
 
 async fn unpublish_post_form(
     state: Arc<storage::AppState>,
@@ -92,7 +90,7 @@ async fn post_json(
     let app = jaunder::create_router(
         test_options(),
         state,
-        crate::helpers::noop_mailer(),
+        noop_mailer(),
         true,
         crate::helpers::tmp_storage_path(),
     );
@@ -1917,7 +1915,7 @@ async fn get_post_finds_author_draft_across_multiple_pages(#[case] backend: Back
             .unwrap()
     );
 
-    let ids = crate::helpers::seed_posts(&state, author_id, 55, false).await;
+    let ids = storage::test_support::seed_posts(&state, author_id, 55, false).await;
     let first_post_id = ids[0];
     let record = state
         .posts
@@ -1985,7 +1983,7 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination(#[case] 
             .unwrap()
     );
 
-    crate::helpers::seed_posts(&state, author_id, 51, true).await;
+    storage::test_support::seed_posts(&state, author_id, 51, true).await;
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -2091,8 +2089,8 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
             .await
             .unwrap()
     );
-    crate::helpers::seed_posts(&state, author_id, 26, true).await;
-    crate::helpers::seed_posts(&state, other_id, 26, true).await;
+    storage::test_support::seed_posts(&state, author_id, 26, true).await;
+    storage::test_support::seed_posts(&state, other_id, 26, true).await;
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -2206,7 +2204,7 @@ async fn list_home_feed_returns_authenticated_users_published_posts_only(#[case]
             .unwrap()
     );
 
-    crate::helpers::seed_posts(&state, author_id, 51, true).await;
+    storage::test_support::seed_posts(&state, author_id, 51, true).await;
 
     let (status, body) = create_post_json(
         Arc::clone(&state),

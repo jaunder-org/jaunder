@@ -16,18 +16,10 @@ use tower::ServiceExt;
 // The both-backend test harness — `Backend`, `TestEnv`, per-test DB provisioning,
 // and the `backends`/`sqlite_only`/`postgres_only` rstest templates — lives in
 // `storage::test_support` (gated by storage's `test-support` feature; ADR-0033) so
-// `storage`'s own tests can use it from the same crate instance.
-// Re-exported here so existing `use crate::helpers::…` sites keep working unchanged.
-// `helpers` is compiled into every test binary and each uses a different subset,
-// so the union re-export reads as unused in some — same as `CapturingWebSubClient`
-// below.
-#[allow(unused_imports)]
-pub use storage::test_support::{
-    backends, backends_matrix, nonexistent_postgres_url, noop_mailer, postgres_bootstrap_url,
-    postgres_only, postgres_test_authority, recorded_postgres_url, seed_posts, sqlite_only,
-    sqlite_url, template_postgres_url, unique_postgres_url, Backend, CloseablePool,
-    PostgresDbGuard, TestBase, TestEnv, PG_URL_FILE,
-};
+// `storage`'s own tests can use it from the same crate instance. Test files import
+// what they need directly from `storage::test_support`; `helpers`' own bodies pull
+// in only `noop_mailer`.
+use storage::test_support::noop_mailer;
 
 mod websub_capturing;
 // Re-exported for `feed_worker.rs`; `helpers` is included into every test binary

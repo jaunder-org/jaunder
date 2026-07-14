@@ -4,7 +4,8 @@ use axum::{
 };
 use tower::ServiceExt;
 
-use crate::helpers::{test_options, Backend, TestEnv};
+use crate::helpers::test_options;
+use storage::test_support::{noop_mailer, Backend, TestEnv};
 
 async fn get_asset(uri: &str) -> (StatusCode, Option<String>) {
     // Static-asset serving never touches storage; pin a single backend so these
@@ -20,7 +21,7 @@ async fn get_asset(uri: &str) -> (StatusCode, Option<String>) {
     let app = jaunder::create_router(
         test_options(),
         state,
-        crate::helpers::noop_mailer(),
+        noop_mailer(),
         false,
         crate::helpers::tmp_storage_path(),
     );

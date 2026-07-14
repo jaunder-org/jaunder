@@ -6,7 +6,8 @@ use common::username::Username;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{backends, post_form, Backend, TestEnv};
+use crate::helpers::post_form;
+use storage::test_support::{backends, Backend, TestEnv};
 
 /// Creates a user and a session, returning (`user_id`, `raw_token`, `cookie_header`).
 async fn create_user_and_session(

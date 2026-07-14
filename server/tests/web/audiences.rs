@@ -6,7 +6,8 @@ use common::username::Username;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{backends, post_form, Backend, TestEnv};
+use crate::helpers::post_form;
+use storage::test_support::{backends, Backend, TestEnv};
 
 async fn make_user(state: &Arc<storage::AppState>, name: &str) -> i64 {
     state
