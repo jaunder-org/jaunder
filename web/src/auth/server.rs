@@ -139,8 +139,10 @@ fn auth_rejection_error(error: AuthRejection) -> InternalError {
 
 /// Verifies that an app-password (Basic auth) request authenticated as the
 /// user it claimed. Cookie/Bearer requests carry no expected username and
-/// always pass. The pure comparison lives in `common::auth`; this wrapper only
-/// lifts it into the web-local [`AuthRejection`] result type.
+/// always pass. The check is a direct `Username` equality — case-insensitive,
+/// because `Username::from_str` lowercases at construction (see
+/// `common::username`), so a differently-cased Basic username still matches a
+/// valid session (#344).
 ///
 /// # Errors
 ///
@@ -218,6 +220,15 @@ mod tests {
         let user: Username = "alice".parse().unwrap();
         let expected: Username = "alice".parse().unwrap();
         assert!(verify_basic_username(&user, Some(&expected)).is_ok());
+    }
+
+    #[test]
+    fn verify_basic_username_match_is_case_insensitive() {
+        // #344: Username lowercases at construction, so a differently-cased Basic
+        // username still matches the authenticated session's user.
+        let authenticated: Username = "alice".parse().unwrap();
+        let expected: Username = "Alice".parse().unwrap(); // normalizes to "alice"
+        assert!(verify_basic_username(&authenticated, Some(&expected)).is_ok());
     }
 
     #[test]
