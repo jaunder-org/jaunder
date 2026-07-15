@@ -1,6 +1,7 @@
 pub mod atompub;
 pub mod auth;
 pub mod backup;
+pub mod email;
 pub mod feed;
 pub mod invite;
 pub mod mailer;
@@ -10,6 +11,8 @@ pub mod render;
 pub mod site;
 pub mod slug;
 pub mod tag;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 pub mod text;
 pub mod token;
 pub mod username;

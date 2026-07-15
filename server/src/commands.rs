@@ -10,6 +10,7 @@ use crate::cli::{Commands, StorageArgs};
 use crate::mailer::LettreMailSender;
 use crate::runtime_file;
 use common::backup::BackupMode;
+use common::email::Email;
 use common::mailer::{EmailMessage, MailSender};
 use common::password::Password;
 use common::username::Username;
@@ -302,9 +303,9 @@ pub async fn cmd_smtp_test(storage: &StorageArgs, to: &str) -> anyhow::Result<()
     let mailer = LettreMailSender::from_config(&smtp_config)
         .map_err(|e| anyhow::anyhow!("Failed to build SMTP transport: {e}"))?;
 
-    let to_addr: email_address::EmailAddress = to
+    let to_addr: Email = to
         .parse()
-        .map_err(|e| anyhow::anyhow!("Invalid email address '{to}': {e}"))?;
+        .map_err(|e| anyhow::anyhow!("Invalid recipient '{to}': {e}"))?;
 
     let message = EmailMessage {
         from: None,

@@ -2,11 +2,11 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use email_address::EmailAddress;
 use sqlx::{Database, Pool};
 use thiserror::Error;
 
 use crate::backend::Backend;
+use common::email::Email;
 
 /// Errors returned by [`EmailVerificationStorage::use_email_verification`].
 #[derive(Debug, Error)]
@@ -40,7 +40,7 @@ pub trait EmailVerificationStorage: Send + Sync {
     async fn create_email_verification(
         &self,
         user_id: i64,
-        email: &EmailAddress,
+        email: &Email,
         expires_at: DateTime<Utc>,
     ) -> sqlx::Result<String>;
 
@@ -55,7 +55,7 @@ pub trait EmailVerificationStorage: Send + Sync {
     async fn use_email_verification(
         &self,
         raw_token: &str,
-    ) -> Result<(i64, EmailAddress), UseEmailVerificationError>;
+    ) -> Result<(i64, Email), UseEmailVerificationError>;
 }
 
 /// Generic [`EmailVerificationStorage`] backed by any [`Backend`] database.
@@ -89,7 +89,7 @@ where
     async fn create_email_verification(
         &self,
         user_id: i64,
-        email: &EmailAddress,
+        email: &Email,
         expires_at: DateTime<Utc>,
     ) -> sqlx::Result<String> {
         let (raw_token, token_hash) = crate::helpers::generate_hashed_token()?;
@@ -116,7 +116,7 @@ where
         )
         .bind(token_hash.as_str())
         .bind(user_id)
-        .bind(email.as_str())
+        .bind(&**email)
         .bind(now)
         .bind(expires_at)
         .execute(&mut *tx)
@@ -130,7 +130,7 @@ where
     async fn use_email_verification(
         &self,
         raw_token: &str,
-    ) -> Result<(i64, EmailAddress), UseEmailVerificationError> {
+    ) -> Result<(i64, Email), UseEmailVerificationError> {
         let token_hash =
             crate::auth::hash_token(raw_token).map_err(|_| UseEmailVerificationError::NotFound)?;
 
@@ -157,7 +157,7 @@ where
             // The address was validated when stored; a parse failure here means
             // the stored value was corrupted, which we surface as a decode error.
             let email = email
-                .parse::<EmailAddress>()
+                .parse::<Email>()
                 .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
             return Ok((user_id, email));
         }
@@ -179,6 +179,7 @@ where
 mod tests {
     use super::*;
     use crate::test_support::{backends, Backend, TestEnv};
+    use common::test_support::parse_email;
     use rstest::*;
     use rstest_reuse::*;
 
@@ -188,7 +189,7 @@ mod tests {
         let TestEnv { state, base } = backend.setup().await;
         base.close_pool().await;
         let expires_at = chrono::Utc::now();
-        let email: EmailAddress = "test@example.com".parse().unwrap();
+        let email = parse_email("test@example.com");
         let result = state
             .email_verifications
             .create_email_verification(1, &email, expires_at)

@@ -24,7 +24,6 @@ http.workspace = true
 cfg-if.workspace = true
 chrono = { workspace = true, optional = true }
 croner.workspace = true
-email_address = { workspace = true, optional = true }
 serde.workspace = true
 serde_json = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
@@ -76,7 +75,6 @@ server = [
     "dep:axum",
     "dep:chrono",
     "dep:storage",
-    "dep:email_address",
     "dep:tracing",
 ]
 

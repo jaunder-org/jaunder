@@ -2,12 +2,12 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use email_address::EmailAddress;
 use sqlx::{Database, Pool};
 use thiserror::Error;
 use tracing::Instrument;
 
 use crate::backend::Backend;
+use common::email::Email;
 use common::password::Password;
 use common::username::Username;
 
@@ -33,7 +33,7 @@ pub struct UserRecord {
     /// When the user last successfully authenticated.
     pub last_authenticated_at: Option<DateTime<Utc>>,
     /// User's verified or pending email address.
-    pub email: Option<EmailAddress>,
+    pub email: Option<Email>,
     /// Whether the email address has been verified.
     pub email_verified: bool,
     /// Whether the user has site-wide administrative privileges.
@@ -176,7 +176,7 @@ pub trait UserStorage: Send + Sync {
     async fn set_email<'a>(
         &self,
         user_id: i64,
-        email: Option<&'a EmailAddress>,
+        email: Option<&'a Email>,
         verified: bool,
     ) -> sqlx::Result<()>;
 
@@ -419,11 +419,11 @@ where
     async fn set_email<'a>(
         &self,
         user_id: i64,
-        email: Option<&'a EmailAddress>,
+        email: Option<&'a Email>,
         verified: bool,
     ) -> sqlx::Result<()> {
         sqlx::query("UPDATE users SET email = $1, email_verified = $2 WHERE user_id = $3")
-            .bind(email.map(EmailAddress::as_str))
+            .bind(email.map(|e| &**e))
             .bind(verified)
             .bind(user_id)
             .execute(&self.pool)

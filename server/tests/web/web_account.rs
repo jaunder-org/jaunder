@@ -294,7 +294,7 @@ async fn create_invite_emails_link_and_appears_in_list(#[case] backend: Backend)
     let sent = mailer.sent();
     assert_eq!(sent.len(), 1, "expected one invite email");
     assert_eq!(sent[0].to.len(), 1);
-    assert_eq!(sent[0].to[0].as_str(), "invitee@example.com");
+    assert_eq!(sent[0].to[0], "invitee@example.com");
     assert!(
         sent[0]
             .body_text

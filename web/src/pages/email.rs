@@ -1,7 +1,9 @@
 use crate::email::{verify_email, RequestEmailVerification};
 use crate::error::WebError;
+use crate::forms::{Field, ValidatedInput};
 use crate::pages::Topbar;
 use crate::profile::get_profile;
+use common::email::Email;
 use leptos::prelude::*;
 
 /// Email settings page — shows current email and verification status;
@@ -9,6 +11,7 @@ use leptos::prelude::*;
 #[component]
 pub fn EmailPage() -> impl IntoView {
     let request_action = ServerAction::<RequestEmailVerification>::new();
+    let email = Field::<Email>::new();
     let profile = crate::server_resource(move || request_action.version().get(), |_| get_profile());
 
     view! {
@@ -33,8 +36,20 @@ pub fn EmailPage() -> impl IntoView {
                     })}
                 </Suspense>
                 <ActionForm action=request_action>
-                    <label>"New email address" <input type="email" name="email" /></label>
-                    <button type="submit" class="j-btn is-primary">
+                    <ValidatedInput<
+                    Email,
+                >
+                        label="New email address"
+                        name="email"
+                        input_type="email"
+                        autocomplete="email"
+                        field=email
+                    />
+                    <button
+                        type="submit"
+                        class="j-btn is-primary"
+                        prop:disabled=move || !email.is_valid()
+                    >
                         "Send verification link"
                     </button>
                 </ActionForm>

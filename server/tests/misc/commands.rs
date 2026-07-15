@@ -787,7 +787,7 @@ async fn cmd_smtp_test_fails_on_invalid_to_address(#[case] backend: Backend) {
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(
-        msg.contains("Invalid email address"),
-        "expected 'Invalid email address', got: {msg}"
+        msg.contains("not-an-email") && msg.contains("invalid email address"),
+        "expected the offending input and the typed parse reason, got: {msg}"
     );
 }

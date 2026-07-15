@@ -118,6 +118,7 @@ impl MailSender for LettreMailSender {
 
 #[cfg(test)]
 mod tests {
+    use common::email::Email;
     use storage::{SmtpConfig, SmtpTlsMode};
 
     use super::*;
@@ -203,22 +204,25 @@ mod tests {
         assert!(matches!(error, MailError::Send(_)));
     }
 
-    /// A domain-literal address (`user@[127.0.0.1]`) that `email_address`
-    /// accepts but lettre's stricter `Mailbox` parser rejects. Used to drive the
-    /// re-parse `map_err` arms, which are unreachable through equal parsers.
-    fn divergent_address() -> email_address::EmailAddress {
+    /// A domain-literal address (`user@[127.0.0.1]`) that `Email` accepts but
+    /// lettre's stricter `Mailbox` parser rejects. Used to drive the re-parse
+    /// `map_err` arms, which are unreachable through equal parsers.
+    fn divergent_address() -> Email {
         "user@[127.0.0.1]"
             .parse()
-            .expect("email_address accepts a domain-literal")
+            .expect("a domain-literal is a valid Email")
     }
 
     #[tokio::test]
     async fn from_config_rejects_sender_lettre_cannot_parse() {
         // guard:no-backend — no DB
-        // `email_address` accepts the domain-literal sender, but lettre's Mailbox
-        // parser rejects it, so `from_config` maps it to InvalidSender.
+        // `SmtpConfig::sender` (an `email_address::EmailAddress`) accepts the
+        // domain-literal, but lettre's Mailbox parser rejects it, so `from_config`
+        // maps it to InvalidSender.
         let config = SmtpConfig {
-            sender: divergent_address(),
+            sender: "user@[127.0.0.1]"
+                .parse()
+                .expect("email_address accepts a domain-literal"),
             ..base_config(SmtpTlsMode::Plain)
         };
         // `LettreMailSender` is not `Debug`, so match on the result rather than
