@@ -24,7 +24,7 @@ async fn operator_gets_default_backup_settings(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let settings: BackupConfig = serde_json::from_str(&body).unwrap();
     assert_eq!(settings.destination_path, None);
-    assert_eq!(settings.schedule.as_str(), "0 0 0 * * *");
+    assert_eq!(settings.schedule, "0 0 0 * * *");
     assert_eq!(settings.retention_count, 7);
     assert_eq!(settings.mode, BackupMode::Directory);
 }
@@ -93,7 +93,7 @@ async fn operator_gets_configured_backup_settings(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let settings: BackupConfig = serde_json::from_str(&body).unwrap();
     assert_eq!(settings.destination_path, Some("/srv/backups".to_string()));
-    assert_eq!(settings.schedule.as_str(), "0 30 2 * * *");
+    assert_eq!(settings.schedule, "0 30 2 * * *");
     assert_eq!(settings.retention_count, 4);
     assert_eq!(settings.mode, BackupMode::Archive);
 }
@@ -129,7 +129,7 @@ async fn operator_gets_defaults_for_invalid_backup_settings(#[case] backend: Bac
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let settings: BackupConfig = serde_json::from_str(&body).unwrap();
     assert_eq!(settings.destination_path, Some("/srv/backups".to_string()));
-    assert_eq!(settings.schedule.as_str(), "0 0 0 * * *");
+    assert_eq!(settings.schedule, "0 0 0 * * *");
     assert_eq!(settings.retention_count, 7);
     assert_eq!(settings.mode, BackupMode::Directory);
 }
@@ -213,15 +213,33 @@ async fn operator_can_update_backup_settings_to_archive_mode(#[case] backend: Ba
     );
 }
 
+// The `schedule` arg is typed `BackupSchedule` (ADR-0065): an invalid value is rejected
+// when the request struct deserializes (its `FromStr` runs) — before the fn body — so the
+// guard is the newtype, not an in-body validation string. Assert the request is refused
+// (non-OK), not a specific message, since the message is now the framework's, not ours.
 #[apply(backends_matrix)]
 #[case::empty_schedule(
-    "destination_path=%2Fsrv%2Fbackups&schedule=+++&retention_count=5&mode=directory",
-    "backup schedule must be a valid six-field cron expression"
+    "destination_path=%2Fsrv%2Fbackups&schedule=+++&retention_count=5&mode=directory"
 )]
 #[case::invalid_schedule(
-    "destination_path=%2Fsrv%2Fbackups&schedule=not-a-schedule&retention_count=5&mode=directory",
-    "backup schedule must be a valid six-field cron expression"
+    "destination_path=%2Fsrv%2Fbackups&schedule=not-a-schedule&retention_count=5&mode=directory"
 )]
+#[tokio::test]
+async fn operator_update_backup_settings_rejects_invalid_schedule(
+    backend: Backend,
+    #[case] form: &str,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = create_session_cookie(&state, "operator", true).await;
+
+    let (status, body) = post_form(state, "/api/update_backup_settings", form, Some(&cookie)).await;
+
+    assert_ne!(status, StatusCode::OK, "body: {body}");
+}
+
+// The remaining fields are still bare-`String` wire args parsed in the fn body (see #454
+// mode, #455 retention_count), so they keep their in-body 500 + message contract.
+#[apply(backends_matrix)]
 #[case::invalid_retention_count(
     "destination_path=%2Fsrv%2Fbackups&schedule=0+0+0+*+*+*&retention_count=bogus&mode=directory",
     "backup retention count"

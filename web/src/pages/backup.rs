@@ -1,7 +1,8 @@
 use crate::backup::{get_backup_settings, UpdateBackupSettings};
 use crate::error::WebError;
+use crate::forms::{Field, ValidatedInput};
 use crate::pages::Topbar;
-use common::backup::{BackupConfig, BackupMode};
+use common::backup::{BackupConfig, BackupMode, BackupSchedule};
 use leptos::prelude::*;
 
 #[component]
@@ -54,6 +55,9 @@ fn backup_settings_form(
         // cov:ignore-stop
     };
     // cov:ignore-start
+    // Seed the client-side validated schedule field from the persisted value (ADR-0065), so an
+    // invalid cron edit disables Save before the request is sent (Deref: &BackupSchedule → &str).
+    let schedule = Field::<BackupSchedule>::prefilled(&settings.schedule);
     view! {
         <ActionForm action=update_action attr:class="j-card j-backup-form">
             <div class="j-card-head">
@@ -75,20 +79,16 @@ fn backup_settings_form(
                         prop:value=settings.destination_path.unwrap_or_default()
                     />
                 </label>
-                <label class="j-backup-field j-backup-field-wide">
-                    <span class="j-edit-form-label">"Schedule"</span>
-                    <input
-                        class="j-backup-input"
-                        type="text"
-                        name="schedule"
-                        placeholder="0 0 0 * * *"
-                        prop:value=settings.schedule.as_str().to_owned()
-                        aria-describedby="backup-schedule-help"
-                    />
-                    <span id="backup-schedule-help" class="j-backup-help">
-                        "Use a six-field cron expression: second minute hour day-of-month month day-of-week. Example: 0 0 0 * * * runs daily at midnight."
-                    </span>
-                </label>
+                <ValidatedInput<
+                BackupSchedule,
+            >
+                    label="Schedule"
+                    name="schedule"
+                    field=schedule
+                    field_class="j-backup-field j-backup-field-wide"
+                    class="j-backup-input"
+                    help="Use a six-field cron expression: second minute hour day-of-month month day-of-week. Example: 0 0 0 * * * runs daily at midnight."
+                />
                 <label class="j-backup-field">
                     <span class="j-edit-form-label">"Retention Count"</span>
                     <input
@@ -108,7 +108,11 @@ fn backup_settings_form(
                 </label>
             </div>
             <div class="j-backup-form-actions">
-                <button type="submit" class="j-btn is-primary">
+                <button
+                    type="submit"
+                    class="j-btn is-primary"
+                    prop:disabled=move || !schedule.is_valid()
+                >
                     "Save Backup Settings"
                 </button>
             </div>

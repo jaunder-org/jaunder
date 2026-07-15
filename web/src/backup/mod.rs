@@ -1,5 +1,7 @@
 use crate::error::WebResult;
-use common::backup::BackupConfig;
+// `BackupSchedule` is unconditional: it's the typed `#[server]` argument, so the generated
+// request struct must carry it on both the client (serialize) and server (deserialize) sides.
+use common::backup::{BackupConfig, BackupSchedule};
 use leptos::prelude::*;
 
 #[cfg(feature = "server")]
@@ -11,7 +13,7 @@ use server::require_operator;
 use {
     crate::auth::require_auth,
     crate::error::{ErrorKind, InternalError},
-    common::backup::{BackupMode, BackupSchedule},
+    common::backup::BackupMode,
     std::sync::Arc,
     storage::{SiteConfigStorage, UserStorage},
 };
@@ -93,16 +95,16 @@ pub async fn get_backup_settings() -> WebResult<BackupConfig> {
 )]
 pub async fn update_backup_settings(
     destination_path: String,
-    schedule: String,
+    schedule: BackupSchedule,
     retention_count: String,
     mode: String,
 ) -> WebResult<()> {
     boundary!("update_backup_settings", {
         require_operator().await?;
 
-        let schedule = BackupSchedule::parse(schedule.trim()).ok_or_else(|| {
-            InternalError::validation("backup schedule must be a valid six-field cron expression")
-        })?;
+        // `schedule` is already validated: it arrives typed as `BackupSchedule`, so the arg
+        // `Deserialize` ran its `FromStr`. Legitimate clients pre-validate the form field
+        // (ADR-0065), so an invalid value only reaches here from a non-browser caller.
         let retention_count = retention_count.trim().parse::<usize>().map_err(|_| {
             InternalError::validation("backup retention count must be a non-negative integer")
         })?;

@@ -41,7 +41,7 @@ pub trait SiteConfigStorage: Send + Sync {
             .get(BACKUP_SCHEDULE_KEY)
             .await?
             .as_deref()
-            .and_then(BackupSchedule::parse)
+            .and_then(|s| s.parse::<BackupSchedule>().ok())
             .unwrap_or_default();
         let retention_count = self
             .get(BACKUP_RETENTION_COUNT_KEY)
@@ -144,8 +144,7 @@ pub trait SiteConfigStorage: Send + Sync {
             config.destination_path.as_deref().unwrap_or(""),
         )
         .await?;
-        self.set(BACKUP_SCHEDULE_KEY, config.schedule.as_str())
-            .await?;
+        self.set(BACKUP_SCHEDULE_KEY, &config.schedule).await?;
         self.set(
             BACKUP_RETENTION_COUNT_KEY,
             &config.retention_count.to_string(),
@@ -312,7 +311,7 @@ where
 #[cfg(test)]
 mod tests {
     use crate::test_support::{backends, Backend};
-    use common::backup::{BackupConfig, BackupMode, BackupSchedule};
+    use common::backup::{BackupConfig, BackupMode};
     use common::feed::FeedsConfig;
     use rstest::*;
     use rstest_reuse::*;
@@ -333,7 +332,7 @@ mod tests {
         let storage = &*env.state.site_config;
         let config = BackupConfig {
             destination_path: Some("/srv/backups".to_owned()),
-            schedule: BackupSchedule::parse("0 30 2 * * *").unwrap(),
+            schedule: "0 30 2 * * *".parse().unwrap(),
             retention_count: 14,
             mode: BackupMode::Archive,
         };

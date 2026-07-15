@@ -886,6 +886,11 @@
     color: var(--ink-soft);
     font-family: var(--font-meta);
 }
+.j-form-help {
+    color: var(--ink-soft);
+    font-size: 12.5px;
+    line-height: 1.4;
+}
 .j-form-input {
     width: 100%;
     min-height: 38px;
@@ -945,11 +950,6 @@
 }
 .j-backup-input:focus {
     border-color: var(--accent);
-}
-.j-backup-help {
-    color: var(--ink-soft);
-    font-size: 12.5px;
-    line-height: 1.4;
 }
 .j-backup-form-actions {
     padding: 14px 18px;
