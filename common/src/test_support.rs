@@ -8,6 +8,7 @@
 // self-flags if the scaffolding ever stops using `expect`.
 #![expect(clippy::expect_used)]
 
+use crate::audience::AudienceName;
 use crate::email::Email;
 
 /// Parse `addr` into a valid [`Email`] for tests — the single place a test email
@@ -20,4 +21,16 @@ use crate::email::Email;
 #[must_use]
 pub fn parse_email(addr: &str) -> Email {
     addr.parse().expect("valid test email address")
+}
+
+/// Parse `name` into a valid [`AudienceName`] for tests — the single place a test
+/// audience-name literal is parsed, so a malformed fixture fails loudly and the parse
+/// isn't re-spelled at every store-seeding call site across the workspace.
+///
+/// # Panics
+///
+/// Panics if `name` is empty or whitespace-only.
+#[must_use]
+pub fn parse_audience_name(name: &str) -> AudienceName {
+    name.parse().expect("valid test audience name")
 }

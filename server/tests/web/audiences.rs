@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
+use common::test_support::parse_audience_name;
 use common::username::Username;
 
 use rstest::*;
@@ -127,16 +128,16 @@ async fn duplicate_audience_name_is_user_error(#[case] backend: Backend) {
     );
 }
 
-// An empty / whitespace-only name is rejected by create_audience with a
-// user-facing validation error (not a 500-masked failure).
+// An empty / whitespace-only name is rejected at arg-decode (the typed
+// `AudienceName` wire arg), so no audience is created.
 #[apply(backends)]
 #[tokio::test]
-async fn create_audience_empty_name_is_validation_error(#[case] backend: Backend) {
+async fn create_audience_empty_name_is_rejected(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let author = make_user(&state, "author").await;
     let cookie = cookie_for(&state, author).await;
 
-    let (status, body) = post_form(
+    let (status, _body) = post_form(
         Arc::clone(&state),
         "/api/create_audience",
         "name=%20%20",
@@ -144,10 +145,6 @@ async fn create_audience_empty_name_is_validation_error(#[case] backend: Backend
     )
     .await;
     assert_ne!(status, StatusCode::OK, "empty name must be rejected");
-    assert!(
-        body.contains("audience name must not be empty"),
-        "empty-name error should be user-facing: {body}"
-    );
     assert!(
         state
             .audiences
@@ -159,11 +156,11 @@ async fn create_audience_empty_name_is_validation_error(#[case] backend: Backend
     );
 }
 
-// An empty / whitespace-only name is rejected by rename_audience with a
-// user-facing validation error.
+// An empty / whitespace-only name is rejected at arg-decode (the typed
+// `AudienceName` wire arg), so the name is unchanged.
 #[apply(backends)]
 #[tokio::test]
-async fn rename_audience_empty_name_is_validation_error(#[case] backend: Backend) {
+async fn rename_audience_empty_name_is_rejected(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let author = make_user(&state, "author").await;
     let cookie = cookie_for(&state, author).await;
@@ -177,7 +174,7 @@ async fn rename_audience_empty_name_is_validation_error(#[case] backend: Backend
     .await;
     let aud_id = parse_id(&body);
 
-    let (status, body) = post_form(
+    let (status, _body) = post_form(
         Arc::clone(&state),
         "/api/rename_audience",
         &format!("audience_id={aud_id}&name=%20%20"),
@@ -185,10 +182,6 @@ async fn rename_audience_empty_name_is_validation_error(#[case] backend: Backend
     )
     .await;
     assert_ne!(status, StatusCode::OK, "empty rename must be rejected");
-    assert!(
-        body.contains("audience name must not be empty"),
-        "empty-name error should be user-facing: {body}"
-    );
     // Original name is unchanged.
     let audiences = state.audiences.list_audiences(author).await.unwrap();
     assert_eq!(audiences.len(), 1);
@@ -212,7 +205,7 @@ async fn list_audience_members_returns_members(#[case] backend: Backend) {
 
     let aud_id = state
         .audiences
-        .create_audience(author, "Friends")
+        .create_audience(author, &parse_audience_name("Friends"))
         .await
         .unwrap();
     state
@@ -348,7 +341,7 @@ async fn cross_author_audience_id_is_scoped_away(#[case] backend: Backend) {
         .unwrap();
     let alice_aud = state
         .audiences
-        .create_audience(alice, "Secret")
+        .create_audience(alice, &parse_audience_name("Secret"))
         .await
         .unwrap();
     state
@@ -477,7 +470,7 @@ async fn cross_author_add_member_is_rejected(#[case] backend: Backend) {
         .unwrap();
     let alice_aud = state
         .audiences
-        .create_audience(alice, "Secret")
+        .create_audience(alice, &parse_audience_name("Secret"))
         .await
         .unwrap();
     let bob_cookie = cookie_for(&state, bob).await;
@@ -520,7 +513,7 @@ async fn cross_author_rename_and_delete_are_scoped(#[case] backend: Backend) {
     let bob = make_user(&state, "bob").await;
     let alice_aud = state
         .audiences
-        .create_audience(alice, "Secret")
+        .create_audience(alice, &parse_audience_name("Secret"))
         .await
         .unwrap();
     let bob_cookie = cookie_for(&state, bob).await;

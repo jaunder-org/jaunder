@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use common::password::Password;
 use common::tag::TagLabel;
+use common::test_support::parse_audience_name;
 use common::username::Username;
 use common::visibility::{AudienceTarget, ViewerIdentity};
 use jaunder::cli::StorageArgs;
@@ -112,7 +113,7 @@ async fn seed_named_audience_post(
         .expect("subscribe viewer");
     let audience = state
         .audiences
-        .create_audience(author, "friends")
+        .create_audience(author, &parse_audience_name("friends"))
         .await
         .expect("create audience");
     state
