@@ -2,7 +2,7 @@
 //!
 //! All of jaunder's opaque tokens — invite codes, the session `RawToken`, the
 //! password-reset token — are base64url-no-pad strings from the same generator
-//! (`storage::auth::generate_token`). Their shape validation is therefore one
+//! (`host::token::generate`). Their shape validation is therefore one
 //! token-general rule, kept here so every token newtype's `FromStr` delegates to a
 //! single source of truth rather than re-deriving it.
 

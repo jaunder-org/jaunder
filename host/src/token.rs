@@ -82,8 +82,9 @@ mod tests {
 
     #[test]
     fn hash_matches_legacy_vector() {
-        // Golden vector: `storage::auth::hash_token("dGVzdC10b2tlbg")` before this
-        // refactor. Pins byte-identical hashing so existing sessions stay valid.
+        // Golden vector: the legacy SHA-256-over-base64url-decoded-bytes hashing
+        // (the former `storage::auth::hash_token`) applied to "dGVzdC10b2tlbg".
+        // Pins byte-identical hashing so existing sessions stay valid.
         let raw = RawToken::try_from("dGVzdC10b2tlbg".to_string()).unwrap();
         let hashed = hash(&raw).unwrap();
         assert_eq!(

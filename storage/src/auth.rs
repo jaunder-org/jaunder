@@ -1,7 +1,5 @@
 use std::{fmt, str::FromStr};
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use rand::RngCore;
 use thiserror::Error;
 
 use crate::SiteConfigStorage;
@@ -66,37 +64,6 @@ pub async fn load_registration_policy(store: &dyn SiteConfigStorage) -> Registra
         .flatten()
         .and_then(|v| v.parse().ok())
         .unwrap_or(RegistrationPolicy::Closed)
-}
-
-// ---------------------------------------------------------------------------
-// Token generation / hashing
-// ---------------------------------------------------------------------------
-
-/// Generates an opaque session token: 32 cryptographically random bytes encoded
-/// as base64url without padding (43 characters).
-#[must_use]
-pub fn generate_token() -> String {
-    let mut bytes = [0u8; 32];
-    rand::rng().fill_bytes(&mut bytes);
-    URL_SAFE_NO_PAD.encode(bytes)
-}
-
-/// Hashes a raw token using SHA-256 and returns the base64url-encoded digest.
-///
-/// This is used to store hashes of opaque tokens (sessions, invites) so that
-/// the raw token is never persisted.
-///
-/// # Errors
-///
-/// Returns an error if the `raw_token` is not valid base64url.
-pub fn hash_token(raw_token: &str) -> Result<String, String> {
-    use sha2::{Digest, Sha256};
-
-    let bytes = URL_SAFE_NO_PAD
-        .decode(raw_token)
-        .map_err(|e| e.to_string())?;
-    let hash = Sha256::digest(&bytes);
-    Ok(URL_SAFE_NO_PAD.encode(hash))
 }
 
 #[cfg(test)]
@@ -204,29 +171,5 @@ mod tests {
             load_registration_policy(store).await,
             RegistrationPolicy::Closed
         );
-    }
-
-    // --- generate_token / hash_token ---
-
-    #[test]
-    fn generate_token_returns_non_empty_string() {
-        let t1 = generate_token();
-        let t2 = generate_token();
-        assert!(!t1.is_empty());
-        assert!(!t2.is_empty());
-        assert_ne!(t1, t2);
-    }
-
-    #[test]
-    fn hash_token_roundtrips() {
-        let raw = generate_token();
-        let hash = hash_token(&raw).unwrap();
-        assert!(!hash.is_empty());
-        assert_ne!(raw, hash);
-    }
-
-    #[test]
-    fn hash_token_rejects_invalid_base64() {
-        assert!(hash_token("not base64!").is_err());
     }
 }
