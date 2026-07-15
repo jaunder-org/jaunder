@@ -40,7 +40,7 @@ pub fn timeline_post_summary(
 fn post_tags_to_summaries(tags: Vec<PostTag>) -> Vec<TagSummary> {
     tags.into_iter()
         .map(|t| TagSummary {
-            slug: t.tag_slug.to_string(),
+            slug: t.tag_slug,
             display: t.tag_display,
         })
         .collect()

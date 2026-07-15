@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use common::atompub::{entry_from_xml, entry_to_xml, render_feed, FeedMeta};
+use common::tag::TagLabel;
 use common::username::Username;
 use common::visibility::ViewerIdentity;
 use storage::{
@@ -78,7 +79,7 @@ pub(crate) fn etag_for(post: &PostRecord) -> String {
         body: &'a str,
         format: String,
         summary: Option<&'a str>,
-        tags: Vec<&'a str>,
+        tags: Vec<&'a TagLabel>,
         draft: bool,
     }
     let content = EtagContent {
@@ -86,7 +87,7 @@ pub(crate) fn etag_for(post: &PostRecord) -> String {
         body: &post.body,
         format: post.format.to_string(),
         summary: post.summary.as_deref(),
-        tags: post.tags.iter().map(|t| t.tag_display.as_str()).collect(),
+        tags: post.tags.iter().map(|t| &t.tag_display).collect(),
         draft: post.published_at.is_none(),
     };
     let bytes = serde_json::to_vec(&content).unwrap_or_else(|_| Vec::new());
@@ -277,18 +278,18 @@ pub async fn member_get(
 /// Reconciles the post's tags with a desired set of category terms.
 ///
 /// Tags missing from `desired` are removed; desired categories not yet tagged
-/// are added. Invalid tag names (in the sense that they fail to parse as `Tag`)
-/// are skipped.
+/// are added. Each `desired` label is already valid (invalid `<category>` terms
+/// were skipped upstream in `entry_to_post_fields`).
 async fn apply_categories(
     posts: &dyn storage::PostStorage,
     post_id: i64,
-    desired: &[String],
+    desired: &[TagLabel],
 ) -> Result<(), HandlerError> {
     let existing = posts.get_tags_for_post(post_id).await?;
     let diff = storage::post_tag_diff(&existing, desired);
 
-    for display in diff.to_add {
-        posts.tag_post(post_id, display).await?;
+    for label in diff.to_add {
+        posts.tag_post(post_id, label).await?;
     }
     for slug in diff.to_remove {
         posts.untag_post(post_id, slug).await?;
@@ -556,7 +557,7 @@ mod etag_tests {
             post_id,
             tag_id,
             tag_slug: slug.parse().expect("parse tag slug"),
-            tag_display: display.to_string(),
+            tag_display: display.parse().expect("parse tag label"),
         }
     }
 

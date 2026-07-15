@@ -9,6 +9,7 @@ use axum::{
 use chrono::{Datelike, Utc};
 use common::password::Password;
 use common::slug::Slug;
+use common::tag::TagLabel;
 use common::username::Username;
 use common::visibility::AudienceTarget;
 use storage::{CreatePostInput, PostFormat};
@@ -61,7 +62,11 @@ async fn seed_tagged_post(state: &Arc<storage::AppState>) {
         })
         .await
         .unwrap();
-    state.posts.tag_post(post_id, "rust").await.unwrap();
+    state
+        .posts
+        .tag_post(post_id, &"rust".parse::<TagLabel>().unwrap())
+        .await
+        .unwrap();
 }
 
 /// Seed a published post for `alice` and return the permalink components.

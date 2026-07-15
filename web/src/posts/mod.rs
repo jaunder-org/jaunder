@@ -19,7 +19,7 @@ use server::{not_found_error, private_post_not_found_error};
 #[cfg(feature = "server")]
 pub use server::post_response;
 
-use common::{slug::Slug, username::Username};
+use common::{slug::Slug, tag::TagLabel, username::Username};
 
 use crate::error::WebResult;
 use crate::tags::TagSummary;
@@ -230,7 +230,7 @@ pub async fn create_post(
     slug_override: Option<Slug>,
     publish: bool,
     publish_at: Option<String>,
-    tags: Option<Vec<String>>,
+    tags: Option<Vec<TagLabel>>,
     summary: Option<String>,
     audience: Option<AudienceSelection>,
 ) -> WebResult<CreatePostResult> {
@@ -238,6 +238,9 @@ pub async fn create_post(
         let auth = require_auth().await?;
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
+        // The wire delivers `Vec<TagLabel>` directly: each tag is validated at
+        // arg-decode (ADR-0065) and a `TagLabel` is never empty, so the body only
+        // dedups and enforces the per-post cap.
         let validated_tags = common::tag::parse_and_validate_tags(tags.unwrap_or_default())?;
 
         let format = format.parse::<PostFormat>()?;
@@ -287,8 +290,8 @@ pub async fn create_post(
             summary: record.summary,
         };
 
-        for display in &validated_tags {
-            posts.tag_post(created.post_id, display).await?;
+        for label in &validated_tags {
+            posts.tag_post(created.post_id, label).await?;
         }
 
         let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
@@ -382,7 +385,7 @@ pub async fn update_post(
     // Optional RFC3339 UTC instant from the editor's datetime control. See
     // `create_post` for why this crosses the boundary as a `String`.
     publish_at: Option<String>,
-    tags: Option<Vec<String>>,
+    tags: Option<Vec<TagLabel>>,
     summary: Option<String>,
     audience: Option<AudienceSelection>,
 ) -> WebResult<UpdatePostResult> {
@@ -400,7 +403,9 @@ pub async fn update_post(
             .unwrap_or_default();
 
         // Validate tags up-front so a malformed input rejects before any
-        // post mutation lands.
+        // post mutation lands. The wire delivers `Vec<TagLabel>` (validated at
+        // arg-decode per ADR-0065); the body only dedups and caps. `None` leaves
+        // the existing tags untouched.
         let new_tags = tags.map(common::tag::parse_and_validate_tags).transpose()?;
 
         let format = format.parse::<PostFormat>()?;

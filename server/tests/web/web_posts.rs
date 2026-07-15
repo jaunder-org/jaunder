@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use axum::http::StatusCode;
 use chrono::Datelike;
+use common::tag::TagLabel;
 use storage::PostFormat;
 use web::posts::{
     AudienceSelection, CreatePostResult, DraftSummary, PublishPostResult, TimelinePage,
@@ -2676,8 +2677,16 @@ async fn list_user_posts_carries_tags_per_post(#[case] backend: Backend) {
     // Apply two tags via the storage layer (the create_post tags param lands
     // in tags.5; here we just verify the timeline surface threads them
     // through).
-    state.posts.tag_post(created.post_id, "Rust").await.unwrap();
-    state.posts.tag_post(created.post_id, "web").await.unwrap();
+    state
+        .posts
+        .tag_post(created.post_id, &"Rust".parse::<TagLabel>().unwrap())
+        .await
+        .unwrap();
+    state
+        .posts
+        .tag_post(created.post_id, &"web".parse::<TagLabel>().unwrap())
+        .await
+        .unwrap();
 
     let (status, body) =
         list_user_posts_form(Arc::clone(&state), "author", None, None, 50, Some(&cookie)).await;
@@ -2685,7 +2694,7 @@ async fn list_user_posts_carries_tags_per_post(#[case] backend: Backend) {
     let page: TimelinePage = serde_json::from_str(&body).unwrap();
     assert_eq!(page.posts.len(), 1);
     let post = &page.posts[0];
-    let slugs: Vec<&str> = post.tags.iter().map(|t| t.slug.as_str()).collect();
+    let slugs: Vec<&str> = post.tags.iter().map(|t| t.slug.as_ref()).collect();
     assert_eq!(slugs, vec!["rust", "web"]);
     // Display casing is preserved (author-provided).
     assert!(post.tags.iter().any(|t| t.display == "Rust"));
@@ -2730,7 +2739,7 @@ async fn get_post_carries_tags(#[case] backend: Backend) {
 
     state
         .posts
-        .tag_post(created.post_id, "Performance")
+        .tag_post(created.post_id, &"Performance".parse::<TagLabel>().unwrap())
         .await
         .unwrap();
 
@@ -2813,7 +2822,7 @@ async fn create_post_applies_tags_from_param(#[case] backend: Backend) {
         .get_tags_for_post(created.post_id)
         .await
         .unwrap();
-    let slugs: Vec<&str> = stored_tags.iter().map(|t| t.tag_slug.as_str()).collect();
+    let slugs: Vec<&str> = stored_tags.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert_eq!(slugs, vec!["rust", "web-dev"]);
     assert!(stored_tags.iter().any(|t| t.tag_display == "Rust"));
 }
@@ -2832,7 +2841,10 @@ async fn create_post_rejects_invalid_tag_token(#[case] backend: Backend) {
     });
     let (status, body) = post_json(state, "/api/create_post", payload, Some(&cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("invalid tag"), "body: {body}");
+    // The invalid token is now rejected at the wire→TagLabel parse, surfacing
+    // InvalidTagLabel's own message (the single validation source) rather than the
+    // retired TagValidationError::Invalid.
+    assert!(body.contains("tag must be non-empty"), "body: {body}");
 }
 
 #[apply(backends)]
@@ -2899,7 +2911,7 @@ async fn update_post_applies_tag_set_diff(#[case] backend: Backend) {
         .get_tags_for_post(created.post_id)
         .await
         .unwrap();
-    let slugs: Vec<&str> = stored.iter().map(|t| t.tag_slug.as_str()).collect();
+    let slugs: Vec<&str> = stored.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert_eq!(slugs, vec!["new-tag", "rust"]);
 }
 
@@ -3114,7 +3126,7 @@ async fn update_post_with_tags_unset_leaves_existing_tags_alone(#[case] backend:
         .get_tags_for_post(created.post_id)
         .await
         .unwrap();
-    let slugs: Vec<&str> = stored.iter().map(|t| t.tag_slug.as_str()).collect();
+    let slugs: Vec<&str> = stored.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert_eq!(slugs, vec!["keep"]);
 }
 

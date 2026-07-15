@@ -6,7 +6,7 @@ use sqlx::{Database, Pool};
 use thiserror::Error;
 
 use common::slug::Slug;
-use common::tag::Tag;
+use common::tag::{Tag, TagLabel};
 use common::username::Username;
 use common::visibility::{AudienceTarget, TargetKind, ViewerIdentity};
 use host::error::{InternalError, InternalResult};
@@ -245,7 +245,7 @@ pub struct PostTag {
     pub tag_id: i64,
     pub tag_slug: Tag,
     /// The original case-sensitive display name of the tag.
-    pub tag_display: String,
+    pub tag_display: TagLabel,
 }
 
 /// A post that crossed into "live" within a time window, carrying exactly the
@@ -263,44 +263,37 @@ pub struct GoLivePost {
 /// Borrows from both inputs; callers perform the actual `tag_post`/`untag_post`
 /// writes with their own error mapping.
 pub struct PostTagDiff<'a> {
-    /// Display tokens to add (their slug is not already present on the post).
-    pub to_add: Vec<&'a str>,
+    /// Labels to add (their slug is not already present on the post).
+    pub to_add: Vec<&'a TagLabel>,
     /// Existing tags to remove (their slug is not in the desired set).
     pub to_remove: Vec<&'a Tag>,
 }
 
-/// Diffs a post's `existing` tags against a `desired` set of display tokens.
+/// Diffs a post's `existing` tags against a `desired` set of [`TagLabel`]s.
 ///
-/// Tagging is keyed on slug, so a desired token is "to add" only when no
+/// Tagging is keyed on slug, so a desired label is "to add" only when no
 /// existing tag shares its slug, and an existing tag is "to remove" only when
-/// no desired token maps to its slug. Tokens that fail to parse as [`Tag`] are
-/// ignored. Re-applying an existing tag with different display casing is a
-/// no-op (the existing row's casing is preserved by storage).
+/// no desired label maps to its slug. Each `desired` label is already valid (its
+/// `FromStr` ran at the boundary), so nothing is skipped here. Re-applying an
+/// existing tag with different display casing is a no-op (the existing row's
+/// casing is preserved by storage).
 ///
 /// This is the pure core shared by the `web` and `server`/`AtomPub` front-ends;
 /// each applies the result with its own error type.
 #[must_use]
-pub fn post_tag_diff<'a>(existing: &'a [PostTag], desired: &'a [String]) -> PostTagDiff<'a> {
+pub fn post_tag_diff<'a>(existing: &'a [PostTag], desired: &'a [TagLabel]) -> PostTagDiff<'a> {
     use std::collections::HashSet;
-    use std::str::FromStr;
 
-    let existing_slugs: HashSet<String> = existing.iter().map(|t| t.tag_slug.to_string()).collect();
-    let desired_slugs: HashSet<String> = desired
-        .iter()
-        .filter_map(|d| Tag::from_str(d).ok())
-        .map(|t| t.to_string())
-        .collect();
+    let existing_slugs: HashSet<Tag> = existing.iter().map(|t| t.tag_slug.clone()).collect();
+    let desired_slugs: HashSet<Tag> = desired.iter().map(TagLabel::slug).collect();
 
     let to_add = desired
         .iter()
-        .filter(|display| {
-            Tag::from_str(display).is_ok_and(|slug| !existing_slugs.contains(&slug.to_string()))
-        })
-        .map(String::as_str)
+        .filter(|label| !existing_slugs.contains(&label.slug()))
         .collect();
     let to_remove = existing
         .iter()
-        .filter(|tag| !desired_slugs.contains(&tag.tag_slug.to_string()))
+        .filter(|tag| !desired_slugs.contains(&tag.tag_slug))
         .map(|tag| &tag.tag_slug)
         .collect();
 
@@ -407,13 +400,13 @@ pub fn parse_post_cursor(
 pub async fn apply_post_tag_diff(
     posts: &dyn PostStorage,
     post_id: i64,
-    desired: &[String],
+    desired: &[TagLabel],
 ) -> InternalResult<()> {
     let existing = posts.get_tags_for_post(post_id).await?;
     let diff = post_tag_diff(&existing, desired);
 
-    for display in diff.to_add {
-        posts.tag_post(post_id, display).await?;
+    for label in diff.to_add {
+        posts.tag_post(post_id, label).await?;
     }
     for slug in diff.to_remove {
         posts.untag_post(post_id, slug).await?;
@@ -652,7 +645,7 @@ pub trait PostStorage: Send + Sync {
     ) -> sqlx::Result<Vec<PostRecord>>;
 
     /// Associates a post with a tag. If the tag doesn't exist, it is created.
-    async fn tag_post(&self, post_id: i64, tag_display: &str) -> Result<(), TaggingError>;
+    async fn tag_post(&self, post_id: i64, tag: &TagLabel) -> Result<(), TaggingError>;
 
     /// Removes a tag association from a post.
     async fn untag_post(&self, post_id: i64, tag_slug: &Tag) -> Result<(), TaggingError>;
@@ -784,13 +777,9 @@ pub trait PostDialect: Backend {
         input: &UpdatePostInput,
     ) -> Result<PostRecord, UpdatePostError>;
 
-    /// Associate `post_id` with the tag parsed from `tag_display`, creating the
-    /// tag if it does not yet exist.
-    async fn tag_post(
-        pool: &Pool<Self>,
-        post_id: i64,
-        tag_display: &str,
-    ) -> Result<(), TaggingError>;
+    /// Associate `post_id` with `tag` (its slug is the canonical key, its label
+    /// the stored casing), creating the tag if it does not yet exist.
+    async fn tag_post(pool: &Pool<Self>, post_id: i64, tag: &TagLabel) -> Result<(), TaggingError>;
 
     /// Remove a tag association; returns [`TaggingError::TagNotFound`] when no
     /// row was deleted.
@@ -1292,8 +1281,8 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn tag_post(&self, post_id: i64, tag_display: &str) -> Result<(), TaggingError> {
-        DB::tag_post(&self.pool, post_id, tag_display).await
+    async fn tag_post(&self, post_id: i64, tag: &TagLabel) -> Result<(), TaggingError> {
+        DB::tag_post(&self.pool, post_id, tag).await
     }
 
     #[tracing::instrument(
@@ -1323,10 +1312,13 @@ where
         .await?;
 
         rows.into_iter()
-            .map(|(post_id, tag_id, tag_slug_str, tag_display)| {
+            .map(|(post_id, tag_id, tag_slug_str, tag_display_str)| {
                 let tag_slug: Tag = tag_slug_str
                     .parse()
                     .map_err(|_| sqlx::Error::Decode("invalid tag format".into()))?;
+                let tag_display: TagLabel = tag_display_str
+                    .parse()
+                    .map_err(|_| sqlx::Error::Decode("invalid tag label".into()))?;
                 Ok(PostTag {
                     post_id,
                     tag_id,
@@ -1352,7 +1344,7 @@ where
     ) -> Result<Vec<PostRecord>, ListByTagError> {
         let tag_exists: bool =
             sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = $1")
-                .bind(tag_slug.as_str())
+                .bind(tag_slug.as_ref())
                 .fetch_one(&self.pool)
                 .await?;
 
@@ -1384,7 +1376,7 @@ where
                  LIMIT ${limit_idx}"
             );
             let query = sqlx::query_as::<_, PostRow>(&sql)
-                .bind(tag_slug.as_str())
+                .bind(tag_slug.as_ref())
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
                 .bind(cursor.post_id)
@@ -1415,7 +1407,7 @@ where
                  LIMIT ${limit_idx}"
             );
             let query = sqlx::query_as::<_, PostRow>(&sql)
-                .bind(tag_slug.as_str())
+                .bind(tag_slug.as_ref())
                 .bind(now);
             binds
                 .bind_onto(query)
@@ -1446,7 +1438,7 @@ where
     ) -> Result<Vec<PostRecord>, ListByTagError> {
         let tag_exists: bool =
             sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = $1")
-                .bind(tag_slug.as_str())
+                .bind(tag_slug.as_ref())
                 .fetch_one(&self.pool)
                 .await?;
 
@@ -1480,7 +1472,7 @@ where
             );
             let query = sqlx::query_as::<_, PostRow>(&sql)
                 .bind(user_id)
-                .bind(tag_slug.as_str())
+                .bind(tag_slug.as_ref())
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
                 .bind(cursor.post_id)
@@ -1513,7 +1505,7 @@ where
             );
             let query = sqlx::query_as::<_, PostRow>(&sql)
                 .bind(user_id)
-                .bind(tag_slug.as_str())
+                .bind(tag_slug.as_ref())
                 .bind(now);
             binds
                 .bind_onto(query)
@@ -1990,7 +1982,7 @@ where
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRow>(&sql)
                 .bind(now)
-                .bind(tag.as_str())
+                .bind(tag.as_ref())
                 .bind(min_items)
                 .bind(cutoff);
             binds.bind_onto(query).fetch_all(pool).await
@@ -2003,7 +1995,7 @@ where
             let query = sqlx::query_as::<_, PostRow>(&sql)
                 .bind(now)
                 .bind(username.as_ref())
-                .bind(tag.as_str())
+                .bind(tag.as_ref())
                 .bind(min_items)
                 .bind(cutoff);
             binds.bind_onto(query).fetch_all(pool).await
@@ -2166,7 +2158,7 @@ where
                  ORDER BY p.published_at DESC LIMIT 1",
             )
             .bind(now)
-            .bind(tag.as_str())
+            .bind(tag.as_ref())
             .fetch_optional(pool)
             .await?
         }
@@ -2182,7 +2174,7 @@ where
             )
             .bind(now)
             .bind(username.as_ref())
-            .bind(tag.as_str())
+            .bind(tag.as_ref())
             .fetch_optional(pool)
             .await?
         }
@@ -2230,27 +2222,26 @@ mod tests {
             post_id: 1,
             tag_id: 0,
             tag_slug: slug.parse::<Tag>().expect("valid tag slug"),
-            tag_display: display.to_string(),
+            tag_display: display.parse::<TagLabel>().expect("valid tag label"),
         }
     }
 
     #[test]
-    fn post_tag_diff_adds_removes_keeps_and_skips_invalid() {
+    fn post_tag_diff_adds_removes_keeps() {
         let existing = vec![post_tag("rust", "Rust"), post_tag("leptos", "Leptos")];
-        let desired = vec![
+        let desired: Vec<TagLabel> = vec![
             // Same slug as an existing tag (different casing): kept, not re-added.
-            "Rust".to_string(),
+            "Rust".parse().unwrap(),
             // New slug: added.
-            "wasm".to_string(),
-            // Fails to parse as a Tag (underscore): ignored entirely.
-            "has_underscore".to_string(),
+            "wasm".parse().unwrap(),
         ];
 
         let diff = post_tag_diff(&existing, &desired);
 
-        assert_eq!(diff.to_add, vec!["wasm"]);
-        let removed: Vec<&str> = diff.to_remove.iter().map(|t| t.as_str()).collect();
-        assert_eq!(removed, vec!["leptos"]);
+        let added: Vec<String> = diff.to_add.iter().map(ToString::to_string).collect();
+        assert_eq!(added, vec!["wasm".to_string()]);
+        let removed: Vec<String> = diff.to_remove.iter().map(ToString::to_string).collect();
+        assert_eq!(removed, vec!["leptos".to_string()]);
     }
 
     #[test]
@@ -2465,7 +2456,11 @@ mod tests {
             .await
             .unwrap();
 
-        let result = env.state.posts.tag_post(post_id, "rust").await;
+        let result = env
+            .state
+            .posts
+            .tag_post(post_id, &"rust".parse().unwrap())
+            .await;
         assert!(matches!(result, Err(TaggingError::Internal(_))));
     }
 
@@ -2721,9 +2716,13 @@ mod tests {
             .unwrap();
 
         // Adding two tags then reading back yields both slugs.
-        apply_post_tag_diff(posts, post_id, &["rust".to_string(), "web".to_string()])
-            .await
-            .unwrap();
+        apply_post_tag_diff(
+            posts,
+            post_id,
+            &["rust".parse().unwrap(), "web".parse().unwrap()],
+        )
+        .await
+        .unwrap();
         let mut slugs: Vec<String> = posts
             .get_tags_for_post(post_id)
             .await
@@ -2735,7 +2734,7 @@ mod tests {
         assert_eq!(slugs, vec!["rust".to_string(), "web".to_string()]);
 
         // Narrowing the desired set removes the dropped tag.
-        apply_post_tag_diff(posts, post_id, &["rust".to_string()])
+        apply_post_tag_diff(posts, post_id, &["rust".parse().unwrap()])
             .await
             .unwrap();
         let remaining: Vec<String> = posts
@@ -2746,6 +2745,41 @@ mod tests {
             .map(|t| t.tag_slug.to_string())
             .collect();
         assert_eq!(remaining, vec!["rust".to_string()]);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn tag_post_round_trips_slug_and_label(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let posts = &*env.state.posts;
+        let post_id = posts
+            .create_post(&CreatePostInput {
+                user_id,
+                title: Some("Post".to_string()),
+                slug: "post".parse().unwrap(),
+                body: "body".to_string(),
+                format: PostFormat::Markdown,
+                rendered_html: "<p>body</p>".to_string(),
+                published_at: None,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
+            })
+            .await
+            .unwrap();
+
+        // Tagging with a case-preserving label stores the canonical slug and the
+        // author's casing; both read back intact on either backend.
+        posts
+            .tag_post(post_id, &"Rust".parse::<TagLabel>().unwrap())
+            .await
+            .unwrap();
+
+        let tags = posts.get_tags_for_post(post_id).await.unwrap();
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].tag_slug, "rust"); // canonical slug (lowercased)
+        assert_eq!(tags[0].tag_display, "Rust"); // author casing preserved
     }
 
     #[apply(backends)]

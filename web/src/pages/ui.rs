@@ -11,6 +11,7 @@ use crate::posts::{
 };
 use crate::tags::TagSummary;
 use common::slug::Slug;
+use common::tag::TagLabel;
 use common::username::Username;
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
@@ -52,11 +53,12 @@ pub fn TagList(tags: Vec<TagSummary>, context: TagContext) -> impl IntoView {
                 TagContext::SiteWide => None,
             };
             let chip_href = format!("/tags/{slug}");
+            // TagLabel isn't IntoRender/IntoAttributeValue — stringify for the view.
             view! {
                 <span class="j-tag-cell">
                     <a class="j-tag" href=chip_href>
                         "#"
-                        {tag.display}
+                        {tag.display.to_string()}
                     </a>
                     {here}
                 </span>
@@ -1221,28 +1223,32 @@ pub fn TagInput(
                     }
                 }
                 // Commit the typed text; Tab passes through if the field is empty.
-                let text = crate::tags::normalize_tag_token(&input_text.get());
-                if text.is_empty() {
+                if input_text.get().trim().is_empty() {
                     return;
                 }
                 ev.prevent_default();
-                if crate::tags::is_valid_tag_slug(&text) {
-                    let slug = text.clone();
-                    tags.update(|t| {
-                        if !t.iter().any(|x| x.slug == slug) {
-                            t.push(TagSummary {
-                                slug: slug.clone(),
-                                display: slug,
-                            });
-                        }
-                    });
-                    input_text.set(String::new());
-                    error.set(None);
-                    suggestions.set(Vec::new());
-                    suggestions_open.set(false);
-                    selected_idx.set(None);
-                } else {
-                    error.set(Some(format!("Invalid tag \"{text}\"")));
+                // Validate the raw input via `TagLabel::from_str` (the single
+                // validity source, shared with the server) — trims and validates
+                // without lowercasing, so the author's casing is preserved
+                // (Decision 4). Dedup is on the canonical slug.
+                match input_text.get().parse::<TagLabel>() {
+                    Ok(label) => {
+                        let slug = label.slug();
+                        tags.update(|t| {
+                            if !t.iter().any(|x| x.slug == slug) {
+                                t.push(TagSummary {
+                                    slug,
+                                    display: label,
+                                });
+                            }
+                        });
+                        input_text.set(String::new());
+                        error.set(None);
+                        suggestions.set(Vec::new());
+                        suggestions_open.set(false);
+                        selected_idx.set(None);
+                    }
+                    Err(e) => error.set(Some(e.to_string())),
                 }
             }
             "Backspace" if input_text.get().is_empty() => {
@@ -1281,7 +1287,7 @@ pub fn TagInput(
                     .into_iter()
                     .map(|tag| {
                         let slug = tag.slug.clone();
-                        let display = tag.display.clone();
+                        let display = tag.display.to_string();
                         view! {
                             <span class="j-tag-chip">
                                 <input type="hidden" name=name value=display.clone() />
@@ -1348,7 +1354,7 @@ pub fn TagInput(
                                 }
                             >
                                 "#"
-                                {tag.display}
+                                {tag.display.to_string()}
                             </li>
                         }
                     })

@@ -7,6 +7,7 @@ use axum::{
 use chrono::{Timelike, Utc};
 use common::password::Password;
 use common::slug::Slug;
+use common::tag::TagLabel;
 use common::username::Username;
 use tower::ServiceExt;
 
@@ -134,7 +135,7 @@ async fn handler_serves_site_tag_feed_with_200(#[case] backend: Backend) {
         .expect("create post");
     state
         .posts
-        .tag_post(post_id, "rust")
+        .tag_post(post_id, &"rust".parse::<TagLabel>().unwrap())
         .await
         .expect("tag post");
 

@@ -28,14 +28,14 @@ pub(super) fn write_text_element(writer: &mut Writer<Vec<u8>>, name: &str, text:
 
 /// Writes a self-closing `<name k="v" .../>` element. Attribute values are
 /// XML-escaped by `quick-xml`.
-pub(super) fn write_empty_element(
+pub(super) fn write_empty_element<V: AsRef<str>>(
     writer: &mut Writer<Vec<u8>>,
     name: &str,
-    attrs: &[(&str, &str)],
+    attrs: &[(&str, V)],
 ) {
     let mut start = BytesStart::new(name);
-    for &(key, value) in attrs {
-        start.push_attribute((key, value));
+    for (key, value) in attrs {
+        start.push_attribute((*key, value.as_ref()));
     }
     let _ = writer.write_event(Event::Empty(start));
 }

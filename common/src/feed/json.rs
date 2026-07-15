@@ -73,7 +73,7 @@ mod tests {
             content_html: "<p>hi</p>".into(),
             published_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
             updated_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
-            tags: tags.into_iter().map(str::to_string).collect(),
+            tags: tags.into_iter().map(|t| t.parse().unwrap()).collect(),
         }
     }
 

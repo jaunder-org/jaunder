@@ -4,7 +4,7 @@ use sqlx::{Pool, Postgres};
 
 use crate::helpers::{post_record_from_row, PostRow};
 use crate::{PostDialect, PostRecord, PostStore, TaggingError, UpdatePostError, UpdatePostInput};
-use common::tag::Tag;
+use common::tag::{Tag, TagLabel};
 
 /// Postgres-backed post storage.
 pub type PostgresPostStorage = PostStore<Postgres>;
@@ -111,11 +111,10 @@ impl PostDialect for Postgres {
     async fn tag_post(
         pool: &Pool<Postgres>,
         post_id: i64,
-        tag_display: &str,
+        tag: &TagLabel,
     ) -> Result<(), TaggingError> {
-        let tag: Tag = tag_display.parse().map_err(|_| {
-            TaggingError::Internal(sqlx::Error::Decode("invalid tag format".into()))
-        })?;
+        // The slug is the canonical key; the label carries the author's casing.
+        let slug = tag.slug();
 
         let mut tx = pool.begin().await?;
 
@@ -131,13 +130,13 @@ impl PostDialect for Postgres {
         }
 
         sqlx::query("INSERT INTO tags (tag_slug) VALUES ($1) ON CONFLICT DO NOTHING")
-            .bind(tag.as_str())
+            .bind(slug.as_ref())
             .execute(&mut *tx)
             .await?;
 
         let tag_id: i64 =
             sqlx::query_scalar::<_, i64>("SELECT tag_id FROM tags WHERE tag_slug = $1")
-                .bind(tag.as_str())
+                .bind(slug.as_ref())
                 .fetch_one(&mut *tx)
                 .await?;
 
@@ -145,7 +144,7 @@ impl PostDialect for Postgres {
             sqlx::query("INSERT INTO post_tags (post_id, tag_id, tag_display) VALUES ($1, $2, $3)")
                 .bind(post_id)
                 .bind(tag_id)
-                .bind(tag_display)
+                .bind(tag.as_ref())
                 .execute(&mut *tx)
                 .await;
 
@@ -175,7 +174,7 @@ impl PostDialect for Postgres {
              WHERE post_id = $1 AND tag_id = (SELECT tag_id FROM tags WHERE tag_slug = $2)",
         )
         .bind(post_id)
-        .bind(tag_slug.as_str())
+        .bind(tag_slug.as_ref())
         .execute(pool)
         .await?
         .rows_affected();

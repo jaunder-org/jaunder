@@ -63,13 +63,14 @@ pub async fn regenerate_feed(
     let canonical_url = match &surface {
         FeedSurface::Site => format!("{base}/"),
         FeedSurface::SiteTag { tag } => {
-            format!("{base}/tags/{}/", urlencoding::encode(tag.as_str()))
+            // urlencoding::encode (external) takes &str.
+            format!("{base}/tags/{}/", urlencoding::encode(tag.as_ref()))
         }
         FeedSurface::User { username } => format!("{base}/~{username}/"),
         FeedSurface::UserTag { username, tag } => {
             format!(
                 "{base}/~{username}/tags/{}/",
-                urlencoding::encode(tag.as_str())
+                urlencoding::encode(tag.as_ref())
             )
         }
     };

@@ -1086,7 +1086,11 @@ fn render_delete_result(
 #[component]
 pub fn SiteTagPage() -> impl IntoView {
     let params = use_params_map();
-    let tag = Memo::new(move |_| params.get().get("tag").unwrap_or_default().to_lowercase());
+    // Parse the `:tag` route segment into a canonical `Tag` once, at the source
+    // (ADR-0063 §4); an unparseable segment is `None`, so the fetch below is
+    // skipped and the client 404s — mirroring the `PostPage` slug parse.
+    // `Tag::from_str` lowercases, so the heading and the projected render coincide.
+    let tag = Memo::new(move |_| params.get().get("tag").and_then(|s| s.parse::<Tag>().ok()));
 
     let mutate_version = RwSignal::new(0u32);
     let on_mutate = Callback::new(move |()| mutate_version.update(|v| *v += 1));
@@ -1094,9 +1098,9 @@ pub fn SiteTagPage() -> impl IntoView {
     let initial_page = crate::server_resource(
         move || (tag.get(), mutate_version.get()),
         |(tag, _)| async move {
-            if tag.is_empty() {
+            let Some(tag) = tag else {
                 return Err(WebError::validation("Invalid tag"));
-            }
+            };
             list_posts_by_tag(tag, None, None, Some(50)).await
         },
     );
@@ -1116,7 +1120,7 @@ pub fn SiteTagPage() -> impl IntoView {
         page,
     }) = use_context::<Option<crate::render::PageSeed>>().flatten()
     {
-        if seed_tag == tag.get_untracked() {
+        if tag.get_untracked().as_ref() == Some(&seed_tag) {
             next_cursor_created_at.set(page.next_cursor_created_at);
             next_cursor_post_id.set(page.next_cursor_post_id);
             has_more.set(page.has_more);
@@ -1164,8 +1168,10 @@ pub fn SiteTagPage() -> impl IntoView {
     });
 
     let on_load_more = move |_| {
-        let tag_value = tag.get_untracked();
-        if tag_value.is_empty() || !has_more.get_untracked() {
+        let Some(tag_value) = tag.get_untracked() else {
+            return;
+        };
+        if !has_more.get_untracked() {
             return;
         }
         load_more_action.dispatch(ListPostsByTag {
@@ -1176,7 +1182,9 @@ pub fn SiteTagPage() -> impl IntoView {
         });
     };
 
-    let read_tag = move || read_signal!(tag);
+    // The canonical tag for the heading (a newtype is not `IntoRender`), or empty
+    // for an unparseable segment — the page renders a validation error anyway.
+    let read_tag = move || read_signal!(tag).map(|t| t.to_string()).unwrap_or_default();
     let read_error = move || read_signal!(error);
     let read_initial_loaded = move || read_signal!(initial_loaded);
     let read_timeline = move || read_signal!(timeline);
@@ -1188,8 +1196,6 @@ pub fn SiteTagPage() -> impl IntoView {
             view! {
                 {tag
                     .get()
-                    .parse::<Tag>()
-                    .ok()
                     .map(|tag| view! { <FeedDiscovery surface=FeedSurface::SiteTag { tag } /> })}
             }
         }}
@@ -1258,7 +1264,11 @@ pub fn UserTagPage() -> impl IntoView {
             .strip_prefix('~')
             .and_then(|s| s.parse::<Username>().ok())
     });
-    let tag = Memo::new(move |_| params.get().get("tag").unwrap_or_default().to_lowercase());
+    // Parse the `:tag` route segment into a canonical `Tag` once, at the source
+    // (ADR-0063 §4); an unparseable segment is `None`, so the fetch below is
+    // skipped and the client 404s — mirroring the `PostPage` slug parse.
+    // `Tag::from_str` lowercases, so the heading and the projected render coincide.
+    let tag = Memo::new(move |_| params.get().get("tag").and_then(|s| s.parse::<Tag>().ok()));
 
     let mutate_version = RwSignal::new(0u32);
     let on_mutate = Callback::new(move |()| mutate_version.update(|v| *v += 1));
@@ -1267,9 +1277,9 @@ pub fn UserTagPage() -> impl IntoView {
         move || (username.get(), tag.get(), mutate_version.get()),
         |(username, tag, _)| async move {
             let username = username.ok_or_else(|| WebError::validation("Invalid username"))?;
-            if tag.is_empty() {
+            let Some(tag) = tag else {
                 return Err(WebError::validation("Invalid tag"));
-            }
+            };
             list_user_posts_by_tag(username, tag, None, None, Some(50)).await
         },
     );
@@ -1289,7 +1299,8 @@ pub fn UserTagPage() -> impl IntoView {
         page,
     }) = use_context::<Option<crate::render::PageSeed>>().flatten()
     {
-        if username.get_untracked().as_ref() == Some(&seed_user) && seed_tag == tag.get_untracked()
+        if username.get_untracked().as_ref() == Some(&seed_user)
+            && tag.get_untracked().as_ref() == Some(&seed_tag)
         {
             next_cursor_created_at.set(page.next_cursor_created_at);
             next_cursor_post_id.set(page.next_cursor_post_id);
@@ -1341,8 +1352,10 @@ pub fn UserTagPage() -> impl IntoView {
         let Some(username_value) = username.get_untracked() else {
             return;
         };
-        let tag_value = tag.get_untracked();
-        if tag_value.is_empty() || !has_more.get_untracked() {
+        let Some(tag_value) = tag.get_untracked() else {
+            return;
+        };
+        if !has_more.get_untracked() {
             return;
         }
         load_more_action.dispatch(ListUserPostsByTag {
@@ -1357,7 +1370,9 @@ pub fn UserTagPage() -> impl IntoView {
     // Canonical (parsed, lowercased) username for the heading, or empty for an
     // invalid segment — the page renders a validation error in that case anyway.
     let read_username = move || username.get().map(String::from).unwrap_or_default();
-    let read_tag = move || read_signal!(tag);
+    // The canonical tag for the heading (a newtype is not `IntoRender`), or empty
+    // for an unparseable segment — the page renders a validation error anyway.
+    let read_tag = move || read_signal!(tag).map(|t| t.to_string()).unwrap_or_default();
     let read_error = move || read_signal!(error);
     let read_initial_loaded = move || read_signal!(initial_loaded);
     let read_timeline = move || read_signal!(timeline);
@@ -1369,7 +1384,7 @@ pub fn UserTagPage() -> impl IntoView {
             view! {
                 {username
                     .get()
-                    .zip(tag.get().parse::<Tag>().ok())
+                    .zip(tag.get())
                     .map(|(username, tag)| {
                         view! {
                             <FeedDiscovery surface=FeedSurface::UserTag {

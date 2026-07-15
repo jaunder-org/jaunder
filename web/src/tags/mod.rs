@@ -1,3 +1,4 @@
+use common::tag::{Tag, TagLabel};
 use leptos::prelude::*;
 use leptos::server_fn::codec::Json;
 use serde::{Deserialize, Serialize};
@@ -24,8 +25,8 @@ pub const MAX_TAG_LIMIT: u32 = 50;
 /// row the underlying `SELECT` returned first.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TagSummary {
-    pub slug: String,
-    pub display: String,
+    pub slug: Tag,
+    pub display: TagLabel,
 }
 
 /// Returns tag suggestions for the autocomplete dropdown.
@@ -33,6 +34,10 @@ pub struct TagSummary {
 /// `prefix` is a case-insensitive prefix match against the canonical slug;
 /// `None` or whitespace-only returns the alphabetically-first tags. `limit`
 /// defaults to [`DEFAULT_TAG_LIMIT`] and is clamped at [`MAX_TAG_LIMIT`].
+///
+/// `prefix` stays `String` (not `Tag`): it is a partial search fragment matched
+/// with SQL `LIKE prefix%`, not a complete tag value — typing it `Tag` would
+/// reject valid partials (ADR-0063 §4 boundary policy; #409 Decision 7).
 #[server(endpoint = "/list_tags", input = Json)]
 pub async fn list_tags(prefix: Option<String>, limit: Option<u32>) -> WebResult<Vec<TagSummary>> {
     boundary!("list_tags", {
@@ -42,117 +47,39 @@ pub async fn list_tags(prefix: Option<String>, limit: Option<u32>) -> WebResult<
         Ok(records
             .into_iter()
             .map(|rec| TagSummary {
-                slug: rec.tag_slug.to_string(),
-                display: rec.tag_slug.to_string(),
+                slug: rec.tag_slug.clone(),
+                display: TagLabel::from(rec.tag_slug),
             })
             .collect())
     })
 }
 
-// ─── Pure helpers for the TagInput UI ─────────────────────────
-// Client-side tag-slug validation, shared by the wasm-only `pages::ui::TagInput`
-// and host-tested here. Kept in `web::tags` (both-target, no `target_arch` gate)
-// rather than in `pages/` so it stays coverage-measured once `pages` is wasm-only.
-
-/// Returns `true` when `s` is a valid tag slug: non-empty, first char
-/// `[a-z0-9]`, remaining chars `[a-z0-9-]`.  The input must already be
-/// lowercased (call [`normalize_tag_token`] first).
-///
-/// Mirrors [`common::tag::Tag::from_str`] so client and server agree on
-/// validity without importing `common` into the WASM bundle.
-#[must_use]
-pub fn is_valid_tag_slug(s: &str) -> bool {
-    let mut chars = s.chars();
-    match chars.next() {
-        None => false,
-        Some(c) if !c.is_ascii_lowercase() && !c.is_ascii_digit() => false,
-        _ => chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
-    }
-}
-
-/// Trims whitespace from `raw` and lowercases the result.
-#[must_use]
-pub fn normalize_tag_token(raw: &str) -> String {
-    raw.trim().to_lowercase()
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{is_valid_tag_slug, normalize_tag_token};
+    use super::TagSummary;
+    use common::tag::TagLabel;
 
-    // ─── is_valid_tag_slug ────────────────────────────────────
-
+    /// #416 agreement: the `TagInput` commit path validates the raw token with
+    /// `TagLabel::from_str` (the same rule the server applies at arg-decode), so
+    /// client and server accept/reject identically — no re-implemented validator
+    /// can drift. A trimmed, mixed-case token is accepted with its casing kept.
     #[test]
-    fn tag_slug_accepts_lowercase_alpha() {
-        assert!(is_valid_tag_slug("rust"));
+    fn tag_label_validation_agrees_client_and_server() {
+        assert!("Rust".parse::<TagLabel>().is_ok());
+        assert_eq!(" ab ".parse::<TagLabel>().unwrap().as_ref(), "ab");
+        assert!("bad tag".parse::<TagLabel>().is_err());
     }
 
+    /// Committing "Rust" yields a `TagSummary` whose `slug` is the canonical
+    /// lowercase and whose `display` preserves the author's casing (Decision 4).
     #[test]
-    fn tag_slug_accepts_leading_digit() {
-        assert!(is_valid_tag_slug("42things"));
-    }
-
-    #[test]
-    fn tag_slug_accepts_hyphens_in_body() {
-        assert!(is_valid_tag_slug("hello-world"));
-    }
-
-    #[test]
-    fn tag_slug_accepts_single_char() {
-        assert!(is_valid_tag_slug("a"));
-        assert!(is_valid_tag_slug("0"));
-    }
-
-    #[test]
-    fn tag_slug_rejects_empty() {
-        assert!(!is_valid_tag_slug(""));
-    }
-
-    #[test]
-    fn tag_slug_rejects_leading_hyphen() {
-        assert!(!is_valid_tag_slug("-hello"));
-    }
-
-    #[test]
-    fn tag_slug_rejects_uppercase() {
-        assert!(!is_valid_tag_slug("Rust"));
-        assert!(!is_valid_tag_slug("RUST"));
-    }
-
-    #[test]
-    fn tag_slug_rejects_spaces() {
-        assert!(!is_valid_tag_slug("hello world"));
-    }
-
-    #[test]
-    fn tag_slug_rejects_special_chars() {
-        assert!(!is_valid_tag_slug("tag@site"));
-        assert!(!is_valid_tag_slug("tag_name"));
-    }
-
-    // ─── normalize_tag_token ──────────────────────────────────
-
-    #[test]
-    fn normalize_trims_whitespace() {
-        assert_eq!(normalize_tag_token("  rust  "), "rust");
-    }
-
-    #[test]
-    fn normalize_lowercases() {
-        assert_eq!(normalize_tag_token("Rust"), "rust");
-        assert_eq!(normalize_tag_token("HELLO-WORLD"), "hello-world");
-    }
-
-    #[test]
-    fn normalize_empty_stays_empty() {
-        assert_eq!(normalize_tag_token(""), "");
-        assert_eq!(normalize_tag_token("   "), "");
-    }
-
-    #[test]
-    fn normalize_then_validate_roundtrip() {
-        let normalized = normalize_tag_token("  Hello-World  ");
-        assert!(is_valid_tag_slug(&normalized));
-        assert_eq!(normalized, "hello-world");
+    fn tag_summary_preserves_casing_with_canonical_slug() {
+        let label: TagLabel = "Rust".parse().unwrap();
+        let summary = TagSummary {
+            slug: label.slug(),
+            display: label,
+        };
+        assert_eq!(summary.slug, "rust");
+        assert_eq!(summary.display, "Rust");
     }
 }

@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use common::password::Password;
+use common::tag::TagLabel;
 use common::username::Username;
 use common::visibility::{AudienceTarget, ViewerIdentity};
 use jaunder::cli::StorageArgs;
@@ -65,7 +66,7 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
         .expect("create post");
     state
         .posts
-        .tag_post(public_post, "Backup-Test")
+        .tag_post(public_post, &"Backup-Test".parse::<TagLabel>().unwrap())
         .await
         .expect("tag post");
 
@@ -203,7 +204,7 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
         .await
         .expect("get tags");
     assert_eq!(tags.len(), 1);
-    assert_eq!(tags[0].tag_slug.as_str(), "backup-test");
+    assert_eq!(tags[0].tag_slug, "backup-test");
     assert_eq!(tags[0].tag_display, "Backup-Test");
 
     // #4 closed: the Named-audience post survives restore visible to its

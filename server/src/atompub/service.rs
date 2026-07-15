@@ -33,7 +33,7 @@ pub async fn service_document(
         .list_tags(None, 100)
         .await?
         .into_iter()
-        .map(|t| t.tag_slug.to_string())
+        .map(|t| t.tag_slug)
         .collect();
 
     let doc = ServiceDocument {

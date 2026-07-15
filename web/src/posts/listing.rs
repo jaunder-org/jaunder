@@ -7,7 +7,7 @@
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use common::{slug::Slug, username::Username};
+use common::{slug::Slug, tag::Tag, username::Username};
 
 use crate::error::WebResult;
 use crate::tags::TagSummary;
@@ -18,10 +18,7 @@ use {
     crate::auth::require_auth,
     crate::error::{InternalError, InternalResult},
     crate::viewer::viewer_identity,
-    common::{
-        tag::Tag,
-        visibility::{viewer_user_id, ViewerIdentity},
-    },
+    common::visibility::{viewer_user_id, ViewerIdentity},
     std::sync::Arc,
     storage::{
         list_by_tag_rows, parse_post_cursor, to_post_cursor, PostCursor, PostRecord, PostStorage,
@@ -230,24 +227,23 @@ pub async fn list_home_feed(
 ///
 /// # Errors
 ///
-/// Returns a validation error for an unparseable tag or cursor, or a storage
-/// error if the listing query fails.
+/// Returns a validation error for an unparseable cursor, or a storage error if
+/// the listing query fails.
 #[cfg(feature = "server")]
 pub async fn fetch_posts_by_tag(
     posts: &dyn PostStorage,
     viewer: &ViewerIdentity,
-    tag: &str,
+    tag: &Tag,
     cursor_created_at: Option<String>,
     cursor_post_id: Option<i64>,
     limit: Option<u32>,
 ) -> InternalResult<TimelinePage> {
-    let tag_slug = tag.trim().parse::<Tag>()?;
     let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
     let page_size = limit.unwrap_or(50).clamp(1, 50);
     let rows = list_by_tag_rows(
         posts
             .list_posts_by_tag(
-                &tag_slug,
+                tag,
                 cursor.as_ref(),
                 page_size.saturating_add(1),
                 viewer,
@@ -263,19 +259,18 @@ pub async fn fetch_posts_by_tag(
 ///
 /// # Errors
 ///
-/// Returns a validation error for an unparseable tag/cursor, a not-found error
-/// for an unknown user, or a storage error.
+/// Returns a validation error for an unparseable cursor, a not-found error for
+/// an unknown user, or a storage error.
 #[cfg(feature = "server")]
 pub async fn fetch_user_posts_by_tag(
     posts: &dyn PostStorage,
     users: &dyn UserStorage,
     viewer: &ViewerIdentity,
     username: &Username,
-    tag: &str,
+    tag: &Tag,
     cursor: Option<PostCursor>,
     limit: Option<u32>,
 ) -> InternalResult<TimelinePage> {
-    let tag_slug = tag.trim().parse::<Tag>()?;
     let author = users
         .get_user_by_username(username)
         .await?
@@ -285,7 +280,7 @@ pub async fn fetch_user_posts_by_tag(
         posts
             .list_user_posts_by_tag(
                 author.user_id,
-                &tag_slug,
+                tag,
                 cursor.as_ref(),
                 page_size.saturating_add(1),
                 viewer,
@@ -299,7 +294,7 @@ pub async fn fetch_user_posts_by_tag(
 /// Lists published, non-deleted posts site-wide carrying `tag`.
 #[server(endpoint = "/list_posts_by_tag")]
 pub async fn list_posts_by_tag(
-    tag: String,
+    tag: Tag,
     cursor_created_at: Option<String>,
     cursor_post_id: Option<i64>,
     limit: Option<u32>,
@@ -323,7 +318,7 @@ pub async fn list_posts_by_tag(
 #[server(endpoint = "/list_user_posts_by_tag")]
 pub async fn list_user_posts_by_tag(
     username: Username,
-    tag: String,
+    tag: Tag,
     cursor_created_at: Option<String>,
     cursor_post_id: Option<i64>,
     limit: Option<u32>,
@@ -352,6 +347,7 @@ mod tests {
     // allow-{unwrap,expect}-in-tests, so allow the test-scaffolding panics.
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::{fetch_posts_by_tag, fetch_user_posts_by_tag};
+    use common::tag::Tag;
     use common::username::Username;
     use common::visibility::ViewerIdentity;
     use storage::{ListByTagError, MockPostStorage, MockUserStorage, UserRecord};
@@ -379,8 +375,15 @@ mod tests {
             .returning(|_tag, _cursor, _limit, _viewer, _now| {
                 Err(ListByTagError::Internal(sqlx::Error::PoolClosed))
             });
-        let result =
-            fetch_posts_by_tag(&posts, &ViewerIdentity::Anonymous, "rust", None, None, None).await;
+        let result = fetch_posts_by_tag(
+            &posts,
+            &ViewerIdentity::Anonymous,
+            &"rust".parse::<Tag>().unwrap(),
+            None,
+            None,
+            None,
+        )
+        .await;
         assert!(result.is_err());
     }
 
@@ -402,7 +405,7 @@ mod tests {
             &users,
             &ViewerIdentity::Anonymous,
             &"author".parse::<Username>().unwrap(),
-            "rust",
+            &"rust".parse::<Tag>().unwrap(),
             None,
             None,
         )

@@ -744,12 +744,14 @@ test("TagInput: invalid tag text shows an error", async ({
   registeredPage: page,
 }) => {
   await goto(page, "/posts/new");
-  // "bad tag" has a space — invalid after normalize
+  // "bad tag" has a space — rejected by TagLabel::from_str
   await page.fill(".j-tag-text", "bad tag");
   await page.keyboard.press("Enter");
 
   await waitForSelector(page, ".j-tag-error");
-  await expect(page.locator(".j-tag-error")).toContainText("Invalid tag");
+  await expect(page.locator(".j-tag-error")).toContainText(
+    "tag must be non-empty",
+  );
   // No chip should appear
   await expect(page.locator(".j-tag-chip")).toHaveCount(0);
 });

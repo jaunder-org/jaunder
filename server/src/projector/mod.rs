@@ -26,6 +26,7 @@ use axum::{
     routing::get,
     Router,
 };
+use common::tag::Tag;
 use common::username::Username;
 use common::visibility::ViewerIdentity;
 use sha2::{Digest, Sha256};
@@ -207,6 +208,24 @@ fn timeline_response(
     }
 }
 
+/// Map a by-tag listing result to a projected response: the seed on success, or
+/// the SPA shell on any error. Unlike [`timeline_response`], an error here serves
+/// the shell (not a 500) — an unknown user or a live storage failure is never
+/// public content, so the client resolves the URL per session. Split from the
+/// handlers so the error arm — otherwise reachable only under a live DB failure —
+/// stays unit-testable; `into_seed` wraps the page in its route's [`PageSeed`].
+fn tag_response(
+    result: web::error::InternalResult<web::posts::TimelinePage>,
+    headers: &HeaderMap,
+    shell: &Shell,
+    into_seed: impl FnOnce(web::posts::TimelinePage) -> PageSeed,
+) -> Response {
+    match result {
+        Ok(page) => cacheable(headers, &into_seed(page)),
+        Err(_) => shell_response(shell),
+    }
+}
+
 async fn profile(
     Extension(posts): Extension<Arc<dyn PostStorage>>,
     Extension(shell): Extension<Shell>,
@@ -240,12 +259,20 @@ async fn site_tag(
     Extension(posts): Extension<Arc<dyn PostStorage>>,
     Extension(shell): Extension<Shell>,
     headers: HeaderMap,
+    // The tag segment stays `String` (not a typed `Path<Tag>` extractor) so a
+    // malformed segment is parsed *inside* the handler and falls back to the SPA
+    // shell (client-rendered 404) below — a typed extractor would reject it with a
+    // 400 *before* the handler runs. This is the deliberate projector-vs-atompub
+    // boundary split (ADR-0063 §4): atompub handlers are typed (400-on-malformed
+    // API); the public projector serves the shell. Mirrors the `permalink` handler.
     Path(tag): Path<String>,
 ) -> Response {
-    // Match `SiteTagPage`'s lowercasing so the projected heading and the client
-    // render coincide.
-    let tag = tag.to_lowercase();
-    match fetch_posts_by_tag(
+    // `Tag::from_str` lowercases, so the projected heading and the client render
+    // coincide. An unparseable tag is never public content — let the client route it.
+    let Ok(tag) = tag.parse::<Tag>() else {
+        return shell_response(&shell);
+    };
+    let result = fetch_posts_by_tag(
         posts.as_ref(),
         &ViewerIdentity::Anonymous,
         &tag,
@@ -253,12 +280,11 @@ async fn site_tag(
         None,
         Some(50),
     )
-    .await
-    {
-        Ok(page) => cacheable(&headers, &PageSeed::SiteTag { tag, page }),
-        // An unparseable tag is never public content — let the client route it.
-        Err(_) => shell_response(&shell),
-    }
+    .await;
+    tag_response(result, &headers, &shell, |page| PageSeed::SiteTag {
+        tag,
+        page,
+    })
 }
 
 async fn user_tag(
@@ -266,34 +292,34 @@ async fn user_tag(
     Extension(users): Extension<Arc<dyn UserStorage>>,
     Extension(shell): Extension<Shell>,
     headers: HeaderMap,
+    // The username/tag segments stay `String` (not typed extractors) so a malformed
+    // segment is parsed *inside* the handler and falls back to the SPA shell below,
+    // rather than a typed extractor's 400 before the handler runs — the deliberate
+    // projector-vs-atompub boundary split (ADR-0063 §4). Mirrors `permalink`.
     Path((username, tag)): Path<(String, String)>,
 ) -> Response {
-    let tag = tag.to_lowercase();
-    // An unparseable username, an unknown user, or a storage error is never public
-    // content — serve the shell and let the client route it.
-    let seed = match username.parse::<Username>() {
-        Ok(username) => fetch_user_posts_by_tag(
-            posts.as_ref(),
-            users.as_ref(),
-            &ViewerIdentity::Anonymous,
-            &username,
-            &tag,
-            None,
-            Some(50),
-        )
-        .await
-        .ok()
-        .map(|page| PageSeed::UserTag {
-            username,
-            tag,
-            page,
-        }),
-        Err(_) => None,
+    // `Tag::from_str` lowercases, so the projected heading and the client render
+    // coincide. An unparseable username/tag is never public content — serve the
+    // shell and let the client route it.
+    let (Ok(username), Ok(tag)) = (username.parse::<Username>(), tag.parse::<Tag>()) else {
+        return shell_response(&shell);
     };
-    match seed {
-        Some(seed) => cacheable(&headers, &seed),
-        None => shell_response(&shell),
-    }
+    // An unknown user or a storage error is likewise never public content.
+    let result = fetch_user_posts_by_tag(
+        posts.as_ref(),
+        users.as_ref(),
+        &ViewerIdentity::Anonymous,
+        &username,
+        &tag,
+        None,
+        Some(50),
+    )
+    .await;
+    tag_response(result, &headers, &shell, |page| PageSeed::UserTag {
+        username,
+        tag,
+        page,
+    })
 }
 
 #[cfg(test)]
@@ -316,6 +342,22 @@ mod tests {
     fn no_public_post_serves_shell() {
         let shell = Shell("shell".into());
         let resp = permalink_response(Ok(None), &HeaderMap::new(), &shell);
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn tag_storage_error_serves_shell() {
+        use super::{tag_response, PageSeed};
+        let shell = Shell("shell".into());
+        let resp = tag_response(
+            Err(web::error::InternalError::validation("boom")),
+            &HeaderMap::new(),
+            &shell,
+            // `into_seed` is never called on the error path; any constructor works.
+            PageSeed::SiteTimeline,
+        );
+        // The shell fallback (an unknown user / live storage failure) is a 200,
+        // not a 500 — the client resolves the URL per session.
         assert_eq!(resp.status(), StatusCode::OK);
     }
 

@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 
+use crate::tag::TagLabel;
+
 #[derive(Debug, Clone)]
 pub struct FeedMetadata {
     pub title: String,
@@ -20,7 +22,7 @@ pub struct FeedItem {
     pub content_html: String,
     pub published_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    pub tags: Vec<String>,
+    pub tags: Vec<TagLabel>,
 }
 
 impl crate::feed::window::HasPublishedAt for FeedItem {

@@ -5,6 +5,7 @@ use axum::{
     http::{header, Request, StatusCode},
 };
 use base64::Engine as _;
+use common::tag::TagLabel;
 use tower::ServiceExt;
 
 use rstest::*;
@@ -901,7 +902,7 @@ async fn update_removes_categories_not_in_new_entry(#[case] backend: Backend) {
 
     state
         .posts
-        .tag_post(post.post_id, "original-tag")
+        .tag_post(post.post_id, &"original-tag".parse::<TagLabel>().unwrap())
         .await
         .unwrap();
 

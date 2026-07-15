@@ -1,3 +1,4 @@
+use common::tag::TagLabel;
 use common::visibility::AudienceTarget;
 use std::sync::Arc;
 
@@ -45,7 +46,11 @@ async fn seed_user_and_tagged_post(
         .await
         .expect("create_post failed");
     for display in tags {
-        state.posts.tag_post(post_id, display).await.unwrap();
+        state
+            .posts
+            .tag_post(post_id, &display.parse::<TagLabel>().unwrap())
+            .await
+            .unwrap();
     }
     post_id
 }
@@ -84,12 +89,12 @@ async fn list_tags_returns_all_when_prefix_absent(#[case] backend: Backend) {
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let tags: Vec<TagSummary> = serde_json::from_str(&body).unwrap();
-    let slugs: Vec<&str> = tags.iter().map(|t| t.slug.as_str()).collect();
+    let slugs: Vec<&str> = tags.iter().map(|t| t.slug.as_ref()).collect();
     assert_eq!(slugs, vec!["performance", "rust", "rust-lang", "web"]);
     // display currently mirrors the slug (M5's display-casing wiring lands in
     // tags.5 alongside the tags param on create/update).
     for tag in &tags {
-        assert_eq!(tag.display, tag.slug);
+        assert_eq!(tag.display, tag.slug.as_ref());
     }
 }
 
@@ -115,7 +120,7 @@ async fn list_tags_filters_by_prefix_case_insensitive(#[case] backend: Backend) 
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let tags: Vec<TagSummary> = serde_json::from_str(&body).unwrap();
-    let slugs: Vec<&str> = tags.iter().map(|t| t.slug.as_str()).collect();
+    let slugs: Vec<&str> = tags.iter().map(|t| t.slug.as_ref()).collect();
     assert_eq!(slugs, vec!["rust", "rust-lang"]);
 }
 
@@ -128,7 +133,7 @@ async fn list_tags_clamps_limit_to_max(#[case] backend: Backend) {
     for n in 0..60 {
         state
             .posts
-            .tag_post(post, &format!("tag{n:02}"))
+            .tag_post(post, &format!("tag{n:02}").parse::<TagLabel>().unwrap())
             .await
             .unwrap();
     }
@@ -154,7 +159,7 @@ async fn list_tags_uses_default_limit_when_unspecified(#[case] backend: Backend)
     for n in 0..20 {
         state
             .posts
-            .tag_post(post, &format!("tag{n:02}"))
+            .tag_post(post, &format!("tag{n:02}").parse::<TagLabel>().unwrap())
             .await
             .unwrap();
     }

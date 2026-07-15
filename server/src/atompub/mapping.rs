@@ -7,6 +7,7 @@
 
 use chrono::{DateTime, Utc};
 use common::atompub::{is_draft, set_draft, set_j_slug, Category, Content, Entry, Link, Text};
+use common::tag::TagLabel;
 use storage::{PostFormat, PostRecord};
 
 /// The post-shaped data carried by an incoming `AtomPub` `Entry`.
@@ -20,8 +21,8 @@ pub struct PostFields {
     pub format: PostFormat,
     /// Optional summary/excerpt.
     pub summary: Option<String>,
-    /// Categories/tags extracted from the entry.
-    pub categories: Vec<String>,
+    /// Categories/tags extracted from the entry (author labels).
+    pub categories: Vec<TagLabel>,
     /// Whether the entry is marked as draft.
     pub is_draft: bool,
     /// Explicit publication time from the entry's `<published>` element
@@ -82,10 +83,17 @@ pub fn entry_to_post_fields(entry: &Entry, default_format: PostFormat) -> PostFi
         (!trimmed.is_empty()).then(|| trimmed.to_string())
     };
     let summary = entry.summary().map(|t| t.as_str().to_string());
+    // atom `<category term>` values are arbitrary RFC-4287 protocol strings (the
+    // atom `Entry` model holds them as `String`, not our domain tag) — this is the
+    // boundary where a conforming term becomes a `TagLabel`. `entry_to_post_fields`
+    // is infallible, so an invalid term is silently skipped here (the sole ingest
+    // skip — `post_tag_diff` no longer filters, since every `TagLabel` it receives
+    // is already valid). Dropping a malformed term keeps one bad category from
+    // failing the whole entry (R5).
     let categories = entry
         .categories()
         .iter()
-        .map(|c| c.term().to_string())
+        .filter_map(|c| c.term().parse::<TagLabel>().ok())
         .collect();
     let is_draft = is_draft(entry);
     // Any incoming `j:slug` is deliberately ignored (ADR-0023): the slug is a
@@ -149,7 +157,8 @@ pub fn post_to_entry(post: &PostRecord, base_url: &str) -> Entry {
             .tags
             .iter()
             .map(|t| Category {
-                term: t.tag_display.clone(),
+                // atom_syndication::Category.term is an external owned String — materialize the label.
+                term: t.tag_display.to_string(),
                 ..Default::default()
             })
             .collect(),
@@ -402,7 +411,27 @@ mod tests {
         let entry = common::atompub::entry_from_xml(xml).expect("parse entry");
         let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
 
-        assert_eq!(fields.categories, Vec::<String>::new());
+        assert_eq!(fields.categories, Vec::<TagLabel>::new());
+    }
+
+    #[test]
+    fn entry_to_post_fields_skips_invalid_category_terms() {
+        // One valid and one invalid `<category term>`: the invalid term is
+        // silently dropped (R5) rather than failing the whole entry, so exactly
+        // the valid label survives.
+        let xml = r#"<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>Test</title>
+  <id>id</id>
+  <updated>2026-05-31T00:00:00Z</updated>
+  <category term="rust"/>
+  <category term="not a tag"/>
+</entry>"#;
+
+        let entry = common::atompub::entry_from_xml(xml).expect("parse entry");
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
+
+        assert_eq!(fields.categories, vec!["rust".parse::<TagLabel>().unwrap()]);
     }
 
     #[test]
@@ -504,7 +533,7 @@ mod tests {
                 post_id,
                 tag_id: i64::try_from(i).expect("tag index fits in i64") + 1,
                 tag_slug: tag_slug.parse().expect("parse tag"),
-                tag_display,
+                tag_display: tag_display.parse().expect("parse tag label"),
             })
             .collect();
 
