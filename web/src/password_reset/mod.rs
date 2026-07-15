@@ -3,6 +3,7 @@ use {
     chrono::Duration,
     common::mailer::{EmailMessage, MailSender},
     common::password::Password,
+    common::token::RawToken,
     std::sync::Arc,
     storage::{AtomicOps, PasswordResetStorage, UserStorage},
 };
@@ -48,7 +49,7 @@ pub async fn request_password_reset(username: Username) -> WebResult<()> {
             .create_password_reset(user_id, expires_at)
             .await?;
 
-        let link = format!("/reset-password?token={raw_token}");
+        let link = format!("/reset-password?token={}", raw_token.as_ref());
         let message = EmailMessage {
             from: None,
             to: vec![verified_email],
@@ -77,8 +78,11 @@ pub async fn confirm_password_reset(token: String, new_password: String) -> WebR
 
         let password = new_password.parse::<Password>()?;
 
+        let raw_token = RawToken::try_from(token)
+            .map_err(|_| InternalError::validation("invalid reset token"))?;
+
         atomic
-            .confirm_password_reset(&token, &password)
+            .confirm_password_reset(&raw_token, &password)
             .await
             .map_err(InternalError::storage)?;
 

@@ -165,7 +165,7 @@ async fn confirm_password_reset_sets_password_and_revokes_sessions(#[case] backe
         .await
         .unwrap();
 
-    let body = format!("token={raw_token}&new_password=newpassword456");
+    let body = format!("token={}&new_password=newpassword456", raw_token.as_ref());
     let (status, _body) = post_form_with_mailer(
         Arc::clone(&state),
         mailer.clone() as Arc<dyn common::mailer::MailSender>,
@@ -218,7 +218,7 @@ async fn confirm_password_reset_with_expired_token_returns_error(#[case] backend
         .await
         .unwrap();
 
-    let body = format!("token={raw_token}&new_password=newpassword456");
+    let body = format!("token={}&new_password=newpassword456", raw_token.as_ref());
     let (status, _body) = post_form_with_mailer(
         Arc::clone(&state),
         mailer.clone() as Arc<dyn common::mailer::MailSender>,
@@ -266,7 +266,7 @@ async fn confirm_password_reset_with_used_token_returns_error(#[case] backend: B
         .await
         .unwrap();
 
-    let body = format!("token={raw_token}&new_password=newpassword456");
+    let body = format!("token={}&new_password=newpassword456", raw_token.as_ref());
 
     // Use it once — should succeed
     let (status, _) = post_form_with_mailer(

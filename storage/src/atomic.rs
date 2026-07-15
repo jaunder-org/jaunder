@@ -5,6 +5,7 @@ use thiserror::Error;
 
 use common::display_name::DisplayName;
 use common::password::Password;
+use common::token::RawToken;
 use common::username::Username;
 use host::invite::InviteCode;
 
@@ -104,7 +105,7 @@ pub trait AtomicOps: Send + Sync {
     /// Returns [`ConfirmPasswordResetError`] if any part of the transaction fails.
     async fn confirm_password_reset(
         &self,
-        raw_token: &str,
+        raw_token: &RawToken,
         new_password: &Password,
     ) -> Result<(), ConfirmPasswordResetError>;
 }
@@ -201,7 +202,10 @@ mod tests {
         assert!(matches!(
             env.state
                 .atomic
-                .confirm_password_reset("not-base64", &password)
+                .confirm_password_reset(
+                    &RawToken::try_from("not-base64".to_string()).unwrap(),
+                    &password,
+                )
                 .await,
             Err(ConfirmPasswordResetError::NotFound)
         ));

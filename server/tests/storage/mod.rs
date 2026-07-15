@@ -951,7 +951,10 @@ async fn confirm_password_reset_bogus_token_returns_not_found_without_hashing(
     // (ADR-0022). Before the reorder this would have hashed first and returned Internal.
     let result = state
         .atomic
-        .confirm_password_reset("dGVzdA", &password("force-hash-error-for-test-coverage"))
+        .confirm_password_reset(
+            &RawToken::try_from("dGVzdA".to_string()).unwrap(),
+            &password("force-hash-error-for-test-coverage"),
+        )
         .await;
     assert!(matches!(result, Err(ConfirmPasswordResetError::NotFound)));
 }
@@ -1992,7 +1995,7 @@ async fn use_password_reset_unknown_token_returns_not_found(#[case] backend: Bac
 
     let err = state
         .password_resets
-        .use_password_reset("not-a-real-token")
+        .use_password_reset(&RawToken::try_from("not-a-real-token".to_string()).unwrap())
         .await
         .unwrap_err();
     assert!(

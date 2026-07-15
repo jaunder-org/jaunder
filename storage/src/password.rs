@@ -5,6 +5,8 @@ use chrono::{DateTime, Utc};
 use sqlx::{Database, Pool};
 use thiserror::Error;
 
+use common::token::RawToken;
+
 use crate::backend::Backend;
 
 /// Errors returned by [`PasswordResetStorage::use_password_reset`].
@@ -37,7 +39,7 @@ pub trait PasswordResetStorage: Send + Sync {
         &self,
         user_id: i64,
         expires_at: DateTime<Utc>,
-    ) -> sqlx::Result<String>;
+    ) -> sqlx::Result<RawToken>;
 
     /// Validates a raw reset token and marks it as used.
     ///
@@ -47,7 +49,7 @@ pub trait PasswordResetStorage: Send + Sync {
     ///
     /// Returns [`UsePasswordResetError`] if the token is invalid, expired,
     /// or already used.
-    async fn use_password_reset(&self, raw_token: &str) -> Result<i64, UsePasswordResetError>;
+    async fn use_password_reset(&self, raw_token: &RawToken) -> Result<i64, UsePasswordResetError>;
 }
 
 /// Generic [`PasswordResetStorage`] backed by any [`Backend`] database.
@@ -81,15 +83,15 @@ where
         &self,
         user_id: i64,
         expires_at: DateTime<Utc>,
-    ) -> sqlx::Result<String> {
-        let (raw_token, token_hash) = crate::helpers::generate_hashed_token()?;
+    ) -> sqlx::Result<RawToken> {
+        let (raw_token, token_hash) = host::token::generate_hashed();
         let now = Utc::now();
 
         sqlx::query(
             "INSERT INTO password_resets (token_hash, user_id, created_at, expires_at)
              VALUES ($1, $2, $3, $4)",
         )
-        .bind(token_hash.as_str())
+        .bind(token_hash.as_ref())
         .bind(user_id)
         .bind(now)
         .bind(expires_at)
@@ -99,9 +101,9 @@ where
         Ok(raw_token)
     }
 
-    async fn use_password_reset(&self, raw_token: &str) -> Result<i64, UsePasswordResetError> {
+    async fn use_password_reset(&self, raw_token: &RawToken) -> Result<i64, UsePasswordResetError> {
         let token_hash =
-            crate::auth::hash_token(raw_token).map_err(|_| UsePasswordResetError::NotFound)?;
+            host::token::hash(raw_token).map_err(|_| UsePasswordResetError::NotFound)?;
 
         let now = Utc::now();
 
@@ -115,7 +117,7 @@ where
              RETURNING user_id",
         )
         .bind(now)
-        .bind(token_hash.as_str())
+        .bind(token_hash.as_ref())
         .bind(now)
         .fetch_optional(&self.pool)
         .await?;
@@ -127,7 +129,7 @@ where
         let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
             "SELECT used_at, expires_at FROM password_resets WHERE token_hash = $1",
         )
-        .bind(token_hash.as_str())
+        .bind(token_hash.as_ref())
         .fetch_optional(&self.pool)
         .await?;
 
@@ -160,7 +162,10 @@ mod tests {
     async fn use_password_reset_with_closed_pool_returns_error(#[case] backend: Backend) {
         let TestEnv { state, base } = backend.setup().await;
         base.close_pool().await;
-        let result = state.password_resets.use_password_reset("dGVzdA").await;
+        let result = state
+            .password_resets
+            .use_password_reset(&RawToken::try_from("dGVzdA".to_string()).unwrap())
+            .await;
         assert!(matches!(result, Err(UsePasswordResetError::Internal(_))));
     }
 }
