@@ -61,15 +61,15 @@ so it compiles and gates green on its own.
 
 ## Task 3 — write path: typed wire arg + ADR-0065 client validation
 
-- [ ] `storage/src/users.rs`:
+- [x] `storage/src/users.rs`:
       `ProfileUpdate.display_name: Option<&'a DisplayName>`; the
       `update_profile` SQL binding maps to `&str` (`.map(|d| &**d)`).
-- [ ] `web/src/profile/mod.rs::update_profile`: wire arg
+- [x] `web/src/profile/mod.rs::update_profile`: wire arg
       `display_name: Option<DisplayName>`; **drop** `common::text::non_empty`
       for display name (empty→`None` handled client-side); pass
       `display_name.as_ref()` into `ProfileUpdate`. `bio` unchanged (keeps
       `non_empty`).
-- [ ] `web/src/pages/profile.rs`: convert the profile `<ActionForm>` to a
+- [x] `web/src/pages/profile.rs`: convert the profile `<ActionForm>` to a
       `.dispatch` form (mirror `slug_override`):
       `Field::<DisplayName>::optional_prefilled(&existing)`, **direct-bind** the
       existing `<input name="display_name">` (`prop:value`/`on:input` →
@@ -78,9 +78,9 @@ so it compiles and gates green on its own.
       `update_action.dispatch(UpdateProfile { display_name: dn_field.parsed(),     bio: bio_sig.get() })`.
       Submit `prop:disabled=move || !dn_field.is_valid()` (blank stays valid ⇒
       clearing works; over-long gates).
-- [ ] `web/src/forms.rs` tests: add a `field_error::<DisplayName>` case (valid →
+- [x] `web/src/forms.rs` tests: add a `field_error::<DisplayName>` case (valid →
       `None`; over-long → the newtype's message).
-- [ ] Server integration tests (`server/tests/web/web_account.rs`): for the
+- [x] Server integration tests (`server/tests/web/web_account.rs`): for the
       invalid/over-long `update_profile` case assert `assert_ne!(status, OK)` +
       the store side-effect and **drop** any `body.contains("<message>")`
       (precedent: `web_auth.rs::register_invalid_username_returns_error`). Keep

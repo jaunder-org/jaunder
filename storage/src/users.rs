@@ -108,10 +108,11 @@ pub fn login_outcome(error: &UserAuthError) -> host::metrics::LoginOutcome {
 
 /// Fields to update on a user's profile.
 ///
-/// Each field is `Option<&str>`: `None` clears the field, `Some(v)` sets it.
+/// `None` clears the field, `Some(v)` sets it. `display_name` is a validated
+/// [`DisplayName`] (the invariant is held at the boundary); `bio` is free-form.
 pub struct ProfileUpdate<'a> {
     /// New display name, or `None` to clear.
-    pub display_name: Option<&'a str>,
+    pub display_name: Option<&'a DisplayName>,
     /// New bio text, or `None` to clear.
     pub bio: Option<&'a str>,
 }
@@ -409,7 +410,7 @@ where
         update: &ProfileUpdate<'a>,
     ) -> sqlx::Result<()> {
         sqlx::query("UPDATE users SET display_name = $1, bio = $2 WHERE user_id = $3")
-            .bind(update.display_name)
+            .bind(update.display_name.map(|d| &**d))
             .bind(update.bio)
             .bind(user_id)
             .execute(&self.pool)

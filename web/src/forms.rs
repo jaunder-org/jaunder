@@ -228,6 +228,7 @@ mod tests {
     // `common` has no top-level re-exports — qualify by module.
     use common::audience::AudienceName;
     use common::backup::BackupSchedule;
+    use common::display_name::DisplayName;
     use common::email::Email;
     use common::password::Password;
     use common::slug::Slug;
@@ -244,6 +245,7 @@ mod tests {
         assert_eq!(field_error::<Email>("user@example.com"), None);
         assert_eq!(field_error::<AudienceName>("Close Friends"), None);
         assert_eq!(field_error::<BackupSchedule>("0 0 0 * * *"), None); // six-field cron
+        assert_eq!(field_error::<DisplayName>("Ada Lovelace"), None);
     }
 
     #[test]
@@ -267,6 +269,8 @@ mod tests {
         // prefix rather than couple to the crate's wording.
         assert!(field_error::<BackupSchedule>("not a cron")
             .is_some_and(|m| m.starts_with("invalid backup schedule")));
+        assert!(field_error::<DisplayName>("").is_some()); // empty
+        assert!(field_error::<DisplayName>(&"a".repeat(256)).is_some()); // over 255
     }
 
     // `Field<T>`'s methods are signal-only (no `Effect`/`Resource`), so — like

@@ -34,7 +34,7 @@ async fn get_profile_returns_display_name_and_bio(#[case] backend: Backend) {
         .update_profile(
             user_id,
             &ProfileUpdate {
-                display_name: Some("Alice Smith"),
+                display_name: Some(&"Alice Smith".parse().unwrap()),
                 bio: Some("Hello world"),
             },
         )
@@ -601,7 +601,7 @@ async fn update_profile_with_empty_fields_sets_to_none(#[case] backend: Backend)
         .update_profile(
             user_id,
             &ProfileUpdate {
-                display_name: Some("Initial"),
+                display_name: Some(&"Initial".parse().unwrap()),
                 bio: Some("Initial Bio"),
             },
         )
@@ -615,10 +615,14 @@ async fn update_profile_with_empty_fields_sets_to_none(#[case] backend: Backend)
         .unwrap();
     let cookie_header = format!("session={raw_token}");
 
+    // Clearing the display name is the dispatch-`None` path: the typed
+    // `Option<DisplayName>` wire arg is *omitted* (serde decodes a missing
+    // Option field to `None`); an empty `display_name=` would instead fail to
+    // parse. Empty `bio=` clears via `non_empty`.
     let (status, _) = post_form(
         Arc::clone(&state),
         "/api/update_profile",
-        "display_name=&bio=",
+        "bio=",
         Some(&cookie_header),
     )
     .await;
@@ -627,4 +631,44 @@ async fn update_profile_with_empty_fields_sets_to_none(#[case] backend: Backend)
     let user = state.users.get_user(user_id).await.unwrap().unwrap();
     assert!(user.display_name.is_none());
     assert!(user.bio.is_none());
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn update_profile_rejects_invalid_display_name(#[case] backend: Backend) {
+    // A malformed display_name (over the 255-char bound) fails at typed-arg
+    // decode — a non-OK server-function error, not a Validation message
+    // (ADR-0065). The client's disable-until-valid gate keeps a real browser
+    // from reaching this; a raw POST is the malformed-client path. Mirrors
+    // web_auth::register_invalid_username_returns_error.
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let username: Username = "invalid_dn".parse().unwrap();
+    let user_id = state
+        .users
+        .create_user(&username, &"password123".parse().unwrap(), None, false)
+        .await
+        .unwrap();
+    let raw_token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
+    let cookie_header = format!("session={raw_token}");
+
+    let overlong = "a".repeat(common::display_name::MAX_DISPLAY_NAME_CHARS + 1);
+    let (status, _) = post_form(
+        Arc::clone(&state),
+        "/api/update_profile",
+        &format!("display_name={overlong}&bio=x"),
+        Some(&cookie_header),
+    )
+    .await;
+
+    assert_ne!(status, StatusCode::OK, "over-long display_name should fail");
+    // Store side-effect did not happen.
+    let user = state.users.get_user(user_id).await.unwrap().unwrap();
+    assert!(
+        user.display_name.is_none(),
+        "invalid display_name must not persist"
+    );
 }

@@ -1134,7 +1134,7 @@ async fn update_profile_persists_changes(#[case] backend: Backend) {
         .update_profile(
             user_id,
             &ProfileUpdate {
-                display_name: Some("David"),
+                display_name: Some(&"David".parse().unwrap()),
                 bio: Some("A bio"),
             },
         )
