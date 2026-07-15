@@ -317,9 +317,12 @@ mod tests {
         };
         let out = str_newtype::expand(&input).to_string();
         assert!(out.contains("Display"));
+        assert!(out.contains("AsRef"));
         assert!(out.contains("Deref"));
         assert!(out.contains("Serialize"));
         assert!(out.contains("Deserialize"));
+        // The fallible door (TryFrom / FromStr routing) is absent — the author writes
+        // From<String> and Deserialize routes through it.
         assert!(!out.contains("TryFrom"));
         assert!(!out.contains("FromStr"));
     }

@@ -202,6 +202,9 @@ pub(crate) fn build_post_record(
         post_id,
         user_id,
         author_username,
+        // `PostTitle::from` trims; stored titles are already trimmed at write, so this
+        // is a no-op that also defensively normalizes any out-of-band row. `PostBody`
+        // wraps verbatim.
         title: title.map(PostTitle::from),
         slug,
         body: PostBody::from(body),
