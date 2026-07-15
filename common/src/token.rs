@@ -57,6 +57,20 @@ impl FromStr for RawToken {
     }
 }
 
+impl RawToken {
+    /// Wraps a token freshly produced by the server-side generator
+    /// (`host::token::generate`) **without** re-validating it — the generator's
+    /// output is base64url by construction, so the shape check is redundant. This
+    /// is the single trusted-construction door (mirroring
+    /// [`crate::render::RenderedHtml::from_trusted`]); **untrusted** input (a
+    /// cookie, a header, the wire) must go through [`FromStr`]/`TryFrom`, which
+    /// validate.
+    #[must_use]
+    pub fn from_generated(token: String) -> Self {
+        RawToken(token)
+    }
+}
+
 /// The SHA-256 hash of a [`RawToken`] — what the `sessions` / `password_resets` /
 /// `email_verifications` tables store and what lookups and revocation key on. Not
 /// secret (it is a hash, compared and rendered in the session-management UI and
@@ -73,6 +87,18 @@ impl FromStr for TokenHash {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         validate_shape(s)?;
         Ok(TokenHash(s.to_owned()))
+    }
+}
+
+impl TokenHash {
+    /// Wraps a SHA-256 digest produced by `host::token::hash` **without**
+    /// re-validating it — a base64url-encoded digest is well-formed by
+    /// construction. The trusted-construction door; a hash arriving from an
+    /// **untrusted** source (a revoke form field, the wire) must go through
+    /// [`FromStr`]/`TryFrom`, which validate.
+    #[must_use]
+    pub fn from_digest(digest: String) -> Self {
+        TokenHash(digest)
     }
 }
 
@@ -112,6 +138,13 @@ mod tests {
         let json = serde_json::to_string(&h).unwrap();
         let back: TokenHash = serde_json::from_str(&json).unwrap();
         assert_eq!(h, back);
+    }
+
+    #[test]
+    fn trusted_constructors_wrap_without_validation() {
+        // The trusted doors skip validate_shape (the caller asserts provenance).
+        assert_eq!(RawToken::from_generated("abc".to_string()).as_ref(), "abc");
+        assert_eq!(TokenHash::from_digest("xyz".to_string()).as_ref(), "xyz");
     }
 
     #[test]

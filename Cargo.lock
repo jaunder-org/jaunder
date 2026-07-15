@@ -1435,11 +1435,14 @@ name = "host"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "common",
  "http",
  "macros",
  "opentelemetry",
  "opentelemetry_sdk",
+ "rand 0.9.4",
+ "sha2",
  "sqlx",
  "tempfile",
  "tokio",
