@@ -19,7 +19,7 @@ use server::{not_found_error, private_post_not_found_error};
 #[cfg(feature = "server")]
 pub use server::post_response;
 
-use common::{slug::Slug, tag::TagLabel, username::Username};
+use common::{render::RenderedHtml, slug::Slug, tag::TagLabel, username::Username};
 
 use crate::error::WebResult;
 use crate::tags::TagSummary;
@@ -172,6 +172,16 @@ pub struct PublishPostResult {
     pub permalink: String,
 }
 
+/// Trusted-rebuild `deserialize_with` for a wire `RenderedHtml` field: the value
+/// is prior `render()` output serialized by our own server, so reconstruct it via
+/// [`RenderedHtml::from_trusted`] (the type has no blanket `Deserialize` by design).
+pub(crate) fn deserialize_rendered_html<'de, D>(deserializer: D) -> Result<RenderedHtml, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    String::deserialize(deserializer).map(RenderedHtml::from_trusted)
+}
+
 /// Details of a post returned by [`get_post`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PostResponse {
@@ -181,7 +191,8 @@ pub struct PostResponse {
     pub slug: Slug,
     pub body: String,
     pub format: String,
-    pub rendered_html: String,
+    #[serde(deserialize_with = "deserialize_rendered_html")]
+    pub rendered_html: RenderedHtml,
     pub created_at: String,
     pub published_at: Option<String>,
     pub is_draft: bool,
@@ -688,6 +699,35 @@ mod tests {
         }
     }
 
+    // A wire DTO's `rendered_html` survives a serde round-trip: `Serialize` writes
+    // the raw string, and the `deserialize_with` trusted-rebuild reconstructs a
+    // `RenderedHtml` (the type has no blanket `Deserialize`). Covers the sole wire
+    // reconstruction door.
+    #[test]
+    fn timeline_summary_round_trips_rendered_html_via_trusted_rebuild() {
+        use super::TimelinePostSummary;
+        use common::render::RenderedHtml;
+        use common::username::Username;
+
+        let original = TimelinePostSummary {
+            post_id: 1,
+            username: "alice".parse::<Username>().unwrap(),
+            title: Some("T".into()),
+            summary: None,
+            slug: "hello".parse::<Slug>().unwrap(),
+            rendered_html: RenderedHtml::from_trusted("<p>hi</p>"),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            published_at: "2026-01-01T00:00:00Z".into(),
+            permalink: "/~alice/2026/01/01/hello".into(),
+            is_author: false,
+            tags: vec![],
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let round_tripped: TimelinePostSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(round_tripped.rendered_html.as_ref(), "<p>hi</p>");
+        assert_eq!(round_tripped, original);
+    }
+
     // The `publish_at` parse-failure branch: an unparseable RFC3339 value yields a
     // Validation error carrying the friendly wire message (the chrono source rides the
     // anyhow chain rather than being flattened via `.to_string()`).
@@ -796,7 +836,7 @@ mod tests {
         use crate::posts::server::timeline_post_summary;
         use chrono::{TimeZone, Utc};
         use common::{slug::Slug, username::Username};
-        use storage::{PostFormat, PostRecord};
+        use storage::{PostFormat, PostRecord, RenderedHtml};
 
         let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
         let slug = "titleless-note".parse::<Slug>().unwrap();
@@ -810,7 +850,7 @@ mod tests {
                 slug,
                 body: "Titleless note".to_string(),
                 format: PostFormat::Markdown,
-                rendered_html: "<p>Titleless note</p>".to_string(),
+                rendered_html: RenderedHtml::from_trusted("<p>Titleless note</p>"),
                 created_at: base_time,
                 updated_at: base_time,
                 published_at: Some(base_time),
@@ -833,7 +873,7 @@ mod tests {
         use crate::posts::server::post_response;
         use chrono::{TimeZone, Utc};
         use common::{slug::Slug, username::Username};
-        use storage::{PostFormat, PostRecord};
+        use storage::{PostFormat, PostRecord, RenderedHtml};
 
         let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
         let author_username = "author".parse::<Username>().unwrap();
@@ -848,7 +888,7 @@ mod tests {
                 slug: slug.clone(),
                 body: "body".to_string(),
                 format: PostFormat::Markdown,
-                rendered_html: "<p>body</p>".to_string(),
+                rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
                 created_at: base_time,
                 updated_at: base_time,
                 published_at: None,
@@ -871,7 +911,7 @@ mod tests {
                 slug,
                 body: "body".to_string(),
                 format: PostFormat::Markdown,
-                rendered_html: "<p>body</p>".to_string(),
+                rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
                 created_at: base_time,
                 updated_at: base_time,
                 published_at: Some(base_time),
@@ -902,7 +942,7 @@ mod server_tests {
     use std::sync::Arc;
     use storage::{
         MockPostStorage, MockSubscriptionStorage, PostFormat, PostRecord, PostStorage,
-        SubscriptionStorage, UpdatePostError,
+        RenderedHtml, SubscriptionStorage, UpdatePostError,
     };
 
     fn owned_post(user_id: i64) -> PostRecord {
@@ -915,7 +955,7 @@ mod server_tests {
             slug: "hello-world".parse::<Slug>().unwrap(),
             body: "body".to_string(),
             format: PostFormat::Markdown,
-            rendered_html: "<p>body</p>".to_string(),
+            rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
             created_at: now,
             updated_at: now,
             published_at: None,

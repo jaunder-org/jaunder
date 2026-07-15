@@ -144,7 +144,9 @@ async fn build_feed_items(
             title: p.title.clone(),
             permalink: p.permalink(),
             summary: p.summary.clone(),
-            content_html: p.rendered_html.clone(),
+            // Feed content is a separate `String` surface (RSS/Atom XML), outside
+            // #398's view-sink boundary; materialize the rendered HTML into it.
+            content_html: p.rendered_html.to_string(),
             published_at,
             updated_at: p.updated_at,
             tags: tags.iter().map(|t| t.tag_display.clone()).collect(),

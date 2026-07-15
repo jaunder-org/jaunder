@@ -14,7 +14,7 @@ use host::error::{InternalError, InternalResult};
 use crate::backend::Backend;
 use crate::helpers::{post_record_from_row, PostRow};
 
-pub use common::render::{InvalidPostFormat, PostFormat};
+pub use common::render::{InvalidPostFormat, PostFormat, RenderedHtml};
 
 /// The `year`/`month`/`day` component of a public permalink lookup key. Bundling
 /// the date triple keeps [`PostStorage::get_post_by_permalink`] under the
@@ -52,8 +52,9 @@ pub struct PostRecord {
     pub body: String,
     /// Format of the `body`.
     pub format: PostFormat,
-    /// Sanitized HTML rendering of the `body`.
-    pub rendered_html: String,
+    /// HTML produced by `render()` from the `body`. A provenance marker, **not**
+    /// a safety guarantee — `render()` does not sanitize (see #445).
+    pub rendered_html: RenderedHtml,
     /// When the post was first created.
     pub created_at: DateTime<Utc>,
     /// When the post was last updated.
@@ -116,8 +117,9 @@ pub struct PostRevisionRecord {
     pub body: String,
     /// Format at the time of this revision.
     pub format: PostFormat,
-    /// Sanitized HTML rendering at the time of this revision.
-    pub rendered_html: String,
+    /// HTML produced by `render()` at the time of this revision. A provenance
+    /// marker, **not** a safety guarantee — `render()` does not sanitize (see #445).
+    pub rendered_html: RenderedHtml,
     /// When this revision was created.
     pub edited_at: DateTime<Utc>,
 }
@@ -193,7 +195,7 @@ pub struct CreatePostInput {
     pub slug: Slug,
     pub body: String,
     pub format: PostFormat,
-    pub rendered_html: String,
+    pub rendered_html: RenderedHtml,
     /// If Some, the post is created in a published state.
     pub published_at: Option<DateTime<Utc>>,
     /// Optional summary/excerpt of the post.
@@ -215,7 +217,7 @@ pub struct UpdatePostInput {
     pub slug: Slug,
     pub body: String,
     pub format: PostFormat,
-    pub rendered_html: String,
+    pub rendered_html: RenderedHtml,
     /// If `true`, clear `published_at` back to NULL (draft / unschedule). Takes
     /// precedence over `explicit_published_at`.
     pub unpublish: bool,
@@ -1861,7 +1863,7 @@ where
     .bind(input.slug.as_ref())
     .bind(input.body.as_str())
     .bind(format.as_str())
-    .bind(input.rendered_html.as_str())
+    .bind(input.rendered_html.as_ref())
     .bind(now)
     .bind(now)
     .bind(input.published_at)
@@ -2301,7 +2303,9 @@ mod tests {
             body: "\n\n   The first non-empty line of the body is here. \n\n Another line."
                 .to_string(),
             format: PostFormat::Markdown,
-            rendered_html: "<p>The first non-empty line of the body is here.</p>".to_string(),
+            rendered_html: RenderedHtml::from_trusted(
+                "<p>The first non-empty line of the body is here.</p>",
+            ),
             created_at: Utc::now(),
             updated_at: Utc::now(),
             published_at: None,
@@ -2336,7 +2340,7 @@ mod tests {
             slug: "hello-world".parse().unwrap(),
             body: "My body".to_string(),
             format: PostFormat::Markdown,
-            rendered_html: "<p>My body</p>".to_string(),
+            rendered_html: RenderedHtml::from_trusted("<p>My body</p>"),
             created_at: Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap(),
             updated_at: Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap(),
             published_at: Some(Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap()),
@@ -2360,7 +2364,7 @@ mod tests {
             slug: "test-slug".parse().unwrap(),
             body: "Test body".into(),
             format: PostFormat::Markdown,
-            rendered_html: "<p>Test body</p>".into(),
+            rendered_html: RenderedHtml::from_trusted("<p>Test body</p>"),
             published_at: None,
             summary: Some("the summary".into()),
             audiences: vec![AudienceTarget::Public],
@@ -2388,7 +2392,7 @@ mod tests {
             slug: "test-post".parse().unwrap(),
             body: "body".to_string(),
             format: PostFormat::Markdown,
-            rendered_html: "<p>body</p>".to_string(),
+            rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
             published_at: None,
             summary: None,
             audiences: vec![AudienceTarget::Public],
@@ -2438,7 +2442,7 @@ mod tests {
                 slug: "post".parse().unwrap(),
                 body: "body".to_string(),
                 format: PostFormat::Markdown,
-                rendered_html: "<p>body</p>".to_string(),
+                rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
                 published_at: None,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
@@ -2479,7 +2483,7 @@ mod tests {
             slug: slug.parse().unwrap(),
             body: "body".to_string(),
             format: PostFormat::Markdown,
-            rendered_html: "<p>body</p>".to_string(),
+            rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
             published_at: published.then_some(now - chrono::Duration::minutes(30)),
             summary: None,
             audiences: vec![AudienceTarget::Public],
@@ -2608,7 +2612,7 @@ mod tests {
             slug: "hello-world".parse().unwrap(),
             body: String::new(),
             format: PostFormat::Markdown,
-            rendered_html: String::new(),
+            rendered_html: RenderedHtml::from_trusted(""),
             created_at: Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap(),
             updated_at: Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap(),
             published_at: None,
@@ -2706,7 +2710,7 @@ mod tests {
                 slug: "post".parse().unwrap(),
                 body: "body".to_string(),
                 format: PostFormat::Markdown,
-                rendered_html: "<p>body</p>".to_string(),
+                rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
                 published_at: None,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
@@ -2760,7 +2764,7 @@ mod tests {
                 slug: "post".parse().unwrap(),
                 body: "body".to_string(),
                 format: PostFormat::Markdown,
-                rendered_html: "<p>body</p>".to_string(),
+                rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
                 published_at: None,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
@@ -2847,7 +2851,7 @@ mod tests {
                         slug: slug.clone(),
                         body: String::new(),
                         format: PostFormat::Markdown,
-                        rendered_html: String::new(),
+                        rendered_html: RenderedHtml::from_trusted(""),
                         created_at: base + chrono::Duration::seconds(i),
                         updated_at: base,
                         published_at: None,

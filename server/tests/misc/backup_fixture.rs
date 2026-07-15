@@ -6,6 +6,7 @@ use common::visibility::{AudienceTarget, ViewerIdentity};
 use jaunder::cli::StorageArgs;
 use storage::{
     open_existing_database, AppState, CreatePostInput, MediaRecord, MediaSource, PostFormat,
+    RenderedHtml,
 };
 
 /// SHA-256 the media-table fixture row is keyed by; any stable value works, since
@@ -56,7 +57,7 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
             slug: "restored-post".parse().expect("valid slug"),
             body: "body text".to_owned(),
             format: PostFormat::Markdown,
-            rendered_html: "<p>body text</p>".to_owned(),
+            rendered_html: RenderedHtml::from_trusted("<p>body text</p>"),
             published_at: Some(fixture_published_at()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
@@ -126,7 +127,7 @@ async fn seed_named_audience_post(
             slug: "friends-only".parse().expect("valid slug"),
             body: "secret body".to_owned(),
             format: PostFormat::Markdown,
-            rendered_html: "<p>secret body</p>".to_owned(),
+            rendered_html: RenderedHtml::from_trusted("<p>secret body</p>"),
             published_at: Some(fixture_published_at()),
             summary: None,
             audiences: vec![AudienceTarget::Named(audience)],

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use chrono::Datelike;
 use common::tag::TagLabel;
-use storage::PostFormat;
+use storage::{PostFormat, RenderedHtml};
 use web::posts::{
     AudienceSelection, CreatePostResult, DraftSummary, PublishPostResult, TimelinePage,
     UpdatePostResult,
@@ -145,7 +145,10 @@ async fn create_post_persists_rendered_published_post(#[case] backend: Backend) 
     assert_eq!(record.format, PostFormat::Markdown);
     assert!(record.published_at.is_some());
     assert!(
-        record.rendered_html.contains("<strong>bold</strong>"),
+        record
+            .rendered_html
+            .as_ref()
+            .contains("<strong>bold</strong>"),
         "rendered_html: {}",
         record.rendered_html
     );
@@ -316,7 +319,7 @@ async fn create_post_accepts_slug_override_and_saves_draft(#[case] backend: Back
     assert_eq!(record.slug.to_string(), "custom-slug");
     assert_eq!(record.format, PostFormat::Org);
     assert!(record.published_at.is_none());
-    assert!(record.rendered_html.contains("<b>bold</b>"));
+    assert!(record.rendered_html.as_ref().contains("<b>bold</b>"));
 }
 
 #[apply(backends)]
@@ -415,7 +418,10 @@ Body text",
     // Body is stored verbatim including the heading
     assert_eq!(record.body, "# Extracted Title\n\nBody text");
     // Rendered HTML contains the heading because body is rendered verbatim
-    assert!(record.rendered_html.contains("<h1>Extracted Title</h1>"));
+    assert!(record
+        .rendered_html
+        .as_ref()
+        .contains("<h1>Extracted Title</h1>"));
 }
 
 // Shape B — create_post rejection cluster. Identical setup (author + session)
@@ -973,7 +979,10 @@ async fn update_post_updates_draft_content_and_slug(#[case] backend: Backend) {
         .expect("post should exist");
     assert_eq!(record.title.as_deref(), Some("Updated Title"));
     assert_eq!(record.slug.to_string(), "updated-slug");
-    assert!(record.rendered_html.contains("<strong>new body</strong>"));
+    assert!(record
+        .rendered_html
+        .as_ref()
+        .contains("<strong>new body</strong>"));
 }
 
 #[apply(backends)]
@@ -1449,7 +1458,7 @@ async fn list_drafts_surfaces_scheduled_with_marker_excludes_live(#[case] backen
             slug: slug.parse().unwrap(),
             body: "body".to_string(),
             format: PostFormat::Markdown,
-            rendered_html: "<p>body</p>".to_string(),
+            rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
             published_at: Some(published_at),
             summary: None,
             audiences: vec![common::visibility::AudienceTarget::Public],
@@ -3197,7 +3206,7 @@ async fn create_targeted_post(
             slug: slug.parse().unwrap(),
             body: "body".to_string(),
             format: PostFormat::Markdown,
-            rendered_html: "<p>body</p>".to_string(),
+            rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
             published_at: Some(chrono::Utc::now()),
             summary: None,
             audiences,

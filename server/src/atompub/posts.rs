@@ -550,7 +550,7 @@ pub async fn member_put(
 mod etag_tests {
     use super::*;
     use chrono::{TimeZone, Utc};
-    use storage::{PostFormat, PostTag};
+    use storage::{PostFormat, PostTag, RenderedHtml};
 
     fn mk_tag(post_id: i64, tag_id: i64, slug: &str, display: &str) -> PostTag {
         PostTag {
@@ -574,7 +574,7 @@ mod etag_tests {
             slug: "my-post".parse().expect("parse slug"),
             body: "Body text.".to_string(),
             format: PostFormat::Org,
-            rendered_html: "<p>Body text.</p>".to_string(),
+            rendered_html: RenderedHtml::from_trusted("<p>Body text.</p>"),
             created_at: t,
             updated_at: t,
             published_at: Some(t),
@@ -618,7 +618,7 @@ mod etag_tests {
         p.created_at = later;
         p.updated_at = later;
         p.published_at = Some(later);
-        p.rendered_html = "<p>totally different</p>".to_string();
+        p.rendered_html = RenderedHtml::from_trusted("<p>totally different</p>");
         p.tags = vec![
             mk_tag(999, 55, "rust", "Rust"),
             mk_tag(999, 56, "emacs", "Emacs"),

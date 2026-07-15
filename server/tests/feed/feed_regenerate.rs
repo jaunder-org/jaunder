@@ -4,7 +4,7 @@ use common::slug::Slug;
 use common::username::Username;
 use common::visibility::AudienceTarget;
 use jaunder::feed::regenerate::regenerate_feed;
-use storage::{CreatePostInput, PostFormat};
+use storage::{CreatePostInput, PostFormat, RenderedHtml};
 
 use rstest::*;
 use rstest_reuse::*;
@@ -33,7 +33,7 @@ async fn regenerate_writes_cache_row_for_user_feed(#[case] backend: Backend) {
             slug: "post-1".parse::<Slug>().expect("valid slug"),
             body: "Post 1 body".to_string(),
             format: PostFormat::Markdown,
-            rendered_html: "<p>Post 1 body</p>".to_string(),
+            rendered_html: RenderedHtml::from_trusted("<p>Post 1 body</p>"),
             published_at: Some(now),
             summary: None,
             audiences: vec![AudienceTarget::Public],
@@ -50,7 +50,7 @@ async fn regenerate_writes_cache_row_for_user_feed(#[case] backend: Backend) {
             slug: "post-2".parse::<Slug>().expect("valid slug"),
             body: "Post 2 body".to_string(),
             format: PostFormat::Markdown,
-            rendered_html: "<p>Post 2 body</p>".to_string(),
+            rendered_html: RenderedHtml::from_trusted("<p>Post 2 body</p>"),
             published_at: Some(now),
             summary: None,
             audiences: vec![AudienceTarget::Public],
@@ -214,7 +214,7 @@ async fn regenerate_writes_each_format(#[case] backend: Backend) {
             slug: "test-post".parse::<Slug>().expect("valid slug"),
             body: "Test body".to_string(),
             format: PostFormat::Markdown,
-            rendered_html: "<p>Test body</p>".to_string(),
+            rendered_html: RenderedHtml::from_trusted("<p>Test body</p>"),
             published_at: Some(now),
             summary: None,
             audiences: vec![AudienceTarget::Public],
@@ -272,7 +272,7 @@ async fn feed_contains_only_public_posts(#[case] backend: Backend) {
         slug: slug.parse::<Slug>().expect("valid slug"),
         body: format!("{title} body"),
         format: PostFormat::Markdown,
-        rendered_html: format!("<p>{title} body</p>"),
+        rendered_html: RenderedHtml::from_trusted(format!("<p>{title} body</p>")),
         published_at: Some(now),
         summary: None,
         audiences,

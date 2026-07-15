@@ -118,7 +118,7 @@ mod tests {
         use crate::posts::server::post_response;
         use chrono::{TimeZone, Utc};
         use common::{slug::Slug, username::Username};
-        use storage::{PostFormat, PostRecord};
+        use storage::{PostFormat, PostRecord, RenderedHtml};
 
         let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
         let author_username = "author".parse::<Username>().unwrap();
@@ -133,7 +133,7 @@ mod tests {
                 slug,
                 body: "body".to_string(),
                 format: PostFormat::Markdown,
-                rendered_html: "<p>body</p>".to_string(),
+                rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
                 created_at: base_time,
                 updated_at: base_time,
                 published_at: Some(base_time),

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use axum::http::StatusCode;
 use chrono::Utc;
-use storage::{CreatePostInput, PostFormat};
+use storage::{CreatePostInput, PostFormat, RenderedHtml};
 use web::tags::TagSummary;
 
 use rstest::*;
@@ -37,7 +37,7 @@ async fn seed_user_and_tagged_post(
             slug: slug.parse().unwrap(),
             body: format!("body {slug}"),
             format: PostFormat::Markdown,
-            rendered_html: format!("<p>body {slug}</p>"),
+            rendered_html: RenderedHtml::from_trusted(format!("<p>body {slug}</p>")),
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
