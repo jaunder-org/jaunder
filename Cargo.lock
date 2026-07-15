@@ -4120,7 +4120,6 @@ dependencies = [
  "clap",
  "common",
  "croner",
- "email_address",
  "flate2",
  "futures-util",
  "host",

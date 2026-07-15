@@ -216,13 +216,13 @@ mod tests {
     #[tokio::test]
     async fn from_config_rejects_sender_lettre_cannot_parse() {
         // guard:no-backend — no DB
-        // `SmtpConfig::sender` (an `email_address::EmailAddress`) accepts the
+        // `SmtpConfig::sender` (a `common::mailbox::Mailbox`) accepts the
         // domain-literal, but lettre's Mailbox parser rejects it, so `from_config`
         // maps it to InvalidSender.
         let config = SmtpConfig {
             sender: "user@[127.0.0.1]"
                 .parse()
-                .expect("email_address accepts a domain-literal"),
+                .expect("Mailbox accepts a domain-literal"),
             ..base_config(SmtpTlsMode::Plain)
         };
         // `LettreMailSender` is not `Debug`, so match on the result rather than
