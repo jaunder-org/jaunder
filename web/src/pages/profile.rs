@@ -1,6 +1,8 @@
 use crate::error::WebError;
+use crate::forms::Field;
 use crate::pages::Topbar;
 use crate::profile::{get_default_post_format, get_profile, SetDefaultPostFormat, UpdateProfile};
+use common::display_name::DisplayName;
 use leptos::prelude::*;
 
 /// Profile page — shows username, display name, bio; allows updating.
@@ -8,6 +10,13 @@ use leptos::prelude::*;
 pub fn ProfilePage() -> impl IntoView {
     let update_action = ServerAction::<UpdateProfile>::new();
     let profile = crate::server_resource(move || update_action.version().get(), |_| get_profile());
+    // Client-validated display name (optional: empty clears it) + a plain bio
+    // buffer, owned by the component so the bespoke form can `.dispatch` the typed
+    // `UpdateProfile` args — the ADR-0065 direct-bind pattern (mirrors the post
+    // compose/edit forms), replacing the former `<ActionForm>` whose string field
+    // could not carry a validated `Option<DisplayName>`.
+    let dn_field = Field::<DisplayName>::optional();
+    let bio = RwSignal::new(String::new());
 
     view! {
         <Topbar title="Profile".to_string() sub="Your details".to_string() />
@@ -19,28 +28,62 @@ pub fn ProfilePage() -> impl IntoView {
                     {move || Suspend::new(async move {
                         match profile.await {
                             Ok(data) => {
+                                dn_field
+                                    .value
+                                    .set(
+                                        data.display_name.as_deref().unwrap_or_default().to_string(),
+                                    );
+                                bio.set(data.bio.as_deref().unwrap_or_default().to_string());
+                                let submit = move |_| {
+                                    update_action
+                                        .dispatch(UpdateProfile {
+                                            display_name: dn_field.parsed(),
+                                            bio: bio.get(),
+                                        });
+                                };
+                                // Seed the form from the persisted profile. This re-runs
+                                // (re-seeding) whenever a successful update bumps the
+                                // resource; a stored display name is always valid, so the
+                                // optional field stays valid.
                                 view! {
                                     <p>"Username: " {data.username.to_string()}</p>
-                                    <ActionForm action=update_action>
-                                        <label>
-                                            "Display Name"
-                                            <input
-                                                type="text"
-                                                name="display_name"
-                                                prop:value=data.display_name.clone().unwrap_or_default()
-                                            />
-                                        </label>
-                                        <label>
-                                            "Bio"
-                                            <textarea
-                                                name="bio"
-                                                prop:value=data.bio.clone().unwrap_or_default()
-                                            />
-                                        </label>
-                                        <button type="submit" class="j-btn is-primary">
-                                            "Update Profile"
-                                        </button>
-                                    </ActionForm>
+                                    <label>
+                                        "Display Name"
+                                        <input
+                                            type="text"
+                                            name="display_name"
+                                            prop:value=dn_field.value
+                                            on:input=move |ev| {
+                                                let v = event_target_value(&ev);
+                                                dn_field.value.set(v.clone());
+                                                dn_field.error.set(dn_field.error_for(&v));
+                                            }
+                                            on:blur=move |_| dn_field.touch()
+                                        />
+                                    </label>
+                                    {move || {
+                                        dn_field
+                                            .is_touched()
+                                            .then(|| dn_field.error.get())
+                                            .flatten()
+                                            .map(|msg| view! { <p class="error">{msg}</p> })
+                                    }}
+                                    <label>
+                                        "Bio"
+                                        <textarea
+                                            name="bio"
+                                            prop:value=bio
+                                            on:input=move |ev| bio.set(event_target_value(&ev))
+                                        />
+                                    </label>
+                                    <button
+                                        type="button"
+                                        class="j-btn is-primary"
+                                        prop:disabled=move || !dn_field.is_valid()
+                                        on:click=submit
+                                    >
+                                        "Update Profile"
+                                    </button>
                                     <DefaultPostFormatControl />
                                 }
                                     .into_any()

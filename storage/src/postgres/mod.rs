@@ -62,6 +62,7 @@ mod schema;
 mod teardown;
 
 use crate::{AtomicOps, ConfirmPasswordResetError, RegisterWithInviteError};
+use common::display_name::DisplayName;
 use common::password::Password;
 use common::username::Username;
 use host::invite::InviteCode;
@@ -87,7 +88,7 @@ impl AtomicOps for PostgresAtomicOps {
         &self,
         username: &Username,
         password: &Password,
-        display_name: Option<&str>,
+        display_name: Option<&DisplayName>,
         is_operator: bool,
         invite_code: &InviteCode,
     ) -> Result<i64, RegisterWithInviteError> {
@@ -121,7 +122,7 @@ impl AtomicOps for PostgresAtomicOps {
         )
         .bind(username.as_ref())
         .bind(&password_hash)
-        .bind(display_name)
+        .bind(display_name.map(|d| &**d))
         .bind(now)
         .bind(is_operator)
         .fetch_one(&mut *tx)

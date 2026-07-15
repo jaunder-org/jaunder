@@ -1,5 +1,6 @@
 // Shared imports (no cfg needed)
 use crate::error::WebResult;
+use common::display_name::DisplayName;
 use common::email::Email;
 use common::username::Username;
 use leptos::prelude::*;
@@ -22,7 +23,7 @@ use {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileData {
     pub username: Username,
-    pub display_name: Option<String>,
+    pub display_name: Option<DisplayName>,
     pub bio: Option<String>,
     pub email: Option<Email>,
     pub email_verified: bool,
@@ -49,20 +50,21 @@ pub async fn get_profile() -> WebResult<ProfileData> {
 }
 
 /// Updates the authenticated user's display name and bio.
-/// Blank input (empty or whitespace-only) clears the field; surrounding
-/// whitespace is trimmed.
+///
+/// `display_name` is a typed [`DisplayName`] wire arg pre-validated on the client
+/// (ADR-0065): `None` clears it, `Some` is already trimmed/bounded. `bio` is
+/// free-form; blank (empty or whitespace-only) clears it.
 #[server(endpoint = "/update_profile")]
-pub async fn update_profile(display_name: String, bio: String) -> WebResult<()> {
+pub async fn update_profile(display_name: Option<DisplayName>, bio: String) -> WebResult<()> {
     boundary!("update_profile", {
         let auth = require_auth().await?;
         let users = expect_context::<Arc<dyn UserStorage>>();
-        let dn = common::text::non_empty(&display_name);
         let b = common::text::non_empty(&bio);
         users
             .update_profile(
                 auth.user_id,
                 &ProfileUpdate {
-                    display_name: dn,
+                    display_name: display_name.as_ref(),
                     bio: b,
                 },
             )

@@ -9,6 +9,7 @@ use crate::{
     InviteRecord, MediaRecord, MediaSource, PostFormat, PostRecord, PostTag, RenderedHtml,
     SessionRecord, UserRecord,
 };
+use common::display_name::DisplayName;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::token::InvalidTokenShape;
@@ -47,6 +48,12 @@ pub(crate) fn build_user_record(
     let username = username
         .parse()
         .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    let display_name = display_name
+        .map(|s| {
+            s.parse::<DisplayName>()
+                .map_err(|e| sqlx::Error::Decode(Box::new(e)))
+        })
+        .transpose()?;
     let email = email
         .map(|s| s.parse().map_err(|e| sqlx::Error::Decode(Box::new(e))))
         .transpose()?;
@@ -905,7 +912,7 @@ mod tests {
         let record = user_record_from_row(row).unwrap();
         assert_eq!(record.user_id, 1);
         assert_eq!(record.username, "alice");
-        assert_eq!(record.display_name, Some("Alice".to_string()));
+        assert_eq!(record.display_name, Some("Alice".parse().unwrap()));
         assert_eq!(record.bio, Some("Bio".to_string()));
         assert_eq!(record.created_at, now);
         assert_eq!(record.last_authenticated_at, Some(now));

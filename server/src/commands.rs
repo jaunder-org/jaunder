@@ -10,6 +10,7 @@ use crate::cli::{Commands, StorageArgs};
 use crate::mailer::LettreMailSender;
 use crate::runtime_file;
 use common::backup::BackupMode;
+use common::display_name::DisplayName;
 use common::email::Email;
 use common::mailer::{EmailMessage, MailSender};
 use common::password::Password;
@@ -66,7 +67,7 @@ impl Commands {
                     &storage,
                     &username,
                     parse_password(password)?,
-                    display_name.as_deref(),
+                    display_name.as_ref(),
                     operator,
                 )
                 .await
@@ -177,7 +178,7 @@ pub async fn cmd_user_create(
     storage: &StorageArgs,
     username: &Username,
     password: Option<Password>,
-    display_name: Option<&str>,
+    display_name: Option<&DisplayName>,
     is_operator: bool,
 ) -> anyhow::Result<()> {
     let state = open_existing_database(&storage.db)

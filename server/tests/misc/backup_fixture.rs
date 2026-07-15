@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use common::password::Password;
 use common::tag::TagLabel;
-use common::test_support::parse_audience_name;
+use common::test_support::{parse_audience_name, parse_display_name};
 use common::username::Username;
 use common::visibility::{AudienceTarget, ViewerIdentity};
 use jaunder::cli::StorageArgs;
@@ -48,7 +48,12 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
     let password: Password = "password123".parse().expect("valid password");
     let author = state
         .users
-        .create_user(&username, &password, Some("Backup User"), true)
+        .create_user(
+            &username,
+            &password,
+            Some(&parse_display_name("Backup User")),
+            true,
+        )
         .await
         .expect("create user");
     let public_post = state
@@ -98,7 +103,12 @@ async fn seed_named_audience_post(
     let viewer_name: Username = "viewer".parse().expect("valid username");
     let viewer = state
         .users
-        .create_user(&viewer_name, password, Some("Viewer"), false)
+        .create_user(
+            &viewer_name,
+            password,
+            Some(&parse_display_name("Viewer")),
+            false,
+        )
         .await
         .expect("create viewer");
     let local = state
