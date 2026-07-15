@@ -47,6 +47,58 @@ impl FromStr for PostFormat {
     }
 }
 
+/// HTML **produced by [`render`]**. This is a *provenance* marker, not a safety
+/// guarantee: `render` does **no** sanitization (see #445), so this type means
+/// "came out of our renderer", NOT "safe / XSS-free". Its value is structural — the
+/// unescaped view sink accepts only `RenderedHtml`, so a raw `String`/body cannot
+/// reach it by accident.
+///
+/// The only ways to obtain one are [`render`] (mints new HTML) and
+/// [`RenderedHtml::from_trusted`] (rebuilds a value already produced by `render`
+/// and round-tripped through our own storage or wire). There is deliberately no
+/// `From`/`TryFrom`/`Deref`/`FromStr`/`Deserialize`.
+///
+/// Constructing one from an arbitrary string does not compile:
+/// ```compile_fail
+/// let _ = common::render::RenderedHtml("<p>x</p>".to_string()); // private field
+/// ```
+/// ```compile_fail
+/// let _: common::render::RenderedHtml = "<p>x</p>".to_string().into(); // no From
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RenderedHtml(String);
+
+impl RenderedHtml {
+    /// Rebuild a `RenderedHtml` from a string the caller asserts is prior
+    /// [`render`] output round-tripped through our own store or wire. This is the
+    /// single trusted-rebuild door; grep it to enumerate every rebuild site. Takes
+    /// `impl Into<String>` so callers (esp. fixtures) don't need `.to_string()`.
+    #[must_use]
+    pub fn from_trusted(html: impl Into<String>) -> Self {
+        Self(html.into())
+    }
+}
+
+impl fmt::Display for RenderedHtml {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl AsRef<str> for RenderedHtml {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+// Reading out is always safe; deliberately NO `Deserialize` — the wire uses a
+// `deserialize_with` helper that routes through `from_trusted`.
+impl serde::Serialize for RenderedHtml {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Pure rendering functions
 // ---------------------------------------------------------------------------
@@ -277,6 +329,19 @@ fn render_org(body: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rendered_html_display_and_as_ref_expose_inner() {
+        let h = RenderedHtml::from_trusted("<p>hi</p>");
+        assert_eq!(h.to_string(), "<p>hi</p>");
+        assert_eq!(h.as_ref(), "<p>hi</p>");
+    }
+
+    #[test]
+    fn rendered_html_serializes_as_the_raw_string() {
+        let h = RenderedHtml::from_trusted("<b>x</b>");
+        assert_eq!(serde_json::to_string(&h).unwrap(), "\"<b>x</b>\"");
+    }
 
     #[test]
     fn post_format_markdown_variant() {
