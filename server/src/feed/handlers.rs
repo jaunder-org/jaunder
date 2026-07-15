@@ -6,7 +6,7 @@ use axum::{
     response::{IntoResponse, Response},
     Extension,
 };
-use common::feed::{canonicalize, FeedFormat, FeedSurface};
+use common::feed::{FeedFormat, FeedPath, FeedSurface};
 use common::{tag::Tag, username::Username};
 use storage::{FeedCacheStorage, PostStorage, SiteConfigStorage};
 
@@ -29,8 +29,8 @@ async fn serve(
     surface: FeedSurface,
     format: FeedFormat,
 ) -> Response {
-    let feed_url = canonicalize(&surface, format);
-    let row = match feed_cache.get(&feed_url).await {
+    let feed_path = FeedPath::canonical(&surface, format);
+    let row = match feed_cache.get(&feed_path).await {
         Ok(Some(row)) => {
             host::metrics::feed_cache(host::metrics::CacheResult::Hit);
             row
@@ -44,7 +44,7 @@ async fn serve(
                 site_config.as_ref(),
                 posts.as_ref(),
                 feed_cache.as_ref(),
-                &feed_url,
+                &feed_path,
             )
             .await
             {
@@ -192,7 +192,7 @@ mod tests {
 
     fn sample_row(etag: &str, updated_at: chrono::DateTime<chrono::Utc>) -> FeedCacheRow {
         FeedCacheRow {
-            feed_url: "/feed.rss".to_owned(),
+            feed_path: "/feed.rss".parse().expect("valid feed path"),
             body: "<rss/>".to_owned(),
             etag: etag.to_owned(),
             content_type: "application/rss+xml; charset=utf-8".to_owned(),

@@ -8,7 +8,7 @@ use common::password::Password;
 use common::slug::Slug;
 use common::username::Username;
 use jaunder::feed::worker::FeedWorker;
-use storage::test_support::{backends, Backend, TestEnv};
+use storage::test_support::{backends, fp, Backend, TestEnv};
 use storage::{CreatePostInput, FeedCacheRow, PostFormat, RenderedHtml};
 
 use rstest::*;
@@ -76,10 +76,10 @@ async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub(#[case] bac
         .await
         .expect("create post");
 
-    let feed_url: FeedPath = "/~alice/feed.rss".parse().expect("valid feed path");
+    let feed_path = fp("/~alice/feed.rss");
     state
         .feed_events
-        .enqueue(&feed_url)
+        .enqueue(&feed_path)
         .await
         .expect("enqueue feed event");
 
@@ -87,7 +87,7 @@ async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub(#[case] bac
 
     let cache_row = state
         .feed_cache
-        .get(&feed_url)
+        .get(&feed_path)
         .await
         .expect("get cache")
         .expect("cache row should exist");
@@ -139,10 +139,10 @@ async fn worker_pings_hub_when_configured(#[case] backend: Backend) {
         .await
         .expect("set hub url");
 
-    let feed_url: FeedPath = "/~alice/feed.rss".parse().expect("valid feed path");
+    let feed_path = fp("/~alice/feed.rss");
     state
         .feed_events
-        .enqueue(&feed_url)
+        .enqueue(&feed_path)
         .await
         .expect("enqueue feed event");
 
@@ -196,11 +196,11 @@ async fn worker_groups_duplicate_events_into_single_regen(#[case] backend: Backe
         .await
         .expect("set hub url");
 
-    let feed_url: FeedPath = "/~alice/feed.rss".parse().expect("valid feed path");
+    let feed_path = fp("/~alice/feed.rss");
     for _ in 0..5 {
         state
             .feed_events
-            .enqueue(&feed_url)
+            .enqueue(&feed_path)
             .await
             .expect("enqueue feed event");
     }
@@ -265,10 +265,10 @@ async fn worker_applies_backoff_on_ping_failure(#[case] backend: Backend) {
         .await
         .expect("set hub url");
 
-    let feed_url: FeedPath = "/~alice/feed.rss".parse().expect("valid feed path");
+    let feed_path = fp("/~alice/feed.rss");
     state
         .feed_events
-        .enqueue(&feed_url)
+        .enqueue(&feed_path)
         .await
         .expect("enqueue feed event");
 
@@ -291,7 +291,7 @@ async fn worker_applies_backoff_on_ping_failure(#[case] backend: Backend) {
     // Verify the cache row was still created (regen succeeded, only ping failed)
     let cache_row = state
         .feed_cache
-        .get(&feed_url)
+        .get(&feed_path)
         .await
         .expect("get cache")
         .expect("cache row should exist even though ping failed");
@@ -322,7 +322,7 @@ async fn startup_catchup_regenerates_feed_for_go_live_while_down(#[case] backend
     state
         .feed_cache
         .upsert(FeedCacheRow {
-            feed_url: "/feed.atom".to_string(),
+            feed_path: fp("/feed.atom"),
             body: "stale".to_string(),
             etag: "etag".to_string(),
             content_type: "application/atom+xml; charset=utf-8".to_string(),
@@ -464,8 +464,12 @@ async fn worker_marks_exhausted_after_backoff_attempts_are_used_up(#[case] backe
         .await
         .expect("set hub url");
 
-    let feed_url: FeedPath = "/~alice/feed.rss".parse().expect("valid feed path");
-    state.feed_events.enqueue(&feed_url).await.expect("enqueue");
+    let feed_path = fp("/~alice/feed.rss");
+    state
+        .feed_events
+        .enqueue(&feed_path)
+        .await
+        .expect("enqueue");
 
     // Drive the attempt count up to the backoff-table length by repeatedly
     // claiming and re-queuing with a past retry time (so it stays claimable).

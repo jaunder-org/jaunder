@@ -15,7 +15,7 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::make_app;
-use storage::test_support::{backends, backends_matrix, Backend, TestEnv};
+use storage::test_support::{backends, backends_matrix, fp, Backend, TestEnv};
 use storage::CreatePostInput;
 use storage::PostFormat;
 use storage::RenderedHtml;
@@ -96,7 +96,7 @@ async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_typ
 
     let cached = state
         .feed_cache
-        .get("/~alice/feed.rss")
+        .get(&fp("/~alice/feed.rss"))
         .await
         .expect("get from cache")
         .expect("cache entry should exist");
@@ -171,7 +171,7 @@ async fn handler_cache_hit_serves_stored_body_without_regeneration(#[case] backe
     // Pre-populate the cache with a known body
     let known_body = "known feed body";
     let row = storage::FeedCacheRow {
-        feed_url: "/~bob/feed.rss".to_string(),
+        feed_path: fp("/~bob/feed.rss"),
         body: known_body.to_string(),
         etag: "known-etag".to_string(),
         content_type: "application/rss+xml; charset=utf-8".to_string(),
@@ -209,7 +209,7 @@ async fn handler_if_none_match_returns_304(#[case] backend: Backend) {
 
     let etag = "test-etag-123";
     let row = storage::FeedCacheRow {
-        feed_url: "/~charlie/feed.rss".to_string(),
+        feed_path: fp("/~charlie/feed.rss"),
         body: "feed body".to_string(),
         etag: etag.to_string(),
         content_type: "application/rss+xml; charset=utf-8".to_string(),
@@ -245,7 +245,7 @@ async fn handler_if_modified_since_returns_304_when_unchanged(#[case] backend: B
         .with_nanosecond(0)
         .expect("valid nanosecond value");
     let row = storage::FeedCacheRow {
-        feed_url: "/~dave/feed.rss".to_string(),
+        feed_path: fp("/~dave/feed.rss"),
         body: "feed body".to_string(),
         etag: "test-etag".to_string(),
         content_type: "application/rss+xml; charset=utf-8".to_string(),

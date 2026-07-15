@@ -1,6 +1,6 @@
 use chrono::Utc;
 use common::feed::{
-    feed_etag, parse, FeedFormat, FeedItem, FeedMetadata, FeedSurface, HybridWindow,
+    feed_etag, parse, FeedFormat, FeedItem, FeedMetadata, FeedPath, FeedSurface, HybridWindow,
 };
 use storage::{FeedCacheRow, FeedCacheStorage, PostRecord, PostStorage, SiteConfigStorage};
 use thiserror::Error;
@@ -23,16 +23,19 @@ pub enum RegenerateError {
 ///
 /// # Errors
 ///
-/// Returns `RegenerateError::BadUrl` if `feed_url` cannot be parsed,
-/// or `RegenerateError::Storage` if any database operation fails.
+/// Returns `RegenerateError::Storage` if any database operation fails.
+/// (`RegenerateError::BadUrl` is retained as a defensive, never-hit guard: a
+/// `FeedPath` argument is always parseable, so that arm cannot fire.)
 pub async fn regenerate_feed(
     site_config: &dyn SiteConfigStorage,
     posts: &dyn PostStorage,
     feed_cache: &dyn FeedCacheStorage,
-    feed_url: &str,
+    feed_path: &FeedPath,
 ) -> Result<FeedCacheRow, RegenerateError> {
+    // A `FeedPath` is always parseable, so this never yields `None`; `BadUrl` is
+    // retained as a mapped (never-hit) error rather than an `expect()`/panic.
     let (surface, format) =
-        parse(feed_url).ok_or_else(|| RegenerateError::BadUrl(feed_url.into()))?;
+        parse(feed_path).ok_or_else(|| RegenerateError::BadUrl(feed_path.to_string()))?; // cov:ignore
 
     let feeds = site_config.get_feeds_config().await.map_err(storage_err)?;
     let identity = site_config.get_identity().await.map_err(storage_err)?;
@@ -59,7 +62,7 @@ pub async fn regenerate_feed(
     let items = build_feed_items(posts, &published).await?;
 
     let base = identity.base_url.as_deref().unwrap_or("");
-    let self_url = format!("{base}{}", percent_encode_path(feed_url));
+    let self_url = format!("{base}{}", percent_encode_path(feed_path));
     let canonical_url = match &surface {
         FeedSurface::Site => format!("{base}/"),
         FeedSurface::SiteTag { tag } => {
@@ -95,7 +98,7 @@ pub async fn regenerate_feed(
     let etag = feed_etag(&items, now);
 
     let row = FeedCacheRow {
-        feed_url: feed_url.to_string(),
+        feed_path: feed_path.clone(),
         body,
         etag,
         content_type: format.content_type().to_string(),
@@ -214,9 +217,14 @@ mod tests {
         let mut feed_cache = storage::MockFeedCacheStorage::new();
         feed_cache.expect_upsert().returning(|_| Ok(()));
 
-        let row = regenerate_feed(&site_config, &posts, &feed_cache, "/feed.rss")
-            .await
-            .expect("site feed regenerates");
+        let row = regenerate_feed(
+            &site_config,
+            &posts,
+            &feed_cache,
+            &"/feed.rss".parse::<FeedPath>().expect("valid feed path"),
+        )
+        .await
+        .expect("site feed regenerates");
 
         // The `FeedSurface::Site` arm anchors the canonical URL at `{base}/`.
         assert!(

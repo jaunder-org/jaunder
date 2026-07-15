@@ -31,8 +31,8 @@ use rstest::*;
 use rstest_reuse::*;
 
 use storage::test_support::{
-    backends, recorded_postgres_url, sqlite_url, template_postgres_url, Backend, PostgresDbGuard,
-    TestEnv,
+    backends, fp, recorded_postgres_url, sqlite_url, template_postgres_url, Backend,
+    PostgresDbGuard, TestEnv,
 };
 
 // The Postgres-backed cases below (the `::postgres` expansion of each
@@ -969,9 +969,7 @@ async fn feed_events_marks_run(#[case] backend: Backend) {
     // Enqueue + claim to obtain real ids, then exercise every
     // FeedEventDialect mark_* method on this backend. Each is an independent
     // `UPDATE … WHERE id IN (…)`, so they all run regardless of row state.
-    fe.enqueue(&"/feed.rss".parse::<common::feed::FeedPath>().unwrap())
-        .await
-        .unwrap();
+    fe.enqueue(&fp("/feed.rss")).await.unwrap();
     let claimed = fe
         .claim_pending_batch(50, chrono::Duration::minutes(5))
         .await
@@ -3390,7 +3388,7 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
         .unwrap();
 
     let mk_row = |feed_url: &str, generated_at| FeedCacheRow {
-        feed_url: feed_url.to_string(),
+        feed_path: fp(feed_url),
         body: "cached".to_string(),
         etag: "etag".to_string(),
         content_type: "application/atom+xml; charset=utf-8".to_string(),
