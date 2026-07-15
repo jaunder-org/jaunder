@@ -235,6 +235,7 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
+    use common::test_support::parse_display_name;
 
     /// Serializes all tests that read or write the env vars clap resolves at parse time.
     /// `cargo test` runs tests in parallel threads within the same process, so concurrent
@@ -512,7 +513,7 @@ mod tests {
         let Commands::UserCreate { display_name, .. } = cli.command.expect("subcommand") else {
             unreachable!("parse yields Commands::UserCreate")
         };
-        assert_eq!(display_name, Some("Alice Smith".parse().unwrap()));
+        assert_eq!(display_name, Some(parse_display_name("Alice Smith")));
     }
 
     #[test]

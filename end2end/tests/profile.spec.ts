@@ -42,3 +42,36 @@ test("over-long display name shows an inline error and gates submit", async ({
   await expect(page.locator(SEL.error)).toBeVisible();
   await expect(page.locator(UPDATE_BUTTON)).toBeDisabled();
 });
+
+// #401: clearing the box removes the display name end-to-end. Under the typed
+// Option<DisplayName> wire arg an empty value is *omitted* (dispatched as None),
+// not sent as an empty string that would fail to decode — so emptying the field
+// and submitting must persist as cleared, and submit stays enabled (empty is a
+// valid optional value). This is the real-browser form of the former
+// "empty fields set to none" server test.
+test("clearing the display name persists as empty", async ({
+  registeredPage: page,
+}) => {
+  await goto(page, "/profile");
+
+  await page.fill(DISPLAY_NAME, "Temp Name");
+  let updated = page.waitForResponse((response) =>
+    response.url().includes("update_profile"),
+  );
+  await page.click(UPDATE_BUTTON);
+  expect((await updated).ok()).toBe(true);
+
+  await goto(page, "/profile");
+  await expect(page.locator(DISPLAY_NAME)).toHaveValue("Temp Name");
+
+  // Empty the field (valid for an optional field ⇒ submit stays enabled) and save.
+  await page.fill(DISPLAY_NAME, "");
+  updated = page.waitForResponse((response) =>
+    response.url().includes("update_profile"),
+  );
+  await page.click(UPDATE_BUTTON);
+  expect((await updated).ok()).toBe(true);
+
+  await goto(page, "/profile");
+  await expect(page.locator(DISPLAY_NAME)).toHaveValue("");
+});

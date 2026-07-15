@@ -113,6 +113,7 @@ pub trait AtomicOps: Send + Sync {
 mod tests {
     use super::*;
     use crate::test_support::{backends, Backend};
+    use common::test_support::parse_display_name;
     use rstest::*;
     use rstest_reuse::*;
 
@@ -169,7 +170,7 @@ mod tests {
         env.base.close_pool().await;
         let username: Username = "alice".parse().unwrap();
         let password: Password = "password123".parse().unwrap();
-        let display_name: DisplayName = "Alice".parse().unwrap();
+        let display_name = parse_display_name("Alice");
 
         assert!(env
             .state
