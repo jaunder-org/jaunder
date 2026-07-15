@@ -83,3 +83,15 @@ export function extractToken(email: CapturedEmail): string {
   if (!match) throw new Error("no token in captured email");
   return match[1];
 }
+
+/**
+ * Extract the `invite_code=...` value from a captured invitation email body
+ * (#433: the invite link is `{base_url}/register?invite_code=<code>`).  Throws
+ * if absent, mirroring `extractToken`, so callers fail clearly rather than
+ * navigating with an `undefined` code.
+ */
+export function extractInviteCode(email: CapturedEmail): string {
+  const match = email.body_text.match(/invite_code=([^\s]+)/);
+  if (!match) throw new Error("no invite_code in captured email");
+  return match[1];
+}

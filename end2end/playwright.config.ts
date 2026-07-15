@@ -47,16 +47,16 @@ export default defineConfig({
     screenshot: "only-on-failure",
     ...(traceParent ? { extraHTTPHeaders: { traceparent: traceParent } } : {}),
   },
-  // admin-site mutates site.title/base_url global singletons, so under fullyParallel it
-  // must not overlap specs that read them (ADR-0039). Each browser splits into a parallel
-  // main project (admin-site ignored) and a serial *-admin project that runs admin-site
-  // alone AFTER the main project (dependencies + fullyParallel:false). At workers=1 this
-  // is inert. webkit is defined for host use; the VM never selects it (WPE SIGABRT), so no
-  // gating needed.
+  // admin-site and invite mutate global site-config singletons (site.title/base_url;
+  // site.registration_policy, #433), so under fullyParallel they must not overlap specs
+  // that read them (ADR-0039). Each browser splits into a parallel main project (these
+  // specs ignored) and a serial *-admin project that runs them AFTER the main project
+  // (dependencies + fullyParallel:false). At workers=1 this is inert. webkit is defined
+  // for host use; the VM never selects it (WPE SIGABRT), so no gating needed.
   projects: [
     {
       name: "chromium",
-      testIgnore: /admin-site\.spec\.ts/,
+      testIgnore: /(admin-site|invite)\.spec\.ts/,
       use: {
         ...devices["Desktop Chrome"],
         launchOptions: chromiumLaunchOptions,
@@ -64,7 +64,7 @@ export default defineConfig({
     },
     {
       name: "chromium-admin",
-      testMatch: /admin-site\.spec\.ts/,
+      testMatch: /(admin-site|invite)\.spec\.ts/,
       fullyParallel: false,
       dependencies: ["chromium"],
       use: {
@@ -74,7 +74,7 @@ export default defineConfig({
     },
     {
       name: "firefox",
-      testIgnore: /admin-site\.spec\.ts/,
+      testIgnore: /(admin-site|invite)\.spec\.ts/,
       use: {
         ...devices["Desktop Firefox"],
         launchOptions: firefoxLaunchOptions,
@@ -82,7 +82,7 @@ export default defineConfig({
     },
     {
       name: "firefox-admin",
-      testMatch: /admin-site\.spec\.ts/,
+      testMatch: /(admin-site|invite)\.spec\.ts/,
       fullyParallel: false,
       dependencies: ["firefox"],
       use: {
@@ -92,7 +92,7 @@ export default defineConfig({
     },
     {
       name: "webkit",
-      testIgnore: /admin-site\.spec\.ts/,
+      testIgnore: /(admin-site|invite)\.spec\.ts/,
       use: { ...devices["Desktop Safari"] },
     },
   ],

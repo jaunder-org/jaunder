@@ -5,14 +5,41 @@ use crate::pages::Topbar;
 use common::password::Password;
 use common::username::Username;
 use leptos::prelude::*;
+use macros::client_only;
+
+/// Guidance shown on `/register` in invite-only mode when the URL carries no invite
+/// code — the visitor didn't follow an invitation link, so a register form would only
+/// fail "invite code required". (#444 will turn this into a request-an-invitation form.)
+/// Client-only UI, exercised by the invite e2e (Test B), not host tests.
+#[client_only]
+fn invite_link_required() -> AnyView {
+    view! {
+        <div class="j-card">
+            <p class="j-form-note">
+                "You need an invitation link to register. Please use the link from your invitation email."
+            </p>
+        </div>
+    }
+    .into_any()
+}
 
 /// Registration page.
 #[component]
 pub fn RegisterPage() -> impl IntoView {
+    use leptos_router::hooks::use_query_map;
+
     let register_action = ServerAction::<Register>::new();
     let policy = crate::server_resource(|| (), |()| get_registration_policy());
     let username = Field::<Username>::new();
     let password = Field::<Password>::new();
+
+    // The invite code arrives in the URL (`?invite_code=…`) from the invitation link,
+    // not typed by hand. Read it once at mount — a plain read is safe here because the
+    // app is CSR (no SSR-hydration race; see the spec/#433).
+    let invite_code = use_query_map()
+        .read()
+        .get("invite_code")
+        .unwrap_or_default();
 
     // Mirror the new session into the advisory auth marker (#181, ADR-0044): on a
     // successful register the client knows the submitted username, so pre-paint
@@ -31,69 +58,73 @@ pub fn RegisterPage() -> impl IntoView {
                 <Suspense fallback=|| {
                     view! { <p class="j-loading">"Loading\u{2026}"</p> }
                 }>
-                    {move || Suspend::new(async move {
-                        let p = policy.await;
-                        let is_invite_only = p.as_deref() == Ok("invite_only");
-                        view! {
-                            <ActionForm action=register_action attr:class="j-card">
-                                <div class="j-card-head">
-                                    <h2>"Create an account"</h2>
-                                </div>
-                                <div class="j-form-body">
-                                    <ValidatedInput<
-                                    Username,
-                                >
-                                        label="Username"
-                                        name="username"
-                                        autocomplete="username"
-                                        field=username
-                                        transform=str::to_lowercase
-                                    />
-                                    <ValidatedInput<
-                                    Password,
-                                >
-                                        label="Password"
-                                        name="password"
-                                        input_type="password"
-                                        autocomplete="new-password"
-                                        field=password
-                                    />
+                    {move || {
+                        let invite_code = invite_code.clone();
+                        Suspend::new(async move {
+                            let p = policy.await;
+                            let is_invite_only = p.as_deref() == Ok("invite_only");
+                            if is_invite_only && invite_code.is_empty() {
+                                return invite_link_required();
+                            }
+                            // No code in the URL under invite-only: guide, don't show a
+                            // form that would only fail server-side.
 
-                                    {is_invite_only
-                                        .then(|| {
-                                            view! {
-                                                <label class="j-form-field">
-                                                    <span class="j-form-label">"Invite code"</span>
-                                                    // `required`: the field renders only in
-                                                    // invite-only mode, where a code is
-                                                    // mandatory — this blocks an empty submit
-                                                    // client-side so the typed wire arg
-                                                    // (`Option<ProfferedInviteCode>`) only ever
-                                                    // sees `None` (open mode) or a filled value.
-                                                    <input
-                                                        class="j-form-input"
-                                                        type="text"
-                                                        name="invite_code"
-                                                        required=true
-                                                    />
-                                                </label>
-                                            }
-                                        })}
-                                </div>
-                                <div class="j-form-actions">
-                                    <button
-                                        type="submit"
-                                        class="j-btn is-primary"
-                                        prop:disabled=move || {
-                                            !(username.is_valid() && password.is_valid())
-                                        }
+                            view! {
+                                <ActionForm action=register_action attr:class="j-card">
+                                    <div class="j-card-head">
+                                        <h2>"Create an account"</h2>
+                                    </div>
+                                    <div class="j-form-body">
+                                        <ValidatedInput<
+                                        Username,
                                     >
-                                        "Register"
-                                    </button>
-                                </div>
-                            </ActionForm>
-                        }
-                    })}
+                                            label="Username"
+                                            name="username"
+                                            autocomplete="username"
+                                            field=username
+                                            transform=str::to_lowercase
+                                        />
+                                        <ValidatedInput<
+                                        Password,
+                                    >
+                                            label="Password"
+                                            name="password"
+                                            input_type="password"
+                                            autocomplete="new-password"
+                                            field=password
+                                        />
+                                        {(is_invite_only && !invite_code.is_empty())
+                                            .then(|| {
+                                                // The code comes from the invitation link — carried as a
+                                                // hidden field and confirmed read-only, never typed.
+                                                view! {
+                                                    <input
+                                                        type="hidden"
+                                                        name="invite_code"
+                                                        value=invite_code.clone()
+                                                    />
+                                                    <p class="j-form-note">
+                                                        "Registering with your invitation."
+                                                    </p>
+                                                }
+                                            })}
+                                    </div>
+                                    <div class="j-form-actions">
+                                        <button
+                                            type="submit"
+                                            class="j-btn is-primary"
+                                            prop:disabled=move || {
+                                                !(username.is_valid() && password.is_valid())
+                                            }
+                                        >
+                                            "Register"
+                                        </button>
+                                    </div>
+                                </ActionForm>
+                            }
+                                .into_any()
+                        })
+                    }}
                 </Suspense>
                 {move || {
                     register_action
