@@ -156,7 +156,7 @@ pub fn render_head(seed: &PageSeed) -> String {
         PageSeed::Permalink(post) => (
             post.title
                 .clone()
-                .unwrap_or_else(|| format!("Post by {}", post.username)),
+                .map_or_else(|| format!("Post by {}", post.username), String::from),
             post.summary.clone().unwrap_or_default(),
         ),
         PageSeed::Profile { username, .. } => (format!("Posts by {username}"), String::new()),
@@ -871,9 +871,9 @@ mod tests {
         PostResponse {
             post_id: 7,
             username: "alice".parse::<Username>().unwrap(),
-            title: Some("Hello & <World>".into()),
+            title: Some("Hello & <World>".to_owned().into()),
             slug: "hello".parse().unwrap(),
-            body: "raw".into(),
+            body: "raw".to_owned().into(),
             format: "markdown".into(),
             rendered_html: RenderedHtml::from_trusted("<p>Hi <em>there</em></p>"),
             created_at: "2026-01-02T03:04:05Z".into(),
@@ -893,7 +893,7 @@ mod tests {
         TimelinePostSummary {
             post_id: 1,
             username: "bob".parse::<Username>().unwrap(),
-            title: Some("First".into()),
+            title: Some("First".to_owned().into()),
             summary: Some("An excerpt".into()),
             slug: "first".parse().unwrap(),
             rendered_html: RenderedHtml::from_trusted("<p>body</p>"),

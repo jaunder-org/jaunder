@@ -379,8 +379,7 @@ pub async fn collection_post(
         posts.as_ref(),
         storage::PostCreation {
             user_id: auth_user.user_id,
-            // #402 Task 3 seam: temporary, removed in Task 4 (PostFields.body stays String).
-            body: fields.body.into(),
+            body: fields.body,
             title: fields.title.as_deref(),
             format: fields.format,
             slug_override: None,
@@ -503,8 +502,7 @@ pub async fn member_put(
         storage::PostUpdate {
             post_id,
             editor_user_id: auth_user.user_id,
-            // #402 Task 3 seam: temporary, removed in Task 4 (PostFields.body stays String).
-            body: fields.body.into(),
+            body: fields.body,
             title: fields.title.as_deref(),
             format: fields.format,
             slug_override: None,

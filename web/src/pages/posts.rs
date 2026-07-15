@@ -683,7 +683,7 @@ pub fn EditPostPage() -> impl IntoView {
             {move || Suspend::new(async move {
                 match post.await {
                     Ok(fetched) => {
-                        body.set(fetched.body.clone());
+                        body.set(String::from(fetched.body.clone()));
                         format.set(fetched.format.clone());
                         slug_field.value.set(fetched.slug.to_string());
                         summary.set(fetched.summary.clone().unwrap_or_default());
@@ -694,7 +694,7 @@ pub fn EditPostPage() -> impl IntoView {
                             update_post_action
                                 .dispatch(UpdatePost {
                                     post_id,
-                                    body: body.get(),
+                                    body: body.get().into(),
                                     format: format.get(),
                                     slug_override: slug_field.parsed(),
                                     publish,
@@ -989,7 +989,11 @@ fn render_draft_row(
     delete_action: ServerAction<DeletePost>,
 ) -> impl IntoView {
     let post_id = draft.post_id;
-    let label = draft.title.clone().unwrap_or(draft.summary_label.clone());
+    let label = draft
+        .title
+        .clone()
+        .map(String::from)
+        .unwrap_or(draft.summary_label.clone());
     // cov:ignore-stop
     // A scheduled post (future `published_at`) carries `scheduled_at`; mark it
     // distinctly from a true draft so the author can tell the two apart on this

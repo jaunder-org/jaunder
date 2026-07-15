@@ -19,7 +19,10 @@ use server::{not_found_error, private_post_not_found_error};
 #[cfg(feature = "server")]
 pub use server::post_response;
 
-use common::{render::RenderedHtml, slug::Slug, tag::TagLabel, username::Username};
+use common::{
+    post_body::PostBody, post_title::PostTitle, render::RenderedHtml, slug::Slug, tag::TagLabel,
+    username::Username,
+};
 
 use crate::error::WebResult;
 use crate::tags::TagSummary;
@@ -149,7 +152,7 @@ pub fn targets_to_audience_selection(
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DraftSummary {
     pub post_id: i64,
-    pub title: Option<String>,
+    pub title: Option<PostTitle>,
     pub summary_label: String,
     pub slug: Slug,
     pub created_at: String,
@@ -187,9 +190,9 @@ where
 pub struct PostResponse {
     pub post_id: i64,
     pub username: Username,
-    pub title: Option<String>,
+    pub title: Option<PostTitle>,
     pub slug: Slug,
-    pub body: String,
+    pub body: PostBody,
     pub format: String,
     #[serde(deserialize_with = "deserialize_rendered_html")]
     pub rendered_html: RenderedHtml,
@@ -236,7 +239,7 @@ fn parse_publish_at(raw: Option<&str>) -> crate::error::InternalResult<Option<Da
 #[allow(clippy::too_many_arguments)]
 #[server(endpoint = "/create_post", input = Json)]
 pub async fn create_post(
-    body: String,
+    body: PostBody,
     format: String,
     slug_override: Option<Slug>,
     publish: bool,
@@ -272,8 +275,7 @@ pub async fn create_post(
             posts.as_ref(),
             PostCreation {
                 user_id: auth.user_id,
-                // #402 Task 3 seam: temporary, removed in Task 4 (server arg stays String).
-                body: body.into(),
+                body,
                 title: None,
                 format,
                 slug_override: slug_override.as_ref(),
@@ -390,7 +392,7 @@ pub async fn get_post_preview(post_id: i64) -> WebResult<PostResponse> {
 #[server(endpoint = "/update_post", input = Json)]
 pub async fn update_post(
     post_id: i64,
-    body: String,
+    body: PostBody,
     format: String,
     slug_override: Option<Slug>,
     publish: bool,
@@ -433,8 +435,7 @@ pub async fn update_post(
             PostUpdate {
                 post_id,
                 editor_user_id: auth.user_id,
-                // #402 Task 3 seam: temporary, removed in Task 4 (server arg stays String).
-                body: body.into(),
+                body,
                 title: None,
                 format,
                 slug_override: slug_override.as_ref(),
@@ -550,8 +551,7 @@ pub async fn list_drafts(
                 let scheduled_at = draft.published_at.map(|t| t.to_rfc3339());
                 DraftSummary {
                     post_id: draft.post_id,
-                    // #402 Task 3 seam: temporary, removed in Task 4 (DraftSummary.title stays String).
-                    title: draft.title.clone().map(String::from),
+                    title: draft.title.clone(),
                     summary_label: draft.fallback_summary_label(),
                     slug: draft.slug.clone(),
                     created_at: draft.created_at.to_rfc3339(),
@@ -715,7 +715,7 @@ mod tests {
         let original = TimelinePostSummary {
             post_id: 1,
             username: "alice".parse::<Username>().unwrap(),
-            title: Some("T".into()),
+            title: Some("T".to_owned().into()),
             summary: None,
             slug: "hello".parse::<Slug>().unwrap(),
             rendered_html: RenderedHtml::from_trusted("<p>hi</p>"),
