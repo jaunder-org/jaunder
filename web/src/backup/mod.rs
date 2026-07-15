@@ -1,7 +1,8 @@
 use crate::error::WebResult;
-// `BackupSchedule` is unconditional: it's the typed `#[server]` argument, so the generated
-// request struct must carry it on both the client (serialize) and server (deserialize) sides.
-use common::backup::{BackupConfig, BackupSchedule};
+// `BackupSchedule`/`BackupMode` are unconditional: they're the typed `#[server]` arguments, so
+// the generated request struct must carry them on both the client (serialize) and server
+// (deserialize) sides.
+use common::backup::{BackupConfig, BackupMode, BackupSchedule};
 use leptos::prelude::*;
 
 #[cfg(feature = "server")]
@@ -13,7 +14,6 @@ use server::require_operator;
 use {
     crate::auth::require_auth,
     crate::error::{ErrorKind, InternalError},
-    common::backup::BackupMode,
     std::sync::Arc,
     storage::{SiteConfigStorage, UserStorage},
 };
@@ -97,26 +97,19 @@ pub async fn update_backup_settings(
     destination_path: String,
     schedule: BackupSchedule,
     retention_count: String,
-    mode: String,
+    mode: BackupMode,
 ) -> WebResult<()> {
     boundary!("update_backup_settings", {
         require_operator().await?;
 
-        // `schedule` is already validated: it arrives typed as `BackupSchedule`, so the arg
-        // `Deserialize` ran its `FromStr`. Legitimate clients pre-validate the form field
-        // (ADR-0065), so an invalid value only reaches here from a non-browser caller.
+        // `schedule` and `mode` are already validated: they arrive typed (`BackupSchedule` /
+        // `BackupMode`), so the arg `Deserialize` ran their `FromStr`/enum parse. Legitimate
+        // clients only submit valid values (the form's cron field pre-validates per ADR-0065,
+        // and the mode `<select>` can only emit a real variant), so an invalid value reaches
+        // here only from a non-browser caller.
         let retention_count = retention_count.trim().parse::<usize>().map_err(|_| {
             InternalError::validation("backup retention count must be a non-negative integer")
         })?;
-        let mode = match mode.trim() {
-            "directory" => BackupMode::Directory,
-            "archive" => BackupMode::Archive,
-            _ => {
-                return Err(InternalError::validation(
-                    "backup mode must be directory or archive",
-                ))
-            }
-        };
         let destination_path = common::text::non_empty(&destination_path).map(str::to_owned);
 
         let config = BackupConfig {

@@ -53,7 +53,7 @@ pub trait SiteConfigStorage: Send + Sync {
             .get(BACKUP_MODE_KEY)
             .await?
             .as_deref()
-            .and_then(parse_backup_mode)
+            .and_then(|v| v.trim().parse::<BackupMode>().ok())
             .unwrap_or_default();
         Ok(BackupConfig {
             destination_path,
@@ -150,8 +150,7 @@ pub trait SiteConfigStorage: Send + Sync {
             &config.retention_count.to_string(),
         )
         .await?;
-        self.set(BACKUP_MODE_KEY, backup_mode_str(config.mode))
-            .await?;
+        self.set(BACKUP_MODE_KEY, config.mode.as_ref()).await?;
         Ok(())
     }
 
@@ -225,21 +224,6 @@ pub const SITE_TITLE_KEY: &str = "site.title";
 /// trailing slash). Unset (or empty) means callers should emit
 /// root-relative URLs.
 pub const SITE_BASE_URL_KEY: &str = "site.base_url";
-
-fn parse_backup_mode(value: &str) -> Option<BackupMode> {
-    match value.trim() {
-        "directory" => Some(BackupMode::Directory),
-        "archive" => Some(BackupMode::Archive),
-        _ => None,
-    }
-}
-
-fn backup_mode_str(mode: BackupMode) -> &'static str {
-    match mode {
-        BackupMode::Directory => "directory",
-        BackupMode::Archive => "archive",
-    }
-}
 
 /// Parses a stored site-wide default audience. Only the built-ins are valid:
 /// `Named` is per-author and has no instance-wide form, so it is rejected here
