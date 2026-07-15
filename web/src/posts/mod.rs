@@ -796,7 +796,7 @@ mod tests {
         use crate::posts::server::timeline_post_summary;
         use chrono::{TimeZone, Utc};
         use common::{slug::Slug, username::Username};
-        use storage::{PostFormat, PostRecord};
+        use storage::{PostFormat, PostRecord, RenderedHtml};
 
         let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
         let slug = "titleless-note".parse::<Slug>().unwrap();
@@ -810,7 +810,7 @@ mod tests {
                 slug,
                 body: "Titleless note".to_string(),
                 format: PostFormat::Markdown,
-                rendered_html: "<p>Titleless note</p>".to_string(),
+                rendered_html: RenderedHtml::from_trusted("<p>Titleless note</p>"),
                 created_at: base_time,
                 updated_at: base_time,
                 published_at: Some(base_time),
@@ -833,7 +833,7 @@ mod tests {
         use crate::posts::server::post_response;
         use chrono::{TimeZone, Utc};
         use common::{slug::Slug, username::Username};
-        use storage::{PostFormat, PostRecord};
+        use storage::{PostFormat, PostRecord, RenderedHtml};
 
         let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
         let author_username = "author".parse::<Username>().unwrap();
@@ -848,7 +848,7 @@ mod tests {
                 slug: slug.clone(),
                 body: "body".to_string(),
                 format: PostFormat::Markdown,
-                rendered_html: "<p>body</p>".to_string(),
+                rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
                 created_at: base_time,
                 updated_at: base_time,
                 published_at: None,
@@ -871,7 +871,7 @@ mod tests {
                 slug,
                 body: "body".to_string(),
                 format: PostFormat::Markdown,
-                rendered_html: "<p>body</p>".to_string(),
+                rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
                 created_at: base_time,
                 updated_at: base_time,
                 published_at: Some(base_time),
@@ -902,7 +902,7 @@ mod server_tests {
     use std::sync::Arc;
     use storage::{
         MockPostStorage, MockSubscriptionStorage, PostFormat, PostRecord, PostStorage,
-        SubscriptionStorage, UpdatePostError,
+        RenderedHtml, SubscriptionStorage, UpdatePostError,
     };
 
     fn owned_post(user_id: i64) -> PostRecord {
@@ -915,7 +915,7 @@ mod server_tests {
             slug: "hello-world".parse::<Slug>().unwrap(),
             body: "body".to_string(),
             format: PostFormat::Markdown,
-            rendered_html: "<p>body</p>".to_string(),
+            rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
             created_at: now,
             updated_at: now,
             published_at: None,

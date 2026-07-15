@@ -103,14 +103,16 @@ impl serde::Serialize for RenderedHtml {
 // Pure rendering functions
 // ---------------------------------------------------------------------------
 
-/// Renders `body` to HTML based on `format`. Pure, infallible function.
+/// Renders `body` to HTML based on `format`. Pure, infallible function. The output
+/// is a [`RenderedHtml`] — this is the only door that mints new rendered HTML.
 #[must_use]
-pub fn render(body: &str, format: &PostFormat) -> String {
-    match format {
+pub fn render(body: &str, format: &PostFormat) -> RenderedHtml {
+    let html = match format {
         PostFormat::Markdown => render_markdown(body),
         PostFormat::Org => render_org(body),
         PostFormat::Html => body.to_string(),
-    }
+    };
+    RenderedHtml(html)
 }
 
 /// Metadata derived from a post body used for slug generation and display.
@@ -543,13 +545,13 @@ mod tests {
     #[test]
     fn render_dispatches_markdown() {
         let result = render("**bold**", &PostFormat::Markdown);
-        assert!(result.contains("<strong>bold</strong>"));
+        assert!(result.as_ref().contains("<strong>bold</strong>"));
     }
 
     #[test]
     fn render_dispatches_org() {
         let result = render("*bold*", &PostFormat::Org);
-        assert!(result.contains("<b>bold</b>"));
+        assert!(result.as_ref().contains("<b>bold</b>"));
     }
 
     #[test]
@@ -717,7 +719,7 @@ mod tests {
     #[test]
     fn render_html_format_is_identity() {
         let body = "<p>hi <b>there</b></p>";
-        assert_eq!(render(body, &PostFormat::Html), body.to_string());
+        assert_eq!(render(body, &PostFormat::Html).as_ref(), body);
     }
 
     // -- canonicalize_org_body tests (ADR-0024; load-bearing, user-flagged) --

@@ -6,8 +6,8 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use crate::{
-    InviteRecord, MediaRecord, MediaSource, PostFormat, PostRecord, PostTag, SessionRecord,
-    UserRecord,
+    InviteRecord, MediaRecord, MediaSource, PostFormat, PostRecord, PostTag, RenderedHtml,
+    SessionRecord, UserRecord,
 };
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
@@ -197,7 +197,8 @@ pub(crate) fn build_post_record(
         slug,
         body,
         format,
-        rendered_html,
+        // Trusted rebuild: this column only ever holds prior `render()` output.
+        rendered_html: RenderedHtml::from_trusted(rendered_html),
         created_at,
         updated_at,
         published_at,

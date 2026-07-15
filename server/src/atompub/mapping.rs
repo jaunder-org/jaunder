@@ -545,7 +545,7 @@ mod tests {
             slug: slug.parse().expect("parse slug"),
             body: body.to_string(),
             format,
-            rendered_html: "<p>html</p>".to_string(),
+            rendered_html: storage::RenderedHtml::from_trusted("<p>html</p>"),
             created_at: Utc::now(),
             updated_at: Utc::now(),
             published_at,

@@ -12,7 +12,7 @@ use common::slug::Slug;
 use common::tag::TagLabel;
 use common::username::Username;
 use common::visibility::AudienceTarget;
-use storage::{CreatePostInput, PostFormat};
+use storage::{CreatePostInput, PostFormat, RenderedHtml};
 use tower::ServiceExt;
 
 use rstest::*;
@@ -54,7 +54,7 @@ async fn seed_tagged_post(state: &Arc<storage::AppState>) {
             slug: "tagged".parse::<Slug>().unwrap(),
             body: "b".to_string(),
             format: PostFormat::Markdown,
-            rendered_html: "<p>tag body</p>".to_string(),
+            rendered_html: RenderedHtml::from_trusted("<p>tag body</p>"),
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
@@ -87,7 +87,7 @@ async fn seed_published_post(state: &Arc<storage::AppState>) -> (String, i32, u3
             slug: "hello".parse::<Slug>().unwrap(),
             body: "Body".to_string(),
             format: PostFormat::Markdown,
-            rendered_html: "<p>Body here</p>".to_string(),
+            rendered_html: RenderedHtml::from_trusted("<p>Body here</p>"),
             published_at: Some(now),
             summary: None,
             audiences: vec![AudienceTarget::Public],

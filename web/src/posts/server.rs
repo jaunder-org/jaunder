@@ -28,7 +28,8 @@ pub fn timeline_post_summary(
         title,
         summary,
         slug,
-        rendered_html,
+        // TODO(#398): drop `.as_ref().to_string()` in Task 3 when the DTO field becomes RenderedHtml.
+        rendered_html: rendered_html.as_ref().to_string(),
         created_at: created_at.to_rfc3339(),
         published_at: published_at.to_rfc3339(),
         permalink,
@@ -71,7 +72,8 @@ pub fn post_response(post: PostRecord, is_author: bool) -> super::PostResponse {
         slug,
         body,
         format: format.to_string(),
-        rendered_html,
+        // TODO(#398): drop `.as_ref().to_string()` in Task 3 when the DTO field becomes RenderedHtml.
+        rendered_html: rendered_html.as_ref().to_string(),
         created_at: created_at.to_rfc3339(),
         is_draft: published_at.is_none(),
         published_at: published_at.map(|t| t.to_rfc3339()),
@@ -118,7 +120,7 @@ mod tests {
         use crate::posts::server::post_response;
         use chrono::{TimeZone, Utc};
         use common::{slug::Slug, username::Username};
-        use storage::{PostFormat, PostRecord};
+        use storage::{PostFormat, PostRecord, RenderedHtml};
 
         let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
         let author_username = "author".parse::<Username>().unwrap();
@@ -133,7 +135,7 @@ mod tests {
                 slug,
                 body: "body".to_string(),
                 format: PostFormat::Markdown,
-                rendered_html: "<p>body</p>".to_string(),
+                rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
                 created_at: base_time,
                 updated_at: base_time,
                 published_at: Some(base_time),

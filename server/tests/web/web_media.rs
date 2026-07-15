@@ -267,7 +267,7 @@ async fn delete_media_succeeds_for_existing_item(#[case] backend: Backend) {
 #[tokio::test]
 async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend: Backend) {
     use common::slug::Slug;
-    use storage::{CreatePostInput, PostFormat};
+    use storage::{CreatePostInput, PostFormat, RenderedHtml};
 
     let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state
@@ -305,7 +305,7 @@ async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend:
             slug: "with-media".parse::<Slug>().expect("valid slug"),
             body: format!("![inline]({media_url})"),
             format: PostFormat::Markdown,
-            rendered_html: format!("<p><img src=\"{media_url}\"></p>"),
+            rendered_html: RenderedHtml::from_trusted(format!("<p><img src=\"{media_url}\"></p>")),
             published_at: Some(Utc::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],

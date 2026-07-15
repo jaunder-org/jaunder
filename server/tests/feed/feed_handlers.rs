@@ -18,6 +18,7 @@ use crate::helpers::make_app;
 use storage::test_support::{backends, backends_matrix, Backend, TestEnv};
 use storage::CreatePostInput;
 use storage::PostFormat;
+use storage::RenderedHtml;
 
 #[apply(backends)]
 #[tokio::test]
@@ -44,7 +45,7 @@ async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_typ
             slug: "test-post".parse::<Slug>().expect("valid slug"),
             body: "Test body".to_string(),
             format: PostFormat::Markdown,
-            rendered_html: "<p>Test body</p>".to_string(),
+            rendered_html: RenderedHtml::from_trusted("<p>Test body</p>"),
             published_at: Some(now),
             summary: None,
             audiences: vec![AudienceTarget::Public],
@@ -125,7 +126,7 @@ async fn handler_serves_site_tag_feed_with_200(#[case] backend: Backend) {
             slug: "tagged-post".parse::<Slug>().expect("valid slug"),
             body: "Test body".to_string(),
             format: PostFormat::Markdown,
-            rendered_html: "<p>Test body</p>".to_string(),
+            rendered_html: RenderedHtml::from_trusted("<p>Test body</p>"),
             published_at: Some(now),
             summary: None,
             audiences: vec![AudienceTarget::Public],
@@ -321,7 +322,7 @@ async fn handler_returns_correct_content_type_per_format(#[case] backend: Backen
             slug: "test-post".parse::<Slug>().expect("valid slug"),
             body: "Test body".to_string(),
             format: PostFormat::Markdown,
-            rendered_html: "<p>Test body</p>".to_string(),
+            rendered_html: RenderedHtml::from_trusted("<p>Test body</p>"),
             published_at: Some(now),
             summary: None,
             audiences: vec![AudienceTarget::Public],
