@@ -298,10 +298,35 @@ Nix gate).
 - [ ] Every `rendered_html` field/consumer from the spec's path table is
       threaded (records, inputs, both binds, DTOs, `PostView`, emit, `media`
       reader).
-- [ ] No `From`/`TryFrom`/`Deref`/`FromStr`/`Deserialize` on `RenderedHtml`;
-      mint doors are exactly `render()` + `from_trusted`.
+- [ ] No `From`/`TryFrom`/`FromStr`/`Deserialize` on `RenderedHtml` (the
+      construction traits); mint doors are exactly `render()` + `from_trusted`.
+      (`Deref<str>` is present as a read-only convenience — see Task 5.)
 - [ ] Task-2 temporary bridge in `server.rs` is removed in Task 3 (grep for the
       `TODO(#398)`).
 - [ ] `compile_fail` doctests present (documentary, per repo convention);
       XSS-boundary test passes under the Nix gate.
 - [ ] No "sanitized" claim survives in doc comments; #445 referenced.
+
+## Post-review additions (from the branch review)
+
+### Task 5 — `Deref<Target = str>` for read ergonomics
+
+Add `impl Deref<Target = str>` to `RenderedHtml` so `str` methods resolve
+without `.as_ref()`, and simplify the read sites (`render.rs` tests,
+`post_service.rs` asserts, `media/mod.rs` `.contains()`, `feed/regenerate.rs`
+`.to_string()`). Construction traits stay absent — `Deref` is one-way (reads
+out, never in), so the sink is untouched. `.as_ref()` remains only at the SQL
+`.bind()` sites (generic API, no coercion). Update the type doc + this spec's
+§1.
+
+### Task 6 — `rendered-html-from-trusted` enforcement gate
+
+`from_trusted` is `pub`/cross-crate, so review — not the compiler — is what
+keeps it from being called spuriously. Add an xtask static check
+(`xtask/src/steps/rendered_html_from_trusted_check.rs`, a `syn` AST pass
+modelled on `server_fn_registrar_check`) that pins every non-test `from_trusted`
+mention to an allowlist of enclosing fns (`build_post_record`,
+`deserialize_rendered_html`), fail-loud on parse error, with in-crate unit
+tests. Register it in the `check` and `validate` pipelines (`xtask/src/lib.rs`).
+This makes the "few auditable doors" guarantee enforced rather than
+conventional.

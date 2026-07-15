@@ -55,9 +55,14 @@ To make the **emit sink** reject a `String` (acceptance), the type must reach
   `StrNewtype` — that macro emits `TryFrom<String>` / `From` / `Deref<str>` /
   `Deserialize`, i.e. exactly the parse-from-any-string constructors the issue
   forbids.
-- **Reading trailer** (ADR-0063): `Display` (used by the emit interpolation) and
-  `AsRef<str>` (used to bind into SQL and in test assertions). Deliberately
-  **no** `Deref`, `From`, `TryFrom<String>`, `FromStr`.
+- **Reading trailer** (ADR-0063): `Display` (emit interpolation), `AsRef<str>`
+  (SQL binds), and `Deref<Target = str>` (so `str` methods like `.contains()`
+  work without `.as_ref()`). The construction prohibition is what protects the
+  boundary: deliberately **no** `From`, `TryFrom<String>`, `FromStr`,
+  `Deserialize` — a raw `String` can never become a `RenderedHtml`. `Deref` is a
+  _reading_ convenience and is one-way (it coerces `RenderedHtml → &str`, never
+  the reverse), so it does not weaken the sink. (Post-review addition; the
+  original draft omitted `Deref`.)
 
 ### 2. Mint discipline — tight
 
@@ -81,6 +86,16 @@ Mint sites after this change (the complete auditable set): `render()` (creates
 new HTML) and `RenderedHtml::from_trusted` (round-trip rebuild; the wire
 `deserialize_with` helper delegates to it). Both are greppable by name — nothing
 is hidden behind a blanket derive.
+
+**Enforcement (post-review addition).** Because `from_trusted` is `pub` and
+cross-crate, Rust visibility cannot confine it — a future call laundering an
+untrusted string into "trusted" HTML would compile. A bespoke xtask static check
+`rendered-html-from-trusted` (a `syn` AST pass modelled on
+`server-fn-registrar`/`proffered-invite-code`) pins every **non-test**
+`from_trusted` mention to an allowlist of enclosing functions
+(`build_post_record`, `deserialize_rendered_html`); a new site fails the gate
+until it is added with justification. This turns the "few, auditable doors"
+guarantee from a convention into an enforced invariant.
 
 ### 3. Threading
 
