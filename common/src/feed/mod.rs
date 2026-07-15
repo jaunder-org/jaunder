@@ -1,5 +1,7 @@
 pub mod feed_path;
-pub use feed_path::{affected_feed_urls, canonicalize, parse, FeedFormat, FeedSurface};
+pub use feed_path::{
+    affected_feed_urls, canonicalize, parse, FeedFormat, FeedPath, FeedSurface, InvalidFeedPath,
+};
 
 pub mod window;
 pub use window::{HasPublishedAt, HybridWindow};
