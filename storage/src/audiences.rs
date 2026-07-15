@@ -12,6 +12,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use common::audience::AudienceName;
 use sqlx::{Database, Pool};
 
 use crate::backend::Backend;
@@ -72,7 +73,11 @@ impl From<AudienceError> for host::error::InternalError {
 pub trait AudienceStorage: Send + Sync {
     /// Creates a named audience for the author. Maps the
     /// `UNIQUE (author_user_id, name)` violation to [`AudienceError::DuplicateName`].
-    async fn create_audience(&self, author_user_id: i64, name: &str) -> Result<i64, AudienceError>;
+    async fn create_audience(
+        &self,
+        author_user_id: i64,
+        name: &AudienceName,
+    ) -> Result<i64, AudienceError>;
 
     /// Renames an audience the author owns. [`AudienceError::NotFound`] if the
     /// `(author_user_id, audience_id)` pair does not exist; [`AudienceError::DuplicateName`]
@@ -81,7 +86,7 @@ pub trait AudienceStorage: Send + Sync {
         &self,
         author_user_id: i64,
         audience_id: i64,
-        name: &str,
+        name: &AudienceName,
     ) -> Result<(), AudienceError>;
 
     /// Deletes an audience the author owns and its membership rows in one
@@ -150,12 +155,16 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn create_audience(&self, author_user_id: i64, name: &str) -> Result<i64, AudienceError> {
+    async fn create_audience(
+        &self,
+        author_user_id: i64,
+        name: &AudienceName,
+    ) -> Result<i64, AudienceError> {
         match sqlx::query_as::<_, (i64,)>(
             "INSERT INTO audiences (author_user_id, name) VALUES ($1, $2) RETURNING audience_id",
         )
         .bind(author_user_id)
-        .bind(name)
+        .bind(name.as_ref())
         .fetch_one(&self.pool)
         .await
         {
@@ -176,7 +185,7 @@ where
         &self,
         author_user_id: i64,
         audience_id: i64,
-        name: &str,
+        name: &AudienceName,
     ) -> Result<(), AudienceError> {
         // `RETURNING` so a no-match is detected generically (via `fetch_optional`)
         // without `rows_affected()`, which sqlx exposes only on concrete results.
@@ -184,7 +193,7 @@ where
             "UPDATE audiences SET name = $1 WHERE author_user_id = $2 AND audience_id = $3 \
              RETURNING audience_id",
         )
-        .bind(name)
+        .bind(name.as_ref())
         .bind(author_user_id)
         .bind(audience_id)
         .fetch_optional(&self.pool)

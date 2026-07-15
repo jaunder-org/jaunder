@@ -2,7 +2,7 @@ use chrono::{Datelike, Utc};
 use common::password::Password;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
-use common::test_support::parse_email;
+use common::test_support::{parse_audience_name, parse_email};
 use common::username::Username;
 use common::visibility::{
     AudienceTarget, Channel, SubscriptionPolicy, SubscriptionStatus, TargetKind, ViewerIdentity,
@@ -321,12 +321,12 @@ async fn audience_create_list_rename_delete(#[case] backend: Backend) {
 
     let friends = state
         .audiences
-        .create_audience(author, "Friends")
+        .create_audience(author, &parse_audience_name("Friends"))
         .await
         .unwrap();
     let family = state
         .audiences
-        .create_audience(author, "Family")
+        .create_audience(author, &parse_audience_name("Family"))
         .await
         .unwrap();
 
@@ -341,7 +341,7 @@ async fn audience_create_list_rename_delete(#[case] backend: Backend) {
     // Rename mutates exactly the targeted audience.
     state
         .audiences
-        .rename_audience(author, friends, "Close Friends")
+        .rename_audience(author, friends, &parse_audience_name("Close Friends"))
         .await
         .unwrap();
     let listed = state.audiences.list_audiences(author).await.unwrap();
@@ -356,7 +356,7 @@ async fn audience_create_list_rename_delete(#[case] backend: Backend) {
     assert!(matches!(
         state
             .audiences
-            .rename_audience(stranger, friends, "Hijacked")
+            .rename_audience(stranger, friends, &parse_audience_name("Hijacked"))
             .await,
         Err(AudienceError::NotFound)
     ));
@@ -392,31 +392,34 @@ async fn audience_duplicate_name_rejected(#[case] backend: Backend) {
 
     state
         .audiences
-        .create_audience(alice, "Friends")
+        .create_audience(alice, &parse_audience_name("Friends"))
         .await
         .unwrap();
     // Same author, same name → DuplicateName.
     assert!(matches!(
-        state.audiences.create_audience(alice, "Friends").await,
+        state
+            .audiences
+            .create_audience(alice, &parse_audience_name("Friends"))
+            .await,
         Err(AudienceError::DuplicateName)
     ));
     // Different author may reuse the name.
     state
         .audiences
-        .create_audience(bob, "Friends")
+        .create_audience(bob, &parse_audience_name("Friends"))
         .await
         .unwrap();
 
     // Rename onto an existing name (same author) → DuplicateName.
     let work = state
         .audiences
-        .create_audience(alice, "Work")
+        .create_audience(alice, &parse_audience_name("Work"))
         .await
         .unwrap();
     assert!(matches!(
         state
             .audiences
-            .rename_audience(alice, work, "Friends")
+            .rename_audience(alice, work, &parse_audience_name("Friends"))
             .await,
         Err(AudienceError::DuplicateName)
     ));
@@ -447,7 +450,7 @@ async fn audience_membership_round_trip(#[case] backend: Backend) {
         .unwrap();
     let audience = state
         .audiences
-        .create_audience(author, "Friends")
+        .create_audience(author, &parse_audience_name("Friends"))
         .await
         .unwrap();
 
@@ -520,7 +523,7 @@ async fn audience_add_member_cross_author_rejected(#[case] backend: Backend) {
     // Audience owned by ALICE.
     let alice_audience = state
         .audiences
-        .create_audience(alice, "Friends")
+        .create_audience(alice, &parse_audience_name("Friends"))
         .await
         .unwrap();
 
@@ -569,7 +572,7 @@ async fn audience_members_are_author_scoped(#[case] backend: Backend) {
         .unwrap();
     let alice_audience = state
         .audiences
-        .create_audience(alice, "Friends")
+        .create_audience(alice, &parse_audience_name("Friends"))
         .await
         .unwrap();
     state
@@ -630,7 +633,7 @@ async fn audience_delete_cascades_memberships(#[case] backend: Backend) {
         .unwrap();
     let audience = state
         .audiences
-        .create_audience(alice, "Friends")
+        .create_audience(alice, &parse_audience_name("Friends"))
         .await
         .unwrap();
     state
@@ -2697,7 +2700,7 @@ async fn post_audiences_are_persisted_and_replaced(#[case] backend: Backend) {
         .unwrap();
     let aud = state
         .audiences
-        .create_audience(author, "Friends")
+        .create_audience(author, &parse_audience_name("Friends"))
         .await
         .unwrap();
 
@@ -2787,7 +2790,7 @@ async fn get_post_audiences_round_trips(#[case] backend: Backend) {
         .unwrap();
     let aud = state
         .audiences
-        .create_audience(author, "Friends")
+        .create_audience(author, &parse_audience_name("Friends"))
         .await
         .unwrap();
 
@@ -7591,8 +7594,16 @@ async fn resolution_matrix(#[case] backend: Backend) {
         .subscribe(a, local, &m.to_string())
         .await
         .unwrap();
-    let g = state.audiences.create_audience(a, "G").await.unwrap();
-    let g2 = state.audiences.create_audience(a, "G2").await.unwrap();
+    let g = state
+        .audiences
+        .create_audience(a, &parse_audience_name("G"))
+        .await
+        .unwrap();
+    let g2 = state
+        .audiences
+        .create_audience(a, &parse_audience_name("G2"))
+        .await
+        .unwrap();
     state.audiences.add_member(a, g, m_sub).await.unwrap();
 
     // One published post per audience targeting. `Private` carries no audience

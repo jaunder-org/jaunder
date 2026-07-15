@@ -3,6 +3,7 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use chrono::Datelike;
 use common::tag::TagLabel;
+use common::test_support::parse_audience_name;
 use storage::{PostFormat, RenderedHtml};
 use web::posts::{
     AudienceSelection, CreatePostResult, DraftSummary, PublishPostResult, TimelinePage,
@@ -3265,7 +3266,7 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     // the subscription id for audience membership.
     let friends = state
         .audiences
-        .create_audience(author, "Friends")
+        .create_audience(author, &parse_audience_name("Friends"))
         .await
         .unwrap();
     let sub_id = state

@@ -15,9 +15,15 @@
 //! no-op delete).
 
 use crate::error::WebResult;
+// `AudienceName` is the wire-arg type of `create_audience` / `rename_audience`, so the
+// `#[server]`-generated arg structs reference it on both the client and server builds —
+// keep it ungated. `crate::forms::Field` (the validated-input field) is aliased to avoid
+// colliding with `reactive_stores::Field` (the keyed-store field used by `AudienceRow`).
+use crate::forms::Field as ValidatedField;
 use crate::reactive::{invalidator_scope, Invalidator, ListState};
 use crate::render::Icons;
 use crate::ui::Topbar;
+use common::audience::AudienceName;
 use leptos::prelude::*;
 use reactive_stores::{Field, Patch, Store};
 use serde::{Deserialize, Serialize};
@@ -25,7 +31,6 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "server")]
 use {
     crate::auth::require_auth,
-    crate::error::InternalError,
     std::sync::Arc,
     storage::{AudienceStorage, SubscriptionStorage, UserStorage},
 };
@@ -63,31 +68,27 @@ type RosterSignal = Signal<Option<WebResult<Vec<SubscriberSummary>>>>;
 
 /// Creates a named audience owned by the authenticated author.
 #[server(endpoint = "/create_audience")]
-pub async fn create_audience(name: String) -> WebResult<i64> {
+pub async fn create_audience(name: AudienceName) -> WebResult<i64> {
     boundary!("create_audience", {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
-        let name = name.trim();
-        if name.is_empty() {
-            return Err(InternalError::validation("audience name must not be empty"));
-        }
-        let id = audiences.create_audience(auth.user_id, name).await?;
+        // `name` arrives already validated (typed wire arg, client-pre-validated via the
+        // direct-bound `AudienceName` field, per ADR-0065): its serde bridge routes
+        // through `AudienceName::from_str`, so the empty/whitespace rule ran on decode.
+        let id = audiences.create_audience(auth.user_id, &name).await?;
         Ok(id)
     })
 }
 
 /// Renames an audience the authenticated author owns.
 #[server(endpoint = "/rename_audience")]
-pub async fn rename_audience(audience_id: i64, name: String) -> WebResult<()> {
+pub async fn rename_audience(audience_id: i64, name: AudienceName) -> WebResult<()> {
     boundary!("rename_audience", {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
-        let name = name.trim();
-        if name.is_empty() {
-            return Err(InternalError::validation("audience name must not be empty"));
-        }
+        // `name` arrives already validated (see `create_audience`).
         audiences
-            .rename_audience(auth.user_id, audience_id, name)
+            .rename_audience(auth.user_id, audience_id, &name)
             .await?;
         Ok(())
     })
@@ -350,6 +351,11 @@ pub fn AudiencesPage() -> impl IntoView {
 #[component]
 fn CreateAudienceForm() -> impl IntoView {
     let create_action = expect_context::<AudienceList>().action::<CreateAudience>();
+    // Client-side pre-validation (ADR-0065) via direct-bind: the same `AudienceName::from_str`
+    // the typed `#[server]` arg decodes through gates submit (disable-until-valid), so a valid
+    // name is a precondition of dispatch and the empty-name rejection never round-trips for a
+    // real client. `required` is dropped — the newtype rule is the single source of truth.
+    let name = ValidatedField::<AudienceName>::new();
 
     view! {
         <section class="j-card">
@@ -362,11 +368,34 @@ fn CreateAudienceForm() -> impl IntoView {
                 </div>
             </div>
             <ActionForm action=create_action>
-                <input type="text" name="name" placeholder="Audience name" required />
-                <button type="submit" class="j-btn is-primary">
+                <input
+                    type="text"
+                    name="name"
+                    placeholder="Audience name"
+                    prop:value=name.value
+                    on:input=move |ev| {
+                        let v = event_target_value(&ev);
+                        name.value.set(v.clone());
+                        name.error.set(name.error_for(&v));
+                    }
+                    on:blur=move |_| name.touch()
+                />
+                <button
+                    type="submit"
+                    class="j-btn is-primary"
+                    prop:disabled=move || !name.is_valid()
+                >
                     "Create"
                 </button>
             </ActionForm>
+            // Touched-gated inline validation message (the newtype's own `Display`).
+            {move || {
+                name.is_touched()
+                    .then(|| name.error.get())
+                    .flatten()
+                    .map(|m| view! { <p class="error">{m}</p> })
+            }}
+            // Server-action error (e.g. a duplicate name) — unchanged.
             {move || {
                 create_action
                     .value()
@@ -401,15 +430,35 @@ fn AudienceHeader(audience_id: i64, name: String) -> impl IntoView {
     let list = expect_context::<AudienceList>();
     let rename_action = list.action::<RenameAudience>();
     let delete_action = list.action::<DeleteAudience>();
+    // Client-side pre-validation (ADR-0065), seeded from the existing name so a pristine
+    // row is already valid (submit enabled); clearing it disables Rename and — once
+    // touched — shows the newtype's own message inline.
+    let name = ValidatedField::<AudienceName>::prefilled(&name);
 
     view! {
         <div class="j-audience-head">
             <ActionForm action=rename_action>
                 <input type="hidden" name="audience_id" value=audience_id />
-                <input type="text" name="name" value=name />
-                <button type="submit" class="j-btn">
+                <input
+                    type="text"
+                    name="name"
+                    prop:value=name.value
+                    on:input=move |ev| {
+                        let v = event_target_value(&ev);
+                        name.value.set(v.clone());
+                        name.error.set(name.error_for(&v));
+                    }
+                    on:blur=move |_| name.touch()
+                />
+                <button type="submit" class="j-btn" prop:disabled=move || !name.is_valid()>
                     "Rename"
                 </button>
+                {move || {
+                    name.is_touched()
+                        .then(|| name.error.get())
+                        .flatten()
+                        .map(|m| view! { <p class="error">{m}</p> })
+                }}
             </ActionForm>
             <ActionForm action=delete_action>
                 <input type="hidden" name="audience_id" value=audience_id />

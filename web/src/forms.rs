@@ -203,6 +203,7 @@ where
 mod tests {
     use super::*;
     // `common` has no top-level re-exports — qualify by module.
+    use common::audience::AudienceName;
     use common::email::Email;
     use common::password::Password;
     use common::slug::Slug;
@@ -217,6 +218,7 @@ mod tests {
         assert_eq!(field_error::<Slug>("hello"), None);
         assert_eq!(field_error::<Password>("hunter2!"), None); // >= 8 chars
         assert_eq!(field_error::<Email>("user@example.com"), None);
+        assert_eq!(field_error::<AudienceName>("Close Friends"), None);
     }
 
     #[test]
@@ -231,6 +233,11 @@ mod tests {
         // label, so assert the prefix rather than couple to the crate's wording.
         assert!(field_error::<Email>("not-an-email")
             .is_some_and(|m| m.starts_with("invalid email address")));
+        // An empty / whitespace-only audience name yields the newtype's own message.
+        assert_eq!(
+            field_error::<AudienceName>("   ").as_deref(),
+            Some("audience name must not be empty")
+        );
     }
 
     // `Field<T>`'s methods are signal-only (no `Effect`/`Resource`), so — like
