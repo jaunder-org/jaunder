@@ -137,6 +137,19 @@ the domain type in a server-only crate (never built for wasm) makes "never
 client-side" a compile fact. `ProfferedInviteCode` (#400), paired with the
 domain `InviteCode`, is the first user.
 
+**Outbound-secret variant.** The mirror case is a secret the server _mints_ and
+_deliberately delivers_ to a client exactly once — the session `RawToken` (#458)
+returned by `create_app_password` for the user to copy into an AtomPub client.
+This also uses `#[str_newtype(secret, serde)]`, but it is **not** paired with
+the inbound gate, and deliberately so: the value is server-generated (never
+client-submitted, so there is no untrusted-parameter position to pin), the
+redacting `Debug` keeps it un-leakable in telemetry (ADR-0011), and the
+load-bearing invariant is the **type distinction** — `RawToken` cannot be
+confused with, or converted to, its stored `TokenHash`. The
+`ProfferedInviteCode` `xtask` gate is type-specific (it names that identifier),
+so it neither fires on nor governs `RawToken`; a single sanctioned return site
+(the app-password response) is the whole outbound surface.
+
 **Numeric IDs** take the same idea with a numeric trailer: `struct UserId(i64)`
 deriving `Clone, Copy, Debug, PartialEq, Eq, Hash`, plus `From<i64>` /
 `Into<i64>`, `Display`, and a **transparent-i64 serde bridge** — no `str`
