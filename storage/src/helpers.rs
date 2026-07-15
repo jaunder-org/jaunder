@@ -14,7 +14,7 @@ use common::post_body::PostBody;
 use common::post_title::PostTitle;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
-use common::token::InvalidTokenShape;
+use common::token::{InvalidTokenShape, TokenHash};
 use common::username::Username;
 use host::invite::InviteCode;
 
@@ -88,7 +88,9 @@ pub(crate) fn build_session_record(
         .parse()
         .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
     Ok(SessionRecord {
-        token_hash,
+        // The `token_hash` column is written only by `create_session` (canonical
+        // base64url digest), so this is a trusted rebuild of our own stored value.
+        token_hash: TokenHash::from_digest(token_hash),
         user_id,
         username,
         label,

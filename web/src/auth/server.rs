@@ -4,6 +4,7 @@ use axum::{
     http::{request::Parts, StatusCode},
     response::{IntoResponse, Response},
 };
+use common::token::{RawToken, TokenHash};
 use common::username::Username;
 use host::auth::resolve_credential;
 use std::sync::Arc;
@@ -23,7 +24,7 @@ pub use host::auth::CookieSettings;
 pub struct AuthUser {
     pub user_id: i64,
     pub username: Username,
-    pub token_hash: String,
+    pub token_hash: TokenHash,
 }
 
 #[derive(Debug)]
@@ -159,7 +160,7 @@ fn verify_basic_username(
 // Cookie helpers (leptos/axum adapters over host's pure header builders)
 // ---------------------------------------------------------------------------
 
-pub fn set_session_cookie(raw_token: &str) {
+pub fn set_session_cookie(raw_token: &RawToken) {
     use leptos::context::use_context;
     use leptos_axum::ResponseOptions;
 
@@ -233,7 +234,7 @@ mod tests {
     fn set_session_cookie_without_response_options_context_is_noop() {
         Owner::new().with(|| {
             provide_context(CookieSettings { secure: true });
-            set_session_cookie("token");
+            set_session_cookie(&RawToken::try_from("token".to_string()).unwrap());
         });
     }
 

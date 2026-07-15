@@ -38,7 +38,7 @@ async fn media_usage_returns_defaults_for_authenticated_user(#[case] backend: Ba
         .create_session(user_id, "test session")
         .await
         .expect("create_session failed");
-    let cookie = format!("session={token}");
+    let cookie = format!("session={}", token.as_ref());
 
     let (status, body) = post_form(Arc::clone(&state), "/api/media_usage", "", Some(&cookie)).await;
 
@@ -94,7 +94,7 @@ async fn list_my_media_returns_empty_for_new_user(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .expect("create_session failed");
-    let cookie = format!("session={token}");
+    let cookie = format!("session={}", token.as_ref());
 
     let (status, body) =
         post_form(Arc::clone(&state), "/api/list_my_media", "", Some(&cookie)).await;
@@ -139,7 +139,7 @@ async fn list_my_media_returns_inserted_item(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .expect("create_session failed");
-    let cookie = format!("session={token}");
+    let cookie = format!("session={}", token.as_ref());
 
     let (status, body) =
         post_form(Arc::clone(&state), "/api/list_my_media", "", Some(&cookie)).await;
@@ -190,7 +190,7 @@ async fn list_my_media_with_source_filter(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .expect("create_session failed");
-    let cookie = format!("session={token}");
+    let cookie = format!("session={}", token.as_ref());
 
     let (status, body) = post_form(
         Arc::clone(&state),
@@ -244,7 +244,7 @@ async fn delete_media_succeeds_for_existing_item(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .expect("create_session failed");
-    let cookie = format!("session={token}");
+    let cookie = format!("session={}", token.as_ref());
 
     let body = "sha256=deadbeef01234567&filename=test.png&source=upload&force=false";
     let (status, body_str) =
@@ -319,7 +319,7 @@ async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend:
         .create_session(user_id, "test session")
         .await
         .expect("create_session failed");
-    let cookie = format!("session={token}");
+    let cookie = format!("session={}", token.as_ref());
 
     let body = "sha256=deadbeef99999999&filename=inline.png&source=upload&force=false";
     let (status, body_str) =

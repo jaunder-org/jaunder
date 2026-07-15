@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
+use common::token::RawToken;
 use common::username::Username;
 
 use rstest::*;
@@ -13,7 +14,7 @@ use storage::test_support::{backends, Backend, TestEnv};
 async fn create_user_and_session(
     state: &Arc<storage::AppState>,
     username: &str,
-) -> (i64, String, String) {
+) -> (i64, RawToken, String) {
     let user_id = state
         .users
         .create_user(
@@ -29,7 +30,7 @@ async fn create_user_and_session(
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={raw_token}");
+    let cookie = format!("session={}", raw_token.as_ref());
     (user_id, raw_token, cookie)
 }
 

@@ -40,7 +40,7 @@ async fn create_published_post_enqueues_expected_feeds(
         .create_session(user_id, "test session")
         .await
         .expect("create session");
-    let cookie = create_session_cookie(token.as_str());
+    let cookie = create_session_cookie(token.as_ref());
 
     let body = json!({
         "body": "Test post",
@@ -86,7 +86,7 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
         .create_session(user_id, "test session")
         .await
         .expect("create session");
-    let cookie = create_session_cookie(token.as_str());
+    let cookie = create_session_cookie(token.as_ref());
 
     let create_body = json!({
         "body": "Test post",
@@ -172,7 +172,7 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend
         .create_session(user_id, "test session")
         .await
         .expect("create session");
-    let cookie = create_session_cookie(token.as_str());
+    let cookie = create_session_cookie(token.as_ref());
 
     let create_body = json!({
         "body": "Test post",
@@ -249,7 +249,7 @@ async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .expect("create session");
-    let cookie = create_session_cookie(token.as_str());
+    let cookie = create_session_cookie(token.as_ref());
 
     let create_body = json!({
         "body": "Test post",
@@ -326,7 +326,7 @@ async fn delete_draft_post_enqueues_nothing(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .expect("create session");
-    let cookie = create_session_cookie(token.as_str());
+    let cookie = create_session_cookie(token.as_ref());
 
     let create_body = json!({
         "body": "Test draft",

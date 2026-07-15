@@ -261,7 +261,7 @@ pub async fn app_password_create(
         .create_session(user.user_id, label)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
-    Ok(token)
+    Ok(token.as_ref().to_string())
 }
 
 /// CLI wrapper: opens the database, mints an app password, prints it to stdout.

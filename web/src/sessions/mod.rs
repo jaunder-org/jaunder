@@ -1,6 +1,8 @@
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use common::token::{RawToken, TokenHash};
+
 use crate::error::WebResult;
 
 #[cfg(feature = "server")]
@@ -11,7 +13,7 @@ use {
 /// Session info returned by [`list_sessions`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInfo {
-    pub token_hash: String,
+    pub token_hash: TokenHash,
     pub label: String,
     pub created_at: String,
     pub last_used_at: String,
@@ -43,7 +45,7 @@ pub async fn list_sessions() -> WebResult<Vec<SessionInfo>> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppPassword {
     /// The raw token — used as the password for `AtomPub` HTTP Basic auth.
-    pub token: String,
+    pub token: RawToken,
     /// The label recorded for this app password.
     pub label: String,
 }
@@ -69,7 +71,7 @@ pub async fn create_app_password(label: String) -> WebResult<AppPassword> {
 
 /// Revokes a session belonging to the authenticated user.
 #[server(endpoint = "/revoke_session")]
-pub async fn revoke_session(token_hash: String) -> WebResult<()> {
+pub async fn revoke_session(token_hash: TokenHash) -> WebResult<()> {
     boundary!("revoke_session", {
         let auth = require_auth().await?;
         let sessions = expect_context::<Arc<dyn SessionStorage>>();

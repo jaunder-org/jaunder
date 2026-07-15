@@ -291,6 +291,8 @@ async fn seed_alice(state: &Arc<storage::AppState>) -> String {
         .create_session(user_id, "MarsEdit")
         .await
         .unwrap()
+        .as_ref()
+        .to_string()
 }
 
 #[apply(backends)]

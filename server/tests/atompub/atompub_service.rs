@@ -66,7 +66,7 @@ async fn service_document_returns_200_with_app_password(#[case] backend: Backend
         .oneshot(
             Request::builder()
                 .uri("/atompub/service")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -126,7 +126,10 @@ async fn service_document_rejects_basic_username_mismatch(#[case] backend: Backe
         .oneshot(
             Request::builder()
                 .uri("/atompub/service")
-                .header(header::AUTHORIZATION, basic_header("mallory", &token))
+                .header(
+                    header::AUTHORIZATION,
+                    basic_header("mallory", token.as_ref()),
+                )
                 .body(Body::empty())
                 .unwrap(),
         )

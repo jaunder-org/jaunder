@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use axum::http::StatusCode;
 use chrono::Utc;
+use common::token::RawToken;
 use common::username::Username;
 
 use rstest::*;
@@ -336,7 +337,7 @@ async fn login_with_label_creates_session_with_label(#[case] backend: Backend) {
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    let raw_token = extract_token(&body);
+    let raw_token = RawToken::try_from(extract_token(&body)).unwrap();
     let record = state.sessions.authenticate(&raw_token).await.unwrap();
     assert_eq!(record.label, "my-device");
 }
@@ -369,7 +370,7 @@ async fn login_with_empty_label_creates_session_without_label(#[case] backend: B
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    let raw_token = extract_token(&body);
+    let raw_token = RawToken::try_from(extract_token(&body)).unwrap();
     let record = state.sessions.authenticate(&raw_token).await.unwrap();
     // When no label provided, should default to "Unknown device"
     assert_eq!(record.label, "Unknown device");
@@ -408,7 +409,7 @@ async fn login_truncates_long_user_agent(#[case] backend: Backend) {
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    let raw_token = extract_token(&body);
+    let raw_token = RawToken::try_from(extract_token(&body)).unwrap();
     let record = state.sessions.authenticate(&raw_token).await.unwrap();
     // Label should be truncated to 200 chars
     assert_eq!(record.label.len(), 200);
@@ -476,7 +477,7 @@ async fn logout_revokes_session_and_clears_cookie(#[case] backend: Backend) {
         "one session should exist before logout"
     );
 
-    let cookie_header = format!("session={raw_token}");
+    let cookie_header = format!("session={}", raw_token.as_ref());
     let (status, set_cookie, _body) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/logout",
@@ -625,7 +626,7 @@ async fn logout_with_bearer_token_revokes_session(#[case] backend: Backend) {
 
     // POST to /api/logout with Bearer token instead of a cookie.
     let (status, set_cookie, _body) =
-        post_form_with_bearer(Arc::clone(&state), "/api/logout", "", &raw_token).await;
+        post_form_with_bearer(Arc::clone(&state), "/api/logout", "", raw_token.as_ref()).await;
 
     assert_eq!(
         status,
@@ -744,7 +745,7 @@ async fn logout_clears_cookie_without_secure_attribute_when_disabled(#[case] bac
         .await
         .unwrap();
 
-    let cookie_header = format!("session={raw_token}");
+    let cookie_header = format!("session={}", raw_token.as_ref());
     let (status, set_cookie, _) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/logout",
@@ -780,7 +781,7 @@ async fn current_user_returns_username_when_authenticated(#[case] backend: Backe
         .await
         .unwrap();
 
-    let cookie_header = format!("session={raw_token}");
+    let cookie_header = format!("session={}", raw_token.as_ref());
     let (status, _, body) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/current_user",

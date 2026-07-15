@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 use sqlx::{Pool, Sqlite};
 
+use common::token::TokenHash;
+
 use crate::helpers::SessionRow;
 use crate::sessions::{SessionDialect, SessionStore};
 
@@ -11,7 +13,7 @@ pub type SqliteSessionStorage = SessionStore<Sqlite>;
 impl SessionDialect for Sqlite {
     async fn touch_and_load(
         pool: &Pool<Sqlite>,
-        token_hash: &str,
+        token_hash: &TokenHash,
         now: chrono::DateTime<chrono::Utc>,
     ) -> sqlx::Result<Option<SessionRow>> {
         // Two statements in one tx: SQLite's RETURNING with a correlated
@@ -19,7 +21,7 @@ impl SessionDialect for Sqlite {
         let mut tx = pool.begin().await?;
         sqlx::query("UPDATE sessions SET last_used_at = $1 WHERE token_hash = $2")
             .bind(now)
-            .bind(token_hash)
+            .bind(token_hash.as_ref())
             .execute(&mut *tx)
             .await?;
 
@@ -29,7 +31,7 @@ impl SessionDialect for Sqlite {
              JOIN users u ON u.user_id = s.user_id
              WHERE s.token_hash = $1",
         )
-        .bind(token_hash)
+        .bind(token_hash.as_ref())
         .fetch_optional(&mut *tx)
         .await?;
 

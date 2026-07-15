@@ -211,5 +211,5 @@ async fn create_session_cookie(
         .await
         .expect("create_session");
 
-    format!("session={token}")
+    format!("session={}", token.as_ref())
 }

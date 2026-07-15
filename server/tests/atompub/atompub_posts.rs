@@ -82,7 +82,7 @@ async fn collection_lists_user_posts(#[case] backend: Backend) {
         .oneshot(
             Request::builder()
                 .uri("/atompub/alice/posts")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -160,7 +160,7 @@ async fn member_returns_native_source_with_etag(#[case] backend: Backend) {
         .oneshot(
             Request::builder()
                 .uri(format!("/atompub/alice/posts/{}", post.post_id))
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -210,7 +210,7 @@ async fn member_get_unknown_returns_404(#[case] backend: Backend) {
         .oneshot(
             Request::builder()
                 .uri("/atompub/alice/posts/999999")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -267,7 +267,7 @@ async fn delete_then_get_is_404(#[case] backend: Backend) {
             Request::builder()
                 .method("DELETE")
                 .uri(format!("/atompub/alice/posts/{}", post.post_id))
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -281,7 +281,7 @@ async fn delete_then_get_is_404(#[case] backend: Backend) {
         .oneshot(
             Request::builder()
                 .uri(format!("/atompub/alice/posts/{}", post.post_id))
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -338,7 +338,7 @@ async fn collection_paging_emits_next_link(#[case] backend: Backend) {
         .oneshot(
             Request::builder()
                 .uri("/atompub/alice/posts?limit=1")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -376,7 +376,7 @@ async fn seed_alice(state: &Arc<storage::AppState>) -> (i64, String) {
         .create_session(user_id, "MarsEdit")
         .await
         .unwrap();
-    (user_id, token)
+    (user_id, token.as_ref().to_string())
 }
 
 // Shape B — the cursor accept/reject pair. Both seed `alice`, issue a GET to the
@@ -428,7 +428,7 @@ async fn collection_cursor_validation(
         .oneshot(
             Request::builder()
                 .uri(format!("/atompub/alice/posts?{query}"))
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -449,7 +449,7 @@ async fn collection_empty_returns_feed_without_entries(#[case] backend: Backend)
         .oneshot(
             Request::builder()
                 .uri("/atompub/alice/posts")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -566,7 +566,7 @@ async fn malformed_username_path_returns_400(#[case] backend: Backend) {
         .oneshot(
             Request::builder()
                 .uri("/atompub/a@b/posts")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -599,7 +599,7 @@ async fn create_post_returns_201_and_is_retrievable(#[case] backend: Backend) {
                 .method("POST")
                 .uri("/atompub/alice/posts")
                 .header(header::CONTENT_TYPE, "application/atom+xml")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::from(xml))
                 .unwrap(),
         )
@@ -623,7 +623,7 @@ async fn create_post_returns_201_and_is_retrievable(#[case] backend: Backend) {
         .oneshot(
             Request::builder()
                 .uri(&loc_path)
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -656,7 +656,7 @@ async fn create_post_applies_categories(#[case] backend: Backend) {
                 .method("POST")
                 .uri("/atompub/alice/posts")
                 .header(header::CONTENT_TYPE, "application/atom+xml")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::from(xml))
                 .unwrap(),
         )
@@ -685,7 +685,7 @@ async fn create_html_entry_is_stored_as_html(#[case] backend: Backend) {
                 .method("POST")
                 .uri("/atompub/alice/posts")
                 .header(header::CONTENT_TYPE, "application/atom+xml")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::from(xml))
                 .unwrap(),
         )
@@ -725,7 +725,7 @@ async fn create_format_media_type_round_trips(
                 .method("POST")
                 .uri("/atompub/alice/posts")
                 .header(header::CONTENT_TYPE, "application/atom+xml")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::from(xml))
                 .unwrap(),
         )
@@ -746,7 +746,7 @@ async fn create_format_media_type_round_trips(
         .oneshot(
             Request::builder()
                 .uri(&location)
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -794,7 +794,7 @@ async fn update_replaces_post_body(#[case] backend: Backend) {
                 .method("PUT")
                 .uri(format!("/atompub/alice/posts/{}", post.post_id))
                 .header(header::CONTENT_TYPE, "application/atom+xml")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::from(xml))
                 .unwrap(),
         )
@@ -843,7 +843,7 @@ async fn update_with_stale_if_match_returns_412(#[case] backend: Backend) {
                 .uri(format!("/atompub/alice/posts/{}", post.post_id))
                 .header(header::CONTENT_TYPE, "application/atom+xml")
                 .header(header::IF_MATCH, "\"0\"") // Wrong ETag
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::from(xml))
                 .unwrap(),
         )
@@ -866,7 +866,7 @@ async fn create_rejects_malformed_entry(#[case] backend: Backend) {
                 .method("POST")
                 .uri("/atompub/alice/posts")
                 .header(header::CONTENT_TYPE, "application/atom+xml")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::from("not xml"))
                 .unwrap(),
         )
@@ -916,7 +916,7 @@ async fn update_removes_categories_not_in_new_entry(#[case] backend: Backend) {
                 .method("PUT")
                 .uri(format!("/atompub/alice/posts/{}", post.post_id))
                 .header(header::CONTENT_TYPE, "application/atom+xml")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::from(xml))
                 .unwrap(),
         )
@@ -962,7 +962,7 @@ async fn update_with_put_returns_200_and_etag(#[case] backend: Backend) {
                 .method("PUT")
                 .uri(format!("/atompub/alice/posts/{}", post.post_id))
                 .header(header::CONTENT_TYPE, "application/atom+xml")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::from(xml))
                 .unwrap(),
         )
@@ -1033,7 +1033,7 @@ async fn empty_entry_returns_400(backend: Backend, #[case] op: EmptyEntryOp) {
                 .method("PUT")
                 .uri(format!("/atompub/alice/posts/{}", post.post_id))
                 .header(header::CONTENT_TYPE, "application/atom+xml")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::from(EMPTY_ENTRY_XML))
                 .unwrap()
         }
@@ -1067,7 +1067,7 @@ async fn create_draft_entry_is_unpublished(#[case] backend: Backend) {
                 .method("POST")
                 .uri("/atompub/alice/posts")
                 .header(header::CONTENT_TYPE, "application/atom+xml")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::from(xml))
                 .unwrap(),
         )
@@ -1086,7 +1086,7 @@ async fn create_draft_entry_is_unpublished(#[case] backend: Backend) {
         .oneshot(
             Request::builder()
                 .uri(&location)
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -1137,7 +1137,7 @@ async fn member_carries_read_only_j_slug(#[case] backend: Backend) {
         .oneshot(
             Request::builder()
                 .uri(format!("/atompub/alice/posts/{}", post.post_id))
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -1179,7 +1179,7 @@ async fn incoming_j_slug_is_ignored(#[case] backend: Backend) {
                 .method("POST")
                 .uri("/atompub/alice/posts")
                 .header(header::CONTENT_TYPE, "application/atom+xml")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::from(xml))
                 .unwrap(),
         )
@@ -1223,7 +1223,7 @@ async fn create_skips_invalid_category(#[case] backend: Backend) {
                 .method("POST")
                 .uri("/atompub/alice/posts")
                 .header(header::CONTENT_TYPE, "application/atom+xml")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::from(xml))
                 .unwrap(),
         )
@@ -1259,7 +1259,7 @@ async fn update_keeps_unchanged_category(#[case] backend: Backend) {
                 .method("POST")
                 .uri("/atompub/alice/posts")
                 .header(header::CONTENT_TYPE, "application/atom+xml")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::from(with_rust))
                 .unwrap(),
         )
@@ -1281,7 +1281,7 @@ async fn update_keeps_unchanged_category(#[case] backend: Backend) {
                 .method("PUT")
                 .uri(&location)
                 .header(header::CONTENT_TYPE, "application/atom+xml")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::from(with_rust))
                 .unwrap(),
         )
@@ -1312,7 +1312,7 @@ async fn update_with_matching_if_match_succeeds(#[case] backend: Backend) {
                 .method("POST")
                 .uri("/atompub/alice/posts")
                 .header(header::CONTENT_TYPE, "application/atom+xml")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::from(xml))
                 .unwrap(),
         )
@@ -1341,7 +1341,7 @@ async fn update_with_matching_if_match_succeeds(#[case] backend: Backend) {
                 .uri(&location)
                 .header(header::CONTENT_TYPE, "application/atom+xml")
                 .header(header::IF_MATCH, etag)
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::from(xml))
                 .unwrap(),
         )
@@ -1423,7 +1423,7 @@ async fn delete_with_stale_if_match_returns_412(#[case] backend: Backend) {
                 .method("DELETE")
                 .uri(&location)
                 .header(header::IF_MATCH, "\"0\"")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -1449,7 +1449,7 @@ async fn delete_with_matching_if_match_succeeds(#[case] backend: Backend) {
                 .method("DELETE")
                 .uri(&location)
                 .header(header::IF_MATCH, etag)
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -1476,7 +1476,7 @@ async fn delete_without_if_match_succeeds(#[case] backend: Backend) {
             Request::builder()
                 .method("DELETE")
                 .uri(&location)
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -1501,7 +1501,7 @@ async fn delete_with_wildcard_if_match_succeeds(#[case] backend: Backend) {
                 .method("DELETE")
                 .uri(&location)
                 .header(header::IF_MATCH, "*")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -1536,7 +1536,7 @@ async fn editing_content_via_put_changes_etag(#[case] backend: Backend) {
                 .uri(&location)
                 .header(header::CONTENT_TYPE, "application/atom+xml")
                 .header(header::IF_MATCH, &e1)
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::from(edited))
                 .unwrap(),
         )
@@ -1602,7 +1602,7 @@ async fn idempotent_reput_keeps_etag(#[case] backend: Backend) {
                 .method("POST")
                 .uri("/atompub/alice/posts")
                 .header(header::CONTENT_TYPE, "application/atom+xml")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::from(ETAG_POST_XML))
                 .unwrap(),
         )
@@ -1630,7 +1630,7 @@ async fn idempotent_reput_keeps_etag(#[case] backend: Backend) {
                 .uri(&location)
                 .header(header::CONTENT_TYPE, "application/atom+xml")
                 .header(header::IF_MATCH, &e1)
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::from(ETAG_POST_XML))
                 .unwrap(),
         )
@@ -1685,7 +1685,7 @@ async fn update_preserves_non_public_targeting(#[case] backend: Backend) {
                 .method("PUT")
                 .uri(format!("/atompub/alice/posts/{}", post.post_id))
                 .header(header::CONTENT_TYPE, "application/atom+xml")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::from(xml))
                 .unwrap(),
         )
@@ -1738,7 +1738,7 @@ async fn member_get_serves_owner_non_public_post(#[case] backend: Backend) {
         .oneshot(
             Request::builder()
                 .uri(format!("/atompub/alice/posts/{}", post.post_id))
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -1777,7 +1777,7 @@ async fn create_adopts_default_audience(#[case] backend: Backend) {
                 .method("POST")
                 .uri("/atompub/alice/posts")
                 .header(header::CONTENT_TYPE, "application/atom+xml")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::from(xml))
                 .unwrap(),
         )
@@ -1827,7 +1827,7 @@ async fn create_with_future_published_is_scheduled(#[case] backend: Backend) {
                 .method("POST")
                 .uri("/atompub/alice/posts")
                 .header(header::CONTENT_TYPE, "application/atom+xml")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::from(xml))
                 .unwrap(),
         )
@@ -1888,7 +1888,7 @@ async fn create_with_past_published_is_live_backdated(#[case] backend: Backend) 
                 .method("POST")
                 .uri("/atompub/alice/posts")
                 .header(header::CONTENT_TYPE, "application/atom+xml")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::from(xml))
                 .unwrap(),
         )
@@ -1946,7 +1946,7 @@ async fn update_with_future_published_schedules_post(#[case] backend: Backend) {
                 .method("PUT")
                 .uri(format!("/atompub/alice/posts/{}", post.post_id))
                 .header(header::CONTENT_TYPE, "application/atom+xml")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .header(header::AUTHORIZATION, basic_header("alice", token.as_ref()))
                 .body(Body::from(xml))
                 .unwrap(),
         )

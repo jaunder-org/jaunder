@@ -40,7 +40,7 @@ async fn create_user_with_verified_email(
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    (user_id, raw_token)
+    (user_id, raw_token.as_ref().to_string())
 }
 
 // M3.11.7: request_password_reset for a user with a verified email sends a reset email.

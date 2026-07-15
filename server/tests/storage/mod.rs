@@ -3,6 +3,7 @@ use common::password::Password;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::test_support::{parse_audience_name, parse_display_name, parse_email};
+use common::token::RawToken;
 use common::username::Username;
 use common::visibility::{
     AudienceTarget, Channel, SubscriptionPolicy, SubscriptionStatus, TargetKind, ViewerIdentity,
@@ -1241,9 +1242,12 @@ async fn authenticate_with_invalid_base64_token_returns_invalid_token(#[case] ba
     let env = backend.setup().await;
     let state = &env.state;
 
+    // In-charset (base64url) but an invalid length that cannot decode, so hashing
+    // fails and `authenticate` reports InvalidToken. (A non-charset string like
+    // "not-base64!" can no longer be constructed as a `RawToken`.)
     let err = state
         .sessions
-        .authenticate("not-base64!")
+        .authenticate(&RawToken::try_from("a".to_string()).unwrap())
         .await
         .unwrap_err();
     assert!(matches!(err, SessionAuthError::InvalidToken));
