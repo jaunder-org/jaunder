@@ -7,6 +7,8 @@
 
 use chrono::{DateTime, Utc};
 use common::atompub::{is_draft, set_draft, set_j_slug, Category, Content, Entry, Link, Text};
+use common::post_body::PostBody;
+use common::post_title::PostTitle;
 use common::tag::TagLabel;
 use storage::{PostFormat, PostRecord};
 
@@ -14,9 +16,9 @@ use storage::{PostFormat, PostRecord};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PostFields {
     /// Explicit title carried by the entry (`None` when absent/blank).
-    pub title: Option<String>,
+    pub title: Option<PostTitle>,
     /// Raw source body (in the selected format).
-    pub body: String,
+    pub body: PostBody,
     /// Format/markup language of the body.
     pub format: PostFormat,
     /// Optional summary/excerpt.
@@ -77,10 +79,11 @@ pub fn entry_to_post_fields(entry: &Entry, default_format: PostFormat) -> PostFi
 
     let format = wire_to_format(ctype, default_format);
 
-    let body = value.to_string();
+    let body = PostBody::from(value);
     let title = {
-        let trimmed = entry.title().as_str().trim();
-        (!trimmed.is_empty()).then(|| trimmed.to_string())
+        // `PostTitle::from` trims; the local trim only decides presence (blank → None).
+        let raw = entry.title().as_str();
+        (!raw.trim().is_empty()).then(|| PostTitle::from(raw))
     };
     let summary = entry.summary().map(|t| t.as_str().to_string());
     // atom `<category term>` values are arbitrary RFC-4287 protocol strings (the
@@ -128,7 +131,6 @@ pub fn post_to_entry(post: &PostRecord, base_url: &str) -> Entry {
 
     // Content: the post's format becomes the wire media `type` (native source form).
     let content_type = format_to_wire(&post.format);
-    let body = post.body.clone();
 
     // Links: always an `edit` link; a public `alternate` only when published.
     let mut links = vec![Link {
@@ -146,10 +148,14 @@ pub fn post_to_entry(post: &PostRecord, base_url: &str) -> Entry {
 
     let mut entry = Entry {
         id: edit_uri,
-        title: Text::plain(post.title.clone().unwrap_or_else(|| post.slug.to_string())),
+        title: Text::plain(
+            post.title
+                .clone()
+                .map_or_else(|| post.slug.to_string(), String::from),
+        ),
         content: Some(Content {
             content_type: Some(content_type.to_string()),
-            value: Some(body),
+            value: Some(String::from(post.body.clone())),
             ..Default::default()
         }),
         summary: post.summary.clone().map(Text::plain),
@@ -541,9 +547,9 @@ mod tests {
             post_id,
             user_id: 1,
             author_username: "alice".parse().expect("parse username"),
-            title: title.map(std::string::ToString::to_string),
+            title: title.map(PostTitle::from),
             slug: slug.parse().expect("parse slug"),
-            body: body.to_string(),
+            body: body.into(),
             format,
             rendered_html: storage::RenderedHtml::from_trusted("<p>html</p>"),
             created_at: Utc::now(),

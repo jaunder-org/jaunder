@@ -33,9 +33,9 @@ async fn seed_user_and_tagged_post(
         .posts
         .create_post(&CreatePostInput {
             user_id,
-            title: Some(format!("Post {slug}")),
+            title: Some(format!("Post {slug}").into()),
             slug: slug.parse().unwrap(),
-            body: format!("body {slug}"),
+            body: format!("body {slug}").into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted(format!("<p>body {slug}</p>")),
             published_at: Some(Utc::now()),

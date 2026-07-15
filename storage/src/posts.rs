@@ -6,6 +6,8 @@ use sqlx::{Database, Pool};
 use thiserror::Error;
 
 use common::feed::FeedPath;
+use common::post_body::PostBody;
+use common::post_title::PostTitle;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::username::Username;
@@ -46,11 +48,11 @@ pub struct PostRecord {
     /// Username of the author
     pub author_username: Username,
     /// Optional title.
-    pub title: Option<String>,
+    pub title: Option<PostTitle>,
     /// Unique slug (per user, per day).
     pub slug: Slug,
     /// Raw source body (Markdown or Org).
-    pub body: String,
+    pub body: PostBody,
     /// Format of the `body`.
     pub format: PostFormat,
     /// HTML produced by `render()` from the `body`. A provenance marker, **not**
@@ -94,7 +96,7 @@ impl PostRecord {
             .find(|line| !line.is_empty())
             .map(|line| line.chars().take(100).collect::<String>())
             .filter(|line| !line.is_empty())
-            .or_else(|| self.title.clone())
+            .or_else(|| self.title.clone().map(String::from))
             .unwrap_or_else(|| self.slug.to_string())
     }
 }
@@ -111,11 +113,11 @@ pub struct PostRevisionRecord {
     /// ID of the user who made the edit.
     pub user_id: i64,
     /// Title at the time of this revision.
-    pub title: Option<String>,
+    pub title: Option<PostTitle>,
     /// Slug at the time of this revision.
     pub slug: Slug,
     /// Raw source body at the time of this revision.
-    pub body: String,
+    pub body: PostBody,
     /// Format at the time of this revision.
     pub format: PostFormat,
     /// HTML produced by `render()` at the time of this revision. A provenance
@@ -192,9 +194,9 @@ pub struct CollectionCursor {
 #[derive(Clone)]
 pub struct CreatePostInput {
     pub user_id: i64,
-    pub title: Option<String>,
+    pub title: Option<PostTitle>,
     pub slug: Slug,
-    pub body: String,
+    pub body: PostBody,
     pub format: PostFormat,
     pub rendered_html: RenderedHtml,
     /// If Some, the post is created in a published state.
@@ -213,10 +215,10 @@ pub struct CreatePostInput {
 /// Input for updating an existing post.
 #[derive(Clone)]
 pub struct UpdatePostInput {
-    pub title: Option<String>,
+    pub title: Option<PostTitle>,
     /// The new slug. Note: Slugs are typically immutable once published.
     pub slug: Slug,
-    pub body: String,
+    pub body: PostBody,
     pub format: PostFormat,
     pub rendered_html: RenderedHtml,
     /// If `true`, clear `published_at` back to NULL (draft / unschedule). Takes
@@ -824,6 +826,7 @@ where
     (String, DateTime<Utc>): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<&'q str>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<String>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<i64>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -1846,6 +1849,7 @@ where
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<i64>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<&'q str>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<String>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<DateTime<Utc>>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -1862,9 +1866,9 @@ where
          RETURNING post_id",
     )
     .bind(input.user_id)
-    .bind(input.title.clone())
+    .bind(input.title.as_deref())
     .bind(input.slug.as_ref())
-    .bind(input.body.as_str())
+    .bind(&*input.body)
     .bind(format.as_str())
     .bind(input.rendered_html.as_ref())
     .bind(now)
@@ -2301,10 +2305,9 @@ mod tests {
             post_id: 1,
             user_id: 1,
             author_username: "author".parse().unwrap(),
-            title: Some("My Title".to_string()),
+            title: Some("My Title".into()),
             slug: "my-slug".parse().unwrap(),
-            body: "\n\n   The first non-empty line of the body is here. \n\n Another line."
-                .to_string(),
+            body: "\n\n   The first non-empty line of the body is here. \n\n Another line.".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted(
                 "<p>The first non-empty line of the body is here.</p>",
@@ -2324,7 +2327,7 @@ mod tests {
         );
 
         // Case 2: Body is empty but title is populated.
-        post.body = String::new();
+        post.body = "".into();
         assert_eq!(post.fallback_summary_label(), "My Title");
 
         // Case 3: Body and title are empty. It should use the slug.
@@ -2339,9 +2342,9 @@ mod tests {
             post_id: 1,
             user_id: 1,
             author_username: "author".parse().unwrap(),
-            title: Some("My Title".to_string()),
+            title: Some("My Title".into()),
             slug: "hello-world".parse().unwrap(),
-            body: "My body".to_string(),
+            body: "My body".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>My body</p>"),
             created_at: Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap(),
@@ -2391,9 +2394,9 @@ mod tests {
         env.base.close_pool().await;
         let input = CreatePostInput {
             user_id: 1,
-            title: Some("Test".to_string()),
+            title: Some("Test".into()),
             slug: "test-post".parse().unwrap(),
-            body: "body".to_string(),
+            body: "body".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
             published_at: None,
@@ -2441,9 +2444,9 @@ mod tests {
             .posts
             .create_post(&CreatePostInput {
                 user_id: uid,
-                title: Some("Post".to_string()),
+                title: Some("Post".into()),
                 slug: "post".parse().unwrap(),
-                body: "body".to_string(),
+                body: "body".into(),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
                 published_at: None,
@@ -2482,9 +2485,9 @@ mod tests {
 
         let mk = |slug: &str, published: bool| CreatePostInput {
             user_id: uid,
-            title: Some(format!("Post {slug}")),
+            title: Some(format!("Post {slug}").into()),
             slug: slug.parse().unwrap(),
-            body: "body".to_string(),
+            body: "body".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
             published_at: published.then_some(now - chrono::Duration::minutes(30)),
@@ -2613,7 +2616,7 @@ mod tests {
             author_username: "author".parse().unwrap(),
             title: None,
             slug: "hello-world".parse().unwrap(),
-            body: String::new(),
+            body: "".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted(""),
             created_at: Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap(),
@@ -2709,9 +2712,9 @@ mod tests {
         let post_id = posts
             .create_post(&CreatePostInput {
                 user_id,
-                title: Some("Post".to_string()),
+                title: Some("Post".into()),
                 slug: "post".parse().unwrap(),
-                body: "body".to_string(),
+                body: "body".into(),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
                 published_at: None,
@@ -2763,9 +2766,9 @@ mod tests {
         let post_id = posts
             .create_post(&CreatePostInput {
                 user_id,
-                title: Some("Post".to_string()),
+                title: Some("Post".into()),
                 slug: "post".parse().unwrap(),
-                body: "body".to_string(),
+                body: "body".into(),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
                 published_at: None,
@@ -2852,7 +2855,7 @@ mod tests {
                         author_username: username.clone(),
                         title: None,
                         slug: slug.clone(),
-                        body: String::new(),
+                        body: "".into(),
                         format: PostFormat::Markdown,
                         rendered_html: RenderedHtml::from_trusted(""),
                         created_at: base + chrono::Duration::seconds(i),

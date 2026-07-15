@@ -141,6 +141,28 @@ pub fn client_only(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// # let s = Sec("x".to_owned());
 /// let _: &str = &s;
 /// ```
+///
+/// `#[str_newtype(infallible)]` selects the **infallible** trailer for a newtype whose
+/// invariant never rejects: construction is a hand-written `From<String>` (the single
+/// pure-wrap or normalizing chokepoint) rather than `FromStr`, so there is no
+/// `TryFrom<String>`/`FromStr`. The derive also emits a `From<&str>` alias that routes
+/// through that `From<String>` — so a literal constructs with one `.into()`, no
+/// `.to_owned()` — and a `Deserialize` that routes wire input through it too, so it cannot
+/// fail and normalizes identically. Exclusive with `secret`/`serde` (the infallible
+/// trailer already includes the serde bridge):
+///
+/// ```
+/// use macros::StrNewtype;
+/// #[derive(Clone, StrNewtype)]
+/// #[str_newtype(infallible)]
+/// struct Inf(String);
+/// impl From<String> for Inf {
+///     fn from(s: String) -> Self { Inf(s) }
+/// }
+/// let v: Inf = "x".into();                                        // From<&str>, one hop
+/// assert_eq!(serde_json::to_string(&v).unwrap(), "\"x\"");        // serde bridge
+/// let _back: Inf = serde_json::from_str("\"x\"").unwrap();        // deserialize via From<String>
+/// ```
 #[proc_macro_derive(StrNewtype, attributes(str_newtype))]
 pub fn str_newtype_derive(item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as DeriveInput);
@@ -279,6 +301,49 @@ mod tests {
         // A bare `serde` is invalid — the default trailer already has the serde bridge.
         let input: DeriveInput = parse_quote! {
             #[str_newtype(serde)]
+            struct X(String);
+        };
+        assert!(str_newtype::expand(&input)
+            .to_string()
+            .contains("compile_error"));
+    }
+
+    #[test]
+    fn str_newtype_infallible_emits_from_string_serde_and_omits_fallible_door() {
+        // Infallible mode: Display/AsRef/Deref/Serialize/Deserialize present; the
+        // fallible door (TryFrom / FromStr routing) is absent — the author writes
+        // From<String> and Deserialize routes through it.
+        let input: DeriveInput = parse_quote! {
+            #[str_newtype(infallible)]
+            struct X(String);
+        };
+        let out = str_newtype::expand(&input).to_string();
+        assert!(out.contains("Display"));
+        assert!(out.contains("AsRef"));
+        assert!(out.contains("Deref"));
+        assert!(out.contains("Serialize"));
+        assert!(out.contains("Deserialize"));
+        // The fallible door (TryFrom / FromStr routing) is absent — the author writes
+        // From<String> and Deserialize routes through it.
+        assert!(!out.contains("TryFrom"));
+        assert!(!out.contains("FromStr"));
+    }
+
+    #[test]
+    fn str_newtype_infallible_with_secret_emits_compile_error() {
+        let input: DeriveInput = parse_quote! {
+            #[str_newtype(infallible, secret)]
+            struct X(String);
+        };
+        assert!(str_newtype::expand(&input)
+            .to_string()
+            .contains("compile_error"));
+    }
+
+    #[test]
+    fn str_newtype_infallible_with_serde_emits_compile_error() {
+        let input: DeriveInput = parse_quote! {
+            #[str_newtype(infallible, serde)]
             struct X(String);
         };
         assert!(str_newtype::expand(&input)

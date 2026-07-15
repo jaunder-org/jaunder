@@ -144,7 +144,9 @@ async fn build_feed_items(
         let published_at = p.published_at.unwrap_or(p.created_at);
         items.push(FeedItem {
             id: p.post_id,
-            title: p.title.clone(),
+            // FeedItem.title is the feed-native String surface (excluded from the
+            // PostTitle sweep, spec #402); map the post's PostTitle into it.
+            title: p.title.clone().map(String::from),
             permalink: p.permalink(),
             summary: p.summary.clone(),
             // Feed content is a separate `String` surface (RSS/Atom XML), outside

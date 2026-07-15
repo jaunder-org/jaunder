@@ -2004,9 +2004,9 @@ async fn use_password_reset_unknown_token_returns_not_found(#[case] backend: Bac
 fn make_create_post_input(user_id: i64, slug: &str) -> CreatePostInput {
     CreatePostInput {
         user_id,
-        title: Some(format!("Post {slug}")),
+        title: Some(format!("Post {slug}").into()),
         slug: slug.parse().unwrap(),
-        body: "body text".to_string(),
+        body: "body text".into(),
         format: PostFormat::Markdown,
         rendered_html: RenderedHtml::from_trusted("<p>body text</p>"),
         published_at: None,
@@ -2040,7 +2040,7 @@ async fn seed_post_published_at(
             user_id,
             title: None,
             slug: slug.parse().expect("valid slug"),
-            body: format!("# {slug}\n\nbody"),
+            body: format!("# {slug}\n\nbody").into(),
             format: PostFormat::Markdown,
             published_at: Some(published_at),
             summary: None,
@@ -2383,9 +2383,9 @@ async fn post_slug_conflict_returns_slug_conflict(#[case] backend: Backend) {
     let now = Utc::now();
     let pub_input = CreatePostInput {
         user_id,
-        title: Some("Published".to_string()),
+        title: Some("Published".into()),
         slug: "same-day-slug".parse().unwrap(),
-        body: "body".to_string(),
+        body: "body".into(),
         format: PostFormat::Markdown,
         rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
         published_at: Some(now),
@@ -2420,9 +2420,9 @@ async fn post_update_writes_revision_and_updates_record(#[case] backend: Backend
         .unwrap();
 
     let update_input = UpdatePostInput {
-        title: Some("Updated Title".to_string()),
+        title: Some("Updated Title".into()),
         slug: "update-test".parse().unwrap(),
-        body: "updated body".to_string(),
+        body: "updated body".into(),
         format: PostFormat::Org,
         rendered_html: RenderedHtml::from_trusted("<p>updated body</p>"),
         unpublish: true,
@@ -2447,9 +2447,9 @@ async fn post_update_not_found_returns_error(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let update_input = UpdatePostInput {
-        title: Some("Title".to_string()),
+        title: Some("Title".into()),
         slug: "nope".parse().unwrap(),
-        body: "body".to_string(),
+        body: "body".into(),
         format: PostFormat::Markdown,
         rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
         unpublish: true,
@@ -2488,9 +2488,9 @@ async fn post_update_by_non_owner_returns_unauthorized(#[case] backend: Backend)
         .posts
         .create_post(&CreatePostInput {
             user_id: owner,
-            title: Some("Owned".to_string()),
+            title: Some("Owned".into()),
             slug: "owned".parse().unwrap(),
-            body: "Content".to_string(),
+            body: "Content".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
             published_at: None,
@@ -2507,9 +2507,9 @@ async fn post_update_by_non_owner_returns_unauthorized(#[case] backend: Backend)
             post_id,
             other,
             &UpdatePostInput {
-                title: Some("Hijacked".to_string()),
+                title: Some("Hijacked".into()),
                 slug: "hijacked".parse().unwrap(),
-                body: "Nope".to_string(),
+                body: "Nope".into(),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>Nope</p>"),
                 unpublish: true,
@@ -2536,7 +2536,7 @@ fn update_input(
     PostUpdate {
         post_id,
         editor_user_id,
-        body: "updated body".to_string(),
+        body: "updated body".into(),
         title: Some("Updated Title"),
         format: PostFormat::Markdown,
         slug_override: Some(slug),
@@ -2727,9 +2727,9 @@ async fn post_audiences_are_persisted_and_replaced(#[case] backend: Backend) {
 
     // Update to [Private] → zero rows.
     let update_private = UpdatePostInput {
-        title: Some("Post audience-post".to_string()),
+        title: Some("Post audience-post".into()),
         slug: "audience-post".parse().unwrap(),
-        body: "body text".to_string(),
+        body: "body text".into(),
         format: PostFormat::Markdown,
         rendered_html: RenderedHtml::from_trusted("<p>body text</p>"),
         unpublish: true,
@@ -2820,9 +2820,9 @@ async fn get_post_audiences_round_trips(#[case] backend: Backend) {
 
     // Subscribers-only.
     let update_subs = UpdatePostInput {
-        title: Some("Post round-trip".to_string()),
+        title: Some("Post round-trip".into()),
         slug: "round-trip".parse().unwrap(),
-        body: "body text".to_string(),
+        body: "body text".into(),
         format: PostFormat::Markdown,
         rendered_html: RenderedHtml::from_trusted("<p>body text</p>"),
         unpublish: true,
@@ -3482,9 +3482,9 @@ async fn multiple_tags_on_single_post(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Multi Tag Post".to_string()),
+            title: Some("Multi Tag Post".into()),
             slug: "multi-tag-post".parse().unwrap(),
-            body: "Content with many tags".to_string(),
+            body: "Content with many tags".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content with many tags</p>"),
             published_at: Some(Utc::now()),
@@ -3544,9 +3544,9 @@ async fn empty_tag_list(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("No Tags".to_string()),
+            title: Some("No Tags".into()),
             slug: "no-tags".parse().unwrap(),
-            body: "Untagged post".to_string(),
+            body: "Untagged post".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Untagged post</p>"),
             published_at: Some(Utc::now()),
@@ -3586,9 +3586,9 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Post 1".to_string()),
+            title: Some("Post 1".into()),
             slug: "post-1".parse().unwrap(),
-            body: "Content 1".to_string(),
+            body: "Content 1".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content 1</p>"),
             published_at: Some(Utc::now()),
@@ -3603,9 +3603,9 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Post 2".to_string()),
+            title: Some("Post 2".into()),
             slug: "post-2".parse().unwrap(),
-            body: "Content 2".to_string(),
+            body: "Content 2".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content 2</p>"),
             published_at: Some(Utc::now()),
@@ -3676,9 +3676,9 @@ async fn tag_list_pagination(#[case] backend: Backend) {
             .posts
             .create_post(&CreatePostInput {
                 user_id: user,
-                title: Some(format!("Post {i}")),
+                title: Some(format!("Post {i}").into()),
                 slug: format!("post-{i}").parse().unwrap(),
-                body: format!("Content {i}"),
+                body: format!("Content {i}").into(),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted(format!("<p>Content {i}</p>")),
                 published_at: Some(Utc::now()),
@@ -3740,9 +3740,9 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user1,
-            title: Some("User1 Post".to_string()),
+            title: Some("User1 Post".into()),
             slug: "user1-post".parse().unwrap(),
-            body: "Content 1".to_string(),
+            body: "Content 1".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content 1</p>"),
             published_at: Some(Utc::now()),
@@ -3757,9 +3757,9 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user2,
-            title: Some("User2 Post".to_string()),
+            title: Some("User2 Post".into()),
             slug: "user2-post".parse().unwrap(),
-            body: "Content 2".to_string(),
+            body: "Content 2".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content 2</p>"),
             published_at: Some(Utc::now()),
@@ -3835,9 +3835,9 @@ async fn selective_untag(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Multi Tag".to_string()),
+            title: Some("Multi Tag".into()),
             slug: "multi-tag".parse().unwrap(),
-            body: "Content".to_string(),
+            body: "Content".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
             published_at: Some(Utc::now()),
@@ -3910,9 +3910,9 @@ async fn numeric_tag(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Numeric Tag".to_string()),
+            title: Some("Numeric Tag".into()),
             slug: "numeric-tag".parse().unwrap(),
-            body: "Content".to_string(),
+            body: "Content".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
             published_at: Some(Utc::now()),
@@ -3972,9 +3972,9 @@ async fn retag_same_post_with_same_tag_fails(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Retag Post".to_string()),
+            title: Some("Retag Post".into()),
             slug: "retag-post".parse().unwrap(),
-            body: "Content".to_string(),
+            body: "Content".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
             published_at: Some(Utc::now()),
@@ -4101,9 +4101,9 @@ async fn many_tags_many_posts(#[case] backend: Backend) {
             .posts
             .create_post(&CreatePostInput {
                 user_id: user,
-                title: Some(format!("Post {i}")),
+                title: Some(format!("Post {i}").into()),
                 slug: format!("post-many-{i}").parse().unwrap(),
-                body: format!("Content {i}"),
+                body: format!("Content {i}").into(),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted(format!("<p>Content {i}</p>")),
                 published_at: Some(Utc::now()),
@@ -4164,9 +4164,9 @@ async fn tag_all_numeric(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Numeric Tag".to_string()),
+            title: Some("Numeric Tag".into()),
             slug: "numeric-slug".parse().unwrap(),
-            body: "Content".to_string(),
+            body: "Content".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
             published_at: Some(Utc::now()),
@@ -4220,9 +4220,9 @@ async fn tag_hyphen_boundaries(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Hyphen Test".to_string()),
+            title: Some("Hyphen Test".into()),
             slug: "hyphen-test".parse().unwrap(),
-            body: "Content".to_string(),
+            body: "Content".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
             published_at: Some(Utc::now()),
@@ -4284,9 +4284,9 @@ async fn tag_with_long_display(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Long Tag Test".to_string()),
+            title: Some("Long Tag Test".into()),
             slug: "long-tag-test".parse().unwrap(),
-            body: "Content".to_string(),
+            body: "Content".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
             published_at: Some(Utc::now()),
@@ -4334,9 +4334,9 @@ async fn tag_list_ordering(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Post 1".to_string()),
+            title: Some("Post 1".into()),
             slug: "post-1-order".parse().unwrap(),
-            body: "Content 1".to_string(),
+            body: "Content 1".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content 1</p>"),
             published_at: Some(Utc::now()),
@@ -4351,9 +4351,9 @@ async fn tag_list_ordering(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Post 2".to_string()),
+            title: Some("Post 2".into()),
             slug: "post-2-order".parse().unwrap(),
-            body: "Content 2".to_string(),
+            body: "Content 2".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content 2</p>"),
             published_at: Some(Utc::now()),
@@ -4428,9 +4428,9 @@ async fn tags_for_multiple_posts(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Post A".to_string()),
+            title: Some("Post A".into()),
             slug: "post-a".parse().unwrap(),
-            body: "Content A".to_string(),
+            body: "Content A".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content A</p>"),
             published_at: Some(Utc::now()),
@@ -4445,9 +4445,9 @@ async fn tags_for_multiple_posts(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Post B".to_string()),
+            title: Some("Post B".into()),
             slug: "post-b".parse().unwrap(),
-            body: "Content B".to_string(),
+            body: "Content B".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content B</p>"),
             published_at: Some(Utc::now()),
@@ -4500,9 +4500,9 @@ async fn tag_mixed_alphanumeric(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Mixed Post".to_string()),
+            title: Some("Mixed Post".into()),
             slug: "mixed-post".parse().unwrap(),
-            body: "Content".to_string(),
+            body: "Content".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
             published_at: Some(Utc::now()),
@@ -4561,9 +4561,9 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Simple".to_string()),
+            title: Some("Simple".into()),
             slug: "simple".parse().unwrap(),
-            body: "Content".to_string(),
+            body: "Content".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
             published_at: Some(Utc::now()),
@@ -4638,9 +4638,9 @@ async fn tag_creation_and_retrieval(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Test Post".to_string()),
+            title: Some("Test Post".into()),
             slug: "test-post".parse().unwrap(),
-            body: "Content".to_string(),
+            body: "Content".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
             published_at: Some(Utc::now()),
@@ -4688,9 +4688,9 @@ async fn tag_normalization(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Test Post".to_string()),
+            title: Some("Test Post".into()),
             slug: "test-post".parse().unwrap(),
-            body: "Content".to_string(),
+            body: "Content".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
             published_at: Some(Utc::now()),
@@ -4738,9 +4738,9 @@ async fn untag_post(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Test Post".to_string()),
+            title: Some("Test Post".into()),
             slug: "test-post".parse().unwrap(),
-            body: "Content".to_string(),
+            body: "Content".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
             published_at: Some(Utc::now()),
@@ -4799,9 +4799,9 @@ async fn duplicate_tag_error(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Test Post".to_string()),
+            title: Some("Test Post".into()),
             slug: "test-post".parse().unwrap(),
-            body: "Content".to_string(),
+            body: "Content".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
             published_at: Some(Utc::now()),
@@ -4862,9 +4862,9 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user1,
-            title: Some("Post 1".to_string()),
+            title: Some("Post 1".into()),
             slug: "post-1".parse().unwrap(),
-            body: "Content 1".to_string(),
+            body: "Content 1".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content 1</p>"),
             published_at: Some(Utc::now()),
@@ -4879,9 +4879,9 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user2,
-            title: Some("Post 2".to_string()),
+            title: Some("Post 2".into()),
             slug: "post-2".parse().unwrap(),
-            body: "Content 2".to_string(),
+            body: "Content 2".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content 2</p>"),
             published_at: Some(Utc::now()),
@@ -4946,9 +4946,9 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user1,
-            title: Some("Post 1".to_string()),
+            title: Some("Post 1".into()),
             slug: "post-1".parse().unwrap(),
-            body: "Content 1".to_string(),
+            body: "Content 1".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content 1</p>"),
             published_at: Some(Utc::now()),
@@ -4963,9 +4963,9 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user1,
-            title: Some("Post 2".to_string()),
+            title: Some("Post 2".into()),
             slug: "post-2".parse().unwrap(),
-            body: "Content 2".to_string(),
+            body: "Content 2".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content 2</p>"),
             published_at: Some(Utc::now()),
@@ -4980,9 +4980,9 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user2,
-            title: Some("Post 3".to_string()),
+            title: Some("Post 3".into()),
             slug: "post-3".parse().unwrap(),
-            body: "Content 3".to_string(),
+            body: "Content 3".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content 3</p>"),
             published_at: Some(Utc::now()),
@@ -5066,9 +5066,9 @@ async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Post 1".to_string()),
+            title: Some("Post 1".into()),
             slug: "post-1".parse().unwrap(),
-            body: "Content 1".to_string(),
+            body: "Content 1".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content 1</p>"),
             published_at: Some(Utc::now()),
@@ -5083,9 +5083,9 @@ async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Post 2".to_string()),
+            title: Some("Post 2".into()),
             slug: "post-2".parse().unwrap(),
-            body: "Content 2".to_string(),
+            body: "Content 2".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content 2</p>"),
             published_at: Some(Utc::now()),
@@ -5161,9 +5161,9 @@ async fn untag_nonexistent_tag_error(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Test Post".to_string()),
+            title: Some("Test Post".into()),
             slug: "test-post".parse().unwrap(),
-            body: "Content".to_string(),
+            body: "Content".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
             published_at: Some(Utc::now()),
@@ -5204,9 +5204,9 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Draft Post".to_string()),
+            title: Some("Draft Post".into()),
             slug: "draft-post".parse().unwrap(),
-            body: "Draft content".to_string(),
+            body: "Draft content".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Draft</p>"),
             published_at: None, // Draft,
@@ -5221,9 +5221,9 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Published Post".to_string()),
+            title: Some("Published Post".into()),
             slug: "published-post".parse().unwrap(),
-            body: "Published content".to_string(),
+            body: "Published content".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Published</p>"),
             published_at: Some(Utc::now()),
@@ -5273,9 +5273,9 @@ async fn post_update_invalid_slug(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Original".to_string()),
+            title: Some("Original".into()),
             slug: "original-slug".parse().unwrap(),
-            body: "Content".to_string(),
+            body: "Content".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
             published_at: None,
@@ -5290,9 +5290,9 @@ async fn post_update_invalid_slug(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Second".to_string()),
+            title: Some("Second".into()),
             slug: "second-slug".parse().unwrap(),
-            body: "Content".to_string(),
+            body: "Content".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
             published_at: None,
@@ -5309,9 +5309,9 @@ async fn post_update_invalid_slug(#[case] backend: Backend) {
             post_id,
             user,
             &UpdatePostInput {
-                title: Some("Updated".to_string()),
+                title: Some("Updated".into()),
                 slug: "second-slug".parse().unwrap(),
-                body: "Updated content".to_string(),
+                body: "Updated content".into(),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>Updated</p>"),
                 unpublish: true,
@@ -5353,9 +5353,9 @@ async fn list_published_cursor_boundary(#[case] backend: Backend) {
             .posts
             .create_post(&CreatePostInput {
                 user_id: user,
-                title: Some(format!("Post {i}")),
+                title: Some(format!("Post {i}").into()),
                 slug: format!("post-{i}").parse().unwrap(),
-                body: "Content".to_string(),
+                body: "Content".into(),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
                 published_at: Some(now),
@@ -5418,9 +5418,9 @@ async fn list_drafts_cursor_boundary(#[case] backend: Backend) {
             .posts
             .create_post(&CreatePostInput {
                 user_id: user,
-                title: Some(format!("Draft {i}")),
+                title: Some(format!("Draft {i}").into()),
                 slug: format!("draft-{i}").parse().unwrap(),
-                body: "Content".to_string(),
+                body: "Content".into(),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
                 published_at: None,
@@ -5483,9 +5483,9 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
             .posts
             .create_post(&CreatePostInput {
                 user_id: user,
-                title: Some(format!("Tagged {i}")),
+                title: Some(format!("Tagged {i}").into()),
                 slug: format!("tagged-{i}").parse().unwrap(),
-                body: "Content".to_string(),
+                body: "Content".into(),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
                 published_at: Some(now),
@@ -5563,9 +5563,9 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
             .posts
             .create_post(&CreatePostInput {
                 user_id: user,
-                title: Some(format!("Global {i}")),
+                title: Some(format!("Global {i}").into()),
                 slug: format!("global-{i}").parse().unwrap(),
-                body: "Content".to_string(),
+                body: "Content".into(),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
                 published_at: Some(now),
@@ -5639,9 +5639,9 @@ async fn soft_delete_then_operations(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("To Delete".to_string()),
+            title: Some("To Delete".into()),
             slug: "to-delete".parse().unwrap(),
-            body: "Content".to_string(),
+            body: "Content".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
             published_at: Some(Utc::now()),
@@ -5703,9 +5703,9 @@ async fn tag_post_multiple_attempts(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("For Tagging".to_string()),
+            title: Some("For Tagging".into()),
             slug: "for-tagging".parse().unwrap(),
-            body: "Content".to_string(),
+            body: "Content".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
             published_at: Some(Utc::now()),
@@ -5816,9 +5816,9 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Permalink Test".to_string()),
+            title: Some("Permalink Test".into()),
             slug: "permalink-test".parse().unwrap(),
-            body: "Content".to_string(),
+            body: "Content".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
             published_at: Some(created_at),
@@ -5890,9 +5890,9 @@ async fn update_soft_deleted_post(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("To Update".to_string()),
+            title: Some("To Update".into()),
             slug: "to-update".parse().unwrap(),
-            body: "Content".to_string(),
+            body: "Content".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
             published_at: None,
@@ -5916,9 +5916,9 @@ async fn update_soft_deleted_post(#[case] backend: Backend) {
             post_id,
             user,
             &UpdatePostInput {
-                title: Some("Updated".to_string()),
+                title: Some("Updated".into()),
                 slug: "updated-slug".parse().unwrap(),
-                body: "New content".to_string(),
+                body: "New content".into(),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>New</p>"),
                 unpublish: false,
@@ -5959,9 +5959,9 @@ async fn tag_edge_case_formats(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Edge Cases".to_string()),
+            title: Some("Edge Cases".into()),
             slug: "edge-cases".parse().unwrap(),
-            body: "Content".to_string(),
+            body: "Content".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
             published_at: Some(Utc::now()),
@@ -6043,9 +6043,9 @@ async fn list_published_with_cursor_same_timestamp(#[case] backend: Backend) {
             .posts
             .create_post(&CreatePostInput {
                 user_id: user,
-                title: Some(format!("Post {i}")),
+                title: Some(format!("Post {i}").into()),
                 slug: format!("post-cursor-same-{i}").parse().unwrap(),
-                body: "Content".to_string(),
+                body: "Content".into(),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
                 published_at: Some(now),
@@ -6100,9 +6100,9 @@ async fn post_revisions_created(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Original".to_string()),
+            title: Some("Original".into()),
             slug: "revision-test".parse().unwrap(),
-            body: "Original content".to_string(),
+            body: "Original content".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Original</p>"),
             published_at: None,
@@ -6119,9 +6119,9 @@ async fn post_revisions_created(#[case] backend: Backend) {
             post_id,
             user,
             &UpdatePostInput {
-                title: Some("Updated".to_string()),
+                title: Some("Updated".into()),
                 slug: "revision-test".parse().unwrap(),
-                body: "Updated content".to_string(),
+                body: "Updated content".into(),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>Updated</p>"),
                 unpublish: false,
@@ -6158,9 +6158,9 @@ async fn tag_display_preservation(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Display Test".to_string()),
+            title: Some("Display Test".into()),
             slug: "display-test".parse().unwrap(),
-            body: "Content".to_string(),
+            body: "Content".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
             published_at: Some(Utc::now()),
@@ -6208,9 +6208,9 @@ async fn untag_preserves_other_tags(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Multi Tag".to_string()),
+            title: Some("Multi Tag".into()),
             slug: "multi-tag".parse().unwrap(),
-            body: "Content".to_string(),
+            body: "Content".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
             published_at: Some(Utc::now()),
@@ -6417,9 +6417,9 @@ async fn create_rendered_post_markdown_renders_and_stores(#[case] backend: Backe
         state.posts.as_ref(),
         RenderedPostContent {
             user_id,
-            title: Some("Rendered Markdown".to_string()),
+            title: Some("Rendered Markdown".into()),
             slug: "rendered-markdown".parse().unwrap(),
-            body: "**bold**".to_string(),
+            body: "**bold**".into(),
             format: PostFormat::Markdown,
             published_at: None,
             summary: None,
@@ -6467,9 +6467,9 @@ async fn create_rendered_post_org_renders_and_stores(#[case] backend: Backend) {
         state.posts.as_ref(),
         RenderedPostContent {
             user_id,
-            title: Some("Rendered Org".to_string()),
+            title: Some("Rendered Org".into()),
             slug: "rendered-org".parse().unwrap(),
-            body: "*bold*".to_string(),
+            body: "*bold*".into(),
             format: PostFormat::Org,
             published_at: None,
             summary: None,
@@ -6519,9 +6519,9 @@ async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backen
         state.posts.as_ref(),
         RenderedPostContent {
             user_id,
-            title: Some("First Post".to_string()),
+            title: Some("First Post".into()),
             slug: "conflict-slug".parse().unwrap(),
-            body: "body".to_string(),
+            body: "body".into(),
             format: PostFormat::Markdown,
             published_at: Some(now),
             summary: None,
@@ -6537,9 +6537,9 @@ async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backen
         state.posts.as_ref(),
         RenderedPostContent {
             user_id,
-            title: Some("Second Post".to_string()),
+            title: Some("Second Post".into()),
             slug: "conflict-slug".parse().unwrap(),
-            body: "body".to_string(),
+            body: "body".into(),
             format: PostFormat::Markdown,
             published_at: Some(now),
             summary: None,
@@ -6573,9 +6573,9 @@ async fn create_post_foreign_key_violation_maps_to_internal(#[case] backend: Bac
     // — exercising the generic-error arm.
     let input = CreatePostInput {
         user_id: 999_999,
-        title: Some("Orphan".to_string()),
+        title: Some("Orphan".into()),
         slug: "orphan".parse().unwrap(),
-        body: "body".to_string(),
+        body: "body".into(),
         format: PostFormat::Markdown,
         rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
         published_at: Some(Utc::now()),
@@ -6622,9 +6622,9 @@ async fn create_posts_batches_all_rows_in_order(#[case] backend: Backend) {
     let inputs: Vec<CreatePostInput> = (0..3)
         .map(|i| CreatePostInput {
             user_id,
-            title: Some(format!("Batch {i}")),
+            title: Some(format!("Batch {i}").into()),
             slug: format!("batch-{i}").parse().unwrap(),
-            body: format!("body {i}"),
+            body: format!("body {i}").into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted(format!("<p>body {i}</p>")),
             published_at: Some(Utc::now()),
@@ -6668,9 +6668,9 @@ async fn create_posts_conflict_rolls_back_whole_batch(#[case] backend: Backend) 
 
     let mk = |slug: &str, i: usize| CreatePostInput {
         user_id,
-        title: Some(format!("Row {i}")),
+        title: Some(format!("Row {i}").into()),
         slug: slug.parse().unwrap(),
-        body: format!("body {i}"),
+        body: format!("body {i}").into(),
         format: PostFormat::Markdown,
         rendered_html: RenderedHtml::from_trusted(format!("<p>body {i}</p>")),
         published_at: Some(Utc::now()),
@@ -6727,9 +6727,9 @@ async fn update_rendered_post_markdown_renders_and_updates(#[case] backend: Back
         RenderedPostUpdate {
             post_id,
             editor_user_id: user_id,
-            title: Some("Updated Title".to_string()),
+            title: Some("Updated Title".into()),
             slug: "update-render-md".parse().unwrap(),
-            body: "**updated**".to_string(),
+            body: "**updated**".into(),
             format: PostFormat::Markdown,
             publish: PublishUpdate::Unpublish,
             summary: None,
@@ -6777,9 +6777,9 @@ async fn update_rendered_post_org_renders_and_updates(#[case] backend: Backend) 
         RenderedPostUpdate {
             post_id,
             editor_user_id: user_id,
-            title: Some("Updated Org Title".to_string()),
+            title: Some("Updated Org Title".into()),
             slug: "update-render-org".parse().unwrap(),
-            body: "*bold org*".to_string(),
+            body: "*bold org*".into(),
             format: PostFormat::Org,
             publish: PublishUpdate::Unpublish,
             summary: None,
@@ -6810,9 +6810,9 @@ async fn update_rendered_post_not_found_returns_storage_error(#[case] backend: B
         RenderedPostUpdate {
             post_id: 99999,
             editor_user_id: 1,
-            title: Some("No Post".to_string()),
+            title: Some("No Post".into()),
             slug: "no-post".parse().unwrap(),
-            body: "body".to_string(),
+            body: "body".into(),
             format: PostFormat::Markdown,
             publish: PublishUpdate::Unpublish,
             summary: None,
@@ -7300,9 +7300,9 @@ async fn list_tags_returns_alphabetical_with_prefix(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id: user,
-            title: Some("Tagged".to_string()),
+            title: Some("Tagged".into()),
             slug: "tagged".parse().unwrap(),
-            body: "body".to_string(),
+            body: "body".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
             published_at: Some(Utc::now()),
@@ -7375,9 +7375,9 @@ async fn post_record_carries_tags(#[case] backend: Backend) {
             .posts
             .create_post(&CreatePostInput {
                 user_id: user,
-                title: Some(format!("Post {n}")),
+                title: Some(format!("Post {n}").into()),
                 slug: format!("post-{n}").parse().unwrap(),
-                body: format!("body {n}"),
+                body: format!("body {n}").into(),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted(format!("<p>body {n}</p>")),
                 published_at: Some(Utc::now()),
@@ -7625,9 +7625,9 @@ async fn resolution_matrix(#[case] backend: Backend) {
     // rows; `Public+Named(G)` carries both.
     let make = |slug: &str, audiences: Vec<AudienceTarget>| CreatePostInput {
         user_id: a,
-        title: Some(format!("Post {slug}")),
+        title: Some(format!("Post {slug}").into()),
         slug: slug.parse().unwrap(),
-        body: "body".to_string(),
+        body: "body".into(),
         format: PostFormat::Markdown,
         rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
         published_at: Some(Utc::now()),

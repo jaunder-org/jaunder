@@ -85,9 +85,9 @@ impl PostDialect for Postgres {
                        created_at, updated_at, published_at, deleted_at, summary,
                        COALESCE((SELECT json_agg(json_build_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = posts.post_id), '[]'::json)::text AS tags",
         )
-        .bind(&input.title)
+        .bind(input.title.as_deref())
         .bind(input.slug.as_ref())
-        .bind(&input.body)
+        .bind(&*input.body)
         .bind(input.format.to_string())
         .bind(input.rendered_html.as_ref())
         // $6 unpublish, $7/$8 explicit_published_at (bound twice: NULL-test

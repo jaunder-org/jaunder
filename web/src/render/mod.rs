@@ -156,7 +156,7 @@ pub fn render_head(seed: &PageSeed) -> String {
         PageSeed::Permalink(post) => (
             post.title
                 .clone()
-                .unwrap_or_else(|| format!("Post by {}", post.username)),
+                .map_or_else(|| format!("Post by {}", post.username), String::from),
             post.summary.clone().unwrap_or_default(),
         ),
         PageSeed::Profile { username, .. } => (format!("Posts by {username}"), String::new()),

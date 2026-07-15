@@ -11,6 +11,8 @@ use crate::{
     CreatePostError, CreatePostInput, PostFormat, PostRecord, PostStorage, UpdatePostError,
     UpdatePostInput,
 };
+use common::post_body::PostBody;
+use common::post_title::PostTitle;
 use common::render::{derive_post_metadata, render};
 use common::slug::{slugify_title, InvalidSlug, Slug};
 use common::visibility::AudienceTarget;
@@ -26,11 +28,11 @@ pub struct RenderedPostContent {
     /// Author of the new post.
     pub user_id: i64,
     /// Explicit title, or `None`.
-    pub title: Option<String>,
+    pub title: Option<PostTitle>,
     /// Slug for the new post.
     pub slug: Slug,
     /// Raw post body in `format`.
-    pub body: String,
+    pub body: PostBody,
     /// Markup format of `body`.
     pub format: PostFormat,
     /// Publication timestamp, or `None` for a draft.
@@ -104,7 +106,7 @@ pub fn seed_post_input(user_id: i64, slug: Slug, body: String, published: bool) 
         user_id,
         title: None,
         slug,
-        body,
+        body: body.into(),
         format: PostFormat::Markdown,
         published_at: published.then(Utc::now),
         summary: None,
@@ -122,11 +124,11 @@ pub struct RenderedPostUpdate {
     /// User performing the edit (ownership is checked in storage).
     pub editor_user_id: i64,
     /// Explicit title, or `None`.
-    pub title: Option<String>,
+    pub title: Option<PostTitle>,
     /// New slug for the post.
     pub slug: Slug,
     /// Raw post body in `format`.
-    pub body: String,
+    pub body: PostBody,
     /// Markup format of `body`.
     pub format: PostFormat,
     /// What this update does to the post's publication state.
@@ -257,7 +259,7 @@ pub struct PostUpdate<'a> {
     /// User performing the edit (ownership is checked in storage).
     pub editor_user_id: i64,
     /// Raw post body in `format`.
-    pub body: String,
+    pub body: PostBody,
     /// Explicit title, or `None` to derive one from the body.
     pub title: Option<&'a str>,
     /// Markup format of `body`.
@@ -304,8 +306,8 @@ pub async fn perform_post_update(
     // Derive the title from the *original* body above, then canonicalize the stored
     // Org body (ADR-0024): strip the title-source line, keep everything else. Web and
     // AtomPub thus converge on one stored body. Non-Org bodies are stored verbatim.
-    let body = if matches!(format, PostFormat::Org) {
-        common::render::canonicalize_org_body(&body)
+    let body: PostBody = if matches!(format, PostFormat::Org) {
+        common::render::canonicalize_org_body(&body).into()
     } else {
         body
     };
@@ -412,7 +414,7 @@ pub struct PostCreation<'a> {
     /// Author of the new post.
     pub user_id: i64,
     /// Raw post body in `format`.
-    pub body: String,
+    pub body: PostBody,
     /// Explicit title, or `None` to derive one from the body.
     pub title: Option<&'a str>,
     /// Markup format of `body`.
@@ -463,8 +465,8 @@ pub async fn perform_post_creation(
     // Derive the title from the *original* body above, then canonicalize the stored
     // Org body (ADR-0024): strip the title-source line, keep everything else. Web and
     // AtomPub thus converge on one stored body. Non-Org bodies are stored verbatim.
-    let body = if matches!(format, PostFormat::Org) {
-        common::render::canonicalize_org_body(&body)
+    let body: PostBody = if matches!(format, PostFormat::Org) {
+        common::render::canonicalize_org_body(&body).into()
     } else {
         body
     };
@@ -555,7 +557,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".to_owned(),
+                body: "Hello, world!".into(),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -588,7 +590,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Body without a heading.".to_owned(),
+                body: "Body without a heading.".into(),
                 title: Some("Explicit Title"),
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -620,7 +622,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".to_owned(),
+                body: "Hello, world!".into(),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: Some(&slug),
@@ -647,7 +649,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "   ".to_owned(),
+                body: "   ".into(),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -681,7 +683,7 @@ mod tests {
             &storage,
             PostCreation {
                 user_id: 1,
-                body: "Hello, world!".to_owned(),
+                body: "Hello, world!".into(),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -710,7 +712,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "!!!".to_owned(),
+                body: "!!!".into(),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -739,7 +741,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "# 日本語\n\nbody".to_owned(),
+                body: "# 日本語\n\nbody".into(),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -794,7 +796,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".to_owned(),
+                body: "Hello, world!".into(),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -812,7 +814,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".to_owned(),
+                body: "Hello, world!".into(),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -830,7 +832,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".to_owned(),
+                body: "Hello, world!".into(),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -860,7 +862,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".to_owned(),
+                body: "Hello, world!".into(),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -878,7 +880,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".to_owned(),
+                body: "Hello, world!".into(),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -899,7 +901,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".to_owned(),
+                body: "Hello, world!".into(),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -928,7 +930,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "#+TITLE: Hi\n#+FOO: x\n\nHello".to_owned(),
+                body: "#+TITLE: Hi\n#+FOO: x\n\nHello".into(),
                 title: None,
                 format: PostFormat::Org,
                 slug_override: None,
@@ -964,7 +966,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "#+TITLE: First\n\noriginal".to_owned(),
+                body: "#+TITLE: First\n\noriginal".into(),
                 title: None,
                 format: PostFormat::Org,
                 slug_override: None,
@@ -983,7 +985,7 @@ mod tests {
             PostUpdate {
                 post_id: created.post_id,
                 editor_user_id: user_id,
-                body: "#+TITLE: Second\n#+FOO: keep\n\nupdated".to_owned(),
+                body: "#+TITLE: Second\n#+FOO: keep\n\nupdated".into(),
                 title: None,
                 format: PostFormat::Org,
                 slug_override: None,
@@ -1023,7 +1025,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "# H1\n\nBody text".to_owned(),
+                body: "# H1\n\nBody text".into(),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -1053,7 +1055,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "#+TITLE: Distinct Headline\n\nParagraph body".to_owned(),
+                body: "#+TITLE: Distinct Headline\n\nParagraph body".into(),
                 title: None,
                 format: PostFormat::Org,
                 slug_override: None,
@@ -1087,7 +1089,7 @@ mod tests {
     fn creation_with_key<'a>(user_id: i64, body: &str, key: Option<&'a str>) -> PostCreation<'a> {
         PostCreation {
             user_id,
-            body: body.to_owned(),
+            body: body.into(),
             title: None,
             format: PostFormat::Markdown,
             slug_override: None,

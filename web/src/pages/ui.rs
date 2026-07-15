@@ -611,7 +611,7 @@ pub fn PostCreateForm(
     if compact {
         let dispatch_save = move |_| {
             create_action.dispatch(CreatePost {
-                body: body.get(),
+                body: body.get().into(),
                 format: format.get(),
                 slug_override: None,
                 publish: false,
@@ -623,7 +623,7 @@ pub fn PostCreateForm(
         };
         let dispatch_publish = move |_| {
             create_action.dispatch(CreatePost {
-                body: body.get(),
+                body: body.get().into(),
                 format: format.get(),
                 slug_override: None,
                 publish: true,
@@ -727,7 +727,7 @@ pub fn PostCreateForm(
         let slug_field = Field::<Slug>::optional();
         let dispatch_create = move |publish: bool| {
             create_action.dispatch(CreatePost {
-                body: body.get(),
+                body: body.get().into(),
                 format: format.get(),
                 slug_override: slug_field.parsed(),
                 publish,

@@ -42,7 +42,7 @@ async fn service_document_returns_200_with_app_password(#[case] backend: Backend
         state.posts.as_ref(),
         storage::PostCreation {
             user_id,
-            body: "a tagged post".to_string(),
+            body: "a tagged post".into(),
             title: Some("Tagged"),
             format: storage::PostFormat::Markdown,
             slug_override: None,

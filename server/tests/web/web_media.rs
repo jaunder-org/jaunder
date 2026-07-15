@@ -301,9 +301,9 @@ async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend:
         .posts
         .create_post(&CreatePostInput {
             user_id,
-            title: Some("with media".to_string()),
+            title: Some("with media".into()),
             slug: "with-media".parse::<Slug>().expect("valid slug"),
-            body: format!("![inline]({media_url})"),
+            body: format!("![inline]({media_url})").into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted(format!("<p><img src=\"{media_url}\"></p>")),
             published_at: Some(Utc::now()),
