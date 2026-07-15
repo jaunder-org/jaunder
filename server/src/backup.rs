@@ -31,7 +31,7 @@ pub async fn start_backup_worker(
     };
 
     let scheduler = JobScheduler::new().await?;
-    let schedule = config.schedule.as_str().to_owned();
+    let schedule = config.schedule.to_string();
     let job = Job::new_async(schedule.as_str(), move |_uuid, _lock| {
         let database = database.clone();
         let media_path = storage_path.join("media");
@@ -278,7 +278,7 @@ mod tests {
 
         let config = BackupConfig {
             destination_path: Some(destination_root.to_string_lossy().into_owned()),
-            schedule: common::backup::BackupSchedule::parse("0 0 0 1 1 *").expect("valid schedule"),
+            schedule: "0 0 0 1 1 *".parse().expect("valid schedule"),
             retention_count: 1,
             mode: BackupMode::Directory,
         };
@@ -303,7 +303,7 @@ mod tests {
         let ok_root = temp.path().join("ok-backups");
         let ok_config = BackupConfig {
             destination_path: Some(ok_root.to_string_lossy().into_owned()),
-            schedule: common::backup::BackupSchedule::parse("0 0 0 1 1 *").expect("valid schedule"),
+            schedule: "0 0 0 1 1 *".parse().expect("valid schedule"),
             retention_count: 1,
             mode: BackupMode::Directory,
         };

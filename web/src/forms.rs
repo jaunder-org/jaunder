@@ -156,6 +156,18 @@ pub fn ValidatedInput<T>(
     field: Field<T>,
     #[prop(default = "text")] input_type: &'static str,
     #[prop(optional)] autocomplete: Option<&'static str>,
+    /// Override the wrapping `<label>` class (default `j-form-field`) so the field slots into a
+    /// bespoke layout — e.g. a grid cell that must span full width.
+    #[prop(default = "j-form-field")]
+    field_class: &'static str,
+    /// Override the input's CSS class (default `j-form-input`) so a form with bespoke styling
+    /// keeps its look; the validation behavior is unchanged.
+    #[prop(default = "j-form-input")]
+    class: &'static str,
+    /// Optional hint line rendered under the input and wired to it via `aria-describedby`
+    /// (id `{name}-help`), for a field whose format needs explaining (e.g. a cron expression).
+    #[prop(optional)]
+    help: Option<&'static str>,
     /// Live input massaging before validation/display, e.g. `transform=str::to_lowercase`
     /// for a username. `fn(&str) -> String`; a call site passes the bare fn (leptos wraps the
     /// optional prop, and the fn-item coerces to the pointer at the known type — an `into`
@@ -176,18 +188,29 @@ where
         field.value.set(v.clone());
         field.error.set(field.error_for(&v));
     };
+    // Only wire `aria-describedby` when a help line is actually rendered (its id must resolve).
+    let describedby = help.map(|_| format!("{name}-help"));
     view! {
-        <label class="j-form-field">
+        <label class=field_class>
             <span class="j-form-label">{label}</span>
             <input
-                class="j-form-input"
+                class=class
                 type=input_type
                 name=name
                 autocomplete=autocomplete
+                aria-describedby=describedby
                 prop:value=field.value
                 on:input=on_input
                 on:blur=move |_| field.touch()
             />
+            {help
+                .map(|text| {
+                    view! {
+                        <span id=format!("{name}-help") class="j-form-help">
+                            {text}
+                        </span>
+                    }
+                })}
             {move || {
                 field
                     .is_touched()
@@ -204,6 +227,7 @@ mod tests {
     use super::*;
     // `common` has no top-level re-exports — qualify by module.
     use common::audience::AudienceName;
+    use common::backup::BackupSchedule;
     use common::email::Email;
     use common::password::Password;
     use common::slug::Slug;
@@ -219,6 +243,7 @@ mod tests {
         assert_eq!(field_error::<Password>("hunter2!"), None); // >= 8 chars
         assert_eq!(field_error::<Email>("user@example.com"), None);
         assert_eq!(field_error::<AudienceName>("Close Friends"), None);
+        assert_eq!(field_error::<BackupSchedule>("0 0 0 * * *"), None); // six-field cron
     }
 
     #[test]
@@ -238,6 +263,10 @@ mod tests {
             field_error::<AudienceName>("   ").as_deref(),
             Some("audience name must not be empty")
         );
+        // `BackupSchedule`'s message carries croner's reason after our label, so assert the
+        // prefix rather than couple to the crate's wording.
+        assert!(field_error::<BackupSchedule>("not a cron")
+            .is_some_and(|m| m.starts_with("invalid backup schedule")));
     }
 
     // `Field<T>`'s methods are signal-only (no `Effect`/`Resource`), so — like
