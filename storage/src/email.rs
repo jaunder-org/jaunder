@@ -26,6 +26,25 @@ pub enum UseEmailVerificationError {
     Internal(#[from] sqlx::Error),
 }
 
+impl From<UseEmailVerificationError> for host::error::InternalError {
+    /// Mirrors the sibling [`crate::atomic::ConfirmPasswordResetError`] mapping so
+    /// `verify_email` is `?`-liftable: the three token failures are client
+    /// validation errors (a stale/used/unknown verification link), and an
+    /// internal failure is a masked storage error. Previously `web` hand-mapped
+    /// every variant to `storage`, masking all three as a 500.
+    fn from(error: UseEmailVerificationError) -> Self {
+        use host::error::InternalError;
+        match error {
+            UseEmailVerificationError::NotFound => InternalError::validation("token not found"),
+            UseEmailVerificationError::Expired => InternalError::validation("token has expired"),
+            UseEmailVerificationError::AlreadyUsed => {
+                InternalError::validation("token has already been used")
+            }
+            UseEmailVerificationError::Internal(e) => InternalError::storage(e),
+        }
+    }
+}
+
 /// Storage for email verification tokens.
 ///
 /// This trait manages the lifecycle of tokens sent to users to verify their
@@ -183,6 +202,24 @@ mod tests {
     use common::test_support::parse_email;
     use rstest::*;
     use rstest_reuse::*;
+
+    #[test]
+    fn use_email_verification_error_maps_each_variant_to_expected_kind() {
+        use host::error::{ErrorKind, InternalError};
+        // The three token failures are client validation errors, not a masked
+        // storage 500 — while a genuine DB fault still masks as storage.
+        for error in [
+            UseEmailVerificationError::NotFound,
+            UseEmailVerificationError::Expired,
+            UseEmailVerificationError::AlreadyUsed,
+        ] {
+            let mapped: InternalError = error.into();
+            assert_eq!(mapped.kind(), ErrorKind::Validation);
+        }
+        let mapped: InternalError =
+            UseEmailVerificationError::Internal(sqlx::Error::RowNotFound).into();
+        assert_eq!(mapped.kind(), ErrorKind::Storage);
+    }
 
     #[apply(backends)]
     #[tokio::test]

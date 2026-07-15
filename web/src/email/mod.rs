@@ -67,8 +67,7 @@ pub async fn verify_email(token: String) -> WebResult<()> {
 
         let (user_id, email_addr) = email_verifications
             .use_email_verification(&raw_token)
-            .await
-            .map_err(InternalError::storage)?;
+            .await?;
 
         users
             .set_email(user_id, Some(&email_addr), true)
