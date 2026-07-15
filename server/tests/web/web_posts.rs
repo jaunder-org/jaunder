@@ -1455,9 +1455,9 @@ async fn list_drafts_surfaces_scheduled_with_marker_excludes_live(#[case] backen
     let scheduled_post =
         |slug: &str, published_at: chrono::DateTime<chrono::Utc>| storage::CreatePostInput {
             user_id: author_id,
-            title: Some(format!("Post {slug}")),
+            title: Some(format!("Post {slug}").into()),
             slug: slug.parse().unwrap(),
-            body: "body".to_string(),
+            body: "body".to_string().into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
             published_at: Some(published_at),
@@ -3203,9 +3203,9 @@ async fn create_targeted_post(
         .posts
         .create_post(&storage::CreatePostInput {
             user_id: author,
-            title: Some(format!("Post {slug}")),
+            title: Some(format!("Post {slug}").into()),
             slug: slug.parse().unwrap(),
-            body: "body".to_string(),
+            body: "body".to_string().into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
             published_at: Some(chrono::Utc::now()),

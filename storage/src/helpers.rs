@@ -10,6 +10,8 @@ use crate::{
     SessionRecord, UserRecord,
 };
 use common::display_name::DisplayName;
+use common::post_body::PostBody;
+use common::post_title::PostTitle;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::token::InvalidTokenShape;
@@ -200,9 +202,9 @@ pub(crate) fn build_post_record(
         post_id,
         user_id,
         author_username,
-        title,
+        title: title.map(PostTitle::from),
         slug,
-        body,
+        body: PostBody::from(body),
         format,
         // Trusted rebuild: this column only ever holds prior `render()` output.
         rendered_html: RenderedHtml::from_trusted(rendered_html),

@@ -25,7 +25,8 @@ pub fn timeline_post_summary(
     Some(super::TimelinePostSummary {
         post_id,
         username: author_username,
-        title,
+        // #402 Task 3 seam: temporary, removed in Task 4 (TimelinePostSummary.title stays String).
+        title: title.map(String::from),
         summary,
         slug,
         rendered_html,
@@ -67,9 +68,10 @@ pub fn post_response(post: PostRecord, is_author: bool) -> super::PostResponse {
     super::PostResponse {
         post_id,
         username: author_username,
-        title,
+        // #402 Task 3 seam: temporary, removed in Task 4 (PostResponse fields stay String).
+        title: title.map(String::from),
         slug,
-        body,
+        body: String::from(body),
         format: format.to_string(),
         rendered_html,
         created_at: created_at.to_rfc3339(),
@@ -129,9 +131,9 @@ mod tests {
                 post_id: 1,
                 user_id: 2,
                 author_username,
-                title: Some("Title".to_string()),
+                title: Some("Title".to_string().into()),
                 slug,
-                body: "body".to_string(),
+                body: "body".to_string().into(),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
                 created_at: base_time,

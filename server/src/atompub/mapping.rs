@@ -128,7 +128,8 @@ pub fn post_to_entry(post: &PostRecord, base_url: &str) -> Entry {
 
     // Content: the post's format becomes the wire media `type` (native source form).
     let content_type = format_to_wire(&post.format);
-    let body = post.body.clone();
+    // #402 Task 3 seam: temporary, removed in Task 4 (PostFields/Text stay String here).
+    let body = String::from(post.body.clone());
 
     // Links: always an `edit` link; a public `alternate` only when published.
     let mut links = vec![Link {
@@ -146,7 +147,12 @@ pub fn post_to_entry(post: &PostRecord, base_url: &str) -> Entry {
 
     let mut entry = Entry {
         id: edit_uri,
-        title: Text::plain(post.title.clone().unwrap_or_else(|| post.slug.to_string())),
+        // #402 Task 3 seam: temporary, removed in Task 4 (map PostTitle -> String).
+        title: Text::plain(
+            post.title
+                .clone()
+                .map_or_else(|| post.slug.to_string(), String::from),
+        ),
         content: Some(Content {
             content_type: Some(content_type.to_string()),
             value: Some(body),
@@ -541,9 +547,9 @@ mod tests {
             post_id,
             user_id: 1,
             author_username: "alice".parse().expect("parse username"),
-            title: title.map(std::string::ToString::to_string),
+            title: title.map(|t| t.to_owned().into()),
             slug: slug.parse().expect("parse slug"),
-            body: body.to_string(),
+            body: body.to_string().into(),
             format,
             rendered_html: storage::RenderedHtml::from_trusted("<p>html</p>"),
             created_at: Utc::now(),

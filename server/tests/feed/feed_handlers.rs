@@ -41,9 +41,9 @@ async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_typ
         .posts
         .create_post(&CreatePostInput {
             user_id,
-            title: Some("Test Post".to_string()),
+            title: Some("Test Post".to_string().into()),
             slug: "test-post".parse::<Slug>().expect("valid slug"),
-            body: "Test body".to_string(),
+            body: "Test body".to_string().into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Test body</p>"),
             published_at: Some(now),
@@ -122,9 +122,9 @@ async fn handler_serves_site_tag_feed_with_200(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id,
-            title: Some("Tagged Post".to_string()),
+            title: Some("Tagged Post".to_string().into()),
             slug: "tagged-post".parse::<Slug>().expect("valid slug"),
-            body: "Test body".to_string(),
+            body: "Test body".to_string().into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Test body</p>"),
             published_at: Some(now),
@@ -318,9 +318,9 @@ async fn handler_returns_correct_content_type_per_format(#[case] backend: Backen
         .posts
         .create_post(&CreatePostInput {
             user_id,
-            title: Some("Test Post".to_string()),
+            title: Some("Test Post".to_string().into()),
             slug: "test-post".parse::<Slug>().expect("valid slug"),
-            body: "Test body".to_string(),
+            body: "Test body".to_string().into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Test body</p>"),
             published_at: Some(now),

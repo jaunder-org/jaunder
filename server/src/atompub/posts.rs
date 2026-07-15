@@ -379,7 +379,8 @@ pub async fn collection_post(
         posts.as_ref(),
         storage::PostCreation {
             user_id: auth_user.user_id,
-            body: fields.body,
+            // #402 Task 3 seam: temporary, removed in Task 4 (PostFields.body stays String).
+            body: fields.body.into(),
             title: fields.title.as_deref(),
             format: fields.format,
             slug_override: None,
@@ -502,7 +503,8 @@ pub async fn member_put(
         storage::PostUpdate {
             post_id,
             editor_user_id: auth_user.user_id,
-            body: fields.body,
+            // #402 Task 3 seam: temporary, removed in Task 4 (PostFields.body stays String).
+            body: fields.body.into(),
             title: fields.title.as_deref(),
             format: fields.format,
             slug_override: None,
@@ -570,9 +572,9 @@ mod etag_tests {
             post_id: 1,
             user_id: 1,
             author_username: "alice".parse().expect("parse username"),
-            title: Some("Title".to_string()),
+            title: Some("Title".to_string().into()),
             slug: "my-post".parse().expect("parse slug"),
-            body: "Body text.".to_string(),
+            body: "Body text.".to_string().into(),
             format: PostFormat::Org,
             rendered_html: RenderedHtml::from_trusted("<p>Body text.</p>"),
             created_at: t,
@@ -634,9 +636,9 @@ mod etag_tests {
             f(&mut p);
             etag_for(&p)
         };
-        assert_ne!(flip(&|p| p.title = Some("Other".to_string())), e); // title value
+        assert_ne!(flip(&|p| p.title = Some("Other".to_string().into())), e); // title value
         assert_ne!(flip(&|p| p.title = None), e); // title present->absent
-        assert_ne!(flip(&|p| p.body = "Different body.".to_string()), e); // body
+        assert_ne!(flip(&|p| p.body = "Different body.".to_string().into()), e); // body
         assert_ne!(flip(&|p| p.summary = Some("Other".to_string())), e); // summary value
         assert_ne!(flip(&|p| p.summary = None), e); // summary present->absent
         assert_ne!(flip(&|p| p.format = PostFormat::Markdown), e); // format

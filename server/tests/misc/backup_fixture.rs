@@ -60,9 +60,9 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
         .posts
         .create_post(&CreatePostInput {
             user_id: author,
-            title: Some("Restored Post".to_owned()),
+            title: Some("Restored Post".to_owned().into()),
             slug: "restored-post".parse().expect("valid slug"),
-            body: "body text".to_owned(),
+            body: "body text".to_owned().into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>body text</p>"),
             published_at: Some(fixture_published_at()),
@@ -135,9 +135,9 @@ async fn seed_named_audience_post(
         .posts
         .create_post(&CreatePostInput {
             user_id: author,
-            title: Some("Friends Only".to_owned()),
+            title: Some("Friends Only".to_owned().into()),
             slug: "friends-only".parse().expect("valid slug"),
-            body: "secret body".to_owned(),
+            body: "secret body".to_owned().into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>secret body</p>"),
             published_at: Some(fixture_published_at()),

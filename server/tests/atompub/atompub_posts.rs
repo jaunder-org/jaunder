@@ -44,7 +44,7 @@ async fn collection_lists_user_posts(#[case] backend: Backend) {
         state.posts.as_ref(),
         storage::PostCreation {
             user_id,
-            body: "Hello body one".to_string(),
+            body: "Hello body one".to_string().into(),
             title: Some("Hello Title One"),
             format: storage::PostFormat::Markdown,
             slug_override: None,
@@ -62,7 +62,7 @@ async fn collection_lists_user_posts(#[case] backend: Backend) {
         state.posts.as_ref(),
         storage::PostCreation {
             user_id,
-            body: "Hello body two".to_string(),
+            body: "Hello body two".to_string().into(),
             title: Some("Hello Title Two"),
             format: storage::PostFormat::Markdown,
             slug_override: None,
@@ -140,7 +140,7 @@ async fn member_returns_native_source_with_etag(#[case] backend: Backend) {
         state.posts.as_ref(),
         storage::PostCreation {
             user_id,
-            body: "# Markdown body".to_string(),
+            body: "# Markdown body".to_string().into(),
             title: Some("My Post"),
             format: storage::PostFormat::Markdown,
             slug_override: None,
@@ -244,7 +244,7 @@ async fn delete_then_get_is_404(#[case] backend: Backend) {
         state.posts.as_ref(),
         storage::PostCreation {
             user_id,
-            body: "Delete me".to_string(),
+            body: "Delete me".to_string().into(),
             title: Some("Temporary Post"),
             format: storage::PostFormat::Markdown,
             slug_override: None,
@@ -316,7 +316,7 @@ async fn collection_paging_emits_next_link(#[case] backend: Backend) {
             state.posts.as_ref(),
             storage::PostCreation {
                 user_id,
-                body: format!("Body {i}"),
+                body: format!("Body {i}").into(),
                 title: Some(&format!("Title {i}")),
                 format: storage::PostFormat::Markdown,
                 slug_override: None,
@@ -408,7 +408,7 @@ async fn collection_cursor_validation(
             state.posts.as_ref(),
             storage::PostCreation {
                 user_id,
-                body: "Body".to_string(),
+                body: "Body".to_string().into(),
                 title: Some("Title"),
                 format: storage::PostFormat::Markdown,
                 slug_override: None,
@@ -771,7 +771,7 @@ async fn update_replaces_post_body(#[case] backend: Backend) {
         state.posts.as_ref(),
         storage::PostCreation {
             user_id,
-            body: "Old body".to_string(),
+            body: "Old body".to_string().into(),
             title: Some("Old"),
             format: storage::PostFormat::Markdown,
             slug_override: None,
@@ -819,7 +819,7 @@ async fn update_with_stale_if_match_returns_412(#[case] backend: Backend) {
         state.posts.as_ref(),
         storage::PostCreation {
             user_id,
-            body: "Old body".to_string(),
+            body: "Old body".to_string().into(),
             title: Some("Old"),
             format: storage::PostFormat::Markdown,
             slug_override: None,
@@ -886,7 +886,7 @@ async fn update_removes_categories_not_in_new_entry(#[case] backend: Backend) {
         state.posts.as_ref(),
         storage::PostCreation {
             user_id,
-            body: "Body".to_string(),
+            body: "Body".to_string().into(),
             title: Some("Title"),
             format: storage::PostFormat::Markdown,
             slug_override: None,
@@ -939,7 +939,7 @@ async fn update_with_put_returns_200_and_etag(#[case] backend: Backend) {
         state.posts.as_ref(),
         storage::PostCreation {
             user_id,
-            body: "Original".to_string(),
+            body: "Original".to_string().into(),
             title: Some("Title"),
             format: storage::PostFormat::Markdown,
             slug_override: None,
@@ -1016,7 +1016,7 @@ async fn empty_entry_returns_400(backend: Backend, #[case] op: EmptyEntryOp) {
                 state.posts.as_ref(),
                 storage::PostCreation {
                     user_id,
-                    body: "Original body".to_string(),
+                    body: "Original body".to_string().into(),
                     title: Some("Original"),
                     format: storage::PostFormat::Markdown,
                     slug_override: None,
@@ -1117,7 +1117,7 @@ async fn member_carries_read_only_j_slug(#[case] backend: Backend) {
         state.posts.as_ref(),
         storage::PostCreation {
             user_id,
-            body: "Body".to_string(),
+            body: "Body".to_string().into(),
             title: Some("My Post"),
             format: storage::PostFormat::Markdown,
             slug_override: None,
@@ -1662,7 +1662,7 @@ async fn update_preserves_non_public_targeting(#[case] backend: Backend) {
         state.posts.as_ref(),
         storage::PostCreation {
             user_id,
-            body: "Old body".to_string(),
+            body: "Old body".to_string().into(),
             title: Some("Old"),
             format: storage::PostFormat::Markdown,
             slug_override: None,
@@ -1718,7 +1718,7 @@ async fn member_get_serves_owner_non_public_post(#[case] backend: Backend) {
         state.posts.as_ref(),
         storage::PostCreation {
             user_id,
-            body: "Secret body".to_string(),
+            body: "Secret body".to_string().into(),
             title: Some("Secret"),
             format: storage::PostFormat::Markdown,
             slug_override: None,
@@ -1923,7 +1923,7 @@ async fn update_with_future_published_schedules_post(#[case] backend: Backend) {
         state.posts.as_ref(),
         storage::PostCreation {
             user_id,
-            body: "Old body".to_string(),
+            body: "Old body".to_string().into(),
             title: Some("Old"),
             format: storage::PostFormat::Markdown,
             slug_override: None,

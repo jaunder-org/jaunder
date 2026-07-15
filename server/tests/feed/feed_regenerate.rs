@@ -29,9 +29,9 @@ async fn regenerate_writes_cache_row_for_user_feed(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id,
-            title: Some("Post 1".to_string()),
+            title: Some("Post 1".to_string().into()),
             slug: "post-1".parse::<Slug>().expect("valid slug"),
-            body: "Post 1 body".to_string(),
+            body: "Post 1 body".to_string().into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Post 1 body</p>"),
             published_at: Some(now),
@@ -46,9 +46,9 @@ async fn regenerate_writes_cache_row_for_user_feed(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id,
-            title: Some("Post 2".to_string()),
+            title: Some("Post 2".to_string().into()),
             slug: "post-2".parse::<Slug>().expect("valid slug"),
-            body: "Post 2 body".to_string(),
+            body: "Post 2 body".to_string().into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Post 2 body</p>"),
             published_at: Some(now),
@@ -210,9 +210,9 @@ async fn regenerate_writes_each_format(#[case] backend: Backend) {
         .posts
         .create_post(&CreatePostInput {
             user_id,
-            title: Some("Test Post".to_string()),
+            title: Some("Test Post".to_string().into()),
             slug: "test-post".parse::<Slug>().expect("valid slug"),
-            body: "Test body".to_string(),
+            body: "Test body".to_string().into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Test body</p>"),
             published_at: Some(now),
@@ -268,9 +268,9 @@ async fn feed_contains_only_public_posts(#[case] backend: Backend) {
     let now = Utc::now();
     let mk = |title: &str, slug: &str, audiences: Vec<AudienceTarget>| CreatePostInput {
         user_id,
-        title: Some(title.to_string()),
+        title: Some(title.to_string().into()),
         slug: slug.parse::<Slug>().expect("valid slug"),
-        body: format!("{title} body"),
+        body: format!("{title} body").into(),
         format: PostFormat::Markdown,
         rendered_html: RenderedHtml::from_trusted(format!("<p>{title} body</p>")),
         published_at: Some(now),

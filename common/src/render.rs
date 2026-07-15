@@ -8,6 +8,9 @@ use std::str::FromStr;
 
 use thiserror::Error;
 
+use crate::post_body::PostBody;
+use crate::post_title::PostTitle;
+
 /// The format/markup language used to author a post body.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PostFormat {
@@ -120,7 +123,7 @@ impl serde::Serialize for RenderedHtml {
 /// Renders `body` to HTML based on `format`. Pure, infallible function. The output
 /// is a [`RenderedHtml`] — this is the only door that mints new rendered HTML.
 #[must_use]
-pub fn render(body: &str, format: &PostFormat) -> RenderedHtml {
+pub fn render(body: &PostBody, format: &PostFormat) -> RenderedHtml {
     let html = match format {
         PostFormat::Markdown => render_markdown(body),
         PostFormat::Org => render_org(body),
@@ -132,7 +135,7 @@ pub fn render(body: &str, format: &PostFormat) -> RenderedHtml {
 /// Metadata derived from a post body used for slug generation and display.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DerivedPostMetadata {
-    pub title: Option<String>,
+    pub title: Option<PostTitle>,
     pub slug_seed: String,
     pub summary_label: String,
 }
@@ -153,7 +156,7 @@ pub fn derive_post_metadata(
         let title = title.to_owned();
         let summary_label = fallback_label(body).unwrap_or_else(|| title.clone());
         return Some(DerivedPostMetadata {
-            title: Some(title.clone()),
+            title: Some(PostTitle::from(title.clone())),
             slug_seed: title,
             summary_label,
         });
@@ -168,7 +171,7 @@ pub fn derive_post_metadata(
     if let Some(title) = extracted_title {
         let summary_label = fallback_label(body).unwrap_or_else(|| title.clone());
         return Some(DerivedPostMetadata {
-            title: Some(title.clone()),
+            title: Some(PostTitle::from(title.clone())),
             slug_seed: title,
             summary_label,
         });
@@ -558,13 +561,16 @@ mod tests {
 
     #[test]
     fn render_dispatches_markdown() {
-        let result = render("**bold**", &PostFormat::Markdown);
+        let result = render(
+            &PostBody::from("**bold**".to_owned()),
+            &PostFormat::Markdown,
+        );
         assert!(result.contains("<strong>bold</strong>"));
     }
 
     #[test]
     fn render_dispatches_org() {
-        let result = render("*bold*", &PostFormat::Org);
+        let result = render(&PostBody::from("*bold*".to_owned()), &PostFormat::Org);
         assert!(result.contains("<b>bold</b>"));
     }
 
@@ -733,7 +739,10 @@ mod tests {
     #[test]
     fn render_html_format_is_identity() {
         let body = "<p>hi <b>there</b></p>";
-        assert_eq!(render(body, &PostFormat::Html).as_ref(), body);
+        assert_eq!(
+            render(&PostBody::from(body.to_owned()), &PostFormat::Html).as_ref(),
+            body
+        );
     }
 
     // -- canonicalize_org_body tests (ADR-0024; load-bearing, user-flagged) --
