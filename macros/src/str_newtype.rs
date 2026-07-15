@@ -187,6 +187,18 @@ fn infallible_trailer(name: &syn::Ident) -> proc_macro2::TokenStream {
             }
         }
 
+        // A borrowed-source alias for the owned `From<String>` chokepoint: routes through
+        // it (so any normalization still happens in one place) and lets a `&str`/literal
+        // construct the newtype with a single `.into()` / `X::from("…")`, no `.to_owned()`.
+        #[automatically_derived]
+        impl ::core::convert::From<&str> for #name {
+            fn from(s: &str) -> Self {
+                <#name as ::core::convert::From<::std::string::String>>::from(
+                    ::std::string::String::from(s),
+                )
+            }
+        }
+
         #[automatically_derived]
         impl ::core::cmp::PartialEq<str> for #name {
             fn eq(&self, other: &str) -> bool {

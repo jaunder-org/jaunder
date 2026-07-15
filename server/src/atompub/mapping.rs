@@ -79,10 +79,10 @@ pub fn entry_to_post_fields(entry: &Entry, default_format: PostFormat) -> PostFi
 
     let format = wire_to_format(ctype, default_format);
 
-    let body = PostBody::from(value.to_string());
+    let body = PostBody::from(value);
     let title = {
         let trimmed = entry.title().as_str().trim();
-        (!trimmed.is_empty()).then(|| PostTitle::from(trimmed.to_owned()))
+        (!trimmed.is_empty()).then(|| PostTitle::from(trimmed))
     };
     let summary = entry.summary().map(|t| t.as_str().to_string());
     // atom `<category term>` values are arbitrary RFC-4287 protocol strings (the
@@ -546,9 +546,9 @@ mod tests {
             post_id,
             user_id: 1,
             author_username: "alice".parse().expect("parse username"),
-            title: title.map(|t| t.to_owned().into()),
+            title: title.map(PostTitle::from),
             slug: slug.parse().expect("parse slug"),
-            body: body.to_string().into(),
+            body: body.into(),
             format,
             rendered_html: storage::RenderedHtml::from_trusted("<p>html</p>"),
             created_at: Utc::now(),

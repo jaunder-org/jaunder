@@ -2305,11 +2305,9 @@ mod tests {
             post_id: 1,
             user_id: 1,
             author_username: "author".parse().unwrap(),
-            title: Some("My Title".to_string().into()),
+            title: Some("My Title".into()),
             slug: "my-slug".parse().unwrap(),
-            body: "\n\n   The first non-empty line of the body is here. \n\n Another line."
-                .to_string()
-                .into(),
+            body: "\n\n   The first non-empty line of the body is here. \n\n Another line.".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted(
                 "<p>The first non-empty line of the body is here.</p>",
@@ -2329,7 +2327,7 @@ mod tests {
         );
 
         // Case 2: Body is empty but title is populated.
-        post.body = String::new().into();
+        post.body = "".into();
         assert_eq!(post.fallback_summary_label(), "My Title");
 
         // Case 3: Body and title are empty. It should use the slug.
@@ -2344,9 +2342,9 @@ mod tests {
             post_id: 1,
             user_id: 1,
             author_username: "author".parse().unwrap(),
-            title: Some("My Title".to_string().into()),
+            title: Some("My Title".into()),
             slug: "hello-world".parse().unwrap(),
-            body: "My body".to_string().into(),
+            body: "My body".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>My body</p>"),
             created_at: Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap(),
@@ -2368,9 +2366,9 @@ mod tests {
         let posts = &*env.state.posts;
         let input = CreatePostInput {
             user_id,
-            title: Some("Test Title".to_owned().into()),
+            title: Some("Test Title".into()),
             slug: "test-slug".parse().unwrap(),
-            body: "Test body".to_owned().into(),
+            body: "Test body".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Test body</p>"),
             published_at: None,
@@ -2396,9 +2394,9 @@ mod tests {
         env.base.close_pool().await;
         let input = CreatePostInput {
             user_id: 1,
-            title: Some("Test".to_string().into()),
+            title: Some("Test".into()),
             slug: "test-post".parse().unwrap(),
-            body: "body".to_string().into(),
+            body: "body".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
             published_at: None,
@@ -2446,9 +2444,9 @@ mod tests {
             .posts
             .create_post(&CreatePostInput {
                 user_id: uid,
-                title: Some("Post".to_string().into()),
+                title: Some("Post".into()),
                 slug: "post".parse().unwrap(),
-                body: "body".to_string().into(),
+                body: "body".into(),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
                 published_at: None,
@@ -2489,7 +2487,7 @@ mod tests {
             user_id: uid,
             title: Some(format!("Post {slug}").into()),
             slug: slug.parse().unwrap(),
-            body: "body".to_string().into(),
+            body: "body".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
             published_at: published.then_some(now - chrono::Duration::minutes(30)),
@@ -2618,7 +2616,7 @@ mod tests {
             author_username: "author".parse().unwrap(),
             title: None,
             slug: "hello-world".parse().unwrap(),
-            body: String::new().into(),
+            body: "".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted(""),
             created_at: Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap(),
@@ -2714,9 +2712,9 @@ mod tests {
         let post_id = posts
             .create_post(&CreatePostInput {
                 user_id,
-                title: Some("Post".to_string().into()),
+                title: Some("Post".into()),
                 slug: "post".parse().unwrap(),
-                body: "body".to_string().into(),
+                body: "body".into(),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
                 published_at: None,
@@ -2768,9 +2766,9 @@ mod tests {
         let post_id = posts
             .create_post(&CreatePostInput {
                 user_id,
-                title: Some("Post".to_string().into()),
+                title: Some("Post".into()),
                 slug: "post".parse().unwrap(),
-                body: "body".to_string().into(),
+                body: "body".into(),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
                 published_at: None,
@@ -2857,7 +2855,7 @@ mod tests {
                         author_username: username.clone(),
                         title: None,
                         slug: slug.clone(),
-                        body: String::new().into(),
+                        body: "".into(),
                         format: PostFormat::Markdown,
                         rendered_html: RenderedHtml::from_trusted(""),
                         created_at: base + chrono::Duration::seconds(i),

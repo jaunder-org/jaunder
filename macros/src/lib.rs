@@ -145,9 +145,11 @@ pub fn client_only(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// `#[str_newtype(infallible)]` selects the **infallible** trailer for a newtype whose
 /// invariant never rejects: construction is a hand-written `From<String>` (the single
 /// pure-wrap or normalizing chokepoint) rather than `FromStr`, so there is no
-/// `TryFrom<String>`/`FromStr`. The derived `Deserialize` routes wire input through that
-/// same `From<String>`, so it cannot fail and normalizes identically. Exclusive with
-/// `secret`/`serde` (the infallible trailer already includes the serde bridge):
+/// `TryFrom<String>`/`FromStr`. The derive also emits a `From<&str>` alias that routes
+/// through that `From<String>` — so a literal constructs with one `.into()`, no
+/// `.to_owned()` — and a `Deserialize` that routes wire input through it too, so it cannot
+/// fail and normalizes identically. Exclusive with `secret`/`serde` (the infallible
+/// trailer already includes the serde bridge):
 ///
 /// ```
 /// use macros::StrNewtype;
@@ -157,7 +159,7 @@ pub fn client_only(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// impl From<String> for Inf {
 ///     fn from(s: String) -> Self { Inf(s) }
 /// }
-/// let v: Inf = "x".to_owned().into();
+/// let v: Inf = "x".into();                                        // From<&str>, one hop
 /// assert_eq!(serde_json::to_string(&v).unwrap(), "\"x\"");        // serde bridge
 /// let _back: Inf = serde_json::from_str("\"x\"").unwrap();        // deserialize via From<String>
 /// ```

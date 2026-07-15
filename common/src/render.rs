@@ -561,16 +561,13 @@ mod tests {
 
     #[test]
     fn render_dispatches_markdown() {
-        let result = render(
-            &PostBody::from("**bold**".to_owned()),
-            &PostFormat::Markdown,
-        );
+        let result = render(&PostBody::from("**bold**"), &PostFormat::Markdown);
         assert!(result.contains("<strong>bold</strong>"));
     }
 
     #[test]
     fn render_dispatches_org() {
-        let result = render(&PostBody::from("*bold*".to_owned()), &PostFormat::Org);
+        let result = render(&PostBody::from("*bold*"), &PostFormat::Org);
         assert!(result.contains("<b>bold</b>"));
     }
 
@@ -740,7 +737,7 @@ mod tests {
     fn render_html_format_is_identity() {
         let body = "<p>hi <b>there</b></p>";
         assert_eq!(
-            render(&PostBody::from(body.to_owned()), &PostFormat::Html).as_ref(),
+            render(&PostBody::from(body), &PostFormat::Html).as_ref(),
             body
         );
     }

@@ -14,7 +14,7 @@ use macros::StrNewtype;
 /// A `PostBody` is not a `RenderedHtml`, and neither converts to the other:
 /// ```compile_fail
 /// fn want_html(_: common::render::RenderedHtml) {}
-/// want_html(common::post_body::PostBody::from("x".to_owned()));
+/// want_html(common::post_body::PostBody::from("x"));
 /// ```
 /// ```compile_fail
 /// fn want_body(_: common::post_body::PostBody) {}
@@ -38,13 +38,13 @@ mod tests {
     fn post_body_wraps_verbatim_without_trimming() {
         // Unlike PostTitle, a body is never trimmed — leading/trailing whitespace is
         // meaningful content.
-        let b = PostBody::from("  # Heading\n\nbody  ".to_owned());
+        let b = PostBody::from("  # Heading\n\nbody  ");
         assert_eq!(b, "  # Heading\n\nbody  ");
     }
 
     #[test]
     fn post_body_display_and_deref_expose_inner() {
-        let b = PostBody::from("hello".to_owned());
+        let b = PostBody::from("hello");
         assert_eq!(b.to_string(), "hello");
         assert_eq!(&*b, "hello");
         assert!(b.contains("ell")); // str method via Deref
@@ -52,7 +52,7 @@ mod tests {
 
     #[test]
     fn post_body_serde_round_trips_as_plain_string() {
-        let b = PostBody::from("raw *body*".to_owned());
+        let b = PostBody::from("raw *body*");
         assert_eq!(serde_json::to_string(&b).unwrap(), "\"raw *body*\"");
         assert_eq!(
             serde_json::from_str::<PostBody>("\"raw *body*\"").unwrap(),
@@ -62,6 +62,6 @@ mod tests {
 
     #[test]
     fn post_body_into_string_extracts_inner() {
-        assert_eq!(String::from(PostBody::from("x".to_owned())), "x");
+        assert_eq!(String::from(PostBody::from("x")), "x");
     }
 }

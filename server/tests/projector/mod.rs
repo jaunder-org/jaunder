@@ -50,9 +50,9 @@ async fn seed_tagged_post(state: &Arc<storage::AppState>) {
         .posts
         .create_post(&CreatePostInput {
             user_id,
-            title: Some("Tagged Post".to_string().into()),
+            title: Some("Tagged Post".into()),
             slug: "tagged".parse::<Slug>().unwrap(),
-            body: "b".to_string().into(),
+            body: "b".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>tag body</p>"),
             published_at: Some(Utc::now()),
@@ -83,9 +83,9 @@ async fn seed_published_post(state: &Arc<storage::AppState>) -> (String, i32, u3
         .posts
         .create_post(&CreatePostInput {
             user_id,
-            title: Some("Hello World".to_string().into()),
+            title: Some("Hello World".into()),
             slug: "hello".parse::<Slug>().unwrap(),
-            body: "Body".to_string().into(),
+            body: "Body".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Body here</p>"),
             published_at: Some(now),

@@ -557,7 +557,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".to_owned().into(),
+                body: "Hello, world!".into(),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -590,7 +590,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Body without a heading.".to_owned().into(),
+                body: "Body without a heading.".into(),
                 title: Some("Explicit Title"),
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -622,7 +622,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".to_owned().into(),
+                body: "Hello, world!".into(),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: Some(&slug),
@@ -649,7 +649,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "   ".to_owned().into(),
+                body: "   ".into(),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -683,7 +683,7 @@ mod tests {
             &storage,
             PostCreation {
                 user_id: 1,
-                body: "Hello, world!".to_owned().into(),
+                body: "Hello, world!".into(),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -712,7 +712,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "!!!".to_owned().into(),
+                body: "!!!".into(),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -741,7 +741,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "# 日本語\n\nbody".to_owned().into(),
+                body: "# 日本語\n\nbody".into(),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -796,7 +796,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".to_owned().into(),
+                body: "Hello, world!".into(),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -814,7 +814,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".to_owned().into(),
+                body: "Hello, world!".into(),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -832,7 +832,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".to_owned().into(),
+                body: "Hello, world!".into(),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -862,7 +862,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".to_owned().into(),
+                body: "Hello, world!".into(),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -880,7 +880,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".to_owned().into(),
+                body: "Hello, world!".into(),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -901,7 +901,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".to_owned().into(),
+                body: "Hello, world!".into(),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -930,7 +930,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "#+TITLE: Hi\n#+FOO: x\n\nHello".to_owned().into(),
+                body: "#+TITLE: Hi\n#+FOO: x\n\nHello".into(),
                 title: None,
                 format: PostFormat::Org,
                 slug_override: None,
@@ -966,7 +966,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "#+TITLE: First\n\noriginal".to_owned().into(),
+                body: "#+TITLE: First\n\noriginal".into(),
                 title: None,
                 format: PostFormat::Org,
                 slug_override: None,
@@ -985,7 +985,7 @@ mod tests {
             PostUpdate {
                 post_id: created.post_id,
                 editor_user_id: user_id,
-                body: "#+TITLE: Second\n#+FOO: keep\n\nupdated".to_owned().into(),
+                body: "#+TITLE: Second\n#+FOO: keep\n\nupdated".into(),
                 title: None,
                 format: PostFormat::Org,
                 slug_override: None,
@@ -1025,7 +1025,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "# H1\n\nBody text".to_owned().into(),
+                body: "# H1\n\nBody text".into(),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -1055,9 +1055,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "#+TITLE: Distinct Headline\n\nParagraph body"
-                    .to_owned()
-                    .into(),
+                body: "#+TITLE: Distinct Headline\n\nParagraph body".into(),
                 title: None,
                 format: PostFormat::Org,
                 slug_override: None,
@@ -1091,7 +1089,7 @@ mod tests {
     fn creation_with_key<'a>(user_id: i64, body: &str, key: Option<&'a str>) -> PostCreation<'a> {
         PostCreation {
             user_id,
-            body: body.to_owned().into(),
+            body: body.into(),
             title: None,
             format: PostFormat::Markdown,
             slug_override: None,

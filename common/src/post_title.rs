@@ -28,7 +28,7 @@ mod tests {
 
     #[test]
     fn post_title_trims_outer_whitespace_preserving_inner_and_case() {
-        let t = PostTitle::from("  Hello  World  ".to_owned());
+        let t = PostTitle::from("  Hello  World  ");
         assert_eq!(t, "Hello  World");
     }
 
@@ -37,20 +37,20 @@ mod tests {
         // Deserialize routes through From<String>, so wire input is trimmed too.
         assert_eq!(
             serde_json::from_str::<PostTitle>("\"  Trimmed \"").unwrap(),
-            PostTitle::from("Trimmed".to_owned())
+            PostTitle::from("Trimmed")
         );
     }
 
     #[test]
     fn post_title_serializes_as_plain_string() {
         assert_eq!(
-            serde_json::to_string(&PostTitle::from("Title".to_owned())).unwrap(),
+            serde_json::to_string(&PostTitle::from("Title")).unwrap(),
             "\"Title\""
         );
     }
 
     #[test]
     fn post_title_display_exposes_inner() {
-        assert_eq!(PostTitle::from(" Hi ".to_owned()).to_string(), "Hi");
+        assert_eq!(PostTitle::from(" Hi ").to_string(), "Hi");
     }
 }
