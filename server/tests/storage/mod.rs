@@ -3367,7 +3367,7 @@ async fn list_posts_gone_live_between_returns_only_window_with_tags(#[case] back
 #[tokio::test]
 async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend) {
     use chrono::{Duration, TimeZone};
-    use common::feed::{canonicalize, FeedFormat, FeedSurface};
+    use common::feed::{FeedFormat, FeedPath, FeedSurface};
     let env = backend.setup().await;
     let state = &env.state;
     let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
@@ -3399,8 +3399,8 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
     // does, so the per-surface arms of `max_published_at_for_surface` are all
     // exercised (Site, User, SiteTag, UserTag).
     let tag = "rust".parse().unwrap();
-    let site_tag_url = canonicalize(&FeedSurface::SiteTag { tag }, FeedFormat::Atom);
-    let user_tag_url = canonicalize(
+    let site_tag_url = FeedPath::canonical(&FeedSurface::SiteTag { tag }, FeedFormat::Atom);
+    let user_tag_url = FeedPath::canonical(
         &FeedSurface::UserTag {
             username: username("alice"),
             tag: "rust".parse().unwrap(),
@@ -3433,7 +3433,7 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
 
     let stale = state.posts.feed_urls_needing_catchup(now).await.unwrap();
     assert!(
-        stale.contains(&"/feed.atom".to_string()),
+        stale.iter().any(|u| u.as_ref() == "/feed.atom"),
         "a stale site feed is returned: {stale:?}"
     );
     assert!(
@@ -3445,7 +3445,7 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
         "a stale user-tag feed is returned: {stale:?}"
     );
     assert!(
-        !stale.contains(&"/~alice/feed.atom".to_string()),
+        !stale.iter().any(|u| u.as_ref() == "/~alice/feed.atom"),
         "a feed newer than its surface's newest post is not stale: {stale:?}"
     );
 }
