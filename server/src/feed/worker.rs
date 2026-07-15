@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use crate::websub::WebSubClient;
 use chrono::{DateTime, Utc};
-use common::feed::affected_feed_urls;
+use common::feed::{affected_feed_urls, FeedPath};
 use storage::{
     FeedCacheStorage, FeedEventRecord, FeedEventStorage, PostStorage, SiteConfigStorage,
 };
@@ -92,7 +92,7 @@ impl FeedWorker {
     }
 
     /// Processes a batch of pending feed events: regenerates feeds and pings the
-    /// `WebSub` hub. Groups events by `feed_url` to avoid redundant regeneration.
+    /// `WebSub` hub. Groups events by `feed_path` to avoid redundant regeneration.
     pub async fn tick(&self) {
         // Enqueue go-live regeneration first so the same tick drains what it
         // just enqueued. A failure here must not abort the tick — the queue
@@ -119,10 +119,10 @@ impl FeedWorker {
             return;
         }
 
-        // Group by feed_url to avoid redundant regeneration
-        let mut groups: HashMap<String, Vec<FeedEventRecord>> = HashMap::new();
+        // Group by feed_path to avoid redundant regeneration
+        let mut groups: HashMap<FeedPath, Vec<FeedEventRecord>> = HashMap::new();
         for rec in claimed {
-            groups.entry(rec.feed_url.clone()).or_default().push(rec);
+            groups.entry(rec.feed_path.clone()).or_default().push(rec);
         }
 
         // Read hub URL and site identity once per tick
@@ -134,8 +134,8 @@ impl FeedWorker {
             .flatten();
         let identity = self.site_config.get_identity().await.ok();
 
-        for (feed_url, recs) in groups {
-            self.process_feed_group(feed_url, recs, hub_url.as_deref(), identity.as_ref())
+        for (feed_path, recs) in groups {
+            self.process_feed_group(feed_path, recs, hub_url.as_deref(), identity.as_ref())
                 .await;
         }
     }
@@ -145,7 +145,7 @@ impl FeedWorker {
     /// backoff retry or marks the batch exhausted.
     async fn process_feed_group(
         &self,
-        feed_url: String,
+        feed_path: FeedPath,
         recs: Vec<FeedEventRecord>,
         hub_url: Option<&str>,
         identity: Option<&common::site::SiteIdentity>,
@@ -157,7 +157,7 @@ impl FeedWorker {
             self.site_config.as_ref(),
             self.posts.as_ref(),
             self.feed_cache.as_ref(),
-            &feed_url,
+            &feed_path,
         )
         .await
         {
@@ -170,18 +170,18 @@ impl FeedWorker {
                 let item_bytes = row.body.len();
                 let duration_ms = started.elapsed().as_millis();
                 tracing::info!(
-                    feed_url,
+                    feed_path = %feed_path,
                     item_bytes = item_bytes,
                     duration_ms = duration_ms,
                     "feed.regen.completed"
                 );
 
                 let attempt = recs.iter().map(|r| r.attempts).max().unwrap_or(0) + 1;
-                self.ping_websub(&feed_url, &ids, attempt, hub_url, identity)
+                self.ping_websub(&feed_path, &ids, attempt, hub_url, identity)
                     .await;
             }
             Err(e) => {
-                self.on_regen_failure(&feed_url, &ids, &recs, &e).await;
+                self.on_regen_failure(&feed_path, &ids, &recs, &e).await;
             }
         }
     }
@@ -317,7 +317,7 @@ mod tests {
         let now = Utc::now();
         FeedEventRecord {
             id,
-            feed_url: feed_url.to_owned(),
+            feed_path: feed_url.parse().expect("valid feed path in test"),
             status: FeedEventStatus::Claimed,
             attempts,
             last_error: None,
@@ -467,7 +467,15 @@ mod tests {
     // guard:no-backend — mock store
     #[tokio::test]
     async fn tick_marks_exhausted_when_regen_fails_past_backoff_table() {
+        // A FeedPath is always parseable, so regen can only fail on a storage
+        // error: make the first read inside regenerate_feed fail. The record's
+        // high attempt count pushes the next attempt past the backoff table, so
+        // the tick marks the events exhausted (terminal failure).
         let mut site_config = storage::MockSiteConfigStorage::new();
+        site_config
+            .expect_get_feeds_config()
+            .times(0..)
+            .returning(|| Err(sqlx::Error::PoolClosed));
         site_config
             .expect_get_feeds_websub_hub_url()
             .times(0..)
@@ -484,13 +492,10 @@ mod tests {
             .times(0..)
             .returning(|_| Ok(vec![]));
         let mut events = storage::MockFeedEventStorage::new();
-        // An unparseable feed_url makes regenerate_feed fail immediately; the
-        // record's high attempt count pushes the next attempt past the backoff
-        // table, so the tick marks the events exhausted (terminal failure).
         events
             .expect_claim_pending_batch()
             .times(1)
-            .returning(|_, _| Ok(vec![event(1, "not-a-feed-url", 10)]));
+            .returning(|_, _| Ok(vec![event(1, "/feed.rss", 10)]));
         events
             .expect_mark_exhausted()
             .times(1)
@@ -501,6 +506,49 @@ mod tests {
             storage::MockFeedCacheStorage::new(),
             events,
         );
+        w.tick().await;
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn tick_reschedules_on_regen_failure_within_backoff() {
+        // Replaces the former integration test whose bad-URL trigger a FeedPath
+        // makes impossible: a valid path plus a forced storage failure inside
+        // regenerate_feed. attempts = 0 keeps the next attempt inside the backoff
+        // table, so the batch is rescheduled (mark_failed), the cache is never
+        // written, and no hub ping is attempted.
+        let mut site_config = storage::MockSiteConfigStorage::new();
+        site_config
+            .expect_get_feeds_config()
+            .times(0..)
+            .returning(|| Err(sqlx::Error::PoolClosed));
+        site_config
+            .expect_get_feeds_websub_hub_url()
+            .times(0..)
+            .returning(|| Ok(None));
+        site_config.expect_get_identity().times(0..).returning(|| {
+            Ok(SiteIdentity {
+                title: "Jaunder".to_owned(),
+                base_url: None,
+            })
+        });
+        let mut posts = storage::MockPostStorage::new();
+        posts
+            .expect_feed_urls_needing_catchup()
+            .times(0..)
+            .returning(|_| Ok(vec![]));
+        let mut cache = storage::MockFeedCacheStorage::new();
+        cache.expect_upsert().times(0); // no cache row on regen failure
+        let mut events = storage::MockFeedEventStorage::new();
+        events
+            .expect_claim_pending_batch()
+            .times(1)
+            .returning(|_, _| Ok(vec![event(1, "/feed.rss", 0)]));
+        events
+            .expect_mark_failed()
+            .times(1)
+            .returning(|_, _, _| Ok(()));
+        let w = worker(site_config, posts, cache, events);
         w.tick().await;
     }
 

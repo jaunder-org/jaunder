@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use common::feed::FeedPath;
 use sqlx::{Pool, Postgres, Row};
 
 use crate::feed_events::{
@@ -8,6 +9,30 @@ use crate::feed_events::{
 
 /// Postgres-backed feed-event storage.
 pub type PostgresFeedEventStorage = FeedEventStore<Postgres>;
+
+/// Deletes `feed_events` rows whose `feed_url` could not be parsed into a
+/// [`FeedPath`] — only reachable via DB tampering/corruption, since `enqueue`
+/// takes a validated `FeedPath`. Such a row names no identifiable feed, so it is
+/// purged to keep the worker draining rather than wedged on it forever; any real
+/// regeneration need re-enqueues via the write/go-live path. Best-effort: a
+/// delete failure is logged, never propagated — the corrupt ids are already
+/// excluded from the returned batch, so the worker proceeds regardless.
+async fn purge_corrupt(pool: &Pool<Postgres>, ids: &[i64]) {
+    if ids.is_empty() {
+        return;
+    }
+    tracing::warn!("feed_events: purging rows with an unparseable feed_url");
+    if let Err(e) = sqlx::query("DELETE FROM feed_events WHERE id = ANY($1)")
+        .bind(ids)
+        .execute(pool)
+        .await
+    {
+        // cov:ignore-start — defensive log; the delete is best-effort and the
+        // corrupt ids are already excluded from the batch, so this never blocks.
+        tracing::warn!(error = %e, "feed_events: purge of corrupt rows failed");
+        // cov:ignore-stop
+    }
+}
 
 #[async_trait]
 impl FeedEventDialect for Postgres {
@@ -39,11 +64,21 @@ impl FeedEventDialect for Postgres {
         .fetch_all(pool)
         .await?;
 
-        let records = rows
-            .into_iter()
-            .map(|r| FeedEventRecord {
-                id: r.get("id"),
-                feed_url: r.get("feed_url"),
+        let mut records = Vec::with_capacity(rows.len());
+        let mut corrupt = Vec::new();
+        for r in rows {
+            let id: i64 = r.get("id");
+            // A feed_url that won't parse can only come from DB tampering/corruption
+            // (enqueue takes a validated FeedPath). Such a row is an unactionable
+            // work item, so collect it for purge rather than failing the whole batch
+            // (which would wedge the worker on the corrupt row forever).
+            let Ok(feed_path) = FeedPath::try_from(r.get::<String, _>("feed_url")) else {
+                corrupt.push(id);
+                continue;
+            };
+            records.push(FeedEventRecord {
+                id,
+                feed_path,
                 status: parse_status(r.get::<&str, _>("status")),
                 attempts: r.get("attempts"),
                 last_error: r.get("last_error"),
@@ -52,8 +87,9 @@ impl FeedEventDialect for Postgres {
                 created_at: r.get("created_at"),
                 regenerated_at: r.get("regenerated_at"),
                 pinged_at: r.get("pinged_at"),
-            })
-            .collect();
+            });
+        }
+        purge_corrupt(pool, &corrupt).await;
         Ok(records)
     }
 

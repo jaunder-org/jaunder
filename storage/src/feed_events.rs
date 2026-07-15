@@ -4,6 +4,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
+use common::feed::FeedPath;
 use sqlx::{Database, Pool};
 use thiserror::Error;
 
@@ -32,7 +33,7 @@ pub(crate) fn parse_status(s: &str) -> FeedEventStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeedEventRecord {
     pub id: i64,
-    pub feed_url: String,
+    pub feed_path: FeedPath,
     pub status: FeedEventStatus,
     pub attempts: i32,
     pub last_error: Option<String>,
@@ -52,8 +53,8 @@ pub enum FeedEventError {
 #[cfg_attr(feature = "test-utils", mockall::automock)]
 #[async_trait]
 pub trait FeedEventStorage: Send + Sync {
-    /// Insert a new `pending` row for `feed_url`. Returns the new row id.
-    async fn enqueue(&self, feed_url: &str) -> Result<i64, FeedEventError>;
+    /// Insert a new `pending` row for `feed_path`. Returns the new row id.
+    async fn enqueue(&self, feed_path: &FeedPath) -> Result<i64, FeedEventError>;
 
     /// Atomically claim up to `limit` rows that are either:
     ///   * `status = 'pending' AND next_attempt_at <= now`, or
@@ -165,10 +166,10 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn enqueue(&self, feed_url: &str) -> Result<i64, FeedEventError> {
+    async fn enqueue(&self, feed_path: &FeedPath) -> Result<i64, FeedEventError> {
         let id: i64 =
             sqlx::query_scalar("INSERT INTO feed_events (feed_url) VALUES ($1) RETURNING id")
-                .bind(feed_url)
+                .bind(feed_path.as_ref())
                 .fetch_one(&self.pool)
                 .await?;
         Ok(id)
@@ -247,7 +248,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, Backend};
+    use crate::test_support::{backends, fp, Backend};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -265,15 +266,63 @@ mod tests {
     #[tokio::test]
     async fn enqueue_creates_pending_row(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let id = env.state.feed_events.enqueue("/feed.rss").await.unwrap();
+        let id = env
+            .state
+            .feed_events
+            .enqueue(&fp("/feed.rss"))
+            .await
+            .unwrap();
         assert!(id > 0);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn claim_purges_rows_with_unparseable_feed_url(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        // Simulate DB tampering/corruption: a feed_url that bypasses FeedPath
+        // validation (which `enqueue` could never write), alongside a valid row.
+        env.base
+            .pool()
+            .execute("INSERT INTO feed_events (feed_url) VALUES ('not a feed path')")
+            .await
+            .unwrap();
+        env.state
+            .feed_events
+            .enqueue(&fp("/feed.rss"))
+            .await
+            .unwrap();
+
+        // The claim skips-and-purges the corrupt row and returns only the valid
+        // one — the batch is NOT failed (which would wedge the worker forever).
+        let claimed = env
+            .state
+            .feed_events
+            .claim_pending_batch(50, chrono::Duration::minutes(5))
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].feed_path, "/feed.rss");
+
+        // The corrupt row was deleted, not merely skipped, so it can never wedge
+        // a future claim either.
+        let corrupt_remaining = env
+            .base
+            .pool()
+            .scalar_i64("SELECT COUNT(*) FROM feed_events WHERE feed_url = 'not a feed path'")
+            .await
+            .unwrap();
+        assert_eq!(corrupt_remaining, 0, "corrupt row should be purged");
     }
 
     #[apply(backends)]
     #[tokio::test]
     async fn claim_returns_eligible_pending_row(#[case] backend: Backend) {
         let env = backend.setup().await;
-        env.state.feed_events.enqueue("/feed.rss").await.unwrap();
+        env.state
+            .feed_events
+            .enqueue(&fp("/feed.rss"))
+            .await
+            .unwrap();
         let claimed = env
             .state
             .feed_events
@@ -289,7 +338,11 @@ mod tests {
     #[tokio::test]
     async fn double_claim_returns_no_rows_within_lease(#[case] backend: Backend) {
         let env = backend.setup().await;
-        env.state.feed_events.enqueue("/feed.rss").await.unwrap();
+        env.state
+            .feed_events
+            .enqueue(&fp("/feed.rss"))
+            .await
+            .unwrap();
         let first = env
             .state
             .feed_events
@@ -310,7 +363,11 @@ mod tests {
     #[tokio::test]
     async fn lease_expired_rows_are_reclaimable(#[case] backend: Backend) {
         let env = backend.setup().await;
-        env.state.feed_events.enqueue("/feed.rss").await.unwrap();
+        env.state
+            .feed_events
+            .enqueue(&fp("/feed.rss"))
+            .await
+            .unwrap();
         let _first = env
             .state
             .feed_events
@@ -331,7 +388,11 @@ mod tests {
     #[tokio::test]
     async fn mark_pinged_marks_done_and_removes_from_queue(#[case] backend: Backend) {
         let env = backend.setup().await;
-        env.state.feed_events.enqueue("/feed.rss").await.unwrap();
+        env.state
+            .feed_events
+            .enqueue(&fp("/feed.rss"))
+            .await
+            .unwrap();
         let claimed = env
             .state
             .feed_events
@@ -354,7 +415,12 @@ mod tests {
     #[tokio::test]
     async fn mark_failed_increments_attempts_and_reschedules(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let id = env.state.feed_events.enqueue("/feed.rss").await.unwrap();
+        let id = env
+            .state
+            .feed_events
+            .enqueue(&fp("/feed.rss"))
+            .await
+            .unwrap();
         let _ = env
             .state
             .feed_events
@@ -381,7 +447,12 @@ mod tests {
     #[tokio::test]
     async fn mark_exhausted_marks_failed_terminal(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let id = env.state.feed_events.enqueue("/feed.rss").await.unwrap();
+        let id = env
+            .state
+            .feed_events
+            .enqueue(&fp("/feed.rss"))
+            .await
+            .unwrap();
         env.state
             .feed_events
             .mark_exhausted(&[id], "gave up")

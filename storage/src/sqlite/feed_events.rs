@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use common::feed::FeedPath;
 use sqlx::{Pool, Row, Sqlite};
 
 use crate::feed_events::{
@@ -11,6 +12,32 @@ pub type SqliteFeedEventStorage = FeedEventStore<Sqlite>;
 
 fn placeholders(n: usize) -> String {
     std::iter::repeat_n("?", n).collect::<Vec<_>>().join(",")
+}
+
+/// Deletes `feed_events` rows whose `feed_url` could not be parsed into a
+/// [`FeedPath`] — only reachable via DB tampering/corruption, since `enqueue`
+/// takes a validated `FeedPath`. Such a row names no identifiable feed, so it is
+/// purged to keep the worker draining rather than wedged on it forever; any real
+/// regeneration need re-enqueues via the write/go-live path. Best-effort: a
+/// delete failure is logged, never propagated — the corrupt ids are already
+/// excluded from the returned batch, so the worker proceeds regardless.
+async fn purge_corrupt(pool: &Pool<Sqlite>, ids: &[i64]) {
+    if ids.is_empty() {
+        return;
+    }
+    tracing::warn!("feed_events: purging rows with an unparseable feed_url");
+    let ph = placeholders(ids.len());
+    let sql = format!("DELETE FROM feed_events WHERE id IN ({ph})");
+    let mut q = sqlx::query(&sql);
+    for id in ids {
+        q = q.bind(*id);
+    }
+    if let Err(e) = q.execute(pool).await {
+        // cov:ignore-start — defensive log; the delete is best-effort and the
+        // corrupt ids are already excluded from the batch, so this never blocks.
+        tracing::warn!(error = %e, "feed_events: purge of corrupt rows failed");
+        // cov:ignore-stop
+    }
 }
 
 #[async_trait]
@@ -43,24 +70,33 @@ impl FeedEventDialect for Sqlite {
         .fetch_all(pool)
         .await?;
 
-        let records = rows
-            .into_iter()
-            .map(|r| {
-                let attempts: i64 = r.get("attempts");
-                FeedEventRecord {
-                    id: r.get("id"),
-                    feed_url: r.get("feed_url"),
-                    status: parse_status(r.get::<&str, _>("status")),
-                    attempts: i32::try_from(attempts).unwrap_or(i32::MAX),
-                    last_error: r.get("last_error"),
-                    next_attempt_at: r.get("next_attempt_at"),
-                    claimed_at: r.get("claimed_at"),
-                    created_at: r.get("created_at"),
-                    regenerated_at: r.get("regenerated_at"),
-                    pinged_at: r.get("pinged_at"),
-                }
-            })
-            .collect();
+        let mut records = Vec::with_capacity(rows.len());
+        let mut corrupt = Vec::new();
+        for r in rows {
+            let id: i64 = r.get("id");
+            // A feed_url that won't parse can only come from DB tampering/corruption
+            // (enqueue takes a validated FeedPath). Such a row is an unactionable
+            // work item, so collect it for purge rather than failing the whole batch
+            // (which would wedge the worker on the corrupt row forever).
+            let Ok(feed_path) = FeedPath::try_from(r.get::<String, _>("feed_url")) else {
+                corrupt.push(id);
+                continue;
+            };
+            let attempts: i64 = r.get("attempts");
+            records.push(FeedEventRecord {
+                id,
+                feed_path,
+                status: parse_status(r.get::<&str, _>("status")),
+                attempts: i32::try_from(attempts).unwrap_or(i32::MAX),
+                last_error: r.get("last_error"),
+                next_attempt_at: r.get("next_attempt_at"),
+                claimed_at: r.get("claimed_at"),
+                created_at: r.get("created_at"),
+                regenerated_at: r.get("regenerated_at"),
+                pinged_at: r.get("pinged_at"),
+            });
+        }
+        purge_corrupt(pool, &corrupt).await;
         Ok(records)
     }
 
@@ -140,7 +176,7 @@ impl FeedEventDialect for Sqlite {
 mod tests {
     use std::sync::Arc;
 
-    use crate::test_support::{sqlite_only, Backend};
+    use crate::test_support::{fp, sqlite_only, Backend};
     use crate::FeedEventError;
     use chrono::Duration;
 
@@ -158,12 +194,10 @@ mod tests {
         let env = backend.setup().await;
         let feed_events = env.state.feed_events.clone();
 
-        // Seed a populated queue.
+        // Seed a populated queue with distinct valid feed paths.
         for i in 0..200 {
-            feed_events
-                .enqueue(&format!("/feed-{i}.rss"))
-                .await
-                .expect("enqueue");
+            let url = fp(&format!("/tags/t{i}/feed.rss"));
+            feed_events.enqueue(&url).await.expect("enqueue");
         }
 
         // Many concurrent claimers re-contending the same rows (zero lease keeps

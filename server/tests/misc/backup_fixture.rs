@@ -4,6 +4,7 @@ use common::tag::TagLabel;
 use common::username::Username;
 use common::visibility::{AudienceTarget, ViewerIdentity};
 use jaunder::cli::StorageArgs;
+use storage::test_support::fp;
 use storage::{
     open_existing_database, AppState, CreatePostInput, MediaRecord, MediaSource, PostFormat,
     RenderedHtml,
@@ -162,7 +163,7 @@ async fn seed_side_tables(state: &AppState, author: i64) {
         .expect("create media row");
     state
         .feed_events
-        .enqueue("https://example.com/feed.xml")
+        .enqueue(&fp("/feed.rss"))
         .await
         .expect("enqueue feed event");
 }

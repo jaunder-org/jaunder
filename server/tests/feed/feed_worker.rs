@@ -3,11 +3,12 @@ use std::sync::Arc;
 
 use crate::helpers::CapturingWebSubClient;
 use chrono::Utc;
+use common::feed::FeedPath;
 use common::password::Password;
 use common::slug::Slug;
 use common::username::Username;
 use jaunder::feed::worker::FeedWorker;
-use storage::test_support::{backends, Backend, TestEnv};
+use storage::test_support::{backends, fp, Backend, TestEnv};
 use storage::{CreatePostInput, FeedCacheRow, PostFormat, RenderedHtml};
 
 use rstest::*;
@@ -75,10 +76,10 @@ async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub(#[case] bac
         .await
         .expect("create post");
 
-    let feed_url = "/~alice/feed.rss";
+    let feed_path = fp("/~alice/feed.rss");
     state
         .feed_events
-        .enqueue(feed_url)
+        .enqueue(&feed_path)
         .await
         .expect("enqueue feed event");
 
@@ -86,7 +87,7 @@ async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub(#[case] bac
 
     let cache_row = state
         .feed_cache
-        .get(feed_url)
+        .get(&feed_path)
         .await
         .expect("get cache")
         .expect("cache row should exist");
@@ -138,10 +139,10 @@ async fn worker_pings_hub_when_configured(#[case] backend: Backend) {
         .await
         .expect("set hub url");
 
-    let feed_url = "/~alice/feed.rss";
+    let feed_path = fp("/~alice/feed.rss");
     state
         .feed_events
-        .enqueue(feed_url)
+        .enqueue(&feed_path)
         .await
         .expect("enqueue feed event");
 
@@ -195,11 +196,11 @@ async fn worker_groups_duplicate_events_into_single_regen(#[case] backend: Backe
         .await
         .expect("set hub url");
 
-    let feed_url = "/~alice/feed.rss";
+    let feed_path = fp("/~alice/feed.rss");
     for _ in 0..5 {
         state
             .feed_events
-            .enqueue(feed_url)
+            .enqueue(&feed_path)
             .await
             .expect("enqueue feed event");
     }
@@ -217,47 +218,12 @@ async fn worker_groups_duplicate_events_into_single_regen(#[case] backend: Backe
     assert!(pings[0].feed_url.ends_with("/~alice/feed.rss"));
 }
 
-#[apply(backends)]
-#[tokio::test]
-async fn worker_applies_backoff_on_regen_failure(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let capture = Arc::new(CapturingWebSubClient::default());
-
-    // Enqueue an event whose feed_url cannot be parsed into a feed surface;
-    // regenerate_feed returns BadUrl before any hub logic runs.
-    let feed_url = "/this-is-not-a-feed-url";
-    state
-        .feed_events
-        .enqueue(feed_url)
-        .await
-        .expect("enqueue feed event");
-
-    // Run the worker - regeneration will fail.
-    make_worker(&state, capture.clone()).tick().await;
-
-    let cache = state.feed_cache.get(feed_url).await.expect("get cache");
-    assert!(
-        cache.is_none(),
-        "no cache row should exist on regen failure"
-    );
-
-    // No ping should have been attempted (regen failed first).
-    assert!(
-        capture.pings().is_empty(),
-        "no ping should be sent when regeneration fails"
-    );
-
-    // The event is scheduled for a future retry, not immediately claimable.
-    let immediately_claimable = state
-        .feed_events
-        .claim_pending_batch(10, chrono::Duration::minutes(5))
-        .await
-        .expect("claim pending");
-    assert!(
-        immediately_claimable.is_empty(),
-        "event should be scheduled for retry, not immediately claimable"
-    );
-}
+// The regen-failure backoff behavior moved to a mock-based worker unit test
+// (`worker::tests::tick_reschedules_on_regen_failure_within_backoff`): a
+// `FeedPath` can no longer hold an unparseable value, so the former bad-URL
+// trigger is unrepresentable, and a real backend cannot cheaply inject the only
+// remaining failure (a storage error). The real-backend `mark_failed`
+// scheduling SQL stays covered by the dual-backend `feed_events` storage test.
 
 #[apply(backends)]
 #[tokio::test]
@@ -299,10 +265,10 @@ async fn worker_applies_backoff_on_ping_failure(#[case] backend: Backend) {
         .await
         .expect("set hub url");
 
-    let feed_url = "/~alice/feed.rss";
+    let feed_path = fp("/~alice/feed.rss");
     state
         .feed_events
-        .enqueue(feed_url)
+        .enqueue(&feed_path)
         .await
         .expect("enqueue feed event");
 
@@ -325,7 +291,7 @@ async fn worker_applies_backoff_on_ping_failure(#[case] backend: Backend) {
     // Verify the cache row was still created (regen succeeded, only ping failed)
     let cache_row = state
         .feed_cache
-        .get(feed_url)
+        .get(&feed_path)
         .await
         .expect("get cache")
         .expect("cache row should exist even though ping failed");
@@ -356,7 +322,7 @@ async fn startup_catchup_regenerates_feed_for_go_live_while_down(#[case] backend
     state
         .feed_cache
         .upsert(FeedCacheRow {
-            feed_url: "/feed.atom".to_string(),
+            feed_path: fp("/feed.atom"),
             body: "stale".to_string(),
             etag: "etag".to_string(),
             content_type: "application/atom+xml; charset=utf-8".to_string(),
@@ -395,9 +361,9 @@ async fn startup_catchup_regenerates_feed_for_go_live_while_down(#[case] backend
         .await
         .expect("claim pending");
     assert!(
-        pending.iter().any(|r| r.feed_url == "/feed.atom"),
+        pending.iter().any(|r| r.feed_path == "/feed.atom"),
         "startup catch-up must enqueue the stale site feed: {:?}",
-        pending.iter().map(|r| &r.feed_url).collect::<Vec<_>>()
+        pending.iter().map(|r| &r.feed_path).collect::<Vec<_>>()
     );
 }
 
@@ -449,13 +415,13 @@ async fn steady_state_window_enqueues_newly_live_posts(#[case] backend: Backend)
         .claim_pending_batch(100, chrono::Duration::minutes(5))
         .await
         .expect("claim pending");
-    let urls: Vec<&String> = pending.iter().map(|r| &r.feed_url).collect();
+    let urls: Vec<&FeedPath> = pending.iter().map(|r| &r.feed_path).collect();
     assert!(
         urls.iter().any(|u| u.contains("alice")),
         "the author's feeds must be enqueued on go-live: {urls:?}"
     );
     assert!(
-        urls.iter().any(|u| u.as_str() == "/feed.atom"),
+        urls.iter().any(|u| u.as_ref() == "/feed.atom"),
         "the site feed must be enqueued on go-live: {urls:?}"
     );
 }
@@ -498,8 +464,12 @@ async fn worker_marks_exhausted_after_backoff_attempts_are_used_up(#[case] backe
         .await
         .expect("set hub url");
 
-    let feed_url = "/~alice/feed.rss";
-    state.feed_events.enqueue(feed_url).await.expect("enqueue");
+    let feed_path = fp("/~alice/feed.rss");
+    state
+        .feed_events
+        .enqueue(&feed_path)
+        .await
+        .expect("enqueue");
 
     // Drive the attempt count up to the backoff-table length by repeatedly
     // claiming and re-queuing with a past retry time (so it stays claimable).

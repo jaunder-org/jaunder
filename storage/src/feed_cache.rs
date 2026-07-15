@@ -4,6 +4,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use common::feed::FeedPath;
 use sqlx::{Database, Pool};
 use thiserror::Error;
 
@@ -12,7 +13,7 @@ use crate::backend::Backend;
 /// A single cached feed body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeedCacheRow {
-    pub feed_url: String,
+    pub feed_path: FeedPath,
     pub body: String,
     pub etag: String,
     pub content_type: String,
@@ -29,22 +30,24 @@ pub enum FeedCacheError {
 #[cfg_attr(feature = "test-utils", mockall::automock)]
 #[async_trait]
 pub trait FeedCacheStorage: Send + Sync {
-    async fn get(&self, feed_url: &str) -> Result<Option<FeedCacheRow>, FeedCacheError>;
+    async fn get(&self, feed_path: &FeedPath) -> Result<Option<FeedCacheRow>, FeedCacheError>;
     async fn upsert(&self, row: FeedCacheRow) -> Result<(), FeedCacheError>;
-    async fn delete(&self, feed_url: &str) -> Result<(), FeedCacheError>;
+    async fn delete(&self, feed_path: &FeedPath) -> Result<(), FeedCacheError>;
 }
 
 type CacheTuple = (String, String, String, String, DateTime<Utc>, DateTime<Utc>);
 
-fn row_from_tuple(t: CacheTuple) -> FeedCacheRow {
-    FeedCacheRow {
-        feed_url: t.0,
+fn row_from_tuple(t: CacheTuple) -> Result<FeedCacheRow, sqlx::Error> {
+    Ok(FeedCacheRow {
+        // The feed_url column is written only via a validated FeedPath, so a
+        // parse failure means DB corruption; surface it as Decode.
+        feed_path: FeedPath::try_from(t.0).map_err(|e| sqlx::Error::Decode(Box::new(e)))?, // cov:ignore
         body: t.1,
         etag: t.2,
         content_type: t.3,
         updated_at: t.4,
         generated_at: t.5,
-    }
+    })
 }
 
 /// Generic [`FeedCacheStorage`] backed by any [`Backend`] database.
@@ -77,15 +80,15 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn get(&self, feed_url: &str) -> Result<Option<FeedCacheRow>, FeedCacheError> {
+    async fn get(&self, feed_path: &FeedPath) -> Result<Option<FeedCacheRow>, FeedCacheError> {
         let row = sqlx::query_as::<_, CacheTuple>(
             "SELECT feed_url, body, etag, content_type, updated_at, generated_at \
              FROM feed_cache WHERE feed_url = $1",
         )
-        .bind(feed_url)
+        .bind(feed_path.as_ref())
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(row_from_tuple))
+        Ok(row.map(row_from_tuple).transpose()?)
     }
 
     #[tracing::instrument(
@@ -104,7 +107,7 @@ where
                updated_at = excluded.updated_at, \
                generated_at = excluded.generated_at",
         )
-        .bind(row.feed_url.as_str())
+        .bind(row.feed_path.as_ref())
         .bind(row.body.as_str())
         .bind(row.etag.as_str())
         .bind(row.content_type.as_str())
@@ -120,9 +123,9 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn delete(&self, feed_url: &str) -> Result<(), FeedCacheError> {
+    async fn delete(&self, feed_path: &FeedPath) -> Result<(), FeedCacheError> {
         sqlx::query("DELETE FROM feed_cache WHERE feed_url = $1")
-            .bind(feed_url)
+            .bind(feed_path.as_ref())
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -132,13 +135,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, Backend};
+    use crate::test_support::{backends, fp, Backend};
     use rstest::*;
     use rstest_reuse::*;
 
     fn sample(url: &str) -> FeedCacheRow {
         FeedCacheRow {
-            feed_url: url.into(),
+            feed_path: fp(url),
             body: "<rss/>".into(),
             etag: "\"sha256-deadbeef\"".into(),
             content_type: "application/rss+xml".into(),
@@ -159,11 +162,11 @@ mod tests {
         let got = env
             .state
             .feed_cache
-            .get("/feed.rss")
+            .get(&fp("/feed.rss"))
             .await
             .unwrap()
             .expect("present");
-        assert_eq!(got.feed_url, "/feed.rss");
+        assert_eq!(got.feed_path, "/feed.rss");
         assert_eq!(got.body, "<rss/>");
     }
 
@@ -178,7 +181,7 @@ mod tests {
         let got = env
             .state
             .feed_cache
-            .get("/feed.rss")
+            .get(&fp("/feed.rss"))
             .await
             .unwrap()
             .unwrap();
@@ -192,7 +195,7 @@ mod tests {
         assert!(env
             .state
             .feed_cache
-            .get("/missing")
+            .get(&fp("/tags/absent/feed.rss"))
             .await
             .unwrap()
             .is_none());
@@ -207,11 +210,11 @@ mod tests {
             .upsert(sample("/feed.rss"))
             .await
             .unwrap();
-        env.state.feed_cache.delete("/feed.rss").await.unwrap();
+        env.state.feed_cache.delete(&fp("/feed.rss")).await.unwrap();
         assert!(env
             .state
             .feed_cache
-            .get("/feed.rss")
+            .get(&fp("/feed.rss"))
             .await
             .unwrap()
             .is_none());

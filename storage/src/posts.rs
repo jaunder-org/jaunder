@@ -5,6 +5,7 @@ use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use sqlx::{Database, Pool};
 use thiserror::Error;
 
+use common::feed::FeedPath;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::username::Username;
@@ -726,7 +727,7 @@ pub trait PostStorage: Send + Sync {
     /// (`published_at <= now`, not deleted) strictly newer than the feed's own
     /// `generated_at` — i.e. cached feeds that missed a go-live while the worker
     /// was down. Drives the feed-relative startup catch-up.
-    async fn feed_urls_needing_catchup(&self, now: DateTime<Utc>) -> sqlx::Result<Vec<String>>;
+    async fn feed_urls_needing_catchup(&self, now: DateTime<Utc>) -> sqlx::Result<Vec<FeedPath>>;
 
     /// Reads a post's audience targeting as a [`Vec<AudienceTarget>`], for
     /// pre-selecting the editor's audience picker.
@@ -1648,7 +1649,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn feed_urls_needing_catchup(&self, now: DateTime<Utc>) -> sqlx::Result<Vec<String>> {
+    async fn feed_urls_needing_catchup(&self, now: DateTime<Utc>) -> sqlx::Result<Vec<FeedPath>> {
         // Cached feeds live in the same database, so they are enumerated here
         // and, for each, the newest live post on that surface is compared
         // against the feed's own `generated_at`. Feed count is small, so a
@@ -1660,15 +1661,17 @@ where
                 .await?;
         let mut needing = Vec::new();
         for (feed_url, generated_at) in cached {
-            let Some((surface, _format)) = common::feed::parse(&feed_url) else {
+            let Some((surface, format)) = common::feed::parse(&feed_url) else {
                 continue;
             };
             if let Some(max) = max_published_at_for_surface::<DB>(&self.pool, &surface, now).await?
             {
                 // Strictly newer => a go-live happened after this feed was last
-                // generated, so it must be regenerated.
+                // generated, so it must be regenerated. Rebuild the key as a
+                // `FeedPath` from the already-parsed surface (infallible; also
+                // re-canonicalizes, harmless since the column is canonical).
                 if max > generated_at {
-                    needing.push(feed_url);
+                    needing.push(FeedPath::canonical(&surface, format));
                 }
             }
         }

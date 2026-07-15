@@ -31,8 +31,8 @@ use rstest::*;
 use rstest_reuse::*;
 
 use storage::test_support::{
-    backends, recorded_postgres_url, sqlite_url, template_postgres_url, Backend, PostgresDbGuard,
-    TestEnv,
+    backends, fp, recorded_postgres_url, sqlite_url, template_postgres_url, Backend,
+    PostgresDbGuard, TestEnv,
 };
 
 // The Postgres-backed cases below (the `::postgres` expansion of each
@@ -969,7 +969,7 @@ async fn feed_events_marks_run(#[case] backend: Backend) {
     // Enqueue + claim to obtain real ids, then exercise every
     // FeedEventDialect mark_* method on this backend. Each is an independent
     // `UPDATE … WHERE id IN (…)`, so they all run regardless of row state.
-    fe.enqueue("/feed-marks.rss").await.unwrap();
+    fe.enqueue(&fp("/feed.rss")).await.unwrap();
     let claimed = fe
         .claim_pending_batch(50, chrono::Duration::minutes(5))
         .await
@@ -3367,7 +3367,7 @@ async fn list_posts_gone_live_between_returns_only_window_with_tags(#[case] back
 #[tokio::test]
 async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend) {
     use chrono::{Duration, TimeZone};
-    use common::feed::{canonicalize, FeedFormat, FeedSurface};
+    use common::feed::{FeedFormat, FeedPath, FeedSurface};
     let env = backend.setup().await;
     let state = &env.state;
     let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
@@ -3388,7 +3388,7 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
         .unwrap();
 
     let mk_row = |feed_url: &str, generated_at| FeedCacheRow {
-        feed_url: feed_url.to_string(),
+        feed_path: fp(feed_url),
         body: "cached".to_string(),
         etag: "etag".to_string(),
         content_type: "application/atom+xml; charset=utf-8".to_string(),
@@ -3399,8 +3399,8 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
     // does, so the per-surface arms of `max_published_at_for_surface` are all
     // exercised (Site, User, SiteTag, UserTag).
     let tag = "rust".parse().unwrap();
-    let site_tag_url = canonicalize(&FeedSurface::SiteTag { tag }, FeedFormat::Atom);
-    let user_tag_url = canonicalize(
+    let site_tag_url = FeedPath::canonical(&FeedSurface::SiteTag { tag }, FeedFormat::Atom);
+    let user_tag_url = FeedPath::canonical(
         &FeedSurface::UserTag {
             username: username("alice"),
             tag: "rust".parse().unwrap(),
@@ -3433,7 +3433,7 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
 
     let stale = state.posts.feed_urls_needing_catchup(now).await.unwrap();
     assert!(
-        stale.contains(&"/feed.atom".to_string()),
+        stale.iter().any(|u| u.as_ref() == "/feed.atom"),
         "a stale site feed is returned: {stale:?}"
     );
     assert!(
@@ -3445,7 +3445,7 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
         "a stale user-tag feed is returned: {stale:?}"
     );
     assert!(
-        !stale.contains(&"/~alice/feed.atom".to_string()),
+        !stale.iter().any(|u| u.as_ref() == "/~alice/feed.atom"),
         "a feed newer than its surface's newest post is not stale: {stale:?}"
     );
 }

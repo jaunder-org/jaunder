@@ -9,7 +9,7 @@ use storage::{CreatePostInput, PostFormat, RenderedHtml};
 use rstest::*;
 use rstest_reuse::*;
 
-use storage::test_support::{backends, Backend, TestEnv};
+use storage::test_support::{backends, fp, Backend, TestEnv};
 
 #[apply(backends)]
 #[tokio::test]
@@ -63,7 +63,7 @@ async fn regenerate_writes_cache_row_for_user_feed(#[case] backend: Backend) {
         state.site_config.as_ref(),
         state.posts.as_ref(),
         state.feed_cache.as_ref(),
-        "/~alice/feed.rss",
+        &fp("/~alice/feed.rss"),
     )
     .await
     .expect("regenerate feed");
@@ -75,7 +75,7 @@ async fn regenerate_writes_cache_row_for_user_feed(#[case] backend: Backend) {
 
     let from_cache = state
         .feed_cache
-        .get("/~alice/feed.rss")
+        .get(&fp("/~alice/feed.rss"))
         .await
         .expect("get from cache")
         .expect("cache entry exists");
@@ -108,7 +108,7 @@ async fn regenerate_writes_empty_feed_for_user_with_no_posts(#[case] backend: Ba
         state.site_config.as_ref(),
         state.posts.as_ref(),
         state.feed_cache.as_ref(),
-        "/~bob/feed.rss",
+        &fp("/~bob/feed.rss"),
     )
     .await
     .expect("regenerate feed");
@@ -120,7 +120,7 @@ async fn regenerate_writes_empty_feed_for_user_with_no_posts(#[case] backend: Ba
     assert!(!row.body.is_empty(), "empty feed still has valid body");
     let cached = state
         .feed_cache
-        .get("/~bob/feed.rss")
+        .get(&fp("/~bob/feed.rss"))
         .await
         .expect("get from cache")
         .expect("cache entry exists");
@@ -148,7 +148,7 @@ async fn regenerate_writes_cache_rows_for_tag_surfaces(#[case] backend: Backend)
         state.site_config.as_ref(),
         state.posts.as_ref(),
         state.feed_cache.as_ref(),
-        "/tags/rust/feed.rss",
+        &fp("/tags/rust/feed.rss"),
     )
     .await
     .expect("regenerate site-tag feed");
@@ -159,7 +159,7 @@ async fn regenerate_writes_cache_rows_for_tag_surfaces(#[case] backend: Backend)
     assert!(
         state
             .feed_cache
-            .get("/tags/rust/feed.rss")
+            .get(&fp("/tags/rust/feed.rss"))
             .await
             .expect("get site-tag from cache")
             .is_some(),
@@ -172,7 +172,7 @@ async fn regenerate_writes_cache_rows_for_tag_surfaces(#[case] backend: Backend)
         state.site_config.as_ref(),
         state.posts.as_ref(),
         state.feed_cache.as_ref(),
-        "/~alice/tags/rust/feed.rss",
+        &fp("/~alice/tags/rust/feed.rss"),
     )
     .await
     .expect("regenerate user-tag feed");
@@ -183,7 +183,7 @@ async fn regenerate_writes_cache_rows_for_tag_surfaces(#[case] backend: Backend)
     assert!(
         state
             .feed_cache
-            .get("/~alice/tags/rust/feed.rss")
+            .get(&fp("/~alice/tags/rust/feed.rss"))
             .await
             .expect("get user-tag from cache")
             .is_some(),
@@ -235,7 +235,7 @@ async fn regenerate_writes_each_format(#[case] backend: Backend) {
             state.site_config.as_ref(),
             state.posts.as_ref(),
             state.feed_cache.as_ref(),
-            feed_url,
+            &fp(feed_url),
         )
         .await
         .unwrap_or_else(|_| panic!("regenerate {feed_url}"));
@@ -308,7 +308,7 @@ async fn feed_contains_only_public_posts(#[case] backend: Backend) {
         state.site_config.as_ref(),
         state.posts.as_ref(),
         state.feed_cache.as_ref(),
-        "/~alice/feed.rss",
+        &fp("/~alice/feed.rss"),
     )
     .await
     .expect("regenerate feed");
