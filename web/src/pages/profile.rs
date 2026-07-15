@@ -31,13 +31,9 @@ pub fn ProfilePage() -> impl IntoView {
                                 dn_field
                                     .value
                                     .set(
-                                        data
-                                            .display_name
-                                            .clone()
-                                            .map(|d| d.to_string())
-                                            .unwrap_or_default(),
+                                        data.display_name.as_deref().unwrap_or_default().to_string(),
                                     );
-                                bio.set(data.bio.clone().unwrap_or_default());
+                                bio.set(data.bio.as_deref().unwrap_or_default().to_string());
                                 let submit = move |_| {
                                     update_action
                                         .dispatch(UpdateProfile {
@@ -45,9 +41,10 @@ pub fn ProfilePage() -> impl IntoView {
                                             bio: bio.get(),
                                         });
                                 };
-                                // Seed the form with the persisted profile (re-runs when a
-                                // successful update bumps the resource). An existing stored
-                                // display name is valid, so the optional field stays valid.
+                                // Seed the form from the persisted profile. This re-runs
+                                // (re-seeding) whenever a successful update bumps the
+                                // resource; a stored display name is always valid, so the
+                                // optional field stays valid.
                                 view! {
                                     <p>"Username: " {data.username.to_string()}</p>
                                     <label>

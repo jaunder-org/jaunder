@@ -3,6 +3,7 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use common::mailer::test_utils::CapturingMailSender;
 use common::mailer::MailSender;
+use common::test_support::parse_display_name;
 use common::username::Username;
 use storage::{AppState, ProfileUpdate};
 
@@ -34,7 +35,7 @@ async fn get_profile_returns_display_name_and_bio(#[case] backend: Backend) {
         .update_profile(
             user_id,
             &ProfileUpdate {
-                display_name: Some(&"Alice Smith".parse().unwrap()),
+                display_name: Some(&parse_display_name("Alice Smith")),
                 bio: Some("Hello world"),
             },
         )
@@ -591,7 +592,7 @@ async fn update_profile_with_empty_fields_sets_to_none(#[case] backend: Backend)
         .create_user(
             &username,
             &"password123".parse().unwrap(),
-            Some(&"Initial".parse().unwrap()),
+            Some(&parse_display_name("Initial")),
             false,
         )
         .await
@@ -601,7 +602,7 @@ async fn update_profile_with_empty_fields_sets_to_none(#[case] backend: Backend)
         .update_profile(
             user_id,
             &ProfileUpdate {
-                display_name: Some(&"Initial".parse().unwrap()),
+                display_name: Some(&parse_display_name("Initial")),
                 bio: Some("Initial Bio"),
             },
         )

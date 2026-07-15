@@ -9,6 +9,7 @@
 #![expect(clippy::expect_used)]
 
 use crate::audience::AudienceName;
+use crate::display_name::DisplayName;
 use crate::email::Email;
 
 /// Parse `addr` into a valid [`Email`] for tests — the single place a test email
@@ -33,4 +34,16 @@ pub fn parse_email(addr: &str) -> Email {
 #[must_use]
 pub fn parse_audience_name(name: &str) -> AudienceName {
     name.parse().expect("valid test audience name")
+}
+
+/// Parse `name` into a valid [`DisplayName`] for tests — the single place a test
+/// display-name literal is parsed, so a malformed fixture fails loudly and the parse
+/// isn't re-spelled at every store-seeding call site across the workspace.
+///
+/// # Panics
+///
+/// Panics if `name` is empty, whitespace-only, or longer than the length bound.
+#[must_use]
+pub fn parse_display_name(name: &str) -> DisplayName {
+    name.parse().expect("valid test display name")
 }

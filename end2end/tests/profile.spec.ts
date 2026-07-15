@@ -20,7 +20,7 @@ test("profile update persists a valid display name", async ({
     response.url().includes("update_profile"),
   );
   await page.click(UPDATE_BUTTON);
-  await updated;
+  expect((await updated).ok()).toBe(true);
 
   // A fresh load reads the persisted value back through get_profile.
   await goto(page, "/profile");

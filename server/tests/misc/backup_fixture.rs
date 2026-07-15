@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use common::password::Password;
 use common::tag::TagLabel;
-use common::test_support::parse_audience_name;
+use common::test_support::{parse_audience_name, parse_display_name};
 use common::username::Username;
 use common::visibility::{AudienceTarget, ViewerIdentity};
 use jaunder::cli::StorageArgs;
@@ -51,7 +51,7 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
         .create_user(
             &username,
             &password,
-            Some(&"Backup User".parse().unwrap()),
+            Some(&parse_display_name("Backup User")),
             true,
         )
         .await
@@ -106,7 +106,7 @@ async fn seed_named_audience_post(
         .create_user(
             &viewer_name,
             password,
-            Some(&"Viewer".parse().unwrap()),
+            Some(&parse_display_name("Viewer")),
             false,
         )
         .await
