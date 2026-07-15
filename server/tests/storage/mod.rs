@@ -969,7 +969,9 @@ async fn feed_events_marks_run(#[case] backend: Backend) {
     // Enqueue + claim to obtain real ids, then exercise every
     // FeedEventDialect mark_* method on this backend. Each is an independent
     // `UPDATE … WHERE id IN (…)`, so they all run regardless of row state.
-    fe.enqueue("/feed-marks.rss").await.unwrap();
+    fe.enqueue(&"/feed.rss".parse::<common::feed::FeedPath>().unwrap())
+        .await
+        .unwrap();
     let claimed = fe
         .claim_pending_batch(50, chrono::Duration::minutes(5))
         .await

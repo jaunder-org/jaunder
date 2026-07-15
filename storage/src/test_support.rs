@@ -15,6 +15,7 @@
 
 use crate::sql::quote_identifier;
 use crate::{AppState, DbConnectOptions};
+use common::feed::FeedPath;
 use common::mailer::{MailSender, NoopMailSender};
 use sqlx::{Connection, PgPool, SqlitePool};
 use std::sync::{
@@ -78,6 +79,20 @@ impl CloseablePool {
             }
         }
         Ok(())
+    }
+
+    /// Fetches a single `i64` scalar (e.g. a `COUNT(*)`) — the inspect
+    /// counterpart to [`execute`](CloseablePool::execute), dispatched per backend
+    /// so callers stay backend-agnostic.
+    ///
+    /// # Errors
+    ///
+    /// Returns the `sqlx::Error` if the query fails.
+    pub async fn scalar_i64(&self, sql: &str) -> Result<i64, sqlx::Error> {
+        match self {
+            CloseablePool::Sqlite(pool) => sqlx::query_scalar(sql).fetch_one(pool).await,
+            CloseablePool::Postgres(pool) => sqlx::query_scalar(sql).fetch_one(pool).await,
+        }
     }
 
     /// The Postgres pool, for raw-SQL seed/inspect against the per-test database
@@ -578,6 +593,18 @@ pub fn noop_mailer() -> Arc<dyn MailSender> {
 /// Seeds `count` posts for `user_id` directly through the storage service,
 /// bypassing the HTTP/server-fn path (markdown render of trivial bodies is
 /// negligible; the cost we avoid is axum routing + `server_fn` per call).
+/// Parses `s` into the canonical [`FeedPath`] identity key. The one shared
+/// feed-path constructor for both the `storage` crate's tests and `server`'s
+/// integration tests, so the `"…".parse().expect(…)` shape lives in one place.
+///
+/// # Panics
+///
+/// If `s` is not a valid canonical feed path.
+#[must_use]
+pub fn fp(s: &str) -> FeedPath {
+    s.parse().expect("valid feed path")
+}
+
 /// `published == true` sets `published_at = now` so list/timeline endpoints
 /// return them; `false` leaves them as drafts. Returns ids in creation order.
 ///
