@@ -7,9 +7,10 @@
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use common::{slug::Slug, tag::Tag, username::Username};
+use common::{render::RenderedHtml, slug::Slug, tag::Tag, username::Username};
 
 use crate::error::WebResult;
+use crate::posts::deserialize_rendered_html;
 use crate::tags::TagSummary;
 
 #[cfg(feature = "server")]
@@ -34,7 +35,8 @@ pub struct TimelinePostSummary {
     pub title: Option<String>,
     pub summary: Option<String>,
     pub slug: Slug,
-    pub rendered_html: String,
+    #[serde(deserialize_with = "deserialize_rendered_html")]
+    pub rendered_html: RenderedHtml,
     pub created_at: String,
     pub published_at: String,
     pub permalink: String,

@@ -28,8 +28,7 @@ pub fn timeline_post_summary(
         title,
         summary,
         slug,
-        // TODO(#398): drop `.as_ref().to_string()` in Task 3 when the DTO field becomes RenderedHtml.
-        rendered_html: rendered_html.as_ref().to_string(),
+        rendered_html,
         created_at: created_at.to_rfc3339(),
         published_at: published_at.to_rfc3339(),
         permalink,
@@ -72,8 +71,7 @@ pub fn post_response(post: PostRecord, is_author: bool) -> super::PostResponse {
         slug,
         body,
         format: format.to_string(),
-        // TODO(#398): drop `.as_ref().to_string()` in Task 3 when the DTO field becomes RenderedHtml.
-        rendered_html: rendered_html.as_ref().to_string(),
+        rendered_html,
         created_at: created_at.to_rfc3339(),
         is_draft: published_at.is_none(),
         published_at: published_at.map(|t| t.to_rfc3339()),

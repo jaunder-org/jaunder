@@ -16,6 +16,7 @@
 use crate::posts::{PostResponse, TimelinePage, TimelinePostSummary};
 use crate::tags::TagSummary;
 use crate::ui::topbar::render_topbar;
+use common::render::RenderedHtml;
 use common::tag::Tag;
 use common::username::Username;
 use serde::{Deserialize, Serialize};
@@ -405,7 +406,7 @@ pub(crate) struct PostView<'a> {
     pub title: Option<&'a str>,
     pub banner: Option<&'a str>,
     pub summary: Option<&'a str>,
-    pub rendered_html: &'a str,
+    pub rendered_html: &'a RenderedHtml,
     pub time: &'a str,
     pub permalink: &'a str,
     pub tags: &'a [TagSummary],
@@ -814,12 +815,13 @@ mod tests {
         // authed re-render cannot diverge from the paint — no localized flash.
         let ctx = TagCtx::ForUser("alice".parse::<Username>().unwrap());
         let author: Username = "alice".parse().unwrap();
+        let body = RenderedHtml::from_trusted("<p>b</p>");
         let view = PostView {
             username: &author,
             title: Some("T"),
             banner: None,
             summary: None,
-            rendered_html: "<p>b</p>",
+            rendered_html: &body,
             time: "2026-01-01 00:00",
             permalink: "/~alice/x",
             tags: &[],
@@ -873,7 +875,7 @@ mod tests {
             slug: "hello".parse().unwrap(),
             body: "raw".into(),
             format: "markdown".into(),
-            rendered_html: "<p>Hi <em>there</em></p>".into(),
+            rendered_html: RenderedHtml::from_trusted("<p>Hi <em>there</em></p>"),
             created_at: "2026-01-02T03:04:05Z".into(),
             published_at: Some("2026-01-02T03:04:05Z".into()),
             is_draft: false,
@@ -894,7 +896,7 @@ mod tests {
             title: Some("First".into()),
             summary: Some("An excerpt".into()),
             slug: "first".parse().unwrap(),
-            rendered_html: "<p>body</p>".into(),
+            rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
             created_at: "2026-01-01T00:00:00Z".into(),
             published_at: "2026-01-01T00:00:00Z".into(),
             permalink: "/~bob/2026/01/01/first".into(),
@@ -1191,12 +1193,13 @@ mod tests {
         // the projector's anonymous paint (the action column is purely additive).
         let ctx = TagCtx::SiteWide;
         let author: Username = "bob".parse().unwrap();
+        let body = RenderedHtml::from_trusted("<p>b</p>");
         let view = PostView {
             username: &author,
             title: None,
             banner: None,
             summary: None,
-            rendered_html: "<p>b</p>",
+            rendered_html: &body,
             time: "2026-01-01 00:00",
             permalink: "",
             tags: &[],
@@ -1210,12 +1213,13 @@ mod tests {
     fn post_content_renders_draft_banner_when_present() {
         let ctx = TagCtx::SiteWide;
         let author: Username = "bob".parse().unwrap();
+        let body = RenderedHtml::from_trusted("<p>b</p>");
         let view = PostView {
             username: &author,
             title: None,
             banner: Some("Draft - visible only to you"),
             summary: Some("An excerpt"),
-            rendered_html: "<p>b</p>",
+            rendered_html: &body,
             time: "2026-01-01 00:00",
             permalink: "",
             tags: &[],
@@ -1236,12 +1240,13 @@ mod tests {
     fn post_article_wraps_inner_in_j_post_article() {
         let ctx = TagCtx::SiteWide;
         let author: Username = "bob".parse().unwrap();
+        let body = RenderedHtml::from_trusted("<p>b</p>");
         let view = PostView {
             username: &author,
             title: Some("T"),
             banner: None,
             summary: None,
-            rendered_html: "<p>b</p>",
+            rendered_html: &body,
             time: "2026-01-01 00:00",
             permalink: "/~bob/x",
             tags: &[],
