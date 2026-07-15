@@ -44,6 +44,29 @@ pub fn validate_shape(s: &str) -> Result<(), InvalidTokenShape> {
 /// response). Hashing (`host::token::hash`) is the sole path to a [`TokenHash`];
 /// there is deliberately no `PartialEq`/`Display`/`Deref` and no conversion the
 /// other way, so a raw token can never be compared with, or mistaken for, its hash.
+///
+/// The distinction is enforced by the type system — each of these does **not**
+/// compile, which is why `revoke_session(raw_token)` and `raw == stored_hash`
+/// cannot typecheck either:
+/// ```compile_fail
+/// let _ = common::token::RawToken("abc".to_string()); // private field
+/// ```
+/// ```compile_fail
+/// use std::str::FromStr;
+/// let raw = common::token::RawToken::from_str("abc").unwrap();
+/// let _h: common::token::TokenHash = raw.into(); // no RawToken -> TokenHash conversion
+/// ```
+/// ```compile_fail
+/// use std::str::FromStr;
+/// let hash = common::token::TokenHash::from_str("abc").unwrap();
+/// let _r: common::token::RawToken = hash.into(); // no reverse conversion
+/// ```
+/// ```compile_fail
+/// use std::str::FromStr;
+/// let raw = common::token::RawToken::from_str("abc").unwrap();
+/// let hash = common::token::TokenHash::from_str("abc").unwrap();
+/// let _ = raw == hash; // no cross-type PartialEq
+/// ```
 #[derive(Clone, StrNewtype)]
 #[str_newtype(secret, serde)]
 pub struct RawToken(String);
