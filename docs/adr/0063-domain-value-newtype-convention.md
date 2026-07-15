@@ -163,6 +163,14 @@ the wire). No inherent `as_str()` is generated — the `str` traits replace it. 
 new domain newtype is then a struct, a derive, and a `FromStr` — not 40 lines of
 boilerplate that drift apart over time.
 
+For a value whose invariant never rejects (only normalizes, or wraps verbatim),
+`#[str_newtype(infallible)]` supplies the trailer's
+`From<String>`-when-infallible half (§2): the author hand-writes `From<String>`
+instead of `FromStr`, the derive omits `TryFrom<String>` (which would collide
+with it via the std blanket `impl<T, U: Into<T>> TryFrom<U>`) and routes
+`Deserialize` through that `From<String>`. First users: `PostBody`/`PostTitle`
+(#402).
+
 ### 4. Boundary rule
 
 Parse into the newtype at the **outermost** boundary — `#[server]` argument and
