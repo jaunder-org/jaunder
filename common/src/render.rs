@@ -55,8 +55,12 @@ impl FromStr for PostFormat {
 ///
 /// The only ways to obtain one are [`render`] (mints new HTML) and
 /// [`RenderedHtml::from_trusted`] (rebuilds a value already produced by `render`
-/// and round-tripped through our own storage or wire). There is deliberately no
-/// `From`/`TryFrom`/`Deref`/`FromStr`/`Deserialize`.
+/// and round-tripped through our own storage or wire); the latter is enforced by
+/// the `rendered-html-from-trusted` static check. Reading is convenient —
+/// `Display`, `AsRef<str>`, and `Deref<Target = str>` — but there is deliberately
+/// no *constructor* trait: no `From`/`TryFrom`/`FromStr`/`Deserialize`, so a raw
+/// `String` can never become a `RenderedHtml` (deref coercion is one-way — it
+/// reads out, never in).
 ///
 /// Constructing one from an arbitrary string does not compile:
 /// ```compile_fail
@@ -87,6 +91,16 @@ impl fmt::Display for RenderedHtml {
 
 impl AsRef<str> for RenderedHtml {
     fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+// Read-only deref to `str` so callers can use `str` methods (`.contains()`, …)
+// without `.as_ref()`. One-way (reads out, never in): it cannot turn a `&str`
+// into a `RenderedHtml`, so the trust boundary is untouched.
+impl std::ops::Deref for RenderedHtml {
+    type Target = str;
+    fn deref(&self) -> &str {
         &self.0
     }
 }
@@ -545,13 +559,13 @@ mod tests {
     #[test]
     fn render_dispatches_markdown() {
         let result = render("**bold**", &PostFormat::Markdown);
-        assert!(result.as_ref().contains("<strong>bold</strong>"));
+        assert!(result.contains("<strong>bold</strong>"));
     }
 
     #[test]
     fn render_dispatches_org() {
         let result = render("*bold*", &PostFormat::Org);
-        assert!(result.as_ref().contains("<b>bold</b>"));
+        assert!(result.contains("<b>bold</b>"));
     }
 
     #[test]

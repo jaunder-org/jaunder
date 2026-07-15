@@ -573,10 +573,7 @@ mod tests {
         assert_eq!(record.slug, "hello-world");
         assert_eq!(record.body, "Hello, world!");
         assert_eq!(record.format, PostFormat::Markdown);
-        assert!(record
-            .rendered_html
-            .as_ref()
-            .contains("<p>Hello, world!</p>"));
+        assert!(record.rendered_html.contains("<p>Hello, world!</p>"));
     }
 
     #[apply(backends)]
@@ -1077,7 +1074,7 @@ mod tests {
             record.body
         );
         assert!(
-            !record.rendered_html.as_ref().contains("Distinct Headline"),
+            !record.rendered_html.contains("Distinct Headline"),
             "rendered html double-renders the title: {:?}",
             record.rendered_html
         );

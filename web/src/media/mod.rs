@@ -151,8 +151,7 @@ pub async fn delete_media(
         let referenced_in_posts: Vec<i64> = published
             .iter()
             .chain(drafts.iter())
-            // `rendered_html` is `RenderedHtml` (no `Deref`); `.as_ref()` for `str::contains`.
-            .filter(|post| post.body.contains(&url) || post.rendered_html.as_ref().contains(&url))
+            .filter(|post| post.body.contains(&url) || post.rendered_html.contains(&url))
             .map(|post| post.post_id)
             .collect();
 
