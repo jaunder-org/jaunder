@@ -31,3 +31,26 @@ test("backup schedule field gates submit until a valid cron is entered", async (
   await expect(page.locator(SEL.error)).not.toBeVisible();
   await expect(page.locator(SEL.submit)).toBeEnabled();
 });
+
+// #454: the mode <select> is generated from `BackupMode::VARIANTS` (option text = label,
+// value = the snake_case wire token), with the persisted mode pre-selected — no hardcoded
+// options, so a new enum variant surfaces automatically.
+test("backup mode select is generated from the enum variants", async ({
+  page,
+}) => {
+  await login(page, "testoperator", "testpassword123");
+  await goto(page, "/admin/backups");
+
+  await waitForSelector(page, 'select[name="mode"]');
+  const modeSelect = page.locator('select[name="mode"]');
+
+  // Options come from the enum, in variant order, with human labels and wire-token values.
+  await expect(modeSelect.locator("option")).toHaveText([
+    "Directory",
+    "Archive",
+  ]);
+  await expect(modeSelect.locator('option[value="directory"]')).toHaveCount(1);
+  await expect(modeSelect.locator('option[value="archive"]')).toHaveCount(1);
+  // The persisted default (Directory) is pre-selected.
+  await expect(modeSelect).toHaveValue("directory");
+});

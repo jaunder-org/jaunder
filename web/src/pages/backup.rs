@@ -4,6 +4,7 @@ use crate::forms::{Field, ValidatedInput};
 use crate::pages::Topbar;
 use common::backup::{BackupConfig, BackupMode, BackupSchedule};
 use leptos::prelude::*;
+use strum::VariantArray;
 
 #[component]
 pub fn BackupSettingsPage() -> impl IntoView {
@@ -49,12 +50,6 @@ fn backup_settings_form(
     settings: BackupConfig,
     update_action: ServerAction<UpdateBackupSettings>,
 ) -> impl IntoView {
-    let mode_str = match settings.mode {
-        BackupMode::Directory => "directory",
-        BackupMode::Archive => "archive",
-        // cov:ignore-stop
-    };
-    // cov:ignore-start
     // Seed the client-side validated schedule field from the persisted value (ADR-0065), so an
     // invalid cron edit disables Save before the request is sent (Deref: &BackupSchedule → &str).
     let schedule = Field::<BackupSchedule>::prefilled(&settings.schedule);
@@ -101,9 +96,21 @@ fn backup_settings_form(
                 </label>
                 <label class="j-backup-field">
                     <span class="j-edit-form-label">"Mode"</span>
-                    <select class="j-backup-input" name="mode" prop:value=mode_str>
-                        <option value="directory">"Directory"</option>
-                        <option value="archive">"Archive"</option>
+                    <select class="j-backup-input" name="mode">
+                        {BackupMode::VARIANTS
+                            .iter()
+                            .copied()
+                            .map(|m| {
+                                let wire: &'static str = m.into();
+                                // `&'static str` (IntoStaticStr) so the option value outlives
+                                // the closure — `as_ref()` would borrow the local `m`.
+                                view! {
+                                    <option value=wire selected=m == settings.mode>
+                                        {m.label()}
+                                    </option>
+                                }
+                            })
+                            .collect_view()}
                     </select>
                 </label>
             </div>

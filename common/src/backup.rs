@@ -12,8 +12,28 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// How a backup is written to its destination.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+///
+/// `BackupMode` is the single source of truth for its own string forms: the `strum`
+/// derives (`serialize_all = "snake_case"`, mirroring serde's `rename_all`) supply
+/// variant enumeration (`VARIANTS`), the wire/storage token (`AsRef<str>`), and parsing
+/// (`FromStr`) — all from the variant names, so the admin `<select>` and `site_config`
+/// need no hand-maintained string list. Only [`BackupMode::label`] (UI text) is authored.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Deserialize,
+    Eq,
+    PartialEq,
+    Serialize,
+    strum::VariantArray,
+    strum::AsRefStr,
+    strum::IntoStaticStr,
+    strum::EnumString,
+)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum BackupMode {
     /// An expanded directory (`backup-<timestamp>/` holding `manifest.json`, the
     /// dumped tables, and the media tree). The default.
@@ -21,6 +41,18 @@ pub enum BackupMode {
     Directory,
     /// A single `backup-<timestamp>.tar.gz` archive of the same contents.
     Archive,
+}
+
+impl BackupMode {
+    /// Human-facing label for the admin `<select>` (distinct from the wire token).
+    /// The exhaustive match makes the compiler force a new variant to be handled here.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            BackupMode::Directory => "Directory",
+            BackupMode::Archive => "Archive",
+        }
+    }
 }
 
 /// A validated six-field cron schedule expression.
@@ -98,6 +130,28 @@ impl Default for BackupConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backup_mode_string_forms_agree_across_strum_serde_and_parse() {
+        use strum::VariantArray;
+        for &m in BackupMode::VARIANTS {
+            // strum's wire token equals serde's serialized token — one snake_case rule.
+            assert_eq!(
+                serde_json::to_value(m).unwrap(),
+                serde_json::Value::String(m.as_ref().to_owned())
+            );
+            // The `IntoStaticStr` form (the value rendered as the `<option>`) is the same token.
+            assert_eq!(<&'static str>::from(m), m.as_ref());
+            // Parsing that token round-trips back to the variant.
+            assert_eq!(m.as_ref().parse::<BackupMode>().ok(), Some(m));
+            // The UI label is present.
+            assert!(!m.label().is_empty());
+        }
+        // An unknown token is rejected.
+        assert!("floppy".parse::<BackupMode>().is_err());
+        // Sanity: both known variants are enumerated.
+        assert_eq!(BackupMode::VARIANTS.len(), 2);
+    }
 
     #[test]
     fn backup_schedule_parse_accepts_valid_six_field_cron() {

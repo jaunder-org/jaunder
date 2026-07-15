@@ -213,10 +213,10 @@ async fn operator_can_update_backup_settings_to_archive_mode(#[case] backend: Ba
     );
 }
 
-// The `schedule` arg is typed `BackupSchedule` (ADR-0065): an invalid value is rejected
-// when the request struct deserializes (its `FromStr` runs) — before the fn body — so the
-// guard is the newtype, not an in-body validation string. Assert the request is refused
-// (non-OK), not a specific message, since the message is now the framework's, not ours.
+// `schedule` (`BackupSchedule`, #453) and `mode` (`BackupMode`, #454) are typed wire args
+// (ADR-0065): an invalid value is rejected when the request struct deserializes — before the
+// fn body — so the guard is the type, not an in-body validation string. Assert the request is
+// refused (non-OK), not a specific message, since the message is now the framework's, not ours.
 #[apply(backends_matrix)]
 #[case::empty_schedule(
     "destination_path=%2Fsrv%2Fbackups&schedule=+++&retention_count=5&mode=directory"
@@ -224,8 +224,11 @@ async fn operator_can_update_backup_settings_to_archive_mode(#[case] backend: Ba
 #[case::invalid_schedule(
     "destination_path=%2Fsrv%2Fbackups&schedule=not-a-schedule&retention_count=5&mode=directory"
 )]
+#[case::invalid_mode(
+    "destination_path=%2Fsrv%2Fbackups&schedule=0+0+0+*+*+*&retention_count=5&mode=surprise"
+)]
 #[tokio::test]
-async fn operator_update_backup_settings_rejects_invalid_schedule(
+async fn operator_update_backup_settings_rejects_invalid_schedule_or_mode(
     backend: Backend,
     #[case] form: &str,
 ) {
@@ -237,16 +240,12 @@ async fn operator_update_backup_settings_rejects_invalid_schedule(
     assert_ne!(status, StatusCode::OK, "body: {body}");
 }
 
-// The remaining fields are still bare-`String` wire args parsed in the fn body (see #454
-// mode, #455 retention_count), so they keep their in-body 500 + message contract.
+// `retention_count` is still a bare-`String` wire arg parsed in the fn body (see #455), so it
+// keeps its in-body 500 + message contract.
 #[apply(backends_matrix)]
 #[case::invalid_retention_count(
     "destination_path=%2Fsrv%2Fbackups&schedule=0+0+0+*+*+*&retention_count=bogus&mode=directory",
     "backup retention count"
-)]
-#[case::invalid_mode(
-    "destination_path=%2Fsrv%2Fbackups&schedule=0+0+0+*+*+*&retention_count=5&mode=surprise",
-    "backup mode"
 )]
 #[tokio::test]
 async fn operator_update_backup_settings_rejects_invalid_input(
