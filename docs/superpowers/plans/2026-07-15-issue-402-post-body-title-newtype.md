@@ -112,7 +112,7 @@ path feeds `render()` the `canonicalize_org_body` `String`, which is re-wrapped
   routing. The type author hand-writes `From<String>`. Rejects `infallible`
   combined with `secret` or `serde`.
 
-- [ ] **Step 1: Write the failing tests** — add to `macros/src/lib.rs`
+- [x] **Step 1: Write the failing tests** — add to `macros/src/lib.rs`
       `mod tests` (mirroring `str_newtype_secret_selects_redacting_trailer`,
       lib.rs:250-261):
 
@@ -154,13 +154,13 @@ fn str_newtype_infallible_with_serde_emits_compile_error() {
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run: `cargo nextest run -p macros infallible` Expected: FAIL — `parse_opts`
 rejects the unknown `infallible` option (all three assert on behavior not yet
 implemented).
 
-- [ ] **Step 3: Implement against the tests** — in `macros/src/str_newtype.rs`:
+- [x] **Step 3: Implement against the tests** — in `macros/src/str_newtype.rs`:
   1. Add `infallible: bool` to `struct Opts` (line 10-13) and to `parse_opts`
      (line 171-196): accept `meta.path.is_ident("infallible")`; **before** the
      existing `serde && !secret` guard, add
@@ -191,13 +191,13 @@ implemented).
   the derive now implements the trailer's "`From<String>` when infallible" half
   via `#[str_newtype(infallible)]`.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Run: `cargo nextest run -p macros` then `cargo test -p macros --doc` Expected:
 PASS (nextest for the unit tests; `--doc` for the rustdoc fixtures — nextest
 does not run doctests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run `cargo xtask check` first (jaunder-commit), then:
 
@@ -229,7 +229,7 @@ git commit -m "tooling(macros): add str_newtype infallible mode (#402)"
   (`PostBody` pure-wrap; `PostTitle` `s.trim().to_owned()`). Both `Deref<str>`,
   `Display`, serde-as-plain-string, `From<Self> for String`.
 
-- [ ] **Step 1: Write the failing tests** — `common/src/post_body.rs`:
+- [x] **Step 1: Write the failing tests** — `common/src/post_body.rs`:
 
 ```rust
 #[cfg(test)]
@@ -303,12 +303,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run: `cargo nextest run -p common post_body post_title` Expected: FAIL —
 `PostBody`/`PostTitle` not defined.
 
-- [ ] **Step 3: Implement against the tests** — `common/src/post_body.rs`:
+- [x] **Step 3: Implement against the tests** — `common/src/post_body.rs`:
 
 ````rust
 use macros::StrNewtype;
@@ -364,13 +364,13 @@ Then register both modules in `common/src/lib.rs`. Every test branch
 (wrap-vs-trim, Display/Deref, serde both directions, into-String) is pinned, so
 the contract determines the bodies.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Run: `cargo nextest run -p common post_body post_title` then
 `cargo test -p common --doc post_body` Expected: PASS (unit tests + the two
 `compile_fail` transposition doctests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run `cargo xtask check` first, then:
 
@@ -426,7 +426,7 @@ change — so the existing storage + render suites are the contract.
   _storage/DTO fields_ become `Option<PostTitle>`; borrowed/transient title
   params stay `Option<&str>`.
 
-- [ ] **Step 1: Retype the render pipeline** (`common/src/render.rs`)
+- [x] **Step 1: Retype the render pipeline** (`common/src/render.rs`)
   - `render`: `body: &str` → `body: &PostBody` (line 123). Internal
     `render_markdown(body)` / `render_org(body)` / `body.to_string()` take
     `&str` — pass `&**body` / `body` (Deref) unchanged.
@@ -443,7 +443,7 @@ change — so the existing storage + render suites are the contract.
     The `metadata.title.as_deref()` assertions (579/592/602/…) need **no**
     change — `Option<PostTitle>::as_deref()` yields `Option<&str>`.
 
-- [ ] **Step 2: Retype the storage records/inputs + service** (`storage/src/*`)
+- [x] **Step 2: Retype the storage records/inputs + service** (`storage/src/*`)
   - `posts.rs`: the four structs' `body: String` → `PostBody`,
     `title: Option<String>` → `Option<PostTitle>`. Row-mappers:
     `row.get::<String, _>("body")` → `…get::<String,_>("body").into()`; `title`
@@ -467,7 +467,7 @@ change — so the existing storage + render suites are the contract.
   - `helpers.rs`, `test_support.rs`: follow — construct records/inputs with
     `.into()`.
 
-- [ ] **Step 3: Adapt the web/atompub seams (temporary)** Build the workspace;
+- [x] **Step 3: Adapt the web/atompub seams (temporary)** Build the workspace;
       wherever `web` or `server/atompub` now fails because a `String`
       field/param meets a newtype value (e.g. a DTO built from
       `record.body`/`record.title`, or `CreatePostInput` built from a `String`),
@@ -476,14 +476,14 @@ change — so the existing storage + render suites are the contract.
       param **types unchanged** — Task 4 retypes them and deletes these
       conversions.
 
-- [ ] **Step 4: Verify** — compiles + existing suites green
+- [x] **Step 4: Verify** — compiles + existing suites green
 
 Run: `cargo xtask check` (fmt/clippy/coverage), then
 `cargo nextest run -p common -p storage` and `cargo test -p common --doc`.
 Expected: PASS — no behavior change; the dual-backend storage tests and render
 tests exercise the new types end to end.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add common/src/render.rs storage/src/ web/src/posts/ server/src/atompub/
@@ -529,7 +529,7 @@ web + server suites are the contract (behavior unchanged — infallible decode).
   atompub `PostFields` whose `body`/`title` are the newtypes. All Task 3 seam
   conversions deleted.
 
-- [ ] **Step 1: Retype web boundary + DTOs**
+- [x] **Step 1: Retype web boundary + DTOs**
   - `create_post`/`update_post`: `body: String` → `body: PostBody`. The
     `#[server]` serde bridge decodes any JSON string (`PostBody`'s derived
     `Deserialize`), so the compose/edit form needs no change. Where the fn built
@@ -546,25 +546,25 @@ web + server suites are the contract (behavior unchanged — infallible decode).
     `String::from(...)` / `.map(String::from)` (the `.map` before `.unwrap_or`
     so the arms agree), or read via `Deref` where a `&str` suffices.
 
-- [ ] **Step 2: Retype atompub mapping** (`server/src/atompub/mapping.rs`)
+- [x] **Step 2: Retype atompub mapping** (`server/src/atompub/mapping.rs`)
   - `PostFields.title/body` → `Option<PostTitle>`/`PostBody`.
     `entry_to_post_fields` builds them from Atom `Text`/content `String` via
     `.into()` (the inbound boundary parse). `post_to_entry` reads them as `&str`
     (`Deref`/`AsRef`) into Atom `Text`/content. Delete Task 3's seam conversions
     here.
 
-- [ ] **Step 3: Update boundary tests** Update `server/tests/web/web_posts.rs`
+- [x] **Step 3: Update boundary tests** Update `server/tests/web/web_posts.rs`
       and `server/tests/helpers/mod.rs` body/title builders to construct
       `PostBody`/`PostTitle` (or accept `impl Into<PostBody>`). No new behavior
       — the assertions stand; only the constructed types change.
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 Run: `cargo xtask check`, then `cargo nextest run -p web -p server`. Expected:
 PASS — the whole post create/edit/read + atompub round-trip flows through the
 newtypes; behavior unchanged.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/src/posts/ web/src/pages/posts.rs server/src/atompub/ server/tests/
