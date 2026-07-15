@@ -7,6 +7,7 @@ use thiserror::Error;
 
 use crate::backend::Backend;
 use common::email::Email;
+use common::token::RawToken;
 
 /// Errors returned by [`EmailVerificationStorage::use_email_verification`].
 #[derive(Debug, Error)]
@@ -42,7 +43,7 @@ pub trait EmailVerificationStorage: Send + Sync {
         user_id: i64,
         email: &Email,
         expires_at: DateTime<Utc>,
-    ) -> sqlx::Result<String>;
+    ) -> sqlx::Result<RawToken>;
 
     /// Validates a raw verification token and marks it as used.
     ///
@@ -54,7 +55,7 @@ pub trait EmailVerificationStorage: Send + Sync {
     /// or already used.
     async fn use_email_verification(
         &self,
-        raw_token: &str,
+        raw_token: &RawToken,
     ) -> Result<(i64, Email), UseEmailVerificationError>;
 }
 
@@ -91,8 +92,8 @@ where
         user_id: i64,
         email: &Email,
         expires_at: DateTime<Utc>,
-    ) -> sqlx::Result<String> {
-        let (raw_token, token_hash) = crate::helpers::generate_hashed_token()?;
+    ) -> sqlx::Result<RawToken> {
+        let (raw_token, token_hash) = host::token::generate_hashed();
         let now = Utc::now();
 
         let mut tx = self.pool.begin().await?;
@@ -114,7 +115,7 @@ where
              (token_hash, user_id, email, created_at, expires_at)
              VALUES ($1, $2, $3, $4, $5)",
         )
-        .bind(token_hash.as_str())
+        .bind(token_hash.as_ref())
         .bind(user_id)
         .bind(&**email)
         .bind(now)
@@ -129,10 +130,10 @@ where
 
     async fn use_email_verification(
         &self,
-        raw_token: &str,
+        raw_token: &RawToken,
     ) -> Result<(i64, Email), UseEmailVerificationError> {
         let token_hash =
-            crate::auth::hash_token(raw_token).map_err(|_| UseEmailVerificationError::NotFound)?;
+            host::token::hash(raw_token).map_err(|_| UseEmailVerificationError::NotFound)?;
 
         let now = Utc::now();
 
@@ -147,7 +148,7 @@ where
              RETURNING user_id, email",
         )
         .bind(now)
-        .bind(token_hash.as_str())
+        .bind(token_hash.as_ref())
         .bind(now)
         .fetch_optional(&self.pool)
         .await
@@ -166,7 +167,7 @@ where
         let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
             "SELECT used_at, expires_at FROM email_verifications WHERE token_hash = $1",
         )
-        .bind(token_hash.as_str())
+        .bind(token_hash.as_ref())
         .fetch_optional(&self.pool)
         .await
         .map_err(|_| UseEmailVerificationError::NotFound)?;
@@ -204,7 +205,7 @@ mod tests {
         base.close_pool().await;
         let result = state
             .email_verifications
-            .use_email_verification("dGVzdA")
+            .use_email_verification(&RawToken::try_from("dGVzdA".to_string()).unwrap())
             .await;
         assert!(matches!(result, Err(UseEmailVerificationError::NotFound)));
     }

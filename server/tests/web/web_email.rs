@@ -88,7 +88,7 @@ async fn verify_email_with_valid_token_sets_email_verified(#[case] backend: Back
         Arc::clone(&state),
         mailer.clone() as Arc<dyn common::mailer::MailSender>,
         "/api/verify_email",
-        format!("token={raw_token}"),
+        format!("token={}", raw_token.as_ref()),
         None,
     )
     .await;
@@ -129,7 +129,7 @@ async fn verify_email_with_expired_token_returns_error(#[case] backend: Backend)
         Arc::clone(&state),
         mailer.clone() as Arc<dyn common::mailer::MailSender>,
         "/api/verify_email",
-        format!("token={raw_token}"),
+        format!("token={}", raw_token.as_ref()),
         None,
     )
     .await;

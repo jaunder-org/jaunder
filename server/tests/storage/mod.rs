@@ -1752,7 +1752,7 @@ async fn use_email_verification_unknown_token_returns_not_found(#[case] backend:
 
     let err = state
         .email_verifications
-        .use_email_verification("not-a-real-token")
+        .use_email_verification(&RawToken::try_from("not-a-real-token".to_string()).unwrap())
         .await
         .unwrap_err();
     assert!(

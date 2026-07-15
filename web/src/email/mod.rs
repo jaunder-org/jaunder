@@ -3,6 +3,7 @@ use {
     crate::auth::require_auth,
     crate::error::InternalError,
     common::mailer::{EmailMessage, MailSender},
+    common::token::RawToken,
     std::sync::Arc,
     storage::{EmailVerificationStorage, UserStorage},
 };
@@ -32,7 +33,7 @@ pub async fn request_email_verification(email: Email) -> WebResult<()> {
             .create_email_verification(auth.user_id, &email, expires_at)
             .await?;
 
-        let link = format!("/verify-email?token={raw_token}");
+        let link = format!("/verify-email?token={}", raw_token.as_ref());
         let message = EmailMessage {
             from: None,
             to: vec![email],
@@ -61,8 +62,11 @@ pub async fn verify_email(token: String) -> WebResult<()> {
         let email_verifications = expect_context::<Arc<dyn EmailVerificationStorage>>();
         let users = expect_context::<Arc<dyn UserStorage>>();
 
+        let raw_token = RawToken::try_from(token)
+            .map_err(|_| InternalError::validation("invalid verification token"))?;
+
         let (user_id, email_addr) = email_verifications
-            .use_email_verification(&token)
+            .use_email_verification(&raw_token)
             .await
             .map_err(InternalError::storage)?;
 

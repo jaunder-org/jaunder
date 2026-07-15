@@ -319,17 +319,6 @@ pub(crate) fn media_record_from_row(row: MediaRow) -> sqlx::Result<MediaRecord> 
 }
 
 // ---------------------------------------------------------------------------
-// Token and password helpers
-// ---------------------------------------------------------------------------
-
-pub(crate) fn generate_hashed_token() -> sqlx::Result<(String, String)> {
-    let raw_token = crate::auth::generate_token();
-    let token_hash = crate::auth::hash_token(&raw_token)
-        .map_err(|e| sqlx::Error::Io(std::io::Error::other(e)))?;
-    Ok((raw_token, token_hash))
-}
-
-// ---------------------------------------------------------------------------
 // Claim verification error helpers
 // ---------------------------------------------------------------------------
 
@@ -861,14 +850,6 @@ mod tests {
             password_reset_claim_error(Some((None, now))),
             crate::UsePasswordResetError::Expired
         ));
-    }
-
-    #[test]
-    fn generate_hashed_token_returns_token_and_hash() {
-        let (raw, hash) = generate_hashed_token().unwrap();
-        assert!(!raw.is_empty());
-        assert!(!hash.is_empty());
-        assert_ne!(raw, hash);
     }
 
     // guard:no-backend — password hashing/verification; no database
