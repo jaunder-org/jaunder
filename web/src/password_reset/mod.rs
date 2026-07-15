@@ -81,10 +81,7 @@ pub async fn confirm_password_reset(token: String, new_password: String) -> WebR
         let raw_token = RawToken::try_from(token)
             .map_err(|_| InternalError::validation("invalid reset token"))?;
 
-        atomic
-            .confirm_password_reset(&raw_token, &password)
-            .await
-            .map_err(InternalError::storage)?;
+        atomic.confirm_password_reset(&raw_token, &password).await?;
 
         host::metrics::password_reset(host::metrics::PasswordResetEvent::Completed);
         Ok(())

@@ -71,6 +71,26 @@ pub enum ConfirmPasswordResetError {
     Internal(#[from] sqlx::Error),
 }
 
+impl From<ConfirmPasswordResetError> for host::error::InternalError {
+    /// Mirrors the sibling [`RegisterWithInviteError`] mapping so
+    /// `confirm_password_reset` is `?`-liftable in `web`: the three token
+    /// failures are client validation errors (a stale/used/unknown reset link,
+    /// not a server fault), and an internal failure is a masked storage error.
+    /// Previously `web` hand-mapped every variant to `storage`, masking all three
+    /// as a 500 (#344).
+    fn from(error: ConfirmPasswordResetError) -> Self {
+        use host::error::InternalError;
+        match error {
+            ConfirmPasswordResetError::NotFound => InternalError::validation("token not found"),
+            ConfirmPasswordResetError::Expired => InternalError::validation("token has expired"),
+            ConfirmPasswordResetError::AlreadyUsed => {
+                InternalError::validation("token has already been used")
+            }
+            ConfirmPasswordResetError::Internal(e) => InternalError::storage(e),
+        }
+    }
+}
+
 /// Cross-table operations that must be executed atomically.
 ///
 /// These operations span multiple storage traits (e.g., `users` and `invites`)
@@ -117,6 +137,24 @@ mod tests {
     use common::test_support::parse_display_name;
     use rstest::*;
     use rstest_reuse::*;
+
+    #[test]
+    fn confirm_reset_error_maps_each_variant_to_expected_kind() {
+        use host::error::{ErrorKind, InternalError};
+        // #344: the three token failures are client validation errors, not a
+        // masked storage 500 — while a genuine DB fault still masks as storage.
+        for error in [
+            ConfirmPasswordResetError::NotFound,
+            ConfirmPasswordResetError::Expired,
+            ConfirmPasswordResetError::AlreadyUsed,
+        ] {
+            let mapped: InternalError = error.into();
+            assert_eq!(mapped.kind(), ErrorKind::Validation);
+        }
+        let mapped: InternalError =
+            ConfirmPasswordResetError::Internal(sqlx::Error::RowNotFound).into();
+        assert_eq!(mapped.kind(), ErrorKind::Storage);
+    }
 
     async fn seed_invite(state: &std::sync::Arc<crate::AppState>) -> InviteCode {
         state
