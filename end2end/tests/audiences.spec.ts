@@ -310,3 +310,38 @@ test("Audiences: refresh pulls a mid-session new subscriber into the checklists"
     .filter({ hasText: userX });
   await expect(friendsX.locator('button:has-text("Add")')).toBeVisible();
 });
+
+// #350: the audience name is a typed `AudienceName` wire arg with client-side
+// pre-validation (ADR-0065, direct-bind). The create form must gate submit
+// disable-until-valid and show the newtype's own message inline once touched — a valid
+// name never reaches the (malicious-only) decode-time rejection.
+test("Audiences: create-name client-side validation gates submit", async ({
+  page,
+}, testInfo) => {
+  setTestBudget(60_000);
+  const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
+  await register(page, firstNav);
+
+  await goto(page, "/audiences");
+  const nameInput = 'input[placeholder="Audience name"]';
+  const createBtn = 'button:has-text("Create")';
+
+  // Pristine empty name: the non-empty rule leaves Create disabled (no `required` attr).
+  await expect(page.locator(createBtn)).toBeDisabled();
+
+  // A whitespace-only name is invalid; blurring (touch) surfaces the newtype's message.
+  await page.fill(nameInput, "   ");
+  await page.locator(nameInput).blur();
+  await expect(
+    page.locator("p.error", { hasText: "audience name must not be empty" }),
+  ).toBeVisible();
+  await expect(page.locator(createBtn)).toBeDisabled();
+
+  // A valid name clears the error, enables submit, and creates the audience.
+  await page.fill(nameInput, "Friends");
+  await expect(page.locator(createBtn)).toBeEnabled();
+  await click(page, createBtn);
+  await expect(
+    page.locator(".j-audience-item", { hasText: "Friends" }),
+  ).toBeVisible();
+});
