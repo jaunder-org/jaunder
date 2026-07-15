@@ -89,10 +89,10 @@ so it compiles and gates green on its own.
 
 ## Task 4 — e2e
 
-- [ ] Profile-page e2e (extend the existing account/profile spec): a valid
-      display name submits and persists; an over-long entry shows the inline
-      client error and gates submit. Selector unchanged
-      (`input[name="display_name"]`).
+- [x] Profile-page e2e (new `end2end/tests/profile.spec.ts` — no prior profile
+      spec existed): a valid display name submits and persists across a reload;
+      an over-long entry shows the inline client error and gates submit.
+      Selector unchanged (`input[name="display_name"]`).
 - Gate: `cargo xtask e2e sqlite chromium` (representative combo); full
   `cargo xtask validate` at ship.
 
