@@ -81,8 +81,9 @@ pub fn entry_to_post_fields(entry: &Entry, default_format: PostFormat) -> PostFi
 
     let body = PostBody::from(value);
     let title = {
-        let trimmed = entry.title().as_str().trim();
-        (!trimmed.is_empty()).then(|| PostTitle::from(trimmed))
+        // `PostTitle::from` trims; the local trim only decides presence (blank → None).
+        let raw = entry.title().as_str();
+        (!raw.trim().is_empty()).then(|| PostTitle::from(raw))
     };
     let summary = entry.summary().map(|t| t.as_str().to_string());
     // atom `<category term>` values are arbitrary RFC-4287 protocol strings (the
@@ -149,12 +150,12 @@ pub fn post_to_entry(post: &PostRecord, base_url: &str) -> Entry {
         id: edit_uri,
         title: Text::plain(
             post.title
-                .as_deref()
-                .map_or_else(|| post.slug.to_string(), str::to_owned),
+                .clone()
+                .map_or_else(|| post.slug.to_string(), String::from),
         ),
         content: Some(Content {
             content_type: Some(content_type.to_string()),
-            value: Some(post.body.to_string()),
+            value: Some(String::from(post.body.clone())),
             ..Default::default()
         }),
         summary: post.summary.clone().map(Text::plain),
