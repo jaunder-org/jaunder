@@ -4,6 +4,7 @@ use std::{net::SocketAddr, path::PathBuf};
 use clap::{Args, Parser, Subcommand};
 
 use common::backup::BackupMode;
+use common::display_name::DisplayName;
 use common::username::Username;
 use storage::DbConnectOptions;
 
@@ -155,7 +156,7 @@ pub enum Commands {
 
         /// Optional display name.
         #[arg(long)]
-        display_name: Option<String>,
+        display_name: Option<DisplayName>,
 
         /// Mark the user as an operator with administrative privileges.
         #[arg(long)]
@@ -511,7 +512,7 @@ mod tests {
         let Commands::UserCreate { display_name, .. } = cli.command.expect("subcommand") else {
             unreachable!("parse yields Commands::UserCreate")
         };
-        assert_eq!(display_name, Some("Alice Smith".to_owned()));
+        assert_eq!(display_name, Some("Alice Smith".parse().unwrap()));
     }
 
     #[test]

@@ -1,5 +1,6 @@
 // Shared imports (no cfg needed)
 use crate::error::WebResult;
+use common::display_name::DisplayName;
 use common::email::Email;
 use common::username::Username;
 use leptos::prelude::*;
@@ -22,7 +23,7 @@ use {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileData {
     pub username: Username,
-    pub display_name: Option<String>,
+    pub display_name: Option<DisplayName>,
     pub bio: Option<String>,
     pub email: Option<Email>,
     pub email_verified: bool,

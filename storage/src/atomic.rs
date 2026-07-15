@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
+use common::display_name::DisplayName;
 use common::password::Password;
 use common::username::Username;
 use host::invite::InviteCode;
@@ -88,7 +89,7 @@ pub trait AtomicOps: Send + Sync {
         &self,
         username: &Username,
         password: &Password,
-        display_name: Option<&str>,
+        display_name: Option<&DisplayName>,
         is_operator: bool,
         invite_code: &InviteCode,
     ) -> Result<i64, RegisterWithInviteError>;
@@ -168,6 +169,7 @@ mod tests {
         env.base.close_pool().await;
         let username: Username = "alice".parse().unwrap();
         let password: Password = "password123".parse().unwrap();
+        let display_name: DisplayName = "Alice".parse().unwrap();
 
         assert!(env
             .state
@@ -187,7 +189,7 @@ mod tests {
             .create_user_with_invite(
                 &username,
                 &password,
-                Some("Alice"),
+                Some(&display_name),
                 false,
                 &"code".parse::<InviteCode>().unwrap(),
             )

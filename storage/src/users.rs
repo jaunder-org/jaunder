@@ -7,6 +7,7 @@ use thiserror::Error;
 use tracing::Instrument;
 
 use crate::backend::Backend;
+use common::display_name::DisplayName;
 use common::email::Email;
 use common::password::Password;
 use common::username::Username;
@@ -25,7 +26,7 @@ pub struct UserRecord {
     /// Unique username (canonicalized).
     pub username: Username,
     /// User's preferred display name.
-    pub display_name: Option<String>,
+    pub display_name: Option<DisplayName>,
     /// Optional short biography.
     pub bio: Option<String>,
     /// When the account was created.
@@ -137,7 +138,7 @@ pub trait UserStorage: Send + Sync {
         &self,
         username: &Username,
         password: &Password,
-        display_name: Option<&'a str>,
+        display_name: Option<&'a DisplayName>,
         is_operator: bool,
     ) -> Result<i64, CreateUserError>;
 
@@ -238,7 +239,7 @@ where
         &self,
         username: &Username,
         password: &Password,
-        display_name: Option<&'a str>,
+        display_name: Option<&'a DisplayName>,
         is_operator: bool,
     ) -> Result<i64, CreateUserError> {
         let password_hash = crate::helpers::hash_password(password.clone())
@@ -258,7 +259,7 @@ where
         )
         .bind(username.as_ref())
         .bind(password_hash.as_str())
-        .bind(display_name)
+        .bind(display_name.map(|d| &**d))
         .bind(now)
         .bind(is_operator)
         .fetch_one(&self.pool)
@@ -507,6 +508,31 @@ mod tests {
             .execute("UPDATE users SET email='not-an-email' WHERE username='testuser'")
             .await
             .unwrap();
+        let result = env
+            .state
+            .users
+            .authenticate(
+                &"testuser".parse().unwrap(),
+                &"password123".parse().unwrap(),
+            )
+            .await;
+        assert!(matches!(result, Err(UserAuthError::Internal(_))));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn authenticate_with_overlong_display_name_in_db_returns_internal_error(
+        #[case] backend: Backend,
+    ) {
+        // A pre-existing row whose display_name exceeds the DisplayName length
+        // bound (the column was unbounded before #401) must surface as a typed
+        // Internal error at the strict read boundary — never a panic. Mirrors the
+        // invalid-email-in-db case above.
+        let env = backend.setup().await;
+        seed_user(&env.state).await;
+        let overlong = "a".repeat(common::display_name::MAX_DISPLAY_NAME_CHARS + 1);
+        let sql = format!("UPDATE users SET display_name='{overlong}' WHERE username='testuser'");
+        env.base.pool().execute(sql.as_str()).await.unwrap();
         let result = env
             .state
             .users

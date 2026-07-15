@@ -591,7 +591,7 @@ async fn update_profile_with_empty_fields_sets_to_none(#[case] backend: Backend)
         .create_user(
             &username,
             &"password123".parse().unwrap(),
-            Some("Initial"),
+            Some(&"Initial".parse().unwrap()),
             false,
         )
         .await

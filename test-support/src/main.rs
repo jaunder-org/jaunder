@@ -2,6 +2,7 @@
 //! crates (see `lib.rs`). Never shipped in the `jaunder` production binary.
 
 use clap::{Parser, Subcommand};
+use common::display_name::DisplayName;
 use host::capture;
 use storage::DbConnectOptions;
 
@@ -50,7 +51,7 @@ enum Commands {
         password: String,
         /// Optional display name.
         #[arg(long)]
-        display_name: Option<String>,
+        display_name: Option<DisplayName>,
         /// Grant operator (admin) privileges.
         #[arg(long)]
         operator: bool,
@@ -101,7 +102,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             password,
             display_name,
             operator,
-        } => cmd_create_user(&db, &username, &password, display_name.as_deref(), operator).await,
+        } => cmd_create_user(&db, &username, &password, display_name.as_ref(), operator).await,
         Commands::SetSiteConfig { db, key, value } => cmd_set_site_config(&db, &key, &value).await,
         Commands::ResetMail => cmd_reset_mail(),
         Commands::CapturePath { stream } => cmd_capture_path(&stream),
@@ -127,7 +128,7 @@ async fn cmd_create_user(
     db: &DbConnectOptions,
     username: &str,
     password: &str,
-    display_name: Option<&str>,
+    display_name: Option<&DisplayName>,
     operator: bool,
 ) -> anyhow::Result<()> {
     let state = storage::open_existing_database(db).await?;

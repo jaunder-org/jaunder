@@ -27,7 +27,11 @@ pub fn ProfilePage() -> impl IntoView {
                                             <input
                                                 type="text"
                                                 name="display_name"
-                                                prop:value=data.display_name.clone().unwrap_or_default()
+                                                prop:value=data
+                                                    .display_name
+                                                    .clone()
+                                                    .map(|d| d.to_string())
+                                                    .unwrap_or_default()
                                             />
                                         </label>
                                         <label>

@@ -10,20 +10,20 @@ strict `build_user_record` parse) for storage; **`slug_override`** (#408,
 
 ## Task 1 — `common::display_name::DisplayName`
 
-- [ ] Add `common/src/display_name.rs`: `MAX_DISPLAY_NAME_CHARS = 255`;
+- [x] Add `common/src/display_name.rs`: `MAX_DISPLAY_NAME_CHARS = 255`;
       `#[derive(Clone, Debug, PartialEq, Eq, StrNewtype)] struct DisplayName(String)`;
       `InvalidDisplayName` (`#[derive(Debug, Error)]`, message interpolates the
       const); hand-written `FromStr` (trim → reject empty → reject `> MAX` via
       `chars().count()` → preserve casing). Mirror `slug.rs` (bound) +
       `tag.rs::TagLabel` (trim/preserve-case).
-- [ ] Register `pub mod display_name;` in `common/src/lib.rs` (alphabetical,
+- [x] Register `pub mod display_name;` in `common/src/lib.rs` (alphabetical,
       after `backup`).
-- [ ] Inline `#[cfg(test)] mod tests`: parse valid; reject
+- [x] Inline `#[cfg(test)] mod tests`: parse valid; reject
       empty/whitespace-only/over-255 (boundary: 255 ok, 256 rejected);
       `to_string`/`Display`;
       `..._serde_serializes_as_plain_string_and_validates_on_deserialize`
       (pattern from `username.rs`/`slug.rs`).
-- [ ] **No** `validation_from!` entry in `host/src/error.rs` (typed wire arg ⇒
+- [x] **No** `validation_from!` entry in `host/src/error.rs` (typed wire arg ⇒
       no body parse ⇒ dead code).
 - Gate: `cargo xtask check` (workspace still green — nothing consumes it yet).
 
@@ -33,26 +33,27 @@ Everything reachable from `UserRecord.display_name` + `create_user`. Leaves
 `ProfileUpdate`/`update_profile` **unchanged** (still `Option<&str>`/`String`),
 so it compiles and gates green on its own.
 
-- [ ] `storage/src/users.rs`: `UserRecord.display_name: Option<DisplayName>`;
+- [x] `storage/src/users.rs`: `UserRecord.display_name: Option<DisplayName>`;
       `create_user(..., display_name: Option<&'a DisplayName>, ...)` on the
       trait and the generic impl (`.bind(display_name.map(|d| &**d))` — bind the
       `&str` via `Deref`).
-- [ ] `storage/src/helpers.rs::build_user_record`: parse the `display_name`
+- [x] `storage/src/helpers.rs::build_user_record`: parse the `display_name`
       column strictly, exactly like `email`
       (`.map(|s| s.parse().map_err(|e| sqlx::Error::Decode(Box::new(e)))).transpose()?`).
-- [ ] Backends: `storage/src/postgres/mod.rs` + `storage/src/sqlite/mod.rs`
+- [x] Backends: `storage/src/postgres/mod.rs` + `storage/src/sqlite/mod.rs`
       `create_user` signatures/bindings; `storage/src/atomic.rs` wrapper
       forward. No SQL/migration change (column stays `TEXT`).
-- [ ] CLI: `server/src/cli.rs` `UserCreate.display_name: Option<DisplayName>`
+- [x] CLI: `server/src/cli.rs` `UserCreate.display_name: Option<DisplayName>`
       (clap parses via `FromStr`); `server/src/commands.rs` +
       `server/src/main.rs` pass `.as_ref()` (seed paths stay `None`).
-- [ ] `test-support/src/lib.rs` + `src/main.rs`: construct `DisplayName` where a
-      display name is seeded (parse-and-`expect` in test/seed code is fine).
-- [ ] Web read side: `web/src/profile/mod.rs`
+- [x] `test-support/src/lib.rs` + `src/main.rs`: seed CLI's `--display-name` arg
+      is typed `Option<DisplayName>` (clap `FromStr`); the lib `create_user`
+      helper forwards `Option<&DisplayName>` with no internal parse.
+- [x] Web read side: `web/src/profile/mod.rs`
       `ProfileData.display_name:     Option<DisplayName>`; `get_profile` moves
       `user.display_name` directly (no parse). Import `DisplayName` (ungated —
       DTO built on both targets).
-- [ ] Update compile-forced tests: `server/tests/storage/mod.rs`,
+- [x] Update compile-forced tests: `server/tests/storage/mod.rs`,
       `server/tests/misc/backup_fixture.rs`, and any `web_account.rs`
       `get_profile` assertions reading `profile.display_name` (use
       `Some("…".parse().unwrap())` or the `PartialEq<str>` on the inner value).

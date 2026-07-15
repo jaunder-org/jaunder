@@ -739,7 +739,12 @@ async fn create_user_duplicate_and_authenticate_work(#[case] backend: Backend) {
 
     let user_id = state
         .users
-        .create_user(&username, &initial_password, Some("Alice"), false)
+        .create_user(
+            &username,
+            &initial_password,
+            Some(&"Alice".parse().unwrap()),
+            false,
+        )
         .await
         .unwrap();
     let record = state
@@ -810,7 +815,7 @@ async fn invite_and_atomic_registration_work(#[case] backend: Backend) {
         .create_user_with_invite(
             &username("carol"),
             &password("password123"),
-            Some("Carol"),
+            Some(&"Carol".parse().unwrap()),
             false,
             &code,
         )
@@ -1005,7 +1010,7 @@ async fn create_user_succeeds_and_get_by_username_returns_record(#[case] backend
         .create_user(
             &username("alice"),
             &password("password123"),
-            Some("Alice"),
+            Some(&"Alice".parse().unwrap()),
             false,
         )
         .await
@@ -1118,7 +1123,7 @@ async fn update_profile_persists_changes(#[case] backend: Backend) {
         .create_user(
             &username("dave"),
             &password("passw0rd!"),
-            Some("Dave"),
+            Some(&"Dave".parse().unwrap()),
             false,
         )
         .await
@@ -1403,7 +1408,7 @@ async fn create_user_with_invite_creates_user_and_marks_invite_used(#[case] back
         .create_user_with_invite(
             &username("alice"),
             &password("password123"),
-            Some("Alice"),
+            Some(&"Alice".parse().unwrap()),
             false,
             &code,
         )
@@ -3467,7 +3472,7 @@ async fn multiple_tags_on_single_post(#[case] backend: Backend) {
         .create_user(
             &username("multi_tag_user"),
             &password("password"),
-            Some("Multi"),
+            Some(&"Multi".parse().unwrap()),
             false,
         )
         .await
@@ -3529,7 +3534,7 @@ async fn empty_tag_list(#[case] backend: Backend) {
         .create_user(
             &username("no_tag_user"),
             &password("password"),
-            Some("NoTag"),
+            Some(&"NoTag".parse().unwrap()),
             false,
         )
         .await
@@ -3571,7 +3576,7 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
         .create_user(
             &username("case_user"),
             &password("password"),
-            Some("Case"),
+            Some(&"Case".parse().unwrap()),
             false,
         )
         .await
@@ -3659,7 +3664,7 @@ async fn tag_list_pagination(#[case] backend: Backend) {
         .create_user(
             &username("pagination_user"),
             &password("password"),
-            Some("Pagination"),
+            Some(&"Pagination".parse().unwrap()),
             false,
         )
         .await
@@ -3714,7 +3719,7 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
         .create_user(
             &username("user1_tag"),
             &password("password"),
-            Some("User1"),
+            Some(&"User1".parse().unwrap()),
             false,
         )
         .await
@@ -3725,7 +3730,7 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
         .create_user(
             &username("user2_tag"),
             &password("password"),
-            Some("User2"),
+            Some(&"User2".parse().unwrap()),
             false,
         )
         .await
@@ -3820,7 +3825,7 @@ async fn selective_untag(#[case] backend: Backend) {
         .create_user(
             &username("selective_untag"),
             &password("password"),
-            Some("Selective"),
+            Some(&"Selective".parse().unwrap()),
             false,
         )
         .await
@@ -3895,7 +3900,7 @@ async fn numeric_tag(#[case] backend: Backend) {
         .create_user(
             &username("numeric_tag"),
             &password("password"),
-            Some("Numeric"),
+            Some(&"Numeric".parse().unwrap()),
             false,
         )
         .await
@@ -3957,7 +3962,7 @@ async fn retag_same_post_with_same_tag_fails(#[case] backend: Backend) {
         .create_user(
             &username("retag_user"),
             &password("password"),
-            Some("Retag"),
+            Some(&"Retag".parse().unwrap()),
             false,
         )
         .await
@@ -4050,7 +4055,7 @@ async fn list_user_posts_by_nonexistent_tag(#[case] backend: Backend) {
         .create_user(
             &username("user_tag_nope"),
             &password("password"),
-            Some("UserTagNope"),
+            Some(&"UserTagNope".parse().unwrap()),
             false,
         )
         .await
@@ -4082,7 +4087,7 @@ async fn many_tags_many_posts(#[case] backend: Backend) {
         .create_user(
             &username("many_tags_user"),
             &password("password"),
-            Some("ManyTags"),
+            Some(&"ManyTags".parse().unwrap()),
             false,
         )
         .await
@@ -4149,7 +4154,7 @@ async fn tag_all_numeric(#[case] backend: Backend) {
         .create_user(
             &username("numeric_only"),
             &password("password"),
-            Some("NumericOnly"),
+            Some(&"NumericOnly".parse().unwrap()),
             false,
         )
         .await
@@ -4205,7 +4210,7 @@ async fn tag_hyphen_boundaries(#[case] backend: Backend) {
         .create_user(
             &username("hyphen_user"),
             &password("password"),
-            Some("Hyphen"),
+            Some(&"Hyphen".parse().unwrap()),
             false,
         )
         .await
@@ -4269,7 +4274,7 @@ async fn tag_with_long_display(#[case] backend: Backend) {
         .create_user(
             &username("long_tag_user"),
             &password("password"),
-            Some("LongTagUser"),
+            Some(&"LongTagUser".parse().unwrap()),
             false,
         )
         .await
@@ -4319,7 +4324,7 @@ async fn tag_list_ordering(#[case] backend: Backend) {
         .create_user(
             &username("ordering_user"),
             &password("password"),
-            Some("Ordering"),
+            Some(&"Ordering".parse().unwrap()),
             false,
         )
         .await
@@ -4413,7 +4418,7 @@ async fn tags_for_multiple_posts(#[case] backend: Backend) {
         .create_user(
             &username("multi_post_user"),
             &password("password"),
-            Some("MultiPost"),
+            Some(&"MultiPost".parse().unwrap()),
             false,
         )
         .await
@@ -4485,7 +4490,7 @@ async fn tag_mixed_alphanumeric(#[case] backend: Backend) {
         .create_user(
             &username("mixed_user"),
             &password("password"),
-            Some("Mixed"),
+            Some(&"Mixed".parse().unwrap()),
             false,
         )
         .await
@@ -4546,7 +4551,7 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
         .create_user(
             &username("simple_user"),
             &password("password"),
-            Some("Simple"),
+            Some(&"Simple".parse().unwrap()),
             false,
         )
         .await
@@ -4623,7 +4628,7 @@ async fn tag_creation_and_retrieval(#[case] backend: Backend) {
         .create_user(
             &username("alice"),
             &password("password"),
-            Some("Alice"),
+            Some(&"Alice".parse().unwrap()),
             false,
         )
         .await
@@ -4670,7 +4675,12 @@ async fn tag_normalization(#[case] backend: Backend) {
     let state = &env.state;
     let user = state
         .users
-        .create_user(&username("bob"), &password("password"), Some("Bob"), false)
+        .create_user(
+            &username("bob"),
+            &password("password"),
+            Some(&"Bob".parse().unwrap()),
+            false,
+        )
         .await
         .expect("user creation failed");
 
@@ -4718,7 +4728,7 @@ async fn untag_post(#[case] backend: Backend) {
         .create_user(
             &username("charlie"),
             &password("password"),
-            Some("Charlie"),
+            Some(&"Charlie".parse().unwrap()),
             false,
         )
         .await
@@ -4779,7 +4789,7 @@ async fn duplicate_tag_error(#[case] backend: Backend) {
         .create_user(
             &username("dave"),
             &password("password"),
-            Some("Dave"),
+            Some(&"Dave".parse().unwrap()),
             false,
         )
         .await
@@ -4828,7 +4838,12 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
     let state = &env.state;
     let user1 = state
         .users
-        .create_user(&username("eve"), &password("password"), Some("Eve"), false)
+        .create_user(
+            &username("eve"),
+            &password("password"),
+            Some(&"Eve".parse().unwrap()),
+            false,
+        )
         .await
         .expect("user creation failed");
 
@@ -4837,7 +4852,7 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
         .create_user(
             &username("frank"),
             &password("password"),
-            Some("Frank"),
+            Some(&"Frank".parse().unwrap()),
             false,
         )
         .await
@@ -4910,7 +4925,7 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
         .create_user(
             &username("grace"),
             &password("password"),
-            Some("Grace"),
+            Some(&"Grace".parse().unwrap()),
             false,
         )
         .await
@@ -4921,7 +4936,7 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
         .create_user(
             &username("henry"),
             &password("password"),
-            Some("Henry"),
+            Some(&"Henry".parse().unwrap()),
             false,
         )
         .await
@@ -5041,7 +5056,7 @@ async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
         .create_user(
             &username("iris"),
             &password("password"),
-            Some("Iris"),
+            Some(&"Iris".parse().unwrap()),
             false,
         )
         .await
@@ -5136,7 +5151,7 @@ async fn untag_nonexistent_tag_error(#[case] backend: Backend) {
         .create_user(
             &username("karen"),
             &password("password"),
-            Some("Karen"),
+            Some(&"Karen".parse().unwrap()),
             false,
         )
         .await
@@ -5179,7 +5194,7 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
         .create_user(
             &username("jack"),
             &password("password"),
-            Some("Jack"),
+            Some(&"Jack".parse().unwrap()),
             false,
         )
         .await
@@ -7276,7 +7291,7 @@ async fn list_tags_returns_alphabetical_with_prefix(#[case] backend: Backend) {
         .create_user(
             &username("list_tags_user"),
             &password("password"),
-            Some("ListTags"),
+            Some(&"ListTags".parse().unwrap()),
             false,
         )
         .await
@@ -7348,7 +7363,7 @@ async fn post_record_carries_tags(#[case] backend: Backend) {
         .create_user(
             &username("inline_tags_user"),
             &password("password"),
-            Some("Inline"),
+            Some(&"Inline".parse().unwrap()),
             false,
         )
         .await

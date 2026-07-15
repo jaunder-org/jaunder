@@ -48,7 +48,12 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
     let password: Password = "password123".parse().expect("valid password");
     let author = state
         .users
-        .create_user(&username, &password, Some("Backup User"), true)
+        .create_user(
+            &username,
+            &password,
+            Some(&"Backup User".parse().unwrap()),
+            true,
+        )
         .await
         .expect("create user");
     let public_post = state
@@ -98,7 +103,12 @@ async fn seed_named_audience_post(
     let viewer_name: Username = "viewer".parse().expect("valid username");
     let viewer = state
         .users
-        .create_user(&viewer_name, password, Some("Viewer"), false)
+        .create_user(
+            &viewer_name,
+            password,
+            Some(&"Viewer".parse().unwrap()),
+            false,
+        )
         .await
         .expect("create viewer");
     let local = state

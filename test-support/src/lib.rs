@@ -13,6 +13,7 @@
 
 use std::sync::Arc;
 
+use common::display_name::DisplayName;
 use common::username::Username;
 use storage::{seed_post_input, AppState};
 
@@ -105,7 +106,7 @@ pub async fn create_user(
     state: &Arc<AppState>,
     username: &str,
     password: &str,
-    display_name: Option<&str>,
+    display_name: Option<&DisplayName>,
     operator: bool,
 ) -> anyhow::Result<i64> {
     let uname = username
