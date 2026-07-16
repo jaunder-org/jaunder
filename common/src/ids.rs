@@ -33,6 +33,13 @@ mod tests {
     }
 
     #[test]
+    fn user_id_parses_from_a_string() {
+        // For sites that carry an id as a string (e.g. a Leptos route param).
+        assert_eq!("42".parse::<UserId>().unwrap(), UserId::from(42));
+        assert!("not-a-number".parse::<UserId>().is_err());
+    }
+
+    #[test]
     fn user_id_serde_is_a_transparent_bare_integer() {
         // Wire form is a plain integer, so a DTO field can adopt the type with no
         // serialized-shape change; deserialize is an infallible wrap.

@@ -1,6 +1,7 @@
 //! Codegen for `#[derive(IdNewtype)]` — the ADR-0063 numeric-ID trailer for a
-//! `struct X(i64)`: `From<i64>`, `From<Self> for i64`, `Display`, and a transparent-i64
-//! serde bridge. `Copy` and the other std traits stay in the user's `#[derive]` list.
+//! `struct X(i64)`: `From<i64>`, `From<Self> for i64`, `Display`, `FromStr` (delegating to
+//! `i64`'s parse), and a transparent-i64 serde bridge. `Copy` and the other std traits stay
+//! in the user's `#[derive]` list.
 
 use quote::quote;
 use syn::DeriveInput;
@@ -32,6 +33,19 @@ pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
         impl ::core::fmt::Display for #name {
             fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
                 ::core::fmt::Display::fmt(&self.0, f)
+            }
+        }
+
+        // `FromStr` delegates to `i64`'s parse, then wraps — so `"42".parse::<#name>()` works
+        // at the few sites that carry an id as a string (e.g. a Leptos route param, whose
+        // `ParamsMap` yields `String`). Unlike a string newtype's `FromStr`, it enforces no
+        // invariant beyond "is an integer" (an id has no value invariant, only the
+        // transposition guarantee); it is the inverse of `Display`, not a validating chokepoint.
+        #[automatically_derived]
+        impl ::core::str::FromStr for #name {
+            type Err = ::core::num::ParseIntError;
+            fn from_str(s: &str) -> ::core::result::Result<Self, Self::Err> {
+                ::core::result::Result::Ok(#name(<i64 as ::core::str::FromStr>::from_str(s)?))
             }
         }
 
