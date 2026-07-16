@@ -31,26 +31,25 @@ export function seedPostsViaTool(
 }
 
 /**
- * Set a single site-config key/value via the `test-support set-site-config`
- * subcommand (ADR-0046) — the same in-process storage write the canonical e2e
- * seed uses (`devtool seed-e2e` sets `site.registration_policy=open` this way).
- * The running server reads site config live per request, so a test can flip
+ * Set a single site-config key/value via the shipped `jaunder site-config set`
+ * subcommand (#8) — the same in-process storage write the canonical e2e seed
+ * uses (`devtool seed-e2e` sets `site.registration_policy=open` this way). The
+ * running server reads site config live per request, so a test can flip
  * `site.registration_policy` to `invite_only` (or set `site.base_url`) and the
  * next request observes it. There is no UI for the registration policy, so this
  * is the only seam. Global mutation — a spec that calls this must run isolated
  * from parallel specs that read the same key (see playwright.config's `-admin`
  * projects).
  *
- * On a non-zero exit `execFileSync` throws with the tool's stderr, surfacing a
- * misconfigured write as a test error.
+ * Resolves bare `jaunder` on PATH: the flake VM adds `jaunderBin` to
+ * `systemPackages`, the host loop prepends `target/debug`. It reads the target
+ * database from `JAUNDER_DB` (set by the harness). On a non-zero exit
+ * `execFileSync` throws with the tool's stderr, surfacing a misconfigured write
+ * as a test error.
  */
 export function seedConfigViaTool(key: string, value: string): void {
-  execFileSync(
-    "test-support",
-    ["set-site-config", "--key", key, "--value", value],
-    {
-      stdio: "pipe",
-      env: process.env,
-    },
-  );
+  execFileSync("jaunder", ["site-config", "set", key, value], {
+    stdio: "pipe",
+    env: process.env,
+  });
 }
