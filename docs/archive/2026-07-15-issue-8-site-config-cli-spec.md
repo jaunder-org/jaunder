@@ -126,9 +126,17 @@ stdout-capture is unnecessary.
 
 `list` is a **human/discovery view, not a machine round-trip**: a value
 containing a newline or `=` is ambiguous under `key=value` lines. `get <key>` is
-the lossless, scriptable accessor. (No `unset`/delete leaf — the storage trait
-has no delete; clearing is "set empty", which the keys that treat empty as unset
-already honor. A future `unset` would need a storage delete first.)
+the lossless, scriptable accessor.
+
+### D4b — `unset <key>` (added during review)
+
+The spec originally deferred deletion ("set empty" only clears keys whose typed
+accessor treats empty as unset). Review pulled it in as a first-class capability:
+a `site-config unset <key>` leaf backed by a new `SiteConfigStorage::delete`
+primitive (`DELETE … RETURNING key` + `fetch_optional`, so it stays
+backend-generic without the concrete-only `rows_affected`). **Idempotent:**
+unsetting an absent key is a no-op that still exits 0; stderr notes whether a row
+was removed. `delete` returns `bool` (whether a row existed) for that message.
 
 ### D5 — `SiteConfigStorage::list()`
 
