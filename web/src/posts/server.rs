@@ -118,7 +118,11 @@ mod tests {
     fn post_response_carries_summary() {
         use crate::posts::server::post_response;
         use chrono::{TimeZone, Utc};
-        use common::{ids::UserId, slug::Slug, username::Username};
+        use common::{
+            ids::{PostId, UserId},
+            slug::Slug,
+            username::Username,
+        };
         use storage::{PostFormat, PostRecord, RenderedHtml};
 
         let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
@@ -127,7 +131,7 @@ mod tests {
 
         let response = post_response(
             PostRecord {
-                post_id: 1,
+                post_id: PostId::from(1),
                 user_id: UserId::from(2),
                 author_username,
                 title: Some("Title".into()),

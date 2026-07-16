@@ -1,5 +1,5 @@
 use chrono::{Datelike, Utc};
-use common::ids::UserId;
+use common::ids::{PostId, UserId};
 use common::password::Password;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
@@ -2042,7 +2042,7 @@ async fn seed_post_published_at(
     user_id: UserId,
     slug: &str,
     published_at: chrono::DateTime<Utc>,
-) -> i64 {
+) -> PostId {
     create_rendered_post(
         &*state.posts,
         RenderedPostContent {
@@ -2167,7 +2167,7 @@ async fn list_published_by_user_hides_scheduled_until_due(#[case] backend: Backe
         )
         .await
         .unwrap();
-    let ids_now: Vec<i64> = at_now.iter().map(|p| p.post_id).collect();
+    let ids_now: Vec<PostId> = at_now.iter().map(|p| p.post_id).collect();
     assert!(ids_now.contains(&live), "live post must be listed at now");
     assert!(
         !ids_now.contains(&sched),
@@ -2212,7 +2212,7 @@ async fn list_published_hides_scheduled_until_due(#[case] backend: Backend) {
         .list_published(None, 50, &ViewerIdentity::Anonymous, now)
         .await
         .unwrap();
-    let ids_now: Vec<i64> = at_now.iter().map(|p| p.post_id).collect();
+    let ids_now: Vec<PostId> = at_now.iter().map(|p| p.post_id).collect();
     assert!(ids_now.contains(&live), "live post must be listed at now");
     assert!(
         !ids_now.contains(&sched),
@@ -2262,7 +2262,7 @@ async fn list_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backend) {
         .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous, now)
         .await
         .unwrap();
-    let ids_now: Vec<i64> = at_now.iter().map(|p| p.post_id).collect();
+    let ids_now: Vec<PostId> = at_now.iter().map(|p| p.post_id).collect();
     assert!(ids_now.contains(&live), "live post must be listed at now");
     assert!(
         !ids_now.contains(&sched),
@@ -2319,7 +2319,7 @@ async fn list_user_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backe
         )
         .await
         .unwrap();
-    let ids_now: Vec<i64> = at_now.iter().map(|p| p.post_id).collect();
+    let ids_now: Vec<PostId> = at_now.iter().map(|p| p.post_id).collect();
     assert!(ids_now.contains(&live), "live post must be listed at now");
     assert!(
         !ids_now.contains(&sched),
@@ -2468,7 +2468,7 @@ async fn post_update_not_found_returns_error(#[case] backend: Backend) {
     };
     let err = state
         .posts
-        .update_post(9999, UserId::from(1), &update_input)
+        .update_post(PostId::from(9999), UserId::from(1), &update_input)
         .await
         .unwrap_err();
     assert!(
@@ -2537,7 +2537,7 @@ async fn post_update_by_non_owner_returns_unauthorized(#[case] backend: Backend)
 /// stable fields. `slug` is pinned via `slug_override` so repeated updates on
 /// different posts never collide on a derived slug.
 fn update_input(
-    post_id: i64,
+    post_id: PostId,
     editor_user_id: UserId,
     slug: &Slug,
     publish: PublishUpdate,
@@ -2646,7 +2646,7 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
 async fn post_audience_rows(
     backend: Backend,
     env: &TestEnv,
-    post_id: i64,
+    post_id: PostId,
 ) -> Vec<(String, Option<i64>)> {
     let sql = "SELECT tk.name, pa.audience_id \
                FROM post_audiences pa \
@@ -2655,14 +2655,14 @@ async fn post_audience_rows(
                ORDER BY tk.name, pa.audience_id";
     match backend {
         Backend::Sqlite => sqlx::query_as(&sql.replace("$1", "?"))
-            .bind(post_id)
+            .bind(i64::from(post_id))
             .fetch_all(&open_pool(&env.base).await)
             .await
             .unwrap(),
         Backend::Postgres => {
             let pool = env.base.pool().postgres();
             sqlx::query_as(sql)
-                .bind(post_id)
+                .bind(i64::from(post_id))
                 .fetch_all(pool)
                 .await
                 .unwrap()
@@ -4021,7 +4021,7 @@ async fn untag_nonexistent_post(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let tag_slug: Tag = "phantom".parse().unwrap();
-    let result = state.posts.untag_post(99999, &tag_slug).await;
+    let result = state.posts.untag_post(PostId::from(99999), &tag_slug).await;
 
     assert!(matches!(result, Err(TaggingError::TagNotFound)));
 }
@@ -4033,7 +4033,7 @@ async fn get_tags_nonexistent_post(#[case] backend: Backend) {
     let state = &env.state;
     let tags = state
         .posts
-        .get_tags_for_post(99999)
+        .get_tags_for_post(PostId::from(99999))
         .await
         .expect("get_tags_for_post failed");
 
@@ -5140,7 +5140,10 @@ async fn tag_post_nonexistent_post_error(#[case] backend: Backend) {
     let state = &env.state;
     let result = state
         .posts
-        .tag_post(99999, &"nonexistent-post".parse::<TagLabel>().unwrap())
+        .tag_post(
+            PostId::from(99999),
+            &"nonexistent-post".parse::<TagLabel>().unwrap(),
+        )
         .await;
     match result {
         Err(TaggingError::PostNotFound) => {
@@ -5787,7 +5790,7 @@ async fn list_published_by_user_no_posts(#[case] backend: Backend) {
 
     let cursor = PostCursor {
         created_at: Utc::now(),
-        post_id: 999,
+        post_id: PostId::from(999),
     };
     let posts = state
         .posts
@@ -6017,7 +6020,7 @@ async fn get_post_by_id_nonexistent(#[case] backend: Backend) {
     let state = &env.state;
     let result = state
         .posts
-        .get_post_by_id(999_999, &ViewerIdentity::Anonymous)
+        .get_post_by_id(PostId::from(999_999), &ViewerIdentity::Anonymous)
         .await;
     match result {
         Ok(None) => {
@@ -6817,7 +6820,7 @@ async fn update_rendered_post_not_found_returns_storage_error(#[case] backend: B
     let err = update_rendered_post(
         state.posts.as_ref(),
         RenderedPostUpdate {
-            post_id: 99999,
+            post_id: PostId::from(99999),
             editor_user_id: UserId::from(1),
             title: Some("No Post".into()),
             slug: "no-post".parse().unwrap(),
@@ -7689,7 +7692,7 @@ async fn resolution_matrix(#[case] backend: Backend) {
     let viewer_n = ViewerIdentity::local(n, local);
 
     // (label, post_id, [anon, A, S, M, N] expected visibility)
-    let matrix: &[(&str, i64, [bool; 5])] = &[
+    let matrix: &[(&str, PostId, [bool; 5])] = &[
         ("Public", p_public, [true, true, true, true, true]),
         ("Private", p_private, [false, true, false, false, false]),
         (
@@ -7732,7 +7735,7 @@ async fn resolution_matrix(#[case] backend: Backend) {
 
     // `list_published`: the same truth table via presence in the site listing.
     for (vi, (vlabel, viewer)) in viewers.iter().enumerate() {
-        let listed: std::collections::HashSet<i64> = state
+        let listed: std::collections::HashSet<PostId> = state
             .posts
             .list_published(None, 100, viewer, Utc::now())
             .await

@@ -79,6 +79,7 @@ mod tests {
 
     use super::*;
     use crate::feed::metadata::{FeedItem, FeedMetadata};
+    use crate::ids::PostId;
     use crate::render::RenderedHtml;
     use crate::test_support::parse_post_title;
 
@@ -95,7 +96,7 @@ mod tests {
 
     fn item() -> FeedItem {
         FeedItem {
-            id: 1,
+            id: PostId::from(1),
             title: Some(parse_post_title("Hello")),
             permalink: "https://example.com/~alice/posts/1".into(),
             summary: Some("hi".into()),

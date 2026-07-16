@@ -4,7 +4,7 @@ use axum::{
     body::Body,
     http::{header, Request, StatusCode},
 };
-use common::ids::UserId;
+use common::ids::{PostId, UserId};
 use common::tag::TagLabel;
 use common::token::RawToken;
 use tower::ServiceExt;
@@ -1187,7 +1187,7 @@ async fn incoming_j_slug_is_ignored(#[case] backend: Backend) {
     let viewer = common::visibility::ViewerIdentity::Anonymous;
     let rec = state
         .posts
-        .get_post_by_id(post_id, &viewer)
+        .get_post_by_id(PostId::from(post_id), &viewer)
         .await
         .unwrap()
         .unwrap();
@@ -1788,7 +1788,11 @@ async fn create_adopts_default_audience(#[case] backend: Backend) {
         .and_then(|id| id.parse::<i64>().ok())
         .unwrap();
 
-    let audiences = state.posts.get_post_audiences(loc).await.unwrap();
+    let audiences = state
+        .posts
+        .get_post_audiences(PostId::from(loc))
+        .await
+        .unwrap();
     assert_eq!(
         audiences,
         vec![common::visibility::AudienceTarget::Subscribers],
@@ -1836,7 +1840,7 @@ async fn create_with_future_published_is_scheduled(#[case] backend: Backend) {
     let viewer = common::visibility::ViewerIdentity::Anonymous;
     let rec = state
         .posts
-        .get_post_by_id(post_id, &viewer)
+        .get_post_by_id(PostId::from(post_id), &viewer)
         .await
         .unwrap()
         .unwrap();
@@ -1896,7 +1900,7 @@ async fn create_with_past_published_is_live_backdated(#[case] backend: Backend) 
     let viewer = common::visibility::ViewerIdentity::Anonymous;
     let rec = state
         .posts
-        .get_post_by_id(post_id, &viewer)
+        .get_post_by_id(PostId::from(post_id), &viewer)
         .await
         .unwrap()
         .unwrap();

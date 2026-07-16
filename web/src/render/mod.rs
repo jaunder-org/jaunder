@@ -691,6 +691,7 @@ pub fn format_bytes(bytes: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::ids::PostId;
 
     #[test]
     fn format_bytes_displays_bytes_below_kb() {
@@ -869,7 +870,7 @@ mod tests {
 
     fn sample_post() -> PostResponse {
         PostResponse {
-            post_id: 7,
+            post_id: PostId::from(7),
             username: "alice".parse::<Username>().unwrap(),
             title: Some("Hello & <World>".into()),
             slug: "hello".parse().unwrap(),
@@ -891,7 +892,7 @@ mod tests {
 
     fn sample_summary() -> TimelinePostSummary {
         TimelinePostSummary {
-            post_id: 1,
+            post_id: PostId::from(1),
             username: "bob".parse::<Username>().unwrap(),
             title: Some("First".into()),
             summary: Some("An excerpt".into()),

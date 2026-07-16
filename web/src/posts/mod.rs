@@ -20,8 +20,13 @@ use server::{not_found_error, private_post_not_found_error};
 pub use server::post_response;
 
 use common::{
-    ids::AudienceId, post_body::PostBody, post_title::PostTitle, render::RenderedHtml, slug::Slug,
-    tag::TagLabel, username::Username,
+    ids::{AudienceId, PostId},
+    post_body::PostBody,
+    post_title::PostTitle,
+    render::RenderedHtml,
+    slug::Slug,
+    tag::TagLabel,
+    username::Username,
 };
 
 use crate::error::WebResult;
@@ -48,7 +53,7 @@ use {
 /// Result returned by [`create_post`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CreatePostResult {
-    pub post_id: i64,
+    pub post_id: PostId,
     pub slug: Slug,
     pub created_at: String,
     pub published_at: Option<String>,
@@ -60,7 +65,7 @@ pub struct CreatePostResult {
 /// Result returned by [`update_post`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UpdatePostResult {
-    pub post_id: i64,
+    pub post_id: PostId,
     pub slug: Slug,
     pub published_at: Option<String>,
     pub preview_url: String,
@@ -151,7 +156,7 @@ pub fn targets_to_audience_selection(
 /// A draft row returned by [`list_drafts`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DraftSummary {
-    pub post_id: i64,
+    pub post_id: PostId,
     pub title: Option<PostTitle>,
     pub summary_label: String,
     pub slug: Slug,
@@ -169,7 +174,7 @@ pub struct DraftSummary {
 /// Result returned by [`publish_post`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PublishPostResult {
-    pub post_id: i64,
+    pub post_id: PostId,
     pub slug: Slug,
     pub published_at: String,
     pub permalink: String,
@@ -188,7 +193,7 @@ where
 /// Details of a post returned by [`get_post`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PostResponse {
-    pub post_id: i64,
+    pub post_id: PostId,
     pub username: Username,
     pub title: Option<PostTitle>,
     pub slug: Slug,
@@ -365,7 +370,7 @@ pub async fn get_post(
 
 /// Retrieves a draft preview for the authenticated author.
 #[server(endpoint = "/get_post_preview")]
-pub async fn get_post_preview(post_id: i64) -> WebResult<PostResponse> {
+pub async fn get_post_preview(post_id: PostId) -> WebResult<PostResponse> {
     boundary!("get_post_preview", {
         let auth = require_auth()
             .await
@@ -391,7 +396,7 @@ pub async fn get_post_preview(post_id: i64) -> WebResult<PostResponse> {
 #[allow(clippy::too_many_arguments)]
 #[server(endpoint = "/update_post", input = Json)]
 pub async fn update_post(
-    post_id: i64,
+    post_id: PostId,
     body: PostBody,
     format: String,
     slug_override: Option<Slug>,
@@ -499,7 +504,7 @@ pub async fn default_audience_selection() -> WebResult<AudienceSelection> {
 /// Returns the audience-picker selection for an existing post (its current
 /// targeting). Owner-only. Used to pre-select the editor on the edit page.
 #[server(endpoint = "/post_audience_selection")]
-pub async fn post_audience_selection(post_id: i64) -> WebResult<AudienceSelection> {
+pub async fn post_audience_selection(post_id: PostId) -> WebResult<AudienceSelection> {
     boundary!("post_audience_selection", {
         let posts = expect_context::<Arc<dyn PostStorage>>();
         let auth = require_auth()
@@ -523,7 +528,7 @@ pub async fn post_audience_selection(post_id: i64) -> WebResult<AudienceSelectio
 #[server(endpoint = "/list_drafts")]
 pub async fn list_drafts(
     cursor_created_at: Option<String>,
-    cursor_post_id: Option<i64>,
+    cursor_post_id: Option<PostId>,
     limit: Option<u32>,
 ) -> WebResult<Vec<DraftSummary>> {
     boundary!("list_drafts", {
@@ -568,7 +573,7 @@ pub async fn list_drafts(
 
 /// Publishes an existing draft owned by the authenticated user.
 #[server(endpoint = "/publish_post")]
-pub async fn publish_post(post_id: i64) -> WebResult<PublishPostResult> {
+pub async fn publish_post(post_id: PostId) -> WebResult<PublishPostResult> {
     boundary!("publish_post", {
         let auth = require_auth().await?;
         let posts = expect_context::<Arc<dyn PostStorage>>();
@@ -626,7 +631,7 @@ pub async fn publish_post(post_id: i64) -> WebResult<PublishPostResult> {
 
 /// Soft-deletes a post owned by the authenticated user.
 #[server(endpoint = "/delete_post")]
-pub async fn delete_post(post_id: i64) -> WebResult<()> {
+pub async fn delete_post(post_id: PostId) -> WebResult<()> {
     boundary!("delete_post", {
         let auth = require_auth().await?;
         let posts = expect_context::<Arc<dyn PostStorage>>();
@@ -659,7 +664,7 @@ pub async fn delete_post(post_id: i64) -> WebResult<()> {
 
 /// Reverts a published post owned by the authenticated user back to draft status.
 #[server(endpoint = "/unpublish_post")]
-pub async fn unpublish_post(post_id: i64) -> WebResult<()> {
+pub async fn unpublish_post(post_id: PostId) -> WebResult<()> {
     boundary!("unpublish_post", {
         let auth = require_auth().await?;
         let posts = expect_context::<Arc<dyn PostStorage>>();
@@ -710,11 +715,12 @@ mod tests {
     #[test]
     fn timeline_summary_round_trips_rendered_html_via_trusted_rebuild() {
         use super::TimelinePostSummary;
+        use common::ids::PostId;
         use common::render::RenderedHtml;
         use common::username::Username;
 
         let original = TimelinePostSummary {
-            post_id: 1,
+            post_id: PostId::from(1),
             username: "alice".parse::<Username>().unwrap(),
             title: Some("T".into()),
             summary: None,
@@ -847,7 +853,11 @@ mod tests {
     fn timeline_post_summary_keeps_titleless_posts_titleless() {
         use crate::posts::server::timeline_post_summary;
         use chrono::{TimeZone, Utc};
-        use common::{ids::UserId, slug::Slug, username::Username};
+        use common::{
+            ids::{PostId, UserId},
+            slug::Slug,
+            username::Username,
+        };
         use storage::{PostFormat, PostRecord, RenderedHtml};
 
         let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
@@ -855,7 +865,7 @@ mod tests {
 
         let summary = timeline_post_summary(
             PostRecord {
-                post_id: 1,
+                post_id: PostId::from(1),
                 user_id: UserId::from(2),
                 author_username: "author".parse::<Username>().unwrap(),
                 title: None,
@@ -884,7 +894,11 @@ mod tests {
     fn post_response_marks_draft_state_from_published_at() {
         use crate::posts::server::post_response;
         use chrono::{TimeZone, Utc};
-        use common::{ids::UserId, slug::Slug, username::Username};
+        use common::{
+            ids::{PostId, UserId},
+            slug::Slug,
+            username::Username,
+        };
         use storage::{PostFormat, PostRecord, RenderedHtml};
 
         let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
@@ -893,7 +907,7 @@ mod tests {
 
         let draft = post_response(
             PostRecord {
-                post_id: 1,
+                post_id: PostId::from(1),
                 user_id: UserId::from(2),
                 author_username: author_username.clone(),
                 title: Some("Draft".into()),
@@ -916,7 +930,7 @@ mod tests {
 
         let published = post_response(
             PostRecord {
-                post_id: 2,
+                post_id: PostId::from(2),
                 user_id: UserId::from(2),
                 author_username,
                 title: Some("Published".into()),
@@ -947,7 +961,7 @@ mod server_tests {
     use crate::error::WebError;
     use crate::test_support::auth_parts;
     use chrono::Utc;
-    use common::ids::UserId;
+    use common::ids::{PostId, UserId};
     use common::slug::Slug;
     use common::username::Username;
     use leptos::prelude::provide_context;
@@ -961,7 +975,7 @@ mod server_tests {
     fn owned_post(user_id: UserId) -> PostRecord {
         let now = Utc::now();
         PostRecord {
-            post_id: 1,
+            post_id: PostId::from(1),
             user_id,
             author_username: "alice".parse::<Username>().unwrap(),
             title: Some("t".into()),
@@ -1010,7 +1024,7 @@ mod server_tests {
     #[tokio::test]
     async fn publish_post_maps_not_found_update_error_to_not_found() {
         let owner = setup(|| UpdatePostError::NotFound);
-        let result = publish_post(1).await;
+        let result = publish_post(PostId::from(1)).await;
         drop(owner);
         assert!(matches!(result.unwrap_err(), WebError::NotFound { .. }));
     }
@@ -1019,7 +1033,7 @@ mod server_tests {
     #[tokio::test]
     async fn publish_post_maps_internal_update_error_to_storage() {
         let owner = setup(|| UpdatePostError::Internal(sqlx::Error::PoolClosed));
-        let result = publish_post(1).await;
+        let result = publish_post(PostId::from(1)).await;
         drop(owner);
         assert!(matches!(result.unwrap_err(), WebError::Storage { .. }));
     }

@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use common::atompub::{entry_from_xml, entry_to_xml, render_feed, FeedMeta};
+use common::ids::PostId;
 use common::tag::TagLabel;
 use common::username::Username;
 use common::visibility::ViewerIdentity;
@@ -110,7 +111,7 @@ pub struct CollectionPaging {
     /// `updated_at` of the last item on the previous page (RFC 3339).
     updated_before: Option<String>,
     /// `post_id` of the last item on the previous page.
-    id_before: Option<i64>,
+    id_before: Option<PostId>,
     /// Requested page size (clamped to `MAX_PAGE_SIZE`).
     limit: Option<u32>,
 }
@@ -225,7 +226,7 @@ async fn owned_post(
     subscriptions: &dyn SubscriptionStorage,
     auth_user: &AuthUser,
     username: &Username,
-    post_id: i64,
+    post_id: PostId,
 ) -> Result<PostRecord, HandlerError> {
     super::require_user_match(auth_user, username)?;
     let viewer = owner_viewer(subscriptions, auth_user).await?;
@@ -252,7 +253,7 @@ pub async fn member_get(
     Extension(subscriptions): Extension<Arc<dyn SubscriptionStorage>>,
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     auth_user: AuthUser,
-    Path((username, post_id)): Path<(Username, i64)>,
+    Path((username, post_id)): Path<(Username, PostId)>,
 ) -> Result<Response, HandlerError> {
     let post = owned_post(
         posts.as_ref(),
@@ -282,7 +283,7 @@ pub async fn member_get(
 /// were skipped upstream in `entry_to_post_fields`).
 async fn apply_categories(
     posts: &dyn storage::PostStorage,
-    post_id: i64,
+    post_id: PostId,
     desired: &[TagLabel],
 ) -> Result<(), HandlerError> {
     let existing = posts.get_tags_for_post(post_id).await?;
@@ -310,7 +311,7 @@ pub async fn member_delete(
     Extension(posts): Extension<Arc<dyn PostStorage>>,
     Extension(subscriptions): Extension<Arc<dyn SubscriptionStorage>>,
     auth_user: AuthUser,
-    Path((username, post_id)): Path<(Username, i64)>,
+    Path((username, post_id)): Path<(Username, PostId)>,
     headers: HeaderMap,
 ) -> Result<Response, HandlerError> {
     let post = owned_post(
@@ -466,7 +467,7 @@ fn post_entry_response(
 pub async fn member_put(
     services: PostServices,
     auth_user: AuthUser,
-    Path((username, post_id)): Path<(Username, i64)>,
+    Path((username, post_id)): Path<(Username, PostId)>,
     headers: HeaderMap,
     body: String,
 ) -> Result<Response, HandlerError> {
@@ -550,12 +551,12 @@ pub async fn member_put(
 mod etag_tests {
     use super::*;
     use chrono::{TimeZone, Utc};
-    use common::ids::UserId;
+    use common::ids::{PostId, UserId};
     use storage::{PostFormat, PostTag, RenderedHtml};
 
     fn mk_tag(post_id: i64, tag_id: i64, slug: &str, display: &str) -> PostTag {
         PostTag {
-            post_id,
+            post_id: PostId::from(post_id),
             tag_id,
             tag_slug: slug.parse().expect("parse tag slug"),
             tag_display: display.parse().expect("parse tag label"),
@@ -568,7 +569,7 @@ mod etag_tests {
             .single()
             .expect("valid time");
         PostRecord {
-            post_id: 1,
+            post_id: PostId::from(1),
             user_id: UserId::from(1),
             author_username: "alice".parse().expect("parse username"),
             title: Some("Title".into()),
@@ -613,7 +614,7 @@ mod etag_tests {
             .single()
             .expect("valid time");
         let mut p = base_post();
-        p.post_id = 999;
+        p.post_id = PostId::from(999);
         p.user_id = UserId::from(42);
         p.slug = "other-slug".parse().expect("parse slug");
         p.created_at = later;

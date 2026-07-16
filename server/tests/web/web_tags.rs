@@ -1,3 +1,4 @@
+use common::ids::PostId;
 use common::tag::TagLabel;
 use common::visibility::AudienceTarget;
 use std::sync::Arc;
@@ -18,7 +19,7 @@ async fn seed_user_and_tagged_post(
     username: &str,
     slug: &str,
     tags: &[&str],
-) -> i64 {
+) -> PostId {
     let user_id = state
         .users
         .create_user(

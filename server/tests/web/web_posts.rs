@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::http::StatusCode;
 use chrono::Datelike;
-use common::ids::UserId;
+use common::ids::{PostId, UserId};
 use common::tag::TagLabel;
 use common::test_support::parse_audience_name;
 use storage::{PostFormat, RenderedHtml};
@@ -19,7 +19,7 @@ use storage::test_support::{backends, backends_matrix, Backend, TestBase, TestEn
 
 async fn unpublish_post_form(
     state: Arc<storage::AppState>,
-    post_id: i64,
+    post_id: PostId,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
     post_form(
@@ -50,7 +50,7 @@ async fn create_post_json(
 
 async fn update_post_json(
     state: Arc<storage::AppState>,
-    post_id: i64,
+    post_id: PostId,
     body: &str,
     format: &str,
     slug_override: Option<&str>,
@@ -82,7 +82,7 @@ async fn get_post_form(
 
 async fn get_post_preview_form(
     state: Arc<storage::AppState>,
-    post_id: i64,
+    post_id: PostId,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
     let body = format!("post_id={post_id}");
@@ -241,10 +241,19 @@ async fn unauthenticated_request(
             create_post_json(state, "body", "markdown", None, false, None).await
         }
         UnauthEndpoint::UpdatePost => {
-            update_post_json(state, 42, "body", "markdown", None, false, None).await
+            update_post_json(
+                state,
+                PostId::from(42),
+                "body",
+                "markdown",
+                None,
+                false,
+                None,
+            )
+            .await
         }
         UnauthEndpoint::ListDrafts => list_drafts_form(state, None, None, 10, None).await,
-        UnauthEndpoint::PublishPost => publish_post_form(state, 99, None).await,
+        UnauthEndpoint::PublishPost => publish_post_form(state, PostId::from(99), None).await,
         UnauthEndpoint::ListHomeFeed => list_home_feed_form(state, None, None, 50, None).await,
     }
 }
@@ -812,7 +821,7 @@ async fn get_post_returns_not_found_for_missing_post(#[case] backend: Backend) {
 async fn list_drafts_form(
     state: Arc<storage::AppState>,
     cursor_created_at: Option<&str>,
-    cursor_post_id: Option<i64>,
+    cursor_post_id: Option<PostId>,
     limit: u32,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
@@ -829,7 +838,7 @@ async fn list_drafts_form(
 
 async fn publish_post_form(
     state: Arc<storage::AppState>,
-    post_id: i64,
+    post_id: PostId,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
     post_form(
@@ -845,7 +854,7 @@ async fn list_user_posts_form(
     state: Arc<storage::AppState>,
     username: &str,
     cursor_created_at: Option<&str>,
-    cursor_post_id: Option<i64>,
+    cursor_post_id: Option<PostId>,
     limit: u32,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
@@ -882,7 +891,7 @@ async fn list_user_posts_by_tag_form(
 async fn list_local_timeline_form(
     state: Arc<storage::AppState>,
     cursor_created_at: Option<&str>,
-    cursor_post_id: Option<i64>,
+    cursor_post_id: Option<PostId>,
     limit: u32,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
@@ -900,7 +909,7 @@ async fn list_local_timeline_form(
 async fn list_home_feed_form(
     state: Arc<storage::AppState>,
     cursor_created_at: Option<&str>,
-    cursor_post_id: Option<i64>,
+    cursor_post_id: Option<PostId>,
     limit: u32,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
@@ -1237,7 +1246,7 @@ async fn update_post_returns_not_found_for_missing_post(#[case] backend: Backend
 
     let (status, body) = update_post_json(
         Arc::clone(&state),
-        99999,
+        PostId::from(99999),
         "body",
         "markdown",
         None,
@@ -1411,9 +1420,9 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
 
     assert_ne!(first_entry.post_id, second_entry.post_id);
     let mut ids = vec![first_entry.post_id, second_entry.post_id];
-    ids.sort_unstable();
+    ids.sort_unstable_by_key(|id| i64::from(*id));
     let mut expected_ids = vec![first_draft.post_id, second_draft.post_id];
-    expected_ids.sort_unstable();
+    expected_ids.sort_unstable_by_key(|id| i64::from(*id));
     assert_eq!(ids, expected_ids);
 }
 
@@ -1829,7 +1838,8 @@ async fn publish_post_returns_not_found_for_missing_or_deleted_posts(#[case] bac
             .unwrap(),
     );
 
-    let (status, body) = publish_post_form(Arc::clone(&state), 999_999, Some(&cookie)).await;
+    let (status, body) =
+        publish_post_form(Arc::clone(&state), PostId::from(999_999), Some(&cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 
@@ -2223,7 +2233,7 @@ async fn list_home_feed_returns_authenticated_users_published_posts_only(#[case]
 
 async fn delete_post_form(
     state: Arc<storage::AppState>,
-    post_id: i64,
+    post_id: PostId,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
     post_form(
@@ -3163,7 +3173,7 @@ async fn create_targeted_post(
     author: UserId,
     slug: &str,
     audiences: Vec<common::visibility::AudienceTarget>,
-) -> i64 {
+) -> PostId {
     state
         .posts
         .create_post(&storage::CreatePostInput {

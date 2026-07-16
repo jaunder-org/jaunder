@@ -18,6 +18,11 @@ pub struct UserId(i64);
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, IdNewtype)]
 pub struct AudienceId(i64);
 
+/// A post's row id. Newtyped so it can't be transposed with another `i64` id
+/// (user, tag, audience, …) at a call site.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, IdNewtype)]
+pub struct PostId(i64);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -64,5 +69,37 @@ mod tests {
         assert!("nope".parse::<AudienceId>().is_err());
         assert_eq!(serde_json::to_string(&id).unwrap(), "9");
         assert_eq!(serde_json::from_str::<AudienceId>("9").unwrap(), id);
+    }
+
+    #[test]
+    fn post_id_round_trips_through_i64() {
+        let id = PostId::from(42);
+        assert_eq!(i64::from(id), 42);
+        // Copy + Eq: a copy compares equal without moving the original.
+        let copy = id;
+        assert_eq!(copy, id);
+    }
+
+    #[test]
+    fn post_id_displays_as_the_bare_integer() {
+        assert_eq!(PostId::from(7).to_string(), "7");
+    }
+
+    #[test]
+    fn post_id_parses_from_a_string() {
+        // For sites that carry an id as a string (e.g. a Leptos route param).
+        assert_eq!("42".parse::<PostId>().unwrap(), PostId::from(42));
+        assert!("not-a-number".parse::<PostId>().is_err());
+    }
+
+    #[test]
+    fn post_id_serde_is_a_transparent_bare_integer() {
+        // Wire form is a plain integer, so a DTO field can adopt the type with no
+        // serialized-shape change; deserialize is an infallible wrap.
+        assert_eq!(serde_json::to_string(&PostId::from(42)).unwrap(), "42");
+        assert_eq!(
+            serde_json::from_str::<PostId>("42").unwrap(),
+            PostId::from(42)
+        );
     }
 }

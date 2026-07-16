@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use common::ids::UserId;
+use common::ids::{PostId, UserId};
 use common::password::Password;
 use common::tag::TagLabel;
 use common::test_support::{parse_audience_name, parse_content_hash, parse_display_name};
@@ -28,9 +28,9 @@ pub struct BackupFixtureIds {
     /// the `Named` audience — the viewer who must still see the private post.
     pub viewer: UserId,
     /// A `Public` post (visible to everyone, including anonymous).
-    pub public_post: i64,
+    pub public_post: PostId,
     /// A post targeted at a `Named` audience the viewer belongs to.
-    pub named_post: i64,
+    pub named_post: PostId,
 }
 
 /// Fixed microsecond-precision publish time: deterministic and safe from
@@ -100,7 +100,7 @@ async fn seed_named_audience_post(
     state: &AppState,
     author: UserId,
     password: &Password,
-) -> (UserId, i64) {
+) -> (UserId, PostId) {
     let viewer_name: Username = "viewer".parse().expect("valid username");
     let viewer = state
         .users

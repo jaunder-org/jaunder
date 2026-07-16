@@ -11,7 +11,7 @@ use crate::{
     CreatePostError, CreatePostInput, PostFormat, PostRecord, PostStorage, UpdatePostError,
     UpdatePostInput,
 };
-use common::ids::UserId;
+use common::ids::{PostId, UserId};
 use common::post_body::PostBody;
 use common::post_title::PostTitle;
 use common::render::{derive_post_metadata, render};
@@ -54,7 +54,7 @@ pub struct RenderedPostContent {
 pub async fn create_rendered_post(
     storage: &dyn PostStorage,
     content: RenderedPostContent,
-) -> Result<i64, CreatePostError> {
+) -> Result<PostId, CreatePostError> {
     let input = render_post_input(content);
     storage.create_post(&input).await
 }
@@ -126,7 +126,7 @@ pub fn seed_post_input(
 /// at every call site.
 pub struct RenderedPostUpdate {
     /// Post being edited.
-    pub post_id: i64,
+    pub post_id: PostId,
     /// User performing the edit (ownership is checked in storage).
     pub editor_user_id: UserId,
     /// Explicit title, or `None`.
@@ -261,7 +261,7 @@ impl PublishUpdate {
 /// (`title: Option<&str>` / `slug_override: Option<&Slug>`) named at every call site.
 pub struct PostUpdate<'a> {
     /// Post being edited.
-    pub post_id: i64,
+    pub post_id: PostId,
     /// User performing the edit (ownership is checked in storage).
     pub editor_user_id: UserId,
     /// Raw post body in `format`.

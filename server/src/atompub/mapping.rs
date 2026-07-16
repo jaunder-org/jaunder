@@ -187,6 +187,7 @@ pub fn post_to_entry(post: &PostRecord, base_url: &str) -> Entry {
 mod tests {
     use super::*;
     use chrono::{DateTime, Utc};
+    use common::ids::PostId;
     use common::ids::UserId;
 
     // -----------------------------------------------------------------------
@@ -537,7 +538,7 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(i, (tag_slug, tag_display))| storage::PostTag {
-                post_id,
+                post_id: PostId::from(post_id),
                 tag_id: i64::try_from(i).expect("tag index fits in i64") + 1,
                 tag_slug: tag_slug.parse().expect("parse tag"),
                 tag_display: tag_display.parse().expect("parse tag label"),
@@ -545,7 +546,7 @@ mod tests {
             .collect();
 
         PostRecord {
-            post_id,
+            post_id: PostId::from(post_id),
             user_id: UserId::from(1),
             author_username: "alice".parse().expect("parse username"),
             title: title.map(PostTitle::from),

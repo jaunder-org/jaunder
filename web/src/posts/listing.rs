@@ -8,7 +8,8 @@ use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use common::{
-    post_title::PostTitle, render::RenderedHtml, slug::Slug, tag::Tag, username::Username,
+    ids::PostId, post_title::PostTitle, render::RenderedHtml, slug::Slug, tag::Tag,
+    username::Username,
 };
 
 use crate::error::WebResult;
@@ -33,7 +34,7 @@ use {
 /// A published post row returned by timeline listing endpoints.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TimelinePostSummary {
-    pub post_id: i64,
+    pub post_id: PostId,
     pub username: Username,
     pub title: Option<PostTitle>,
     pub summary: Option<String>,
@@ -54,7 +55,7 @@ pub struct TimelinePostSummary {
 pub struct TimelinePage {
     pub posts: Vec<TimelinePostSummary>,
     pub next_cursor_created_at: Option<String>,
-    pub next_cursor_post_id: Option<i64>,
+    pub next_cursor_post_id: Option<PostId>,
     pub has_more: bool,
 }
 
@@ -94,7 +95,7 @@ pub async fn fetch_user_posts(
     viewer: &ViewerIdentity,
     username: &Username,
     cursor_created_at: Option<String>,
-    cursor_post_id: Option<i64>,
+    cursor_post_id: Option<PostId>,
     limit: Option<u32>,
 ) -> InternalResult<TimelinePage> {
     let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
@@ -123,7 +124,7 @@ pub async fn fetch_local_timeline(
     posts: &dyn PostStorage,
     viewer: &ViewerIdentity,
     cursor_created_at: Option<String>,
-    cursor_post_id: Option<i64>,
+    cursor_post_id: Option<PostId>,
     limit: Option<u32>,
 ) -> InternalResult<TimelinePage> {
     let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
@@ -144,7 +145,7 @@ pub async fn fetch_local_timeline(
 pub async fn list_user_posts(
     username: Username,
     cursor_created_at: Option<String>,
-    cursor_post_id: Option<i64>,
+    cursor_post_id: Option<PostId>,
     limit: Option<u32>,
 ) -> WebResult<TimelinePage> {
     boundary!("list_user_posts", {
@@ -166,7 +167,7 @@ pub async fn list_user_posts(
 #[server(endpoint = "/list_local_timeline")]
 pub async fn list_local_timeline(
     cursor_created_at: Option<String>,
-    cursor_post_id: Option<i64>,
+    cursor_post_id: Option<PostId>,
     limit: Option<u32>,
 ) -> WebResult<TimelinePage> {
     boundary!("list_local_timeline", {
@@ -187,7 +188,7 @@ pub async fn list_local_timeline(
 #[server(endpoint = "/list_home_feed")]
 pub async fn list_home_feed(
     cursor_created_at: Option<String>,
-    cursor_post_id: Option<i64>,
+    cursor_post_id: Option<PostId>,
     limit: Option<u32>,
 ) -> WebResult<TimelinePage> {
     boundary!("list_home_feed", {
@@ -240,7 +241,7 @@ pub async fn fetch_posts_by_tag(
     viewer: &ViewerIdentity,
     tag: &Tag,
     cursor_created_at: Option<String>,
-    cursor_post_id: Option<i64>,
+    cursor_post_id: Option<PostId>,
     limit: Option<u32>,
 ) -> InternalResult<TimelinePage> {
     let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
@@ -301,7 +302,7 @@ pub async fn fetch_user_posts_by_tag(
 pub async fn list_posts_by_tag(
     tag: Tag,
     cursor_created_at: Option<String>,
-    cursor_post_id: Option<i64>,
+    cursor_post_id: Option<PostId>,
     limit: Option<u32>,
 ) -> WebResult<TimelinePage> {
     boundary!("list_posts_by_tag", {
@@ -325,7 +326,7 @@ pub async fn list_user_posts_by_tag(
     username: Username,
     tag: Tag,
     cursor_created_at: Option<String>,
-    cursor_post_id: Option<i64>,
+    cursor_post_id: Option<PostId>,
     limit: Option<u32>,
 ) -> WebResult<TimelinePage> {
     boundary!("list_user_posts_by_tag", {

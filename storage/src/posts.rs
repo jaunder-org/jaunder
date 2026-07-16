@@ -6,7 +6,7 @@ use sqlx::{Database, Pool};
 use thiserror::Error;
 
 use common::feed::FeedPath;
-use common::ids::{AudienceId, UserId};
+use common::ids::{AudienceId, PostId, UserId};
 use common::post_body::PostBody;
 use common::post_title::PostTitle;
 use common::slug::Slug;
@@ -43,7 +43,7 @@ pub struct PermalinkDate {
 #[derive(Clone, Debug)]
 pub struct PostRecord {
     /// Unique internal identifier.
-    pub post_id: i64,
+    pub post_id: PostId,
     /// ID of the user who owns the post.
     pub user_id: UserId,
     /// Username of the author
@@ -110,7 +110,7 @@ pub struct PostRevisionRecord {
     /// Unique identifier for this revision.
     pub revision_id: i64,
     /// ID of the associated post.
-    pub post_id: i64,
+    pub post_id: PostId,
     /// ID of the user who made the edit.
     pub user_id: UserId,
     /// Title at the time of this revision.
@@ -178,7 +178,7 @@ pub struct PostCursor {
     /// Creation timestamp of the last item in the previous page.
     pub created_at: DateTime<Utc>,
     /// ID of the last item in the previous page (used for stable ordering).
-    pub post_id: i64,
+    pub post_id: PostId,
 }
 
 /// Cursor for keyset pagination of the editor-facing per-user collection
@@ -188,7 +188,7 @@ pub struct CollectionCursor {
     /// Update timestamp of the last item in the previous page.
     pub updated_at: DateTime<Utc>,
     /// ID of the last item in the previous page (used for stable ordering).
-    pub post_id: i64,
+    pub post_id: PostId,
 }
 
 /// Input for creating a new post.
@@ -247,7 +247,7 @@ pub struct TagRecord {
 /// A post-tag association returned by [`PostStorage`] tag queries.
 #[derive(Clone, Debug)]
 pub struct PostTag {
-    pub post_id: i64,
+    pub post_id: PostId,
     pub tag_id: i64,
     pub tag_slug: Tag,
     /// The original case-sensitive display name of the tag.
@@ -374,7 +374,7 @@ pub fn to_post_cursor(post: &PostRecord) -> PostCursor {
 /// `cursor_created_at` is not a valid RFC3339 instant.
 pub fn parse_post_cursor(
     cursor_created_at: Option<String>,
-    cursor_post_id: Option<i64>,
+    cursor_post_id: Option<PostId>,
 ) -> InternalResult<Option<PostCursor>> {
     match (cursor_created_at, cursor_post_id) {
         (None, None) => Ok(None),
@@ -405,7 +405,7 @@ pub fn parse_post_cursor(
 /// error (via `From<TaggingError>`) if a `tag_post`/`untag_post` write fails.
 pub async fn apply_post_tag_diff(
     posts: &dyn PostStorage,
-    post_id: i64,
+    post_id: PostId,
     desired: &[TagLabel],
 ) -> InternalResult<()> {
     let existing = posts.get_tags_for_post(post_id).await?;
@@ -529,13 +529,16 @@ pub fn list_by_tag_rows(
 #[async_trait]
 pub trait PostStorage: Send + Sync {
     /// Creates a new post.
-    async fn create_post(&self, input: &CreatePostInput) -> Result<i64, CreatePostError>;
+    async fn create_post(&self, input: &CreatePostInput) -> Result<PostId, CreatePostError>;
 
     /// Creates `inputs.len()` posts in a single transaction, returning their new
     /// ids in input order. All-or-nothing: any failure (e.g. a slug conflict on
     /// one row) rolls the whole batch back and nothing persists. An empty slice
     /// is a no-op returning an empty vec without opening a transaction.
-    async fn create_posts(&self, inputs: &[CreatePostInput]) -> Result<Vec<i64>, CreatePostError>;
+    async fn create_posts(
+        &self,
+        inputs: &[CreatePostInput],
+    ) -> Result<Vec<PostId>, CreatePostError>;
 
     /// Returns the `post_id` a `(user_id, key)` idempotency pair maps to, or
     /// `None` if the key was never used by that user. Used to look up the
@@ -544,14 +547,14 @@ pub trait PostStorage: Send + Sync {
         &self,
         user_id: UserId,
         key: &str,
-    ) -> Result<Option<i64>, sqlx::Error>;
+    ) -> Result<Option<PostId>, sqlx::Error>;
 
     /// Fetches a post by its ID, applying the viewer-resolution filter: the post
     /// is returned only if `viewer` is the author or a targeted audience admits
     /// them. See ADR-0020.
     async fn get_post_by_id(
         &self,
-        post_id: i64,
+        post_id: PostId,
         viewer: &ViewerIdentity,
     ) -> sqlx::Result<Option<PostRecord>>;
 
@@ -577,16 +580,16 @@ pub trait PostStorage: Send + Sync {
     /// [`UpdatePostError::Unauthorized`] if the editor isn't the owner.
     async fn update_post(
         &self,
-        post_id: i64,
+        post_id: PostId,
         editor_user_id: UserId,
         input: &UpdatePostInput,
     ) -> Result<PostRecord, UpdatePostError>;
 
     /// Marks a post as deleted without removing it from the database.
-    async fn soft_delete_post(&self, post_id: i64) -> sqlx::Result<()>;
+    async fn soft_delete_post(&self, post_id: PostId) -> sqlx::Result<()>;
 
     /// Reverts a published post to draft status.
-    async fn unpublish_post(&self, post_id: i64) -> sqlx::Result<()>;
+    async fn unpublish_post(&self, post_id: PostId) -> sqlx::Result<()>;
 
     /// Lists published posts for a specific user, ordered by creation date,
     /// applying the viewer-resolution filter. See ADR-0020.
@@ -651,13 +654,13 @@ pub trait PostStorage: Send + Sync {
     ) -> sqlx::Result<Vec<PostRecord>>;
 
     /// Associates a post with a tag. If the tag doesn't exist, it is created.
-    async fn tag_post(&self, post_id: i64, tag: &TagLabel) -> Result<(), TaggingError>;
+    async fn tag_post(&self, post_id: PostId, tag: &TagLabel) -> Result<(), TaggingError>;
 
     /// Removes a tag association from a post.
-    async fn untag_post(&self, post_id: i64, tag_slug: &Tag) -> Result<(), TaggingError>;
+    async fn untag_post(&self, post_id: PostId, tag_slug: &Tag) -> Result<(), TaggingError>;
 
     /// Returns all tags associated with a specific post.
-    async fn get_tags_for_post(&self, post_id: i64) -> sqlx::Result<Vec<PostTag>>;
+    async fn get_tags_for_post(&self, post_id: PostId) -> sqlx::Result<Vec<PostTag>>;
 
     /// Lists published posts that carry a specific tag, applying the
     /// viewer-resolution filter. See ADR-0020.
@@ -741,7 +744,7 @@ pub trait PostStorage: Send + Sync {
     /// `subscribers` → [`AudienceTarget::Subscribers`], `named` →
     /// [`AudienceTarget::Named`]); a post with no rows yields an empty vec
     /// (equivalent to [`AudienceTarget::Private`]). See ADR-0020.
-    async fn get_post_audiences(&self, post_id: i64) -> sqlx::Result<Vec<AudienceTarget>>;
+    async fn get_post_audiences(&self, post_id: PostId) -> sqlx::Result<Vec<AudienceTarget>>;
 }
 
 /// Backend-specific divergence for [`PostStore`].
@@ -778,20 +781,24 @@ pub trait PostDialect: Backend {
     /// Update a post and record a revision, returning the updated record.
     async fn update_post(
         pool: &Pool<Self>,
-        post_id: i64,
+        post_id: PostId,
         editor_user_id: UserId,
         input: &UpdatePostInput,
     ) -> Result<PostRecord, UpdatePostError>;
 
     /// Associate `post_id` with `tag` (its slug is the canonical key, its label
     /// the stored casing), creating the tag if it does not yet exist.
-    async fn tag_post(pool: &Pool<Self>, post_id: i64, tag: &TagLabel) -> Result<(), TaggingError>;
+    async fn tag_post(
+        pool: &Pool<Self>,
+        post_id: PostId,
+        tag: &TagLabel,
+    ) -> Result<(), TaggingError>;
 
     /// Remove a tag association; returns [`TaggingError::TagNotFound`] when no
     /// row was deleted.
     async fn untag_post(
         pool: &Pool<Self>,
-        post_id: i64,
+        post_id: PostId,
         tag_slug: &Tag,
     ) -> Result<(), TaggingError>;
 }
@@ -841,7 +848,7 @@ where
         skip(self, input),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn create_post(&self, input: &CreatePostInput) -> Result<i64, CreatePostError> {
+    async fn create_post(&self, input: &CreatePostInput) -> Result<PostId, CreatePostError> {
         let mut tx = self.pool.begin().await?;
         // On any error the `?` drops `tx`, which sqlx rolls back — equivalent to
         // the previous explicit `tx.rollback()` before returning. (`&mut tx`
@@ -856,7 +863,10 @@ where
         skip(self, inputs),
         fields(db.system = DB::DB_SYSTEM, count = inputs.len())
     )]
-    async fn create_posts(&self, inputs: &[CreatePostInput]) -> Result<Vec<i64>, CreatePostError> {
+    async fn create_posts(
+        &self,
+        inputs: &[CreatePostInput],
+    ) -> Result<Vec<PostId>, CreatePostError> {
         if inputs.is_empty() {
             return Ok(Vec::new());
         }
@@ -879,14 +889,15 @@ where
         &self,
         user_id: UserId,
         key: &str,
-    ) -> Result<Option<i64>, sqlx::Error> {
-        sqlx::query_scalar::<_, i64>(
+    ) -> Result<Option<PostId>, sqlx::Error> {
+        let post_id = sqlx::query_scalar::<_, i64>(
             "SELECT post_id FROM idempotency_keys WHERE user_id = $1 AND key = $2",
         )
         .bind(i64::from(user_id))
         .bind(key)
         .fetch_optional(&self.pool)
-        .await
+        .await?;
+        Ok(post_id.map(PostId::from))
     }
 
     #[tracing::instrument(
@@ -896,7 +907,7 @@ where
     )]
     async fn get_post_by_id(
         &self,
-        post_id: i64,
+        post_id: PostId,
         viewer: &ViewerIdentity,
     ) -> sqlx::Result<Option<PostRecord>> {
         let (resolution, binds, _) = resolution_where(viewer, 2);
@@ -910,7 +921,7 @@ where
                AND {resolution}",
             tags = DB::TAGS_SUBQUERY,
         );
-        let query = sqlx::query_as::<_, PostRow>(&sql).bind(post_id);
+        let query = sqlx::query_as::<_, PostRow>(&sql).bind(i64::from(post_id));
         let row = binds.bind_onto(query).fetch_optional(&self.pool).await?;
         Ok(row.map(post_record_from_row).transpose()?)
     }
@@ -920,7 +931,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn get_post_audiences(&self, post_id: i64) -> sqlx::Result<Vec<AudienceTarget>> {
+    async fn get_post_audiences(&self, post_id: PostId) -> sqlx::Result<Vec<AudienceTarget>> {
         // Owner-only: no viewer resolution. `ORDER BY` makes the result
         // deterministic so callers can compare vecs directly.
         let rows: Vec<(String, Option<i64>)> = sqlx::query_as(
@@ -930,7 +941,7 @@ where
              WHERE pa.post_id = $1 \
              ORDER BY tk.name, pa.audience_id",
         )
-        .bind(post_id)
+        .bind(i64::from(post_id))
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
@@ -988,7 +999,7 @@ where
     )]
     async fn update_post(
         &self,
-        post_id: i64,
+        post_id: PostId,
         editor_user_id: UserId,
         input: &UpdatePostInput,
     ) -> Result<PostRecord, UpdatePostError> {
@@ -1000,11 +1011,11 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn soft_delete_post(&self, post_id: i64) -> sqlx::Result<()> {
+    async fn soft_delete_post(&self, post_id: PostId) -> sqlx::Result<()> {
         let now = Utc::now();
         sqlx::query("UPDATE posts SET deleted_at = $1 WHERE post_id = $2")
             .bind(now)
-            .bind(post_id)
+            .bind(i64::from(post_id))
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -1015,9 +1026,9 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn unpublish_post(&self, post_id: i64) -> sqlx::Result<()> {
+    async fn unpublish_post(&self, post_id: PostId) -> sqlx::Result<()> {
         sqlx::query("UPDATE posts SET published_at = NULL WHERE post_id = $1")
-            .bind(post_id)
+            .bind(i64::from(post_id))
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -1061,7 +1072,7 @@ where
                 .bind(username.as_ref())
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
-                .bind(cursor.post_id)
+                .bind(i64::from(cursor.post_id))
                 .bind(now);
             binds
                 .bind_onto(query)
@@ -1133,7 +1144,7 @@ where
             let query = sqlx::query_as::<_, PostRow>(&sql)
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
-                .bind(cursor.post_id)
+                .bind(i64::from(cursor.post_id))
                 .bind(now);
             binds
                 .bind_onto(query)
@@ -1200,7 +1211,7 @@ where
                 .bind(i64::from(user_id))
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
-                .bind(cursor.post_id)
+                .bind(i64::from(cursor.post_id))
                 .bind(now)
                 .bind(i64::from(limit))
                 .fetch_all(&self.pool)
@@ -1258,7 +1269,7 @@ where
             sqlx::query_as::<_, PostRow>(&sql)
                 .bind(i64::from(user_id))
                 .bind(cursor.updated_at)
-                .bind(cursor.post_id)
+                .bind(i64::from(cursor.post_id))
                 .bind(i64::from(limit))
                 .fetch_all(&self.pool)
                 .await?
@@ -1288,7 +1299,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn tag_post(&self, post_id: i64, tag: &TagLabel) -> Result<(), TaggingError> {
+    async fn tag_post(&self, post_id: PostId, tag: &TagLabel) -> Result<(), TaggingError> {
         DB::tag_post(&self.pool, post_id, tag).await
     }
 
@@ -1297,7 +1308,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn untag_post(&self, post_id: i64, tag_slug: &Tag) -> Result<(), TaggingError> {
+    async fn untag_post(&self, post_id: PostId, tag_slug: &Tag) -> Result<(), TaggingError> {
         DB::untag_post(&self.pool, post_id, tag_slug).await
     }
 
@@ -1306,7 +1317,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn get_tags_for_post(&self, post_id: i64) -> sqlx::Result<Vec<PostTag>> {
+    async fn get_tags_for_post(&self, post_id: PostId) -> sqlx::Result<Vec<PostTag>> {
         let rows = sqlx::query_as::<_, (i64, i64, String, String)>(
             "SELECT pt.post_id, pt.tag_id, t.tag_slug, pt.tag_display
              FROM post_tags pt
@@ -1314,7 +1325,7 @@ where
              WHERE pt.post_id = $1
              ORDER BY t.tag_slug",
         )
-        .bind(post_id)
+        .bind(i64::from(post_id))
         .fetch_all(&self.pool)
         .await?;
 
@@ -1327,7 +1338,7 @@ where
                     .parse()
                     .map_err(|_| sqlx::Error::Decode("invalid tag label".into()))?;
                 Ok(PostTag {
-                    post_id,
+                    post_id: PostId::from(post_id),
                     tag_id,
                     tag_slug,
                     tag_display,
@@ -1386,7 +1397,7 @@ where
                 .bind(tag_slug.as_ref())
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
-                .bind(cursor.post_id)
+                .bind(i64::from(cursor.post_id))
                 .bind(now);
             binds
                 .bind_onto(query)
@@ -1482,7 +1493,7 @@ where
                 .bind(tag_slug.as_ref())
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
-                .bind(cursor.post_id)
+                .bind(i64::from(cursor.post_id))
                 .bind(now);
             binds
                 .bind_onto(query)
@@ -1844,7 +1855,7 @@ fn map_idempotency_insert_error(e: sqlx::Error) -> CreatePostError {
 pub(crate) async fn write_post_in_tx<DB>(
     conn: &mut DB::Connection,
     input: &CreatePostInput,
-) -> Result<i64, CreatePostError>
+) -> Result<PostId, CreatePostError>
 where
     DB: PostDialect,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -1882,6 +1893,7 @@ where
         sqlx::Error::Database(db) if db.is_unique_violation() => CreatePostError::SlugConflict,
         e => CreatePostError::Internal(e),
     })?;
+    let post_id = PostId::from(post_id);
 
     replace_post_audiences::<DB>(conn, post_id, &input.audiences).await?;
 
@@ -1894,7 +1906,7 @@ where
         sqlx::query("INSERT INTO idempotency_keys (user_id, key, post_id) VALUES ($1, $2, $3)")
             .bind(i64::from(input.user_id))
             .bind(key)
-            .bind(post_id)
+            .bind(i64::from(post_id))
             .execute(&mut *conn)
             .await
             .map_err(map_idempotency_insert_error)?;
@@ -1911,7 +1923,7 @@ where
 /// caller's executor so it shares the create/update transaction. See ADR-0020.
 pub(crate) async fn replace_post_audiences<DB>(
     conn: &mut DB::Connection,
-    post_id: i64,
+    post_id: PostId,
     audiences: &[AudienceTarget],
 ) -> sqlx::Result<()>
 where
@@ -1923,13 +1935,13 @@ where
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     sqlx::query(DB::DELETE_POST_AUDIENCES)
-        .bind(post_id)
+        .bind(i64::from(post_id))
         .execute(&mut *conn)
         .await?;
     for target in audiences {
         if let Some((kind_name, audience_id)) = audience_target_row(target) {
             sqlx::query(DB::INSERT_POST_AUDIENCE)
-                .bind(post_id)
+                .bind(i64::from(post_id))
                 .bind(audience_id)
                 .bind(kind_name)
                 .execute(&mut *conn)
@@ -2229,7 +2241,7 @@ mod tests {
 
     fn post_tag(slug: &str, display: &str) -> PostTag {
         PostTag {
-            post_id: 1,
+            post_id: PostId::from(1),
             tag_id: 0,
             tag_slug: slug.parse::<Tag>().expect("valid tag slug"),
             tag_display: display.parse::<TagLabel>().expect("valid tag label"),
@@ -2303,7 +2315,7 @@ mod tests {
     #[test]
     fn fallback_summary_label_prefers_body_then_title_then_slug() {
         let mut post = PostRecord {
-            post_id: 1,
+            post_id: PostId::from(1),
             user_id: UserId::from(1),
             author_username: "author".parse().unwrap(),
             title: Some("My Title".into()),
@@ -2340,7 +2352,7 @@ mod tests {
     fn permalink_formats_username_date_and_slug() {
         use chrono::TimeZone;
         let post = PostRecord {
-            post_id: 1,
+            post_id: PostId::from(1),
             user_id: UserId::from(1),
             author_username: "author".parse().unwrap(),
             title: Some("My Title".into()),
@@ -2417,7 +2429,7 @@ mod tests {
         let result = env
             .state
             .posts
-            .get_post_by_id(1, &ViewerIdentity::Anonymous)
+            .get_post_by_id(PostId::from(1), &ViewerIdentity::Anonymous)
             .await;
         assert!(result.is_err());
     }
@@ -2612,7 +2624,7 @@ mod tests {
     fn to_post_cursor_round_trips_through_parse() {
         use chrono::TimeZone;
         let post = PostRecord {
-            post_id: 42,
+            post_id: PostId::from(42),
             user_id: UserId::from(1),
             author_username: "author".parse().unwrap(),
             title: None,
@@ -2851,7 +2863,7 @@ mod tests {
                 let slug = "other-slug".parse::<Slug>().unwrap();
                 let page = (0..50_i64)
                     .map(|i| PostRecord {
-                        post_id: i,
+                        post_id: PostId::from(i),
                         user_id: UserId::from(1),
                         author_username: username.clone(),
                         title: None,
