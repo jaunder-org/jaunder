@@ -18,9 +18,9 @@ pub fn render_rss(meta: &FeedMetadata, items: &[FeedItem]) -> String {
         .iter()
         .map(|i| {
             ItemBuilder::default()
-                .title(i.title.clone())
+                .title(i.title.clone().map(String::from))
                 .link(Some(i.permalink.clone()))
-                .description(Some(i.content_html.clone()))
+                .description(Some(i.content_html.to_string()))
                 .pub_date(Some(i.published_at.to_rfc2822()))
                 .guid(Some(
                     GuidBuilder::default()
@@ -63,6 +63,8 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
+    use crate::render::RenderedHtml;
+    use crate::test_support::parse_post_title;
 
     fn meta(hub: Option<&str>) -> FeedMetadata {
         FeedMetadata {
@@ -78,10 +80,10 @@ mod tests {
     fn item(title: Option<&str>) -> FeedItem {
         FeedItem {
             id: 1,
-            title: title.map(str::to_string),
+            title: title.map(parse_post_title),
             permalink: "https://example.com/~alice/posts/1".into(),
             summary: None,
-            content_html: "<p>hi</p>".into(),
+            content_html: RenderedHtml::from_trusted("<p>hi</p>"),
             published_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
             updated_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
             tags: vec![],

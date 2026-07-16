@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 
+use crate::post_title::PostTitle;
+use crate::render::RenderedHtml;
 use crate::tag::TagLabel;
 
 #[derive(Debug, Clone)]
@@ -16,10 +18,10 @@ pub struct FeedMetadata {
 #[derive(Debug, Clone)]
 pub struct FeedItem {
     pub id: i64, // last_post_id input to ETag
-    pub title: Option<String>,
+    pub title: Option<PostTitle>,
     pub permalink: String,
     pub summary: Option<String>,
-    pub content_html: String,
+    pub content_html: RenderedHtml,
     pub published_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub tags: Vec<TagLabel>,
@@ -58,15 +60,16 @@ pub fn feed_etag(items: &[FeedItem], generated_at: DateTime<Utc>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::parse_post_title;
     use chrono::TimeZone;
 
     fn item(id: i64, ts: DateTime<Utc>) -> FeedItem {
         FeedItem {
             id,
-            title: Some("t".into()),
+            title: Some(parse_post_title("t")),
             permalink: "/p".into(),
             summary: None,
-            content_html: "<p>c</p>".into(),
+            content_html: RenderedHtml::from_trusted("<p>c</p>"),
             published_at: ts,
             updated_at: ts,
             tags: vec![],

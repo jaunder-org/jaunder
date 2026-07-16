@@ -12,6 +12,7 @@ use crate::audience::AudienceName;
 use crate::backup::RetentionCount;
 use crate::display_name::DisplayName;
 use crate::email::Email;
+use crate::post_title::PostTitle;
 use crate::token::RawToken;
 
 /// Parse `addr` into a valid [`Email`] for tests — the single place a test email
@@ -73,4 +74,12 @@ pub fn parse_retention_count(s: &str) -> RetentionCount {
 #[must_use]
 pub fn parse_raw_token(s: &str) -> RawToken {
     s.parse().expect("valid test raw token")
+}
+
+/// Build a [`PostTitle`] from `title` for tests — the single place a test title
+/// literal is wrapped, so the trimming `From<String>` isn't re-spelled at every feed
+/// fixture. `PostTitle` is infallible (no `FromStr`), so this cannot fail.
+#[must_use]
+pub fn parse_post_title(title: &str) -> PostTitle {
+    PostTitle::from(title.to_owned())
 }

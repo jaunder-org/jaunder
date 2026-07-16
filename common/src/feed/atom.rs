@@ -29,7 +29,7 @@ pub fn render_atom(meta: &FeedMetadata, items: &[FeedItem]) -> String {
         .map(|i| {
             let mut entry = Entry {
                 id: i.permalink.clone(),
-                title: Text::plain(i.title.clone().unwrap_or_default()),
+                title: Text::plain(i.title.clone().map(String::from).unwrap_or_default()),
                 updated: i.updated_at.fixed_offset(),
                 published: Some(i.published_at.fixed_offset()),
                 links: vec![Link {
@@ -39,7 +39,7 @@ pub fn render_atom(meta: &FeedMetadata, items: &[FeedItem]) -> String {
                 }],
                 content: Some(Content {
                     content_type: Some("html".to_string()),
-                    value: Some(i.content_html.clone()),
+                    value: Some(i.content_html.to_string()),
                     ..Default::default()
                 }),
                 categories: i
@@ -79,6 +79,8 @@ mod tests {
 
     use super::*;
     use crate::feed::metadata::{FeedItem, FeedMetadata};
+    use crate::render::RenderedHtml;
+    use crate::test_support::parse_post_title;
 
     fn meta(hub: Option<&str>) -> FeedMetadata {
         FeedMetadata {
@@ -94,10 +96,10 @@ mod tests {
     fn item() -> FeedItem {
         FeedItem {
             id: 1,
-            title: Some("Hello".into()),
+            title: Some(parse_post_title("Hello")),
             permalink: "https://example.com/~alice/posts/1".into(),
             summary: Some("hi".into()),
-            content_html: "<p>hi</p>".into(),
+            content_html: RenderedHtml::from_trusted("<p>hi</p>"),
             published_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
             updated_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
             tags: vec!["rust".parse().unwrap()],
