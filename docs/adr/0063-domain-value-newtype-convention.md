@@ -156,29 +156,35 @@ a `secret`; `RawToken` (always transmitted) is a bearer token.
 
 **Numeric IDs** take the same idea with a numeric trailer: `struct UserId(i64)`
 deriving `Clone, Copy, Debug, PartialEq, Eq, Hash`, plus `From<i64>` /
-`Into<i64>`, `Display`, and a **transparent-i64 serde bridge** — no `str`
-traits. The serde bridge keeps the wire form a bare integer, so a DTO field can
-adopt the type without changing any serialized shape; deserialize is an
-infallible wrap (an id has no value invariant, only the transposition
-guarantee).
+`Into<i64>`, `Display`, `FromStr`, and a **transparent-i64 serde bridge**. The
+serde bridge keeps the wire form a bare integer, so a DTO field can adopt the
+type without changing any serialized shape; deserialize is an infallible wrap
+(an id has no value invariant, only the transposition guarantee). `FromStr`
+delegates to `i64`'s parse and wraps — the inverse of `Display`, for the few
+sites that carry an id as a _string_ (a Leptos route param, whose `ParamsMap`
+yields `String`; a `subscriber_ref`), so `"42".parse::<UserId>()` works. It is
+**not** a validating chokepoint like a string newtype's `FromStr` (an id has no
+invariant beyond "is an integer"); no other `str` traits are provided.
 
 ### 3. The trailer is generated, not hand-written
 
 The trailer is mechanical and identical across types, so it lives in a
 `#[derive(StrNewtype)]` (and `#[derive(IdNewtype)]`) proc-macro in the
-**`macros` crate** (ADR-0062) — its second tenant. The derive generates
-everything except `FromStr` **and the std `#[derive]`s**
+**`macros` crate** (ADR-0062) — its second tenant. For a **string** newtype the
+derive generates everything except `FromStr` **and the std `#[derive]`s**
 (`Clone`/`Debug`/`PartialEq`/`Eq`/`Hash`/`Ord`/`Copy`). `FromStr` stays
 hand-written because the validation/normalization rule is the one genuinely
-per-type part; the std derives stay in the user's `#[derive(...)]` list so
-per-type variation is expressed idiomatically (Slug omits `Hash`, Tag adds
-`Ord`, a secret omits `Debug` so the generated redacting one applies). The serde
-bridge is emitted as **direct `Serialize`/`Deserialize` impls**, not a
-`#[serde(try_from/into)]` attribute (serialize borrows instead of cloning into a
-`String`; deserialize routes through `FromStr` so invalid input is rejected on
-the wire). No inherent `as_str()` is generated — the `str` traits replace it. A
-new domain newtype is then a struct, a derive, and a `FromStr` — not 40 lines of
-boilerplate that drift apart over time.
+per-type part. (A **numeric** `IdNewtype` has no such rule, so it _generates_
+its `FromStr` too — a non-validating delegate to `i64`'s parse, per §2.) The std
+derives stay in the user's `#[derive(...)]` list so per-type variation is
+expressed idiomatically (Slug omits `Hash`, Tag adds `Ord`, a secret omits
+`Debug` so the generated redacting one applies). The serde bridge is emitted as
+**direct `Serialize`/`Deserialize` impls**, not a `#[serde(try_from/into)]`
+attribute (serialize borrows instead of cloning into a `String`; deserialize
+routes through `FromStr` so invalid input is rejected on the wire). No inherent
+`as_str()` is generated — the `str` traits replace it. A new domain newtype is
+then a struct, a derive, and a `FromStr` — not 40 lines of boilerplate that
+drift apart over time.
 
 For a value whose invariant never rejects (only normalizes, or wraps verbatim),
 `#[str_newtype(infallible)]` supplies the trailer's

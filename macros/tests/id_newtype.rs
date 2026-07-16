@@ -1,6 +1,6 @@
 //! Exercises the surface `#[derive(IdNewtype)]` generates for an `i64`-backed id newtype:
-//! `From<i64>`/`From<Self> for i64`, `Display`, and a transparent-i64 serde bridge. `Copy`
-//! and the other std traits are user-derived (ADR-0063 numeric-ID trailer).
+//! `From<i64>`/`From<Self> for i64`, `Display`, `FromStr`, and a transparent-i64 serde
+//! bridge. `Copy` and the other std traits are user-derived (ADR-0063 numeric-ID trailer).
 
 use macros::IdNewtype;
 
@@ -25,6 +25,16 @@ fn copy_semantics() {
 #[test]
 fn display() {
     assert_eq!(format!("{}", Id(42)), "42");
+}
+
+#[test]
+fn from_str_parses_and_is_display_inverse() {
+    assert_eq!("42".parse::<Id>().unwrap(), Id(42));
+    assert_eq!("-7".parse::<Id>().unwrap(), Id(-7));
+    // Round-trips with `Display`.
+    assert_eq!(Id(42).to_string().parse::<Id>().unwrap(), Id(42));
+    // Non-integer input is rejected (delegates to `i64`'s parse error).
+    assert!("not-a-number".parse::<Id>().is_err());
 }
 
 #[test]

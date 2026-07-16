@@ -76,9 +76,7 @@ pub fn account_viewer(user_id: UserId, local_channel_id: Option<i64>) -> ViewerI
 #[must_use]
 pub fn viewer_user_id(viewer: &ViewerIdentity) -> Option<UserId> {
     match viewer {
-        ViewerIdentity::Channel { subscriber_ref, .. } => {
-            subscriber_ref.parse::<i64>().ok().map(UserId::from)
-        }
+        ViewerIdentity::Channel { subscriber_ref, .. } => subscriber_ref.parse::<UserId>().ok(),
         ViewerIdentity::Anonymous => None,
     }
 }
