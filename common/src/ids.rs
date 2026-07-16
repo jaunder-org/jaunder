@@ -27,6 +27,10 @@ pub struct PostId(i64);
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, IdNewtype)]
 pub struct SubscriptionId(i64);
 
+/// A channel's row id (the `local` channel and any future channels).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, IdNewtype)]
+pub struct ChannelId(i64);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,5 +121,17 @@ mod tests {
         assert!("nope".parse::<SubscriptionId>().is_err());
         assert_eq!(serde_json::to_string(&id).unwrap(), "9");
         assert_eq!(serde_json::from_str::<SubscriptionId>("9").unwrap(), id);
+    }
+
+    #[test]
+    fn channel_id_exercises_the_generated_surface() {
+        // Covers this type's generated From/Into/Display/FromStr/serde impls.
+        let id = ChannelId::from(9);
+        assert_eq!(i64::from(id), 9);
+        assert_eq!(id.to_string(), "9");
+        assert_eq!("9".parse::<ChannelId>().unwrap(), id);
+        assert!("nope".parse::<ChannelId>().is_err());
+        assert_eq!(serde_json::to_string(&id).unwrap(), "9");
+        assert_eq!(serde_json::from_str::<ChannelId>("9").unwrap(), id);
     }
 }
