@@ -81,9 +81,11 @@ pub fn run(db: &str, test_support_bin: &Path, jaunder_bin: &Path) -> anyhow::Res
             .args(&args)
             .env("JAUNDER_DB", db)
             .status()
-            .with_context(|| format!("spawning {} {}", path.display(), args[0]))?;
+            .with_context(|| format!("spawning {} {}", path.display(), args.join(" ")))?;
         if !status.success() {
-            bail!("{} {} failed ({status})", path.display(), args[0]);
+            // Full args, so a failing `site-config set <key>` names which write
+            // failed (both share args[0] = "site-config"); aids CI-VM debugging.
+            bail!("{} {} failed ({status})", path.display(), args.join(" "));
         }
     }
     Ok(())
