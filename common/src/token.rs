@@ -102,8 +102,8 @@ impl RawToken {
     /// cookie, a header, the wire) must go through [`FromStr`]/`TryFrom`, which
     /// validate.
     #[must_use]
-    pub fn from_generated(token: String) -> Self {
-        RawToken(token)
+    pub fn from_generated(token: impl Into<String>) -> Self {
+        RawToken(token.into())
     }
 }
 
@@ -133,8 +133,8 @@ impl TokenHash {
     /// **untrusted** source (a revoke form field, the wire) must go through
     /// [`FromStr`]/`TryFrom`, which validate.
     #[must_use]
-    pub fn from_digest(digest: String) -> Self {
-        TokenHash(digest)
+    pub fn from_digest(digest: impl Into<String>) -> Self {
+        TokenHash(digest.into())
     }
 }
 
@@ -179,8 +179,8 @@ mod tests {
     #[test]
     fn trusted_constructors_wrap_without_validation() {
         // The trusted doors skip validate_shape (the caller asserts provenance).
-        assert_eq!(RawToken::from_generated("abc".to_string()).as_ref(), "abc");
-        assert_eq!(TokenHash::from_digest("xyz".to_string()).as_ref(), "xyz");
+        assert_eq!(RawToken::from_generated("abc").as_ref(), "abc");
+        assert_eq!(TokenHash::from_digest("xyz").as_ref(), "xyz");
     }
 
     #[test]

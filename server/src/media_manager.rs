@@ -574,7 +574,7 @@ mod tests {
         let auth = web::auth::AuthUser {
             user_id,
             username: "uploader".parse().unwrap(),
-            token_hash: common::token::TokenHash::from_digest(String::new()),
+            token_hash: common::token::TokenHash::from_digest(""),
         };
 
         // A tiny PNG signature + IHDR-ish bytes (content need not be a valid image).
@@ -621,7 +621,7 @@ mod tests {
         let auth = web::auth::AuthUser {
             user_id,
             username: "uploader".parse().unwrap(),
-            token_hash: common::token::TokenHash::from_digest(String::new()),
+            token_hash: common::token::TokenHash::from_digest(""),
         };
 
         let err = manager
