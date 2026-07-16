@@ -6,7 +6,7 @@
 //! token-general rule, kept here so every token newtype's `FromStr` delegates to a
 //! single source of truth rather than re-deriving it.
 
-use std::str::FromStr;
+use std::{fmt, str::FromStr};
 
 use macros::StrNewtype;
 use thiserror::Error;
@@ -35,19 +35,24 @@ pub fn validate_shape(s: &str) -> Result<(), InvalidTokenShape> {
     Ok(())
 }
 
-/// A raw, secret bearer token — a freshly minted session token, password-reset
-/// token, or email-verification token (all from the same generator). Whoever
-/// holds it *is* the credential, so it is secret-bearing per ADR-0063
-/// (`#[str_newtype(secret, serde)]`): a redacting `Debug` keeps it out of spans
-/// and logs (ADR-0011), and the only surfaces are `AsRef<str>`, `TryFrom<String>`,
-/// and the validating serde bridge (it crosses the wire in the app-password
-/// response). Hashing (`host::token::hash`) is the sole path to a [`TokenHash`];
-/// there is deliberately no `PartialEq`/`Display`/`Deref` and no conversion the
-/// other way, so a raw token can never be compared with, or mistaken for, its hash.
+/// A raw bearer token — a freshly minted session token, password-reset token, or
+/// email-verification token (all from the same generator). It carries the **full
+/// ergonomic** ADR-0063 trailer (`Display`, `Deref<str>`, `AsRef`, `PartialEq<str>`,
+/// serde) because it is *deliberately transmitted* — into `Set-Cookie`, the
+/// app-password response, `Bearer` headers, reset/verify URLs — so interpolating or
+/// binding it must cost nothing.
 ///
-/// The distinction is enforced by the type system — each of these does **not**
-/// compile, which is why `revoke_session(raw_token)` and `raw == stored_hash`
-/// cannot typecheck either:
+/// Its one deviation from the standard trailer is a **hand-written redacting
+/// `Debug`** (it is never `#[derive(Debug)]`'d): the token is a credential and the
+/// real hazard is an accidental `{:?}` in a log or span (ADR-0011), not a deliberate
+/// render. This is the *bearer-token* profile — distinct from ADR-0063's **secret**
+/// exception (`Password`), which forbids `Display`/`Deref` outright because a
+/// password must never be rendered or transmitted at all.
+///
+/// The type stays distinct from [`TokenHash`]: hashing (`host::token::hash`) is the
+/// only path between them, there is no reverse conversion, and no cross-type
+/// `PartialEq` — so each of these does **not** compile, which is why
+/// `revoke_session(raw_token)` and `raw == stored_hash` cannot typecheck either:
 /// ```compile_fail
 /// let _ = common::token::RawToken("abc".to_string()); // private field
 /// ```
@@ -68,8 +73,16 @@ pub fn validate_shape(s: &str) -> Result<(), InvalidTokenShape> {
 /// let _ = raw == hash; // no cross-type PartialEq
 /// ```
 #[derive(Clone, StrNewtype)]
-#[str_newtype(secret, serde)]
 pub struct RawToken(String);
+
+impl fmt::Debug for RawToken {
+    /// Redacts the token body so a stray `{:?}` in a log or span cannot leak the
+    /// credential (ADR-0011). Hand-written because the standard ergonomic trailer
+    /// does not emit `Debug`; `RawToken` must never be `#[derive(Debug)]`'d.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("RawToken([redacted])")
+    }
+}
 
 impl FromStr for RawToken {
     type Err = InvalidTokenShape;

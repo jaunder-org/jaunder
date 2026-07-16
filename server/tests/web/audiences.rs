@@ -29,7 +29,7 @@ async fn cookie_for(state: &Arc<storage::AppState>, user_id: i64) -> String {
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    format!("session={}", token.as_ref())
+    format!("session={token}")
 }
 
 /// Parses the JSON-encoded `i64` that `create_audience` returns.

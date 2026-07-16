@@ -284,7 +284,7 @@ async fn create_session_cookie(
         .await
         .unwrap();
 
-    format!("session={}", token.as_ref())
+    format!("session={token}")
 }
 
 #[apply(backends)]

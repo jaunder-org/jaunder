@@ -52,7 +52,7 @@ async fn upload_returns_201_with_json(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={}", token.as_ref());
+    let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage);
@@ -144,7 +144,7 @@ async fn serve_returns_200_with_cache_headers(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={}", token.as_ref());
+    let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage);
@@ -280,7 +280,7 @@ async fn proxy_redirects_authenticated(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={}", token.as_ref());
+    let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage);
@@ -333,7 +333,7 @@ async fn serve_returns_304_on_if_none_match(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={}", token.as_ref());
+    let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage);
@@ -401,7 +401,7 @@ async fn upload_returns_400_for_empty_multipart(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={}", token.as_ref());
+    let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage);
@@ -447,7 +447,7 @@ async fn upload_deduplicates_same_content(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={}", token.as_ref());
+    let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
 
@@ -464,7 +464,7 @@ async fn upload_deduplicates_same_content(#[case] backend: Backend) {
                         header::CONTENT_TYPE,
                         format!("multipart/form-data; boundary={boundary}"),
                     )
-                    .header(header::COOKIE, format!("session={}", token.as_ref()))
+                    .header(header::COOKIE, format!("session={token}"))
                     .body(Body::from(body_bytes))
                     .unwrap(),
             )
@@ -509,7 +509,7 @@ async fn upload_quota_exceeded_returns_507(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={}", token.as_ref());
+    let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage);
@@ -561,7 +561,7 @@ async fn upload_at_max_file_size_boundary_succeeds(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={}", token.as_ref());
+    let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage);
@@ -617,7 +617,7 @@ async fn upload_one_byte_over_max_file_size_is_rejected(#[case] backend: Backend
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={}", token.as_ref());
+    let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage);
@@ -673,7 +673,7 @@ async fn upload_at_exact_quota_succeeds(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={}", token.as_ref());
+    let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage);
@@ -724,7 +724,7 @@ async fn proxy_rejects_mismatched_user_id(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={}", token.as_ref());
+    let cookie = format!("session={token}");
 
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage);

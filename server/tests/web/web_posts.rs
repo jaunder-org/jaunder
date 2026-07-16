@@ -107,7 +107,7 @@ async fn create_post_persists_rendered_published_post(#[case] backend: Backend) 
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={}", token.as_ref());
+    let cookie = format!("session={token}");
 
     // Title embedded as # heading in the body (verbatim storage)
     let (status, body) = create_post_json(
@@ -186,7 +186,7 @@ async fn create_post_retries_slug_conflicts_for_same_user_and_date(#[case] backe
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={}", token.as_ref());
+    let cookie = format!("session={token}");
 
     // Title embedded as # heading; two posts with same heading produce conflicting slugs
     let (first_status, first_body) = create_post_json(
@@ -286,7 +286,7 @@ async fn create_post_accepts_slug_override_and_saves_draft(#[case] backend: Back
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={}", token.as_ref());
+    let cookie = format!("session={token}");
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -342,7 +342,7 @@ async fn create_post_accepts_titleless_body(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={}", token.as_ref());
+    let cookie = format!("session={token}");
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -389,7 +389,7 @@ async fn create_post_extracts_markdown_heading_title(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={}", token.as_ref());
+    let cookie = format!("session={token}");
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -459,7 +459,7 @@ async fn create_post_rejects(
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={}", token.as_ref());
+    let cookie = format!("session={token}");
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -494,7 +494,7 @@ async fn get_post_returns_published_post(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={}", token.as_ref());
+    let cookie = format!("session={token}");
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -943,7 +943,7 @@ async fn update_post_updates_draft_content_and_slug(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={}", token.as_ref());
+    let cookie = format!("session={token}");
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -1010,7 +1010,7 @@ async fn update_post_freezes_slug_when_published(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={}", token.as_ref());
+    let cookie = format!("session={token}");
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -1065,7 +1065,7 @@ async fn update_post_publishes_draft(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={}", token.as_ref());
+    let cookie = format!("session={token}");
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -1198,7 +1198,7 @@ async fn update_post_rejects(
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={}", token.as_ref());
+    let cookie = format!("session={token}");
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -1246,7 +1246,7 @@ async fn update_post_returns_not_found_for_missing_post(#[case] backend: Backend
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={}", token.as_ref());
+    let cookie = format!("session={token}");
 
     let (status, body) = update_post_json(
         Arc::clone(&state),
@@ -1282,7 +1282,7 @@ async fn update_post_returns_not_found_for_deleted_post(#[case] backend: Backend
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={}", token.as_ref());
+    let cookie = format!("session={token}");
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -1531,7 +1531,7 @@ async fn create_post_with_future_publish_at_is_scheduled(#[case] backend: Backen
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={}", token.as_ref());
+    let cookie = format!("session={token}");
 
     let future = chrono::Utc.with_ymd_and_hms(2099, 1, 1, 0, 0, 0).unwrap();
     let payload = serde_json::json!({
@@ -1599,7 +1599,7 @@ async fn create_post_publish_without_publish_at_is_live_now(#[case] backend: Bac
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={}", token.as_ref());
+    let cookie = format!("session={token}");
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -3538,7 +3538,7 @@ async fn user_with_cookie(state: &Arc<storage::AppState>, username: &str) -> Str
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    format!("session={}", token.as_ref())
+    format!("session={token}")
 }
 
 #[apply(backends)]

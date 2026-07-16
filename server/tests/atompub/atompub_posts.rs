@@ -376,7 +376,7 @@ async fn seed_alice(state: &Arc<storage::AppState>) -> (i64, String) {
         .create_session(user_id, "MarsEdit")
         .await
         .unwrap();
-    (user_id, token.as_ref().to_string())
+    (user_id, token.to_string())
 }
 
 // Shape B — the cursor accept/reject pair. Both seed `alice`, issue a GET to the

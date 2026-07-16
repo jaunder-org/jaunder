@@ -37,6 +37,20 @@ pub struct Credential {
 /// `None` when no recognized credential is present.
 #[must_use]
 pub fn resolve_credential(headers: &http::HeaderMap) -> Option<Credential> {
+    // Validate a token string into a `RawToken`, yielding a `Credential` — or
+    // `None` when the value isn't a syntactically valid token (empty or
+    // out-of-charset). A skipped source does not short-circuit, so e.g. an empty
+    // `session=` cookie falls through to a valid `Authorization` header (#344 item 2).
+    fn credential(
+        raw: &str,
+        expected_username: Option<common::username::Username>,
+    ) -> Option<Credential> {
+        Some(Credential {
+            token: RawToken::from_str(raw).ok()?,
+            expected_username,
+        })
+    }
+
     let from_cookie = headers
         .get(http::header::COOKIE)
         .and_then(|v| v.to_str().ok())
@@ -44,14 +58,7 @@ pub fn resolve_credential(headers: &http::HeaderMap) -> Option<Credential> {
             s.split(';')
                 .map(str::trim)
                 .find_map(|c| c.strip_prefix("session="))
-                // Parse the value as a `RawToken` and contribute a credential only
-                // on success: an empty or malformed `session=` value is skipped so
-                // it no longer short-circuits past a valid header (#344 item 2).
-                .and_then(|token| RawToken::from_str(token).ok())
-                .map(|token| Credential {
-                    token,
-                    expected_username: None,
-                })
+                .and_then(|token| credential(token, None))
         });
     if from_cookie.is_some() {
         return from_cookie;
@@ -61,16 +68,10 @@ pub fn resolve_credential(headers: &http::HeaderMap) -> Option<Credential> {
         .get(http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())?;
     if let Some(token) = header.strip_prefix("Bearer ") {
-        RawToken::from_str(token).ok().map(|token| Credential {
-            token,
-            expected_username: None,
-        })
+        credential(token, None)
     } else {
         let (username, password) = common::auth::parse_basic_auth(header)?;
-        RawToken::from_str(&password).ok().map(|token| Credential {
-            token,
-            expected_username: Some(username),
-        })
+        credential(&password, Some(username))
     }
 }
 
@@ -81,8 +82,8 @@ pub fn session_cookie_header(token: &RawToken, secure: bool) -> String {
     let secure_attr = if secure { "; Secure" } else { "" };
     // `token` is a `RawToken`, so its value is base64url by construction: the
     // charset cannot contain the `;`/newline separators a cookie header uses, so
-    // interpolating it here cannot inject extra attributes or headers (#344 item 3).
-    let token = token.as_ref();
+    // interpolating it here (via its `Display`) cannot inject extra attributes or
+    // headers (#344 item 3).
     format!("session={token}; HttpOnly; SameSite=Lax; Path=/{secure_attr}")
 }
 
@@ -112,7 +113,7 @@ mod tests {
             http::HeaderValue::from_static("Bearer bearer-token"),
         );
         let credential = resolve_credential(&headers).expect("credential");
-        assert_eq!(credential.token.as_ref(), "cookie-token");
+        assert_eq!(credential.token, "cookie-token");
         assert_eq!(credential.expected_username, None);
     }
 
@@ -120,7 +121,7 @@ mod tests {
     fn resolve_credential_reads_bearer_token() {
         let headers = headers_with(http::header::AUTHORIZATION, "Bearer bearer-token");
         let credential = resolve_credential(&headers).expect("credential");
-        assert_eq!(credential.token.as_ref(), "bearer-token");
+        assert_eq!(credential.token, "bearer-token");
         assert_eq!(credential.expected_username, None);
     }
 
@@ -129,7 +130,7 @@ mod tests {
         // base64("alice:tok123") == "YWxpY2U6dG9rMTIz"
         let headers = headers_with(http::header::AUTHORIZATION, "Basic YWxpY2U6dG9rMTIz");
         let credential = resolve_credential(&headers).expect("credential");
-        assert_eq!(credential.token.as_ref(), "tok123");
+        assert_eq!(credential.token, "tok123");
         assert_eq!(credential.expected_username.as_deref(), Some("alice"));
     }
 
@@ -151,7 +152,7 @@ mod tests {
             "Bearer abcABC012-_".parse().unwrap(),
         );
         let credential = resolve_credential(&headers).expect("credential from header");
-        assert_eq!(credential.token.as_ref(), "abcABC012-_");
+        assert_eq!(credential.token, "abcABC012-_");
     }
 
     #[test]

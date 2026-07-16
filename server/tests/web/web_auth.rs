@@ -477,7 +477,7 @@ async fn logout_revokes_session_and_clears_cookie(#[case] backend: Backend) {
         "one session should exist before logout"
     );
 
-    let cookie_header = format!("session={}", raw_token.as_ref());
+    let cookie_header = format!("session={raw_token}");
     let (status, set_cookie, _body) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/logout",
@@ -745,7 +745,7 @@ async fn logout_clears_cookie_without_secure_attribute_when_disabled(#[case] bac
         .await
         .unwrap();
 
-    let cookie_header = format!("session={}", raw_token.as_ref());
+    let cookie_header = format!("session={raw_token}");
     let (status, set_cookie, _) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/logout",
@@ -781,7 +781,7 @@ async fn current_user_returns_username_when_authenticated(#[case] backend: Backe
         .await
         .unwrap();
 
-    let cookie_header = format!("session={}", raw_token.as_ref());
+    let cookie_header = format!("session={raw_token}");
     let (status, _, body) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/current_user",

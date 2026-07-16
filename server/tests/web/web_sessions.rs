@@ -30,7 +30,7 @@ async fn create_user_and_session(
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={}", raw_token.as_ref());
+    let cookie = format!("session={raw_token}");
     (user_id, raw_token, cookie)
 }
 

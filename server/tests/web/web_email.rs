@@ -34,7 +34,7 @@ async fn request_email_verification_creates_row_and_sends_email(#[case] backend:
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={}", raw_token.as_ref());
+    let cookie = format!("session={raw_token}");
 
     let (status, _body) = post_form_with_mailer(
         Arc::clone(&state),
@@ -88,7 +88,7 @@ async fn verify_email_with_valid_token_sets_email_verified(#[case] backend: Back
         Arc::clone(&state),
         mailer.clone() as Arc<dyn common::mailer::MailSender>,
         "/api/verify_email",
-        format!("token={}", raw_token.as_ref()),
+        format!("token={raw_token}"),
         None,
     )
     .await;
@@ -129,7 +129,7 @@ async fn verify_email_with_expired_token_returns_error(#[case] backend: Backend)
         Arc::clone(&state),
         mailer.clone() as Arc<dyn common::mailer::MailSender>,
         "/api/verify_email",
-        format!("token={}", raw_token.as_ref()),
+        format!("token={raw_token}"),
         None,
     )
     .await;
@@ -192,7 +192,7 @@ async fn request_email_verification_invalid_email_returns_error(#[case] backend:
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie_header = format!("session={}", raw_token.as_ref());
+    let cookie_header = format!("session={raw_token}");
 
     let (status, _) = post_form_with_mailer(
         state,

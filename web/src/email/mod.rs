@@ -33,7 +33,7 @@ pub async fn request_email_verification(email: Email) -> WebResult<()> {
             .create_email_verification(auth.user_id, &email, expires_at)
             .await?;
 
-        let link = format!("/verify-email?token={}", raw_token.as_ref());
+        let link = format!("/verify-email?token={raw_token}");
         let message = EmailMessage {
             from: None,
             to: vec![email],

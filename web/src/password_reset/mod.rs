@@ -49,7 +49,7 @@ pub async fn request_password_reset(username: Username) -> WebResult<()> {
             .create_password_reset(user_id, expires_at)
             .await?;
 
-        let link = format!("/reset-password?token={}", raw_token.as_ref());
+        let link = format!("/reset-password?token={raw_token}");
         let message = EmailMessage {
             from: None,
             to: vec![verified_email],
