@@ -6,6 +6,7 @@ pub mod display_name;
 pub mod email;
 pub mod feed;
 pub mod invite;
+pub mod mailbox;
 pub mod mailer;
 pub mod media;
 pub mod password;

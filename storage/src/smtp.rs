@@ -1,5 +1,6 @@
 use std::{fmt, str::FromStr};
 
+use common::mailbox::Mailbox;
 use thiserror::Error;
 
 use crate::SiteConfigStorage;
@@ -65,7 +66,7 @@ pub struct SmtpConfig {
     /// Optional SMTP auth password.
     pub password: Option<String>,
     /// Sender address (e.g. `"Jaunder <noreply@example.com>"`).
-    pub sender: email_address::EmailAddress,
+    pub sender: Mailbox,
 }
 
 // ---------------------------------------------------------------------------
@@ -138,7 +139,7 @@ pub async fn load_smtp_config(
         .unwrap_or_else(|| "Jaunder <noreply@localhost>".to_owned());
 
     let sender = sender_str
-        .parse::<email_address::EmailAddress>()
+        .parse::<Mailbox>()
         .map_err(|_| SmtpConfigError::InvalidSender(sender_str))?;
 
     Ok(Some(SmtpConfig {
@@ -251,9 +252,7 @@ mod tests {
         assert_eq!(config.password, Some("s3cr3t".to_owned()));
         assert_eq!(
             config.sender,
-            "Jaunder <noreply@example.com>"
-                .parse::<email_address::EmailAddress>()
-                .unwrap()
+            "Jaunder <noreply@example.com>".parse::<Mailbox>().unwrap()
         );
     }
 
@@ -274,9 +273,7 @@ mod tests {
         assert_eq!(config.password, None);
         assert_eq!(
             config.sender,
-            "Jaunder <noreply@localhost>"
-                .parse::<email_address::EmailAddress>()
-                .unwrap()
+            "Jaunder <noreply@localhost>".parse::<Mailbox>().unwrap()
         );
     }
 
