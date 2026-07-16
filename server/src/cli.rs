@@ -228,6 +228,49 @@ pub enum Commands {
         #[arg(required = true)]
         path: PathBuf,
     },
+
+    /// Read or write `site_config` key/value entries (set/get/list).
+    ///
+    /// The storage directory must already be initialized via `jaunder init`.
+    SiteConfig {
+        #[command(subcommand)]
+        action: SiteConfigAction,
+    },
+}
+
+/// `site-config` leaf actions. `site_config` is a free-form key/value store;
+/// values are not validated. Known keys include `site.registration_policy`,
+/// `site.title`, `site.base_url`, `feeds.websub_hub_url`, `feeds.min_items`,
+/// `feeds.min_days`, `posts.default_audience`, and the `backup.*` keys.
+#[derive(Subcommand, Clone)]
+pub enum SiteConfigAction {
+    /// Set (upsert) a key to a value.
+    Set {
+        #[command(flatten)]
+        storage: StorageArgs,
+
+        /// The `site_config` key (e.g. `feeds.websub_hub_url`).
+        key: String,
+
+        /// The value to store (free-form; a leading `-` is allowed).
+        #[arg(allow_hyphen_values = true)]
+        value: String,
+    },
+
+    /// Print the value for a key (nothing, and a non-zero exit, if unset).
+    Get {
+        #[command(flatten)]
+        storage: StorageArgs,
+
+        /// The `site_config` key to read.
+        key: String,
+    },
+
+    /// Print every entry as `key=value`, one per line, ordered by key.
+    List {
+        #[command(flatten)]
+        storage: StorageArgs,
+    },
 }
 
 #[cfg(test)]
@@ -638,6 +681,83 @@ mod tests {
         let _guard = ENV_LOCK.lock().expect("env lock");
         let result = Cli::try_parse_from(["jaunder", "restore"]);
         assert!(result.is_err());
+    }
+
+    // --- site-config ---
+
+    #[test]
+    fn site_config_set_parses_positional_key_value() {
+        let cli = parse(&["site-config", "set", "feeds.websub_hub_url", "https://h/"]);
+        let Commands::SiteConfig { action } = cli.command.expect("subcommand") else {
+            unreachable!("parse yields site-config")
+        };
+        let SiteConfigAction::Set { key, value, .. } = action else {
+            unreachable!("parse yields set")
+        };
+        assert_eq!(key, "feeds.websub_hub_url");
+        assert_eq!(value, "https://h/");
+    }
+
+    #[test]
+    fn site_config_set_allows_hyphen_leading_value() {
+        let cli = parse(&["site-config", "set", "some.key", "-dashy"]);
+        let Commands::SiteConfig { action } = cli.command.expect("subcommand") else {
+            unreachable!("parse yields site-config")
+        };
+        let SiteConfigAction::Set { value, .. } = action else {
+            unreachable!("parse yields set")
+        };
+        assert_eq!(value, "-dashy");
+    }
+
+    #[test]
+    fn site_config_set_accepts_db_flag_after_positionals() {
+        // The allow_hyphen_values value must not swallow the flattened --db flag.
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let cli = parse(&[
+            "site-config",
+            "set",
+            "some.key",
+            "val",
+            "--db",
+            "sqlite:./x.db",
+        ]);
+        let Commands::SiteConfig { action } = cli.command.expect("subcommand") else {
+            unreachable!("parse yields site-config")
+        };
+        let SiteConfigAction::Set { key, value, .. } = action else {
+            unreachable!("parse yields set")
+        };
+        assert_eq!((key.as_str(), value.as_str()), ("some.key", "val"));
+    }
+
+    #[test]
+    fn site_config_get_parses_key() {
+        let cli = parse(&["site-config", "get", "site.title"]);
+        let Commands::SiteConfig { action } = cli.command.expect("subcommand") else {
+            unreachable!("parse yields site-config")
+        };
+        let SiteConfigAction::Get { key, .. } = action else {
+            unreachable!("parse yields get")
+        };
+        assert_eq!(key, "site.title");
+    }
+
+    #[test]
+    fn site_config_list_parses() {
+        let cli = parse(&["site-config", "list"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::SiteConfig {
+                action: SiteConfigAction::List { .. },
+            })
+        ));
+    }
+
+    #[test]
+    fn site_config_set_missing_value_is_clap_error() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        assert!(Cli::try_parse_from(["jaunder", "site-config", "set", "only.key"]).is_err());
     }
 
     #[test]
