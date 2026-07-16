@@ -50,7 +50,9 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jaunder::cli::{Cli, CliBackupMode, Commands, PgBootstrapArgs, StorageArgs};
+    use jaunder::cli::{
+        Cli, CliBackupMode, Commands, PgBootstrapArgs, SiteConfigAction, StorageArgs,
+    };
     use tempfile::TempDir;
 
     fn test_storage_args(base: &TempDir) -> StorageArgs {
@@ -124,6 +126,112 @@ mod tests {
             verbose: false,
         };
         run(cli).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn run_site_config_set_get_list_unset_dispatch() {
+        let base = TempDir::new().unwrap();
+        let storage = test_storage_args(&base);
+        run(Cli {
+            command: Some(Commands::Init {
+                storage: storage.clone(),
+                skip_if_exists: false,
+            }),
+            verbose: false,
+        })
+        .await
+        .unwrap();
+
+        // set dispatches and upserts through the real storage path.
+        run(Cli {
+            command: Some(Commands::SiteConfig {
+                action: SiteConfigAction::Set {
+                    storage: storage.clone(),
+                    key: "site.registration_policy".to_string(),
+                    value: "open".to_string(),
+                },
+            }),
+            verbose: false,
+        })
+        .await
+        .unwrap();
+
+        // get of a set key dispatches and succeeds.
+        run(Cli {
+            command: Some(Commands::SiteConfig {
+                action: SiteConfigAction::Get {
+                    storage: storage.clone(),
+                    key: "site.registration_policy".to_string(),
+                },
+            }),
+            verbose: false,
+        })
+        .await
+        .expect("get of a set key succeeds");
+
+        // get of an unset key dispatches and errors (→ non-zero exit).
+        let missing = run(Cli {
+            command: Some(Commands::SiteConfig {
+                action: SiteConfigAction::Get {
+                    storage: storage.clone(),
+                    key: "does.not.exist".to_string(),
+                },
+            }),
+            verbose: false,
+        })
+        .await;
+        assert!(missing.is_err(), "get of an unset key must error");
+
+        // list dispatches and succeeds.
+        run(Cli {
+            command: Some(Commands::SiteConfig {
+                action: SiteConfigAction::List {
+                    storage: storage.clone(),
+                },
+            }),
+            verbose: false,
+        })
+        .await
+        .expect("list succeeds");
+
+        // unset of a present key dispatches and removes it (the removed branch).
+        run(Cli {
+            command: Some(Commands::SiteConfig {
+                action: SiteConfigAction::Unset {
+                    storage: storage.clone(),
+                    key: "site.registration_policy".to_string(),
+                },
+            }),
+            verbose: false,
+        })
+        .await
+        .expect("unset of a present key succeeds");
+
+        // get now errors: the key is gone.
+        let after_unset = run(Cli {
+            command: Some(Commands::SiteConfig {
+                action: SiteConfigAction::Get {
+                    storage: storage.clone(),
+                    key: "site.registration_policy".to_string(),
+                },
+            }),
+            verbose: false,
+        })
+        .await;
+        assert!(after_unset.is_err(), "unset key must read as unset");
+
+        // unset of an absent key is an idempotent no-op (the no-op branch).
+        run(Cli {
+            command: Some(Commands::SiteConfig {
+                action: SiteConfigAction::Unset {
+                    storage,
+                    key: "site.registration_policy".to_string(),
+                },
+            }),
+            verbose: false,
+        })
+        .await
+        .expect("unset of an absent key is a no-op success");
     }
 
     #[tokio::test]

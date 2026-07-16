@@ -6,7 +6,7 @@ use common::display_name::DisplayName;
 use host::capture;
 use storage::DbConnectOptions;
 
-use test_support::{create_user, reset_mail, seed_posts_for_user, set_site_config};
+use test_support::{create_user, reset_mail, seed_posts_for_user};
 
 #[derive(Parser)]
 #[command(
@@ -56,18 +56,6 @@ enum Commands {
         #[arg(long)]
         operator: bool,
     },
-    /// Set a `site_config` key/value (an upsert) through the real storage path.
-    SetSiteConfig {
-        /// Database URL (`sqlite:...` or `postgres://...`) — the server's `--db`.
-        #[arg(long, env = "JAUNDER_DB")]
-        db: DbConnectOptions,
-        /// The `site_config` key (e.g. `site.registration_policy`).
-        #[arg(long)]
-        key: String,
-        /// The value to store.
-        #[arg(long)]
-        value: String,
-    },
     /// Reset the mail-capture file (delete it; missing is fine). Derives
     /// `<JAUNDER_CAPTURE_DIR>/mail.jsonl`; errors if the capture dir is unset.
     ResetMail,
@@ -103,7 +91,6 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             display_name,
             operator,
         } => cmd_create_user(&db, &username, &password, display_name.as_ref(), operator).await,
-        Commands::SetSiteConfig { db, key, value } => cmd_set_site_config(&db, &key, &value).await,
         Commands::ResetMail => cmd_reset_mail(),
         Commands::CapturePath { stream } => cmd_capture_path(&stream),
     }
@@ -134,14 +121,6 @@ async fn cmd_create_user(
     let state = storage::open_existing_database(db).await?;
     let id = create_user(&state, username, password, display_name, operator).await?;
     eprintln!("created user {username} with id {id}");
-    Ok(())
-}
-
-/// Set a `site_config` key/value (an upsert) through the real storage path.
-async fn cmd_set_site_config(db: &DbConnectOptions, key: &str, value: &str) -> anyhow::Result<()> {
-    let state = storage::open_existing_database(db).await?;
-    set_site_config(&state, key, value).await?;
-    eprintln!("set site_config {key} = {value}");
     Ok(())
 }
 
@@ -208,17 +187,9 @@ mod tests {
         .await
         .expect("seed-posts should dispatch and succeed");
 
-        run(cli(Commands::SetSiteConfig {
-            db: db.clone(),
-            key: "site.registration_policy".to_owned(),
-            value: "open".to_owned(),
-        }))
-        .await
-        .expect("set-site-config should dispatch and succeed");
-
         // Read back through a fresh connection to prove the dispatch wired each
         // command's arguments through to storage (not merely returned Ok): the
-        // seeded post is published and attributed to alice, and the config upserted.
+        // seeded post is published and attributed to alice.
         let state = storage::open_existing_database(&db).await.unwrap();
         let published = state
             .posts
@@ -235,15 +206,6 @@ mod tests {
             published.len(),
             1,
             "seed-posts should publish 1 post for alice"
-        );
-        assert_eq!(
-            state
-                .site_config
-                .get("site.registration_policy")
-                .await
-                .unwrap(),
-            Some("open".to_owned()),
-            "set-site-config should upsert the value",
         );
     }
 }

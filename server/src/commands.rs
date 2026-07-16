@@ -6,7 +6,7 @@ use std::{
 
 use sqlx::postgres::PgConnectOptions;
 
-use crate::cli::{Commands, StorageArgs};
+use crate::cli::{Commands, SiteConfigAction, StorageArgs};
 use crate::mailer::LettreMailSender;
 use crate::runtime_file;
 use common::backup::BackupMode;
@@ -88,6 +88,30 @@ impl Commands {
                 path,
             } => cmd_backup(&storage, mode.into(), path).await.map(drop),
             Commands::Restore { storage, path } => cmd_restore(&storage, &path).await,
+            // First nested subcommand group: the arm stays a thin delegation to
+            // SiteConfigAction::execute (a sibling match), preserving the low-CRAP
+            // one-arm-per-command dispatch shape. Copy this pattern for future groups.
+            Commands::SiteConfig { action } => action.execute().await,
+        }
+    }
+}
+
+impl SiteConfigAction {
+    /// Dispatch a `site-config` leaf to its handler (mirrors [`Commands::execute`]).
+    ///
+    /// # Errors
+    ///
+    /// Propagates the selected leaf's failure.
+    pub async fn execute(self) -> anyhow::Result<()> {
+        match self {
+            SiteConfigAction::Set {
+                storage,
+                key,
+                value,
+            } => cmd_site_config_set(&storage, &key, &value).await,
+            SiteConfigAction::Get { storage, key } => cmd_site_config_get(&storage, &key).await,
+            SiteConfigAction::List { storage } => cmd_site_config_list(&storage).await,
+            SiteConfigAction::Unset { storage, key } => cmd_site_config_unset(&storage, &key).await,
         }
     }
 }
@@ -682,6 +706,58 @@ pub async fn cmd_serve(
     // cov:ignore-stop
 }
 
+/// Upsert a `site_config` key/value through the real storage path.
+async fn cmd_site_config_set(storage: &StorageArgs, key: &str, value: &str) -> anyhow::Result<()> {
+    let state = open_existing_database(&storage.db).await?;
+    state.site_config.set(key, value).await?;
+    eprintln!("set site_config {key} = {value}");
+    Ok(())
+}
+
+/// Print the value for `key` to stdout; error (→ non-zero exit) if it is unset,
+/// so a caller can distinguish an unset key from an empty value.
+async fn cmd_site_config_get(storage: &StorageArgs, key: &str) -> anyhow::Result<()> {
+    let state = open_existing_database(&storage.db).await?;
+    match state.site_config.get(key).await? {
+        Some(value) => {
+            println!("{value}");
+            Ok(())
+        }
+        None => Err(anyhow::anyhow!("no site_config value for key {key:?}")),
+    }
+}
+
+/// Print all `site_config` entries as `key=value`, one per line, ordered by key.
+async fn cmd_site_config_list(storage: &StorageArgs) -> anyhow::Result<()> {
+    let state = open_existing_database(&storage.db).await?;
+    let entries = state.site_config.list().await?;
+    print!("{}", format_entries(&entries));
+    Ok(())
+}
+
+/// Delete a `site_config` key. Idempotent (exit 0 whether or not a row existed);
+/// stderr notes which happened.
+async fn cmd_site_config_unset(storage: &StorageArgs, key: &str) -> anyhow::Result<()> {
+    let state = open_existing_database(&storage.db).await?;
+    if state.site_config.delete(key).await? {
+        eprintln!("unset site_config {key}");
+    } else {
+        eprintln!("site_config {key} was not set (no-op)");
+    }
+    Ok(())
+}
+
+/// Render `site_config` entries as `key=value\n` lines (a human/discovery view;
+/// `site-config get` is the lossless scriptable accessor). Pure, unit-tested directly.
+fn format_entries(entries: &[(String, String)]) -> String {
+    use std::fmt::Write as _;
+    entries.iter().fold(String::new(), |mut out, (k, v)| {
+        // writeln! to a String is infallible; the newline gives one entry per line.
+        let _ = writeln!(out, "{k}={v}");
+        out
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -810,6 +886,58 @@ mod tests {
         std::fs::create_dir(&nested).expect("nested dir");
         std::fs::write(nested.join("file.txt"), "content").expect("nested file");
         assert!(directory_has_entries(temp.path()).expect("nested"));
+    }
+
+    #[test]
+    fn format_entries_renders_sorted_key_value_lines() {
+        let entries = vec![
+            ("a.b".to_string(), "1".to_string()),
+            ("c.d".to_string(), "2".to_string()),
+        ];
+        assert_eq!(format_entries(&entries), "a.b=1\nc.d=2\n");
+        assert_eq!(format_entries(&[]), "");
+    }
+
+    #[tokio::test]
+    async fn cmd_site_config_set_upserts_and_get_and_list_read_back() {
+        let temp = TempDir::new().expect("temp dir");
+        let db_path = temp.path().join("jaunder.db");
+        let db_url = format!("sqlite:{}", db_path.display());
+        let opts: DbConnectOptions = db_url.parse().expect("parse sqlite url");
+        // Handlers use open_existing_database, so the DB must already exist.
+        storage::open_database(&opts).await.expect("open db");
+        let storage_args = StorageArgs {
+            storage_path: temp.path().to_path_buf(),
+            db: opts,
+        };
+
+        cmd_site_config_set(&storage_args, "feeds.websub_hub_url", "https://x/")
+            .await
+            .expect("set ok");
+        // set() is an upsert: a second write on the same key overwrites.
+        cmd_site_config_set(&storage_args, "feeds.websub_hub_url", "https://y/")
+            .await
+            .expect("upsert ok");
+
+        let state = open_existing_database(&storage_args.db)
+            .await
+            .expect("reopen");
+        assert_eq!(
+            state.site_config.get("feeds.websub_hub_url").await.unwrap(),
+            Some("https://y/".to_string()),
+            "second set overwrites",
+        );
+
+        // get: present key returns Ok (exercises the println! path); absent key errors.
+        cmd_site_config_get(&storage_args, "feeds.websub_hub_url")
+            .await
+            .expect("get present key ok");
+        cmd_site_config_get(&storage_args, "does.not.exist")
+            .await
+            .expect_err("get absent key errors (→ non-zero exit)");
+
+        // list runs against a populated store (exercises the print path).
+        cmd_site_config_list(&storage_args).await.expect("list ok");
     }
 
     #[tokio::test]

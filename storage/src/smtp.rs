@@ -158,11 +158,9 @@ pub async fn load_smtp_config(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
-    use async_trait::async_trait;
-
     use super::*;
+
+    use crate::test_support::InMemorySiteConfig;
 
     // -- SmtpTlsMode parsing tests --
 
@@ -200,45 +198,24 @@ mod tests {
 
     // -- load_smtp_config tests --
 
-    /// Minimal in-memory implementation of [`SiteConfigStorage`] for tests.
-    struct MapConfigStore(HashMap<&'static str, &'static str>);
-
-    #[async_trait]
-    impl SiteConfigStorage for MapConfigStore {
-        async fn get(&self, key: &str) -> sqlx::Result<Option<String>> {
-            Ok(self.0.get(key).map(std::string::ToString::to_string))
-        }
-
-        async fn set(&self, _key: &str, _value: &str) -> sqlx::Result<()> {
-            Ok(())
-        }
-    }
-
-    // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
-    #[tokio::test]
-    async fn map_config_store_set_returns_ok() {
-        let store = MapConfigStore(HashMap::new());
-        store.set("smtp.host", "mail.example.com").await.unwrap();
-    }
-
     // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
     #[tokio::test]
     async fn load_smtp_config_returns_none_when_host_absent() {
-        let store = MapConfigStore(HashMap::new());
+        let store = InMemorySiteConfig::new();
         assert!(load_smtp_config(&store).await.unwrap().is_none());
     }
 
     // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
     #[tokio::test]
     async fn load_smtp_config_returns_some_with_all_keys_present() {
-        let store = MapConfigStore(HashMap::from([
+        let store = InMemorySiteConfig::from_pairs([
             ("smtp.host", "mail.example.com"),
             ("smtp.port", "465"),
             ("smtp.tls_mode", "tls"),
             ("smtp.username", "user@example.com"),
             ("smtp.password", "s3cr3t"),
             ("smtp.sender", "Jaunder <noreply@example.com>"),
-        ]));
+        ]);
 
         let config = load_smtp_config(&store)
             .await
@@ -259,7 +236,7 @@ mod tests {
     // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
     #[tokio::test]
     async fn load_smtp_config_uses_defaults_for_missing_optional_fields() {
-        let store = MapConfigStore(HashMap::from([("smtp.host", "relay.example.com")]));
+        let store = InMemorySiteConfig::from_pairs([("smtp.host", "relay.example.com")]);
 
         let config = load_smtp_config(&store)
             .await
@@ -280,10 +257,10 @@ mod tests {
     // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
     #[tokio::test]
     async fn load_smtp_config_returns_err_for_invalid_sender() {
-        let store = MapConfigStore(HashMap::from([
+        let store = InMemorySiteConfig::from_pairs([
             ("smtp.host", "mail.example.com"),
             ("smtp.sender", "not-a-valid-email"),
-        ]));
+        ]);
 
         let err = load_smtp_config(&store).await.unwrap_err();
         assert!(matches!(err, SmtpConfigError::InvalidSender(_)));
@@ -292,10 +269,10 @@ mod tests {
     // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
     #[tokio::test]
     async fn load_smtp_config_returns_err_for_invalid_port() {
-        let store = MapConfigStore(HashMap::from([
+        let store = InMemorySiteConfig::from_pairs([
             ("smtp.host", "mail.example.com"),
             ("smtp.port", "not-a-port"),
-        ]));
+        ]);
 
         let err = load_smtp_config(&store).await.unwrap_err();
         assert!(matches!(err, SmtpConfigError::InvalidPort(_)));
@@ -304,10 +281,10 @@ mod tests {
     // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
     #[tokio::test]
     async fn load_smtp_config_returns_err_for_invalid_tls_mode() {
-        let store = MapConfigStore(HashMap::from([
+        let store = InMemorySiteConfig::from_pairs([
             ("smtp.host", "mail.example.com"),
             ("smtp.tls_mode", "ssl"),
-        ]));
+        ]);
 
         let err = load_smtp_config(&store).await.unwrap_err();
         assert!(matches!(err, SmtpConfigError::InvalidTlsMode(_)));
