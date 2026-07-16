@@ -55,38 +55,38 @@ impl FromStr for ContentHash {
 }
 
 impl ContentHash {
-    /// Wraps a hash we ourselves produced — a freshly computed
-    /// `format!("{digest:x}")` string, or a value read back from our own `sha256`
-    /// column — **without** re-validating. The single trusted-construction door
-    /// (mirroring `TokenHash::from_digest`); **untrusted** input (a URL path
-    /// segment, a wire arg) must go through `FromStr`/`TryFrom`, which validate.
+    /// Builds a `ContentHash` from the raw 32 bytes of a SHA-256 digest,
+    /// lowercase-hex-encoding them here so the caller never spells the format.
+    /// Validity is **structural** — 32 bytes always encode to exactly 64 hex.
+    /// A hash arriving as a *string* (URL segment, wire arg, DB column) is not a
+    /// digest and goes through `FromStr`/`TryFrom`, which validate.
     #[must_use]
-    pub fn from_digest(digest: impl Into<String>) -> Self {
-        ContentHash(digest.into())
+    pub fn from_digest(digest: [u8; 32]) -> Self {
+        let mut hex = String::with_capacity(64);
+        for byte in digest {
+            let _ = write!(hex, "{byte:02x}");
+        }
+        ContentHash(hex)
     }
 }
 ```
 
-**`from_digest` door choice (`impl Into<String>` vs `[u8; 32]`) — decided
-consciously.** The adversarial review argued for `from_digest(bytes: [u8; 32])`
-formatting hex internally: it would be structurally unforgeable (32 bytes ⇒
-always 64 hex) and delete the three duplicated `format!("{digest:x}")` sites,
-and the `Sha256::digest(bytes).into()` → `[u8; 32]` conversion is a proven-clean
-idiom (`storage/src/backup.rs:564`). That is genuinely nicer _in isolation_.
-**We do not adopt it**, for one decisive reason: the direct sibling hash newtype
-`TokenHash` (landed one week ago, #458) uses exactly
-`from_digest(impl Into<String>)` and uses that _same one door_ both at its
-compute site (`host/src/token.rs:58,67`) **and** for its trusted DB-read rebuild
-(`storage/src/helpers.rs:93`, "trusted rebuild of our own stored value").
-`ContentHash` is the same shape and needs the same dual use (below). A
-`[u8; 32]` door serves only the compute site and would force a _second_
-String-taking door for the DB read — two doors where the freshly established
-convention has one. Consistency with the immediately-preceding sibling beats the
-local optimization. Consequence honestly stated: the `impl Into<String>` door is
-not self-validating, so the "no panic in `media_path`" property below is a
-**contract** guarantee (every `ContentHash` reaching `media_path` is either
-`FromStr`-validated to 64 hex, or `from_digest`'d from a real SHA-256 digest),
-not a type-system theorem — exactly as it is for `TokenHash`.
+**`from_digest` door choice — takes the raw digest bytes (revised on review
+feedback).** An earlier draft made `from_digest` take `impl Into<String>` (one
+door for both the compute path and a trusted DB-read rebuild, mirroring
+`TokenHash::from_digest`), which forced `format!("{digest:x}")` at every compute
+site. The shipped design instead takes `[u8; 32]` and hex-encodes internally,
+because `common` already depends on `sha2` (it hashes feed ETags in
+`common/src/feed/metadata.rs`), so there is no dependency reason for the string
+detour, and the type owns the canonical hex format. This (a) drops `format!` from
+all three compute sites — `ContentHash::from_digest(Sha256::digest(bytes).into())`
+(the `.into()` → `[u8; 32]` idiom already used in `storage::backup`), and (b)
+makes validity a **type-system fact** rather than a contract: 32 bytes ⇒ exactly
+64 hex, so an invalid hash cannot be constructed here (a public `impl AsRef<[u8]>`
+door would let a stray string in; `[u8; 32]` cannot). The consequence is a clean
+**two-door model** — raw digest bytes → `from_digest` (trusted producer); any
+string, *including the DB column*, → `FromStr` (validated). So `media_record_from_row`
+validates on read (below), not trusted-wrap.
 
 Design choices and their precedents:
 
@@ -100,15 +100,14 @@ Design choices and their precedents:
   primitive that _produces_ the guarantee from untrusted input, so it
   necessarily operates below the type. This is not a skipped site — it is the
   constructor's engine.
-- **Trusted `from_digest(impl Into<String>)`** — mirrors
-  `TokenHash::from_digest` (#458) exactly: a hash produced from a digest is
-  well-formed by construction, so the compute path wraps without a redundant
-  re-parse (and without a denied `.expect()`). This is the same two-door shape
-  as `RawToken`/`TokenHash`: a validating `FromStr` for untrusted input, a
-  trusted constructor for the server-side producer. `ContentHash` is **not** a
-  security newtype (it is a hash, freely rendered and transmitted — like
-  `TokenHash`), so it needs no `xtask` construction gate; the open `FromStr`
-  door is correct, as for `Email`.
+- **Trusted `from_digest([u8; 32])`** — the producer door hex-encodes the raw
+  digest bytes (see the door-choice note above), so validity is structural and
+  the compute path never spells the format. This is the same two-door shape as
+  `RawToken`/`TokenHash`: a validating `FromStr` for any untrusted **string**
+  input, a trusted constructor for the server-side **digest** producer.
+  `ContentHash` is **not** a security newtype (it is a hash, freely rendered and
+  transmitted — like `TokenHash`), so it needs no `xtask` construction gate; the
+  open `FromStr` door is correct, as for `Email`.
 - **Derives** `Clone, Debug, PartialEq, Eq, Hash` — the standard set (matching
   `Email`/`TokenHash`). No `Ord` (never a Rust-side sort/map key; the composite
   PK ordering is DB-side). No `Copy` (owns a `String`).
@@ -178,20 +177,16 @@ as they are.
 - `storage/src/helpers.rs`: `MediaRow` tuple keeps element 2 as `String` (it is
   the raw sqlx column projection of primitives; the domain type appears in the
   record — exactly as `source` is a `String` in the tuple but `MediaSource` in
-  the record). `media_record_from_row` **trusted-wraps on read**:
-  `sha256: ContentHash::from_digest(sha256)`. This mirrors the direct peer
-  `TokenHash::from_digest(token_hash)` at `helpers.rs:93` ("trusted rebuild of
-  our own stored value") — the `sha256` column is written **only** by our own
-  compute path, so re-validating it is not the peer-consistent choice and would
-  (a) diverge from how `TokenHash` is rebuilt two functions away, (b) add a new
-  fallible `Decode` branch needing its own coverage, and (c) break the existing
-  `media_record_from_row_{accepts,rejects}_*` tests, which pass a short
-  placeholder `"sha256"` in the hash slot (a validate-on-read would make
-  `_rejects_invalid_source` fail on the _hash_ instead of the source it means to
-  test). `source` stays validate-on-read because a `MediaSource` string
-  genuinely can be an out-of-domain value; a hash we wrote cannot. (Considered
-  and rejected the validate-on-read alternative the review floated; trusted-wrap
-  is both peer-consistent and lower-risk.)
+  the record). `media_record_from_row` **validates on read** (the shipped design,
+  following the `from_digest`-takes-bytes revision above): the column is a hex
+  string, not a raw digest, so it goes through `FromStr` — `let sha256:
+  ContentHash = sha256.parse().map_err(|e| sqlx::Error::Decode(Box::new(e)))?;` —
+  exactly mirroring the `source` parse two lines up. A corrupt or hand-edited
+  value surfaces as a decode error rather than an invalid `ContentHash`. This adds
+  a fallible branch, so a `media_record_from_row_rejects_invalid_sha256` test
+  covers it, and the existing `_{accepts,rejects}_*` fixtures move their short
+  `"sha256"` placeholder to a canonical 64-char value (the `rejects_invalid_source`
+  case keeps a valid hash so it still fails on the *source*).
 - The SQL migrations (`0012_create_media.sql`, both backends) are **unchanged**
   — the column stays `TEXT`; `ContentHash` is a Rust-side wrapper over the same
   stored string. No migration.
@@ -201,8 +196,9 @@ as they are.
 - `server/src/media_manager.rs`:
   - `UploadMetadata.sha256_hex: ContentHash`.
   - The two **compute sites** (`upload_bytes` and `stream_to_temp`) build the
-    hash via `ContentHash::from_digest(format!("{digest:x}"))`; `stream_to_temp`
-    returns `(ContentHash, u64)`.
+    hash via `ContentHash::from_digest(Sha256::digest(bytes).into())` /
+    `ContentHash::from_digest(hasher.finalize().into())`; `stream_to_temp` returns
+    `(ContentHash, i64)`.
   - `register_in_db(..., sha256_hex: &ContentHash, ...)`;
     `MediaRecord { sha256: … }` takes the `ContentHash` directly (`.clone()`
     where needed).
@@ -237,7 +233,7 @@ as they are.
     `media_url`/edit URI unchanged (via `Display`/`Deref`).
   - The POST-idempotency **compute site**
     (`let sha = format!("{:x}", Sha256::digest(&body))`) becomes
-    `ContentHash::from_digest(format!("{:x}", …))`; `get_media(…, &sha, …)`.
+    `ContentHash::from_digest(Sha256::digest(&body).into())`; `get_media(…, &sha, …)`.
   - `member_get`/`member_delete` take the hash from a URL `Path` segment
     (untrusted): parse it into `ContentHash` at handler entry, mapping a parse
     failure to the handler's existing not-found/invalid response (mirroring
@@ -318,9 +314,9 @@ Every one is in scope (per the test-helper convention, media-hash fixtures use
   **`server/src/media.rs` inline `mod tests`**
   (`resolve_media_path_builds_path_for_valid_params` ~:365 — the 3-tuple
   destructure above; the `Err` cases are unaffected). The
-  `storage/src/helpers.rs:728,744` row tests keep their short `"sha256"`
-  placeholder **because** the read path trusted-wraps (above), so they do
-  **not** break — a deliberate benefit of the trusted-wrap choice.
+  `storage/src/helpers.rs` row tests move their short `"sha256"` placeholder to a
+  canonical 64-char value (the read path validates), and a
+  `media_record_from_row_rejects_invalid_sha256` test covers the new decode branch.
   (`FIXTURE_MEDIA_SHA256` and `media_handlers.rs`'s `SAMPLE_HASH` are already
   64-char.)
 
@@ -372,7 +368,7 @@ No other observable behavior changes. Wire/JSON/SQL shapes are byte-identical.
 - New unit tests on `ContentHash` (mirroring `email.rs`): valid parse, rejects
   short/long/uppercase/non-hex/off-boundary (reuse the `is_valid_content_hash`
   test vectors), `Display`, serde round-trip + wire-rejection, `from_digest`
-  trusted-wrap, `parse_content_hash` helper.
+  byte-hex-encoding, `parse_content_hash` helper.
 - A compile-fail doc-test proving an arbitrary `String` cannot be passed where a
   `ContentHash` is expected (transposition guarantee), mirroring `token.rs`.
 - **Explicitly verify the `ActionForm` → typed-arg decode path.** No existing
