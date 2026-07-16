@@ -20,8 +20,8 @@ use server::{not_found_error, private_post_not_found_error};
 pub use server::post_response;
 
 use common::{
-    post_body::PostBody, post_title::PostTitle, render::RenderedHtml, slug::Slug, tag::TagLabel,
-    username::Username,
+    ids::AudienceId, post_body::PostBody, post_title::PostTitle, render::RenderedHtml, slug::Slug,
+    tag::TagLabel, username::Username,
 };
 
 use crate::error::WebResult;
@@ -77,7 +77,7 @@ pub struct UpdatePostResult {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct AudienceSelection {
     pub base: String,
-    pub named: Vec<i64>,
+    pub named: Vec<AudienceId>,
 }
 
 /// Translates an [`AudienceSelection`] into the `Vec<AudienceTarget>` the
@@ -691,11 +691,12 @@ mod tests {
         audience_selection_to_targets, audience_targets_or_public, targets_to_audience_selection,
         AudienceSelection,
     };
+    use common::ids::AudienceId;
     use common::slug::Slug;
     use common::visibility::AudienceTarget;
     use storage::candidate_slug;
 
-    fn selection(base: &str, named: &[i64]) -> AudienceSelection {
+    fn selection(base: &str, named: &[AudienceId]) -> AudienceSelection {
         AudienceSelection {
             base: base.to_string(),
             named: named.to_vec(),
@@ -761,11 +762,14 @@ mod tests {
     #[test]
     fn public_plus_named_unions() {
         assert_eq!(
-            audience_selection_to_targets(&selection("public", &[5, 9])),
+            audience_selection_to_targets(&selection(
+                "public",
+                &[AudienceId::from(5), AudienceId::from(9)]
+            )),
             vec![
                 AudienceTarget::Public,
-                AudienceTarget::Named(5),
-                AudienceTarget::Named(9),
+                AudienceTarget::Named(AudienceId::from(5)),
+                AudienceTarget::Named(AudienceId::from(9)),
             ]
         );
     }
@@ -773,7 +777,9 @@ mod tests {
     #[test]
     fn private_selection_is_empty_and_ignores_named() {
         // Private cannot combine with anything; named ids are dropped.
-        assert!(audience_selection_to_targets(&selection("private", &[5])).is_empty());
+        assert!(
+            audience_selection_to_targets(&selection("private", &[AudienceId::from(5)])).is_empty()
+        );
         // An unrecognized base also falls through to author-only.
         assert!(audience_selection_to_targets(&selection("nonsense", &[])).is_empty());
     }
@@ -794,9 +800,12 @@ mod tests {
     #[test]
     fn targets_round_trip_through_selection() {
         // Edit round-trip: persisted targets -> selection -> targets.
-        let targets = vec![AudienceTarget::Subscribers, AudienceTarget::Named(3)];
+        let targets = vec![
+            AudienceTarget::Subscribers,
+            AudienceTarget::Named(AudienceId::from(3)),
+        ];
         let sel = targets_to_audience_selection(&targets);
-        assert_eq!(sel, selection("subscribers", &[3]));
+        assert_eq!(sel, selection("subscribers", &[AudienceId::from(3)]));
         assert_eq!(audience_selection_to_targets(&sel), targets);
 
         // Public round-trips through the picker.

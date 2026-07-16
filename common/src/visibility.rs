@@ -1,7 +1,7 @@
 //! Shared visibility types: channels, subscription status, audience targeting,
 //! the viewer identity, and the subscription-admission seam. See ADR-0020.
 
-use crate::ids::UserId;
+use crate::ids::{AudienceId, UserId};
 use std::fmt;
 
 macro_rules! str_enum {
@@ -87,7 +87,7 @@ pub enum AudienceTarget {
     Public,
     Private,
     Subscribers,
-    Named(i64),
+    Named(AudienceId),
 }
 
 /// Admission seam: decides the initial status of a new subscription. Layer A

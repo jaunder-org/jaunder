@@ -63,14 +63,27 @@ unchanged.
    test literal `Named(7)` needs `AudienceId::from`.
 5. **web** — `web/posts/mod.rs` `AudienceSelection.named: Vec<AudienceId>` and
    the `audience_selection_to_targets`/`targets_to_audience_selection`
-   conversions + tests; `web/audiences/mod.rs` DTO (`audience_id: AudienceId`),
-   `#[server]` fns
-   (`rename_audience`/`delete_audience`/`add_subscriber_to_audience`/`remove_...`/
-   `list_audience_members` `audience_id: AudienceId`; the keyed-store
-   `#[store(key)]`), and the Leptos components
-   (`AudienceHeader`/`MemberChecklist` `audience_id: AudienceId`, hidden-input
-   `value=` uses `Display`); `web/pages/ui.rs`/`web/pages/posts.rs`
-   (`AudienceSelection` picker sites).
+   conversions + tests; `web/audiences/mod.rs` `#[server]` fns
+   (`create_audience -> WebResult<AudienceId>`;
+   `rename_audience`/`delete_audience`/`add_subscriber_to_audience`/`remove_...`/
+   `list_audience_members` `audience_id: AudienceId`) and the Leptos components
+   (`AudienceHeader`/`MemberChecklist` `audience_id: AudienceId`; hidden-input
+   `value=i64::from(audience_id)` — Leptos `value=` needs `IntoAttributeValue`,
+   which the id doesn't implement, so bind the primitive there);
+   `web/pages/ui.rs`/`web/pages/posts.rs` (`AudienceSelection` picker sites).
+
+**Carve-out — `AudienceSummary.audience_id` stays `i64`.** `AudienceSummary` is
+a `reactive_stores` keyed-store row (`Store`/`Patch`) whose `#[store(key)]` it
+is. `Patch` requires the field to be `PatchField` — a foreign trait implemented
+only for primitives, with no blanket impl or derive; typing it would force
+`impl PatchField for AudienceId`, coherent only in `common` (where `AudienceId`
+lives) — which would pull a leptos-client dependency (`reactive_stores`) into
+the backend-agnostic crate (ADR-0055/0058); in `web` it is an outright orphan
+violation. This is the ADR-0063 **external-non-owned-type** flatten (like
+`atom_syndication` in #470): the one reactive surface holds the primitive and
+converts at its edges — built from `AudienceRecord` (`i64::from`), and
+re-wrapped to `AudienceId` at `AudienceRow` where it flows into the typed
+components/server fns. Confined to that single field + its store key.
 
 **Do not over-reach:** `subscription_id` (→ #476), `post_id`/`channel_id` in the
 same functions stay their own types (post_id is being typed concurrently by

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
-use common::ids::UserId;
+use common::ids::{AudienceId, UserId};
 use common::test_support::parse_audience_name;
 use common::username::Username;
 
@@ -255,7 +255,7 @@ async fn audience_membership_round_trips(#[case] backend: Backend) {
         Some(&cookie),
     )
     .await;
-    let aud_id = parse_id(&body);
+    let aud_id = AudienceId::from(parse_id(&body));
 
     let (status, body) = post_form(
         Arc::clone(&state),

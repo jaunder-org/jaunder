@@ -44,16 +44,22 @@
       conversion fns (`.map(AudienceTarget::Named)` still works;
       `Named(id) => named.push(*id)`); tests
       (`selection(base, named: &[AudienceId])`, `Named(5/9/3)` literals).
-- [ ] **web/audiences/mod.rs** — DTO `audience_id: AudienceId` +
-      `#[store(key: AudienceId = ...)]` (first newtype store-key — confirm it
-      compiles); `#[server]` fn params **and**
-      **`create_audience(...) -> WebResult<AudienceId>`** (return `Ok(id)`
-      directly; consumers read only the error, so no ripple);
-      `rename/delete/add/remove/list_audience_members` `audience_id: AudienceId`
-      params; `AudienceHeader`/`MemberChecklist` component
-      `audience_id: AudienceId` (hidden-input `value=` relies on `Display`).
+- [ ] **web/audiences/mod.rs** — `#[server]` fns
+      (`create_audience(...) -> WebResult<AudienceId>`, return `Ok(id)`
+      directly; `rename/delete/add/remove/list_audience_members`
+      `audience_id: AudienceId` params); `AudienceHeader`/`MemberChecklist`
+      component `audience_id: AudienceId` (hidden input
+      `value=i64::from(audience_id)` — Leptos `value=` needs
+      `IntoAttributeValue`). **CARVE-OUT:** `AudienceSummary.audience_id` + its
+      `#[store(key)]` stay `i64` (`Patch`/`PatchField` orphan constraint — see
+      spec); convert at the build (`i64::from`) and at `AudienceRow`
+      (`AudienceId::from`).
 - [ ] **web/pages/{ui,posts}.rs** — `AudienceSelection` picker sites compile
       (the `.named` field type changed; the picker pushes/removes `AudienceId`).
+- [ ] **server/tests** — `server/tests/web/audiences.rs`
+      (`aud_id =     AudienceId::from(parse_id(...))` for the `list_members`
+      calls) and `server/tests/storage/mod.rs` (`Some(i64::from(aud))` in the
+      raw post-audience row assertion).
 - **Verify:**
   1. `cargo check --all-features --all-targets` green.
   2. AC2 edit-map struck; supplementary grep (`audience_id: i64`, `Named(i64)`,
