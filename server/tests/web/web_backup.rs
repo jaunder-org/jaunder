@@ -10,7 +10,7 @@ use storage::{
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::post_form;
+use crate::helpers::{post_form, session_cookie};
 use storage::test_support::{backends, backends_matrix, Backend, TestEnv};
 
 #[apply(backends)]
@@ -284,7 +284,7 @@ async fn create_session_cookie(
         .await
         .unwrap();
 
-    format!("session={token}")
+    session_cookie(&token)
 }
 
 #[apply(backends)]

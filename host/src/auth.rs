@@ -7,6 +7,10 @@
 //! `http` header types for parsing but no `web`/`storage`/leptos abstraction
 //! (ADR-0058 floor invariant).
 
+use std::str::FromStr;
+
+use common::token::RawToken;
+
 /// Deployment cookie settings derived from the public scheme. Provided into
 /// leptos context by the `server` composition root and read by `web`'s cookie
 /// adapters; carried here as plain configuration data.
@@ -20,7 +24,7 @@ pub struct CookieSettings {
 /// the username the authenticated session must belong to.
 pub struct Credential {
     /// The raw session token to authenticate.
-    pub token: String,
+    pub token: RawToken,
     /// For Basic auth, the validated username supplied alongside the token, which
     /// must match the authenticated session's user. `None` for cookie/Bearer auth.
     pub expected_username: Option<common::username::Username>,
@@ -33,6 +37,20 @@ pub struct Credential {
 /// `None` when no recognized credential is present.
 #[must_use]
 pub fn resolve_credential(headers: &http::HeaderMap) -> Option<Credential> {
+    // Validate a token string into a `RawToken`, yielding a `Credential` — or
+    // `None` when the value isn't a syntactically valid token (empty or
+    // out-of-charset). A skipped source does not short-circuit, so e.g. an empty
+    // `session=` cookie falls through to a valid `Authorization` header (#344 item 2).
+    fn credential(
+        raw: &str,
+        expected_username: Option<common::username::Username>,
+    ) -> Option<Credential> {
+        Some(Credential {
+            token: RawToken::from_str(raw).ok()?,
+            expected_username,
+        })
+    }
+
     let from_cookie = headers
         .get(http::header::COOKIE)
         .and_then(|v| v.to_str().ok())
@@ -40,10 +58,7 @@ pub fn resolve_credential(headers: &http::HeaderMap) -> Option<Credential> {
             s.split(';')
                 .map(str::trim)
                 .find_map(|c| c.strip_prefix("session="))
-                .map(|token| Credential {
-                    token: token.to_string(),
-                    expected_username: None,
-                })
+                .and_then(|token| credential(token, None))
         });
     if from_cookie.is_some() {
         return from_cookie;
@@ -53,24 +68,22 @@ pub fn resolve_credential(headers: &http::HeaderMap) -> Option<Credential> {
         .get(http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())?;
     if let Some(token) = header.strip_prefix("Bearer ") {
-        Some(Credential {
-            token: token.to_string(),
-            expected_username: None,
-        })
+        credential(token, None)
     } else {
         let (username, password) = common::auth::parse_basic_auth(header)?;
-        Some(Credential {
-            token: password,
-            expected_username: Some(username),
-        })
+        credential(&password, Some(username))
     }
 }
 
 /// Builds the `Set-Cookie` header value that stores the session token. `secure`
 /// appends the `; Secure` attribute (production/HTTPS deployments).
 #[must_use]
-pub fn session_cookie_header(token: &str, secure: bool) -> String {
+pub fn session_cookie_header(token: &RawToken, secure: bool) -> String {
     let secure_attr = if secure { "; Secure" } else { "" };
+    // `token` is a `RawToken`, so its value is base64url by construction: the
+    // charset cannot contain the `;`/newline separators a cookie header uses, so
+    // interpolating it here (via its `Display`) cannot inject extra attributes or
+    // headers (#344 item 3).
     format!("session={token}; HttpOnly; SameSite=Lax; Path=/{secure_attr}")
 }
 
@@ -85,6 +98,7 @@ pub fn clear_session_cookie_header(secure: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::test_support::parse_raw_token;
 
     fn headers_with(name: http::HeaderName, value: &str) -> http::HeaderMap {
         let mut headers = http::HeaderMap::new();
@@ -129,9 +143,34 @@ mod tests {
     }
 
     #[test]
+    fn resolve_credential_empty_session_cookie_falls_through_to_header() {
+        // #344 item 2: an empty `session=` cookie must NOT short-circuit; a valid
+        // Authorization header on the same request must still authenticate.
+        let mut headers = http::HeaderMap::new();
+        headers.insert(http::header::COOKIE, "session=".parse().unwrap());
+        headers.insert(
+            http::header::AUTHORIZATION,
+            "Bearer abcABC012-_".parse().unwrap(),
+        );
+        let credential = resolve_credential(&headers).expect("credential from header");
+        assert_eq!(credential.token, "abcABC012-_");
+    }
+
+    #[test]
+    fn resolve_credential_rejects_unparseable_bearer() {
+        // A Bearer value that is not a valid RawToken yields no credential from that source.
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            http::header::AUTHORIZATION,
+            "Bearer has space".parse().unwrap(),
+        );
+        assert!(resolve_credential(&headers).is_none());
+    }
+
+    #[test]
     fn session_cookie_header_secure_matches_current_string() {
         assert_eq!(
-            session_cookie_header("token", true),
+            session_cookie_header(&parse_raw_token("token"), true),
             "session=token; HttpOnly; SameSite=Lax; Path=/; Secure"
         );
     }
@@ -139,7 +178,7 @@ mod tests {
     #[test]
     fn session_cookie_header_insecure_matches_current_string() {
         assert_eq!(
-            session_cookie_header("token", false),
+            session_cookie_header(&parse_raw_token("token"), false),
             "session=token; HttpOnly; SameSite=Lax; Path=/"
         );
     }

@@ -5,6 +5,7 @@ use thiserror::Error;
 
 use common::display_name::DisplayName;
 use common::password::Password;
+use common::token::RawToken;
 use common::username::Username;
 use host::invite::InviteCode;
 
@@ -70,6 +71,26 @@ pub enum ConfirmPasswordResetError {
     Internal(#[from] sqlx::Error),
 }
 
+impl From<ConfirmPasswordResetError> for host::error::InternalError {
+    /// Mirrors the sibling [`RegisterWithInviteError`] mapping so
+    /// `confirm_password_reset` is `?`-liftable in `web`: the three token
+    /// failures are client validation errors (a stale/used/unknown reset link,
+    /// not a server fault), and an internal failure is a masked storage error.
+    /// Previously `web` hand-mapped every variant to `storage`, masking all three
+    /// as a 500 (#344).
+    fn from(error: ConfirmPasswordResetError) -> Self {
+        use host::error::InternalError;
+        match error {
+            ConfirmPasswordResetError::NotFound => InternalError::validation("token not found"),
+            ConfirmPasswordResetError::Expired => InternalError::validation("token has expired"),
+            ConfirmPasswordResetError::AlreadyUsed => {
+                InternalError::validation("token has already been used")
+            }
+            ConfirmPasswordResetError::Internal(e) => InternalError::storage(e),
+        }
+    }
+}
+
 /// Cross-table operations that must be executed atomically.
 ///
 /// These operations span multiple storage traits (e.g., `users` and `invites`)
@@ -104,7 +125,7 @@ pub trait AtomicOps: Send + Sync {
     /// Returns [`ConfirmPasswordResetError`] if any part of the transaction fails.
     async fn confirm_password_reset(
         &self,
-        raw_token: &str,
+        raw_token: &RawToken,
         new_password: &Password,
     ) -> Result<(), ConfirmPasswordResetError>;
 }
@@ -113,9 +134,27 @@ pub trait AtomicOps: Send + Sync {
 mod tests {
     use super::*;
     use crate::test_support::{backends, Backend};
-    use common::test_support::parse_display_name;
+    use common::test_support::{parse_display_name, parse_raw_token};
     use rstest::*;
     use rstest_reuse::*;
+
+    #[test]
+    fn confirm_reset_error_maps_each_variant_to_expected_kind() {
+        use host::error::{ErrorKind, InternalError};
+        // #344: the three token failures are client validation errors, not a
+        // masked storage 500 — while a genuine DB fault still masks as storage.
+        for error in [
+            ConfirmPasswordResetError::NotFound,
+            ConfirmPasswordResetError::Expired,
+            ConfirmPasswordResetError::AlreadyUsed,
+        ] {
+            let mapped: InternalError = error.into();
+            assert_eq!(mapped.kind(), ErrorKind::Validation);
+        }
+        let mapped: InternalError =
+            ConfirmPasswordResetError::Internal(sqlx::Error::RowNotFound).into();
+        assert_eq!(mapped.kind(), ErrorKind::Storage);
+    }
 
     async fn seed_invite(state: &std::sync::Arc<crate::AppState>) -> InviteCode {
         state
@@ -201,7 +240,7 @@ mod tests {
         assert!(matches!(
             env.state
                 .atomic
-                .confirm_password_reset("not-base64", &password)
+                .confirm_password_reset(&parse_raw_token("not-base64"), &password,)
                 .await,
             Err(ConfirmPasswordResetError::NotFound)
         ));

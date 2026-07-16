@@ -141,7 +141,7 @@ pub async fn register(
 
         set_session_cookie(&raw_token);
         leptos_axum::redirect("/");
-        Ok(raw_token)
+        Ok(raw_token.to_string())
     })
 }
 
@@ -209,7 +209,7 @@ pub async fn login(
 
         set_session_cookie(&raw_token);
         leptos_axum::redirect("/");
-        Ok(raw_token)
+        Ok(raw_token.to_string())
     })
 }
 

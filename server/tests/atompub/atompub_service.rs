@@ -2,20 +2,13 @@ use axum::{
     body::Body,
     http::{header, Request, StatusCode},
 };
-use base64::Engine as _;
 use common::tag::TagLabel;
 use rstest::*;
 use rstest_reuse::*;
 use tower::ServiceExt;
 
-use crate::helpers::{body_string, make_app};
+use crate::helpers::{basic_header, body_string, make_app};
 use storage::test_support::{backends, Backend, TestEnv};
-
-fn basic_header(username: &str, password: &str) -> String {
-    let raw = format!("{username}:{password}");
-    let encoded = base64::engine::general_purpose::STANDARD.encode(raw);
-    format!("Basic {encoded}")
-}
 
 #[apply(backends)]
 #[tokio::test]

@@ -3,6 +3,7 @@ use {
     chrono::Duration,
     common::mailer::{EmailMessage, MailSender},
     common::password::Password,
+    common::token::RawToken,
     std::sync::Arc,
     storage::{AtomicOps, PasswordResetStorage, UserStorage},
 };
@@ -77,10 +78,10 @@ pub async fn confirm_password_reset(token: String, new_password: String) -> WebR
 
         let password = new_password.parse::<Password>()?;
 
-        atomic
-            .confirm_password_reset(&token, &password)
-            .await
-            .map_err(InternalError::storage)?;
+        let raw_token = RawToken::try_from(token)
+            .map_err(|_| InternalError::validation("invalid reset token"))?;
+
+        atomic.confirm_password_reset(&raw_token, &password).await?;
 
         host::metrics::password_reset(host::metrics::PasswordResetEvent::Completed);
         Ok(())

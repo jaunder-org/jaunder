@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 use sqlx::{Pool, Postgres};
 
+use common::token::TokenHash;
+
 use crate::helpers::SessionRow;
 use crate::sessions::{SessionDialect, SessionStore};
 
@@ -11,7 +13,7 @@ pub type PostgresSessionStorage = SessionStore<Postgres>;
 impl SessionDialect for Postgres {
     async fn touch_and_load(
         pool: &Pool<Postgres>,
-        token_hash: &str,
+        token_hash: &TokenHash,
         now: chrono::DateTime<chrono::Utc>,
     ) -> sqlx::Result<Option<SessionRow>> {
         // Postgres can update-and-join atomically with a data-modifying CTE.
@@ -27,7 +29,7 @@ impl SessionDialect for Postgres {
              JOIN users u ON updated.user_id = u.user_id",
         )
         .bind(now)
-        .bind(token_hash)
+        .bind(token_hash.as_ref())
         .fetch_optional(pool)
         .await
     }

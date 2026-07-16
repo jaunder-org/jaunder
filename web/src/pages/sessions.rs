@@ -43,7 +43,7 @@ pub fn SessionsPage() -> impl IntoView {
                                             <p>
                                                 "Copy this app password now \u{2014} it will not be shown again:"
                                             </p>
-                                            <code>{pw.token}</code>
+                                            <code>{pw.token.to_string()}</code>
                                         </div>
                                     }
                                         .into_any()
@@ -63,7 +63,7 @@ pub fn SessionsPage() -> impl IntoView {
                                         {list
                                             .into_iter()
                                             .map(|s| {
-                                                let hash = s.token_hash.clone();
+                                                let hash = s.token_hash.to_string();
                                                 view! {
                                                     <li>
                                                         {s.label.clone()} " — last used: "

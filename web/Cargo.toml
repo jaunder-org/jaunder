@@ -57,7 +57,7 @@ js-sys = { workspace = true }
 wasm-bindgen = { workspace = true }
 
 [dev-dependencies]
-common = { workspace = true, features = ["test-utils"] }
+common = { workspace = true, features = ["test-utils", "test-support"] }
 storage = { workspace = true, features = ["test-utils"] }
 sqlx = { workspace = true }
 tokio = { workspace = true }

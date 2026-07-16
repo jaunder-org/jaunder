@@ -1,19 +1,20 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
+use common::token::RawToken;
 use common::username::Username;
 
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::post_form;
+use crate::helpers::{post_form, session_cookie};
 use storage::test_support::{backends, Backend, TestEnv};
 
 /// Creates a user and a session, returning (`user_id`, `raw_token`, `cookie_header`).
 async fn create_user_and_session(
     state: &Arc<storage::AppState>,
     username: &str,
-) -> (i64, String, String) {
+) -> (i64, RawToken, String) {
     let user_id = state
         .users
         .create_user(
@@ -29,7 +30,7 @@ async fn create_user_and_session(
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={raw_token}");
+    let cookie = session_cookie(&raw_token);
     (user_id, raw_token, cookie)
 }
 

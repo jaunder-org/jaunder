@@ -57,6 +57,7 @@ use crate::db::sql_slow_query_threshold;
 use crate::{AppState, AtomicOps, ConfirmPasswordResetError, RegisterWithInviteError};
 use common::display_name::DisplayName;
 use common::password::Password;
+use common::token::RawToken;
 use common::username::Username;
 use host::invite::InviteCode;
 
@@ -277,11 +278,11 @@ impl AtomicOps for SqliteAtomicOps {
 
     async fn confirm_password_reset(
         &self,
-        raw_token: &str,
+        raw_token: &RawToken,
         new_password: &Password,
     ) -> Result<(), ConfirmPasswordResetError> {
         let token_hash =
-            crate::auth::hash_token(raw_token).map_err(|_| ConfirmPasswordResetError::NotFound)?;
+            host::token::hash(raw_token).map_err(|_| ConfirmPasswordResetError::NotFound)?;
 
         let mut tx = self.pool.begin().await?;
         let now = Utc::now();
@@ -296,7 +297,7 @@ impl AtomicOps for SqliteAtomicOps {
              RETURNING user_id",
         )
         .bind(now)
-        .bind(&token_hash)
+        .bind(token_hash.as_ref())
         .bind(now)
         .fetch_optional(&mut *tx)
         .await?;
@@ -305,7 +306,7 @@ impl AtomicOps for SqliteAtomicOps {
             let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
                 "SELECT used_at, expires_at FROM password_resets WHERE token_hash = $1",
             )
-            .bind(&token_hash)
+            .bind(token_hash.as_ref())
             .fetch_optional(&mut *tx)
             .await?;
 

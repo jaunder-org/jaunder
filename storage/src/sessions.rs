@@ -4,13 +4,14 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use thiserror::Error;
 
+use common::token::{RawToken, TokenHash};
 use common::username::Username;
 
 /// A session record returned by [`SessionStorage`] queries.
 #[derive(Clone, Debug)]
 pub struct SessionRecord {
     /// SHA-256 hash of the session token.
-    pub token_hash: String,
+    pub token_hash: TokenHash,
     /// ID of the user associated with this session.
     pub user_id: i64,
     /// Username at the time of session creation.
@@ -63,7 +64,7 @@ pub trait SessionStorage: Send + Sync {
     /// It is stored in the database and returned in session listings.
     ///
     /// Returns the raw (un-hashed) token to be delivered to the client.
-    async fn create_session(&self, user_id: i64, label: &str) -> sqlx::Result<String>;
+    async fn create_session(&self, user_id: i64, label: &str) -> sqlx::Result<RawToken>;
 
     /// Validates a raw session token and returns the associated record.
     ///
@@ -73,10 +74,10 @@ pub trait SessionStorage: Send + Sync {
     ///
     /// Returns [`SessionAuthError`] if the token is invalid or the session has
     /// been revoked.
-    async fn authenticate(&self, raw_token: &str) -> Result<SessionRecord, SessionAuthError>;
+    async fn authenticate(&self, raw_token: &RawToken) -> Result<SessionRecord, SessionAuthError>;
 
     /// Revokes a specific session by its token hash.
-    async fn revoke_session(&self, token_hash: &str) -> sqlx::Result<()>;
+    async fn revoke_session(&self, token_hash: &TokenHash) -> sqlx::Result<()>;
 
     /// Returns a list of all active sessions for a user.
     async fn list_sessions(&self, user_id: i64) -> sqlx::Result<Vec<SessionRecord>>;
@@ -87,7 +88,7 @@ pub trait SessionStorage: Send + Sync {
 // ---------------------------------------------------------------------------
 
 use crate::backend::Backend;
-use crate::helpers::{generate_hashed_token, session_record_from_row, SessionRow};
+use crate::helpers::{session_record_from_row, SessionRow};
 use sqlx::{Database, Pool};
 
 /// Per-backend divergences of [`SessionStorage`]. The only operation that differs
@@ -109,7 +110,7 @@ where
     /// session row (with username), atomically. `None` if no such session.
     async fn touch_and_load(
         pool: &Pool<Self>,
-        token_hash: &str,
+        token_hash: &TokenHash,
         now: DateTime<Utc>,
     ) -> sqlx::Result<Option<SessionRow>>;
 }
@@ -142,15 +143,15 @@ where
         skip(self, label),
         fields(user_id, db.system = DB::DB_SYSTEM)
     )]
-    async fn create_session(&self, user_id: i64, label: &str) -> sqlx::Result<String> {
-        let (raw_token, token_hash) = generate_hashed_token()?;
+    async fn create_session(&self, user_id: i64, label: &str) -> sqlx::Result<RawToken> {
+        let (raw_token, token_hash) = host::token::generate_hashed();
         let now = Utc::now();
 
         sqlx::query(
             "INSERT INTO sessions (token_hash, user_id, label, created_at, last_used_at)
              VALUES ($1, $2, $3, $4, $5)",
         )
-        .bind(token_hash.as_str())
+        .bind(token_hash.as_ref())
         .bind(user_id)
         .bind(label)
         .bind(now)
@@ -166,9 +167,9 @@ where
         skip(self, raw_token),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn authenticate(&self, raw_token: &str) -> Result<SessionRecord, SessionAuthError> {
+    async fn authenticate(&self, raw_token: &RawToken) -> Result<SessionRecord, SessionAuthError> {
         let token_hash =
-            crate::auth::hash_token(raw_token).map_err(|_| SessionAuthError::InvalidToken)?;
+            host::token::hash(raw_token).map_err(|_| SessionAuthError::InvalidToken)?;
 
         let now = Utc::now();
 
@@ -185,9 +186,9 @@ where
         skip(self, token_hash),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn revoke_session(&self, token_hash: &str) -> sqlx::Result<()> {
+    async fn revoke_session(&self, token_hash: &TokenHash) -> sqlx::Result<()> {
         sqlx::query("DELETE FROM sessions WHERE token_hash = $1")
-            .bind(token_hash)
+            .bind(token_hash.as_ref())
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -211,6 +212,7 @@ where
 mod tests {
     use super::*;
     use crate::test_support::{backends, Backend, TestEnv};
+    use common::test_support::parse_raw_token;
     use rstest::*;
     use rstest_reuse::*;
 
@@ -219,7 +221,10 @@ mod tests {
     async fn authenticate_with_closed_pool_returns_internal_error(#[case] backend: Backend) {
         let TestEnv { state, base } = backend.setup().await;
         base.close_pool().await;
-        let result = state.sessions.authenticate("dGVzdA").await;
+        let result = state
+            .sessions
+            .authenticate(&parse_raw_token("dGVzdA"))
+            .await;
         assert!(matches!(result, Err(SessionAuthError::Internal(_))));
     }
 

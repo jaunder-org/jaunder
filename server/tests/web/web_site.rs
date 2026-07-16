@@ -7,7 +7,7 @@ use common::{password::Password, username::Username};
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::post_form;
+use crate::helpers::{post_form, session_cookie};
 use storage::test_support::{backends, Backend, TestEnv};
 
 #[apply(backends)]
@@ -211,5 +211,5 @@ async fn create_session_cookie(
         .await
         .expect("create_session");
 
-    format!("session={token}")
+    session_cookie(&token)
 }

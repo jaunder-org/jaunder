@@ -4,21 +4,15 @@ use axum::{
     body::Body,
     http::{header, Request, StatusCode},
 };
-use base64::Engine as _;
 use common::tag::TagLabel;
+use common::token::RawToken;
 use tower::ServiceExt;
 
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{body_string, make_app};
+use crate::helpers::{basic_header, body_string, make_app};
 use storage::test_support::{backends, backends_matrix, Backend, TestEnv};
-
-fn basic_header(username: &str, password: &str) -> String {
-    let raw = format!("{username}:{password}");
-    let encoded = base64::engine::general_purpose::STANDARD.encode(raw);
-    format!("Basic {encoded}")
-}
 
 #[apply(backends)]
 #[tokio::test]
@@ -360,7 +354,7 @@ async fn collection_paging_emits_next_link(#[case] backend: Backend) {
 }
 
 /// Seeds a user named `alice` and returns `(user_id, session_token)`.
-async fn seed_alice(state: &Arc<storage::AppState>) -> (i64, String) {
+async fn seed_alice(state: &Arc<storage::AppState>) -> (i64, RawToken) {
     let user_id = state
         .users
         .create_user(
@@ -501,7 +495,7 @@ enum ForbiddenRequest {
 }
 
 impl ForbiddenRequest {
-    fn build(&self, token: &str) -> Request<Body> {
+    fn build(&self, token: &RawToken) -> Request<Body> {
         let auth = basic_header("alice", token);
         match self {
             ForbiddenRequest::Collection => Request::builder()
@@ -1358,7 +1352,7 @@ const ETAG_POST_XML: &str = r#"<?xml version="1.0"?>
 </entry>"#;
 
 /// POST `ETAG_POST_XML` as alice; return the create response's (`Location`, `ETag`).
-async fn create_location_etag(app: axum::Router, token: &str) -> (String, String) {
+async fn create_location_etag(app: axum::Router, token: &RawToken) -> (String, String) {
     let created = app
         .oneshot(
             Request::builder()
@@ -1389,12 +1383,12 @@ async fn create_location_etag(app: axum::Router, token: &str) -> (String, String
 }
 
 /// POST `ETAG_POST_XML` as alice and return the create response's `ETag`.
-async fn create_etag(app: axum::Router, token: &str) -> String {
+async fn create_etag(app: axum::Router, token: &RawToken) -> String {
     create_location_etag(app, token).await.1
 }
 
 /// GET `location` as alice, returning the response status.
-async fn get_status(app: axum::Router, token: &str, location: &str) -> StatusCode {
+async fn get_status(app: axum::Router, token: &RawToken, location: &str) -> StatusCode {
     app.oneshot(
         Request::builder()
             .uri(location)
@@ -1972,7 +1966,7 @@ async fn update_with_future_published_schedules_post(#[case] backend: Backend) {
 /// POST a create as alice, optionally with an `Idempotency-Key`.
 async fn create_post_keyed(
     app: axum::Router,
-    token: &str,
+    token: &RawToken,
     xml: &str,
     idempotency_key: Option<&str>,
 ) -> axum::response::Response {

@@ -86,20 +86,23 @@ where
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     async fn create_invite(&self, expires_at: DateTime<Utc>) -> sqlx::Result<InviteCode> {
-        let code = crate::auth::generate_token();
+        let code = host::token::generate();
         let now = Utc::now();
 
         sqlx::query("INSERT INTO invites (code, created_at, expires_at) VALUES ($1, $2, $3)")
-            .bind(code.as_str())
+            .bind(code.as_ref())
             .bind(now)
             .bind(expires_at)
             .execute(&self.pool)
             .await?;
 
         // The freshly generated token is canonical base64url, so this cannot fail; the
-        // map keeps `expect_used` clean rather than relying on that.
+        // map keeps `expect_used` clean rather than relying on that. `InviteCode` has no
+        // `TryFrom<RawToken>`, so reach it through its validating `FromStr`.
         // cov:ignore-start unreachable: a freshly generated token always parses
-        InviteCode::try_from(code).map_err(|e| sqlx::Error::Decode(Box::new(e)))
+        code.as_ref()
+            .parse::<InviteCode>()
+            .map_err(|e| sqlx::Error::Decode(Box::new(e)))
         // cov:ignore-stop
     }
 

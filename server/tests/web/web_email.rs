@@ -6,7 +6,7 @@ use common::mailer::test_utils::CapturingMailSender;
 use common::test_support::parse_email;
 use common::username::Username;
 
-use crate::helpers::post_form_with_mailer;
+use crate::helpers::{post_form_with_mailer, session_cookie};
 use storage::test_support::{backends, Backend, TestEnv};
 
 use rstest::*;
@@ -34,7 +34,7 @@ async fn request_email_verification_creates_row_and_sends_email(#[case] backend:
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={raw_token}");
+    let cookie = session_cookie(&raw_token);
 
     let (status, _body) = post_form_with_mailer(
         Arc::clone(&state),
@@ -192,7 +192,7 @@ async fn request_email_verification_invalid_email_returns_error(#[case] backend:
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie_header = format!("session={raw_token}");
+    let cookie_header = session_cookie(&raw_token);
 
     let (status, _) = post_form_with_mailer(
         state,

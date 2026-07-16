@@ -25,7 +25,7 @@ pub(crate) fn auth_parts(user_id: i64, username: &str) -> Parts {
     // fixed user so `AuthUser` extraction succeeds.
     mock.expect_authenticate().returning(move |_raw_token| {
         Ok(SessionRecord {
-            token_hash: "hash".to_string(),
+            token_hash: common::token::TokenHash::from_digest("hash"),
             user_id,
             username: username.clone(),
             label: "test".to_string(),

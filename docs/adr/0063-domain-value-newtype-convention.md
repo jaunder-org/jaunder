@@ -109,17 +109,18 @@ mirrors `String: Deref<str>` and `PathBuf: Deref<Path>` — the standard-library
 idiom for a smart-string — and is sanctioned **only** for `str`-backed newtypes,
 nowhere else.
 
-**Secret-bearing exception.** A newtype wrapping a secret (`RawToken`,
-`Password`), selected with `#[str_newtype(secret)]`, exposes a deliberately
-**tight** surface: a **redacting `Debug`**, explicit borrowed access via
-**`AsRef<str>` only**, and construction via `TryFrom<String>`. It **omits**
-`Display`, the serde bridge, `Deref<str>` **and** `Borrow<str>`,
-`From<Self> for String`, and `PartialEq<str>`/`<&str>`. So a secret cannot
-render, (de)serialize, implicitly coerce to `&str` (via `Deref`, which would
-also reopen owned extraction through `str::to_owned`/`to_string`), hand out an
-owned plaintext `String`, or be value-compared in non-constant time. The result
-is readable-for-hashing but un-leakable — it satisfies ADR-0011's
-no-secrets-in-telemetry rule **by construction** rather than by discipline.
+**Secret-bearing exception.** A newtype wrapping a true secret (e.g. `Password`)
+— one that must never be rendered or transmitted at all — selected with
+`#[str_newtype(secret)]`, exposes a deliberately **tight** surface: a
+**redacting `Debug`**, explicit borrowed access via **`AsRef<str>` only**, and
+construction via `TryFrom<String>`. It **omits** `Display`, the serde bridge,
+`Deref<str>` **and** `Borrow<str>`, `From<Self> for String`, and
+`PartialEq<str>`/`<&str>`. So a secret cannot render, (de)serialize, implicitly
+coerce to `&str` (via `Deref`, which would also reopen owned extraction through
+`str::to_owned`/`to_string`), hand out an owned plaintext `String`, or be
+value-compared in non-constant time. The result is readable-for-hashing but
+un-leakable — it satisfies ADR-0011's no-secrets-in-telemetry rule **by
+construction** rather than by discipline.
 
 **Inbound-secret variant.** A secret is sometimes _submitted by a client_ — it
 must cross the `#[server]` boundary client→server — while still never being
@@ -136,6 +137,22 @@ converts into, and an `xtask` gate pins the inbound type to `#[server]`
 the domain type in a server-only crate (never built for wasm) makes "never
 client-side" a compile fact. `ProfferedInviteCode` (#400), paired with the
 domain `InviteCode`, is the first user.
+
+**Bearer-token profile.** A distinct case is a value that is _transmitted by
+design_ yet must not be logged — the session `RawToken` (#458), which the server
+mints and delivers into `Set-Cookie`, the app-password response, `Bearer`
+headers, and reset/verify URLs. This is **not** a secret in the sense above (it
+is _meant_ to leave the server), so it takes the **full ergonomic trailer**
+(`Display`, `Deref<str>`, `AsRef`, `PartialEq<str>`, serde) — interpolating or
+binding it costs nothing — with a **single deviation**: a hand-written redacting
+`Debug` (so it is never `#[derive(Debug)]`'d), because the real hazard is an
+accidental `{:?}` in a log or span (ADR-0011), not a deliberate render. The
+security value is the redacting `Debug` plus the **type distinction** —
+`RawToken` cannot be confused with, or converted to, its stored `TokenHash` —
+not the surface tightness a true secret needs. Corollary: do not reach for the
+tight `secret` surface merely because a value is credential-shaped; weigh
+whether it is ever _meant_ to be transmitted. `Password` (never transmitted) is
+a `secret`; `RawToken` (always transmitted) is a bearer token.
 
 **Numeric IDs** take the same idea with a numeric trailer: `struct UserId(i64)`
 deriving `Clone, Copy, Debug, PartialEq, Eq, Hash`, plus `From<i64>` /

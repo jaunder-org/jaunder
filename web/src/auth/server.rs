@@ -4,6 +4,7 @@ use axum::{
     http::{request::Parts, StatusCode},
     response::{IntoResponse, Response},
 };
+use common::token::{RawToken, TokenHash};
 use common::username::Username;
 use host::auth::resolve_credential;
 use std::sync::Arc;
@@ -23,7 +24,7 @@ pub use host::auth::CookieSettings;
 pub struct AuthUser {
     pub user_id: i64,
     pub username: Username,
-    pub token_hash: String,
+    pub token_hash: TokenHash,
 }
 
 #[derive(Debug)]
@@ -138,8 +139,10 @@ fn auth_rejection_error(error: AuthRejection) -> InternalError {
 
 /// Verifies that an app-password (Basic auth) request authenticated as the
 /// user it claimed. Cookie/Bearer requests carry no expected username and
-/// always pass. The pure comparison lives in `common::auth`; this wrapper only
-/// lifts it into the web-local [`AuthRejection`] result type.
+/// always pass. The check is a direct `Username` equality — case-insensitive,
+/// because `Username::from_str` lowercases at construction (see
+/// `common::username`), so a differently-cased Basic username still matches a
+/// valid session (#344).
 ///
 /// # Errors
 ///
@@ -159,7 +162,7 @@ fn verify_basic_username(
 // Cookie helpers (leptos/axum adapters over host's pure header builders)
 // ---------------------------------------------------------------------------
 
-pub fn set_session_cookie(raw_token: &str) {
+pub fn set_session_cookie(raw_token: &RawToken) {
     use leptos::context::use_context;
     use leptos_axum::ResponseOptions;
 
@@ -204,6 +207,7 @@ pub fn classify_current_user(result: InternalResult<AuthUser>) -> InternalResult
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::test_support::parse_raw_token;
     use leptos::prelude::{provide_context, Owner};
 
     #[test]
@@ -220,6 +224,15 @@ mod tests {
     }
 
     #[test]
+    fn verify_basic_username_match_is_case_insensitive() {
+        // #344: Username lowercases at construction, so a differently-cased Basic
+        // username still matches the authenticated session's user.
+        let authenticated: Username = "alice".parse().unwrap();
+        let expected: Username = "Alice".parse().unwrap(); // normalizes to "alice"
+        assert!(verify_basic_username(&authenticated, Some(&expected)).is_ok());
+    }
+
+    #[test]
     fn verify_basic_username_rejects_mismatch() {
         let user: Username = "alice".parse().unwrap();
         let expected: Username = "mallory".parse().unwrap();
@@ -233,7 +246,7 @@ mod tests {
     fn set_session_cookie_without_response_options_context_is_noop() {
         Owner::new().with(|| {
             provide_context(CookieSettings { secure: true });
-            set_session_cookie("token");
+            set_session_cookie(&parse_raw_token("token"));
         });
     }
 

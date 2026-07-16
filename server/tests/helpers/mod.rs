@@ -6,6 +6,7 @@ use axum::{
     http::{header, Request, StatusCode},
 };
 use common::mailer::MailSender;
+use common::token::RawToken;
 use leptos::prelude::LeptosOptions;
 use std::sync::{Arc, OnceLock};
 use tempfile::TempDir;
@@ -96,6 +97,21 @@ pub fn tmp_storage_path() -> std::path::PathBuf {
     // Return the system temp dir — the media subdirectories are created on
     // demand by the handlers, so the root just needs to exist.
     std::env::temp_dir().join("jaunder-test-storage")
+}
+
+/// The `session=<token>` cookie header value for an authenticated request — the
+/// one place the session-cookie shape is written, so call sites pass the
+/// `RawToken` directly instead of re-`format!`-ing it.
+pub fn session_cookie(token: &RawToken) -> String {
+    format!("session={token}")
+}
+
+/// An `Authorization: Basic <base64(username:token)>` header value — the app-password
+/// credential the `atompub` suite sends. Takes the `RawToken` directly.
+pub fn basic_header(username: &str, token: &RawToken) -> String {
+    use base64::Engine as _;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(format!("{username}:{token}"));
+    format!("Basic {encoded}")
 }
 
 /// Read a response body fully and decode it as UTF-8.

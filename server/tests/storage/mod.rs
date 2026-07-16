@@ -2,7 +2,7 @@ use chrono::{Datelike, Utc};
 use common::password::Password;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
-use common::test_support::{parse_audience_name, parse_display_name, parse_email};
+use common::test_support::{parse_audience_name, parse_display_name, parse_email, parse_raw_token};
 use common::username::Username;
 use common::visibility::{
     AudienceTarget, Channel, SubscriptionPolicy, SubscriptionStatus, TargetKind, ViewerIdentity,
@@ -950,7 +950,10 @@ async fn confirm_password_reset_bogus_token_returns_not_found_without_hashing(
     // (ADR-0022). Before the reorder this would have hashed first and returned Internal.
     let result = state
         .atomic
-        .confirm_password_reset("dGVzdA", &password("force-hash-error-for-test-coverage"))
+        .confirm_password_reset(
+            &parse_raw_token("dGVzdA"),
+            &password("force-hash-error-for-test-coverage"),
+        )
         .await;
     assert!(matches!(result, Err(ConfirmPasswordResetError::NotFound)));
 }
@@ -1241,9 +1244,12 @@ async fn authenticate_with_invalid_base64_token_returns_invalid_token(#[case] ba
     let env = backend.setup().await;
     let state = &env.state;
 
+    // In-charset (base64url) but an invalid length that cannot decode, so hashing
+    // fails and `authenticate` reports InvalidToken. (A non-charset string like
+    // "not-base64!" can no longer be constructed as a `RawToken`.)
     let err = state
         .sessions
-        .authenticate("not-base64!")
+        .authenticate(&parse_raw_token("a"))
         .await
         .unwrap_err();
     assert!(matches!(err, SessionAuthError::InvalidToken));
@@ -1745,7 +1751,7 @@ async fn use_email_verification_unknown_token_returns_not_found(#[case] backend:
 
     let err = state
         .email_verifications
-        .use_email_verification("not-a-real-token")
+        .use_email_verification(&parse_raw_token("not-a-real-token"))
         .await
         .unwrap_err();
     assert!(
@@ -1988,7 +1994,7 @@ async fn use_password_reset_unknown_token_returns_not_found(#[case] backend: Bac
 
     let err = state
         .password_resets
-        .use_password_reset("not-a-real-token")
+        .use_password_reset(&parse_raw_token("not-a-real-token"))
         .await
         .unwrap_err();
     assert!(
