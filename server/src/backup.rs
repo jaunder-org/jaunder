@@ -61,7 +61,7 @@ async fn run_scheduled_backup(
         mode: config.mode,
     })
     .await?;
-    let pruned = prune_backups(destination_root, config.retention_count)?;
+    let pruned = prune_backups(destination_root, config.retention_count.get())?;
     host::metrics::backup_bytes(backup_size_bytes(&destination_path));
     host::metrics::backup_pruned(u64::try_from(pruned).unwrap_or(u64::MAX));
     tracing::info!(path = %destination_path.display(), "scheduled backup complete");
@@ -161,6 +161,7 @@ fn backup_path_for_mode(destination_root: &Path, mode: BackupMode) -> PathBuf {
 mod tests {
     use super::*;
     use crate::test_support::{migrated_sqlite_db, site_config};
+    use common::test_support::parse_retention_count;
     use storage::{BACKUP_DESTINATION_PATH_KEY, BACKUP_SCHEDULE_KEY};
     use tempfile::TempDir;
 
@@ -279,7 +280,7 @@ mod tests {
         let config = BackupConfig {
             destination_path: Some(destination_root.to_string_lossy().into_owned()),
             schedule: "0 0 0 1 1 *".parse().expect("valid schedule"),
-            retention_count: 1,
+            retention_count: parse_retention_count("1"),
             mode: BackupMode::Directory,
         };
         let written = run_scheduled_backup(&db, &media, &destination_root, &config)
@@ -304,7 +305,7 @@ mod tests {
         let ok_config = BackupConfig {
             destination_path: Some(ok_root.to_string_lossy().into_owned()),
             schedule: "0 0 0 1 1 *".parse().expect("valid schedule"),
-            retention_count: 1,
+            retention_count: parse_retention_count("1"),
             mode: BackupMode::Directory,
         };
         run_scheduled_backup_logged(&db, &media, &ok_root, &ok_config).await;

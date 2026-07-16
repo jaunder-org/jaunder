@@ -1,8 +1,8 @@
 use crate::error::WebResult;
-// `BackupSchedule`/`BackupMode` are unconditional: they're the typed `#[server]` arguments, so
-// the generated request struct must carry them on both the client (serialize) and server
-// (deserialize) sides.
-use common::backup::{BackupConfig, BackupMode, BackupSchedule};
+// `BackupSchedule`/`BackupMode`/`RetentionCount` are unconditional: they're the typed
+// `#[server]` arguments, so the generated request struct must carry them on both the client
+// (serialize) and server (deserialize) sides.
+use common::backup::{BackupConfig, BackupMode, BackupSchedule, RetentionCount};
 use leptos::prelude::*;
 
 #[cfg(feature = "server")]
@@ -96,20 +96,18 @@ pub async fn get_backup_settings() -> WebResult<BackupConfig> {
 pub async fn update_backup_settings(
     destination_path: String,
     schedule: BackupSchedule,
-    retention_count: String,
+    retention_count: RetentionCount,
     mode: BackupMode,
 ) -> WebResult<()> {
     boundary!("update_backup_settings", {
         require_operator().await?;
 
-        // `schedule` and `mode` are already validated: they arrive typed (`BackupSchedule` /
-        // `BackupMode`), so the arg `Deserialize` ran their `FromStr`/enum parse. Legitimate
-        // clients only submit valid values (the form's cron field pre-validates per ADR-0065,
-        // and the mode `<select>` can only emit a real variant), so an invalid value reaches
-        // here only from a non-browser caller.
-        let retention_count = retention_count.trim().parse::<usize>().map_err(|_| {
-            InternalError::validation("backup retention count must be a non-negative integer")
-        })?;
+        // `schedule`, `retention_count`, and `mode` are already validated: they arrive typed
+        // (`BackupSchedule` / `RetentionCount` / `BackupMode`), so the arg `Deserialize` ran
+        // their `FromStr`/`NonZeroUsize`/enum parse. Legitimate clients only submit valid values
+        // (the cron and retention fields pre-validate per ADR-0065, and the mode `<select>` can
+        // only emit a real variant), so an invalid value reaches here only from a non-browser
+        // caller.
         let destination_path = common::text::non_empty(&destination_path).map(str::to_owned);
 
         let config = BackupConfig {

@@ -4,6 +4,8 @@
 //! types plus their validation and defaults; the actual export, archiving, and
 //! retention-pruning logic lives in the `storage` and `server` crates.
 
+use std::fmt;
+use std::num::NonZeroUsize;
 use std::str::FromStr;
 
 use croner::Cron;
@@ -99,37 +101,114 @@ impl Default for BackupSchedule {
 }
 
 /// Default for [`BackupConfig::retention_count`]: keep the seven most recent backups.
-pub const DEFAULT_BACKUP_RETENTION_COUNT: usize = 7;
+/// Private — consumers get the default via [`RetentionCount::default`]/[`BackupConfig::default`].
+const DEFAULT_BACKUP_RETENTION_COUNT: usize = 7;
+
+/// The number of most-recent backups to keep. Always >= 1, so retention pruning
+/// (`server::backup::prune_backups`) can never remove every backup — including one just
+/// created. Constructed via [`FromStr`]/serde (both reject 0 through the inner
+/// `NonZeroUsize`) or [`RetentionCount::default`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RetentionCount(NonZeroUsize);
+
+/// Error when a value is not a valid retention count (a whole number of at least 1).
+#[derive(Debug, Error)]
+#[error("backup retention count must be a whole number of at least 1")]
+pub struct InvalidRetentionCount;
+
+impl RetentionCount {
+    /// The inner count (>= 1) for consumers that need a `usize` (e.g. pruning).
+    #[must_use]
+    pub fn get(self) -> usize {
+        self.0.get()
+    }
+}
+
+impl FromStr for RetentionCount {
+    type Err = InvalidRetentionCount;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        s.trim()
+            .parse::<NonZeroUsize>()
+            .map(Self)
+            .map_err(|_| InvalidRetentionCount)
+    }
+}
+
+impl fmt::Display for RetentionCount {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl Default for RetentionCount {
+    fn default() -> Self {
+        // A `const` so the nonzero invariant is checked at compile time — and to avoid the
+        // workspace's `unwrap_used`/`expect_used` denials a runtime `.expect()` would trip.
+        const DEFAULT: NonZeroUsize = match NonZeroUsize::new(DEFAULT_BACKUP_RETENTION_COUNT) {
+            Some(n) => n,
+            None => panic!("DEFAULT_BACKUP_RETENTION_COUNT must be nonzero"),
+        };
+        Self(DEFAULT)
+    }
+}
 
 /// The persisted backup settings (stored in `site_config`, surfaced in the
 /// admin UI, and consumed by the scheduled backup worker).
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+///
+/// `Default` is derived: each field's own `Default` supplies the default (no destination,
+/// the daily-midnight schedule, retention 7, directory mode).
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct BackupConfig {
     /// Filesystem path backups are written under. `None` means no destination is
     /// configured and scheduled backups are disabled.
     pub destination_path: Option<String>,
     /// When scheduled backups run, as a validated six-field cron expression.
     pub schedule: BackupSchedule,
-    /// How many of the most recent backups to keep; older ones are pruned.
-    pub retention_count: usize,
+    /// How many of the most recent backups to keep (>= 1); older ones are pruned.
+    pub retention_count: RetentionCount,
     /// Whether each backup is written as a directory or a single archive.
     pub mode: BackupMode,
-}
-
-impl Default for BackupConfig {
-    fn default() -> Self {
-        Self {
-            destination_path: None,
-            schedule: BackupSchedule::default(),
-            retention_count: DEFAULT_BACKUP_RETENTION_COUNT,
-            mode: BackupMode::default(),
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retention_count_parses_and_rejects_zero_and_non_integers() {
+        assert_eq!("1".parse::<RetentionCount>().unwrap().get(), 1);
+        assert_eq!("  7  ".parse::<RetentionCount>().unwrap().get(), 7);
+        for bad in ["0", "", "-1", "abc", "1.5"] {
+            assert!(
+                bad.parse::<RetentionCount>().is_err(),
+                "{bad} should be rejected"
+            );
+        }
+        // The domain message, not std's generic parse error.
+        assert!("0"
+            .parse::<RetentionCount>()
+            .unwrap_err()
+            .to_string()
+            .starts_with("backup retention count"));
+    }
+
+    #[test]
+    fn retention_count_default_is_seven_and_display_round_trips() {
+        let d = RetentionCount::default();
+        assert_eq!(d.get(), DEFAULT_BACKUP_RETENTION_COUNT);
+        assert_eq!(d.to_string().parse::<RetentionCount>().unwrap(), d);
+    }
+
+    #[test]
+    fn retention_count_serde_rejects_zero_on_the_wire() {
+        let r: RetentionCount = "5".parse().unwrap();
+        // Plain integer — the JSON shape is unchanged from the old `usize` field.
+        assert_eq!(serde_json::to_string(&r).unwrap(), "5");
+        assert_eq!(serde_json::from_str::<RetentionCount>("5").unwrap(), r);
+        // NonZeroUsize rejects 0 at deserialize time.
+        assert!(serde_json::from_str::<RetentionCount>("0").is_err());
+    }
 
     #[test]
     fn backup_mode_string_forms_agree_across_strum_serde_and_parse() {
