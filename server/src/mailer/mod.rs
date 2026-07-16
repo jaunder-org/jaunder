@@ -56,45 +56,15 @@ pub async fn build_mailer(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
-    use async_trait::async_trait;
     use rstest::*;
 
     use super::*;
-
-    struct MapConfigStore(HashMap<&'static str, &'static str>);
-
-    #[async_trait]
-    impl storage::SiteConfigStorage for MapConfigStore {
-        async fn get(&self, key: &str) -> sqlx::Result<Option<String>> {
-            Ok(self.0.get(key).map(std::string::ToString::to_string))
-        }
-
-        async fn set(&self, _key: &str, _value: &str) -> sqlx::Result<()> {
-            Ok(())
-        }
-
-        async fn list(&self) -> sqlx::Result<Vec<(String, String)>> {
-            let mut out: Vec<(String, String)> = self
-                .0
-                .iter()
-                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-                .collect();
-            out.sort();
-            Ok(out)
-        }
-
-        async fn delete(&self, key: &str) -> sqlx::Result<bool> {
-            Ok(self.0.contains_key(key))
-        }
-    }
+    use storage::test_support::InMemorySiteConfig;
 
     #[tokio::test]
     async fn build_mailer_returns_sender_when_no_smtp_config() {
         // No smtp.host → load_smtp_config returns Ok(None) → NoopMailSender arm
-        let store = MapConfigStore(HashMap::new());
-        store.set("unused", "value").await.unwrap(); // cover MapConfigStore::set
+        let store = InMemorySiteConfig::new();
         let sender = build_mailer(&store, None).await;
         // NoopMailSender always returns NotConfigured; verify send_email is callable
         let msg = common::mailer::EmailMessage {
@@ -112,28 +82,9 @@ mod tests {
     #[tokio::test]
     async fn build_mailer_returns_sender_when_smtp_config_present() {
         // smtp.host set → load_smtp_config returns Ok(Some(cfg)) → LettreMailSender arm
-        let store = MapConfigStore(HashMap::from([("smtp.host", "localhost")]));
+        let store = InMemorySiteConfig::from_pairs([("smtp.host", "localhost")]);
         let _sender = build_mailer(&store, None).await;
         // Just verify build_mailer runs without panic; actual SMTP send requires a server.
-    }
-
-    #[tokio::test]
-    async fn map_config_store_list_returns_sorted_entries() {
-        let store = MapConfigStore(HashMap::from([("smtp.port", "25"), ("smtp.host", "h")]));
-        assert_eq!(
-            store.list().await.unwrap(),
-            vec![
-                ("smtp.host".to_string(), "h".to_string()),
-                ("smtp.port".to_string(), "25".to_string()),
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn map_config_store_delete_reports_presence() {
-        let store = MapConfigStore(HashMap::from([("smtp.host", "h")]));
-        assert!(store.delete("smtp.host").await.unwrap());
-        assert!(!store.delete("absent").await.unwrap());
     }
 
     #[fixture]
@@ -147,7 +98,7 @@ mod tests {
     #[tokio::test]
     async fn build_mailer_selects_file_sender_when_path_given(capture_dir: tempfile::TempDir) {
         let path = capture_dir.path().join("mail.jsonl");
-        let store = MapConfigStore(HashMap::new());
+        let store = InMemorySiteConfig::new();
         let sender = build_mailer(&store, Some(path.clone())).await;
         let msg = common::mailer::EmailMessage {
             from: None,

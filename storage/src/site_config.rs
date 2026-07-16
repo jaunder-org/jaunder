@@ -336,6 +336,31 @@ mod tests {
     use rstest::*;
     use rstest_reuse::*;
 
+    // guard:no-backend — exercises the in-memory InMemorySiteConfig fixture; no live database backend
+    #[tokio::test]
+    async fn in_memory_site_config_round_trips() {
+        use crate::test_support::InMemorySiteConfig;
+        use crate::SiteConfigStorage;
+        let store =
+            InMemorySiteConfig::from_pairs([("site.title", "T"), ("backup.mode", "archive")]);
+        assert_eq!(
+            store.get("site.title").await.unwrap(),
+            Some("T".to_string())
+        );
+        store.set("feeds.min_items", "9").await.unwrap();
+        assert_eq!(
+            store.list().await.unwrap(),
+            vec![
+                ("backup.mode".to_string(), "archive".to_string()),
+                ("feeds.min_items".to_string(), "9".to_string()),
+                ("site.title".to_string(), "T".to_string()),
+            ],
+        );
+        assert!(store.delete("site.title").await.unwrap());
+        assert!(!store.delete("site.title").await.unwrap());
+        assert_eq!(store.get("site.title").await.unwrap(), None);
+    }
+
     #[apply(backends)]
     #[tokio::test]
     async fn get_backup_config_returns_defaults_when_unconfigured(#[case] backend: Backend) {
