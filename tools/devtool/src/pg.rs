@@ -14,7 +14,7 @@ use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 
 pub(crate) const HOST: &str = "127.0.0.1";
-const DEFAULT_PORT: u16 = 54329;
+const PORT: u16 = 54329;
 
 const BOOTSTRAP_SQL: &str =
     "CREATE ROLE jaunder LOGIN CREATEDB;\nCREATE DATABASE jaunder OWNER jaunder;\n";
@@ -23,16 +23,6 @@ const BOOTSTRAP_SQL: &str =
 pub struct PgEnv {
     pub test_url: String,
     pub bootstrap_url: String,
-}
-
-/// `JAUNDER_PG_TEST_PORT` with bash `${VAR:-54329}` semantics: unset OR empty ⇒ default.
-fn resolve_port(raw: Option<&str>) -> u16 {
-    match raw {
-        Some(s) if !s.is_empty() => s
-            .parse()
-            .expect("JAUNDER_PG_TEST_PORT must be a valid TCP port"),
-        _ => DEFAULT_PORT,
-    }
 }
 
 fn app_url(host: &str, port: u16) -> String {
@@ -158,7 +148,7 @@ fn bootstrap(host: &str, port: u16) -> Result<()> {
 /// Boot a throwaway PostgreSQL 16 cluster, run `body` with its endpoints, and tear
 /// down on every exit path (normal return, panic, or SIGINT/SIGTERM).
 pub fn with_ephemeral<T>(body: impl FnOnce(&PgEnv) -> Result<T>) -> Result<T> {
-    let port = resolve_port(std::env::var("JAUNDER_PG_TEST_PORT").ok().as_deref());
+    let port = PORT;
     // `keep()` hands ownership of the dir to us so `TempDir`'s own Drop won't delete
     // it while the server is still running; the `Cluster` guard removes it after the
     // server is stopped.
@@ -237,20 +227,15 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn port_defaults_when_unset_or_empty() {
-        assert_eq!(resolve_port(None), 54329);
-        assert_eq!(resolve_port(Some("")), 54329);
-        assert_eq!(resolve_port(Some("55000")), 55000);
-    }
-
-    #[test]
     fn urls_match_bash_parity() {
+        // Thread the `PORT` const (not a literal) through the URL builders so a
+        // change to the constant fails this assertion — the port's regression lock.
         assert_eq!(
-            app_url(HOST, 54329),
+            app_url(HOST, PORT),
             "postgres://jaunder@127.0.0.1:54329/jaunder"
         );
         assert_eq!(
-            bootstrap_url(HOST, 54329),
+            bootstrap_url(HOST, PORT),
             "postgres://postgres@127.0.0.1:54329/postgres"
         );
     }
