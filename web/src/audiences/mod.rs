@@ -24,7 +24,7 @@ use crate::reactive::{invalidator_scope, Invalidator, ListState};
 use crate::render::Icons;
 use crate::ui::Topbar;
 use common::audience::AudienceName;
-use common::ids::AudienceId;
+use common::ids::{AudienceId, SubscriptionId};
 use leptos::prelude::*;
 use reactive_stores::{Field, Patch, Store};
 use serde::{Deserialize, Serialize};
@@ -68,7 +68,7 @@ struct AudienceListData {
 /// One of the author's active subscribers, for the assignment checklist.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SubscriberSummary {
-    pub subscription_id: i64,
+    pub subscription_id: SubscriptionId,
     /// The local subscriber's username (resolved from `subscriber_ref`), or the
     /// raw reference when it could not be resolved to a local user.
     pub label: String,
@@ -176,7 +176,7 @@ pub async fn list_my_subscribers() -> WebResult<Vec<SubscriberSummary>> {
 #[server(endpoint = "/add_subscriber_to_audience")]
 pub async fn add_subscriber_to_audience(
     audience_id: AudienceId,
-    subscription_id: i64,
+    subscription_id: SubscriptionId,
 ) -> WebResult<()> {
     boundary!("add_subscriber_to_audience", {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
@@ -193,7 +193,7 @@ pub async fn add_subscriber_to_audience(
 #[server(endpoint = "/remove_subscriber_from_audience")]
 pub async fn remove_subscriber_from_audience(
     audience_id: AudienceId,
-    subscription_id: i64,
+    subscription_id: SubscriptionId,
 ) -> WebResult<()> {
     boundary!("remove_subscriber_from_audience", {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
@@ -208,7 +208,7 @@ pub async fn remove_subscriber_from_audience(
 /// Lists the `subscription_id`s assigned to an audience the author owns.
 /// `list_members` is author-scoped, so a cross-author `audience_id` lists empty.
 #[server(endpoint = "/list_audience_members")]
-pub async fn list_audience_members(audience_id: AudienceId) -> WebResult<Vec<i64>> {
+pub async fn list_audience_members(audience_id: AudienceId) -> WebResult<Vec<SubscriptionId>> {
     boundary!("list_audience_members", {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
@@ -221,7 +221,7 @@ pub async fn list_audience_members(audience_id: AudienceId) -> WebResult<Vec<i64
 mod tests {
     use super::list_my_subscribers;
     use crate::test_support::auth_parts;
-    use common::ids::UserId;
+    use common::ids::{SubscriptionId, UserId};
     use common::visibility::SubscriptionStatus;
     use leptos::prelude::provide_context;
     use leptos::reactive::owner::Owner;
@@ -240,7 +240,7 @@ mod tests {
         let mut subs = MockSubscriptionStorage::new();
         subs.expect_list_subscribers().returning(|_author| {
             Ok(vec![SubscriptionRecord {
-                subscription_id: 7,
+                subscription_id: SubscriptionId::from(7),
                 channel_id: 1,
                 subscriber_ref: "not-a-number".to_string(),
                 status: SubscriptionStatus::Active,
@@ -548,7 +548,7 @@ fn MemberChecklist(audience_id: AudienceId) -> impl IntoView {
                                                     <input
                                                         type="hidden"
                                                         name="subscription_id"
-                                                        value=subscription_id
+                                                        value=i64::from(subscription_id)
                                                     />
                                                     <span class="j-audience-member is-member">{label}</span>
                                                     <button type="submit" class="j-btn">
@@ -570,7 +570,7 @@ fn MemberChecklist(audience_id: AudienceId) -> impl IntoView {
                                                     <input
                                                         type="hidden"
                                                         name="subscription_id"
-                                                        value=subscription_id
+                                                        value=i64::from(subscription_id)
                                                     />
                                                     <span class="j-audience-member">{label}</span>
                                                     <button type="submit" class="j-btn">

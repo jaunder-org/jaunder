@@ -13,7 +13,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use common::audience::AudienceName;
-use common::ids::{AudienceId, UserId};
+use common::ids::{AudienceId, SubscriptionId, UserId};
 use sqlx::{Database, Pool};
 
 use crate::backend::Backend;
@@ -109,7 +109,7 @@ pub trait AudienceStorage: Send + Sync {
         &self,
         author_user_id: UserId,
         audience_id: AudienceId,
-        subscription_id: i64,
+        subscription_id: SubscriptionId,
     ) -> Result<(), AudienceError>;
 
     /// Removes a subscription from an audience the author owns. A no-op if absent
@@ -118,7 +118,7 @@ pub trait AudienceStorage: Send + Sync {
         &self,
         author_user_id: UserId,
         audience_id: AudienceId,
-        subscription_id: i64,
+        subscription_id: SubscriptionId,
     ) -> sqlx::Result<()>;
 
     /// Lists the `subscription_id`s belonging to an audience the author owns,
@@ -127,7 +127,7 @@ pub trait AudienceStorage: Send + Sync {
         &self,
         author_user_id: UserId,
         audience_id: AudienceId,
-    ) -> sqlx::Result<Vec<i64>>;
+    ) -> sqlx::Result<Vec<SubscriptionId>>;
 }
 
 /// Generic [`AudienceStorage`] backed by any [`Backend`] database. The SQL is
@@ -274,7 +274,7 @@ where
         &self,
         author_user_id: UserId,
         audience_id: AudienceId,
-        subscription_id: i64,
+        subscription_id: SubscriptionId,
     ) -> Result<(), AudienceError> {
         sqlx::query(
             "INSERT INTO audience_members (audience_id, subscription_id, author_user_id) \
@@ -282,7 +282,7 @@ where
              ON CONFLICT (audience_id, subscription_id) DO NOTHING",
         )
         .bind(i64::from(audience_id))
-        .bind(subscription_id)
+        .bind(i64::from(subscription_id))
         .bind(i64::from(author_user_id))
         .execute(&self.pool)
         .await?;
@@ -298,7 +298,7 @@ where
         &self,
         author_user_id: UserId,
         audience_id: AudienceId,
-        subscription_id: i64,
+        subscription_id: SubscriptionId,
     ) -> sqlx::Result<()> {
         sqlx::query(
             "DELETE FROM audience_members \
@@ -306,7 +306,7 @@ where
         )
         .bind(i64::from(author_user_id))
         .bind(i64::from(audience_id))
-        .bind(subscription_id)
+        .bind(i64::from(subscription_id))
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -321,7 +321,7 @@ where
         &self,
         author_user_id: UserId,
         audience_id: AudienceId,
-    ) -> sqlx::Result<Vec<i64>> {
+    ) -> sqlx::Result<Vec<SubscriptionId>> {
         let rows = sqlx::query_as::<_, (i64,)>(
             "SELECT subscription_id FROM audience_members \
              WHERE author_user_id = $1 AND audience_id = $2 ORDER BY subscription_id",
@@ -330,7 +330,10 @@ where
         .bind(i64::from(audience_id))
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows.into_iter().map(|(id,)| id).collect())
+        Ok(rows
+            .into_iter()
+            .map(|(id,)| SubscriptionId::from(id))
+            .collect())
     }
 }
 
