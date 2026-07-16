@@ -54,3 +54,32 @@ test("backup mode select is generated from the enum variants", async ({
   // The persisted default (Directory) is pre-selected.
   await expect(modeSelect).toHaveValue("directory");
 });
+
+// #455: the retention field is client-validated (ValidatedInput<RetentionCount>, ADR-0065) —
+// RetentionCount wraps NonZeroUsize, so 0 (which would let pruning remove every backup) is
+// rejected in the browser and disables Save before the request is sent.
+test("backup retention field gates submit until a count of at least 1 is entered", async ({
+  page,
+}) => {
+  await login(page, "testoperator", "testpassword123");
+  await goto(page, "/admin/backups");
+
+  await waitForSelector(page, 'input[name="retention_count"]');
+  const retentionInput = page.locator('input[name="retention_count"]');
+
+  // Prefilled with the valid default (7): submit starts enabled, no error shown.
+  await expect(page.locator(SEL.submit)).toBeEnabled();
+  await expect(page.locator(SEL.error)).not.toBeVisible();
+
+  // 0 is not a valid retention count (min 1); once touched (blur) it shows the inline error
+  // and disables submit.
+  await retentionInput.fill("0");
+  await retentionInput.blur();
+  await expect(page.locator(SEL.error)).toBeVisible();
+  await expect(page.locator(SEL.submit)).toBeDisabled();
+
+  // A valid count clears the error and re-enables submit.
+  await retentionInput.fill("3");
+  await expect(page.locator(SEL.error)).not.toBeVisible();
+  await expect(page.locator(SEL.submit)).toBeEnabled();
+});
