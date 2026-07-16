@@ -221,7 +221,7 @@ pub async fn list_audience_members(audience_id: AudienceId) -> WebResult<Vec<Sub
 mod tests {
     use super::list_my_subscribers;
     use crate::test_support::auth_parts;
-    use common::ids::{SubscriptionId, UserId};
+    use common::ids::{ChannelId, SubscriptionId, UserId};
     use common::visibility::SubscriptionStatus;
     use leptos::prelude::provide_context;
     use leptos::reactive::owner::Owner;
@@ -241,7 +241,7 @@ mod tests {
         subs.expect_list_subscribers().returning(|_author| {
             Ok(vec![SubscriptionRecord {
                 subscription_id: SubscriptionId::from(7),
-                channel_id: 1,
+                channel_id: ChannelId::from(1),
                 subscriber_ref: "not-a-number".to_string(),
                 status: SubscriptionStatus::Active,
                 created_at: chrono::Utc::now(),

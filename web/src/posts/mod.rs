@@ -961,7 +961,7 @@ mod server_tests {
     use crate::error::WebError;
     use crate::test_support::auth_parts;
     use chrono::Utc;
-    use common::ids::{PostId, UserId};
+    use common::ids::{ChannelId, PostId, UserId};
     use common::slug::Slug;
     use common::username::Username;
     use leptos::prelude::provide_context;
@@ -1015,7 +1015,7 @@ mod server_tests {
         let mut subs = MockSubscriptionStorage::new();
         subs.expect_local_channel_id()
             .times(0..)
-            .returning(|| Ok(1));
+            .returning(|| Ok(ChannelId::from(1)));
         provide_context(Arc::new(subs) as Arc<dyn SubscriptionStorage>);
         owner
     }

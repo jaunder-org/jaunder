@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::{Database, Pool};
 
-use common::ids::{SubscriptionId, UserId};
+use common::ids::{ChannelId, SubscriptionId, UserId};
 use common::visibility::{SubscriptionPolicy, SubscriptionStatus, ViewerIdentity};
 
 /// A subscription row returned by [`SubscriptionStorage::list_subscribers`].
@@ -22,7 +22,7 @@ pub struct SubscriptionRecord {
     /// Unique internal identifier.
     pub subscription_id: SubscriptionId,
     /// Channel the subscription is on (e.g. the `local` channel).
-    pub channel_id: i64,
+    pub channel_id: ChannelId,
     /// Channel-scoped opaque reference to the subscriber (the local user id,
     /// rendered as a string, for the `local` channel).
     pub subscriber_ref: String,
@@ -41,7 +41,7 @@ pub trait SubscriptionStorage: Send + Sync {
     async fn subscribe(
         &self,
         author_user_id: UserId,
-        channel_id: i64,
+        channel_id: ChannelId,
         subscriber_ref: &str,
     ) -> sqlx::Result<SubscriptionId>;
 
@@ -49,7 +49,7 @@ pub trait SubscriptionStorage: Send + Sync {
     async fn unsubscribe(
         &self,
         author_user_id: UserId,
-        channel_id: i64,
+        channel_id: ChannelId,
         subscriber_ref: &str,
     ) -> sqlx::Result<()>;
 
@@ -73,7 +73,7 @@ pub trait SubscriptionStorage: Send + Sync {
     /// `subscribe_to` use to build a [`ViewerIdentity::local`]. The read path
     /// memoizes the result once per process (see [`local_channel_id`]) rather
     /// than querying per request.
-    async fn local_channel_id(&self) -> sqlx::Result<i64>;
+    async fn local_channel_id(&self) -> sqlx::Result<ChannelId>;
 }
 
 /// Process-level cache of the seeded `local` channel id.
@@ -81,7 +81,7 @@ pub trait SubscriptionStorage: Send + Sync {
 /// The `local` channel is created once by migration `0018` and never changes,
 /// so a single lookup is reused for the life of the process instead of querying
 /// `channels` on every read request.
-static LOCAL_CHANNEL_ID: OnceLock<i64> = OnceLock::new();
+static LOCAL_CHANNEL_ID: OnceLock<ChannelId> = OnceLock::new();
 
 /// Looks up the seeded `local` channel id, memoizing it for the process.
 ///
@@ -91,7 +91,7 @@ static LOCAL_CHANNEL_ID: OnceLock<i64> = OnceLock::new();
 /// yields `None` — **fail-closed**: the web `viewer_identity` adapter treats a
 /// viewer whose channel it cannot resolve as anonymous, so it sees only public
 /// content.
-pub async fn local_channel_id(subscriptions: &dyn SubscriptionStorage) -> Option<i64> {
+pub async fn local_channel_id(subscriptions: &dyn SubscriptionStorage) -> Option<ChannelId> {
     if let Some(id) = LOCAL_CHANNEL_ID.get() {
         return Some(*id);
     }
@@ -156,7 +156,7 @@ where
     async fn subscribe(
         &self,
         author_user_id: UserId,
-        channel_id: i64,
+        channel_id: ChannelId,
         subscriber_ref: &str,
     ) -> sqlx::Result<SubscriptionId> {
         let status = self
@@ -164,14 +164,14 @@ where
             .initial_status(author_user_id, channel_id, subscriber_ref);
         sqlx::query(DB::INSERT_SUBSCRIPTION)
             .bind(i64::from(author_user_id))
-            .bind(channel_id)
+            .bind(i64::from(channel_id))
             .bind(subscriber_ref)
             .bind(status.as_str())
             .execute(&self.pool)
             .await?;
         sqlx::query_as::<_, (i64,)>(DB::SELECT_SUBSCRIPTION_ID)
             .bind(i64::from(author_user_id))
-            .bind(channel_id)
+            .bind(i64::from(channel_id))
             .bind(subscriber_ref)
             .fetch_one(&self.pool)
             .await
@@ -181,12 +181,12 @@ where
     async fn unsubscribe(
         &self,
         author_user_id: UserId,
-        channel_id: i64,
+        channel_id: ChannelId,
         subscriber_ref: &str,
     ) -> sqlx::Result<()> {
         sqlx::query(DB::DELETE_SUBSCRIPTION)
             .bind(i64::from(author_user_id))
-            .bind(channel_id)
+            .bind(i64::from(channel_id))
             .bind(subscriber_ref)
             .execute(&self.pool)
             .await?;
@@ -207,7 +207,7 @@ where
         };
         let (exists,) = sqlx::query_as::<_, (i64,)>(DB::IS_ACTIVE_SUBSCRIBER)
             .bind(i64::from(author_user_id))
-            .bind(channel_id)
+            .bind(i64::from(*channel_id))
             .bind(subscriber_ref.as_str())
             .fetch_one(&self.pool)
             .await?;
@@ -230,7 +230,7 @@ where
             .map(
                 |(subscription_id, channel_id, subscriber_ref, created_at)| SubscriptionRecord {
                     subscription_id: SubscriptionId::from(subscription_id),
-                    channel_id,
+                    channel_id: ChannelId::from(channel_id),
                     subscriber_ref,
                     status: SubscriptionStatus::Active,
                     created_at,
@@ -239,11 +239,11 @@ where
             .collect())
     }
 
-    async fn local_channel_id(&self) -> sqlx::Result<i64> {
+    async fn local_channel_id(&self) -> sqlx::Result<ChannelId> {
         sqlx::query_as::<_, (i64,)>(DB::SELECT_LOCAL_CHANNEL_ID)
             .fetch_one(&self.pool)
             .await
-            .map(|(id,)| id)
+            .map(|(id,)| ChannelId::from(id))
     }
 }
 

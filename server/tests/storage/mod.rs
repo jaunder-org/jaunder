@@ -1,5 +1,5 @@
 use chrono::{Datelike, Utc};
-use common::ids::{PostId, UserId};
+use common::ids::{ChannelId, PostId, UserId};
 use common::password::Password;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
@@ -149,9 +149,9 @@ async fn statuses_seed_maps_to_enum(#[case] backend: Backend) {
 // the per-test recorded URL (Postgres) or the same DB file (SQLite) both work;
 // we use the established same-DB helpers for consistency. The trait method
 // `local_channel_id()` is introduced in a later task — do not use it here.
-async fn local_channel_id(backend: Backend, env: &TestEnv) -> i64 {
+async fn local_channel_id(backend: Backend, env: &TestEnv) -> ChannelId {
     let sql = "SELECT channel_id FROM channels WHERE name = 'local'";
-    match backend {
+    let raw: i64 = match backend {
         Backend::Sqlite => sqlx::query_scalar(sql)
             .fetch_one(&open_pool(&env.base).await)
             .await
@@ -160,7 +160,8 @@ async fn local_channel_id(backend: Backend, env: &TestEnv) -> i64 {
             let pool = env.base.pool().postgres();
             sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
         }
-    }
+    };
+    ChannelId::from(raw)
 }
 
 // The production `SubscriptionStorage::local_channel_id()` accessor must return
@@ -248,7 +249,7 @@ async fn subscribe_is_idempotent_and_active(#[case] backend: Backend) {
 async fn pending_subscription_is_not_admitted(#[case] backend: Backend) {
     struct StubPending;
     impl SubscriptionPolicy for StubPending {
-        fn initial_status(&self, _a: UserId, _c: i64, _r: &str) -> SubscriptionStatus {
+        fn initial_status(&self, _a: UserId, _c: ChannelId, _r: &str) -> SubscriptionStatus {
             SubscriptionStatus::Pending
         }
     }

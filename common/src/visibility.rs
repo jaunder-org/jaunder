@@ -1,7 +1,7 @@
 //! Shared visibility types: channels, subscription status, audience targeting,
 //! the viewer identity, and the subscription-admission seam. See ADR-0020.
 
-use crate::ids::{AudienceId, UserId};
+use crate::ids::{AudienceId, ChannelId, UserId};
 use std::fmt;
 
 macro_rules! str_enum {
@@ -36,7 +36,7 @@ str_enum!(TargetKind { Public => "public", Subscribers => "subscribers", Named =
 pub enum ViewerIdentity {
     Anonymous,
     Channel {
-        channel_id: i64,
+        channel_id: ChannelId,
         subscriber_ref: String,
     },
 }
@@ -45,7 +45,7 @@ impl ViewerIdentity {
     /// Local viewer constructor used by Layer A: a logged-in account on the
     /// `local` channel, keyed by its user id as the `subscriber_ref`.
     #[must_use]
-    pub fn local(user_id: UserId, local_channel_id: i64) -> Self {
+    pub fn local(user_id: UserId, local_channel_id: ChannelId) -> Self {
         Self::Channel {
             channel_id: local_channel_id,
             subscriber_ref: user_id.to_string(),
@@ -60,7 +60,7 @@ impl ViewerIdentity {
 /// could not be resolved) → [`ViewerIdentity::Anonymous`], fail-closed: a viewer
 /// we cannot positively place on a channel gets no non-public reach.
 #[must_use]
-pub fn account_viewer(user_id: UserId, local_channel_id: Option<i64>) -> ViewerIdentity {
+pub fn account_viewer(user_id: UserId, local_channel_id: Option<ChannelId>) -> ViewerIdentity {
     match local_channel_id {
         Some(channel_id) => ViewerIdentity::local(user_id, channel_id),
         None => ViewerIdentity::Anonymous,
@@ -96,7 +96,7 @@ pub trait SubscriptionPolicy: Send + Sync {
     fn initial_status(
         &self,
         author_user_id: UserId,
-        channel_id: i64,
+        channel_id: ChannelId,
         subscriber_ref: &str,
     ) -> SubscriptionStatus;
 }
@@ -105,7 +105,7 @@ pub trait SubscriptionPolicy: Send + Sync {
 pub struct OpenSubscriptionPolicy;
 
 impl SubscriptionPolicy for OpenSubscriptionPolicy {
-    fn initial_status(&self, _a: UserId, _c: i64, _r: &str) -> SubscriptionStatus {
+    fn initial_status(&self, _a: UserId, _c: ChannelId, _r: &str) -> SubscriptionStatus {
         SubscriptionStatus::Active // Layer A NOOP auto-approve; M13 swaps this here.
     }
 }
@@ -152,18 +152,18 @@ mod tests {
     #[test]
     fn open_policy_returns_active() {
         assert_eq!(
-            OpenSubscriptionPolicy.initial_status(UserId::from(1), 1, "1"),
+            OpenSubscriptionPolicy.initial_status(UserId::from(1), ChannelId::from(1), "1"),
             SubscriptionStatus::Active
         );
     }
 
     #[test]
     fn viewer_local_constructor_uses_user_id_as_subscriber_ref() {
-        let viewer = ViewerIdentity::local(UserId::from(42), 7);
+        let viewer = ViewerIdentity::local(UserId::from(42), ChannelId::from(7));
         assert_eq!(
             viewer,
             ViewerIdentity::Channel {
-                channel_id: 7,
+                channel_id: ChannelId::from(7),
                 subscriber_ref: "42".to_string(),
             }
         );
@@ -172,8 +172,8 @@ mod tests {
     #[test]
     fn account_viewer_with_channel_is_local() {
         assert_eq!(
-            account_viewer(UserId::from(7), Some(3)),
-            ViewerIdentity::local(UserId::from(7), 3),
+            account_viewer(UserId::from(7), Some(ChannelId::from(3))),
+            ViewerIdentity::local(UserId::from(7), ChannelId::from(3)),
             "a resolved local channel yields a Channel viewer keyed by the user id",
         );
     }
@@ -190,7 +190,7 @@ mod tests {
     #[test]
     fn viewer_user_id_projects_local_channel_to_user_id() {
         assert_eq!(
-            viewer_user_id(&ViewerIdentity::local(UserId::from(42), 1)),
+            viewer_user_id(&ViewerIdentity::local(UserId::from(42), ChannelId::from(1))),
             Some(UserId::from(42))
         );
     }

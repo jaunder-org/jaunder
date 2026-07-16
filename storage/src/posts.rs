@@ -1740,7 +1740,7 @@ fn resolution_where(viewer: &ViewerIdentity, start: usize) -> (String, Resolutio
             // A non-numeric ref (no local user) falls through to -1, so it never
             // matches `p.user_id`.
             let author_id = subscriber_ref.parse::<i64>().unwrap_or(-1);
-            (author_id, *channel_id, subscriber_ref.clone())
+            (author_id, i64::from(*channel_id), subscriber_ref.clone())
         }
     };
     let author = start;
