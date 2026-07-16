@@ -13,14 +13,14 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::{Database, Pool};
 
-use common::ids::UserId;
+use common::ids::{SubscriptionId, UserId};
 use common::visibility::{SubscriptionPolicy, SubscriptionStatus, ViewerIdentity};
 
 /// A subscription row returned by [`SubscriptionStorage::list_subscribers`].
 #[derive(Clone, Debug)]
 pub struct SubscriptionRecord {
     /// Unique internal identifier.
-    pub subscription_id: i64,
+    pub subscription_id: SubscriptionId,
     /// Channel the subscription is on (e.g. the `local` channel).
     pub channel_id: i64,
     /// Channel-scoped opaque reference to the subscriber (the local user id,
@@ -43,7 +43,7 @@ pub trait SubscriptionStorage: Send + Sync {
         author_user_id: UserId,
         channel_id: i64,
         subscriber_ref: &str,
-    ) -> sqlx::Result<i64>;
+    ) -> sqlx::Result<SubscriptionId>;
 
     /// Removes a subscription. A no-op if it does not exist.
     async fn unsubscribe(
@@ -158,7 +158,7 @@ where
         author_user_id: UserId,
         channel_id: i64,
         subscriber_ref: &str,
-    ) -> sqlx::Result<i64> {
+    ) -> sqlx::Result<SubscriptionId> {
         let status = self
             .policy
             .initial_status(author_user_id, channel_id, subscriber_ref);
@@ -175,7 +175,7 @@ where
             .bind(subscriber_ref)
             .fetch_one(&self.pool)
             .await
-            .map(|(id,)| id)
+            .map(|(id,)| SubscriptionId::from(id))
     }
 
     async fn unsubscribe(
@@ -229,7 +229,7 @@ where
             .into_iter()
             .map(
                 |(subscription_id, channel_id, subscriber_ref, created_at)| SubscriptionRecord {
-                    subscription_id,
+                    subscription_id: SubscriptionId::from(subscription_id),
                     channel_id,
                     subscriber_ref,
                     status: SubscriptionStatus::Active,
