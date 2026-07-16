@@ -7,7 +7,7 @@ use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
 use common::ids::UserId;
-use common::media::{detect_content_type, media_path, media_url, sanitize_filename};
+use common::media::{detect_content_type, media_path, media_url, sanitize_filename, ContentHash};
 use storage::{
     CreateMediaError, MediaRecord, MediaSource, MediaStorage, SiteConfigStorage,
     DEFAULT_MAX_FILE_SIZE_BYTES, DEFAULT_USER_QUOTA_BYTES, MEDIA_MAX_FILE_SIZE_BYTES_KEY,
@@ -41,7 +41,7 @@ pub struct MediaManager {
 struct UploadMetadata {
     filename: String,
     content_type: String,
-    sha256_hex: String,
+    sha256_hex: ContentHash,
     size_bytes: i64,
 }
 
@@ -206,14 +206,14 @@ impl MediaManager {
     async fn register_in_db(
         &self,
         user_id: UserId,
-        sha256_hex: &str,
+        sha256_hex: &ContentHash,
         filename: &str,
         content_type: &str,
         size_bytes: i64,
     ) -> anyhow::Result<()> {
         let record = MediaRecord {
             user_id,
-            sha256: sha256_hex.to_owned(),
+            sha256: sha256_hex.clone(),
             filename: filename.to_owned(),
             source: MediaSource::Upload,
             content_type: content_type.to_owned(),
@@ -314,8 +314,7 @@ impl MediaManager {
             anyhow::bail!(MediaError::PayloadTooLarge);
         }
 
-        let digest = Sha256::digest(bytes);
-        let sha256_hex = format!("{digest:x}");
+        let sha256_hex = ContentHash::from_digest(Sha256::digest(bytes).into());
 
         let tmp_path = self.create_temp_file().await?;
         fs::write(&tmp_path, bytes).await?;
@@ -336,7 +335,7 @@ impl MediaManager {
         field: &mut axum::extract::multipart::Field<'_>,
         tmp_path: &Path,
         max_file_size: i64,
-    ) -> anyhow::Result<(String, i64)> {
+    ) -> anyhow::Result<(ContentHash, i64)> {
         let mut file = fs::File::create(tmp_path).await?;
         let mut hasher = Sha256::new();
         let mut bytes_written: i64 = 0;
@@ -354,8 +353,7 @@ impl MediaManager {
         file.flush().await?;
         drop(file);
 
-        let digest = hasher.finalize();
-        let sha256_hex = format!("{digest:x}");
+        let sha256_hex = ContentHash::from_digest(hasher.finalize().into());
         Ok((sha256_hex, bytes_written))
     }
 
@@ -375,6 +373,7 @@ impl MediaManager {
 mod tests {
     use super::*;
     use crate::test_support::{media, migrated_sqlite_db, site_config, users};
+    use common::test_support::parse_content_hash;
     use tempfile::TempDir;
 
     #[test]
@@ -417,7 +416,15 @@ mod tests {
         );
 
         let err = manager
-            .register_in_db(UserId::from(1), "deadbeef", "file.png", "image/png", 100)
+            .register_in_db(
+                UserId::from(1),
+                &parse_content_hash(
+                    "deadbeef00000000000000000000000000000000000000000000000000000000",
+                ),
+                "file.png",
+                "image/png",
+                100,
+            )
             .await
             .unwrap_err();
 
@@ -588,7 +595,7 @@ mod tests {
             .upload_bytes(&auth, "pic.png", "image/png", bytes)
             .await
             .unwrap();
-        assert_eq!(first.sha256, expected_sha);
+        assert_eq!(first.sha256.as_ref(), expected_sha.as_str());
         assert_eq!(first.filename, "pic.png");
         assert_eq!(first.content_type, "image/png");
         assert_eq!(first.size_bytes, i64::try_from(bytes.len()).unwrap());

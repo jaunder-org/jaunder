@@ -156,7 +156,8 @@ pub fn MediaPage() -> impl IntoView {
 fn render_media_row(item: &MediaItem, delete_action: ServerAction<DeleteMedia>) -> impl IntoView {
     let url = item.url.clone();
     let filename = item.filename.clone();
-    let sha256 = item.sha256.clone();
+    // The ActionForm hidden field needs an owned String; `ContentHash: Display`.
+    let sha256 = item.sha256.to_string();
     let source = item.source.clone();
     let size_label = format_bytes(item.size_bytes);
     let created_at = item.created_at.clone();

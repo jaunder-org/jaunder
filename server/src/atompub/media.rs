@@ -11,7 +11,7 @@ use axum::Extension;
 use sha2::{Digest, Sha256};
 
 use common::atompub::{render_media_link_entry, MediaLinkEntry};
-use common::media::{media_url, sanitize_filename};
+use common::media::{media_url, sanitize_filename, ContentHash};
 use common::username::Username;
 use storage::{MediaRecord, MediaSource, MediaStorage, SiteConfigStorage};
 use web::auth::AuthUser;
@@ -77,7 +77,7 @@ pub async fn collection_post(
         .to_string();
 
     // Determine whether this exact resource already exists (idempotent re-upload).
-    let sha = format!("{:x}", Sha256::digest(&body));
+    let sha = ContentHash::from_digest(Sha256::digest(&body).into());
     let existed = media
         .get_media(auth_user.user_id, &sha, &filename, &MediaSource::Upload)
         .await?
@@ -131,6 +131,9 @@ pub async fn member_get(
     Path((username, sha, filename)): Path<(Username, String, String)>,
 ) -> Result<Response, HandlerError> {
     super::require_user_match(&auth_user, &username)?;
+    // The hash comes from the URL (untrusted); a malformed one is a 404, same as a
+    // well-formed hash with no matching record.
+    let sha: ContentHash = sha.parse().map_err(|_| HandlerError::NotFound)?;
     let record = media
         .get_media(auth_user.user_id, &sha, &filename, &MediaSource::Upload)
         .await?
@@ -153,6 +156,9 @@ pub async fn member_delete(
     Path((username, sha, filename)): Path<(Username, String, String)>,
 ) -> Result<Response, HandlerError> {
     super::require_user_match(&auth_user, &username)?;
+    // The hash comes from the URL (untrusted); a malformed one is a 404, matching
+    // the `NotFound` a nonexistent record already yields.
+    let sha: ContentHash = sha.parse().map_err(|_| HandlerError::NotFound)?;
     media
         .delete_media(auth_user.user_id, &sha, &filename, &MediaSource::Upload)
         .await?;

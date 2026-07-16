@@ -12,6 +12,7 @@ use crate::audience::AudienceName;
 use crate::backup::RetentionCount;
 use crate::display_name::DisplayName;
 use crate::email::Email;
+use crate::media::ContentHash;
 use crate::post_title::PostTitle;
 use crate::token::RawToken;
 
@@ -82,4 +83,16 @@ pub fn parse_raw_token(s: &str) -> RawToken {
 #[must_use]
 pub fn parse_post_title(title: &str) -> PostTitle {
     PostTitle::from(title.to_owned())
+}
+
+/// Parse `s` into a valid [`ContentHash`] for tests — the single place a test
+/// media-content-hash literal is parsed, so a malformed fixture fails loudly and
+/// the parse isn't re-spelled at every media store-seeding call site.
+///
+/// # Panics
+///
+/// Panics if `s` is not 64 lowercase hex characters.
+#[must_use]
+pub fn parse_content_hash(s: &str) -> ContentHash {
+    s.parse().expect("valid test content hash")
 }

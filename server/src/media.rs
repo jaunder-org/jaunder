@@ -11,7 +11,7 @@ use tokio::fs;
 use tokio_util::io::ReaderStream;
 
 use common::ids::UserId;
-use common::media::{detect_content_type, should_inline};
+use common::media::{detect_content_type, should_inline, ContentHash};
 use storage::{MediaSource, MediaStorage, SiteConfigStorage};
 use web::auth::AuthUser;
 
@@ -39,7 +39,7 @@ where
 /// JSON body returned on a successful upload.
 #[derive(Debug, Serialize)]
 pub struct UploadResponse {
-    pub sha256: String,
+    pub sha256: ContentHash,
     pub filename: String,
     pub content_type: String,
     pub size_bytes: i64,
@@ -138,14 +138,14 @@ async fn serve_response(
     Path(params): Path<ServeParams>,
     req_headers: axum::http::HeaderMap,
 ) -> Result<Response, StatusCode> {
-    let (source, file_path) = resolve_media_path(&storage_path, &params)?;
+    let (source, hash, file_path) = resolve_media_path(&storage_path, &params)?;
 
     if !file_path.exists() {
         return Err(StatusCode::NOT_FOUND);
     }
 
     // ETag / If-None-Match check.
-    let etag_value = format!("\"{hash}\"", hash = params.hash);
+    let etag_value = format!("\"{hash}\"");
     if let Some(if_none_match) = req_headers.get(axum::http::header::IF_NONE_MATCH) {
         if if_none_match.to_str().unwrap_or("") == etag_value {
             return Ok(StatusCode::NOT_MODIFIED.into_response());
@@ -154,7 +154,7 @@ async fn serve_response(
 
     // Look up content_type from DB; fall back to extension detection.
     let content_type = media
-        .find_by_hash(&params.hash, &source)
+        .find_by_hash(&hash, &source)
         .await
         .map_err(serve_internal_error)?
         .map_or_else(
@@ -229,23 +229,27 @@ pub async fn proxy_handler(
 // ---------------------------------------------------------------------------
 
 /// Validates the serve route's attacker-controlled path parameters, returning
-/// the parsed [`MediaSource`] or `NOT_FOUND` for any invalid component.
+/// the parsed [`MediaSource`] and [`ContentHash`], or `NOT_FOUND` for any invalid
+/// component.
 ///
-/// `hash` must be the canonical 64-char lowercase hex content hash *before* it
-/// is sliced or joined into a path — otherwise `params.hash[2..]` panics on a
-/// short or non-ASCII value, a denial-of-service vector. `p1`/`p2` must be the
-/// matching leading hex pairs of the hash. `filename` must be a single normal
-/// leaf component: `sanitize_filename` strips path components, `.`/`..`, and
-/// null bytes, so a sanitized value differing from the input was not a safe
-/// leaf (e.g. `..`, `a/b`) and is rejected to prevent path traversal.
-fn validate_serve_params(params: &ServeParams) -> Result<MediaSource, StatusCode> {
+/// The hash is parsed into a [`ContentHash`] here (via its `FromStr`, which
+/// enforces canonical 64-char lowercase hex) — a malformed value is rejected as a
+/// DoS-safe `NOT_FOUND` before it is ever sliced, so the downstream
+/// `hash[2..]`/path-join can never panic. `p1`/`p2` must be the matching leading
+/// hex pairs of the hash. `filename` must be a single normal leaf component:
+/// `sanitize_filename` strips path components, `.`/`..`, and null bytes, so a
+/// sanitized value differing from the input was not a safe leaf (e.g. `..`,
+/// `a/b`) and is rejected to prevent path traversal.
+fn validate_serve_params(params: &ServeParams) -> Result<(MediaSource, ContentHash), StatusCode> {
     let source: MediaSource = params.source.parse().map_err(|_| StatusCode::NOT_FOUND)?;
 
-    if !common::media::is_valid_content_hash(&params.hash) {
-        return Err(StatusCode::NOT_FOUND);
-    }
+    // Parse (not just check) the attacker-controlled hash into the newtype here, at
+    // the outermost usable boundary: a malformed hash yields the same DoS-safe 404
+    // as before (keeping `ServeParams.hash: String` avoids axum's extractor turning
+    // it into a pre-handler 400), and the typed hash flows to the ETag/lookup/path.
+    let hash: ContentHash = params.hash.parse().map_err(|_| StatusCode::NOT_FOUND)?;
 
-    if !params.hash.starts_with(&params.p1) || !params.hash[2..].starts_with(&params.p2) {
+    if !hash.starts_with(&params.p1) || !hash[2..].starts_with(&params.p2) {
         return Err(StatusCode::NOT_FOUND);
     }
 
@@ -253,7 +257,7 @@ fn validate_serve_params(params: &ServeParams) -> Result<MediaSource, StatusCode
         return Err(StatusCode::NOT_FOUND);
     }
 
-    Ok(source)
+    Ok((source, hash))
 }
 
 /// Validates the serve route's path parameters and resolves the on-disk file
@@ -261,17 +265,20 @@ fn validate_serve_params(params: &ServeParams) -> Result<MediaSource, StatusCode
 fn resolve_media_path(
     storage_path: &std::path::Path,
     params: &ServeParams,
-) -> Result<(MediaSource, PathBuf), StatusCode> {
-    let source = validate_serve_params(params)?;
+) -> Result<(MediaSource, ContentHash, PathBuf), StatusCode> {
+    let (source, hash) = validate_serve_params(params)?;
     let file_path = storage_path
         .join("media")
         .join(source.as_str())
         .join(&params.p1)
         .join(&params.p2)
-        .join(&params.hash)
+        // Join the parsed hash, not the raw `params.hash`: identical bytes today
+        // (`FromStr` rejects rather than normalizes), but keeps the on-disk path
+        // built from the validated value should that ever change.
+        .join(hash.as_ref())
         .join(&params.filename);
 
-    Ok((source, file_path))
+    Ok((source, hash, file_path))
 }
 
 /// Builds a header-safe `Content-Disposition` value for serving `filename`.
@@ -363,10 +370,11 @@ mod tests {
         let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
         let p = params("upload", "e3", "b0", hash, "photo.jpg");
 
-        let (source, path) =
+        let (source, resolved_hash, path) =
             resolve_media_path(Path::new("/data"), &p).expect("valid params should resolve");
 
         assert_eq!(source, MediaSource::Upload);
+        assert_eq!(resolved_hash, hash);
         assert_eq!(
             path,
             Path::new("/data")
