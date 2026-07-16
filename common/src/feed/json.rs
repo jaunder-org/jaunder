@@ -10,12 +10,12 @@ pub fn render_json(meta: &FeedMetadata, items: &[FeedItem]) -> String {
             let mut o = json!({
                 "id": i.permalink,
                 "url": i.permalink,
-                "content_html": i.content_html,
+                "content_html": &*i.content_html,
                 "date_published": i.published_at.to_rfc3339(),
                 "date_modified": i.updated_at.to_rfc3339(),
             });
             if let Some(t) = &i.title {
-                o["title"] = Value::String(t.clone());
+                o["title"] = Value::String(t.to_string());
             }
             if let Some(s) = &i.summary {
                 o["summary"] = Value::String(s.clone());
@@ -48,6 +48,8 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
+    use crate::render::RenderedHtml;
+    use crate::test_support::parse_post_title;
 
     fn meta(hub: Option<&str>) -> FeedMetadata {
         FeedMetadata {
@@ -67,10 +69,10 @@ mod tests {
     fn item_with_summary(title: Option<&str>, tags: Vec<&str>, summary: Option<&str>) -> FeedItem {
         FeedItem {
             id: 1,
-            title: title.map(str::to_string),
+            title: title.map(parse_post_title),
             permalink: "https://example.com/~alice/posts/1".into(),
             summary: summary.map(str::to_string),
-            content_html: "<p>hi</p>".into(),
+            content_html: RenderedHtml::from_trusted("<p>hi</p>"),
             published_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
             updated_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
             tags: tags.into_iter().map(|t| t.parse().unwrap()).collect(),
