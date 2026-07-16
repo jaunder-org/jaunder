@@ -152,4 +152,4 @@ Expected: PASS. `urls_match_bash_parity` still green (now via `PORT`);
 refactor(devtool): drop JAUNDER_PG_TEST_PORT env knob; hardcode ephemeral port (#275)
 ```
 
-- [ ] Task 1 complete
+- [x] Task 1 complete
