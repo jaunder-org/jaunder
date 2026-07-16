@@ -654,7 +654,7 @@ async fn update_profile_rejects_invalid_display_name(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie_header = format!("session={raw_token}");
+    let cookie_header = format!("session={}", raw_token.as_ref());
 
     let overlong = "a".repeat(common::display_name::MAX_DISPLAY_NAME_CHARS + 1);
     let (status, _) = post_form(
