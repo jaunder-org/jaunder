@@ -710,7 +710,9 @@ mod tests {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
         storage
-            .set_default_audience(&common::visibility::AudienceTarget::Named(7))
+            .set_default_audience(&common::visibility::AudienceTarget::Named(
+                common::ids::AudienceId::from(7),
+            ))
             .await
             .unwrap();
         assert_eq!(

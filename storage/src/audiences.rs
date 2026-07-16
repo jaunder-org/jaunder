@@ -13,7 +13,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use common::audience::AudienceName;
-use common::ids::UserId;
+use common::ids::{AudienceId, UserId};
 use sqlx::{Database, Pool};
 
 use crate::backend::Backend;
@@ -22,7 +22,7 @@ use crate::backend::Backend;
 #[derive(Clone, Debug)]
 pub struct AudienceRecord {
     /// Unique internal identifier.
-    pub audience_id: i64,
+    pub audience_id: AudienceId,
     /// Author-unique display name.
     pub name: String,
     /// When the audience row was created.
@@ -78,7 +78,7 @@ pub trait AudienceStorage: Send + Sync {
         &self,
         author_user_id: UserId,
         name: &AudienceName,
-    ) -> Result<i64, AudienceError>;
+    ) -> Result<AudienceId, AudienceError>;
 
     /// Renames an audience the author owns. [`AudienceError::NotFound`] if the
     /// `(author_user_id, audience_id)` pair does not exist; [`AudienceError::DuplicateName`]
@@ -86,13 +86,17 @@ pub trait AudienceStorage: Send + Sync {
     async fn rename_audience(
         &self,
         author_user_id: UserId,
-        audience_id: i64,
+        audience_id: AudienceId,
         name: &AudienceName,
     ) -> Result<(), AudienceError>;
 
     /// Deletes an audience the author owns and its membership rows in one
     /// transaction (the migrations declare no `ON DELETE CASCADE`).
-    async fn delete_audience(&self, author_user_id: UserId, audience_id: i64) -> sqlx::Result<()>;
+    async fn delete_audience(
+        &self,
+        author_user_id: UserId,
+        audience_id: AudienceId,
+    ) -> sqlx::Result<()>;
 
     /// Lists the author's audiences, ordered by `audience_id`.
     async fn list_audiences(&self, author_user_id: UserId) -> sqlx::Result<Vec<AudienceRecord>>;
@@ -104,7 +108,7 @@ pub trait AudienceStorage: Send + Sync {
     async fn add_member(
         &self,
         author_user_id: UserId,
-        audience_id: i64,
+        audience_id: AudienceId,
         subscription_id: i64,
     ) -> Result<(), AudienceError>;
 
@@ -113,7 +117,7 @@ pub trait AudienceStorage: Send + Sync {
     async fn remove_member(
         &self,
         author_user_id: UserId,
-        audience_id: i64,
+        audience_id: AudienceId,
         subscription_id: i64,
     ) -> sqlx::Result<()>;
 
@@ -122,7 +126,7 @@ pub trait AudienceStorage: Send + Sync {
     async fn list_members(
         &self,
         author_user_id: UserId,
-        audience_id: i64,
+        audience_id: AudienceId,
     ) -> sqlx::Result<Vec<i64>>;
 }
 
@@ -164,7 +168,7 @@ where
         &self,
         author_user_id: UserId,
         name: &AudienceName,
-    ) -> Result<i64, AudienceError> {
+    ) -> Result<AudienceId, AudienceError> {
         match sqlx::query_as::<_, (i64,)>(
             "INSERT INTO audiences (author_user_id, name) VALUES ($1, $2) RETURNING audience_id",
         )
@@ -173,7 +177,7 @@ where
         .fetch_one(&self.pool)
         .await
         {
-            Ok((id,)) => Ok(id),
+            Ok((id,)) => Ok(AudienceId::from(id)),
             Err(sqlx::Error::Database(error)) if error.is_unique_violation() => {
                 Err(AudienceError::DuplicateName)
             }
@@ -189,7 +193,7 @@ where
     async fn rename_audience(
         &self,
         author_user_id: UserId,
-        audience_id: i64,
+        audience_id: AudienceId,
         name: &AudienceName,
     ) -> Result<(), AudienceError> {
         // `RETURNING` so a no-match is detected generically (via `fetch_optional`)
@@ -200,7 +204,7 @@ where
         )
         .bind(name.as_ref())
         .bind(i64::from(author_user_id))
-        .bind(audience_id)
+        .bind(i64::from(audience_id))
         .fetch_optional(&self.pool)
         .await;
         match result {
@@ -218,16 +222,20 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn delete_audience(&self, author_user_id: UserId, audience_id: i64) -> sqlx::Result<()> {
+    async fn delete_audience(
+        &self,
+        author_user_id: UserId,
+        audience_id: AudienceId,
+    ) -> sqlx::Result<()> {
         let mut tx = self.pool.begin().await?;
         sqlx::query("DELETE FROM audience_members WHERE author_user_id = $1 AND audience_id = $2")
             .bind(i64::from(author_user_id))
-            .bind(audience_id)
+            .bind(i64::from(audience_id))
             .execute(&mut *tx)
             .await?;
         sqlx::query("DELETE FROM audiences WHERE author_user_id = $1 AND audience_id = $2")
             .bind(i64::from(author_user_id))
-            .bind(audience_id)
+            .bind(i64::from(audience_id))
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
@@ -250,7 +258,7 @@ where
         Ok(rows
             .into_iter()
             .map(|(audience_id, name, created_at)| AudienceRecord {
-                audience_id,
+                audience_id: AudienceId::from(audience_id),
                 name,
                 created_at,
             })
@@ -265,7 +273,7 @@ where
     async fn add_member(
         &self,
         author_user_id: UserId,
-        audience_id: i64,
+        audience_id: AudienceId,
         subscription_id: i64,
     ) -> Result<(), AudienceError> {
         sqlx::query(
@@ -273,7 +281,7 @@ where
              VALUES ($1, $2, $3) \
              ON CONFLICT (audience_id, subscription_id) DO NOTHING",
         )
-        .bind(audience_id)
+        .bind(i64::from(audience_id))
         .bind(subscription_id)
         .bind(i64::from(author_user_id))
         .execute(&self.pool)
@@ -289,7 +297,7 @@ where
     async fn remove_member(
         &self,
         author_user_id: UserId,
-        audience_id: i64,
+        audience_id: AudienceId,
         subscription_id: i64,
     ) -> sqlx::Result<()> {
         sqlx::query(
@@ -297,7 +305,7 @@ where
              WHERE author_user_id = $1 AND audience_id = $2 AND subscription_id = $3",
         )
         .bind(i64::from(author_user_id))
-        .bind(audience_id)
+        .bind(i64::from(audience_id))
         .bind(subscription_id)
         .execute(&self.pool)
         .await?;
@@ -312,14 +320,14 @@ where
     async fn list_members(
         &self,
         author_user_id: UserId,
-        audience_id: i64,
+        audience_id: AudienceId,
     ) -> sqlx::Result<Vec<i64>> {
         let rows = sqlx::query_as::<_, (i64,)>(
             "SELECT subscription_id FROM audience_members \
              WHERE author_user_id = $1 AND audience_id = $2 ORDER BY subscription_id",
         )
         .bind(i64::from(author_user_id))
-        .bind(audience_id)
+        .bind(i64::from(audience_id))
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().map(|(id,)| id).collect())

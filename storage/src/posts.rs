@@ -6,7 +6,7 @@ use sqlx::{Database, Pool};
 use thiserror::Error;
 
 use common::feed::FeedPath;
-use common::ids::UserId;
+use common::ids::{AudienceId, UserId};
 use common::post_body::PostBody;
 use common::post_title::PostTitle;
 use common::slug::Slug;
@@ -1798,7 +1798,7 @@ fn audience_target_row(target: &AudienceTarget) -> Option<(&'static str, Option<
     match target {
         AudienceTarget::Public => Some((TargetKind::Public.as_str(), None)),
         AudienceTarget::Subscribers => Some((TargetKind::Subscribers.as_str(), None)),
-        AudienceTarget::Named(id) => Some((TargetKind::Named.as_str(), Some(*id))),
+        AudienceTarget::Named(id) => Some((TargetKind::Named.as_str(), Some(i64::from(*id)))),
         AudienceTarget::Private => None,
     }
 }
@@ -1815,7 +1815,7 @@ fn audience_target_from_row(kind: &str, audience_id: Option<i64>) -> Option<Audi
     match TargetKind::try_from(kind) {
         Ok(TargetKind::Public) => Some(AudienceTarget::Public),
         Ok(TargetKind::Subscribers) => Some(AudienceTarget::Subscribers),
-        Ok(TargetKind::Named) => audience_id.map(AudienceTarget::Named),
+        Ok(TargetKind::Named) => audience_id.map(|id| AudienceTarget::Named(AudienceId::from(id))),
         Err(()) => None,
     }
 }
@@ -2220,7 +2220,7 @@ mod tests {
         );
         assert_eq!(
             audience_target_from_row("named", Some(7)),
-            Some(AudienceTarget::Named(7))
+            Some(AudienceTarget::Named(AudienceId::from(7)))
         );
         // A `named` row missing its id, or an unknown kind name, is dropped.
         assert_eq!(audience_target_from_row("named", None), None);

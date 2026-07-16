@@ -2728,7 +2728,7 @@ async fn post_audiences_are_persisted_and_replaced(#[case] backend: Backend) {
     assert_eq!(
         rows,
         vec![
-            ("named".to_string(), Some(aud)),
+            ("named".to_string(), Some(i64::from(aud))),
             ("public".to_string(), None),
         ],
         "create should persist one public and one named row"

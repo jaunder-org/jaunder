@@ -10,6 +10,7 @@ use crate::posts::{
     TimelinePostSummary, UnpublishPost,
 };
 use crate::tags::TagSummary;
+use common::ids::AudienceId;
 use common::slug::Slug;
 use common::tag::TagLabel;
 use common::username::Username;
@@ -523,7 +524,9 @@ fn audience_checkbox(
     audience: AudienceSummary,
     selection: RwSignal<AudienceSelection>,
 ) -> impl IntoView {
-    let id = audience.audience_id;
+    // `AudienceSummary.audience_id` is a bare `i64` (the reactive-store carve-out); wrap it
+    // into the `AudienceId` that `AudienceSelection.named` holds.
+    let id = AudienceId::from(audience.audience_id);
     let input_id = format!("audience-named-{id}");
     let checked = move || selection.get().named.contains(&id);
     let disabled = move || selection.get().base == "private";

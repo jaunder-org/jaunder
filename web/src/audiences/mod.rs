@@ -24,6 +24,7 @@ use crate::reactive::{invalidator_scope, Invalidator, ListState};
 use crate::render::Icons;
 use crate::ui::Topbar;
 use common::audience::AudienceName;
+use common::ids::AudienceId;
 use leptos::prelude::*;
 use reactive_stores::{Field, Patch, Store};
 use serde::{Deserialize, Serialize};
@@ -37,6 +38,18 @@ use {
 };
 
 /// A named audience as shown in the management screen.
+///
+/// `audience_id` stays a bare `i64` here (not `AudienceId`): this is a
+/// `reactive_stores` keyed-store row (`Store`/`Patch`), and `Patch` requires the
+/// field to be `PatchField` — a foreign trait implemented only for primitives, with
+/// no blanket impl. Typing it would force `impl PatchField for AudienceId`; that impl
+/// is coherent only in `common` (where `AudienceId` is defined), but that would drag a
+/// leptos-client dependency (`reactive_stores`) into the backend-agnostic crate
+/// (ADR-0055/0058) — and in `web` it is an outright orphan violation. So this one
+/// reactive surface holds the primitive and
+/// converts at its edges (built from `AudienceRecord`; wrapped into `AudienceId`
+/// where it flows into the typed components/server fns) — the ADR-0063
+/// external-non-owned-type carve-out.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Store, Patch)]
 pub struct AudienceSummary {
     pub audience_id: i64,
@@ -69,7 +82,7 @@ type RosterSignal = Signal<Option<WebResult<Vec<SubscriberSummary>>>>;
 
 /// Creates a named audience owned by the authenticated author.
 #[server(endpoint = "/create_audience")]
-pub async fn create_audience(name: AudienceName) -> WebResult<i64> {
+pub async fn create_audience(name: AudienceName) -> WebResult<AudienceId> {
     boundary!("create_audience", {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
@@ -83,7 +96,7 @@ pub async fn create_audience(name: AudienceName) -> WebResult<i64> {
 
 /// Renames an audience the authenticated author owns.
 #[server(endpoint = "/rename_audience")]
-pub async fn rename_audience(audience_id: i64, name: AudienceName) -> WebResult<()> {
+pub async fn rename_audience(audience_id: AudienceId, name: AudienceName) -> WebResult<()> {
     boundary!("rename_audience", {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
@@ -97,7 +110,7 @@ pub async fn rename_audience(audience_id: i64, name: AudienceName) -> WebResult<
 
 /// Deletes an audience the authenticated author owns (and its memberships).
 #[server(endpoint = "/delete_audience")]
-pub async fn delete_audience(audience_id: i64) -> WebResult<()> {
+pub async fn delete_audience(audience_id: AudienceId) -> WebResult<()> {
     boundary!("delete_audience", {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
@@ -116,7 +129,7 @@ pub async fn list_my_audiences() -> WebResult<Vec<AudienceSummary>> {
         Ok(rows
             .into_iter()
             .map(|a| AudienceSummary {
-                audience_id: a.audience_id,
+                audience_id: i64::from(a.audience_id),
                 name: a.name,
             })
             .collect())
@@ -161,7 +174,10 @@ pub async fn list_my_subscribers() -> WebResult<Vec<SubscriberSummary>> {
 /// the composite FKs reject a cross-author pairing), so passing the session's
 /// `user_id` is the authorization.
 #[server(endpoint = "/add_subscriber_to_audience")]
-pub async fn add_subscriber_to_audience(audience_id: i64, subscription_id: i64) -> WebResult<()> {
+pub async fn add_subscriber_to_audience(
+    audience_id: AudienceId,
+    subscription_id: i64,
+) -> WebResult<()> {
     boundary!("add_subscriber_to_audience", {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
@@ -176,7 +192,7 @@ pub async fn add_subscriber_to_audience(audience_id: i64, subscription_id: i64) 
 /// `remove_member` is author-scoped, so a cross-author `audience_id` is a no-op.
 #[server(endpoint = "/remove_subscriber_from_audience")]
 pub async fn remove_subscriber_from_audience(
-    audience_id: i64,
+    audience_id: AudienceId,
     subscription_id: i64,
 ) -> WebResult<()> {
     boundary!("remove_subscriber_from_audience", {
@@ -192,7 +208,7 @@ pub async fn remove_subscriber_from_audience(
 /// Lists the `subscription_id`s assigned to an audience the author owns.
 /// `list_members` is author-scoped, so a cross-author `audience_id` lists empty.
 #[server(endpoint = "/list_audience_members")]
-pub async fn list_audience_members(audience_id: i64) -> WebResult<Vec<i64>> {
+pub async fn list_audience_members(audience_id: AudienceId) -> WebResult<Vec<i64>> {
     boundary!("list_audience_members", {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
@@ -414,7 +430,9 @@ fn CreateAudienceForm() -> impl IntoView {
 /// a rename updates the `<h3>` name in place (the row is never remounted).
 #[component]
 fn AudienceRow(row: Field<AudienceSummary>) -> impl IntoView {
-    let audience_id = row.audience_id().get_untracked();
+    // The store row holds a bare `i64` (see `AudienceSummary`); wrap it into the typed
+    // `AudienceId` the header/checklist components and server fns speak.
+    let audience_id = AudienceId::from(row.audience_id().get_untracked());
     let initial_name = row.name().get_untracked();
     view! {
         <li class="j-audience-item">
@@ -428,7 +446,7 @@ fn AudienceRow(row: Field<AudienceSummary>) -> impl IntoView {
 /// The `j-audience-head` controls: rename and delete forms for one audience. Both actions
 /// refetch the audience list on success via the `AudienceList` invalidator.
 #[component]
-fn AudienceHeader(audience_id: i64, name: String) -> impl IntoView {
+fn AudienceHeader(audience_id: AudienceId, name: String) -> impl IntoView {
     let list = expect_context::<AudienceList>();
     let rename_action = list.action::<RenameAudience>();
     let delete_action = list.action::<DeleteAudience>();
@@ -440,7 +458,7 @@ fn AudienceHeader(audience_id: i64, name: String) -> impl IntoView {
     view! {
         <div class="j-audience-head">
             <ActionForm action=rename_action>
-                <input type="hidden" name="audience_id" value=audience_id />
+                <input type="hidden" name="audience_id" value=i64::from(audience_id) />
                 <input
                     type="text"
                     name="name"
@@ -463,7 +481,7 @@ fn AudienceHeader(audience_id: i64, name: String) -> impl IntoView {
                 }}
             </ActionForm>
             <ActionForm action=delete_action>
-                <input type="hidden" name="audience_id" value=audience_id />
+                <input type="hidden" name="audience_id" value=i64::from(audience_id) />
                 <button type="submit" class="j-btn is-danger">
                     "Delete"
                 </button>
@@ -476,7 +494,7 @@ fn AudienceHeader(audience_id: i64, name: String) -> impl IntoView {
 /// *local* `Invalidator` whose `sticky` member list refetches only this audience's members
 /// on a toggle — never the whole list.
 #[component]
-fn MemberChecklist(audience_id: i64) -> impl IntoView {
+fn MemberChecklist(audience_id: AudienceId) -> impl IntoView {
     // The subscriber roster, reactive (provided by `AudiencesPage`): it carries the full
     // resolved state and updates the checklist in place when it resolves, without the row
     // being rebuilt. A fetch error renders nothing here (surfaced once at page level), not
@@ -522,7 +540,11 @@ fn MemberChecklist(audience_id: i64) -> impl IntoView {
                                         view! {
                                             <li>
                                                 <ActionForm action=remove_action>
-                                                    <input type="hidden" name="audience_id" value=audience_id />
+                                                    <input
+                                                        type="hidden"
+                                                        name="audience_id"
+                                                        value=i64::from(audience_id)
+                                                    />
                                                     <input
                                                         type="hidden"
                                                         name="subscription_id"
@@ -540,7 +562,11 @@ fn MemberChecklist(audience_id: i64) -> impl IntoView {
                                         view! {
                                             <li>
                                                 <ActionForm action=add_action>
-                                                    <input type="hidden" name="audience_id" value=audience_id />
+                                                    <input
+                                                        type="hidden"
+                                                        name="audience_id"
+                                                        value=i64::from(audience_id)
+                                                    />
                                                     <input
                                                         type="hidden"
                                                         name="subscription_id"
