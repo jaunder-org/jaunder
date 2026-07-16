@@ -198,6 +198,30 @@ storage method can still take `&str` internally and a caller holding a
 This is the shape #14 needs: storage returns the newtype, the DTO field _is_ the
 newtype, and no `parse().expect()` appears at the web boundary.
 
+### 5. Use an existing newtype everywhere its value appears
+
+Once a domain newtype exists, **every** field, argument, return, DTO, **and
+serialization/DTO surface** that carries that value is typed as the newtype.
+Flattening it to a primitive requires **express owner approval**, recorded in
+the issue/spec — it is not a discretionary per-site call, and "it is only a
+serialization / DTO / feed-native surface" is not itself a reason.
+
+This is distinct from §1. §1's "consistency alone is not sufficient
+justification" governs whether to **introduce a new** type; it must **not** be
+cited to leave an **existing** newtype's value as a primitive. Adoption of an
+existing type is mandatory, not consistency-optional. The §4 boundary
+enumeration (`#[server]`, CLI, storage) is likewise **non-exhaustive**: internal
+serialization/DTO surfaces hold the newtype too. A field whose value is sourced
+from a newtype-typed record field _is_ that type, and must be declared as it —
+not re-derived as a bare `String` with a `.to_string()` / `String::from` /
+`.map(String::from)` at the assignment.
+
+**Sole carve-out — external types.** Handing the inner value to a type we do not
+own (e.g. `atom_syndication`, the `rss` crate, `serde_json::Value`) is the one
+sanctioned flatten; read the value out via `Deref`/`AsRef`/`Display`/`Serialize`
+at that boundary. The newtype must still be held on every surface _we_ define up
+to that point.
+
 ## Consequences
 
 - **One decision surface.** "Does this value deserve a type, and what shape does
@@ -220,3 +244,8 @@ newtype, and no `parse().expect()` appears at the web boundary.
   polymorphic values (use an enum); and "consistency-only" newtypes for
   free-form local strings. When a value is borderline, the crossing-a-boundary
   test in §1 decides.
+- **Pervasiveness closes a loophole (§5).** An existing newtype cannot be left
+  as a primitive on a "generic serialization surface" without express approval —
+  §1's consistency caveat governs _introducing_ a type, not _adopting_ one.
+  `FeedItem.title`/`content_html` (#470), flattened to `String` under exactly
+  that reasoning during the #402/#398 sweeps, are the first correction.
