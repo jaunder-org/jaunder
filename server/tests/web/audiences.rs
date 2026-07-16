@@ -7,7 +7,7 @@ use common::username::Username;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::post_form;
+use crate::helpers::{post_form, session_cookie};
 use storage::test_support::{backends, Backend, TestEnv};
 
 async fn make_user(state: &Arc<storage::AppState>, name: &str) -> i64 {
@@ -29,7 +29,7 @@ async fn cookie_for(state: &Arc<storage::AppState>, user_id: i64) -> String {
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    format!("session={token}")
+    session_cookie(&token)
 }
 
 /// Parses the JSON-encoded `i64` that `create_audience` returns.

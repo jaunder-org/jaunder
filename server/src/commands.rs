@@ -14,6 +14,7 @@ use common::display_name::DisplayName;
 use common::email::Email;
 use common::mailer::{EmailMessage, MailSender};
 use common::password::Password;
+use common::token::RawToken;
 use common::username::Username;
 use host::capture;
 use leptos::prelude::{Env, LeptosOptions};
@@ -249,7 +250,7 @@ pub async fn app_password_create(
     state: &storage::AppState,
     username: &Username,
     label: &str,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<RawToken> {
     let user = state
         .users
         .get_user_by_username(username)
@@ -261,7 +262,7 @@ pub async fn app_password_create(
         .create_session(user.user_id, label)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
-    Ok(token.to_string())
+    Ok(token)
 }
 
 /// CLI wrapper: opens the database, mints an app password, prints it to stdout.

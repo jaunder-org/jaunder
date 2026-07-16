@@ -10,7 +10,7 @@ use storage::{AppState, ProfileUpdate};
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{post_form, post_form_with_mailer};
+use crate::helpers::{post_form, post_form_with_mailer, session_cookie};
 use storage::test_support::{backends, Backend, TestEnv};
 
 // ── Profile tests (M2.10.5, M2.10.6) ─────────────────────────────────────
@@ -46,7 +46,7 @@ async fn get_profile_returns_display_name_and_bio(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={token}");
+    let cookie = session_cookie(&token);
 
     let (status, body) = post_form(Arc::clone(&state), "/api/get_profile", "", Some(&cookie)).await;
 
@@ -79,7 +79,7 @@ async fn get_profile_with_email_returns_email(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie_header = format!("session={raw_token}");
+    let cookie_header = session_cookie(&raw_token);
 
     let (status, body) = post_form(state, "/api/get_profile", "", Some(&cookie_header)).await;
     assert_eq!(status, StatusCode::OK);
@@ -106,7 +106,7 @@ async fn update_profile_persists_changes(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={token}");
+    let cookie = session_cookie(&token);
 
     let (status, _) = post_form(
         Arc::clone(&state),
@@ -167,7 +167,7 @@ async fn list_sessions_returns_only_authenticated_users_sessions(#[case] backend
         .await
         .unwrap();
 
-    let cookie = format!("session={token1}");
+    let cookie = session_cookie(&token1);
     let (status, body) =
         post_form(Arc::clone(&state), "/api/list_sessions", "", Some(&cookie)).await;
 
@@ -214,7 +214,7 @@ async fn revoke_session_removes_session_and_reauth_fails(#[case] backend: Backen
     let record_b = state.sessions.authenticate(&token_b).await.unwrap();
     let hash_b = record_b.token_hash;
 
-    let cookie_a = format!("session={token_a}");
+    let cookie_a = session_cookie(&token_a);
     let body = format!(
         "token_hash={}",
         hash_b
@@ -261,7 +261,7 @@ async fn operator_cookie(state: &Arc<AppState>, username: &str) -> String {
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    format!("session={token}")
+    session_cookie(&token)
 }
 
 // #433: create_invite emails the invitation link to the recipient and records the invite.
@@ -462,7 +462,7 @@ async fn revoke_session_unknown_hash_returns_error(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={token}");
+    let cookie = session_cookie(&token);
 
     let (_status, _) = post_form(
         Arc::clone(&state),
@@ -513,7 +513,7 @@ async fn revoke_session_other_user_hash_returns_error(#[case] backend: Backend) 
         .unwrap();
     let record2 = state.sessions.authenticate(&token2).await.unwrap();
 
-    let cookie1 = format!("session={token1}");
+    let cookie1 = session_cookie(&token1);
     let (status, _) = post_form(
         Arc::clone(&state),
         "/api/revoke_session",
@@ -547,7 +547,7 @@ async fn list_invites_returns_error_when_policy_not_invite_only(#[case] backend:
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie = format!("session={token}");
+    let cookie = session_cookie(&token);
 
     let (status, _) = post_form(Arc::clone(&state), "/api/list_invites", "", Some(&cookie)).await;
     assert_ne!(
@@ -614,7 +614,7 @@ async fn update_profile_with_empty_fields_sets_to_none(#[case] backend: Backend)
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie_header = format!("session={raw_token}");
+    let cookie_header = session_cookie(&raw_token);
 
     // Clearing the display name is the dispatch-`None` path: the typed
     // `Option<DisplayName>` wire arg is *omitted* (serde decodes a missing
@@ -654,7 +654,7 @@ async fn update_profile_rejects_invalid_display_name(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .unwrap();
-    let cookie_header = format!("session={raw_token}");
+    let cookie_header = session_cookie(&raw_token);
 
     let overlong = "a".repeat(common::display_name::MAX_DISPLAY_NAME_CHARS + 1);
     let (status, _) = post_form(

@@ -8,18 +8,22 @@ use common::username::Username;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{post_form_with_bearer, post_form_with_secure_flag, post_form_with_ua};
+use crate::helpers::{
+    post_form_with_bearer, post_form_with_secure_flag, post_form_with_ua, session_cookie,
+};
 use storage::test_support::{backends, backends_matrix, Backend, TestEnv};
 
 /// Extracts a raw token from a server-function JSON response body.
 /// Successful server functions return a JSON string: `"<token>"`.
-fn extract_token(body: &str) -> String {
+fn extract_token(body: &str) -> RawToken {
     let trimmed = body.trim();
     assert!(
         trimmed.starts_with('"') && trimmed.ends_with('"'),
         "expected JSON string in body, got: {trimmed}"
     );
-    trimmed[1..trimmed.len() - 1].to_string()
+    trimmed[1..trimmed.len() - 1]
+        .parse()
+        .expect("valid token in body")
 }
 
 // M2.9.8: `register` with Open policy creates user, sets cookie, returns non-empty token.
@@ -337,7 +341,7 @@ async fn login_with_label_creates_session_with_label(#[case] backend: Backend) {
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    let raw_token = RawToken::try_from(extract_token(&body)).unwrap();
+    let raw_token = extract_token(&body);
     let record = state.sessions.authenticate(&raw_token).await.unwrap();
     assert_eq!(record.label, "my-device");
 }
@@ -370,7 +374,7 @@ async fn login_with_empty_label_creates_session_without_label(#[case] backend: B
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    let raw_token = RawToken::try_from(extract_token(&body)).unwrap();
+    let raw_token = extract_token(&body);
     let record = state.sessions.authenticate(&raw_token).await.unwrap();
     // When no label provided, should default to "Unknown device"
     assert_eq!(record.label, "Unknown device");
@@ -409,7 +413,7 @@ async fn login_truncates_long_user_agent(#[case] backend: Backend) {
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    let raw_token = RawToken::try_from(extract_token(&body)).unwrap();
+    let raw_token = extract_token(&body);
     let record = state.sessions.authenticate(&raw_token).await.unwrap();
     // Label should be truncated to 200 chars
     assert_eq!(record.label.len(), 200);
@@ -477,7 +481,7 @@ async fn logout_revokes_session_and_clears_cookie(#[case] backend: Backend) {
         "one session should exist before logout"
     );
 
-    let cookie_header = format!("session={raw_token}");
+    let cookie_header = session_cookie(&raw_token);
     let (status, set_cookie, _body) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/logout",
@@ -745,7 +749,7 @@ async fn logout_clears_cookie_without_secure_attribute_when_disabled(#[case] bac
         .await
         .unwrap();
 
-    let cookie_header = format!("session={raw_token}");
+    let cookie_header = session_cookie(&raw_token);
     let (status, set_cookie, _) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/logout",
@@ -781,7 +785,7 @@ async fn current_user_returns_username_when_authenticated(#[case] backend: Backe
         .await
         .unwrap();
 
-    let cookie_header = format!("session={raw_token}");
+    let cookie_header = session_cookie(&raw_token);
     let (status, _, body) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/current_user",

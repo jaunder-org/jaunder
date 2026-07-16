@@ -4,7 +4,7 @@ use axum::{
     body::Body,
     http::{header, Request, StatusCode},
 };
-use base64::Engine as _;
+use common::token::RawToken;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -13,7 +13,7 @@ use rstest_reuse::*;
 
 use storage::test_support::{backends, backends_matrix, Backend, TestEnv};
 
-use crate::helpers::{body_string, make_app};
+use crate::helpers::{basic_header, body_string, make_app};
 
 const PNG: &[u8] = &[
     0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
@@ -22,12 +22,6 @@ const PNG: &[u8] = &[
     0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
     0x42, 0x60, 0x82,
 ];
-
-fn basic_header(username: &str, password: &str) -> String {
-    let raw = format!("{username}:{password}");
-    let encoded = base64::engine::general_purpose::STANDARD.encode(raw);
-    format!("Basic {encoded}")
-}
 
 #[apply(backends)]
 #[tokio::test]
@@ -275,7 +269,7 @@ async fn upload_forbids_other_user(#[case] backend: Backend) {
 }
 
 /// Seeds a user named `alice` and returns the session token.
-async fn seed_alice(state: &Arc<storage::AppState>) -> String {
+async fn seed_alice(state: &Arc<storage::AppState>) -> RawToken {
     let user_id = state
         .users
         .create_user(
@@ -291,8 +285,6 @@ async fn seed_alice(state: &Arc<storage::AppState>) -> String {
         .create_session(user_id, "MarsEdit")
         .await
         .unwrap()
-        .as_ref()
-        .to_string()
 }
 
 #[apply(backends)]

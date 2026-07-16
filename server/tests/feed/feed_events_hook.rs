@@ -6,12 +6,8 @@ use serde_json::json;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{post_form, post_json};
+use crate::helpers::{post_form, post_json, session_cookie};
 use storage::test_support::{backends, backends_matrix, Backend, TestEnv};
-
-fn create_session_cookie(token: &str) -> String {
-    format!("session={token}")
-}
 
 // Creating a published post enqueues the Site and User feeds (3 formats each =
 // 6 rows), plus 2 rows per tag (SiteTag + UserTag) × 3 formats. With no tags
@@ -40,7 +36,7 @@ async fn create_published_post_enqueues_expected_feeds(
         .create_session(user_id, "test session")
         .await
         .expect("create session");
-    let cookie = create_session_cookie(token.as_ref());
+    let cookie = session_cookie(&token);
 
     let body = json!({
         "body": "Test post",
@@ -86,7 +82,7 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
         .create_session(user_id, "test session")
         .await
         .expect("create session");
-    let cookie = create_session_cookie(token.as_ref());
+    let cookie = session_cookie(&token);
 
     let create_body = json!({
         "body": "Test post",
@@ -172,7 +168,7 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend
         .create_session(user_id, "test session")
         .await
         .expect("create session");
-    let cookie = create_session_cookie(token.as_ref());
+    let cookie = session_cookie(&token);
 
     let create_body = json!({
         "body": "Test post",
@@ -249,7 +245,7 @@ async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .expect("create session");
-    let cookie = create_session_cookie(token.as_ref());
+    let cookie = session_cookie(&token);
 
     let create_body = json!({
         "body": "Test post",
@@ -326,7 +322,7 @@ async fn delete_draft_post_enqueues_nothing(#[case] backend: Backend) {
         .create_session(user_id, "test session")
         .await
         .expect("create session");
-    let cookie = create_session_cookie(token.as_ref());
+    let cookie = session_cookie(&token);
 
     let create_body = json!({
         "body": "Test draft",
