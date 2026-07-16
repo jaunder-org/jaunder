@@ -21,6 +21,13 @@ pub trait SiteConfigStorage: Send + Sync {
     /// Sets or updates the value for a configuration key.
     async fn set(&self, key: &str, value: &str) -> sqlx::Result<()>;
 
+    /// Enumerates every `site_config` entry as `(key, value)`, ordered by key.
+    ///
+    /// A third primitive alongside [`get`](Self::get)/[`set`](Self::set) (no
+    /// default: a `vec![]` default would silently under-report for any
+    /// implementor). Backs `jaunder site-config list`.
+    async fn list(&self) -> sqlx::Result<Vec<(String, String)>>;
+
     /// Returns the integer value for a configuration key, or the default if not set/invalid.
     async fn get_int(&self, key: &str, default: i64) -> i64 {
         self.get(key)
@@ -267,6 +274,7 @@ impl<DB> SiteConfigStorage for SiteConfigStore<DB>
 where
     DB: Backend,
     (String,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (String, String): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
@@ -289,6 +297,15 @@ where
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    async fn list(&self) -> sqlx::Result<Vec<(String, String)>> {
+        let rows = sqlx::query_as::<_, (String, String)>(
+            "SELECT key, value FROM site_config ORDER BY key",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
     }
 }
 
@@ -379,6 +396,30 @@ mod tests {
         storage.set("backup.retention_count", "0").await.unwrap();
         let config = storage.get_backup_config().await.unwrap();
         assert_eq!(config.retention_count, RetentionCount::default());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn list_returns_all_entries_ordered_by_key(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
+        // Insert out of key order to prove the ORDER BY, not insertion order.
+        storage.set("site.title", "T").await.unwrap();
+        storage
+            .set("feeds.websub_hub_url", "https://h/")
+            .await
+            .unwrap();
+        storage.set("backup.mode", "archive").await.unwrap();
+
+        assert_eq!(
+            storage.list().await.unwrap(),
+            vec![
+                ("backup.mode".to_string(), "archive".to_string()),
+                ("feeds.websub_hub_url".to_string(), "https://h/".to_string()),
+                ("site.title".to_string(), "T".to_string()),
+            ],
+            "list() enumerates every entry ordered by key, both backends",
+        );
     }
 
     #[apply(backends)]

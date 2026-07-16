@@ -74,6 +74,16 @@ mod tests {
         async fn set(&self, _key: &str, _value: &str) -> sqlx::Result<()> {
             Ok(())
         }
+
+        async fn list(&self) -> sqlx::Result<Vec<(String, String)>> {
+            let mut out: Vec<(String, String)> = self
+                .0
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect();
+            out.sort();
+            Ok(out)
+        }
     }
 
     #[tokio::test]
@@ -101,6 +111,18 @@ mod tests {
         let store = MapConfigStore(HashMap::from([("smtp.host", "localhost")]));
         let _sender = build_mailer(&store, None).await;
         // Just verify build_mailer runs without panic; actual SMTP send requires a server.
+    }
+
+    #[tokio::test]
+    async fn map_config_store_list_returns_sorted_entries() {
+        let store = MapConfigStore(HashMap::from([("smtp.port", "25"), ("smtp.host", "h")]));
+        assert_eq!(
+            store.list().await.unwrap(),
+            vec![
+                ("smtp.host".to_string(), "h".to_string()),
+                ("smtp.port".to_string(), "25".to_string()),
+            ]
+        );
     }
 
     #[fixture]

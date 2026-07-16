@@ -212,6 +212,16 @@ mod tests {
         async fn set(&self, _key: &str, _value: &str) -> sqlx::Result<()> {
             Ok(())
         }
+
+        async fn list(&self) -> sqlx::Result<Vec<(String, String)>> {
+            let mut out: Vec<(String, String)> = self
+                .0
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect();
+            out.sort();
+            Ok(out)
+        }
     }
 
     // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
@@ -219,6 +229,19 @@ mod tests {
     async fn map_config_store_set_returns_ok() {
         let store = MapConfigStore(HashMap::new());
         store.set("smtp.host", "mail.example.com").await.unwrap();
+    }
+
+    // guard:no-backend — enumerates an in-memory mock SiteConfigStorage; no live database backend
+    #[tokio::test]
+    async fn map_config_store_list_returns_sorted_entries() {
+        let store = MapConfigStore(HashMap::from([("smtp.port", "25"), ("smtp.host", "h")]));
+        assert_eq!(
+            store.list().await.unwrap(),
+            vec![
+                ("smtp.host".to_string(), "h".to_string()),
+                ("smtp.port".to_string(), "25".to_string()),
+            ]
+        );
     }
 
     // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
