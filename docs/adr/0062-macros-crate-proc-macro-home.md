@@ -3,6 +3,11 @@
 - Status: accepted
 - Date: 2026-07-11
 - Issue: [#370](https://github.com/jaunder-org/jaunder/issues/370)
+- Amended: 2026-07-15
+  ([#412](https://github.com/jaunder-org/jaunder/issues/412)) — corrected the
+  "No new coverage surface" consequence (the `macros` crate **is**
+  gate-measured) and documented the covering technique for macro authors (see
+  Consequences)
 
 ## Context
 
@@ -54,9 +59,23 @@ because a _custom attribute_ (unlike a comment) must be macro-backed.
 - No explicit coverage/CI wiring: the Nix coverage source filter auto-admits any
   new top-level crate, and nextest/clippy run workspace-wide, so `macros` is
   picked up simply by being a workspace member (as ADR-0058 noted for `host`).
-- No new coverage surface: a proc-macro crate is a separate `.so` loaded by
-  rustc at build time and is not linked into the instrumented test binaries, so
-  its code contributes no gate-measured lines.
+- **Covered by the coverage gate** (correcting the original bullet here — #412).
+  True: the compiled proc-macro is a build-time `.so`, loaded by rustc and never
+  linked into a dependent's _runtime_ binary, so it adds no runtime footprint.
+  But it does **not** follow that `macros` contributes no gate-measured lines —
+  it does. `macros` is a workspace member, so the Nix coverage source filter
+  auto-admits it (per the bullet above) and its own instrumented `#[cfg(test)]`
+  unit-test binary measures `macros/src/*.rs` like any other crate; #403 hit
+  exactly this (uncovered derive error paths failed `cargo xtask check`).
+  - _Covering technique for macro authors:_ the codegen error branches execute
+    when the derive fn is called, so drive the `compile_error!` / `?`-error
+    paths from in-crate `#[cfg(test)]` unit tests that feed
+    `syn::parse_quote!`-built `DeriveInput` fixtures to the fn and assert on its
+    token output (see the `macros/src/lib.rs` tests). llvm-cov leaves the
+    closing brace of a `?`-fall-through block unmarked as a gap region even when
+    both arms are exercised — annotate that single brace `// cov:ignore`
+    (precedent `macros/src/str_newtype.rs:304`, mirroring
+    `storage/src/backup.rs:515`).
 - Commits us to `macros` as the proc-macro home; a future `client` crate
   (ADR-0058) that wants `#[client_only]` depends on `macros`, not the reverse —
   the two stay cleanly separated (runtime vs build-time).
