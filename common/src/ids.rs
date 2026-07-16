@@ -14,6 +14,10 @@ use macros::IdNewtype;
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, IdNewtype)]
 pub struct UserId(i64);
 
+/// An audience's row id.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, IdNewtype)]
+pub struct AudienceId(i64);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -48,5 +52,17 @@ mod tests {
             serde_json::from_str::<UserId>("42").unwrap(),
             UserId::from(42)
         );
+    }
+
+    #[test]
+    fn audience_id_exercises_the_generated_surface() {
+        // Covers this type's generated From/Into/Display/FromStr/serde impls.
+        let id = AudienceId::from(9);
+        assert_eq!(i64::from(id), 9);
+        assert_eq!(id.to_string(), "9");
+        assert_eq!("9".parse::<AudienceId>().unwrap(), id);
+        assert!("nope".parse::<AudienceId>().is_err());
+        assert_eq!(serde_json::to_string(&id).unwrap(), "9");
+        assert_eq!(serde_json::from_str::<AudienceId>("9").unwrap(), id);
     }
 }
