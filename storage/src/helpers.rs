@@ -10,7 +10,7 @@ use crate::{
     SessionRecord, UserRecord,
 };
 use common::display_name::DisplayName;
-use common::ids::UserId;
+use common::ids::{PostId, UserId};
 use common::media::ContentHash;
 use common::post_body::PostBody;
 use common::post_title::PostTitle;
@@ -156,7 +156,7 @@ struct PostTagJson {
     tag_display: TagLabel,
 }
 
-fn parse_post_tags_json(json: &str, post_id: i64) -> sqlx::Result<Vec<PostTag>> {
+fn parse_post_tags_json(json: &str, post_id: PostId) -> sqlx::Result<Vec<PostTag>> {
     // `Tag`/`TagLabel` validate on deserialize (the serde bridge), so this is a
     // straight field-move: an invalid stored slug or label surfaces as a decode
     // error from `from_str` above.
@@ -200,6 +200,7 @@ pub(crate) fn build_post_record(
     let format = format
         .parse::<PostFormat>()
         .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    let post_id = PostId::from(post_id);
     let tags = parse_post_tags_json(&tags_json, post_id)?;
 
     Ok(PostRecord {
@@ -504,7 +505,7 @@ mod tests {
         ))
         .unwrap();
 
-        assert_eq!(record.post_id, 10);
+        assert_eq!(record.post_id, PostId::from(10));
         assert_eq!(record.user_id, UserId::from(20));
         assert_eq!(record.author_username, "alice");
         assert_eq!(record.slug, "hello-world");
@@ -845,7 +846,7 @@ mod tests {
             "[]".to_string(),
         );
         let record = post_record_from_row(row).unwrap();
-        assert_eq!(record.post_id, 10);
+        assert_eq!(record.post_id, PostId::from(10));
     }
 
     #[test]

@@ -17,7 +17,7 @@ use crate::sql::quote_identifier;
 use crate::{AppState, DbConnectOptions, SiteConfigStorage};
 use async_trait::async_trait;
 use common::feed::FeedPath;
-use common::ids::UserId;
+use common::ids::{PostId, UserId};
 use common::mailer::{MailSender, NoopMailSender};
 use sqlx::{Connection, PgPool, SqlitePool};
 use std::collections::BTreeMap;
@@ -619,7 +619,7 @@ pub async fn seed_posts(
     user_id: UserId,
     count: usize,
     published: bool,
-) -> Vec<i64> {
+) -> Vec<PostId> {
     let inputs: Vec<_> = (0..count)
         .map(|i| {
             crate::seed_post_input(

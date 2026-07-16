@@ -13,6 +13,8 @@ use {
     },
 };
 
+use common::ids::PostId;
+
 use crate::error::WebResult;
 
 /// A media item returned by [`list_my_media`].
@@ -39,7 +41,7 @@ pub struct MediaUsageData {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeleteMediaResult {
     pub deleted: bool,
-    pub referenced_in_posts: Vec<i64>,
+    pub referenced_in_posts: Vec<PostId>,
 }
 
 /// Lists media items owned by the authenticated user.
@@ -149,7 +151,7 @@ pub async fn delete_media(
             .list_drafts_by_user(auth.user_id, None, 1000, chrono::Utc::now())
             .await?;
 
-        let referenced_in_posts: Vec<i64> = published
+        let referenced_in_posts: Vec<PostId> = published
             .iter()
             .chain(drafts.iter())
             .filter(|post| post.body.contains(&url) || post.rendered_html.contains(&url))

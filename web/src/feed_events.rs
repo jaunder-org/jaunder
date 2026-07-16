@@ -38,24 +38,25 @@ pub async fn enqueue_feed_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::ids::PostId;
 
     #[test]
     fn test_tag_slugs_deduplicates_and_sorts() {
         let tags = vec![
             PostTag {
-                post_id: 1,
+                post_id: PostId::from(1),
                 tag_id: 1,
                 tag_slug: "web".parse().unwrap(),
                 tag_display: "Web".parse().unwrap(),
             },
             PostTag {
-                post_id: 1,
+                post_id: PostId::from(1),
                 tag_id: 2,
                 tag_slug: "rust".parse().unwrap(),
                 tag_display: "Rust".parse().unwrap(),
             },
             PostTag {
-                post_id: 1,
+                post_id: PostId::from(1),
                 tag_id: 1,
                 tag_slug: "web".parse().unwrap(),
                 tag_display: "Web".parse().unwrap(),

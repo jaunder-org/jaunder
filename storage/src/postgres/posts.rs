@@ -4,7 +4,7 @@ use sqlx::{Pool, Postgres};
 
 use crate::helpers::{post_record_from_row, PostRow};
 use crate::{PostDialect, PostRecord, PostStore, TaggingError, UpdatePostError, UpdatePostInput};
-use common::ids::UserId;
+use common::ids::{PostId, UserId};
 use common::tag::{Tag, TagLabel};
 
 /// Postgres-backed post storage.
@@ -26,7 +26,7 @@ impl PostDialect for Postgres {
 
     async fn update_post(
         pool: &Pool<Postgres>,
-        post_id: i64,
+        post_id: PostId,
         editor_user_id: UserId,
         input: &UpdatePostInput,
     ) -> Result<PostRecord, UpdatePostError> {
@@ -40,7 +40,7 @@ impl PostDialect for Postgres {
         let existing = sqlx::query_as::<_, (i64, Option<DateTime<Utc>>)>(
             "SELECT user_id, deleted_at FROM posts WHERE post_id = $1 FOR UPDATE",
         )
-        .bind(post_id)
+        .bind(i64::from(post_id))
         .fetch_optional(&mut *tx)
         .await?;
 
@@ -64,7 +64,7 @@ impl PostDialect for Postgres {
              FROM posts WHERE post_id = $2",
         )
         .bind(now)
-        .bind(post_id)
+        .bind(i64::from(post_id))
         .execute(&mut *tx)
         .await?;
 
@@ -100,7 +100,7 @@ impl PostDialect for Postgres {
         .bind(input.explicit_published_at)
         .bind(now)
         .bind(now)
-        .bind(post_id)
+        .bind(i64::from(post_id))
         .fetch_one(&mut *tx)
         .await?;
 
@@ -113,7 +113,7 @@ impl PostDialect for Postgres {
 
     async fn tag_post(
         pool: &Pool<Postgres>,
-        post_id: i64,
+        post_id: PostId,
         tag: &TagLabel,
     ) -> Result<(), TaggingError> {
         // The slug is the canonical key; the label carries the author's casing.
@@ -123,7 +123,7 @@ impl PostDialect for Postgres {
 
         let post_exists: bool =
             sqlx::query_scalar("SELECT COUNT(*) > 0 FROM posts WHERE post_id = $1")
-                .bind(post_id)
+                .bind(i64::from(post_id))
                 .fetch_one(&mut *tx)
                 .await?;
 
@@ -145,7 +145,7 @@ impl PostDialect for Postgres {
 
         let result =
             sqlx::query("INSERT INTO post_tags (post_id, tag_id, tag_display) VALUES ($1, $2, $3)")
-                .bind(post_id)
+                .bind(i64::from(post_id))
                 .bind(tag_id)
                 .bind(tag.as_ref())
                 .execute(&mut *tx)
@@ -169,14 +169,14 @@ impl PostDialect for Postgres {
 
     async fn untag_post(
         pool: &Pool<Postgres>,
-        post_id: i64,
+        post_id: PostId,
         tag_slug: &Tag,
     ) -> Result<(), TaggingError> {
         let rows_deleted = sqlx::query(
             "DELETE FROM post_tags
              WHERE post_id = $1 AND tag_id = (SELECT tag_id FROM tags WHERE tag_slug = $2)",
         )
-        .bind(post_id)
+        .bind(i64::from(post_id))
         .bind(tag_slug.as_ref())
         .execute(pool)
         .await?

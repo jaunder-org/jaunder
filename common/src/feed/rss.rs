@@ -63,6 +63,7 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
+    use crate::ids::PostId;
     use crate::render::RenderedHtml;
     use crate::test_support::parse_post_title;
 
@@ -79,7 +80,7 @@ mod tests {
 
     fn item(title: Option<&str>) -> FeedItem {
         FeedItem {
-            id: 1,
+            id: PostId::from(1),
             title: title.map(parse_post_title),
             permalink: "https://example.com/~alice/posts/1".into(),
             summary: None,

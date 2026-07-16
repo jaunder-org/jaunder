@@ -21,6 +21,7 @@ use crate::{
     },
 };
 use common::feed::FeedSurface;
+use common::ids::PostId;
 use common::{slug::Slug, tag::Tag, username::Username};
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
@@ -356,7 +357,7 @@ pub fn UserTimelinePage() -> impl IntoView {
 
     let timeline = RwSignal::new(Vec::<TimelinePostSummary>::new());
     let next_cursor_created_at = RwSignal::new(None::<String>);
-    let next_cursor_post_id = RwSignal::new(None::<i64>);
+    let next_cursor_post_id = RwSignal::new(None::<PostId>);
     let has_more = RwSignal::new(false);
     let error = RwSignal::new(None::<String>);
     let initial_loaded = RwSignal::new(false);
@@ -529,7 +530,7 @@ pub fn DraftPreviewPage() -> impl IntoView {
         |params| async move {
             let post_id = params
                 .get("post_id")
-                .and_then(|v| v.parse::<i64>().ok())
+                .and_then(|v| v.parse::<PostId>().ok())
                 .ok_or_else(|| WebError::validation("Invalid preview"))?;
             get_post_preview(post_id).await
         },
@@ -572,7 +573,11 @@ pub fn DraftPreviewPage() -> impl IntoView {
                                     >
                                         <div class="j-post-acts">
                                             <ActionForm action=publish_action>
-                                                <input type="hidden" name="post_id" value=post_id />
+                                                <input
+                                                    type="hidden"
+                                                    name="post_id"
+                                                    value=i64::from(post_id)
+                                                />
                                                 <button
                                                     type="submit"
                                                     class="j-btn is-primary"
@@ -660,8 +665,8 @@ pub fn EditPostPage() -> impl IntoView {
         params
             .get()
             .get("post_id")
-            .and_then(|v| v.parse::<i64>().ok())
-            .unwrap_or(-1)
+            .and_then(|v| v.parse::<PostId>().ok())
+            .unwrap_or(PostId::from(-1))
     };
     let post = crate::server_resource(post_id_param, get_post_preview);
     let current_audience = crate::server_resource(post_id_param, post_audience_selection);
@@ -988,7 +993,7 @@ fn render_draft_row(
     publish_action: ServerAction<PublishPost>,
     delete_action: ServerAction<DeletePost>,
 ) -> impl IntoView {
-    let post_id = draft.post_id;
+    let post_id = i64::from(draft.post_id);
     let label = draft
         .title
         .clone()
@@ -1046,9 +1051,10 @@ fn render_draft_row(
 // cov:ignore-start
 fn render_delete_form(
     delete_action: ServerAction<DeletePost>,
-    post_id: i64,
+    post_id: PostId,
     confirm_msg: &'static str,
 ) -> impl IntoView {
+    let post_id = i64::from(post_id);
     view! {
         <ActionForm action=delete_action>
             <input type="hidden" name="post_id" value=post_id />
@@ -1111,7 +1117,7 @@ pub fn SiteTagPage() -> impl IntoView {
 
     let timeline = RwSignal::new(Vec::<TimelinePostSummary>::new());
     let next_cursor_created_at = RwSignal::new(None::<String>);
-    let next_cursor_post_id = RwSignal::new(None::<i64>);
+    let next_cursor_post_id = RwSignal::new(None::<PostId>);
     let has_more = RwSignal::new(false);
     let error = RwSignal::new(None::<String>);
     let initial_loaded = RwSignal::new(false);
@@ -1290,7 +1296,7 @@ pub fn UserTagPage() -> impl IntoView {
 
     let timeline = RwSignal::new(Vec::<TimelinePostSummary>::new());
     let next_cursor_created_at = RwSignal::new(None::<String>);
-    let next_cursor_post_id = RwSignal::new(None::<i64>);
+    let next_cursor_post_id = RwSignal::new(None::<PostId>);
     let has_more = RwSignal::new(false);
     let error = RwSignal::new(None::<String>);
     let initial_loaded = RwSignal::new(false);

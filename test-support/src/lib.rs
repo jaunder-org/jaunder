@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use common::display_name::DisplayName;
-use common::ids::UserId;
+use common::ids::{PostId, UserId};
 use common::username::Username;
 use storage::{seed_post_input, AppState};
 
@@ -64,7 +64,7 @@ pub async fn seed_posts_for_user(
     count: usize,
     published: bool,
     prefix: &str,
-) -> anyhow::Result<Vec<i64>> {
+) -> anyhow::Result<Vec<PostId>> {
     let uname = username
         .parse::<Username>()
         .map_err(|_| anyhow::anyhow!("invalid username: {username}"))?;
