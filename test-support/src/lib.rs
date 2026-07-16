@@ -122,19 +122,6 @@ pub async fn create_user(
     Ok(id)
 }
 
-/// Set a `site_config` key through `SiteConfigStorage::set` (an upsert) —
-/// replaces the raw-SQL `site_config` INSERTs the e2e sites use for
-/// `site.registration_policy` and `feeds.websub_hub_url`. Generic key/value, so
-/// one subcommand covers both and any future e2e site-config.
-///
-/// # Errors
-///
-/// Returns `Err` if the storage write fails.
-pub async fn set_site_config(state: &Arc<AppState>, key: &str, value: &str) -> anyhow::Result<()> {
-    state.site_config.set(key, value).await?;
-    Ok(())
-}
-
 /// Reset the mail-capture file: delete `path` if it exists. A missing file is
 /// success (`rm -f` semantics — matching the shell the script used); any other
 /// error propagates. The one fixture step that is not storage-linked; folding it
@@ -258,46 +245,6 @@ mod create_user_tests {
         create_user(&state, "testoperator", "testpassword123", None, false)
             .await
             .expect_err("duplicate username should error");
-    }
-}
-
-#[cfg(test)]
-mod set_site_config_tests {
-    //! `SQLite`-only smoke test (same rationale as `seed_tests`): `set_site_config`
-    //! dispatches through `SiteConfigStorage::set`, implemented per backend, so
-    //! the e2e matrix proves both backends; here we smoke the logic on `SQLite`.
-    use super::*;
-    use storage::test_support;
-
-    #[tokio::test]
-    async fn set_round_trips_and_upserts() {
-        let test_support::TestEnv { state, base: _base } =
-            test_support::Backend::Sqlite.setup().await;
-
-        set_site_config(&state, "site.registration_policy", "open")
-            .await
-            .expect("set ok");
-        assert_eq!(
-            state
-                .site_config
-                .get("site.registration_policy")
-                .await
-                .unwrap(),
-            Some("open".to_string())
-        );
-
-        // set() is an upsert: a second write on the same key overwrites.
-        set_site_config(&state, "site.registration_policy", "closed")
-            .await
-            .expect("upsert ok");
-        assert_eq!(
-            state
-                .site_config
-                .get("site.registration_policy")
-                .await
-                .unwrap(),
-            Some("closed".to_string())
-        );
     }
 }
 
