@@ -17,6 +17,7 @@ common = { path = "../common" }
 macros = { path = "../macros" }
 
 [dev-dependencies]
+common = { path = "../common", features = ["test-support"] }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = ["metrics", "testing"] }

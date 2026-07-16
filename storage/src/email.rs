@@ -199,7 +199,7 @@ where
 mod tests {
     use super::*;
     use crate::test_support::{backends, Backend, TestEnv};
-    use common::test_support::parse_email;
+    use common::test_support::{parse_email, parse_raw_token};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -242,7 +242,7 @@ mod tests {
         base.close_pool().await;
         let result = state
             .email_verifications
-            .use_email_verification(&RawToken::try_from("dGVzdA".to_string()).unwrap())
+            .use_email_verification(&parse_raw_token("dGVzdA"))
             .await;
         assert!(matches!(result, Err(UseEmailVerificationError::NotFound)));
     }

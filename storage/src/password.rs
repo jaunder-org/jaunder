@@ -141,6 +141,7 @@ where
 mod tests {
     use super::*;
     use crate::test_support::{backends, Backend, TestEnv};
+    use common::test_support::parse_raw_token;
     use rstest::*;
     use rstest_reuse::*;
 
@@ -164,7 +165,7 @@ mod tests {
         base.close_pool().await;
         let result = state
             .password_resets
-            .use_password_reset(&RawToken::try_from("dGVzdA".to_string()).unwrap())
+            .use_password_reset(&parse_raw_token("dGVzdA"))
             .await;
         assert!(matches!(result, Err(UsePasswordResetError::Internal(_))));
     }

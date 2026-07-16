@@ -12,6 +12,7 @@ use crate::audience::AudienceName;
 use crate::backup::RetentionCount;
 use crate::display_name::DisplayName;
 use crate::email::Email;
+use crate::token::RawToken;
 
 /// Parse `addr` into a valid [`Email`] for tests — the single place a test email
 /// literal is parsed, so a malformed fixture fails loudly and the parse isn't
@@ -59,4 +60,17 @@ pub fn parse_display_name(name: &str) -> DisplayName {
 #[must_use]
 pub fn parse_retention_count(s: &str) -> RetentionCount {
     s.parse().expect("valid test retention count")
+}
+
+/// Parse `s` into a [`RawToken`] for tests — the single place a test token literal is
+/// constructed, so `RawToken::try_from("…".to_string()).unwrap()` isn't re-spelled at
+/// every call site. Takes `&str` (no `.to_string()`), routing through `RawToken`'s
+/// validating `FromStr`.
+///
+/// # Panics
+///
+/// Panics if `s` is empty or not base64url.
+#[must_use]
+pub fn parse_raw_token(s: &str) -> RawToken {
+    s.parse().expect("valid test raw token")
 }

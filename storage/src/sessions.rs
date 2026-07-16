@@ -212,6 +212,7 @@ where
 mod tests {
     use super::*;
     use crate::test_support::{backends, Backend, TestEnv};
+    use common::test_support::parse_raw_token;
     use rstest::*;
     use rstest_reuse::*;
 
@@ -222,7 +223,7 @@ mod tests {
         base.close_pool().await;
         let result = state
             .sessions
-            .authenticate(&RawToken::try_from("dGVzdA".to_string()).unwrap())
+            .authenticate(&parse_raw_token("dGVzdA"))
             .await;
         assert!(matches!(result, Err(SessionAuthError::Internal(_))));
     }

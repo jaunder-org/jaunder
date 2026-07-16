@@ -207,6 +207,7 @@ pub fn classify_current_user(result: InternalResult<AuthUser>) -> InternalResult
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::test_support::parse_raw_token;
     use leptos::prelude::{provide_context, Owner};
 
     #[test]
@@ -245,7 +246,7 @@ mod tests {
     fn set_session_cookie_without_response_options_context_is_noop() {
         Owner::new().with(|| {
             provide_context(CookieSettings { secure: true });
-            set_session_cookie(&RawToken::try_from("token".to_string()).unwrap());
+            set_session_cookie(&parse_raw_token("token"));
         });
     }
 

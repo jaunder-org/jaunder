@@ -2,8 +2,7 @@ use chrono::{Datelike, Utc};
 use common::password::Password;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
-use common::test_support::{parse_audience_name, parse_display_name, parse_email};
-use common::token::RawToken;
+use common::test_support::{parse_audience_name, parse_display_name, parse_email, parse_raw_token};
 use common::username::Username;
 use common::visibility::{
     AudienceTarget, Channel, SubscriptionPolicy, SubscriptionStatus, TargetKind, ViewerIdentity,
@@ -952,7 +951,7 @@ async fn confirm_password_reset_bogus_token_returns_not_found_without_hashing(
     let result = state
         .atomic
         .confirm_password_reset(
-            &RawToken::try_from("dGVzdA".to_string()).unwrap(),
+            &parse_raw_token("dGVzdA"),
             &password("force-hash-error-for-test-coverage"),
         )
         .await;
@@ -1250,7 +1249,7 @@ async fn authenticate_with_invalid_base64_token_returns_invalid_token(#[case] ba
     // "not-base64!" can no longer be constructed as a `RawToken`.)
     let err = state
         .sessions
-        .authenticate(&RawToken::try_from("a".to_string()).unwrap())
+        .authenticate(&parse_raw_token("a"))
         .await
         .unwrap_err();
     assert!(matches!(err, SessionAuthError::InvalidToken));
@@ -1752,7 +1751,7 @@ async fn use_email_verification_unknown_token_returns_not_found(#[case] backend:
 
     let err = state
         .email_verifications
-        .use_email_verification(&RawToken::try_from("not-a-real-token".to_string()).unwrap())
+        .use_email_verification(&parse_raw_token("not-a-real-token"))
         .await
         .unwrap_err();
     assert!(
@@ -1995,7 +1994,7 @@ async fn use_password_reset_unknown_token_returns_not_found(#[case] backend: Bac
 
     let err = state
         .password_resets
-        .use_password_reset(&RawToken::try_from("not-a-real-token".to_string()).unwrap())
+        .use_password_reset(&parse_raw_token("not-a-real-token"))
         .await
         .unwrap_err();
     assert!(

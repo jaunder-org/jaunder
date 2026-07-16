@@ -98,6 +98,7 @@ pub fn clear_session_cookie_header(secure: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::test_support::parse_raw_token;
 
     fn headers_with(name: http::HeaderName, value: &str) -> http::HeaderMap {
         let mut headers = http::HeaderMap::new();
@@ -169,7 +170,7 @@ mod tests {
     #[test]
     fn session_cookie_header_secure_matches_current_string() {
         assert_eq!(
-            session_cookie_header(&RawToken::try_from("token".to_string()).unwrap(), true),
+            session_cookie_header(&parse_raw_token("token"), true),
             "session=token; HttpOnly; SameSite=Lax; Path=/; Secure"
         );
     }
@@ -177,7 +178,7 @@ mod tests {
     #[test]
     fn session_cookie_header_insecure_matches_current_string() {
         assert_eq!(
-            session_cookie_header(&RawToken::try_from("token".to_string()).unwrap(), false),
+            session_cookie_header(&parse_raw_token("token"), false),
             "session=token; HttpOnly; SameSite=Lax; Path=/"
         );
     }

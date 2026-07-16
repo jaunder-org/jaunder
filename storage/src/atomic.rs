@@ -134,7 +134,7 @@ pub trait AtomicOps: Send + Sync {
 mod tests {
     use super::*;
     use crate::test_support::{backends, Backend};
-    use common::test_support::parse_display_name;
+    use common::test_support::{parse_display_name, parse_raw_token};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -240,10 +240,7 @@ mod tests {
         assert!(matches!(
             env.state
                 .atomic
-                .confirm_password_reset(
-                    &RawToken::try_from("not-base64".to_string()).unwrap(),
-                    &password,
-                )
+                .confirm_password_reset(&parse_raw_token("not-base64"), &password,)
                 .await,
             Err(ConfirmPasswordResetError::NotFound)
         ));

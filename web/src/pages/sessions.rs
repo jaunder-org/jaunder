@@ -43,7 +43,7 @@ pub fn SessionsPage() -> impl IntoView {
                                             <p>
                                                 "Copy this app password now \u{2014} it will not be shown again:"
                                             </p>
-                                            <code>{pw.token.as_ref().to_string()}</code>
+                                            <code>{pw.token.to_string()}</code>
                                         </div>
                                     }
                                         .into_any()
