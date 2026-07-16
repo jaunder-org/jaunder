@@ -148,9 +148,12 @@ pub fn run(sh: &Shell, result: &mut CommandResult, test_filter: Option<&str>) {
     // no reset is needed.
     let tools = format!("{root}/tools/Cargo.toml");
     let test_support = format!("{root}/target/debug/test-support");
+    // The `site_config` seed steps run through the shipped `jaunder` binary — the
+    // same real build already spawned for `serve` above (cheap-kdf OFF).
+    let jaunder = format!("{root}/target/debug/jaunder");
     if cmd!(
         sh,
-        "cargo run --manifest-path {tools} -- seed-e2e --db {db} --test-support-bin {test_support}"
+        "cargo run --manifest-path {tools} -- seed-e2e --db {db} --test-support-bin {test_support} --jaunder-bin {jaunder}"
     )
     .env("JAUNDER_CAPTURE_DIR", &capture)
     .run()

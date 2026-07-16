@@ -1,39 +1,62 @@
-//! `devtool seed-e2e` — the canonical e2e fixture seed (users + site-config +
+//! `devtool seed-e2e` — the canonical e2e fixture seed (site-config + users +
 //! mail-reset) applied by BOTH the host loop (`cargo xtask e2e-local`) and the
 //! flake VM `seed_db()`. It used to be three literal copies kept in sync only by
-//! comment; now there is one list, here. Shells out to the `test-support` binary
-//! (devtool can't link the main-workspace crate). Every step is fatal: both
-//! callers guarantee a fresh / truncated DB before seeding, so a failure is a
-//! real error, not an expected re-run collision. See issue #249.
+//! comment; now there is one list, here. Shells each step out to its target
+//! binary (devtool can't link the main-workspace crates): the `site_config`
+//! steps go through the shipped `jaunder` binary (`jaunder site-config set`),
+//! the rest through `test-support`. Every step is fatal: both callers guarantee
+//! a fresh / truncated DB before seeding, so a failure is a real error, not an
+//! expected re-run collision. See issues #249 and #8.
 
 use std::path::Path;
 use std::process::Command;
 
 use anyhow::{bail, Context};
 
-/// The canonical fixture invocations as `(args, fatal)`. `fatal` is currently
-/// always true — the tuple shape keeps a future non-fatal step a data change
-/// rather than a control-flow change. Pure, so it is unit-tested directly.
-fn seed_invocations() -> Vec<(Vec<String>, bool)> {
-    let step = |xs: &[&str]| -> (Vec<String>, bool) {
-        (xs.iter().map(|x| (*x).to_owned()).collect(), true)
+/// Which fixture binary a seed step runs against.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SeedBin {
+    /// The out-of-process `test-support` helper (users + mail-reset).
+    TestSupport,
+    /// The shipped `jaunder` binary (`site-config set`).
+    Jaunder,
+}
+
+/// The canonical fixture invocations as `(bin, args, fatal)`. `fatal` is
+/// currently always true — the tuple shape keeps a future non-fatal step a data
+/// change rather than a control-flow change. The `site_config` steps run
+/// **first**, through the shipped `jaunder` binary, so a wrong `--jaunder-bin`
+/// (e.g. a cheap-kdf build that fail-closes) aborts on an empty DB rather than
+/// after the users are created. Pure, so it is unit-tested directly.
+fn seed_invocations() -> Vec<(SeedBin, Vec<String>, bool)> {
+    let step = |bin: SeedBin, xs: &[&str]| -> (SeedBin, Vec<String>, bool) {
+        (bin, xs.iter().map(|x| (*x).to_owned()).collect(), true)
     };
+    let ts = |xs: &[&str]| step(SeedBin::TestSupport, xs);
+    let jaunder = |xs: &[&str]| step(SeedBin::Jaunder, xs);
     vec![
-        step(&[
+        jaunder(&["site-config", "set", "site.registration_policy", "open"]),
+        jaunder(&[
+            "site-config",
+            "set",
+            "feeds.websub_hub_url",
+            "https://hub.test.local/",
+        ]),
+        ts(&[
             "create-user",
             "--username",
             "testlogin",
             "--password",
             "testpassword123",
         ]),
-        step(&[
+        ts(&[
             "create-user",
             "--username",
             "testnoemail",
             "--password",
             "testpassword123",
         ]),
-        step(&[
+        ts(&[
             "create-user",
             "--username",
             "testoperator",
@@ -41,35 +64,26 @@ fn seed_invocations() -> Vec<(Vec<String>, bool)> {
             "testpassword123",
             "--operator",
         ]),
-        step(&[
-            "set-site-config",
-            "--key",
-            "site.registration_policy",
-            "--value",
-            "open",
-        ]),
-        step(&[
-            "set-site-config",
-            "--key",
-            "feeds.websub_hub_url",
-            "--value",
-            "https://hub.test.local/",
-        ]),
-        step(&["reset-mail"]),
+        ts(&["reset-mail"]),
     ]
 }
 
-/// Run the canonical seed by shelling each invocation out to `test_support_bin`
-/// with `JAUNDER_DB=db`. Fatal on the first non-zero exit.
-pub fn run(db: &str, test_support_bin: &Path) -> anyhow::Result<()> {
-    for (args, _fatal) in seed_invocations() {
-        let status = Command::new(test_support_bin)
+/// Run the canonical seed by shelling each step out to its target binary
+/// (`test_support_bin` or `jaunder_bin`) with `JAUNDER_DB=db`. Fatal on the first
+/// non-zero exit; the bail message names the offending binary path.
+pub fn run(db: &str, test_support_bin: &Path, jaunder_bin: &Path) -> anyhow::Result<()> {
+    for (bin, args, _fatal) in seed_invocations() {
+        let path = match bin {
+            SeedBin::TestSupport => test_support_bin,
+            SeedBin::Jaunder => jaunder_bin,
+        };
+        let status = Command::new(path)
             .args(&args)
             .env("JAUNDER_DB", db)
             .status()
-            .with_context(|| format!("spawning {} {}", test_support_bin.display(), args[0]))?;
+            .with_context(|| format!("spawning {} {}", path.display(), args[0]))?;
         if !status.success() {
-            bail!("test-support {} failed ({status})", args[0]);
+            bail!("{} {} failed ({status})", path.display(), args[0]);
         }
     }
     Ok(())
@@ -77,58 +91,67 @@ pub fn run(db: &str, test_support_bin: &Path) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::seed_invocations;
+    use super::{seed_invocations, SeedBin};
 
     #[test]
     fn canonical_fixture_invocations() {
         let inv = seed_invocations();
-        let as_vecs: Vec<Vec<&str>> = inv
+        let as_tagged: Vec<(SeedBin, Vec<&str>)> = inv
             .iter()
-            .map(|(args, fatal)| {
+            .map(|(bin, args, fatal)| {
                 assert!(*fatal, "all e2e seed steps are fatal against a fresh DB");
-                args.iter().map(String::as_str).collect()
+                (*bin, args.iter().map(String::as_str).collect())
             })
             .collect();
         assert_eq!(
-            as_vecs,
+            as_tagged,
             vec![
-                vec![
-                    "create-user",
-                    "--username",
-                    "testlogin",
-                    "--password",
-                    "testpassword123"
-                ],
-                vec![
-                    "create-user",
-                    "--username",
-                    "testnoemail",
-                    "--password",
-                    "testpassword123"
-                ],
-                vec![
-                    "create-user",
-                    "--username",
-                    "testoperator",
-                    "--password",
-                    "testpassword123",
-                    "--operator"
-                ],
-                vec![
-                    "set-site-config",
-                    "--key",
-                    "site.registration_policy",
-                    "--value",
-                    "open"
-                ],
-                vec![
-                    "set-site-config",
-                    "--key",
-                    "feeds.websub_hub_url",
-                    "--value",
-                    "https://hub.test.local/"
-                ],
-                vec!["reset-mail"],
+                // site_config first, through the shipped `jaunder` binary.
+                (
+                    SeedBin::Jaunder,
+                    vec!["site-config", "set", "site.registration_policy", "open"],
+                ),
+                (
+                    SeedBin::Jaunder,
+                    vec![
+                        "site-config",
+                        "set",
+                        "feeds.websub_hub_url",
+                        "https://hub.test.local/",
+                    ],
+                ),
+                (
+                    SeedBin::TestSupport,
+                    vec![
+                        "create-user",
+                        "--username",
+                        "testlogin",
+                        "--password",
+                        "testpassword123",
+                    ],
+                ),
+                (
+                    SeedBin::TestSupport,
+                    vec![
+                        "create-user",
+                        "--username",
+                        "testnoemail",
+                        "--password",
+                        "testpassword123",
+                    ],
+                ),
+                (
+                    SeedBin::TestSupport,
+                    vec![
+                        "create-user",
+                        "--username",
+                        "testoperator",
+                        "--password",
+                        "testpassword123",
+                        "--operator",
+                    ],
+                ),
+                (SeedBin::TestSupport, vec!["reset-mail"]),
             ]
         );
     }

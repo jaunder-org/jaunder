@@ -723,6 +723,8 @@
                   pkgs.opentelemetry-collector-contrib
                   testSupportBin
                   devtoolBin
+                  # `jaunder site-config set` seed steps resolve bare `jaunder` here.
+                  jaunderBin
                 ];
                 environment.etc."jaunder-otel-collector.yaml".source = e2eOtelCollectorConfig;
 
@@ -766,6 +768,7 @@
                   "JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture devtool seed-e2e"
                   + " --db sqlite:/var/lib/jaunder/data/jaunder.db"
                   + " --test-support-bin test-support"
+                  + " --jaunder-bin jaunder"
                 )
 
               machine.start()
@@ -821,6 +824,8 @@
                   pkgs.opentelemetry-collector-contrib
                   testSupportBin
                   devtoolBin
+                  # `jaunder site-config set` seed steps resolve bare `jaunder` here.
+                  jaunderBin
                 ];
                 environment.etc."jaunder-otel-collector.yaml".source = e2eOtelCollectorConfig;
 
@@ -903,6 +908,7 @@
                   "JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture devtool seed-e2e"
                   + " --db postgres://jaunder:testpassword@127.0.0.1/jaunder"
                   + " --test-support-bin test-support"
+                  + " --jaunder-bin jaunder"
                 )
 
               # Seed a fresh DB and run the one browser this derivation targets.

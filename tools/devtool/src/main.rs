@@ -73,6 +73,11 @@ struct SeedE2eArgs {
     /// built `target/debug/test-support` on the host.
     #[arg(long)]
     test_support_bin: std::path::PathBuf,
+    /// Path to the real `jaunder` binary (runs the `site-config set` steps). Bare
+    /// `jaunder` on the VM guest (systemPackages), the built
+    /// `target/debug/jaunder` on the host. Must be a non-cheap-kdf build.
+    #[arg(long)]
+    jaunder_bin: std::path::PathBuf,
 }
 
 #[derive(clap::Args)]
@@ -116,6 +121,8 @@ fn main() -> anyhow::Result<()> {
         Command::Run(args) => run::run(&args.cmd, args.cwd, args.timeout),
         Command::Check(args) => check::run(args.name.as_deref(), args.all, args.fix),
         Command::CsrBundle(args) => csr_bundle::run(&args.wasm, &args.out),
-        Command::SeedE2e(args) => seed_e2e::run(&args.db, &args.test_support_bin),
+        Command::SeedE2e(args) => {
+            seed_e2e::run(&args.db, &args.test_support_bin, &args.jaunder_bin)
+        }
     }
 }
