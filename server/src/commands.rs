@@ -111,6 +111,7 @@ impl SiteConfigAction {
             } => cmd_site_config_set(&storage, &key, &value).await,
             SiteConfigAction::Get { storage, key } => cmd_site_config_get(&storage, &key).await,
             SiteConfigAction::List { storage } => cmd_site_config_list(&storage).await,
+            SiteConfigAction::Unset { storage, key } => cmd_site_config_unset(&storage, &key).await,
         }
     }
 }
@@ -731,6 +732,18 @@ async fn cmd_site_config_list(storage: &StorageArgs) -> anyhow::Result<()> {
     let state = open_existing_database(&storage.db).await?;
     let entries = state.site_config.list().await?;
     print!("{}", format_entries(&entries));
+    Ok(())
+}
+
+/// Delete a `site_config` key. Idempotent (exit 0 whether or not a row existed);
+/// stderr notes which happened.
+async fn cmd_site_config_unset(storage: &StorageArgs, key: &str) -> anyhow::Result<()> {
+    let state = open_existing_database(&storage.db).await?;
+    if state.site_config.delete(key).await? {
+        eprintln!("unset site_config {key}");
+    } else {
+        eprintln!("site_config {key} was not set (no-op)");
+    }
     Ok(())
 }
 

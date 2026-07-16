@@ -129,7 +129,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_site_config_set_get_list_dispatch() {
+    async fn run_site_config_set_get_list_unset_dispatch() {
         let base = TempDir::new().unwrap();
         let storage = test_storage_args(&base);
         run(Cli {
@@ -185,12 +185,53 @@ mod tests {
         // list dispatches and succeeds.
         run(Cli {
             command: Some(Commands::SiteConfig {
-                action: SiteConfigAction::List { storage },
+                action: SiteConfigAction::List {
+                    storage: storage.clone(),
+                },
             }),
             verbose: false,
         })
         .await
         .expect("list succeeds");
+
+        // unset of a present key dispatches and removes it (the removed branch).
+        run(Cli {
+            command: Some(Commands::SiteConfig {
+                action: SiteConfigAction::Unset {
+                    storage: storage.clone(),
+                    key: "site.registration_policy".to_string(),
+                },
+            }),
+            verbose: false,
+        })
+        .await
+        .expect("unset of a present key succeeds");
+
+        // get now errors: the key is gone.
+        let after_unset = run(Cli {
+            command: Some(Commands::SiteConfig {
+                action: SiteConfigAction::Get {
+                    storage: storage.clone(),
+                    key: "site.registration_policy".to_string(),
+                },
+            }),
+            verbose: false,
+        })
+        .await;
+        assert!(after_unset.is_err(), "unset key must read as unset");
+
+        // unset of an absent key is an idempotent no-op (the no-op branch).
+        run(Cli {
+            command: Some(Commands::SiteConfig {
+                action: SiteConfigAction::Unset {
+                    storage,
+                    key: "site.registration_policy".to_string(),
+                },
+            }),
+            verbose: false,
+        })
+        .await
+        .expect("unset of an absent key is a no-op success");
     }
 
     #[tokio::test]

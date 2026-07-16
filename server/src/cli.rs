@@ -271,6 +271,15 @@ pub enum SiteConfigAction {
         #[command(flatten)]
         storage: StorageArgs,
     },
+
+    /// Delete a key. Idempotent: unsetting an absent key is a no-op (exit 0).
+    Unset {
+        #[command(flatten)]
+        storage: StorageArgs,
+
+        /// The `site_config` key to delete.
+        key: String,
+    },
 }
 
 #[cfg(test)]
@@ -752,6 +761,18 @@ mod tests {
                 action: SiteConfigAction::List { .. },
             })
         ));
+    }
+
+    #[test]
+    fn site_config_unset_parses_key() {
+        let cli = parse(&["site-config", "unset", "site.title"]);
+        let Commands::SiteConfig { action } = cli.command.expect("subcommand") else {
+            unreachable!("parse yields site-config")
+        };
+        let SiteConfigAction::Unset { key, .. } = action else {
+            unreachable!("parse yields unset")
+        };
+        assert_eq!(key, "site.title");
     }
 
     #[test]

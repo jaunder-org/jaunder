@@ -222,6 +222,10 @@ mod tests {
             out.sort();
             Ok(out)
         }
+
+        async fn delete(&self, key: &str) -> sqlx::Result<bool> {
+            Ok(self.0.contains_key(key))
+        }
     }
 
     // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
@@ -242,6 +246,14 @@ mod tests {
                 ("smtp.port".to_string(), "25".to_string()),
             ]
         );
+    }
+
+    // guard:no-backend — probes an in-memory mock SiteConfigStorage; no live database backend
+    #[tokio::test]
+    async fn map_config_store_delete_reports_presence() {
+        let store = MapConfigStore(HashMap::from([("smtp.host", "h")]));
+        assert!(store.delete("smtp.host").await.unwrap());
+        assert!(!store.delete("absent").await.unwrap());
     }
 
     // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend

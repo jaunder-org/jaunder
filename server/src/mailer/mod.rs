@@ -84,6 +84,10 @@ mod tests {
             out.sort();
             Ok(out)
         }
+
+        async fn delete(&self, key: &str) -> sqlx::Result<bool> {
+            Ok(self.0.contains_key(key))
+        }
     }
 
     #[tokio::test]
@@ -123,6 +127,13 @@ mod tests {
                 ("smtp.port".to_string(), "25".to_string()),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn map_config_store_delete_reports_presence() {
+        let store = MapConfigStore(HashMap::from([("smtp.host", "h")]));
+        assert!(store.delete("smtp.host").await.unwrap());
+        assert!(!store.delete("absent").await.unwrap());
     }
 
     #[fixture]
