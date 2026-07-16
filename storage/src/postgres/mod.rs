@@ -63,6 +63,7 @@ mod teardown;
 
 use crate::{AtomicOps, ConfirmPasswordResetError, RegisterWithInviteError};
 use common::display_name::DisplayName;
+use common::ids::UserId;
 use common::password::Password;
 use common::token::RawToken;
 use common::username::Username;
@@ -92,7 +93,7 @@ impl AtomicOps for PostgresAtomicOps {
         display_name: Option<&DisplayName>,
         is_operator: bool,
         invite_code: &InviteCode,
-    ) -> Result<i64, RegisterWithInviteError> {
+    ) -> Result<UserId, RegisterWithInviteError> {
         let mut tx = self.pool.begin().await?;
         let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
             "SELECT used_at, expires_at FROM invites WHERE code = $1",
@@ -130,7 +131,7 @@ impl AtomicOps for PostgresAtomicOps {
         .await;
 
         let user_id = match result {
-            Ok(id) => id,
+            Ok(id) => UserId::from(id),
             // Let the UNIQUE(username) constraint be the arbiter rather than a
             // pre-INSERT existence check: that closes the check-then-insert race
             // between concurrent registrations.
@@ -142,7 +143,7 @@ impl AtomicOps for PostgresAtomicOps {
 
         sqlx::query("UPDATE invites SET used_at = $1, used_by = $2 WHERE code = $3")
             .bind(now)
-            .bind(user_id)
+            .bind(i64::from(user_id))
             .bind(invite_code.as_ref())
             .execute(&mut *tx)
             .await?;
@@ -194,6 +195,7 @@ impl AtomicOps for PostgresAtomicOps {
                 Some((None, _)) => Err(ConfirmPasswordResetError::Expired),
             };
         };
+        let user_id = UserId::from(user_id);
 
         // ADR-0022: hash only after the token claim succeeds, so a bogus/used/expired
         // token is rejected above without paying the Argon2 cost. A hash failure here
@@ -204,12 +206,12 @@ impl AtomicOps for PostgresAtomicOps {
 
         sqlx::query("UPDATE users SET password_hash = $1 WHERE user_id = $2")
             .bind(&password_hash)
-            .bind(user_id)
+            .bind(i64::from(user_id))
             .execute(&mut *tx)
             .await?;
 
         sqlx::query("DELETE FROM sessions WHERE user_id = $1")
-            .bind(user_id)
+            .bind(i64::from(user_id))
             .execute(&mut *tx)
             .await?;
 

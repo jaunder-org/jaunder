@@ -9,6 +9,7 @@ use tracing::Instrument;
 use crate::backend::Backend;
 use common::display_name::DisplayName;
 use common::email::Email;
+use common::ids::UserId;
 use common::password::Password;
 use common::username::Username;
 
@@ -22,7 +23,7 @@ use crate::helpers::{user_record_from_row, UserRow};
 #[derive(Clone, Debug)]
 pub struct UserRecord {
     /// Unique internal identifier.
-    pub user_id: i64,
+    pub user_id: UserId,
     /// Unique username (canonicalized).
     pub username: Username,
     /// User's preferred display name.
@@ -141,7 +142,7 @@ pub trait UserStorage: Send + Sync {
         password: &Password,
         display_name: Option<&'a DisplayName>,
         is_operator: bool,
-    ) -> Result<i64, CreateUserError>;
+    ) -> Result<UserId, CreateUserError>;
 
     /// Authenticates a user by username and password.
     ///
@@ -158,7 +159,7 @@ pub trait UserStorage: Send + Sync {
     ) -> Result<UserRecord, UserAuthError>;
 
     /// Fetches a user record by its internal ID.
-    async fn get_user(&self, user_id: i64) -> sqlx::Result<Option<UserRecord>>;
+    async fn get_user(&self, user_id: UserId) -> sqlx::Result<Option<UserRecord>>;
 
     /// Fetches a user record by their username.
     async fn get_user_by_username(&self, username: &Username) -> sqlx::Result<Option<UserRecord>>;
@@ -168,7 +169,7 @@ pub trait UserStorage: Send + Sync {
     // `PostStorage::list_published_by_user`.
     async fn update_profile<'a>(
         &self,
-        user_id: i64,
+        user_id: UserId,
         update: &ProfileUpdate<'a>,
     ) -> sqlx::Result<()>;
 
@@ -177,7 +178,7 @@ pub trait UserStorage: Send + Sync {
     // `PostStorage::list_published_by_user`.
     async fn set_email<'a>(
         &self,
-        user_id: i64,
+        user_id: UserId,
         email: Option<&'a Email>,
         verified: bool,
     ) -> sqlx::Result<()>;
@@ -186,7 +187,7 @@ pub trait UserStorage: Send + Sync {
     ///
     /// This is typically used during password resets. Hashing is performed
     /// asynchronously on a blocking thread.
-    async fn set_password(&self, user_id: i64, new_password: &Password) -> sqlx::Result<()>;
+    async fn set_password(&self, user_id: UserId, new_password: &Password) -> sqlx::Result<()>;
 }
 
 /// Generic [`UserStorage`] backed by any [`Backend`] database.
@@ -242,7 +243,7 @@ where
         password: &Password,
         display_name: Option<&'a DisplayName>,
         is_operator: bool,
-    ) -> Result<i64, CreateUserError> {
+    ) -> Result<UserId, CreateUserError> {
         let password_hash = crate::helpers::hash_password(password.clone())
             .instrument(tracing::info_span!(
                 "storage.user.create_user.hash_password",
@@ -271,7 +272,7 @@ where
         .await;
 
         match result {
-            Ok(id) => Ok(id),
+            Ok(id) => Ok(UserId::from(id)),
             Err(sqlx::Error::Database(error)) if error.is_unique_violation() => {
                 Err(CreateUserError::UsernameTaken)
             }
@@ -380,13 +381,13 @@ where
         .map_err(|e| UserAuthError::Internal(Box::new(e)))
     }
 
-    async fn get_user(&self, user_id: i64) -> sqlx::Result<Option<UserRecord>> {
+    async fn get_user(&self, user_id: UserId) -> sqlx::Result<Option<UserRecord>> {
         let row = sqlx::query_as::<_, UserRow>(
             "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at,
                     email, email_verified, is_operator
              FROM users WHERE user_id = $1",
         )
-        .bind(user_id)
+        .bind(i64::from(user_id))
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(user_record_from_row).transpose()?)
@@ -406,13 +407,13 @@ where
 
     async fn update_profile<'a>(
         &self,
-        user_id: i64,
+        user_id: UserId,
         update: &ProfileUpdate<'a>,
     ) -> sqlx::Result<()> {
         sqlx::query("UPDATE users SET display_name = $1, bio = $2 WHERE user_id = $3")
             .bind(update.display_name.map(|d| &**d))
             .bind(update.bio)
-            .bind(user_id)
+            .bind(i64::from(user_id))
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -420,27 +421,27 @@ where
 
     async fn set_email<'a>(
         &self,
-        user_id: i64,
+        user_id: UserId,
         email: Option<&'a Email>,
         verified: bool,
     ) -> sqlx::Result<()> {
         sqlx::query("UPDATE users SET email = $1, email_verified = $2 WHERE user_id = $3")
             .bind(email.map(|e| &**e))
             .bind(verified)
-            .bind(user_id)
+            .bind(i64::from(user_id))
             .execute(&self.pool)
             .await?;
         Ok(())
     }
 
-    async fn set_password(&self, user_id: i64, new_password: &Password) -> sqlx::Result<()> {
+    async fn set_password(&self, user_id: UserId, new_password: &Password) -> sqlx::Result<()> {
         let password_hash = crate::helpers::hash_password(new_password.clone())
             .await
             .map_err(sqlx::Error::Io)?;
 
         sqlx::query("UPDATE users SET password_hash = $1 WHERE user_id = $2")
             .bind(password_hash.as_str())
-            .bind(user_id)
+            .bind(i64::from(user_id))
             .execute(&self.pool)
             .await?;
         Ok(())

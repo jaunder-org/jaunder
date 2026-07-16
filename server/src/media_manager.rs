@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
+use common::ids::UserId;
 use common::media::{detect_content_type, media_path, media_url, sanitize_filename};
 use storage::{
     CreateMediaError, MediaRecord, MediaSource, MediaStorage, SiteConfigStorage,
@@ -161,7 +162,7 @@ impl MediaManager {
 
     async fn check_quota(
         &self,
-        user_id: i64,
+        user_id: UserId,
         size_bytes: i64,
         user_quota: i64,
     ) -> anyhow::Result<()> {
@@ -204,7 +205,7 @@ impl MediaManager {
 
     async fn register_in_db(
         &self,
-        user_id: i64,
+        user_id: UserId,
         sha256_hex: &str,
         filename: &str,
         content_type: &str,
@@ -235,7 +236,7 @@ impl MediaManager {
     /// the response. The temp file is consumed (moved, linked, or removed).
     async fn finalize_upload(
         &self,
-        user_id: i64,
+        user_id: UserId,
         metadata: UploadMetadata,
         tmp_path: &Path,
         user_quota: i64,
@@ -416,7 +417,7 @@ mod tests {
         );
 
         let err = manager
-            .register_in_db(1, "deadbeef", "file.png", "image/png", 100)
+            .register_in_db(UserId::from(1), "deadbeef", "file.png", "image/png", 100)
             .await
             .unwrap_err();
 

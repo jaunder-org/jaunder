@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use axum::http::StatusCode;
 use chrono::Utc;
+use common::ids::UserId;
 use common::mailer::test_utils::CapturingMailSender;
 use common::test_support::parse_email;
 use common::token::RawToken;
@@ -19,7 +20,7 @@ async fn create_user_with_verified_email(
     state: &Arc<AppState>,
     username: &str,
     email: &str,
-) -> (i64, RawToken) {
+) -> (UserId, RawToken) {
     let user_id = state
         .users
         .create_user(

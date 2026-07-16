@@ -10,6 +10,7 @@ use tower::ServiceExt;
 use rstest::*;
 use rstest_reuse::*;
 
+use common::ids::UserId;
 use storage::test_support::{backends, backends_matrix, Backend, TestEnv};
 
 use crate::helpers::{make_app, session_cookie};
@@ -730,7 +731,7 @@ async fn proxy_rejects_mismatched_user_id(#[case] backend: Backend) {
     let app = make_app(Arc::clone(&state), &storage);
 
     // Pass a different user_id in query params.
-    let wrong_user_id = user_id + 999;
+    let wrong_user_id = UserId::from(i64::from(user_id) + 999);
     let url =
         format!("/media/proxy?url=http%3A%2F%2Fexample.com%2Fimage.jpg&user_id={wrong_user_id}");
 

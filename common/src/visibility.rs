@@ -1,6 +1,7 @@
 //! Shared visibility types: channels, subscription status, audience targeting,
 //! the viewer identity, and the subscription-admission seam. See ADR-0020.
 
+use crate::ids::UserId;
 use std::fmt;
 
 macro_rules! str_enum {
@@ -44,7 +45,7 @@ impl ViewerIdentity {
     /// Local viewer constructor used by Layer A: a logged-in account on the
     /// `local` channel, keyed by its user id as the `subscriber_ref`.
     #[must_use]
-    pub fn local(user_id: i64, local_channel_id: i64) -> Self {
+    pub fn local(user_id: UserId, local_channel_id: i64) -> Self {
         Self::Channel {
             channel_id: local_channel_id,
             subscriber_ref: user_id.to_string(),
@@ -59,7 +60,7 @@ impl ViewerIdentity {
 /// could not be resolved) → [`ViewerIdentity::Anonymous`], fail-closed: a viewer
 /// we cannot positively place on a channel gets no non-public reach.
 #[must_use]
-pub fn account_viewer(user_id: i64, local_channel_id: Option<i64>) -> ViewerIdentity {
+pub fn account_viewer(user_id: UserId, local_channel_id: Option<i64>) -> ViewerIdentity {
     match local_channel_id {
         Some(channel_id) => ViewerIdentity::local(user_id, channel_id),
         None => ViewerIdentity::Anonymous,
@@ -73,9 +74,11 @@ pub fn account_viewer(user_id: i64, local_channel_id: Option<i64>) -> ViewerIden
 /// viewer, `None` for anonymous. Filtering itself lives in the store query; this
 /// is used only to decide whether to render author-only UI affordances.
 #[must_use]
-pub fn viewer_user_id(viewer: &ViewerIdentity) -> Option<i64> {
+pub fn viewer_user_id(viewer: &ViewerIdentity) -> Option<UserId> {
     match viewer {
-        ViewerIdentity::Channel { subscriber_ref, .. } => subscriber_ref.parse::<i64>().ok(),
+        ViewerIdentity::Channel { subscriber_ref, .. } => {
+            subscriber_ref.parse::<i64>().ok().map(UserId::from)
+        }
         ViewerIdentity::Anonymous => None,
     }
 }
@@ -94,7 +97,7 @@ pub enum AudienceTarget {
 pub trait SubscriptionPolicy: Send + Sync {
     fn initial_status(
         &self,
-        author_user_id: i64,
+        author_user_id: UserId,
         channel_id: i64,
         subscriber_ref: &str,
     ) -> SubscriptionStatus;
@@ -104,7 +107,7 @@ pub trait SubscriptionPolicy: Send + Sync {
 pub struct OpenSubscriptionPolicy;
 
 impl SubscriptionPolicy for OpenSubscriptionPolicy {
-    fn initial_status(&self, _a: i64, _c: i64, _r: &str) -> SubscriptionStatus {
+    fn initial_status(&self, _a: UserId, _c: i64, _r: &str) -> SubscriptionStatus {
         SubscriptionStatus::Active // Layer A NOOP auto-approve; M13 swaps this here.
     }
 }
@@ -151,14 +154,14 @@ mod tests {
     #[test]
     fn open_policy_returns_active() {
         assert_eq!(
-            OpenSubscriptionPolicy.initial_status(1, 1, "1"),
+            OpenSubscriptionPolicy.initial_status(UserId::from(1), 1, "1"),
             SubscriptionStatus::Active
         );
     }
 
     #[test]
     fn viewer_local_constructor_uses_user_id_as_subscriber_ref() {
-        let viewer = ViewerIdentity::local(42, 7);
+        let viewer = ViewerIdentity::local(UserId::from(42), 7);
         assert_eq!(
             viewer,
             ViewerIdentity::Channel {
@@ -171,8 +174,8 @@ mod tests {
     #[test]
     fn account_viewer_with_channel_is_local() {
         assert_eq!(
-            account_viewer(7, Some(3)),
-            ViewerIdentity::local(7, 3),
+            account_viewer(UserId::from(7), Some(3)),
+            ViewerIdentity::local(UserId::from(7), 3),
             "a resolved local channel yields a Channel viewer keyed by the user id",
         );
     }
@@ -180,7 +183,7 @@ mod tests {
     #[test]
     fn account_viewer_without_channel_fails_closed_to_anonymous() {
         assert_eq!(
-            account_viewer(7, None),
+            account_viewer(UserId::from(7), None),
             ViewerIdentity::Anonymous,
             "an unresolved local channel must fail closed to Anonymous",
         );
@@ -188,7 +191,10 @@ mod tests {
 
     #[test]
     fn viewer_user_id_projects_local_channel_to_user_id() {
-        assert_eq!(viewer_user_id(&ViewerIdentity::local(42, 1)), Some(42));
+        assert_eq!(
+            viewer_user_id(&ViewerIdentity::local(UserId::from(42), 1)),
+            Some(UserId::from(42))
+        );
     }
 
     #[test]

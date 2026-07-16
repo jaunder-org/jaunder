@@ -13,6 +13,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::{Database, Pool};
 
+use common::ids::UserId;
 use common::visibility::{SubscriptionPolicy, SubscriptionStatus, ViewerIdentity};
 
 /// A subscription row returned by [`SubscriptionStorage::list_subscribers`].
@@ -39,7 +40,7 @@ pub trait SubscriptionStorage: Send + Sync {
     /// upserts idempotently. Returns the (possibly pre-existing) `subscription_id`.
     async fn subscribe(
         &self,
-        author_user_id: i64,
+        author_user_id: UserId,
         channel_id: i64,
         subscriber_ref: &str,
     ) -> sqlx::Result<i64>;
@@ -47,7 +48,7 @@ pub trait SubscriptionStorage: Send + Sync {
     /// Removes a subscription. A no-op if it does not exist.
     async fn unsubscribe(
         &self,
-        author_user_id: i64,
+        author_user_id: UserId,
         channel_id: i64,
         subscriber_ref: &str,
     ) -> sqlx::Result<()>;
@@ -56,12 +57,15 @@ pub trait SubscriptionStorage: Send + Sync {
     /// `Anonymous` short-circuits to `Ok(false)` without a query.
     async fn is_subscriber(
         &self,
-        author_user_id: i64,
+        author_user_id: UserId,
         viewer: &ViewerIdentity,
     ) -> sqlx::Result<bool>;
 
     /// Lists the author's `active` subscribers.
-    async fn list_subscribers(&self, author_user_id: i64) -> sqlx::Result<Vec<SubscriptionRecord>>;
+    async fn list_subscribers(
+        &self,
+        author_user_id: UserId,
+    ) -> sqlx::Result<Vec<SubscriptionRecord>>;
 
     /// Returns the `channel_id` of the seeded `local` channel.
     ///
@@ -151,7 +155,7 @@ where
 {
     async fn subscribe(
         &self,
-        author_user_id: i64,
+        author_user_id: UserId,
         channel_id: i64,
         subscriber_ref: &str,
     ) -> sqlx::Result<i64> {
@@ -159,14 +163,14 @@ where
             .policy
             .initial_status(author_user_id, channel_id, subscriber_ref);
         sqlx::query(DB::INSERT_SUBSCRIPTION)
-            .bind(author_user_id)
+            .bind(i64::from(author_user_id))
             .bind(channel_id)
             .bind(subscriber_ref)
             .bind(status.as_str())
             .execute(&self.pool)
             .await?;
         sqlx::query_as::<_, (i64,)>(DB::SELECT_SUBSCRIPTION_ID)
-            .bind(author_user_id)
+            .bind(i64::from(author_user_id))
             .bind(channel_id)
             .bind(subscriber_ref)
             .fetch_one(&self.pool)
@@ -176,12 +180,12 @@ where
 
     async fn unsubscribe(
         &self,
-        author_user_id: i64,
+        author_user_id: UserId,
         channel_id: i64,
         subscriber_ref: &str,
     ) -> sqlx::Result<()> {
         sqlx::query(DB::DELETE_SUBSCRIPTION)
-            .bind(author_user_id)
+            .bind(i64::from(author_user_id))
             .bind(channel_id)
             .bind(subscriber_ref)
             .execute(&self.pool)
@@ -191,7 +195,7 @@ where
 
     async fn is_subscriber(
         &self,
-        author_user_id: i64,
+        author_user_id: UserId,
         viewer: &ViewerIdentity,
     ) -> sqlx::Result<bool> {
         let ViewerIdentity::Channel {
@@ -202,7 +206,7 @@ where
             return Ok(false); // Anonymous short-circuit; no query.
         };
         let (exists,) = sqlx::query_as::<_, (i64,)>(DB::IS_ACTIVE_SUBSCRIBER)
-            .bind(author_user_id)
+            .bind(i64::from(author_user_id))
             .bind(channel_id)
             .bind(subscriber_ref.as_str())
             .fetch_one(&self.pool)
@@ -210,10 +214,13 @@ where
         Ok(exists != 0)
     }
 
-    async fn list_subscribers(&self, author_user_id: i64) -> sqlx::Result<Vec<SubscriptionRecord>> {
+    async fn list_subscribers(
+        &self,
+        author_user_id: UserId,
+    ) -> sqlx::Result<Vec<SubscriptionRecord>> {
         let rows =
             sqlx::query_as::<_, (i64, i64, String, DateTime<Utc>)>(DB::LIST_ACTIVE_SUBSCRIBERS)
-                .bind(author_user_id)
+                .bind(i64::from(author_user_id))
                 .fetch_all(&self.pool)
                 .await?;
         // The query filters to `st.name = 'active'`, so every returned row is an

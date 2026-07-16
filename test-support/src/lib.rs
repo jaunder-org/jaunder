@@ -14,6 +14,7 @@
 use std::sync::Arc;
 
 use common::display_name::DisplayName;
+use common::ids::UserId;
 use common::username::Username;
 use storage::{seed_post_input, AppState};
 
@@ -108,7 +109,7 @@ pub async fn create_user(
     password: &str,
     display_name: Option<&DisplayName>,
     operator: bool,
-) -> anyhow::Result<i64> {
+) -> anyhow::Result<UserId> {
     let uname = username
         .parse::<Username>()
         .map_err(|_| anyhow::anyhow!("invalid username: {username}"))?;

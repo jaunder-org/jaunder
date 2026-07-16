@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use common::ids::UserId;
 use common::password::Password;
 use common::tag::TagLabel;
 use common::test_support::{parse_audience_name, parse_display_name};
@@ -22,10 +23,10 @@ const FIXTURE_MEDIA_SHA256: &str =
 /// silently Private — the bug in issue #4).
 pub struct BackupFixtureIds {
     /// The operator who authors the fixture posts and owns the audience.
-    pub author: i64,
+    pub author: UserId,
     /// A second, non-operator account subscribed to the author and a member of
     /// the `Named` audience — the viewer who must still see the private post.
-    pub viewer: i64,
+    pub viewer: UserId,
     /// A `Public` post (visible to everyone, including anonymous).
     pub public_post: i64,
     /// A post targeted at a `Named` audience the viewer belongs to.
@@ -97,9 +98,9 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
 /// survive restore so the subscriber still resolves the private post (issue #4).
 async fn seed_named_audience_post(
     state: &AppState,
-    author: i64,
+    author: UserId,
     password: &Password,
-) -> (i64, i64) {
+) -> (UserId, i64) {
     let viewer_name: Username = "viewer".parse().expect("valid username");
     let viewer = state
         .users
@@ -118,7 +119,7 @@ async fn seed_named_audience_post(
         .expect("local channel");
     let subscription = state
         .subscriptions
-        .subscribe(author, local, &viewer.to_string())
+        .subscribe(author, local, &i64::from(viewer).to_string())
         .await
         .expect("subscribe viewer");
     let audience = state
@@ -152,7 +153,7 @@ async fn seed_named_audience_post(
 
 /// Seeds the previously-unbacked side tables: a `user_config` row, a media-table
 /// row, and a `feed_events` row.
-async fn seed_side_tables(state: &AppState, author: i64) {
+async fn seed_side_tables(state: &AppState, author: UserId) {
     state
         .user_config
         .set(author, "editor.theme", "dark")

@@ -236,7 +236,7 @@ pub async fn cmd_user_create(
         host::metrics::RegistrationResult::Ok,
     );
 
-    println!("Created user '{username}' with id {user_id}");
+    println!("Created user '{username}' with id {}", i64::from(user_id));
     Ok(())
 }
 

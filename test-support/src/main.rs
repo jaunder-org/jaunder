@@ -120,7 +120,7 @@ async fn cmd_create_user(
 ) -> anyhow::Result<()> {
     let state = storage::open_existing_database(db).await?;
     let id = create_user(&state, username, password, display_name, operator).await?;
-    eprintln!("created user {username} with id {id}");
+    eprintln!("created user {username} with id {}", i64::from(id));
     Ok(())
 }
 

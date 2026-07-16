@@ -6,6 +6,7 @@ use sqlx::{Database, Pool};
 use thiserror::Error;
 
 use crate::backend::Backend;
+use common::ids::UserId;
 
 /// Source of a media record.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,7 +64,7 @@ impl From<InvalidMediaSource> for host::error::InternalError {
 #[derive(Clone, Debug)]
 pub struct MediaRecord {
     /// ID of the user who owns or triggered the caching of this media.
-    pub user_id: i64,
+    pub user_id: UserId,
     /// SHA-256 hash of the file content (used for deduplication).
     pub sha256: String,
     /// Original filename or a generated unique name.
@@ -120,7 +121,7 @@ pub trait MediaStorage: Send + Sync {
     /// Fetches a single media record by its composite key.
     async fn get_media(
         &self,
-        user_id: i64,
+        user_id: UserId,
         sha256: &str,
         filename: &str,
         source: &MediaSource,
@@ -131,7 +132,7 @@ pub trait MediaStorage: Send + Sync {
     // `PostStorage::list_published_by_user`.
     async fn list_media<'a>(
         &self,
-        user_id: i64,
+        user_id: UserId,
         source: Option<&'a MediaSource>,
         limit: u32,
         offset: u32,
@@ -144,14 +145,14 @@ pub trait MediaStorage: Send + Sync {
     /// Returns [`DeleteMediaError::NotFound`] if the record does not exist.
     async fn delete_media(
         &self,
-        user_id: i64,
+        user_id: UserId,
         sha256: &str,
         filename: &str,
         source: &MediaSource,
     ) -> Result<(), DeleteMediaError>;
 
     /// Calculates the total storage used by a user's uploads (in bytes).
-    async fn get_user_upload_usage(&self, user_id: i64) -> sqlx::Result<i64>;
+    async fn get_user_upload_usage(&self, user_id: UserId) -> sqlx::Result<i64>;
 
     /// Finds a media record by its content hash and source across all users.
     ///
@@ -177,12 +178,12 @@ pub trait MediaStorage: Send + Sync {
 #[async_trait]
 pub trait MediaDialect: Backend {
     /// Returns the total upload bytes for `user_id` using backend-appropriate SQL.
-    async fn get_user_upload_usage(pool: &Pool<Self>, user_id: i64) -> sqlx::Result<i64>;
+    async fn get_user_upload_usage(pool: &Pool<Self>, user_id: UserId) -> sqlx::Result<i64>;
 
     /// Deletes a media record; returns `NotFound` when no row was matched.
     async fn delete_media_row(
         pool: &Pool<Self>,
-        user_id: i64,
+        user_id: UserId,
         sha256: &str,
         filename: &str,
         source: &str,
@@ -226,7 +227,7 @@ where
             "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
-        .bind(record.user_id)
+        .bind(i64::from(record.user_id))
         .bind(record.sha256.as_str())
         .bind(record.filename.as_str())
         .bind(record.source.as_str())
@@ -256,7 +257,7 @@ where
     )]
     async fn get_media(
         &self,
-        user_id: i64,
+        user_id: UserId,
         sha256: &str,
         filename: &str,
         source: &MediaSource,
@@ -266,7 +267,7 @@ where
              FROM media
              WHERE user_id = $1 AND sha256 = $2 AND filename = $3 AND source = $4",
         )
-        .bind(user_id)
+        .bind(i64::from(user_id))
         .bind(sha256)
         .bind(filename)
         .bind(source.as_str())
@@ -283,7 +284,7 @@ where
     )]
     async fn list_media<'a>(
         &self,
-        user_id: i64,
+        user_id: UserId,
         source: Option<&'a MediaSource>,
         limit: u32,
         offset: u32,
@@ -296,7 +297,7 @@ where
                  ORDER BY created_at DESC
                  LIMIT $3 OFFSET $4",
             )
-            .bind(user_id)
+            .bind(i64::from(user_id))
             .bind(src.as_str())
             .bind(i64::from(limit))
             .bind(i64::from(offset))
@@ -310,7 +311,7 @@ where
                  ORDER BY created_at DESC
                  LIMIT $2 OFFSET $3",
             )
-            .bind(user_id)
+            .bind(i64::from(user_id))
             .bind(i64::from(limit))
             .bind(i64::from(offset))
             .fetch_all(&self.pool)
@@ -329,7 +330,7 @@ where
     )]
     async fn delete_media(
         &self,
-        user_id: i64,
+        user_id: UserId,
         sha256: &str,
         filename: &str,
         source: &MediaSource,
@@ -342,7 +343,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn get_user_upload_usage(&self, user_id: i64) -> sqlx::Result<i64> {
+    async fn get_user_upload_usage(&self, user_id: UserId) -> sqlx::Result<i64> {
         DB::get_user_upload_usage(&self.pool, user_id).await
     }
 
@@ -395,7 +396,7 @@ mod tests {
         let TestEnv { state, base } = backend.setup().await;
         base.close_pool().await;
         let record = MediaRecord {
-            user_id: 1,
+            user_id: UserId::from(1),
             sha256: "abc123".to_string(),
             filename: "test.jpg".to_string(),
             source: MediaSource::Upload,
@@ -415,7 +416,7 @@ mod tests {
         base.close_pool().await;
         let result = state
             .media
-            .get_media(1, "abc123", "test.jpg", &MediaSource::Upload)
+            .get_media(UserId::from(1), "abc123", "test.jpg", &MediaSource::Upload)
             .await;
         assert!(result.is_err());
     }
@@ -425,7 +426,7 @@ mod tests {
     async fn list_media_with_closed_pool_returns_error(#[case] backend: Backend) {
         let TestEnv { state, base } = backend.setup().await;
         base.close_pool().await;
-        let result = state.media.list_media(1, None, 10, 0).await;
+        let result = state.media.list_media(UserId::from(1), None, 10, 0).await;
         assert!(result.is_err());
     }
 
@@ -436,7 +437,7 @@ mod tests {
         base.close_pool().await;
         let result = state
             .media
-            .delete_media(1, "abc123", "test.jpg", &MediaSource::Upload)
+            .delete_media(UserId::from(1), "abc123", "test.jpg", &MediaSource::Upload)
             .await;
         assert!(matches!(result, Err(DeleteMediaError::Internal(_))));
     }
@@ -446,7 +447,7 @@ mod tests {
     async fn get_user_upload_usage_with_closed_pool_returns_error(#[case] backend: Backend) {
         let TestEnv { state, base } = backend.setup().await;
         base.close_pool().await;
-        let result = state.media.get_user_upload_usage(1).await;
+        let result = state.media.get_user_upload_usage(UserId::from(1)).await;
         assert!(result.is_err());
     }
 

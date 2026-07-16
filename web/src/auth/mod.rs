@@ -23,6 +23,7 @@ pub use server::{require_auth, AuthRejection, AuthUser, CookieSettings};
 #[cfg(feature = "server")]
 use {
     crate::error::InternalError,
+    common::ids::UserId,
     common::password::Password,
     host::invite::InviteCode,
     std::sync::Arc,
@@ -94,7 +95,7 @@ pub async fn register(
             RegistrationPolicy::InviteOnly => host::metrics::RegistrationPolicy::InviteOnly,
             RegistrationPolicy::Closed => host::metrics::RegistrationPolicy::Closed,
         };
-        let user_id_result: Result<i64, InternalError> = match policy {
+        let user_id_result: Result<UserId, InternalError> = match policy {
             RegistrationPolicy::Open => users
                 .create_user(&username, &password, None, false)
                 .instrument(tracing::info_span!("web.auth.register.create_user_open"))

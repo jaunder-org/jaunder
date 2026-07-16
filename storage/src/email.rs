@@ -7,6 +7,7 @@ use thiserror::Error;
 
 use crate::backend::Backend;
 use common::email::Email;
+use common::ids::UserId;
 use common::token::RawToken;
 
 /// Errors returned by [`EmailVerificationStorage::use_email_verification`].
@@ -59,7 +60,7 @@ pub trait EmailVerificationStorage: Send + Sync {
     /// Returns the raw (un-hashed) token to be delivered to the user.
     async fn create_email_verification(
         &self,
-        user_id: i64,
+        user_id: UserId,
         email: &Email,
         expires_at: DateTime<Utc>,
     ) -> sqlx::Result<RawToken>;
@@ -75,7 +76,7 @@ pub trait EmailVerificationStorage: Send + Sync {
     async fn use_email_verification(
         &self,
         raw_token: &RawToken,
-    ) -> Result<(i64, Email), UseEmailVerificationError>;
+    ) -> Result<(UserId, Email), UseEmailVerificationError>;
 }
 
 /// Generic [`EmailVerificationStorage`] backed by any [`Backend`] database.
@@ -108,7 +109,7 @@ where
 {
     async fn create_email_verification(
         &self,
-        user_id: i64,
+        user_id: UserId,
         email: &Email,
         expires_at: DateTime<Utc>,
     ) -> sqlx::Result<RawToken> {
@@ -124,7 +125,7 @@ where
              SET expires_at = created_at
              WHERE user_id = $1 AND used_at IS NULL AND expires_at > $2",
         )
-        .bind(user_id)
+        .bind(i64::from(user_id))
         .bind(now)
         .execute(&mut *tx)
         .await?;
@@ -135,7 +136,7 @@ where
              VALUES ($1, $2, $3, $4, $5)",
         )
         .bind(token_hash.as_ref())
-        .bind(user_id)
+        .bind(i64::from(user_id))
         .bind(&**email)
         .bind(now)
         .bind(expires_at)
@@ -150,7 +151,7 @@ where
     async fn use_email_verification(
         &self,
         raw_token: &RawToken,
-    ) -> Result<(i64, Email), UseEmailVerificationError> {
+    ) -> Result<(UserId, Email), UseEmailVerificationError> {
         let token_hash =
             host::token::hash(raw_token).map_err(|_| UseEmailVerificationError::NotFound)?;
 
@@ -179,7 +180,7 @@ where
             let email = email
                 .parse::<Email>()
                 .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-            return Ok((user_id, email));
+            return Ok((UserId::from(user_id), email));
         }
 
         // Zero rows affected — inspect the row to return the right error.
@@ -230,7 +231,7 @@ mod tests {
         let email = parse_email("test@example.com");
         let result = state
             .email_verifications
-            .create_email_verification(1, &email, expires_at)
+            .create_email_verification(UserId::from(1), &email, expires_at)
             .await;
         assert!(result.is_err());
     }

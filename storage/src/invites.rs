@@ -7,6 +7,7 @@ use sqlx::{Database, Pool};
 use thiserror::Error;
 
 use crate::backend::Backend;
+use common::ids::UserId;
 
 /// An invite code record returned by [`InviteStorage`] queries.
 #[derive(Clone, Debug)]
@@ -20,7 +21,7 @@ pub struct InviteRecord {
     /// When the code was consumed (None if still active).
     pub used_at: Option<DateTime<Utc>>,
     /// ID of the user who was created using this code.
-    pub used_by: Option<i64>,
+    pub used_by: Option<UserId>,
 }
 
 /// Errors that can occur when consuming an invite code.
@@ -52,7 +53,7 @@ pub trait InviteStorage: Send + Sync {
     /// # Errors
     ///
     /// Returns [`UseInviteError`] if the code is invalid, expired, or already used.
-    async fn use_invite(&self, code: &InviteCode, user_id: i64) -> Result<(), UseInviteError>;
+    async fn use_invite(&self, code: &InviteCode, user_id: UserId) -> Result<(), UseInviteError>;
 
     /// Returns a list of all invite codes in the system.
     async fn list_invites(&self) -> sqlx::Result<Vec<InviteRecord>>;
@@ -106,7 +107,7 @@ where
         // cov:ignore-stop
     }
 
-    async fn use_invite(&self, code: &InviteCode, user_id: i64) -> Result<(), UseInviteError> {
+    async fn use_invite(&self, code: &InviteCode, user_id: UserId) -> Result<(), UseInviteError> {
         let now = Utc::now();
 
         // Atomically claim the invite in one statement: the UPDATE succeeds only
@@ -119,7 +120,7 @@ where
              RETURNING code, created_at, expires_at, used_at, used_by",
         )
         .bind(now)
-        .bind(user_id)
+        .bind(i64::from(user_id))
         .bind(code.as_ref())
         .bind(now)
         .fetch_optional(&self.pool)
@@ -187,7 +188,7 @@ mod tests {
         let TestEnv { state, base } = backend.setup().await;
         base.close_pool().await;
         let code = "code".parse::<InviteCode>().unwrap();
-        let result = state.invites.use_invite(&code, 1).await;
+        let result = state.invites.use_invite(&code, UserId::from(1)).await;
         assert!(matches!(result, Err(UseInviteError::NotFound)));
     }
 

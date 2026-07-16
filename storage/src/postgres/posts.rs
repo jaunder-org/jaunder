@@ -4,6 +4,7 @@ use sqlx::{Pool, Postgres};
 
 use crate::helpers::{post_record_from_row, PostRow};
 use crate::{PostDialect, PostRecord, PostStore, TaggingError, UpdatePostError, UpdatePostInput};
+use common::ids::UserId;
 use common::tag::{Tag, TagLabel};
 
 /// Postgres-backed post storage.
@@ -26,7 +27,7 @@ impl PostDialect for Postgres {
     async fn update_post(
         pool: &Pool<Postgres>,
         post_id: i64,
-        editor_user_id: i64,
+        editor_user_id: UserId,
         input: &UpdatePostInput,
     ) -> Result<PostRecord, UpdatePostError> {
         let mut tx = pool.begin().await?;
@@ -48,7 +49,9 @@ impl PostDialect for Postgres {
                 tx.rollback().await.ok();
                 return Err(UpdatePostError::NotFound);
             }
-            Some((owner_id, deleted_at)) if owner_id != editor_user_id || deleted_at.is_some() => {
+            Some((owner_id, deleted_at))
+                if UserId::from(owner_id) != editor_user_id || deleted_at.is_some() =>
+            {
                 tx.rollback().await.ok();
                 return Err(UpdatePostError::Unauthorized);
             }

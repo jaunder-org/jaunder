@@ -1,4 +1,5 @@
 use chrono::{Datelike, Utc};
+use common::ids::UserId;
 use common::password::Password;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
@@ -245,7 +246,7 @@ async fn subscribe_is_idempotent_and_active(#[case] backend: Backend) {
 async fn pending_subscription_is_not_admitted(#[case] backend: Backend) {
     struct StubPending;
     impl SubscriptionPolicy for StubPending {
-        fn initial_status(&self, _a: i64, _c: i64, _r: &str) -> SubscriptionStatus {
+        fn initial_status(&self, _a: UserId, _c: i64, _r: &str) -> SubscriptionStatus {
             SubscriptionStatus::Pending
         }
     }
@@ -1155,7 +1156,7 @@ async fn get_user_unknown_id_returns_none(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
 
-    let record = state.users.get_user(999).await.unwrap();
+    let record = state.users.get_user(UserId::from(999)).await.unwrap();
     assert!(record.is_none());
 }
 
@@ -2007,7 +2008,7 @@ async fn use_password_reset_unknown_token_returns_not_found(#[case] backend: Bac
 // PostStorage integration tests
 // ---------------------------------------------------------------------------
 
-fn make_create_post_input(user_id: i64, slug: &str) -> CreatePostInput {
+fn make_create_post_input(user_id: UserId, slug: &str) -> CreatePostInput {
     CreatePostInput {
         user_id,
         title: Some(format!("Post {slug}").into()),
@@ -2022,7 +2023,7 @@ fn make_create_post_input(user_id: i64, slug: &str) -> CreatePostInput {
     }
 }
 
-fn make_published_create_post_input(user_id: i64, slug: &str) -> CreatePostInput {
+fn make_published_create_post_input(user_id: UserId, slug: &str) -> CreatePostInput {
     CreatePostInput {
         published_at: Some(Utc::now()),
         summary: None,
@@ -2036,7 +2037,7 @@ fn make_published_create_post_input(user_id: i64, slug: &str) -> CreatePostInput
 /// below pin the publication instant relative to the injected `now`.
 async fn seed_post_published_at(
     state: &Arc<AppState>,
-    user_id: i64,
+    user_id: UserId,
     slug: &str,
     published_at: chrono::DateTime<Utc>,
 ) -> i64 {
@@ -2465,7 +2466,7 @@ async fn post_update_not_found_returns_error(#[case] backend: Backend) {
     };
     let err = state
         .posts
-        .update_post(9999, 1, &update_input)
+        .update_post(9999, UserId::from(1), &update_input)
         .await
         .unwrap_err();
     assert!(
@@ -2535,7 +2536,7 @@ async fn post_update_by_non_owner_returns_unauthorized(#[case] backend: Backend)
 /// different posts never collide on a derived slug.
 fn update_input(
     post_id: i64,
-    editor_user_id: i64,
+    editor_user_id: UserId,
     slug: &Slug,
     publish: PublishUpdate,
 ) -> PostUpdate<'_> {
@@ -2931,7 +2932,7 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
         .unwrap();
 
     let now = Utc::now();
-    let make_post = |user_id: i64, slug: &str, days_ago: i64| {
+    let make_post = |user_id: UserId, slug: &str, days_ago: i64| {
         let mut input = make_create_post_input(user_id, slug);
         input.published_at = Some(now - Duration::days(days_ago));
         input
@@ -6578,7 +6579,7 @@ async fn create_post_foreign_key_violation_maps_to_internal(#[case] backend: Bac
     // (via the shared `write_post_in_tx`) maps it to `Internal`, not `SlugConflict`
     // — exercising the generic-error arm.
     let input = CreatePostInput {
-        user_id: 999_999,
+        user_id: UserId::from(999_999),
         title: Some("Orphan".into()),
         slug: "orphan".parse().unwrap(),
         body: "body".into(),
@@ -6815,7 +6816,7 @@ async fn update_rendered_post_not_found_returns_storage_error(#[case] backend: B
         state.posts.as_ref(),
         RenderedPostUpdate {
             post_id: 99999,
-            editor_user_id: 1,
+            editor_user_id: UserId::from(1),
             title: Some("No Post".into()),
             slug: "no-post".parse().unwrap(),
             body: "body".into(),
@@ -6843,7 +6844,7 @@ async fn update_rendered_post_not_found_returns_storage_error(#[case] backend: B
 use storage::{CreateMediaError, DeleteMediaError, MediaRecord, MediaSource};
 
 fn make_media_record(
-    user_id: i64,
+    user_id: UserId,
     sha256: &str,
     filename: &str,
     source: MediaSource,

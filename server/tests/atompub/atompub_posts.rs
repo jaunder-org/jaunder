@@ -4,6 +4,7 @@ use axum::{
     body::Body,
     http::{header, Request, StatusCode},
 };
+use common::ids::UserId;
 use common::tag::TagLabel;
 use common::token::RawToken;
 use tower::ServiceExt;
@@ -354,7 +355,7 @@ async fn collection_paging_emits_next_link(#[case] backend: Backend) {
 }
 
 /// Seeds a user named `alice` and returns `(user_id, session_token)`.
-async fn seed_alice(state: &Arc<storage::AppState>) -> (i64, RawToken) {
+async fn seed_alice(state: &Arc<storage::AppState>) -> (UserId, RawToken) {
     let user_id = state
         .users
         .create_user(

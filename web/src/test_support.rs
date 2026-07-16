@@ -11,6 +11,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use axum::http::{header, request::Parts, Request};
+use common::ids::UserId;
 use common::username::Username;
 use std::sync::Arc;
 use storage::{MockSessionStorage, SessionRecord, SessionStorage};
@@ -18,7 +19,7 @@ use storage::{MockSessionStorage, SessionRecord, SessionStorage};
 /// Builds request `Parts` carrying a Bearer credential whose session store
 /// authenticates as `(user_id, username)`. Provide it into the reactive owner
 /// via `provide_context` so `require_auth()` resolves to this user.
-pub(crate) fn auth_parts(user_id: i64, username: &str) -> Parts {
+pub(crate) fn auth_parts(user_id: UserId, username: &str) -> Parts {
     let username: Username = username.parse().unwrap();
     let mut mock = MockSessionStorage::new();
     // `require_auth` only ever calls `authenticate`, which must resolve to the

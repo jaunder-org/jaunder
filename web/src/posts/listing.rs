@@ -21,6 +21,7 @@ use {
     crate::auth::require_auth,
     crate::error::{InternalError, InternalResult},
     crate::viewer::viewer_identity,
+    common::ids::UserId,
     common::visibility::{viewer_user_id, ViewerIdentity},
     std::sync::Arc,
     storage::{
@@ -63,7 +64,7 @@ pub struct TimelinePage {
 fn page_from_rows(
     mut rows: Vec<PostRecord>,
     page_size: u32,
-    viewer_user_id: Option<i64>,
+    viewer_user_id: Option<UserId>,
 ) -> TimelinePage {
     let has_more = rows.len() > page_size as usize;
     rows.truncate(page_size as usize);
@@ -351,12 +352,13 @@ mod tests {
     // allow-{unwrap,expect}-in-tests, so allow the test-scaffolding panics.
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::{fetch_posts_by_tag, fetch_user_posts_by_tag};
+    use common::ids::UserId;
     use common::tag::Tag;
     use common::username::Username;
     use common::visibility::ViewerIdentity;
     use storage::{ListByTagError, MockPostStorage, MockUserStorage, UserRecord};
 
-    fn user(user_id: i64, username: &str) -> UserRecord {
+    fn user(user_id: UserId, username: &str) -> UserRecord {
         UserRecord {
             user_id,
             username: username.parse::<Username>().unwrap(),
@@ -397,7 +399,7 @@ mod tests {
         let mut users = MockUserStorage::new();
         users
             .expect_get_user_by_username()
-            .returning(|_username| Ok(Some(user(2, "author"))));
+            .returning(|_username| Ok(Some(user(UserId::from(2), "author"))));
         let mut posts = MockPostStorage::new();
         posts.expect_list_user_posts_by_tag().returning(
             |_uid, _tag, _cursor, _limit, _viewer, _now| {

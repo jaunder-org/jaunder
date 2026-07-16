@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio_util::io::ReaderStream;
 
+use common::ids::UserId;
 use common::media::{detect_content_type, should_inline};
 use storage::{MediaSource, MediaStorage, SiteConfigStorage};
 use web::auth::AuthUser;
@@ -201,7 +202,7 @@ async fn serve_response(
 #[derive(Deserialize)]
 pub struct ProxyParams {
     pub url: String,
-    pub user_id: i64,
+    pub user_id: UserId,
 }
 
 /// Stub proxy handler: redirects to the remote URL.

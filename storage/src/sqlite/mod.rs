@@ -56,6 +56,7 @@ mod pool;
 use crate::db::sql_slow_query_threshold;
 use crate::{AppState, AtomicOps, ConfirmPasswordResetError, RegisterWithInviteError};
 use common::display_name::DisplayName;
+use common::ids::UserId;
 use common::password::Password;
 use common::token::RawToken;
 use common::username::Username;
@@ -188,7 +189,7 @@ impl AtomicOps for SqliteAtomicOps {
         display_name: Option<&DisplayName>,
         is_operator: bool,
         invite_code: &InviteCode,
-    ) -> Result<i64, RegisterWithInviteError> {
+    ) -> Result<UserId, RegisterWithInviteError> {
         // ADR-0021: take the write lock up front with BEGIN IMMEDIATE rather than a
         // deferred BEGIN, so the SELECT->INSERT step performs no shared->reserved lock
         // upgrade (the SQLITE_BUSY-on-upgrade failure mode). sqlx's Transaction issues
@@ -201,7 +202,7 @@ impl AtomicOps for SqliteAtomicOps {
         let mut conn = self.pool.acquire().await?;
         sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
 
-        let result: Result<i64, RegisterWithInviteError> = async {
+        let result: Result<UserId, RegisterWithInviteError> = async {
             // Read the invite's state first so the three failures stay distinct: no row ->
             // InviteNotFound, used_at set -> InviteAlreadyUsed, past expires_at -> InviteExpired.
             // These checks deliberately are NOT folded into the write (e.g. a single
@@ -246,7 +247,7 @@ impl AtomicOps for SqliteAtomicOps {
             .await;
 
             let user_id = match insert {
-                Ok(id) => id,
+                Ok(id) => UserId::from(id),
                 Err(sqlx::Error::Database(error)) if error.is_unique_violation() => {
                     return Err(RegisterWithInviteError::UsernameTaken);
                 }
@@ -255,7 +256,7 @@ impl AtomicOps for SqliteAtomicOps {
 
             sqlx::query("UPDATE invites SET used_at = $1, used_by = $2 WHERE code = $3")
                 .bind(now)
-                .bind(user_id)
+                .bind(i64::from(user_id))
                 .bind(invite_code.as_ref())
                 .execute(&mut *conn)
                 .await?;
@@ -318,6 +319,7 @@ impl AtomicOps for SqliteAtomicOps {
                 Some((None, _)) => Err(ConfirmPasswordResetError::Expired),
             };
         };
+        let user_id = UserId::from(user_id);
 
         // ADR-0022: hash only after the token claim succeeds, so a bogus/used/expired
         // token is rejected above without paying the Argon2 cost. A hash failure here
@@ -328,12 +330,12 @@ impl AtomicOps for SqliteAtomicOps {
 
         sqlx::query("UPDATE users SET password_hash = $1 WHERE user_id = $2")
             .bind(&password_hash)
-            .bind(user_id)
+            .bind(i64::from(user_id))
             .execute(&mut *tx)
             .await?;
 
         sqlx::query("DELETE FROM sessions WHERE user_id = $1")
-            .bind(user_id)
+            .bind(i64::from(user_id))
             .execute(&mut *tx)
             .await?;
 

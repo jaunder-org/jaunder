@@ -10,6 +10,7 @@ use crate::{
     SessionRecord, UserRecord,
 };
 use common::display_name::DisplayName;
+use common::ids::UserId;
 use common::post_body::PostBody;
 use common::post_title::PostTitle;
 use common::slug::Slug;
@@ -60,7 +61,7 @@ pub(crate) fn build_user_record(
         .map(|s| s.parse().map_err(|e| sqlx::Error::Decode(Box::new(e))))
         .transpose()?;
     Ok(UserRecord {
-        user_id,
+        user_id: UserId::from(user_id),
         username,
         display_name,
         bio,
@@ -91,7 +92,7 @@ pub(crate) fn build_session_record(
         // The `token_hash` column is written only by `create_session` (canonical
         // base64url digest), so this is a trusted rebuild of our own stored value.
         token_hash: TokenHash::from_digest(token_hash),
-        user_id,
+        user_id: UserId::from(user_id),
         username,
         label,
         created_at,
@@ -117,7 +118,7 @@ pub(crate) fn build_invite_record(
         created_at,
         expires_at,
         used_at,
-        used_by,
+        used_by: used_by.map(UserId::from),
     })
 }
 
@@ -202,7 +203,7 @@ pub(crate) fn build_post_record(
 
     Ok(PostRecord {
         post_id,
-        user_id,
+        user_id: UserId::from(user_id),
         author_username,
         // `PostTitle::from` trims; stored titles are already trimmed at write, so this
         // is a no-op that also defensively normalizes any out-of-band row. `PostBody`
@@ -307,7 +308,7 @@ pub(crate) fn media_record_from_row(row: MediaRow) -> sqlx::Result<MediaRecord> 
         .parse()
         .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
     Ok(MediaRecord {
-        user_id,
+        user_id: UserId::from(user_id),
         sha256,
         filename,
         source,
@@ -433,7 +434,7 @@ mod tests {
             false,
         );
         let record = build_user_record(parts).unwrap();
-        assert_eq!(record.user_id, 1);
+        assert_eq!(record.user_id, UserId::from(1));
         assert_eq!(record.username, "alice");
         assert_eq!(record.email.unwrap(), "alice@example.com");
     }
@@ -472,7 +473,7 @@ mod tests {
         assert_eq!(record.created_at, created_at);
         assert_eq!(record.expires_at, expires_at);
         assert_eq!(record.used_at, Some(used_at));
-        assert_eq!(record.used_by, Some(7));
+        assert_eq!(record.used_by, Some(UserId::from(7)));
     }
 
     #[test]
@@ -497,7 +498,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(record.post_id, 10);
-        assert_eq!(record.user_id, 20);
+        assert_eq!(record.user_id, UserId::from(20));
         assert_eq!(record.author_username, "alice");
         assert_eq!(record.slug, "hello-world");
         assert_eq!(record.format, PostFormat::Markdown);
@@ -754,7 +755,7 @@ mod tests {
             Utc::now(),
         );
         let record = media_record_from_row(row).unwrap();
-        assert_eq!(record.user_id, 1);
+        assert_eq!(record.user_id, UserId::from(1));
         assert_eq!(record.source, MediaSource::Upload);
     }
 
@@ -770,7 +771,7 @@ mod tests {
             now,
         );
         let session_record = session_record_from_row(session).unwrap();
-        assert_eq!(session_record.user_id, 1);
+        assert_eq!(session_record.user_id, UserId::from(1));
 
         let invite: InviteRow = ("code".to_string(), now, now, None, None);
         let invite_record = invite_record_from_row(invite).unwrap();
@@ -792,7 +793,7 @@ mod tests {
             false,
         );
         let record = user_record_from_row(row).unwrap();
-        assert_eq!(record.user_id, 1);
+        assert_eq!(record.user_id, UserId::from(1));
     }
 
     #[test]
@@ -898,7 +899,7 @@ mod tests {
             false,
         );
         let record = user_record_from_row(row).unwrap();
-        assert_eq!(record.user_id, 1);
+        assert_eq!(record.user_id, UserId::from(1));
         assert_eq!(record.username, "alice");
         assert_eq!(record.display_name, Some("Alice".parse().unwrap()));
         assert_eq!(record.bio, Some("Bio".to_string()));
@@ -917,6 +918,6 @@ mod tests {
         assert_eq!(record.created_at, now);
         assert_eq!(record.expires_at, now);
         assert_eq!(record.used_at, Some(now));
-        assert_eq!(record.used_by, Some(1));
+        assert_eq!(record.used_by, Some(UserId::from(1)));
     }
 }

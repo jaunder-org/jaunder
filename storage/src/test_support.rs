@@ -17,6 +17,7 @@ use crate::sql::quote_identifier;
 use crate::{AppState, DbConnectOptions, SiteConfigStorage};
 use async_trait::async_trait;
 use common::feed::FeedPath;
+use common::ids::UserId;
 use common::mailer::{MailSender, NoopMailSender};
 use sqlx::{Connection, PgPool, SqlitePool};
 use std::collections::BTreeMap;
@@ -615,7 +616,7 @@ pub fn fp(s: &str) -> FeedPath {
 /// If a slug fails to parse or a post fails to persist.
 pub async fn seed_posts(
     state: &Arc<AppState>,
-    user_id: i64,
+    user_id: UserId,
     count: usize,
     published: bool,
 ) -> Vec<i64> {
@@ -642,7 +643,7 @@ pub async fn seed_posts(
 /// # Panics
 ///
 /// If the username/password fail to parse or the user cannot be created.
-pub async fn seed_user(state: &Arc<AppState>) -> i64 {
+pub async fn seed_user(state: &Arc<AppState>) -> UserId {
     state
         .users
         .create_user(
@@ -724,7 +725,7 @@ mod tests {
     async fn seed_user_creates_a_user(#[case] backend: Backend) {
         let env = backend.setup().await;
         let id = seed_user(&env.state).await;
-        assert!(id > 0);
+        assert!(i64::from(id) > 0);
     }
 
     // guard:no-backend — harness type-guard on the SQLite CloseablePool variant; no database ops
