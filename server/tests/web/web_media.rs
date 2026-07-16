@@ -15,6 +15,7 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{post_form, session_cookie, test_options};
+use common::test_support::parse_content_hash;
 use storage::test_support::{backends, backends_matrix, noop_mailer, Backend, TestEnv};
 
 // ─── media_usage ──────────────────────────────────────────────
@@ -58,7 +59,7 @@ async fn media_usage_returns_defaults_for_authenticated_user(#[case] backend: Ba
 #[apply(backends_matrix)]
 #[case::media_usage("/api/media_usage", "")]
 #[case::list_my_media("/api/list_my_media", "")]
-#[case::delete_media("/api/delete_media", "sha256=deadbeef&filename=test.png&source=upload")]
+#[case::delete_media("/api/delete_media", "sha256=deadbeef00000000000000000000000000000000000000000000000000000000&filename=test.png&source=upload")]
 #[tokio::test]
 async fn media_endpoint_rejects_unauthenticated_request(
     backend: Backend,
@@ -121,7 +122,9 @@ async fn list_my_media_returns_inserted_item(#[case] backend: Backend) {
 
     let record = MediaRecord {
         user_id,
-        sha256: "aabbccdd11223344".to_string(),
+        sha256: parse_content_hash(
+            "aabbccdd11223344000000000000000000000000000000000000000000000000",
+        ),
         filename: "photo.jpg".to_string(),
         source: MediaSource::Upload,
         content_type: "image/jpeg".to_string(),
@@ -172,7 +175,9 @@ async fn list_my_media_with_source_filter(#[case] backend: Backend) {
 
     let record = MediaRecord {
         user_id,
-        sha256: "ff00ee11dd22cc33".to_string(),
+        sha256: parse_content_hash(
+            "ff00ee11dd22cc33000000000000000000000000000000000000000000000000",
+        ),
         filename: "clip.mp4".to_string(),
         source: MediaSource::Upload,
         content_type: "video/mp4".to_string(),
@@ -226,7 +231,9 @@ async fn delete_media_succeeds_for_existing_item(#[case] backend: Backend) {
     // Insert a media record directly so delete has something to act on.
     let record = MediaRecord {
         user_id,
-        sha256: "deadbeef01234567".to_string(),
+        sha256: parse_content_hash(
+            "deadbeef01234567000000000000000000000000000000000000000000000000",
+        ),
         filename: "test.png".to_string(),
         source: MediaSource::Upload,
         content_type: "image/png".to_string(),
@@ -246,7 +253,7 @@ async fn delete_media_succeeds_for_existing_item(#[case] backend: Backend) {
         .expect("create_session failed");
     let cookie = session_cookie(&token);
 
-    let body = "sha256=deadbeef01234567&filename=test.png&source=upload&force=false";
+    let body = "sha256=deadbeef01234567000000000000000000000000000000000000000000000000&filename=test.png&source=upload&force=false";
     let (status, body_str) =
         post_form(Arc::clone(&state), "/api/delete_media", body, Some(&cookie)).await;
 
@@ -281,10 +288,16 @@ async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend:
         .await
         .expect("create_user failed");
 
-    let media_url = common::media::media_url("upload", "deadbeef99999999", "inline.png");
+    let media_url = common::media::media_url(
+        "upload",
+        &parse_content_hash("deadbeef99999999000000000000000000000000000000000000000000000000"),
+        "inline.png",
+    );
     let record = MediaRecord {
         user_id,
-        sha256: "deadbeef99999999".to_string(),
+        sha256: parse_content_hash(
+            "deadbeef99999999000000000000000000000000000000000000000000000000",
+        ),
         filename: "inline.png".to_string(),
         source: MediaSource::Upload,
         content_type: "image/png".to_string(),
@@ -321,7 +334,7 @@ async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend:
         .expect("create_session failed");
     let cookie = session_cookie(&token);
 
-    let body = "sha256=deadbeef99999999&filename=inline.png&source=upload&force=false";
+    let body = "sha256=deadbeef99999999000000000000000000000000000000000000000000000000&filename=inline.png&source=upload&force=false";
     let (status, body_str) =
         post_form(Arc::clone(&state), "/api/delete_media", body, Some(&cookie)).await;
 

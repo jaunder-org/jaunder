@@ -11,6 +11,7 @@ use crate::{
 };
 use common::display_name::DisplayName;
 use common::ids::UserId;
+use common::media::ContentHash;
 use common::post_body::PostBody;
 use common::post_title::PostTitle;
 use common::slug::Slug;
@@ -305,6 +306,12 @@ pub(crate) type MediaRow = (
 pub(crate) fn media_record_from_row(row: MediaRow) -> sqlx::Result<MediaRecord> {
     let (user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at) = row;
     let source: MediaSource = source
+        .parse()
+        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    // The `sha256` column is a canonical hex string, not a raw digest, so it goes
+    // through the validating parse (like `source` above); a corrupt or hand-edited
+    // value surfaces as a decode error rather than an invalid `ContentHash`.
+    let sha256: ContentHash = sha256
         .parse()
         .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
     Ok(MediaRecord {
@@ -726,13 +733,34 @@ mod tests {
         assert!(matches!(err, sqlx::Error::Decode(_)));
     }
 
+    /// A canonical 64-char lowercase-hex content hash for row fixtures.
+    const ROW_HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
     #[test]
     fn media_record_from_row_rejects_invalid_source() {
         let row: MediaRow = (
             1,
-            "sha256".to_string(),
+            ROW_HASH.to_string(),
             "file.png".to_string(),
             "not-a-source".to_string(),
+            "image/png".to_string(),
+            42,
+            None,
+            Utc::now(),
+        );
+        let err = media_record_from_row(row).unwrap_err();
+        assert!(matches!(err, sqlx::Error::Decode(_)));
+    }
+
+    #[test]
+    fn media_record_from_row_rejects_invalid_sha256() {
+        // A non-canonical hash (here too short) in the `sha256` column decodes to
+        // an error rather than an invalid `ContentHash`.
+        let row: MediaRow = (
+            1,
+            "sha256".to_string(),
+            "file.png".to_string(),
+            "upload".to_string(),
             "image/png".to_string(),
             42,
             None,
@@ -746,7 +774,7 @@ mod tests {
     fn media_record_from_row_accepts_valid_source() {
         let row: MediaRow = (
             1,
-            "sha256".to_string(),
+            ROW_HASH.to_string(),
             "file.png".to_string(),
             "upload".to_string(),
             "image/png".to_string(),
@@ -757,6 +785,7 @@ mod tests {
         let record = media_record_from_row(row).unwrap();
         assert_eq!(record.user_id, UserId::from(1));
         assert_eq!(record.source, MediaSource::Upload);
+        assert_eq!(record.sha256, ROW_HASH);
     }
 
     #[test]

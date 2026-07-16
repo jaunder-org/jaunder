@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use common::media::ContentHash;
 use sqlx::{Pool, Postgres};
 
 use crate::media::{DeleteMediaError, MediaDialect, MediaStore};
@@ -23,7 +24,7 @@ impl MediaDialect for Postgres {
     async fn delete_media_row(
         pool: &Pool<Postgres>,
         user_id: UserId,
-        sha256: &str,
+        sha256: &ContentHash,
         filename: &str,
         source: &str,
     ) -> Result<(), DeleteMediaError> {
@@ -31,7 +32,7 @@ impl MediaDialect for Postgres {
             "DELETE FROM media WHERE user_id = $1 AND sha256 = $2 AND filename = $3 AND source = $4",
         )
         .bind(i64::from(user_id))
-        .bind(sha256)
+        .bind(sha256.as_ref())
         .bind(filename)
         .bind(source)
         .execute(pool)

@@ -3,7 +3,9 @@ use common::ids::UserId;
 use common::password::Password;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
-use common::test_support::{parse_audience_name, parse_display_name, parse_email, parse_raw_token};
+use common::test_support::{
+    parse_audience_name, parse_content_hash, parse_display_name, parse_email, parse_raw_token,
+};
 use common::username::Username;
 use common::visibility::{
     AudienceTarget, Channel, SubscriptionPolicy, SubscriptionStatus, TargetKind, ViewerIdentity,
@@ -6851,7 +6853,7 @@ fn make_media_record(
 ) -> MediaRecord {
     MediaRecord {
         user_id,
-        sha256: sha256.to_string(),
+        sha256: parse_content_hash(sha256),
         filename: filename.to_string(),
         source,
         content_type: "image/jpeg".to_string(),
@@ -6877,7 +6879,8 @@ async fn create_and_get_media(#[case] backend: Backend) {
         .await
         .unwrap();
 
-    let sha256 = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234".to_string();
+    let sha256 =
+        parse_content_hash("abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234");
     let record = make_media_record(user_id, &sha256, "test.jpg", MediaSource::Upload);
     state.media.create_media(&record).await.unwrap();
 
@@ -6937,7 +6940,8 @@ async fn delete_media_removes_record(#[case] backend: Backend) {
         .await
         .unwrap();
 
-    let sha256 = "cccc1234cccc1234cccc1234cccc1234cccc1234cccc1234cccc1234cccc1234".to_string();
+    let sha256 =
+        parse_content_hash("cccc1234cccc1234cccc1234cccc1234cccc1234cccc1234cccc1234cccc1234");
     let record = make_media_record(user_id, &sha256, "del.jpg", MediaSource::Upload);
     state.media.create_media(&record).await.unwrap();
     state
@@ -6970,7 +6974,8 @@ async fn delete_nonexistent_returns_not_found(#[case] backend: Backend) {
         .await
         .unwrap();
 
-    let sha256 = "dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234".to_string();
+    let sha256 =
+        parse_content_hash("dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234");
     let err = state
         .media
         .delete_media(user_id, &sha256, "ghost.jpg", &MediaSource::Upload)
@@ -7010,7 +7015,7 @@ async fn list_media_returns_records_for_user(#[case] backend: Backend) {
 
     let sha1 = "eeee1234eeee1234eeee1234eeee1234eeee1234eeee1234eeee1234eeee1234".to_string();
     let sha2 = "ffff1234ffff1234ffff1234ffff1234ffff1234ffff1234ffff1234ffff1234".to_string();
-    let sha3 = "gggg1234gggg1234gggg1234gggg1234gggg1234gggg1234gggg1234gggg1234".to_string();
+    let sha3 = "9999123499991234999912349999123499991234999912349999123499991234".to_string();
 
     state
         .media
@@ -7064,8 +7069,8 @@ async fn list_media_filtered_by_source(#[case] backend: Backend) {
         .await
         .unwrap();
 
-    let sha_up = "hhhh1234hhhh1234hhhh1234hhhh1234hhhh1234hhhh1234hhhh1234hhhh1234".to_string();
-    let sha_ca = "iiii1234iiii1234iiii1234iiii1234iiii1234iiii1234iiii1234iiii1234".to_string();
+    let sha_up = "8888123488881234888812348888123488881234888812348888123488881234".to_string();
+    let sha_ca = "7777123477771234777712347777123477771234777712347777123477771234".to_string();
 
     state
         .media
@@ -7141,8 +7146,8 @@ async fn get_user_upload_usage_sums_uploads_only(#[case] backend: Backend) {
         .await
         .unwrap();
 
-    let sha_up = "jjjj1234jjjj1234jjjj1234jjjj1234jjjj1234jjjj1234jjjj1234jjjj1234".to_string();
-    let sha_ca = "kkkk1234kkkk1234kkkk1234kkkk1234kkkk1234kkkk1234kkkk1234kkkk1234".to_string();
+    let sha_up = "6666123466661234666612346666123466661234666612346666123466661234".to_string();
+    let sha_ca = "5555123455551234555512345555123455551234555512345555123455551234".to_string();
 
     let mut upload = make_media_record(user_id, &sha_up, "upload.jpg", MediaSource::Upload);
     upload.size_bytes = 1000;
@@ -7172,7 +7177,8 @@ async fn find_by_hash_returns_any_match(#[case] backend: Backend) {
         .await
         .unwrap();
 
-    let sha256 = "llll1234llll1234llll1234llll1234llll1234llll1234llll1234llll1234".to_string();
+    let sha256 =
+        parse_content_hash("4444123444441234444412344444123444441234444412344444123444441234");
     let record = make_media_record(user_id, &sha256, "find.jpg", MediaSource::Upload);
     state.media.create_media(&record).await.unwrap();
 

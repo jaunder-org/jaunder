@@ -16,9 +16,11 @@
 //!
 //! Filenames and hashes round-trip through URLs, so they are attacker-
 //! influenced. [`sanitize_filename`] reduces a name to a single safe path
-//! component, and [`is_valid_content_hash`] must gate any externally supplied
-//! hash before it reaches [`media_path`], whose `sha256[..2]`/`[2..4]` slicing
-//! is unguarded and panics on a short or non-`UTF-8`-boundary value.
+//! component. An externally supplied hash must be parsed into a [`ContentHash`]
+//! (via [`is_valid_content_hash`], its `FromStr`'s validating engine) before it
+//! reaches [`media_path`]: the type is what guarantees the `sha256[..2]`/`[2..4]`
+//! slicing — unguarded, and panicking on a short or non-`UTF-8`-boundary value —
+//! only ever sees a canonical 64-hex string.
 //!
 //! # Content type
 //!
@@ -131,13 +133,12 @@ pub fn is_valid_content_hash(hash: &str) -> bool {
 /// Returns `"<source>/<p1>/<p2>/<full-sha256>/<filename>"`, the content-
 /// addressed layout described in the module docs.
 ///
-/// # Panics
-///
-/// Panics if `sha256` is shorter than four bytes, or if byte index 2 or 4 does
-/// not fall on a `UTF-8` char boundary (the slicing is unguarded). Validate an
-/// untrusted hash with [`is_valid_content_hash`] before calling this.
+/// Takes a [`ContentHash`] rather than a bare `&str`, so the `sha256[..2]`/`[2..4]`
+/// slicing below can never see a short or non-`UTF-8`-boundary value — the type is
+/// the guard (its `FromStr`/`from_digest` are the only ways to build one). `p1`/`p2`
+/// index through `Deref<Target = str>`.
 #[must_use]
-pub fn media_path(source: &str, sha256: &str, filename: &str) -> String {
+pub fn media_path(source: &str, sha256: &ContentHash, filename: &str) -> String {
     let p1 = &sha256[..2];
     let p2 = &sha256[2..4];
     format!("{source}/{p1}/{p2}/{sha256}/{filename}")
@@ -145,7 +146,7 @@ pub fn media_path(source: &str, sha256: &str, filename: &str) -> String {
 
 /// Returns `"/media/<source>/<2-hex-p1>/<2-hex-p2>/<full-sha256>/<filename>"`.
 #[must_use]
-pub fn media_url(source: &str, sha256: &str, filename: &str) -> String {
+pub fn media_url(source: &str, sha256: &ContentHash, filename: &str) -> String {
     format!("/media/{}", media_path(source, sha256, filename))
 }
 
@@ -228,14 +229,16 @@ mod tests {
 
     #[test]
     fn media_path_computation() {
-        let path = media_path("upload", "a3f2deadbeef1234abcd", "photo.jpg");
-        assert_eq!(path, "upload/a3/f2/a3f2deadbeef1234abcd/photo.jpg");
+        let hash: ContentHash = CANONICAL.parse().unwrap();
+        let path = media_path("upload", &hash, "photo.jpg");
+        assert_eq!(path, format!("upload/e3/b0/{CANONICAL}/photo.jpg"));
     }
 
     #[test]
     fn media_url_computation() {
-        let url = media_url("upload", "a3f2deadbeef1234abcd", "photo.jpg");
-        assert_eq!(url, "/media/upload/a3/f2/a3f2deadbeef1234abcd/photo.jpg");
+        let hash: ContentHash = CANONICAL.parse().unwrap();
+        let url = media_url("upload", &hash, "photo.jpg");
+        assert_eq!(url, format!("/media/upload/e3/b0/{CANONICAL}/photo.jpg"));
     }
 
     #[test]
