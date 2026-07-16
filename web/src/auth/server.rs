@@ -4,6 +4,7 @@ use axum::{
     http::{request::Parts, StatusCode},
     response::{IntoResponse, Response},
 };
+use common::ids::UserId;
 use common::token::{RawToken, TokenHash};
 use common::username::Username;
 use host::auth::resolve_credential;
@@ -22,7 +23,7 @@ pub use host::auth::CookieSettings;
 /// The authenticated user extracted from a valid session cookie or Bearer token.
 #[derive(Debug)]
 pub struct AuthUser {
-    pub user_id: i64,
+    pub user_id: UserId,
     pub username: Username,
     pub token_hash: TokenHash,
 }

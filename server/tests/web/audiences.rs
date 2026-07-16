@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
+use common::ids::UserId;
 use common::test_support::parse_audience_name;
 use common::username::Username;
 
@@ -10,7 +11,7 @@ use rstest_reuse::*;
 use crate::helpers::{post_form, session_cookie};
 use storage::test_support::{backends, Backend, TestEnv};
 
-async fn make_user(state: &Arc<storage::AppState>, name: &str) -> i64 {
+async fn make_user(state: &Arc<storage::AppState>, name: &str) -> UserId {
     state
         .users
         .create_user(
@@ -23,7 +24,7 @@ async fn make_user(state: &Arc<storage::AppState>, name: &str) -> i64 {
         .unwrap()
 }
 
-async fn cookie_for(state: &Arc<storage::AppState>, user_id: i64) -> String {
+async fn cookie_for(state: &Arc<storage::AppState>, user_id: UserId) -> String {
     let token = state
         .sessions
         .create_session(user_id, "test session")
@@ -199,7 +200,7 @@ async fn list_audience_members_returns_members(#[case] backend: Backend) {
     let channel = state.subscriptions.local_channel_id().await.unwrap();
     let sub_id = state
         .subscriptions
-        .subscribe(author, channel, &subscriber.to_string())
+        .subscribe(author, channel, &i64::from(subscriber).to_string())
         .await
         .unwrap();
 
@@ -243,7 +244,7 @@ async fn audience_membership_round_trips(#[case] backend: Backend) {
     let channel = state.subscriptions.local_channel_id().await.unwrap();
     let sub_id = state
         .subscriptions
-        .subscribe(author, channel, &subscriber.to_string())
+        .subscribe(author, channel, &i64::from(subscriber).to_string())
         .await
         .unwrap();
 
@@ -336,7 +337,7 @@ async fn cross_author_audience_id_is_scoped_away(#[case] backend: Backend) {
     // Alice owns an audience with a member.
     let alice_sub = state
         .subscriptions
-        .subscribe(alice, channel, &subscriber.to_string())
+        .subscribe(alice, channel, &i64::from(subscriber).to_string())
         .await
         .unwrap();
     let alice_aud = state
@@ -397,7 +398,7 @@ async fn list_my_subscribers_resolves_usernames(#[case] backend: Backend) {
     let channel = state.subscriptions.local_channel_id().await.unwrap();
     state
         .subscriptions
-        .subscribe(author, channel, &subscriber.to_string())
+        .subscribe(author, channel, &i64::from(subscriber).to_string())
         .await
         .unwrap();
 
@@ -465,7 +466,7 @@ async fn cross_author_add_member_is_rejected(#[case] backend: Backend) {
     // Alice owns a subscription and an audience (no members yet).
     let alice_sub = state
         .subscriptions
-        .subscribe(alice, channel, &subscriber.to_string())
+        .subscribe(alice, channel, &i64::from(subscriber).to_string())
         .await
         .unwrap();
     let alice_aud = state

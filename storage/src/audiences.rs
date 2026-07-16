@@ -13,6 +13,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use common::audience::AudienceName;
+use common::ids::UserId;
 use sqlx::{Database, Pool};
 
 use crate::backend::Backend;
@@ -75,7 +76,7 @@ pub trait AudienceStorage: Send + Sync {
     /// `UNIQUE (author_user_id, name)` violation to [`AudienceError::DuplicateName`].
     async fn create_audience(
         &self,
-        author_user_id: i64,
+        author_user_id: UserId,
         name: &AudienceName,
     ) -> Result<i64, AudienceError>;
 
@@ -84,17 +85,17 @@ pub trait AudienceStorage: Send + Sync {
     /// on a name collision.
     async fn rename_audience(
         &self,
-        author_user_id: i64,
+        author_user_id: UserId,
         audience_id: i64,
         name: &AudienceName,
     ) -> Result<(), AudienceError>;
 
     /// Deletes an audience the author owns and its membership rows in one
     /// transaction (the migrations declare no `ON DELETE CASCADE`).
-    async fn delete_audience(&self, author_user_id: i64, audience_id: i64) -> sqlx::Result<()>;
+    async fn delete_audience(&self, author_user_id: UserId, audience_id: i64) -> sqlx::Result<()>;
 
     /// Lists the author's audiences, ordered by `audience_id`.
-    async fn list_audiences(&self, author_user_id: i64) -> sqlx::Result<Vec<AudienceRecord>>;
+    async fn list_audiences(&self, author_user_id: UserId) -> sqlx::Result<Vec<AudienceRecord>>;
 
     /// Adds a subscription to an audience. `author_user_id` is written into the
     /// row so the composite FKs reject a cross-author pairing at the database
@@ -102,7 +103,7 @@ pub trait AudienceStorage: Send + Sync {
     /// [`AudienceError::Storage`].
     async fn add_member(
         &self,
-        author_user_id: i64,
+        author_user_id: UserId,
         audience_id: i64,
         subscription_id: i64,
     ) -> Result<(), AudienceError>;
@@ -111,14 +112,18 @@ pub trait AudienceStorage: Send + Sync {
     /// (including when `audience_id` belongs to another author).
     async fn remove_member(
         &self,
-        author_user_id: i64,
+        author_user_id: UserId,
         audience_id: i64,
         subscription_id: i64,
     ) -> sqlx::Result<()>;
 
     /// Lists the `subscription_id`s belonging to an audience the author owns,
     /// ordered. Empty when `audience_id` belongs to another author.
-    async fn list_members(&self, author_user_id: i64, audience_id: i64) -> sqlx::Result<Vec<i64>>;
+    async fn list_members(
+        &self,
+        author_user_id: UserId,
+        audience_id: i64,
+    ) -> sqlx::Result<Vec<i64>>;
 }
 
 /// Generic [`AudienceStorage`] backed by any [`Backend`] database. The SQL is
@@ -157,13 +162,13 @@ where
     )]
     async fn create_audience(
         &self,
-        author_user_id: i64,
+        author_user_id: UserId,
         name: &AudienceName,
     ) -> Result<i64, AudienceError> {
         match sqlx::query_as::<_, (i64,)>(
             "INSERT INTO audiences (author_user_id, name) VALUES ($1, $2) RETURNING audience_id",
         )
-        .bind(author_user_id)
+        .bind(i64::from(author_user_id))
         .bind(name.as_ref())
         .fetch_one(&self.pool)
         .await
@@ -183,7 +188,7 @@ where
     )]
     async fn rename_audience(
         &self,
-        author_user_id: i64,
+        author_user_id: UserId,
         audience_id: i64,
         name: &AudienceName,
     ) -> Result<(), AudienceError> {
@@ -194,7 +199,7 @@ where
              RETURNING audience_id",
         )
         .bind(name.as_ref())
-        .bind(author_user_id)
+        .bind(i64::from(author_user_id))
         .bind(audience_id)
         .fetch_optional(&self.pool)
         .await;
@@ -213,15 +218,15 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn delete_audience(&self, author_user_id: i64, audience_id: i64) -> sqlx::Result<()> {
+    async fn delete_audience(&self, author_user_id: UserId, audience_id: i64) -> sqlx::Result<()> {
         let mut tx = self.pool.begin().await?;
         sqlx::query("DELETE FROM audience_members WHERE author_user_id = $1 AND audience_id = $2")
-            .bind(author_user_id)
+            .bind(i64::from(author_user_id))
             .bind(audience_id)
             .execute(&mut *tx)
             .await?;
         sqlx::query("DELETE FROM audiences WHERE author_user_id = $1 AND audience_id = $2")
-            .bind(author_user_id)
+            .bind(i64::from(author_user_id))
             .bind(audience_id)
             .execute(&mut *tx)
             .await?;
@@ -234,12 +239,12 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn list_audiences(&self, author_user_id: i64) -> sqlx::Result<Vec<AudienceRecord>> {
+    async fn list_audiences(&self, author_user_id: UserId) -> sqlx::Result<Vec<AudienceRecord>> {
         let rows = sqlx::query_as::<_, (i64, String, DateTime<Utc>)>(
             "SELECT audience_id, name, created_at FROM audiences \
              WHERE author_user_id = $1 ORDER BY audience_id",
         )
-        .bind(author_user_id)
+        .bind(i64::from(author_user_id))
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
@@ -259,7 +264,7 @@ where
     )]
     async fn add_member(
         &self,
-        author_user_id: i64,
+        author_user_id: UserId,
         audience_id: i64,
         subscription_id: i64,
     ) -> Result<(), AudienceError> {
@@ -270,7 +275,7 @@ where
         )
         .bind(audience_id)
         .bind(subscription_id)
-        .bind(author_user_id)
+        .bind(i64::from(author_user_id))
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -283,7 +288,7 @@ where
     )]
     async fn remove_member(
         &self,
-        author_user_id: i64,
+        author_user_id: UserId,
         audience_id: i64,
         subscription_id: i64,
     ) -> sqlx::Result<()> {
@@ -291,7 +296,7 @@ where
             "DELETE FROM audience_members \
              WHERE author_user_id = $1 AND audience_id = $2 AND subscription_id = $3",
         )
-        .bind(author_user_id)
+        .bind(i64::from(author_user_id))
         .bind(audience_id)
         .bind(subscription_id)
         .execute(&self.pool)
@@ -304,12 +309,16 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn list_members(&self, author_user_id: i64, audience_id: i64) -> sqlx::Result<Vec<i64>> {
+    async fn list_members(
+        &self,
+        author_user_id: UserId,
+        audience_id: i64,
+    ) -> sqlx::Result<Vec<i64>> {
         let rows = sqlx::query_as::<_, (i64,)>(
             "SELECT subscription_id FROM audience_members \
              WHERE author_user_id = $1 AND audience_id = $2 ORDER BY subscription_id",
         )
-        .bind(author_user_id)
+        .bind(i64::from(author_user_id))
         .bind(audience_id)
         .fetch_all(&self.pool)
         .await?;

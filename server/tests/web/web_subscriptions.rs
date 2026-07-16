@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
+use common::ids::UserId;
 use common::username::Username;
 use common::visibility::ViewerIdentity;
 
@@ -10,7 +11,7 @@ use rstest_reuse::*;
 use crate::helpers::{post_form, session_cookie};
 use storage::test_support::{backends, Backend, TestEnv};
 
-async fn make_user(state: &Arc<storage::AppState>, name: &str) -> i64 {
+async fn make_user(state: &Arc<storage::AppState>, name: &str) -> UserId {
     state
         .users
         .create_user(
@@ -23,7 +24,7 @@ async fn make_user(state: &Arc<storage::AppState>, name: &str) -> i64 {
         .unwrap()
 }
 
-async fn cookie_for(state: &Arc<storage::AppState>, user_id: i64) -> String {
+async fn cookie_for(state: &Arc<storage::AppState>, user_id: UserId) -> String {
     let token = state
         .sessions
         .create_session(user_id, "test session")

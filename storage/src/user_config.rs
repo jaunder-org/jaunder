@@ -3,6 +3,7 @@
 use crate::backend::Backend;
 use crate::posts::PostFormat;
 use async_trait::async_trait;
+use common::ids::UserId;
 use sqlx::{Database, Pool};
 
 /// Async operations on the `user_config` key-value table.
@@ -12,13 +13,13 @@ use sqlx::{Database, Pool};
 #[async_trait]
 pub trait UserConfigStorage: Send + Sync {
     /// Returns a user's configuration value for a specific key.
-    async fn get(&self, user_id: i64, key: &str) -> sqlx::Result<Option<String>>;
+    async fn get(&self, user_id: UserId, key: &str) -> sqlx::Result<Option<String>>;
 
     /// Sets or updates a user's configuration value.
-    async fn set(&self, user_id: i64, key: &str, value: &str) -> sqlx::Result<()>;
+    async fn set(&self, user_id: UserId, key: &str, value: &str) -> sqlx::Result<()>;
 
     /// Deletes a specific configuration key for a user.
-    async fn delete(&self, user_id: i64, key: &str) -> sqlx::Result<()>;
+    async fn delete(&self, user_id: UserId, key: &str) -> sqlx::Result<()>;
 }
 
 /// Key for a user's media cache policy (e.g., whether to cache remote content).
@@ -35,7 +36,7 @@ pub const DEFAULT_POST_FORMAT_KEY: &str = "posts.default_format";
 /// Returns a database error if the query fails.
 pub async fn get_default_post_format(
     config: &dyn UserConfigStorage,
-    user_id: i64,
+    user_id: UserId,
 ) -> sqlx::Result<PostFormat> {
     let raw = config.get(user_id, DEFAULT_POST_FORMAT_KEY).await?;
     Ok(raw
@@ -51,7 +52,7 @@ pub async fn get_default_post_format(
 /// Returns a database error if the query fails.
 pub async fn set_default_post_format(
     config: &dyn UserConfigStorage,
-    user_id: i64,
+    user_id: UserId,
     format: PostFormat,
 ) -> sqlx::Result<()> {
     config
@@ -92,11 +93,11 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn get(&self, user_id: i64, key: &str) -> sqlx::Result<Option<String>> {
+    async fn get(&self, user_id: UserId, key: &str) -> sqlx::Result<Option<String>> {
         let row = sqlx::query_as::<_, (String,)>(
             "SELECT value FROM user_config WHERE user_id = $1 AND key = $2",
         )
-        .bind(user_id)
+        .bind(i64::from(user_id))
         .bind(key)
         .fetch_optional(&self.pool)
         .await?;
@@ -109,12 +110,12 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn set(&self, user_id: i64, key: &str, value: &str) -> sqlx::Result<()> {
+    async fn set(&self, user_id: UserId, key: &str, value: &str) -> sqlx::Result<()> {
         sqlx::query(
             "INSERT INTO user_config (user_id, key, value) VALUES ($1, $2, $3)
              ON CONFLICT (user_id, key) DO UPDATE SET value = excluded.value",
         )
-        .bind(user_id)
+        .bind(i64::from(user_id))
         .bind(key)
         .bind(value)
         .execute(&self.pool)
@@ -127,9 +128,9 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn delete(&self, user_id: i64, key: &str) -> sqlx::Result<()> {
+    async fn delete(&self, user_id: UserId, key: &str) -> sqlx::Result<()> {
         sqlx::query("DELETE FROM user_config WHERE user_id = $1 AND key = $2")
-            .bind(user_id)
+            .bind(i64::from(user_id))
             .bind(key)
             .execute(&self.pool)
             .await?;

@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use thiserror::Error;
 
+use common::ids::UserId;
 use common::token::{RawToken, TokenHash};
 use common::username::Username;
 
@@ -13,7 +14,7 @@ pub struct SessionRecord {
     /// SHA-256 hash of the session token.
     pub token_hash: TokenHash,
     /// ID of the user associated with this session.
-    pub user_id: i64,
+    pub user_id: UserId,
     /// Username at the time of session creation.
     pub username: Username,
     /// Label for the device/client (e.g., "Mobile App", "Safari on macOS", "Sign-up session").
@@ -64,7 +65,7 @@ pub trait SessionStorage: Send + Sync {
     /// It is stored in the database and returned in session listings.
     ///
     /// Returns the raw (un-hashed) token to be delivered to the client.
-    async fn create_session(&self, user_id: i64, label: &str) -> sqlx::Result<RawToken>;
+    async fn create_session(&self, user_id: UserId, label: &str) -> sqlx::Result<RawToken>;
 
     /// Validates a raw session token and returns the associated record.
     ///
@@ -80,7 +81,7 @@ pub trait SessionStorage: Send + Sync {
     async fn revoke_session(&self, token_hash: &TokenHash) -> sqlx::Result<()>;
 
     /// Returns a list of all active sessions for a user.
-    async fn list_sessions(&self, user_id: i64) -> sqlx::Result<Vec<SessionRecord>>;
+    async fn list_sessions(&self, user_id: UserId) -> sqlx::Result<Vec<SessionRecord>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -143,7 +144,7 @@ where
         skip(self, label),
         fields(user_id, db.system = DB::DB_SYSTEM)
     )]
-    async fn create_session(&self, user_id: i64, label: &str) -> sqlx::Result<RawToken> {
+    async fn create_session(&self, user_id: UserId, label: &str) -> sqlx::Result<RawToken> {
         let (raw_token, token_hash) = host::token::generate_hashed();
         let now = Utc::now();
 
@@ -152,7 +153,7 @@ where
              VALUES ($1, $2, $3, $4, $5)",
         )
         .bind(token_hash.as_ref())
-        .bind(user_id)
+        .bind(i64::from(user_id))
         .bind(label)
         .bind(now)
         .bind(now)
@@ -194,13 +195,13 @@ where
         Ok(())
     }
 
-    async fn list_sessions(&self, user_id: i64) -> sqlx::Result<Vec<SessionRecord>> {
+    async fn list_sessions(&self, user_id: UserId) -> sqlx::Result<Vec<SessionRecord>> {
         let rows = sqlx::query_as::<_, SessionRow>(
             "SELECT s.token_hash, s.user_id, u.username, s.label, s.created_at, s.last_used_at
              FROM sessions s JOIN users u ON s.user_id = u.user_id
              WHERE s.user_id = $1",
         )
-        .bind(user_id)
+        .bind(i64::from(user_id))
         .fetch_all(&self.pool)
         .await?;
 

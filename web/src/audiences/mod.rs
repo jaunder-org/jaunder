@@ -31,6 +31,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "server")]
 use {
     crate::auth::require_auth,
+    common::ids::UserId,
     std::sync::Arc,
     storage::{AudienceStorage, SubscriptionStorage, UserStorage},
 };
@@ -138,7 +139,7 @@ pub async fn list_my_subscribers() -> WebResult<Vec<SubscriberSummary>> {
             // raw reference if it cannot be resolved.
             let label = match row.subscriber_ref.parse::<i64>() {
                 Ok(uid) => users
-                    .get_user(uid)
+                    .get_user(UserId::from(uid))
                     .await
                     .ok()
                     .flatten()
@@ -204,6 +205,7 @@ pub async fn list_audience_members(audience_id: i64) -> WebResult<Vec<i64>> {
 mod tests {
     use super::list_my_subscribers;
     use crate::test_support::auth_parts;
+    use common::ids::UserId;
     use common::visibility::SubscriptionStatus;
     use leptos::prelude::provide_context;
     use leptos::reactive::owner::Owner;
@@ -218,7 +220,7 @@ mod tests {
     async fn list_my_subscribers_falls_back_to_raw_ref_when_non_numeric() {
         let owner = Owner::new();
         owner.set();
-        provide_context(auth_parts(1, "alice"));
+        provide_context(auth_parts(UserId::from(1), "alice"));
         let mut subs = MockSubscriptionStorage::new();
         subs.expect_list_subscribers().returning(|_author| {
             Ok(vec![SubscriptionRecord {

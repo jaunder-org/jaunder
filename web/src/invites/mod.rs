@@ -10,6 +10,7 @@ use {
 };
 
 use crate::error::WebResult;
+use common::ids::UserId;
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -23,7 +24,7 @@ pub struct InviteInfo {
     pub created_at: String,
     pub expires_at: String,
     pub used_at: Option<String>,
-    pub used_by: Option<i64>,
+    pub used_by: Option<UserId>,
 }
 
 /// Creates an invite code expiring in `expires_in_hours` (default 168 = 7 days) and

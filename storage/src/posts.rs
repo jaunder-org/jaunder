@@ -6,6 +6,7 @@ use sqlx::{Database, Pool};
 use thiserror::Error;
 
 use common::feed::FeedPath;
+use common::ids::UserId;
 use common::post_body::PostBody;
 use common::post_title::PostTitle;
 use common::slug::Slug;
@@ -44,7 +45,7 @@ pub struct PostRecord {
     /// Unique internal identifier.
     pub post_id: i64,
     /// ID of the user who owns the post.
-    pub user_id: i64,
+    pub user_id: UserId,
     /// Username of the author
     pub author_username: Username,
     /// Optional title.
@@ -111,7 +112,7 @@ pub struct PostRevisionRecord {
     /// ID of the associated post.
     pub post_id: i64,
     /// ID of the user who made the edit.
-    pub user_id: i64,
+    pub user_id: UserId,
     /// Title at the time of this revision.
     pub title: Option<PostTitle>,
     /// Slug at the time of this revision.
@@ -193,7 +194,7 @@ pub struct CollectionCursor {
 /// Input for creating a new post.
 #[derive(Clone)]
 pub struct CreatePostInput {
-    pub user_id: i64,
+    pub user_id: UserId,
     pub title: Option<PostTitle>,
     pub slug: Slug,
     pub body: PostBody,
@@ -463,7 +464,7 @@ pub async fn fetch_post_record(
 /// Returns a storage error if a draft-listing page fails to load.
 pub async fn find_draft_by_permalink_for_user(
     posts: &dyn PostStorage,
-    user_id: i64,
+    user_id: UserId,
     year: i32,
     month: u32,
     day: u32,
@@ -541,7 +542,7 @@ pub trait PostStorage: Send + Sync {
     /// original post on an [`CreatePostError::IdempotencyConflict`] retry.
     async fn post_id_for_idempotency_key(
         &self,
-        user_id: i64,
+        user_id: UserId,
         key: &str,
     ) -> Result<Option<i64>, sqlx::Error>;
 
@@ -577,7 +578,7 @@ pub trait PostStorage: Send + Sync {
     async fn update_post(
         &self,
         post_id: i64,
-        editor_user_id: i64,
+        editor_user_id: UserId,
         input: &UpdatePostInput,
     ) -> Result<PostRecord, UpdatePostError>;
 
@@ -632,7 +633,7 @@ pub trait PostStorage: Send + Sync {
     // Explicit `'a` for `mockall::automock` — see `list_published_by_user`.
     async fn list_drafts_by_user<'a>(
         &self,
-        user_id: i64,
+        user_id: UserId,
         cursor: Option<&'a PostCursor>,
         limit: u32,
         now: DateTime<Utc>,
@@ -644,7 +645,7 @@ pub trait PostStorage: Send + Sync {
     // Explicit `'a` for `mockall::automock` — see `list_published_by_user`.
     async fn list_collection_by_user<'a>(
         &self,
-        user_id: i64,
+        user_id: UserId,
         cursor: Option<&'a CollectionCursor>,
         limit: u32,
     ) -> sqlx::Result<Vec<PostRecord>>;
@@ -681,7 +682,7 @@ pub trait PostStorage: Send + Sync {
     // Explicit `'a` for `mockall::automock` — see `list_published_by_user`.
     async fn list_user_posts_by_tag<'a>(
         &self,
-        user_id: i64,
+        user_id: UserId,
         tag_slug: &Tag,
         cursor: Option<&'a PostCursor>,
         limit: u32,
@@ -778,7 +779,7 @@ pub trait PostDialect: Backend {
     async fn update_post(
         pool: &Pool<Self>,
         post_id: i64,
-        editor_user_id: i64,
+        editor_user_id: UserId,
         input: &UpdatePostInput,
     ) -> Result<PostRecord, UpdatePostError>;
 
@@ -876,13 +877,13 @@ where
     )]
     async fn post_id_for_idempotency_key(
         &self,
-        user_id: i64,
+        user_id: UserId,
         key: &str,
     ) -> Result<Option<i64>, sqlx::Error> {
         sqlx::query_scalar::<_, i64>(
             "SELECT post_id FROM idempotency_keys WHERE user_id = $1 AND key = $2",
         )
-        .bind(user_id)
+        .bind(i64::from(user_id))
         .bind(key)
         .fetch_optional(&self.pool)
         .await
@@ -988,7 +989,7 @@ where
     async fn update_post(
         &self,
         post_id: i64,
-        editor_user_id: i64,
+        editor_user_id: UserId,
         input: &UpdatePostInput,
     ) -> Result<PostRecord, UpdatePostError> {
         DB::update_post(&self.pool, post_id, editor_user_id, input).await
@@ -1173,7 +1174,7 @@ where
     )]
     async fn list_drafts_by_user<'a>(
         &self,
-        user_id: i64,
+        user_id: UserId,
         cursor: Option<&'a PostCursor>,
         limit: u32,
         now: DateTime<Utc>,
@@ -1196,7 +1197,7 @@ where
                  LIMIT $6"
             );
             sqlx::query_as::<_, PostRow>(&sql)
-                .bind(user_id)
+                .bind(i64::from(user_id))
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
                 .bind(cursor.post_id)
@@ -1220,7 +1221,7 @@ where
                  LIMIT $3"
             );
             sqlx::query_as::<_, PostRow>(&sql)
-                .bind(user_id)
+                .bind(i64::from(user_id))
                 .bind(now)
                 .bind(i64::from(limit))
                 .fetch_all(&self.pool)
@@ -1236,7 +1237,7 @@ where
     )]
     async fn list_collection_by_user<'a>(
         &self,
-        user_id: i64,
+        user_id: UserId,
         cursor: Option<&'a CollectionCursor>,
         limit: u32,
     ) -> sqlx::Result<Vec<PostRecord>> {
@@ -1255,7 +1256,7 @@ where
                  LIMIT $4"
             );
             sqlx::query_as::<_, PostRow>(&sql)
-                .bind(user_id)
+                .bind(i64::from(user_id))
                 .bind(cursor.updated_at)
                 .bind(cursor.post_id)
                 .bind(i64::from(limit))
@@ -1274,7 +1275,7 @@ where
                  LIMIT $2"
             );
             sqlx::query_as::<_, PostRow>(&sql)
-                .bind(user_id)
+                .bind(i64::from(user_id))
                 .bind(i64::from(limit))
                 .fetch_all(&self.pool)
                 .await?
@@ -1435,7 +1436,7 @@ where
     )]
     async fn list_user_posts_by_tag<'a>(
         &self,
-        user_id: i64,
+        user_id: UserId,
         tag_slug: &Tag,
         cursor: Option<&'a PostCursor>,
         limit: u32,
@@ -1477,7 +1478,7 @@ where
                  LIMIT ${limit_idx}"
             );
             let query = sqlx::query_as::<_, PostRow>(&sql)
-                .bind(user_id)
+                .bind(i64::from(user_id))
                 .bind(tag_slug.as_ref())
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
@@ -1510,7 +1511,7 @@ where
                  LIMIT ${limit_idx}"
             );
             let query = sqlx::query_as::<_, PostRow>(&sql)
-                .bind(user_id)
+                .bind(i64::from(user_id))
                 .bind(tag_slug.as_ref())
                 .bind(now);
             binds
@@ -1865,7 +1866,7 @@ where
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          RETURNING post_id",
     )
-    .bind(input.user_id)
+    .bind(i64::from(input.user_id))
     .bind(input.title.as_deref())
     .bind(input.slug.as_ref())
     .bind(&*input.body)
@@ -1891,7 +1892,7 @@ where
     // `map_err` fires, not by inspecting the constraint name.
     if let Some(key) = input.idempotency_key.as_deref() {
         sqlx::query("INSERT INTO idempotency_keys (user_id, key, post_id) VALUES ($1, $2, $3)")
-            .bind(input.user_id)
+            .bind(i64::from(input.user_id))
             .bind(key)
             .bind(post_id)
             .execute(&mut *conn)
@@ -2303,7 +2304,7 @@ mod tests {
     fn fallback_summary_label_prefers_body_then_title_then_slug() {
         let mut post = PostRecord {
             post_id: 1,
-            user_id: 1,
+            user_id: UserId::from(1),
             author_username: "author".parse().unwrap(),
             title: Some("My Title".into()),
             slug: "my-slug".parse().unwrap(),
@@ -2340,7 +2341,7 @@ mod tests {
         use chrono::TimeZone;
         let post = PostRecord {
             post_id: 1,
-            user_id: 1,
+            user_id: UserId::from(1),
             author_username: "author".parse().unwrap(),
             title: Some("My Title".into()),
             slug: "hello-world".parse().unwrap(),
@@ -2393,7 +2394,7 @@ mod tests {
         let env = backend.setup().await;
         env.base.close_pool().await;
         let input = CreatePostInput {
-            user_id: 1,
+            user_id: UserId::from(1),
             title: Some("Test".into()),
             slug: "test-post".parse().unwrap(),
             body: "body".into(),
@@ -2612,7 +2613,7 @@ mod tests {
         use chrono::TimeZone;
         let post = PostRecord {
             post_id: 42,
-            user_id: 1,
+            user_id: UserId::from(1),
             author_username: "author".parse().unwrap(),
             title: None,
             slug: "hello-world".parse().unwrap(),
@@ -2851,7 +2852,7 @@ mod tests {
                 let page = (0..50_i64)
                     .map(|i| PostRecord {
                         post_id: i,
-                        user_id: 1,
+                        user_id: UserId::from(1),
                         author_username: username.clone(),
                         title: None,
                         slug: slug.clone(),
@@ -2870,9 +2871,10 @@ mod tests {
             });
 
         let searched = "target-slug".parse::<Slug>().unwrap();
-        let result = find_draft_by_permalink_for_user(&mock, 1, 2020, 1, 1, &searched)
-            .await
-            .unwrap();
+        let result =
+            find_draft_by_permalink_for_user(&mock, UserId::from(1), 2020, 1, 1, &searched)
+                .await
+                .unwrap();
         assert!(result.is_none());
     }
 }

@@ -187,6 +187,7 @@ pub fn post_to_entry(post: &PostRecord, base_url: &str) -> Entry {
 mod tests {
     use super::*;
     use chrono::{DateTime, Utc};
+    use common::ids::UserId;
 
     // -----------------------------------------------------------------------
     // format_wire seam tests
@@ -545,7 +546,7 @@ mod tests {
 
         PostRecord {
             post_id,
-            user_id: 1,
+            user_id: UserId::from(1),
             author_username: "alice".parse().expect("parse username"),
             title: title.map(PostTitle::from),
             slug: slug.parse().expect("parse slug"),

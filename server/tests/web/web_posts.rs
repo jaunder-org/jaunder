@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use axum::http::StatusCode;
 use chrono::Datelike;
+use common::ids::UserId;
 use common::tag::TagLabel;
 use common::test_support::parse_audience_name;
 use storage::{PostFormat, RenderedHtml};
@@ -3159,7 +3160,7 @@ async fn set_default_post_format_persists_and_retrieves_markdown(#[case] backend
 /// directly through the store (the web create path is Public-only in Layer A).
 async fn create_targeted_post(
     state: &Arc<storage::AppState>,
-    author: i64,
+    author: UserId,
     slug: &str,
     audiences: Vec<common::visibility::AudienceTarget>,
 ) -> i64 {
@@ -3235,7 +3236,7 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
         .unwrap();
     let sub_id = state
         .subscriptions
-        .subscribe(author, local, &subscriber.to_string())
+        .subscribe(author, local, &i64::from(subscriber).to_string())
         .await
         .unwrap();
     state
@@ -3366,7 +3367,7 @@ async fn single_post_permalink_hides_subscribers_post_from_anonymous(#[case] bac
     let local = state.subscriptions.local_channel_id().await.unwrap();
     state
         .subscriptions
-        .subscribe(author, local, &subscriber.to_string())
+        .subscribe(author, local, &i64::from(subscriber).to_string())
         .await
         .unwrap();
 

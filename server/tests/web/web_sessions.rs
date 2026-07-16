@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
+use common::ids::UserId;
 use common::token::RawToken;
 use common::username::Username;
 
@@ -14,7 +15,7 @@ use storage::test_support::{backends, Backend, TestEnv};
 async fn create_user_and_session(
     state: &Arc<storage::AppState>,
     username: &str,
-) -> (i64, RawToken, String) {
+) -> (UserId, RawToken, String) {
     let user_id = state
         .users
         .create_user(

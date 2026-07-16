@@ -4,6 +4,7 @@ use sqlx::{Pool, Sqlite};
 
 use crate::helpers::{post_record_from_row, PostRow};
 use crate::{PostDialect, PostRecord, PostStore, TaggingError, UpdatePostError, UpdatePostInput};
+use common::ids::UserId;
 use common::tag::{Tag, TagLabel};
 
 /// SQLite-backed post storage.
@@ -25,7 +26,7 @@ impl PostDialect for Sqlite {
     async fn update_post(
         pool: &Pool<Sqlite>,
         post_id: i64,
-        editor_user_id: i64,
+        editor_user_id: UserId,
         input: &UpdatePostInput,
     ) -> Result<PostRecord, UpdatePostError> {
         // ADR-0021: take the write lock up front with BEGIN IMMEDIATE rather than a
@@ -48,7 +49,7 @@ impl PostDialect for Sqlite {
             match existing {
                 None => return Err(UpdatePostError::NotFound),
                 Some((owner_id, deleted_at))
-                    if owner_id != editor_user_id || deleted_at.is_some() =>
+                    if UserId::from(owner_id) != editor_user_id || deleted_at.is_some() =>
                 {
                     return Err(UpdatePostError::Unauthorized);
                 }

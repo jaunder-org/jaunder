@@ -838,7 +838,7 @@ mod tests {
     fn timeline_post_summary_keeps_titleless_posts_titleless() {
         use crate::posts::server::timeline_post_summary;
         use chrono::{TimeZone, Utc};
-        use common::{slug::Slug, username::Username};
+        use common::{ids::UserId, slug::Slug, username::Username};
         use storage::{PostFormat, PostRecord, RenderedHtml};
 
         let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
@@ -847,7 +847,7 @@ mod tests {
         let summary = timeline_post_summary(
             PostRecord {
                 post_id: 1,
-                user_id: 2,
+                user_id: UserId::from(2),
                 author_username: "author".parse::<Username>().unwrap(),
                 title: None,
                 slug,
@@ -875,7 +875,7 @@ mod tests {
     fn post_response_marks_draft_state_from_published_at() {
         use crate::posts::server::post_response;
         use chrono::{TimeZone, Utc};
-        use common::{slug::Slug, username::Username};
+        use common::{ids::UserId, slug::Slug, username::Username};
         use storage::{PostFormat, PostRecord, RenderedHtml};
 
         let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
@@ -885,7 +885,7 @@ mod tests {
         let draft = post_response(
             PostRecord {
                 post_id: 1,
-                user_id: 2,
+                user_id: UserId::from(2),
                 author_username: author_username.clone(),
                 title: Some("Draft".into()),
                 slug: slug.clone(),
@@ -908,7 +908,7 @@ mod tests {
         let published = post_response(
             PostRecord {
                 post_id: 2,
-                user_id: 2,
+                user_id: UserId::from(2),
                 author_username,
                 title: Some("Published".into()),
                 slug,
@@ -938,6 +938,7 @@ mod server_tests {
     use crate::error::WebError;
     use crate::test_support::auth_parts;
     use chrono::Utc;
+    use common::ids::UserId;
     use common::slug::Slug;
     use common::username::Username;
     use leptos::prelude::provide_context;
@@ -948,7 +949,7 @@ mod server_tests {
         RenderedHtml, SubscriptionStorage, UpdatePostError,
     };
 
-    fn owned_post(user_id: i64) -> PostRecord {
+    fn owned_post(user_id: UserId) -> PostRecord {
         let now = Utc::now();
         PostRecord {
             post_id: 1,
@@ -974,11 +975,11 @@ mod server_tests {
     fn setup(error: fn() -> UpdatePostError) -> Owner {
         let owner = Owner::new();
         owner.set();
-        provide_context(auth_parts(1, "alice"));
+        provide_context(auth_parts(UserId::from(1), "alice"));
         let mut posts = MockPostStorage::new();
         posts
             .expect_get_post_by_id()
-            .returning(|_id, _viewer| Ok(Some(owned_post(1))));
+            .returning(|_id, _viewer| Ok(Some(owned_post(UserId::from(1)))));
         posts
             .expect_get_post_audiences()
             .returning(|_id| Ok(Vec::new()));

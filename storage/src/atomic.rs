@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use thiserror::Error;
 
 use common::display_name::DisplayName;
+use common::ids::UserId;
 use common::password::Password;
 use common::token::RawToken;
 use common::username::Username;
@@ -113,7 +114,7 @@ pub trait AtomicOps: Send + Sync {
         display_name: Option<&DisplayName>,
         is_operator: bool,
         invite_code: &InviteCode,
-    ) -> Result<i64, RegisterWithInviteError>;
+    ) -> Result<UserId, RegisterWithInviteError>;
 
     /// Atomically consumes a password-reset token and updates the user's password.
     ///

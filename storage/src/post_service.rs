@@ -11,6 +11,7 @@ use crate::{
     CreatePostError, CreatePostInput, PostFormat, PostRecord, PostStorage, UpdatePostError,
     UpdatePostInput,
 };
+use common::ids::UserId;
 use common::post_body::PostBody;
 use common::post_title::PostTitle;
 use common::render::{derive_post_metadata, render};
@@ -26,7 +27,7 @@ use common::visibility::AudienceTarget;
 /// limit and share one named shape at every call site.
 pub struct RenderedPostContent {
     /// Author of the new post.
-    pub user_id: i64,
+    pub user_id: UserId,
     /// Explicit title, or `None`.
     pub title: Option<PostTitle>,
     /// Slug for the new post.
@@ -101,7 +102,12 @@ pub fn render_post_input(content: RenderedPostContent) -> CreatePostInput {
 /// `tempfile`/`rstest_reuse`).
 #[cfg(any(test, feature = "seed-posts"))]
 #[must_use]
-pub fn seed_post_input(user_id: i64, slug: Slug, body: String, published: bool) -> CreatePostInput {
+pub fn seed_post_input(
+    user_id: UserId,
+    slug: Slug,
+    body: String,
+    published: bool,
+) -> CreatePostInput {
     render_post_input(RenderedPostContent {
         user_id,
         title: None,
@@ -122,7 +128,7 @@ pub struct RenderedPostUpdate {
     /// Post being edited.
     pub post_id: i64,
     /// User performing the edit (ownership is checked in storage).
-    pub editor_user_id: i64,
+    pub editor_user_id: UserId,
     /// Explicit title, or `None`.
     pub title: Option<PostTitle>,
     /// New slug for the post.
@@ -257,7 +263,7 @@ pub struct PostUpdate<'a> {
     /// Post being edited.
     pub post_id: i64,
     /// User performing the edit (ownership is checked in storage).
-    pub editor_user_id: i64,
+    pub editor_user_id: UserId,
     /// Raw post body in `format`.
     pub body: PostBody,
     /// Explicit title, or `None` to derive one from the body.
@@ -412,7 +418,7 @@ pub fn candidate_slug(slug_seed: &Slug, attempt: usize) -> String {
 /// (`title: Option<&str>` / `slug_override: Option<&Slug>`) named at every call site.
 pub struct PostCreation<'a> {
     /// Author of the new post.
-    pub user_id: i64,
+    pub user_id: UserId,
     /// Raw post body in `format`.
     pub body: PostBody,
     /// Explicit title, or `None` to derive one from the body.
@@ -682,7 +688,7 @@ mod tests {
         let err = perform_post_creation(
             &storage,
             PostCreation {
-                user_id: 1,
+                user_id: UserId::from(1),
                 body: "Hello, world!".into(),
                 title: None,
                 format: PostFormat::Markdown,
@@ -1086,7 +1092,11 @@ mod tests {
 
     /// Builds a minimal public Markdown [`PostCreation`] carrying `key`, so the
     /// dedup tests vary only the user, body, and key.
-    fn creation_with_key<'a>(user_id: i64, body: &str, key: Option<&'a str>) -> PostCreation<'a> {
+    fn creation_with_key<'a>(
+        user_id: UserId,
+        body: &str,
+        key: Option<&'a str>,
+    ) -> PostCreation<'a> {
         PostCreation {
             user_id,
             body: body.into(),

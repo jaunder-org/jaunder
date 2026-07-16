@@ -23,6 +23,7 @@ mod tests {
     use super::require_operator;
     use crate::error::WebError;
     use crate::test_support::auth_parts;
+    use common::ids::UserId;
     use leptos::prelude::provide_context;
     use leptos::reactive::owner::Owner;
     use std::sync::Arc;
@@ -33,7 +34,7 @@ mod tests {
     async fn require_operator_rejects_when_user_absent() {
         let owner = Owner::new();
         owner.set();
-        provide_context(auth_parts(1, "ghost"));
+        provide_context(auth_parts(UserId::from(1), "ghost"));
         let mut users = MockUserStorage::new();
         users.expect_get_user().returning(|_uid| Ok(None));
         provide_context(Arc::new(users) as Arc<dyn UserStorage>);

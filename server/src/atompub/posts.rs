@@ -550,6 +550,7 @@ pub async fn member_put(
 mod etag_tests {
     use super::*;
     use chrono::{TimeZone, Utc};
+    use common::ids::UserId;
     use storage::{PostFormat, PostTag, RenderedHtml};
 
     fn mk_tag(post_id: i64, tag_id: i64, slug: &str, display: &str) -> PostTag {
@@ -568,7 +569,7 @@ mod etag_tests {
             .expect("valid time");
         PostRecord {
             post_id: 1,
-            user_id: 1,
+            user_id: UserId::from(1),
             author_username: "alice".parse().expect("parse username"),
             title: Some("Title".into()),
             slug: "my-post".parse().expect("parse slug"),
@@ -613,7 +614,7 @@ mod etag_tests {
             .expect("valid time");
         let mut p = base_post();
         p.post_id = 999;
-        p.user_id = 42;
+        p.user_id = UserId::from(42);
         p.slug = "other-slug".parse().expect("parse slug");
         p.created_at = later;
         p.updated_at = later;

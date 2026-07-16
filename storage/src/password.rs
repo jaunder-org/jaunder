@@ -8,6 +8,7 @@ use thiserror::Error;
 use common::token::RawToken;
 
 use crate::backend::Backend;
+use common::ids::UserId;
 
 /// Errors returned by [`PasswordResetStorage::use_password_reset`].
 #[derive(Debug, Error)]
@@ -37,7 +38,7 @@ pub trait PasswordResetStorage: Send + Sync {
     /// Returns the raw (un-hashed) token to be delivered to the user.
     async fn create_password_reset(
         &self,
-        user_id: i64,
+        user_id: UserId,
         expires_at: DateTime<Utc>,
     ) -> sqlx::Result<RawToken>;
 
@@ -49,7 +50,10 @@ pub trait PasswordResetStorage: Send + Sync {
     ///
     /// Returns [`UsePasswordResetError`] if the token is invalid, expired,
     /// or already used.
-    async fn use_password_reset(&self, raw_token: &RawToken) -> Result<i64, UsePasswordResetError>;
+    async fn use_password_reset(
+        &self,
+        raw_token: &RawToken,
+    ) -> Result<UserId, UsePasswordResetError>;
 }
 
 /// Generic [`PasswordResetStorage`] backed by any [`Backend`] database.
@@ -81,7 +85,7 @@ where
 {
     async fn create_password_reset(
         &self,
-        user_id: i64,
+        user_id: UserId,
         expires_at: DateTime<Utc>,
     ) -> sqlx::Result<RawToken> {
         let (raw_token, token_hash) = host::token::generate_hashed();
@@ -92,7 +96,7 @@ where
              VALUES ($1, $2, $3, $4)",
         )
         .bind(token_hash.as_ref())
-        .bind(user_id)
+        .bind(i64::from(user_id))
         .bind(now)
         .bind(expires_at)
         .execute(&self.pool)
@@ -101,7 +105,10 @@ where
         Ok(raw_token)
     }
 
-    async fn use_password_reset(&self, raw_token: &RawToken) -> Result<i64, UsePasswordResetError> {
+    async fn use_password_reset(
+        &self,
+        raw_token: &RawToken,
+    ) -> Result<UserId, UsePasswordResetError> {
         let token_hash =
             host::token::hash(raw_token).map_err(|_| UsePasswordResetError::NotFound)?;
 
@@ -123,7 +130,7 @@ where
         .await?;
 
         if let Some((user_id,)) = claimed {
-            return Ok(user_id);
+            return Ok(UserId::from(user_id));
         }
 
         let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
@@ -153,7 +160,7 @@ mod tests {
         let expires_at = chrono::Utc::now();
         let result = state
             .password_resets
-            .create_password_reset(1, expires_at)
+            .create_password_reset(UserId::from(1), expires_at)
             .await;
         assert!(result.is_err());
     }

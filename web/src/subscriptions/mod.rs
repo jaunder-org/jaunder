@@ -19,6 +19,7 @@ use leptos::prelude::*;
 use {
     crate::auth::require_auth,
     crate::error::InternalError,
+    common::ids::UserId,
     std::sync::Arc,
     storage::{SubscriptionStorage, UserStorage},
 };
@@ -32,8 +33,8 @@ use {
 async fn resolve_author(
     users: &dyn UserStorage,
     author_username: &Username,
-    viewer_user_id: i64,
-) -> Result<i64, InternalError> {
+    viewer_user_id: UserId,
+) -> Result<UserId, InternalError> {
     let author = users
         .get_user_by_username(author_username)
         .await?
@@ -58,7 +59,7 @@ pub async fn subscribe_to(author_username: Username) -> WebResult<()> {
         let author_id = resolve_author(users.as_ref(), &author_username, auth.user_id).await?;
         let channel_id = subscriptions.local_channel_id().await?;
         subscriptions
-            .subscribe(author_id, channel_id, &auth.user_id.to_string())
+            .subscribe(author_id, channel_id, &i64::from(auth.user_id).to_string())
             .await?;
         Ok(())
     })
@@ -76,7 +77,7 @@ pub async fn unsubscribe_from(author_username: Username) -> WebResult<()> {
         let author_id = resolve_author(users.as_ref(), &author_username, auth.user_id).await?;
         let channel_id = subscriptions.local_channel_id().await?;
         subscriptions
-            .unsubscribe(author_id, channel_id, &auth.user_id.to_string())
+            .unsubscribe(author_id, channel_id, &i64::from(auth.user_id).to_string())
             .await?;
         Ok(())
     })
@@ -113,6 +114,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::is_subscribed_to;
     use crate::test_support::auth_parts;
+    use common::ids::UserId;
     use common::username::Username;
     use leptos::prelude::provide_context;
     use leptos::reactive::owner::Owner;
@@ -121,7 +123,7 @@ mod tests {
         MockSubscriptionStorage, MockUserStorage, SubscriptionStorage, UserRecord, UserStorage,
     };
 
-    fn user(user_id: i64, username: &str) -> UserRecord {
+    fn user(user_id: UserId, username: &str) -> UserRecord {
         UserRecord {
             user_id,
             username: username.parse::<Username>().unwrap(),
@@ -140,11 +142,11 @@ mod tests {
     async fn is_subscribed_to_returns_false_when_viewing_own_profile() {
         let owner = Owner::new();
         owner.set();
-        provide_context(auth_parts(1, "alice"));
+        provide_context(auth_parts(UserId::from(1), "alice"));
         let mut users = MockUserStorage::new();
         users
             .expect_get_user_by_username()
-            .returning(|_username| Ok(Some(user(1, "alice"))));
+            .returning(|_username| Ok(Some(user(UserId::from(1), "alice"))));
         provide_context(Arc::new(users) as Arc<dyn UserStorage>);
         provide_context(Arc::new(MockSubscriptionStorage::new()) as Arc<dyn SubscriptionStorage>);
 
