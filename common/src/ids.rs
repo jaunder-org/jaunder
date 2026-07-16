@@ -23,6 +23,10 @@ pub struct AudienceId(i64);
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, IdNewtype)]
 pub struct PostId(i64);
 
+/// A subscription's row id.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, IdNewtype)]
+pub struct SubscriptionId(i64);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,5 +105,17 @@ mod tests {
             serde_json::from_str::<PostId>("42").unwrap(),
             PostId::from(42)
         );
+    }
+
+    #[test]
+    fn subscription_id_exercises_the_generated_surface() {
+        // Covers this type's generated From/Into/Display/FromStr/serde impls.
+        let id = SubscriptionId::from(9);
+        assert_eq!(i64::from(id), 9);
+        assert_eq!(id.to_string(), "9");
+        assert_eq!("9".parse::<SubscriptionId>().unwrap(), id);
+        assert!("nope".parse::<SubscriptionId>().is_err());
+        assert_eq!(serde_json::to_string(&id).unwrap(), "9");
+        assert_eq!(serde_json::from_str::<SubscriptionId>("9").unwrap(), id);
     }
 }
