@@ -2,7 +2,7 @@
 
 use crate::backend::Backend;
 use async_trait::async_trait;
-use common::backup::{BackupConfig, BackupMode, BackupSchedule, DEFAULT_BACKUP_RETENTION_COUNT};
+use common::backup::{BackupConfig, BackupMode, BackupSchedule, RetentionCount};
 use common::feed::FeedsConfig;
 use common::site::{SiteIdentity, DEFAULT_SITE_TITLE};
 use common::visibility::AudienceTarget;
@@ -47,8 +47,8 @@ pub trait SiteConfigStorage: Send + Sync {
             .get(BACKUP_RETENTION_COUNT_KEY)
             .await?
             .as_deref()
-            .and_then(|v| v.trim().parse::<usize>().ok())
-            .unwrap_or(DEFAULT_BACKUP_RETENTION_COUNT);
+            .and_then(|v| v.parse::<RetentionCount>().ok())
+            .unwrap_or_default();
         let mode = self
             .get(BACKUP_MODE_KEY)
             .await?
@@ -295,8 +295,9 @@ where
 #[cfg(test)]
 mod tests {
     use crate::test_support::{backends, Backend};
-    use common::backup::{BackupConfig, BackupMode};
+    use common::backup::{BackupConfig, BackupMode, RetentionCount};
     use common::feed::FeedsConfig;
+    use common::test_support::parse_retention_count;
     use rstest::*;
     use rstest_reuse::*;
 
@@ -317,7 +318,7 @@ mod tests {
         let config = BackupConfig {
             destination_path: Some("/srv/backups".to_owned()),
             schedule: "0 30 2 * * *".parse().unwrap(),
-            retention_count: 14,
+            retention_count: parse_retention_count("14"),
             mode: BackupMode::Archive,
         };
         storage.set_backup_config(&config).await.unwrap();
@@ -366,6 +367,18 @@ mod tests {
         storage.set("backup.mode", "floppy").await.unwrap();
         let config = storage.get_backup_config().await.unwrap();
         assert_eq!(config, BackupConfig::default());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn get_backup_config_treats_zero_retention_as_default(#[case] backend: Backend) {
+        // A stored `0` is not a valid RetentionCount (min 1), so it falls back to the default
+        // (7) rather than being kept — pruning can never be configured to remove every backup.
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
+        storage.set("backup.retention_count", "0").await.unwrap();
+        let config = storage.get_backup_config().await.unwrap();
+        assert_eq!(config.retention_count, RetentionCount::default());
     }
 
     #[apply(backends)]

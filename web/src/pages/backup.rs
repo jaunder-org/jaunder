@@ -2,7 +2,7 @@ use crate::backup::{get_backup_settings, UpdateBackupSettings};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::pages::Topbar;
-use common::backup::{BackupConfig, BackupMode, BackupSchedule};
+use common::backup::{BackupConfig, BackupMode, BackupSchedule, RetentionCount};
 use leptos::prelude::*;
 use strum::VariantArray;
 
@@ -50,9 +50,10 @@ fn backup_settings_form(
     settings: BackupConfig,
     update_action: ServerAction<UpdateBackupSettings>,
 ) -> impl IntoView {
-    // Seed the client-side validated schedule field from the persisted value (ADR-0065), so an
-    // invalid cron edit disables Save before the request is sent (Deref: &BackupSchedule → &str).
+    // Seed the client-side validated fields from the persisted values (ADR-0065), so an invalid
+    // cron or a retention count below 1 disables Save before the request is sent.
     let schedule = Field::<BackupSchedule>::prefilled(&settings.schedule);
+    let retention = Field::<RetentionCount>::prefilled(&settings.retention_count.to_string());
     view! {
         <ActionForm action=update_action attr:class="j-card j-backup-form">
             <div class="j-card-head">
@@ -84,16 +85,16 @@ fn backup_settings_form(
                     class="j-backup-input"
                     help="Use a six-field cron expression: second minute hour day-of-month month day-of-week. Example: 0 0 0 * * * runs daily at midnight."
                 />
-                <label class="j-backup-field">
-                    <span class="j-edit-form-label">"Retention Count"</span>
-                    <input
-                        class="j-backup-input"
-                        type="number"
-                        min="0"
-                        name="retention_count"
-                        prop:value=settings.retention_count.to_string()
-                    />
-                </label>
+                <ValidatedInput<
+                RetentionCount,
+            >
+                    label="Retention Count"
+                    name="retention_count"
+                    field=retention
+                    input_type="number"
+                    field_class="j-backup-field"
+                    class="j-backup-input"
+                />
                 <label class="j-backup-field">
                     <span class="j-edit-form-label">"Mode"</span>
                     <select class="j-backup-input" name="mode">
@@ -118,7 +119,7 @@ fn backup_settings_form(
                 <button
                     type="submit"
                     class="j-btn is-primary"
-                    prop:disabled=move || !schedule.is_valid()
+                    prop:disabled=move || !schedule.is_valid() || !retention.is_valid()
                 >
                     "Save Backup Settings"
                 </button>

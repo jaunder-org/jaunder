@@ -25,7 +25,7 @@ async fn operator_gets_default_backup_settings(#[case] backend: Backend) {
     let settings: BackupConfig = serde_json::from_str(&body).unwrap();
     assert_eq!(settings.destination_path, None);
     assert_eq!(settings.schedule, "0 0 0 * * *");
-    assert_eq!(settings.retention_count, 7);
+    assert_eq!(settings.retention_count.get(), 7);
     assert_eq!(settings.mode, BackupMode::Directory);
 }
 
@@ -94,7 +94,7 @@ async fn operator_gets_configured_backup_settings(#[case] backend: Backend) {
     let settings: BackupConfig = serde_json::from_str(&body).unwrap();
     assert_eq!(settings.destination_path, Some("/srv/backups".to_string()));
     assert_eq!(settings.schedule, "0 30 2 * * *");
-    assert_eq!(settings.retention_count, 4);
+    assert_eq!(settings.retention_count.get(), 4);
     assert_eq!(settings.mode, BackupMode::Archive);
 }
 
@@ -130,7 +130,7 @@ async fn operator_gets_defaults_for_invalid_backup_settings(#[case] backend: Bac
     let settings: BackupConfig = serde_json::from_str(&body).unwrap();
     assert_eq!(settings.destination_path, Some("/srv/backups".to_string()));
     assert_eq!(settings.schedule, "0 0 0 * * *");
-    assert_eq!(settings.retention_count, 7);
+    assert_eq!(settings.retention_count.get(), 7);
     assert_eq!(settings.mode, BackupMode::Directory);
 }
 
@@ -213,10 +213,12 @@ async fn operator_can_update_backup_settings_to_archive_mode(#[case] backend: Ba
     );
 }
 
-// `schedule` (`BackupSchedule`, #453) and `mode` (`BackupMode`, #454) are typed wire args
-// (ADR-0065): an invalid value is rejected when the request struct deserializes — before the
-// fn body — so the guard is the type, not an in-body validation string. Assert the request is
-// refused (non-OK), not a specific message, since the message is now the framework's, not ours.
+// `schedule` (`BackupSchedule`, #453), `mode` (`BackupMode`, #454), and `retention_count`
+// (`RetentionCount`, #455) are all typed wire args (ADR-0065): an invalid value is rejected when
+// the request struct deserializes — before the fn body — so the guard is the type, not an
+// in-body validation string. Assert the request is refused (non-OK), not a specific message,
+// since the message is now the framework's, not ours. `retention_count=0` is rejected because
+// `RetentionCount` wraps `NonZeroUsize` (the prune-everything footgun is unrepresentable).
 #[apply(backends_matrix)]
 #[case::empty_schedule(
     "destination_path=%2Fsrv%2Fbackups&schedule=+++&retention_count=5&mode=directory"
@@ -227,8 +229,14 @@ async fn operator_can_update_backup_settings_to_archive_mode(#[case] backend: Ba
 #[case::invalid_mode(
     "destination_path=%2Fsrv%2Fbackups&schedule=0+0+0+*+*+*&retention_count=5&mode=surprise"
 )]
+#[case::invalid_retention_count(
+    "destination_path=%2Fsrv%2Fbackups&schedule=0+0+0+*+*+*&retention_count=bogus&mode=directory"
+)]
+#[case::zero_retention_count(
+    "destination_path=%2Fsrv%2Fbackups&schedule=0+0+0+*+*+*&retention_count=0&mode=directory"
+)]
 #[tokio::test]
-async fn operator_update_backup_settings_rejects_invalid_schedule_or_mode(
+async fn operator_update_backup_settings_rejects_invalid_typed_arg(
     backend: Backend,
     #[case] form: &str,
 ) {
@@ -238,28 +246,6 @@ async fn operator_update_backup_settings_rejects_invalid_schedule_or_mode(
     let (status, body) = post_form(state, "/api/update_backup_settings", form, Some(&cookie)).await;
 
     assert_ne!(status, StatusCode::OK, "body: {body}");
-}
-
-// `retention_count` is still a bare-`String` wire arg parsed in the fn body (see #455), so it
-// keeps its in-body 500 + message contract.
-#[apply(backends_matrix)]
-#[case::invalid_retention_count(
-    "destination_path=%2Fsrv%2Fbackups&schedule=0+0+0+*+*+*&retention_count=bogus&mode=directory",
-    "backup retention count"
-)]
-#[tokio::test]
-async fn operator_update_backup_settings_rejects_invalid_input(
-    backend: Backend,
-    #[case] form: &str,
-    #[case] expected_error: &str,
-) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_session_cookie(&state, "operator", true).await;
-
-    let (status, body) = post_form(state, "/api/update_backup_settings", form, Some(&cookie)).await;
-
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains(expected_error));
 }
 
 #[apply(backends)]

@@ -9,6 +9,7 @@
 #![expect(clippy::expect_used)]
 
 use crate::audience::AudienceName;
+use crate::backup::RetentionCount;
 use crate::display_name::DisplayName;
 use crate::email::Email;
 
@@ -46,4 +47,16 @@ pub fn parse_audience_name(name: &str) -> AudienceName {
 #[must_use]
 pub fn parse_display_name(name: &str) -> DisplayName {
     name.parse().expect("valid test display name")
+}
+
+/// Parse `s` into a valid [`RetentionCount`] for tests — the single place a test
+/// retention-count literal is parsed, so a malformed fixture (e.g. `"0"`) fails loudly
+/// and the parse isn't re-spelled at every `BackupConfig` construction site.
+///
+/// # Panics
+///
+/// Panics if `s` is not a whole number of at least 1.
+#[must_use]
+pub fn parse_retention_count(s: &str) -> RetentionCount {
+    s.parse().expect("valid test retention count")
 }
