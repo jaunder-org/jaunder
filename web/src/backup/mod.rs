@@ -5,6 +5,13 @@ use crate::error::WebResult;
 use common::backup::{BackupConfig, BackupMode, BackupSchedule, RetentionCount};
 use leptos::prelude::*;
 
+// Reactive UI co-located with its server fns + wire types (ADR-0056). Unconditional (no
+// `target_arch` gate): the `#[component]`s host-compile for coverage, as the audiences
+// vertical's components do (ungated, host-compiled — audiences keeps them inline in its
+// mod.rs; backup splits them into this `ui` submodule).
+mod ui;
+pub use ui::BackupSettingsPage;
+
 #[cfg(feature = "server")]
 pub(crate) mod server;
 #[cfg(feature = "server")]
