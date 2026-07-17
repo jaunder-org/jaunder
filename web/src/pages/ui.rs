@@ -2,7 +2,7 @@ use crate::audiences::{list_my_audiences, AudienceSummary};
 // `current_user` is the sidebar's background reconcile (#181), used only in the
 // wasm-only correction Effect.
 use crate::auth::current_user;
-use crate::backup::{backup_warning_visible, current_user_is_operator};
+use crate::backup::current_user_is_operator;
 use crate::forms::Field;
 use crate::pages::upload::MediaPanel;
 use crate::posts::{
@@ -152,33 +152,6 @@ pub fn Chip(
 }
 
 // ─── 3.5 Topbar ───────────────────────────────────────────────
-
-#[component]
-pub fn BackupBanner() -> impl IntoView {
-    let visible = crate::server_resource(|| (), |()| backup_warning_visible());
-
-    view! {
-        <Suspense fallback=|| ()>
-            {move || Suspend::new(async move {
-                match visible.await {
-                    Ok(true) => {
-                        view! {
-                            <div class="j-backup-banner" role="alert">
-                                <span>"Backups are not configured. Your data is at risk."</span>
-                                <div>
-                                    <a href="/admin/backups">"Configure Backups"</a>
-                                    <a href="/admin/site">"Site Settings"</a>
-                                </div>
-                            </div>
-                        }
-                            .into_any()
-                    }
-                    _ => ().into_any(),
-                }
-            })}
-        </Suspense>
-    }
-}
 
 pub use crate::ui::Topbar;
 

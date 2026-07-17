@@ -1,5 +1,4 @@
 pub mod auth;
-pub mod backup;
 pub mod cockpit;
 pub mod email;
 pub mod home;
@@ -15,8 +14,7 @@ pub(crate) mod timeline;
 pub mod ui;
 pub mod upload;
 pub use ui::{
-    Avatar, BackupBanner, Chip, Dot, Icon, Icons, InlineComposer, PostCard, PostDisplay, Sidebar,
-    Topbar,
+    Avatar, Chip, Dot, Icon, Icons, InlineComposer, PostCard, PostDisplay, Sidebar, Topbar,
 };
 pub use upload::{MediaPanel, MediaUploadButton};
 
@@ -26,8 +24,8 @@ pub use upload::{MediaPanel, MediaUploadButton};
 pub use crate::render::DEFAULT_THEME;
 
 use crate::audiences::AudiencesPage;
+use crate::backup::{BackupBanner, BackupSettingsPage};
 use crate::pages::auth::{LoginPage, LogoutPage, RegisterPage};
-use crate::pages::backup::BackupSettingsPage;
 use crate::pages::cockpit::CockpitPage;
 use crate::pages::email::{EmailPage, VerifyEmailPage};
 use crate::pages::home::HomePage;
