@@ -11,7 +11,7 @@ use crate::{
     CreatePostError, CreatePostInput, PostFormat, PostRecord, PostStorage, UpdatePostError,
     UpdatePostInput,
 };
-use common::ids::{PostId, UserId};
+use common::ids::{ChannelId, PostId, UserId};
 use common::post_body::PostBody;
 use common::post_title::PostTitle;
 use common::render::{derive_post_metadata, render};
@@ -516,7 +516,7 @@ pub async fn perform_post_creation(
                 // to an Anonymous viewer). The author branch of the resolution
                 // filter keys on `user_id` alone, so the channel id is irrelevant
                 // here; `0` is a harmless placeholder.
-                let viewer = common::visibility::ViewerIdentity::local(user_id, 0);
+                let viewer = common::visibility::ViewerIdentity::local(user_id, ChannelId::from(0));
                 let record = storage
                     .get_post_by_id(post_id, &viewer)
                     .await
