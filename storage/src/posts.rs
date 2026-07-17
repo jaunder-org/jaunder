@@ -6,7 +6,7 @@ use sqlx::{Database, Pool};
 use thiserror::Error;
 
 use common::feed::FeedPath;
-use common::ids::{AudienceId, PostId, TagId, UserId};
+use common::ids::{AudienceId, PostId, RevisionId, TagId, UserId};
 use common::post_body::PostBody;
 use common::post_title::PostTitle;
 use common::slug::Slug;
@@ -108,7 +108,7 @@ impl PostRecord {
 #[derive(Clone, Debug)]
 pub struct PostRevisionRecord {
     /// Unique identifier for this revision.
-    pub revision_id: i64,
+    pub revision_id: RevisionId,
     /// ID of the associated post.
     pub post_id: PostId,
     /// ID of the user who made the edit.
