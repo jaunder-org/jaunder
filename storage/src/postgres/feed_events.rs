@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use common::feed::FeedPath;
+use common::ids::FeedEventId;
 use sqlx::{Pool, Postgres, Row};
 
 use crate::feed_events::{
@@ -32,6 +33,12 @@ async fn purge_corrupt(pool: &Pool<Postgres>, ids: &[i64]) {
         tracing::warn!(error = %e, "feed_events: purge of corrupt rows failed");
         // cov:ignore-stop
     }
+}
+
+/// Unwrap an id batch to the raw `i64` slice Postgres binds as a single
+/// `= ANY($n)` array parameter — the sqlx seam takes `&[i64]`, not the newtype.
+fn raw_ids(ids: &[FeedEventId]) -> Vec<i64> {
+    ids.iter().map(|id| i64::from(*id)).collect()
 }
 
 #[async_trait]
@@ -77,7 +84,7 @@ impl FeedEventDialect for Postgres {
                 continue;
             };
             records.push(FeedEventRecord {
-                id,
+                id: FeedEventId::from(id),
                 feed_path,
                 status: parse_status(r.get::<&str, _>("status")),
                 attempts: r.get("attempts"),
@@ -93,21 +100,26 @@ impl FeedEventDialect for Postgres {
         Ok(records)
     }
 
-    async fn mark_regenerated(pool: &Pool<Postgres>, ids: &[i64]) -> Result<(), FeedEventError> {
+    async fn mark_regenerated(
+        pool: &Pool<Postgres>,
+        ids: &[FeedEventId],
+    ) -> Result<(), FeedEventError> {
         let now = Utc::now();
+        let raw = raw_ids(ids);
         sqlx::query("UPDATE feed_events SET regenerated_at = $1 WHERE id = ANY($2)")
             .bind(now)
-            .bind(ids)
+            .bind(&raw)
             .execute(pool)
             .await?;
         Ok(())
     }
 
-    async fn mark_pinged(pool: &Pool<Postgres>, ids: &[i64]) -> Result<(), FeedEventError> {
+    async fn mark_pinged(pool: &Pool<Postgres>, ids: &[FeedEventId]) -> Result<(), FeedEventError> {
         let now = Utc::now();
+        let raw = raw_ids(ids);
         sqlx::query("UPDATE feed_events SET status = 'done', pinged_at = $1 WHERE id = ANY($2)")
             .bind(now)
-            .bind(ids)
+            .bind(&raw)
             .execute(pool)
             .await?;
         Ok(())
@@ -115,10 +127,11 @@ impl FeedEventDialect for Postgres {
 
     async fn mark_failed(
         pool: &Pool<Postgres>,
-        ids: &[i64],
+        ids: &[FeedEventId],
         error: &str,
         next_attempt_at: DateTime<Utc>,
     ) -> Result<(), FeedEventError> {
+        let raw = raw_ids(ids);
         sqlx::query(
             "UPDATE feed_events \
              SET status = 'pending', attempts = attempts + 1, \
@@ -127,7 +140,7 @@ impl FeedEventDialect for Postgres {
         )
         .bind(error)
         .bind(next_attempt_at)
-        .bind(ids)
+        .bind(&raw)
         .execute(pool)
         .await?;
         Ok(())
@@ -135,12 +148,13 @@ impl FeedEventDialect for Postgres {
 
     async fn mark_exhausted(
         pool: &Pool<Postgres>,
-        ids: &[i64],
+        ids: &[FeedEventId],
         error: &str,
     ) -> Result<(), FeedEventError> {
+        let raw = raw_ids(ids);
         sqlx::query("UPDATE feed_events SET status = 'failed', last_error = $1 WHERE id = ANY($2)")
             .bind(error)
-            .bind(ids)
+            .bind(&raw)
             .execute(pool)
             .await?;
         Ok(())

@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use common::feed::FeedPath;
+use common::ids::FeedEventId;
 use sqlx::{Pool, Row, Sqlite};
 
 use crate::feed_events::{
@@ -84,7 +85,7 @@ impl FeedEventDialect for Sqlite {
             };
             let attempts: i64 = r.get("attempts");
             records.push(FeedEventRecord {
-                id,
+                id: FeedEventId::from(id),
                 feed_path,
                 status: parse_status(r.get::<&str, _>("status")),
                 attempts: i32::try_from(attempts).unwrap_or(i32::MAX),
@@ -100,26 +101,29 @@ impl FeedEventDialect for Sqlite {
         Ok(records)
     }
 
-    async fn mark_regenerated(pool: &Pool<Sqlite>, ids: &[i64]) -> Result<(), FeedEventError> {
+    async fn mark_regenerated(
+        pool: &Pool<Sqlite>,
+        ids: &[FeedEventId],
+    ) -> Result<(), FeedEventError> {
         let now = Utc::now();
         let ph = placeholders(ids.len());
         let sql = format!("UPDATE feed_events SET regenerated_at = ? WHERE id IN ({ph})");
         let mut q = sqlx::query(&sql).bind(now);
         for id in ids {
-            q = q.bind(*id);
+            q = q.bind(i64::from(*id));
         }
         q.execute(pool).await?;
         Ok(())
     }
 
-    async fn mark_pinged(pool: &Pool<Sqlite>, ids: &[i64]) -> Result<(), FeedEventError> {
+    async fn mark_pinged(pool: &Pool<Sqlite>, ids: &[FeedEventId]) -> Result<(), FeedEventError> {
         let now = Utc::now();
         let ph = placeholders(ids.len());
         let sql =
             format!("UPDATE feed_events SET status = 'done', pinged_at = ? WHERE id IN ({ph})");
         let mut q = sqlx::query(&sql).bind(now);
         for id in ids {
-            q = q.bind(*id);
+            q = q.bind(i64::from(*id));
         }
         q.execute(pool).await?;
         Ok(())
@@ -127,7 +131,7 @@ impl FeedEventDialect for Sqlite {
 
     async fn mark_failed(
         pool: &Pool<Sqlite>,
-        ids: &[i64],
+        ids: &[FeedEventId],
         error: &str,
         next_attempt_at: DateTime<Utc>,
     ) -> Result<(), FeedEventError> {
@@ -139,7 +143,7 @@ impl FeedEventDialect for Sqlite {
         );
         let mut q = sqlx::query(&sql).bind(error).bind(next_attempt_at);
         for id in ids {
-            q = q.bind(*id);
+            q = q.bind(i64::from(*id));
         }
         q.execute(pool).await?;
         Ok(())
@@ -147,7 +151,7 @@ impl FeedEventDialect for Sqlite {
 
     async fn mark_exhausted(
         pool: &Pool<Sqlite>,
-        ids: &[i64],
+        ids: &[FeedEventId],
         error: &str,
     ) -> Result<(), FeedEventError> {
         let ph = placeholders(ids.len());
@@ -155,7 +159,7 @@ impl FeedEventDialect for Sqlite {
             format!("UPDATE feed_events SET status = 'failed', last_error = ? WHERE id IN ({ph})");
         let mut q = sqlx::query(&sql).bind(error);
         for id in ids {
-            q = q.bind(*id);
+            q = q.bind(i64::from(*id));
         }
         q.execute(pool).await?;
         Ok(())

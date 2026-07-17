@@ -7,6 +7,7 @@ use std::time::Duration;
 use crate::websub::WebSubClient;
 use chrono::{DateTime, Utc};
 use common::feed::{affected_feed_urls, FeedPath};
+use common::ids::FeedEventId;
 use storage::{
     FeedCacheStorage, FeedEventRecord, FeedEventStorage, PostStorage, SiteConfigStorage,
 };
@@ -150,7 +151,7 @@ impl FeedWorker {
         hub_url: Option<&str>,
         identity: Option<&common::site::SiteIdentity>,
     ) {
-        let ids: Vec<i64> = recs.iter().map(|r| r.id).collect();
+        let ids: Vec<FeedEventId> = recs.iter().map(|r| r.id).collect();
         let started = std::time::Instant::now();
 
         match regenerate_feed(
@@ -193,7 +194,7 @@ impl FeedWorker {
     async fn ping_websub(
         &self,
         feed_url: &str,
-        ids: &[i64],
+        ids: &[FeedEventId],
         attempt: i32,
         hub_url: Option<&str>,
         identity: Option<&common::site::SiteIdentity>,
@@ -247,7 +248,7 @@ impl FeedWorker {
     async fn on_regen_failure(
         &self,
         feed_url: &str,
-        ids: &[i64],
+        ids: &[FeedEventId],
         recs: &[FeedEventRecord],
         e: &RegenerateError,
     ) {
@@ -316,7 +317,7 @@ mod tests {
     fn event(id: i64, feed_url: &str, attempts: i32) -> FeedEventRecord {
         let now = Utc::now();
         FeedEventRecord {
-            id,
+            id: FeedEventId::from(id),
             feed_path: feed_url.parse().expect("valid feed path in test"),
             status: FeedEventStatus::Claimed,
             attempts,

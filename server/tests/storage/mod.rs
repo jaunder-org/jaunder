@@ -1,5 +1,5 @@
 use chrono::{Datelike, Utc};
-use common::ids::{ChannelId, PostId, UserId};
+use common::ids::{ChannelId, FeedEventId, PostId, UserId};
 use common::password::Password;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
@@ -989,7 +989,7 @@ async fn feed_events_marks_run(#[case] backend: Backend) {
         .claim_pending_batch(50, chrono::Duration::minutes(5))
         .await
         .unwrap();
-    let ids: Vec<i64> = claimed.iter().map(|r| r.id).collect();
+    let ids: Vec<FeedEventId> = claimed.iter().map(|r| r.id).collect();
     assert!(!ids.is_empty());
 
     fe.mark_regenerated(&ids).await.unwrap();
