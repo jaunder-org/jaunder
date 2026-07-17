@@ -137,6 +137,22 @@ test("authenticated user can edit a draft post", async ({
   );
 });
 
+test("editing an invalid or nonexistent post shows not-found", async ({
+  registeredPage: page,
+}) => {
+  // Unparseable post_id ("abc") drives the #487 `None` arm: `post_id_param`
+  // yields None and the fetcher short-circuits to a client-side "Post not found"
+  // with no server lookup. This is the path the sentinel removal introduced, so
+  // it must be guarded against regressing to a sentinel id / wasted round-trip.
+  await goto(page, "/posts/abc/edit");
+  await expect(page.locator(SEL.error)).toContainText("Post not found");
+
+  // A well-formed but nonexistent id takes the unchanged `Some(id)` server path
+  // and must still surface the same message (parity with pre-#487 behavior).
+  await goto(page, "/posts/999999999/edit");
+  await expect(page.locator(SEL.error)).toContainText("Post not found");
+});
+
 test("editing a published post freezes the slug", async ({
   registeredPage: page,
 }) => {
