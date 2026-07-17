@@ -4,6 +4,7 @@ use std::sync::Arc;
 use crate::helpers::CapturingWebSubClient;
 use chrono::Utc;
 use common::feed::FeedPath;
+use common::ids::FeedEventId;
 use common::password::Password;
 use common::slug::Slug;
 use common::username::Username;
@@ -481,7 +482,7 @@ async fn worker_marks_exhausted_after_backoff_attempts_are_used_up(#[case] backe
             .claim_pending_batch(10, chrono::Duration::minutes(5))
             .await
             .expect("claim pending");
-        let ids: Vec<i64> = claimed.iter().map(|r| r.id).collect();
+        let ids: Vec<FeedEventId> = claimed.iter().map(|r| r.id).collect();
         assert!(!ids.is_empty(), "event should be claimable while seeding");
         state
             .feed_events

@@ -5,6 +5,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use common::feed::FeedPath;
+use common::ids::FeedEventId;
 use sqlx::{Database, Pool};
 use thiserror::Error;
 
@@ -32,7 +33,7 @@ pub(crate) fn parse_status(s: &str) -> FeedEventStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeedEventRecord {
-    pub id: i64,
+    pub id: FeedEventId,
     pub feed_path: FeedPath,
     pub status: FeedEventStatus,
     pub attempts: i32,
@@ -54,7 +55,7 @@ pub enum FeedEventError {
 #[async_trait]
 pub trait FeedEventStorage: Send + Sync {
     /// Insert a new `pending` row for `feed_path`. Returns the new row id.
-    async fn enqueue(&self, feed_path: &FeedPath) -> Result<i64, FeedEventError>;
+    async fn enqueue(&self, feed_path: &FeedPath) -> Result<FeedEventId, FeedEventError>;
 
     /// Atomically claim up to `limit` rows that are either:
     ///   * `status = 'pending' AND next_attempt_at <= now`, or
@@ -70,23 +71,23 @@ pub trait FeedEventStorage: Send + Sync {
 
     /// Stamp `regenerated_at = now` on the given rows. Status is unchanged
     /// (still `claimed` until ping resolves).
-    async fn mark_regenerated(&self, ids: &[i64]) -> Result<(), FeedEventError>;
+    async fn mark_regenerated(&self, ids: &[FeedEventId]) -> Result<(), FeedEventError>;
 
     /// Transition rows to `status = 'done'` and stamp `pinged_at = now`.
-    async fn mark_pinged(&self, ids: &[i64]) -> Result<(), FeedEventError>;
+    async fn mark_pinged(&self, ids: &[FeedEventId]) -> Result<(), FeedEventError>;
 
     /// Re-queue rows for another attempt: status back to `pending`,
     /// increment attempts, record the error, schedule the next attempt,
     /// and clear `claimed_at`.
     async fn mark_failed(
         &self,
-        ids: &[i64],
+        ids: &[FeedEventId],
         error: &str,
         next_attempt_at: DateTime<Utc>,
     ) -> Result<(), FeedEventError>;
 
     /// Terminal failure: status = 'failed', record the final error.
-    async fn mark_exhausted(&self, ids: &[i64], error: &str) -> Result<(), FeedEventError>;
+    async fn mark_exhausted(&self, ids: &[FeedEventId], error: &str) -> Result<(), FeedEventError>;
 }
 
 /// Backend-specific divergence for [`FeedEventStore`].
@@ -114,15 +115,16 @@ pub trait FeedEventDialect: Backend {
     ) -> Result<Vec<FeedEventRecord>, FeedEventError>;
 
     /// Stamp `regenerated_at = now` on all rows whose id is in `ids`.
-    async fn mark_regenerated(pool: &Pool<Self>, ids: &[i64]) -> Result<(), FeedEventError>;
+    async fn mark_regenerated(pool: &Pool<Self>, ids: &[FeedEventId])
+        -> Result<(), FeedEventError>;
 
     /// Transition rows to `done` and stamp `pinged_at = now`.
-    async fn mark_pinged(pool: &Pool<Self>, ids: &[i64]) -> Result<(), FeedEventError>;
+    async fn mark_pinged(pool: &Pool<Self>, ids: &[FeedEventId]) -> Result<(), FeedEventError>;
 
     /// Re-queue rows for another attempt.
     async fn mark_failed(
         pool: &Pool<Self>,
-        ids: &[i64],
+        ids: &[FeedEventId],
         error: &str,
         next_attempt_at: DateTime<Utc>,
     ) -> Result<(), FeedEventError>;
@@ -130,7 +132,7 @@ pub trait FeedEventDialect: Backend {
     /// Terminal failure: set `status = 'failed'` and record the final error.
     async fn mark_exhausted(
         pool: &Pool<Self>,
-        ids: &[i64],
+        ids: &[FeedEventId],
         error: &str,
     ) -> Result<(), FeedEventError>;
 }
@@ -166,13 +168,13 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn enqueue(&self, feed_path: &FeedPath) -> Result<i64, FeedEventError> {
+    async fn enqueue(&self, feed_path: &FeedPath) -> Result<FeedEventId, FeedEventError> {
         let id: i64 =
             sqlx::query_scalar("INSERT INTO feed_events (feed_url) VALUES ($1) RETURNING id")
                 .bind(feed_path.as_ref())
                 .fetch_one(&self.pool)
                 .await?;
-        Ok(id)
+        Ok(FeedEventId::from(id))
     }
 
     #[tracing::instrument(
@@ -196,7 +198,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn mark_regenerated(&self, ids: &[i64]) -> Result<(), FeedEventError> {
+    async fn mark_regenerated(&self, ids: &[FeedEventId]) -> Result<(), FeedEventError> {
         if ids.is_empty() {
             return Ok(());
         }
@@ -208,7 +210,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn mark_pinged(&self, ids: &[i64]) -> Result<(), FeedEventError> {
+    async fn mark_pinged(&self, ids: &[FeedEventId]) -> Result<(), FeedEventError> {
         if ids.is_empty() {
             return Ok(());
         }
@@ -222,7 +224,7 @@ where
     )]
     async fn mark_failed(
         &self,
-        ids: &[i64],
+        ids: &[FeedEventId],
         error: &str,
         next_attempt_at: DateTime<Utc>,
     ) -> Result<(), FeedEventError> {
@@ -237,7 +239,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn mark_exhausted(&self, ids: &[i64], error: &str) -> Result<(), FeedEventError> {
+    async fn mark_exhausted(&self, ids: &[FeedEventId], error: &str) -> Result<(), FeedEventError> {
         if ids.is_empty() {
             return Ok(());
         }
@@ -272,7 +274,7 @@ mod tests {
             .enqueue(&fp("/feed.rss"))
             .await
             .unwrap();
-        assert!(id > 0);
+        assert!(i64::from(id) > 0);
     }
 
     #[apply(backends)]
@@ -399,7 +401,7 @@ mod tests {
             .claim_pending_batch(10, chrono::Duration::minutes(5))
             .await
             .unwrap();
-        let ids: Vec<i64> = claimed.iter().map(|r| r.id).collect();
+        let ids: Vec<FeedEventId> = claimed.iter().map(|r| r.id).collect();
         env.state.feed_events.mark_regenerated(&ids).await.unwrap();
         env.state.feed_events.mark_pinged(&ids).await.unwrap();
         let next = env
