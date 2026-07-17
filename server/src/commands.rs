@@ -525,8 +525,6 @@ pub async fn prepare_server(
 
     let leptos_options = LeptosOptions::builder()
         .output_name("jaunder")
-        .site_root("target/site")
-        .site_pkg_dir("pkg")
         .env(if prod { Env::PROD } else { Env::DEV })
         .site_addr(bind)
         .build();

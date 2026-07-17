@@ -16,6 +16,7 @@ pub mod media_manager;
 pub mod observability;
 pub mod projector;
 pub mod runtime_file;
+pub mod site;
 pub mod websub;
 
 #[cfg(test)]
@@ -100,31 +101,24 @@ pub fn create_router(
             axum::routing::get(crate::feed::handlers::feed_user_tag),
         );
 
-    // --- The page path: no reactive render (#180, closes #173). Serve the static
-    //     SPA shell + site assets (pkg/*) plus the public projector's cacheable
-    //     anonymous HTML. The /api server fns and the raw HTTP routes (feed, media,
-    //     atompub, style) above are untouched, so server fns remain the data API;
-    //     only the page render leaves the request path. ---
+    // --- The page path: no reactive render (#180, closes #173). Serve the
+    //     embedded CSR site tree (pkg/*, public/*) plus the public projector's
+    //     cacheable anonymous HTML. The /api server fns and the raw HTTP routes
+    //     (feed, media, atompub, style) above are untouched, so server fns remain
+    //     the data API; only the page render leaves the request path. ---
     let app = {
-        use axum::handler::HandlerWithoutStateExt;
-        use axum::response::Html;
-        use tower_http::services::ServeDir;
-        // The embedded SPA-shell handler — declared before the statements below so it
-        // stays an item at the top of the block (clippy::items_after_statements).
-        async fn spa_shell() -> Html<&'static str> {
-            Html(web::render::SPA_SHELL)
-        }
-        let site_root = leptos_options.site_root.to_string();
-        // The CSR SPA shell is embedded (#239): the server owns it, the same way the
-        // projector renders its routes from constants. The `cargo xtask build-csr`
-        // build never writes index.html to site_root, so we don't read it from disk — only
-        // the wasm bundle (`pkg/*`) and public assets are served from `site_root`.
-        // Non-reactive HTML for the public discoverability routes (the projector,
-        // #178) sits ahead of this fallback; everything else boots the CSR client via
-        // the shell.
+        // The CSR bundle + public assets are embedded (#237, ADR-0003/0008): the
+        // server owns them, the same way the SPA shell (#239) and CSS
+        // (`StaticAssets`) are embedded. `site::serve_site` negotiates the
+        // precompressed (.br/.gz) variants and falls through to the SPA shell for
+        // any path with no embedded file — exactly as the old
+        // `ServeDir(...).fallback(spa_shell)` did (the build never writes
+        // index.html to disk; the server owns it). Non-reactive HTML for the
+        // public discoverability routes (the projector, #178) sits ahead of this
+        // fallback; everything else boots the CSR client via the shell.
         let app =
             crate::projector::register(app, crate::projector::Shell(web::render::SPA_SHELL.into()));
-        app.fallback_service(ServeDir::new(&site_root).fallback(spa_shell.into_service()))
+        app.fallback(site::serve_site)
     };
 
     let app = app

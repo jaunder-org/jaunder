@@ -1212,6 +1212,15 @@
                 # writing its mmap'd output on the CI runner.
                 CARGO_PROFILE_DEV_DEBUG = "0";
                 CARGO_PROFILE_TEST_DEBUG = "0";
+                # Stage the real CSR bundle + public assets so `server`'s
+                # `build.rs` embeds a POPULATED `site::Site` under instrumentation
+                # (#237). Without this the coverage sandbox has no bundle, and the
+                # `serve_site` handler's asset-serving branch could only be
+                # `cov:ignore`d; with it, the handler is exercised end-to-end by
+                # its integration tests and genuinely measured. Same env the
+                # release `jaunderBin` uses; `build.rs` copies from these paths.
+                JAUNDER_CSR_BUNDLE_DIR = "${csrWasmBundle}";
+                JAUNDER_PUBLIC_DIR = "${./public}";
                 nativeBuildInputs = commonArgs.nativeBuildInputs ++ [
                   devtoolBin
                   cargo-crap
