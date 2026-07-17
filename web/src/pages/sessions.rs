@@ -13,7 +13,7 @@ pub fn SessionsPage() -> impl IntoView {
     );
 
     view! {
-        <Topbar title="Sessions".to_string() sub="Active sessions".to_string() />
+        <Topbar title="Sessions" sub="Active sessions" />
         <div class="j-scroll">
             <div class="j-page">
                 <section class="j-app-passwords">

@@ -289,7 +289,7 @@ pub fn AudiencesPage() -> impl IntoView {
     provide_context(subscribers);
 
     view! {
-        <Topbar title="Audiences".to_string() sub="Named subscriber groups".to_string() />
+        <Topbar title="Audiences" sub="Named subscriber groups" />
         <div class="j-scroll">
             <div class="j-page">
                 <CreateAudienceForm />

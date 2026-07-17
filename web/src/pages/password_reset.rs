@@ -17,7 +17,7 @@ pub fn ForgotPasswordPage() -> impl IntoView {
     let username = Field::<Username>::new();
 
     view! {
-        <Topbar title="Forgot Password".to_string() sub="Recover access".to_string() />
+        <Topbar title="Forgot Password" sub="Recover access" />
         <div class="j-scroll">
             <div class="j-page">
                 <ActionForm action=request_action>
@@ -76,7 +76,7 @@ pub fn ResetPasswordPage() -> impl IntoView {
     let new_password = Field::<Password>::new();
 
     view! {
-        <Topbar title="Reset Password".to_string() sub="Set a new password".to_string() />
+        <Topbar title="Reset Password" sub="Set a new password" />
         <div class="j-scroll">
             <div class="j-page">
                 <ActionForm action=confirm_action>

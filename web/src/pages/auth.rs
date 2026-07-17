@@ -52,7 +52,7 @@ pub fn RegisterPage() -> impl IntoView {
     });
 
     view! {
-        <Topbar title="Register".to_string() sub="Create your account".to_string() />
+        <Topbar title="Register" sub="Create your account" />
         <div class="j-scroll">
             <div class="j-page-narrow">
                 <Suspense fallback=|| {
@@ -154,7 +154,7 @@ pub fn LoginPage() -> impl IntoView {
     });
 
     view! {
-        <Topbar title="Login".to_string() sub="Sign in to your account".to_string() />
+        <Topbar title="Login" sub="Sign in to your account" />
         <div class="j-scroll">
             <div class="j-page-narrow">
                 <ActionForm action=login_action attr:class="j-card">
@@ -225,7 +225,7 @@ pub fn LogoutPage() -> impl IntoView {
     });
 
     view! {
-        <Topbar title="Logout".to_string() />
+        <Topbar title="Logout" />
         <div class="j-scroll">
             <div class="j-page">
                 <p class="j-loading">"Logging out\u{2026}"</p>

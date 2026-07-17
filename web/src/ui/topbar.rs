@@ -25,8 +25,8 @@ pub(crate) fn render_topbar(title: &str, sub: Option<&str>, right: &str) -> Stri
 /// children. Twins [`render_topbar`] — keep their markup coincident.
 #[component]
 pub fn Topbar(
-    #[prop(into)] title: Signal<String>,
-    #[prop(optional, into)] sub: Option<Signal<String>>,
+    #[prop(into)] title: TextProp,
+    #[prop(optional, into)] sub: Option<TextProp>,
     #[prop(optional)] children: Option<Children>,
 ) -> impl IntoView {
     view! {
