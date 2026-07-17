@@ -13,7 +13,7 @@ pub fn SiteSettingsPage() -> impl IntoView {
     );
 
     view! {
-        <Topbar title="Site Settings".to_string() sub="Operations".to_string() />
+        <Topbar title="Site Settings" sub="Operations" />
         <div class="j-scroll">
             <div class="j-settings j-site-settings">
                 <Suspense fallback=|| {

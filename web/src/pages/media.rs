@@ -28,7 +28,7 @@ pub fn MediaPage() -> impl IntoView {
     );
 
     view! {
-        <Topbar title="Media".to_string() sub="Your uploads".to_string() />
+        <Topbar title="Media" sub="Your uploads" />
         <div class="j-page">
             <div class="j-sb-head" style="margin-bottom:8px">
                 "Upload"

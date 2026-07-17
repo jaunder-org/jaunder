@@ -15,7 +15,7 @@ pub fn BackupSettingsPage() -> impl IntoView {
     );
 
     view! {
-        <Topbar title="Backup Settings".to_string() sub="Operations".to_string() />
+        <Topbar title="Backup Settings" sub="Operations" />
         <div class="j-scroll">
             <div class="j-settings j-backup-settings">
                 <Suspense fallback=|| {

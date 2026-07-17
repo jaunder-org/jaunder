@@ -15,7 +15,7 @@ pub fn EmailPage() -> impl IntoView {
     let profile = crate::server_resource(move || request_action.version().get(), |_| get_profile());
 
     view! {
-        <Topbar title="Email".to_string() sub="Verify your address".to_string() />
+        <Topbar title="Email" sub="Verify your address" />
         <div class="j-scroll">
             <div class="j-page">
                 <Suspense fallback=|| {
@@ -81,7 +81,7 @@ pub fn VerifyEmailPage() -> impl IntoView {
     let result = crate::server_resource(token, verify_email);
 
     view! {
-        <Topbar title="Verify Email".to_string() />
+        <Topbar title="Verify Email" />
         <div class="j-scroll">
             <div class="j-page">
                 <Suspense fallback=|| {

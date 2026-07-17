@@ -15,7 +15,7 @@ Every full-window page renders, in order:
 
 ```rust
 view! {
-    <Topbar title="…".to_string() sub="…".to_string() />
+    <Topbar title="…" sub="…" />
     <div class="j-scroll">
         <div class="j-page">
             // page body
@@ -33,9 +33,9 @@ view! {
   line.
 - `Topbar` accepts `children` for right-aligned actions (sign-in buttons,
   primary CTA). See `home.rs` Local mode for the pattern.
-- Both `title` and `sub` accept either a static `String` or a closure
-  (`move || …`) for reactive content — see `UserTimelinePage` for the closure
-  form.
+- `title` and `sub` are `leptos::TextProp`: pass a bare `&'static str` literal
+  (`title="Posts"`) or `String` for static content, or a closure (`move || …`) /
+  signal for reactive content — see `UserTimelinePage` for the closure form.
 - The outer `<div class="j-scroll">` is the scrollable region; the inner padded
   div is the gutter. Pages that follow a dense card-grid layout (Backup,
   settings-style forms) may use `<div class="j-settings">` instead — it provides

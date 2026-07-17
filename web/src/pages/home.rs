@@ -62,8 +62,8 @@ pub fn HomePage() -> impl IntoView {
             // is hidden for the owner via `html.authed` CSS (pre-paint, flash-free).
             view! {
                 <Topbar
-                    title="jaunder.local".to_string()
-                    sub="Read-only \u{00b7} posts originating on this instance".to_string()
+                    title="jaunder.local"
+                    sub="Read-only \u{00b7} posts originating on this instance"
                 >
                     <a href="/login" class="j-btn j-anon-only">
                         "Sign in"

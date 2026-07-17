@@ -19,7 +19,7 @@ pub fn ProfilePage() -> impl IntoView {
     let bio = RwSignal::new(String::new());
 
     view! {
-        <Topbar title="Profile".to_string() sub="Your details".to_string() />
+        <Topbar title="Profile" sub="Your details" />
         <div class="j-scroll">
             <div class="j-page">
                 <Suspense fallback=|| {

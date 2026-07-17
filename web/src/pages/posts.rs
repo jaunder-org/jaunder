@@ -32,7 +32,7 @@ pub fn CreatePostPage() -> impl IntoView {
     let last_result: RwSignal<Option<CreatePostResult>> = RwSignal::new(None);
 
     view! {
-        <Topbar title="New post".to_string() sub="Long-form".to_string() />
+        <Topbar title="New post" sub="Long-form" />
         <Suspense fallback=|| {
             view! { <p class="j-loading">"Loading\u{2026}"</p> }
         }>
@@ -462,10 +462,7 @@ pub fn UserTimelinePage() -> impl IntoView {
                     }
                 })
         }}
-        <Topbar
-            title=move || format!("Posts by {}", display_username())
-            sub="User timeline".to_string()
-        />
+        <Topbar title=move || format!("Posts by {}", display_username()) sub="User timeline" />
         <div class="j-scroll">
             <div class="j-page">
                 {move || {
@@ -694,7 +691,7 @@ pub fn EditPostPage() -> impl IntoView {
     });
 
     view! {
-        <Topbar title="Edit Post".to_string() sub="Long-form".to_string() />
+        <Topbar title="Edit Post" sub="Long-form" />
         <Suspense fallback=|| {
             view! { <p class="j-loading">"Loading\u{2026}"</p> }
         }>
@@ -939,7 +936,7 @@ pub fn DraftsPage() -> impl IntoView {
     );
 
     view! {
-        <Topbar title="Drafts".to_string() sub="Unpublished posts".to_string() />
+        <Topbar title="Drafts" sub="Unpublished posts" />
         <div class="j-scroll">
             <div class="j-page">
                 <Suspense fallback=|| {
@@ -1224,7 +1221,7 @@ pub fn SiteTagPage() -> impl IntoView {
         }}
         <Topbar
             title=Signal::derive(move || format!("#{}", read_tag()))
-            sub="Posts on this instance".to_string()
+            sub="Posts on this instance"
         />
         <div class="j-scroll">
             <div class="j-page">

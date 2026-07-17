@@ -17,7 +17,7 @@ pub fn InvitesPage() -> impl IntoView {
     let invites = crate::server_resource(move || create_action.version().get(), |_| list_invites());
 
     view! {
-        <Topbar title="Invites".to_string() sub="Manage codes".to_string() />
+        <Topbar title="Invites" sub="Manage codes" />
         <div class="j-scroll">
             <div class="j-page">
                 <Suspense fallback=|| {

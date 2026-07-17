@@ -80,14 +80,14 @@ pub fn CockpitPage() -> impl IntoView {
             match read_username() {
                 None => {
                     view! {
-                        <Topbar title="Home".to_string() />
+                        <Topbar title="Home" />
                         <p class="j-loading">"Loading\u{2026}"</p>
                     }
                         .into_any()
                 }
                 Some(user) => {
                     view! {
-                        <Topbar title="Home".to_string() sub="Your home feed".to_string() />
+                        <Topbar title="Home" sub="Your home feed" />
                         <InlineComposer username=user on_publish=refresh_version.write_only() />
                         <TimelineRows state=state on_mutate=on_mutate on_load_more=on_load_more />
                     }
