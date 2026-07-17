@@ -11,10 +11,13 @@
 //! steps. Wasm-only: the served CSS is committed + rust-embedded
 //! (`server/assets/`), not part of this bundle.
 
-use std::path::Path;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{bail, Context};
+use flate2::write::GzEncoder;
+use flate2::Compression;
 
 /// wasm-bindgen names its outputs after the input stem; our input is `csr.wasm`.
 const IN_JS: &str = "csr.js";
@@ -31,9 +34,51 @@ fn rewrite_wasm_ref(js: &str) -> String {
     js.replace(IN_WASM, OUT_WASM)
 }
 
+/// Brotli-compress `bytes` at max quality (11, lgwin 22) — the release-asset
+/// setting; the bundle is compressed once at build time, not per request.
+fn brotli_compress(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
+    let mut out = Vec::new();
+    {
+        let mut w = brotli::CompressorWriter::new(&mut out, 4096, 11, 22);
+        w.write_all(bytes).context("brotli write")?;
+    }
+    Ok(out)
+}
+
+/// Gzip-compress `bytes` at best compression.
+fn gzip_compress(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
+    let mut e = GzEncoder::new(Vec::new(), Compression::best());
+    e.write_all(bytes).context("gzip write")?;
+    e.finish().context("gzip finish")
+}
+
+/// Append `.<ext>` to a path (e.g. `jaunder.wasm` -> `jaunder.wasm.br`).
+fn with_suffix(path: &Path, ext: &str) -> PathBuf {
+    let mut s = path.as_os_str().to_os_string();
+    s.push(".");
+    s.push(ext);
+    PathBuf::from(s)
+}
+
+/// Write brotli (`.br`) and gzip (`.gz`) precompressed siblings next to `path`,
+/// so the server can serve a precompressed variant by content negotiation
+/// without compressing per request (#237). Only the top-level JS/wasm are
+/// precompressed; wasm-bindgen `snippets/` are tiny and served identity.
+fn write_precompressed(path: &Path) -> anyhow::Result<()> {
+    let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let br = with_suffix(path, "br");
+    std::fs::write(&br, brotli_compress(&bytes)?)
+        .with_context(|| format!("writing {}", br.display()))?;
+    let gz = with_suffix(path, "gz");
+    std::fs::write(&gz, gzip_compress(&bytes)?)
+        .with_context(|| format!("writing {}", gz.display()))?;
+    Ok(())
+}
+
 /// Run `wasm-bindgen --target web` over `wasm` into `out`, then rename the
-/// outputs to the `jaunder` names and fix the JS wasm reference. Byte-identical
-/// to the flake's inline `csrWasmBundle` steps.
+/// outputs to the `jaunder` names, fix the JS wasm reference, and write
+/// precompressed (`.br`/`.gz`) siblings for the JS/wasm. Byte-identical to the
+/// flake's inline `csrWasmBundle` steps for the raw outputs.
 pub fn run(wasm: &Path, out: &Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(out).with_context(|| format!("creating out dir {}", out.display()))?;
 
@@ -59,6 +104,10 @@ pub fn run(wasm: &Path, out: &Path) -> anyhow::Result<()> {
         .with_context(|| format!("reading {}", js_path.display()))?;
     std::fs::write(&js_path, rewrite_wasm_ref(&js))
         .with_context(|| format!("writing {}", js_path.display()))?;
+
+    // Precompress the final JS (post wasm-ref rewrite) and the wasm.
+    write_precompressed(&js_path).context("precompressing jaunder.js")?;
+    write_precompressed(&out.join(OUT_WASM)).context("precompressing jaunder.wasm")?;
 
     Ok(())
 }
@@ -86,5 +135,46 @@ mod tests {
     fn already_renamed_is_unchanged() {
         let js = "init('jaunder.wasm')";
         assert_eq!(rewrite_wasm_ref(js), js);
+    }
+
+    #[test]
+    fn brotli_round_trips_and_shrinks() {
+        use std::io::Read;
+        let input = b"the quick brown fox jumps over the lazy dog".repeat(50);
+        let compressed = brotli_compress(&input).unwrap();
+        assert!(
+            compressed.len() < input.len(),
+            "brotli should shrink repetitive input"
+        );
+        let mut decoded = Vec::new();
+        brotli::Decompressor::new(compressed.as_slice(), 4096)
+            .read_to_end(&mut decoded)
+            .unwrap();
+        assert_eq!(decoded, input);
+    }
+
+    #[test]
+    fn gzip_round_trips_and_shrinks() {
+        use flate2::read::GzDecoder;
+        use std::io::Read;
+        let input = b"the quick brown fox jumps over the lazy dog".repeat(50);
+        let compressed = gzip_compress(&input).unwrap();
+        assert!(
+            compressed.len() < input.len(),
+            "gzip should shrink repetitive input"
+        );
+        let mut decoded = Vec::new();
+        GzDecoder::new(compressed.as_slice())
+            .read_to_end(&mut decoded)
+            .unwrap();
+        assert_eq!(decoded, input);
+    }
+
+    #[test]
+    fn with_suffix_appends_dotted_ext() {
+        assert_eq!(
+            with_suffix(Path::new("a/jaunder.wasm"), "br"),
+            PathBuf::from("a/jaunder.wasm.br")
+        );
     }
 }

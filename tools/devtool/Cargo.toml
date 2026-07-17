@@ -12,3 +12,5 @@ anyhow = "1"
 coverage = { path = "../coverage" }
 tempfile = "3"
 signal-hook = "0.3"
+brotli = "8"
+flate2 = "1"
