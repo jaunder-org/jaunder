@@ -70,7 +70,6 @@
         let
           targetSystem = pkgs.stdenv.hostPlatform.system;
           jaunderBin = self.packages.${targetSystem}.jaunder;
-          site = self.packages.${targetSystem}.site;
         in
         {
           options.services.jaunder = {
@@ -116,9 +115,9 @@
               // lib.optionalAttrs cfg.prod {
                 JAUNDER_ENV = "prod";
               };
+              # No `target/site` symlink: the binary embeds its CSR bundle +
+              # public assets (#237), so it serves them with no external files.
               preStart = ''
-                mkdir -p target
-                ln -sfn ${site} target/site
                 ${jaunderBin}/bin/jaunder init --db "$JAUNDER_DB" --skip-if-exists
               '';
               serviceConfig = {
@@ -361,6 +360,14 @@
           // {
             inherit cargoArtifacts;
             cargoExtraArgs = "-p jaunder";
+            # Embed the CSR bundle + public assets into the binary (#237): the
+            # release artifact is self-contained (ADR-0003/0008), serving pkg/*
+            # and public/* with no external files. `server/build.rs` stages these
+            # into the embed; the env vars are its inputs (the crane `src` filter
+            # admits neither the bundle nor public/, so they arrive via env). This
+            # is the build-order edge that makes the binary depend on the bundle.
+            JAUNDER_CSR_BUNDLE_DIR = "${csrWasmBundle}";
+            JAUNDER_PUBLIC_DIR = "${./public}";
             # Tests are covered by the separate `nextest` check; disabling here
             # avoids a redundant `cargo test` compile + run during the package
             # build.
@@ -457,10 +464,11 @@
           };
         });
 
-        # The site the server serves: the CSR client's wasm bundle (`pkg/*`) + public
-        # assets. The SPA shell (`csr/index.html`) is NOT staged here — the server
-        # embeds it (#239) and serves it from a compile-time constant on host and Nix
-        # alike, so no disk `index.html` is needed.
+        # The CSR client's wasm bundle (`pkg/*`) + public assets, assembled as a
+        # tree. The server no longer serves this from disk — it embeds the bundle
+        # + public assets (#237) and the SPA shell (#239) into the binary. `site`
+        # is retained because `cargo xtask audit-wasm` builds `.#site` and inspects
+        # `$out/pkg/jaunder.{wasm,js}` for bundle-size analysis (ADR-0028).
         site = pkgs.runCommand "jaunder-site" { } ''
           mkdir -p $out/pkg
           cp -r ${csrWasmBundle}/. $out/pkg/
