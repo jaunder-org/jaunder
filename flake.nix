@@ -1117,13 +1117,13 @@
                   commonArgs
                   // {
                     CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
-                    cargoExtraArgs = "-p web --features csr";
+                    cargoExtraArgs = "-p web -p client --features csr";
                     doCheck = false;
                   }
                 );
                 CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
                 cargoClippyExtraArgs =
-                  "-p web --features csr -- -D warnings "
+                  "-p web -p client --features csr -- -D warnings "
                   + "-A clippy::too_many_arguments -A unfulfilled_lint_expectations";
               }
             );
