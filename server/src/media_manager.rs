@@ -7,7 +7,7 @@ use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
 use common::ids::UserId;
-use common::media::{detect_content_type, media_path, media_url, sanitize_filename, ContentHash};
+use common::media::{detect_content_type, media_path, media_url, ContentHash, Filename};
 use storage::{
     CreateMediaError, MediaRecord, MediaSource, MediaStorage, SiteConfigStorage,
     DEFAULT_MAX_FILE_SIZE_BYTES, DEFAULT_USER_QUOTA_BYTES, MEDIA_MAX_FILE_SIZE_BYTES_KEY,
@@ -39,7 +39,7 @@ pub struct MediaManager {
 /// File metadata for upload finalization.
 #[derive(Debug)]
 struct UploadMetadata {
-    filename: String,
+    filename: Filename,
     content_type: String,
     sha256_hex: ContentHash,
     size_bytes: i64,
@@ -102,13 +102,12 @@ impl MediaManager {
     /// # Errors
     ///
     /// Returns `anyhow::Error` if the filename is empty after sanitization.
-    pub fn validate_filename(file_name: Option<&str>) -> anyhow::Result<String> {
+    pub fn validate_filename(file_name: Option<&str>) -> anyhow::Result<Filename> {
         let raw_name = file_name.unwrap_or("upload");
-        let name = sanitize_filename(raw_name);
-        if name.is_empty() {
-            anyhow::bail!(MediaError::BadRequest("Invalid filename".to_owned()));
-        }
-        Ok(name)
+        // Door B: normalize the client's arbitrary name to a safe leaf, rejecting an
+        // empty-after-sanitize result as a bad request.
+        Filename::sanitized(raw_name)
+            .map_err(|_| anyhow::anyhow!(MediaError::BadRequest("Invalid filename".to_owned())))
     }
 
     pub fn get_content_type(content_type: Option<&str>, filename: &str) -> String {
@@ -207,14 +206,14 @@ impl MediaManager {
         &self,
         user_id: UserId,
         sha256_hex: &ContentHash,
-        filename: &str,
+        filename: &Filename,
         content_type: &str,
         size_bytes: i64,
     ) -> anyhow::Result<()> {
         let record = MediaRecord {
             user_id,
             sha256: sha256_hex.clone(),
-            filename: filename.to_owned(),
+            filename: filename.clone(),
             source: MediaSource::Upload,
             content_type: content_type.to_owned(),
             size_bytes,
@@ -301,13 +300,14 @@ impl MediaManager {
     pub async fn upload_bytes(
         &self,
         auth_user: &AuthUser,
-        filename: &str,
+        filename: &Filename,
         content_type: &str,
         bytes: &[u8],
     ) -> anyhow::Result<crate::media::UploadResponse> {
         let (max_file_size, user_quota) = self.get_limits().await?;
-        let filename = Self::validate_filename(Some(filename))?;
-        let content_type = Self::get_content_type(Some(content_type), &filename);
+        // `filename` is already a validated `Filename` (the caller ran Door B on the
+        // client's name), so there is no re-sanitize here.
+        let content_type = Self::get_content_type(Some(content_type), filename);
 
         let size_bytes = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
         if size_bytes > max_file_size {
@@ -320,7 +320,7 @@ impl MediaManager {
         fs::write(&tmp_path, bytes).await?;
 
         let metadata = UploadMetadata {
-            filename,
+            filename: filename.clone(),
             content_type,
             sha256_hex,
             size_bytes,
@@ -373,7 +373,7 @@ impl MediaManager {
 mod tests {
     use super::*;
     use crate::test_support::{media, migrated_sqlite_db, site_config, users};
-    use common::test_support::parse_content_hash;
+    use common::test_support::{parse_content_hash, parse_filename};
     use tempfile::TempDir;
 
     #[test]
@@ -421,7 +421,7 @@ mod tests {
                 &parse_content_hash(
                     "deadbeef00000000000000000000000000000000000000000000000000000000",
                 ),
-                "file.png",
+                &parse_filename("file.png"),
                 "image/png",
                 100,
             )
@@ -592,7 +592,7 @@ mod tests {
         let expected_sha = format!("{:x}", Sha256::digest(bytes));
 
         let first = manager
-            .upload_bytes(&auth, "pic.png", "image/png", bytes)
+            .upload_bytes(&auth, &parse_filename("pic.png"), "image/png", bytes)
             .await
             .unwrap();
         assert_eq!(first.sha256.as_ref(), expected_sha.as_str());
@@ -602,7 +602,7 @@ mod tests {
 
         // Identical re-upload must succeed and dedup to the same record.
         let second = manager
-            .upload_bytes(&auth, "pic.png", "image/png", bytes)
+            .upload_bytes(&auth, &parse_filename("pic.png"), "image/png", bytes)
             .await
             .unwrap();
         assert_eq!(second.sha256, first.sha256);
@@ -633,7 +633,12 @@ mod tests {
         };
 
         let err = manager
-            .upload_bytes(&auth, "big.bin", "application/octet-stream", &[0_u8; 11])
+            .upload_bytes(
+                &auth,
+                &parse_filename("big.bin"),
+                "application/octet-stream",
+                &[0_u8; 11],
+            )
             .await
             .unwrap_err();
         assert_eq!(MediaManager::map_error(&err), StatusCode::PAYLOAD_TOO_LARGE);

@@ -21,6 +21,7 @@ use quick_xml::{Reader, Writer};
 
 use super::xml::{write_empty_element, write_link, write_text_element};
 use super::{AtomPubError, APP_NS, ATOM_NS, J_NS};
+use crate::media::Filename;
 
 // ---------------------------------------------------------------------------
 // Draft flag (app:control/app:draft) helpers
@@ -588,8 +589,8 @@ pub fn render_feed(meta: &FeedMeta, entries: &[Entry]) -> String {
 pub struct MediaLinkEntry {
     /// Stable entry id (an IRI).
     pub id: String,
-    /// Human-readable title (typically the filename).
-    pub title: String,
+    /// The uploaded media's filename (rendered as the entry's human-readable title).
+    pub title: Filename,
     /// `rel="edit"` href — the media-link member resource.
     pub edit_uri: String,
     /// `rel="edit-media"` href — the binary media resource.
@@ -637,6 +638,7 @@ pub fn render_media_link_entry(entry: &MediaLinkEntry) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::parse_filename;
 
     fn content_parts(entry: &Entry) -> (Option<&str>, Option<&str>) {
         match entry.content() {
@@ -1028,7 +1030,7 @@ mod tests {
     fn render_media_link_entry_references_binary_by_src() {
         let out = render_media_link_entry(&MediaLinkEntry {
             id: "https://h/atompub/alice/media/abc/pic.png".to_string(),
-            title: "pic.png".to_string(),
+            title: parse_filename("pic.png"),
             edit_uri: "https://h/atompub/alice/media/abc/pic.png".to_string(),
             edit_media_uri: "https://h/media/upload/ab/c0/abc/pic.png".to_string(),
             content_src: "https://h/media/upload/ab/c0/abc/pic.png".to_string(),

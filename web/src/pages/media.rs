@@ -155,7 +155,10 @@ pub fn MediaPage() -> impl IntoView {
 // cov:ignore-start
 fn render_media_row(item: &MediaItem, delete_action: ServerAction<DeleteMedia>) -> impl IntoView {
     let url = item.url.clone();
-    let filename = item.filename.clone();
+    // `Filename` implements neither Leptos `IntoView` nor `IntoAttributeValue`, so
+    // render it as an owned String for the link text and the hidden form field
+    // (mirroring `item.sha256.to_string()` below).
+    let filename = item.filename.to_string();
     // The ActionForm hidden field needs an owned String; `ContentHash: Display`.
     let sha256 = item.sha256.to_string();
     let source = item.source.clone();

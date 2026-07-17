@@ -11,7 +11,7 @@ use tokio::fs;
 use tokio_util::io::ReaderStream;
 
 use common::ids::UserId;
-use common::media::{detect_content_type, should_inline, ContentHash};
+use common::media::{detect_content_type, should_inline, ContentHash, Filename};
 use storage::{MediaSource, MediaStorage, SiteConfigStorage};
 use web::auth::AuthUser;
 
@@ -40,7 +40,7 @@ where
 #[derive(Debug, Serialize)]
 pub struct UploadResponse {
     pub sha256: ContentHash,
-    pub filename: String,
+    pub filename: Filename,
     pub content_type: String,
     pub size_bytes: i64,
     pub url: String,
@@ -229,18 +229,22 @@ pub async fn proxy_handler(
 // ---------------------------------------------------------------------------
 
 /// Validates the serve route's attacker-controlled path parameters, returning
-/// the parsed [`MediaSource`] and [`ContentHash`], or `NOT_FOUND` for any invalid
-/// component.
+/// the parsed [`MediaSource`], [`ContentHash`], and [`Filename`], or `NOT_FOUND`
+/// for any invalid component.
 ///
 /// The hash is parsed into a [`ContentHash`] here (via its `FromStr`, which
 /// enforces canonical 64-char lowercase hex) — a malformed value is rejected as a
 /// DoS-safe `NOT_FOUND` before it is ever sliced, so the downstream
 /// `hash[2..]`/path-join can never panic. `p1`/`p2` must be the matching leading
-/// hex pairs of the hash. `filename` must be a single normal leaf component:
-/// `sanitize_filename` strips path components, `.`/`..`, and null bytes, so a
-/// sanitized value differing from the input was not a safe leaf (e.g. `..`,
-/// `a/b`) and is rejected to prevent path traversal.
-fn validate_serve_params(params: &ServeParams) -> Result<(MediaSource, ContentHash), StatusCode> {
+/// hex pairs of the hash. `filename` is parsed into a [`Filename`], whose
+/// validating `FromStr` accepts only a single safe leaf (a name `sanitize_filename`
+/// leaves unchanged); a value that isn't (e.g. `..`, `a/b`) is rejected as
+/// `NOT_FOUND` to prevent path traversal. Keeping `ServeParams` fields as `String`
+/// (rather than typed extractors) is what makes a bad segment a 404 on this public
+/// content route instead of axum's pre-handler 400.
+fn validate_serve_params(
+    params: &ServeParams,
+) -> Result<(MediaSource, ContentHash, Filename), StatusCode> {
     let source: MediaSource = params.source.parse().map_err(|_| StatusCode::NOT_FOUND)?;
 
     // Parse (not just check) the attacker-controlled hash into the newtype here, at
@@ -253,11 +257,15 @@ fn validate_serve_params(params: &ServeParams) -> Result<(MediaSource, ContentHa
         return Err(StatusCode::NOT_FOUND);
     }
 
-    if common::media::sanitize_filename(&params.filename) != params.filename {
-        return Err(StatusCode::NOT_FOUND);
-    }
+    // Parse the attacker-influenced filename into the newtype rather than re-checking
+    // `sanitize_filename(x) == x` inline: `Filename`'s validating `FromStr` *is* that
+    // predicate, so a non-canonical leaf (traversal, separators) fails to parse and
+    // yields the same 404. `ServeParams.filename` stays `String` so this public content
+    // route answers 404 (not axum's pre-handler 400) for a bad segment; the typed value
+    // flows to the on-disk path join.
+    let filename: Filename = params.filename.parse().map_err(|_| StatusCode::NOT_FOUND)?;
 
-    Ok((source, hash))
+    Ok((source, hash, filename))
 }
 
 /// Validates the serve route's path parameters and resolves the on-disk file
@@ -266,17 +274,17 @@ fn resolve_media_path(
     storage_path: &std::path::Path,
     params: &ServeParams,
 ) -> Result<(MediaSource, ContentHash, PathBuf), StatusCode> {
-    let (source, hash) = validate_serve_params(params)?;
+    let (source, hash, filename) = validate_serve_params(params)?;
     let file_path = storage_path
         .join("media")
         .join(source.as_str())
         .join(&params.p1)
         .join(&params.p2)
-        // Join the parsed hash, not the raw `params.hash`: identical bytes today
-        // (`FromStr` rejects rather than normalizes), but keeps the on-disk path
-        // built from the validated value should that ever change.
+        // Join the parsed hash and filename, not the raw `params.*`: identical bytes
+        // today (`FromStr` rejects rather than normalizes), but keeps the on-disk path
+        // built from the validated values should that ever change.
         .join(hash.as_ref())
-        .join(&params.filename);
+        .join(filename.as_ref());
 
     Ok((source, hash, file_path))
 }
@@ -385,6 +393,16 @@ mod tests {
                 .join(hash)
                 .join("photo.jpg")
         );
+    }
+
+    #[test]
+    fn validate_serve_params_returns_typed_filename_for_canonical_name() {
+        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        let p = params("upload", "e3", "b0", hash, "photo.jpg");
+        let (source, h, filename) = validate_serve_params(&p).expect("valid params");
+        assert_eq!(source, MediaSource::Upload);
+        assert_eq!(h, hash);
+        assert_eq!(filename, "photo.jpg"); // Filename: PartialEq<str>
     }
 
     #[test]

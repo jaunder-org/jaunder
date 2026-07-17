@@ -168,7 +168,10 @@ async fn get_unknown_media_returns_404(#[case] backend: Backend) {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/atompub/alice/media/deadbeef/none.png")
+                // A well-formed but never-uploaded hash: the typed extractor accepts it,
+                // and the handler returns 404 for the absent record (a *malformed* hash
+                // would be a pre-handler 400 — see member_rejects_malformed_segment).
+                .uri("/atompub/alice/media/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/none.png")
                 .header(header::AUTHORIZATION, basic_header("alice", &token))
                 .body(Body::empty())
                 .unwrap(),
@@ -330,7 +333,9 @@ async fn member_forbids_other_user(backend: Backend, #[case] method: &str) {
         .oneshot(
             Request::builder()
                 .method(method)
-                .uri("/atompub/bob/media/deadbeef/pic.png")
+                // A well-formed hash so the typed extractor passes and the wrong-user
+                // check (alice authenticated, bob's namespace) is what yields 403.
+                .uri("/atompub/bob/media/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/pic.png")
                 .header(header::AUTHORIZATION, basic_header("alice", &token))
                 .body(Body::empty())
                 .unwrap(),
@@ -339,4 +344,47 @@ async fn member_forbids_other_user(backend: Backend, #[case] method: &str) {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+// A malformed `{sha}` or `{filename}` segment on the authenticated member routes is
+// rejected by the typed `Path<(Username, ContentHash, Filename)>` extractor as a
+// pre-handler 400 (the URL is one we minted, so a bad segment is the caller's fault) —
+// distinct from a well-formed-but-absent resource, which is 404 above.
+#[apply(backends)]
+#[tokio::test]
+async fn member_rejects_malformed_segment_returns_400(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let token = seed_alice(&state).await;
+    let storage = TempDir::new().unwrap();
+    let app = make_app(Arc::clone(&state), &storage);
+
+    // Malformed hash segment (`deadbeef` is not 64 hex) → ContentHash parse fails → 400.
+    let bad_hash = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/atompub/alice/media/deadbeef/pic.png")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bad_hash.status(), StatusCode::BAD_REQUEST);
+
+    // Non-canonical filename segment (`a%5Cb.png` decodes to `a\b.png`, not a safe leaf)
+    // → Filename parse fails → 400.
+    let bad_name = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/atompub/alice/media/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/a%5Cb.png")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bad_name.status(), StatusCode::BAD_REQUEST);
 }

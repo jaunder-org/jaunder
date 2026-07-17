@@ -15,7 +15,7 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{post_form, session_cookie, test_options};
-use common::test_support::parse_content_hash;
+use common::test_support::{parse_content_hash, parse_filename};
 use storage::test_support::{backends, backends_matrix, noop_mailer, Backend, TestEnv};
 
 // ─── media_usage ──────────────────────────────────────────────
@@ -125,7 +125,7 @@ async fn list_my_media_returns_inserted_item(#[case] backend: Backend) {
         sha256: parse_content_hash(
             "aabbccdd11223344000000000000000000000000000000000000000000000000",
         ),
-        filename: "photo.jpg".to_string(),
+        filename: parse_filename("photo.jpg"),
         source: MediaSource::Upload,
         content_type: "image/jpeg".to_string(),
         size_bytes: 1024,
@@ -178,7 +178,7 @@ async fn list_my_media_with_source_filter(#[case] backend: Backend) {
         sha256: parse_content_hash(
             "ff00ee11dd22cc33000000000000000000000000000000000000000000000000",
         ),
-        filename: "clip.mp4".to_string(),
+        filename: parse_filename("clip.mp4"),
         source: MediaSource::Upload,
         content_type: "video/mp4".to_string(),
         size_bytes: 512,
@@ -234,7 +234,7 @@ async fn delete_media_succeeds_for_existing_item(#[case] backend: Backend) {
         sha256: parse_content_hash(
             "deadbeef01234567000000000000000000000000000000000000000000000000",
         ),
-        filename: "test.png".to_string(),
+        filename: parse_filename("test.png"),
         source: MediaSource::Upload,
         content_type: "image/png".to_string(),
         size_bytes: 42,
@@ -298,7 +298,7 @@ async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend:
         sha256: parse_content_hash(
             "deadbeef99999999000000000000000000000000000000000000000000000000",
         ),
-        filename: "inline.png".to_string(),
+        filename: parse_filename("inline.png"),
         source: MediaSource::Upload,
         content_type: "image/png".to_string(),
         size_bytes: 42,

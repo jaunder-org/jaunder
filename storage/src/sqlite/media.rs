@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use common::media::ContentHash;
+use common::media::{ContentHash, Filename};
 use sqlx::{Pool, Sqlite};
 
 use crate::media::{DeleteMediaError, MediaDialect, MediaStore};
@@ -25,7 +25,7 @@ impl MediaDialect for Sqlite {
         pool: &Pool<Sqlite>,
         user_id: UserId,
         sha256: &ContentHash,
-        filename: &str,
+        filename: &Filename,
         source: &str,
     ) -> Result<(), DeleteMediaError> {
         let result = sqlx::query(
@@ -33,7 +33,7 @@ impl MediaDialect for Sqlite {
         )
         .bind(i64::from(user_id))
         .bind(sha256.as_ref())
-        .bind(filename)
+        .bind(filename.as_ref())
         .bind(source)
         .execute(pool)
         .await?;
