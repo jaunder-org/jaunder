@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+  "client",
   "common",
   "csr",
   "host",
@@ -24,6 +25,7 @@ opt-level = 'z'
 codegen-units = 1
 
 [workspace.dependencies]
+client = { path = "client" }
 common = { path = "common" }
 host = { path = "host" }
 storage = { path = "storage" }
