@@ -39,6 +39,10 @@ pub struct TagId(i64);
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, IdNewtype)]
 pub struct RevisionId(i64);
 
+/// A feed-regeneration queue row id.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, IdNewtype)]
+pub struct FeedEventId(i64);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,5 +169,17 @@ mod tests {
         assert!("nope".parse::<RevisionId>().is_err());
         assert_eq!(serde_json::to_string(&id).unwrap(), "9");
         assert_eq!(serde_json::from_str::<RevisionId>("9").unwrap(), id);
+    }
+
+    #[test]
+    fn feed_event_id_exercises_the_generated_surface() {
+        // Covers this type's generated From/Into/Display/FromStr/serde impls.
+        let id = FeedEventId::from(9);
+        assert_eq!(i64::from(id), 9);
+        assert_eq!(id.to_string(), "9");
+        assert_eq!("9".parse::<FeedEventId>().unwrap(), id);
+        assert!("nope".parse::<FeedEventId>().is_err());
+        assert_eq!(serde_json::to_string(&id).unwrap(), "9");
+        assert_eq!(serde_json::from_str::<FeedEventId>("9").unwrap(), id);
     }
 }
