@@ -10,7 +10,7 @@ use crate::{
     SessionRecord, UserRecord,
 };
 use common::display_name::DisplayName;
-use common::ids::{PostId, UserId};
+use common::ids::{PostId, TagId, UserId};
 use common::media::ContentHash;
 use common::post_body::PostBody;
 use common::post_title::PostTitle;
@@ -151,7 +151,7 @@ pub(crate) type PostRecordParts = (
 #[expect(clippy::struct_field_names)]
 #[derive(Deserialize)]
 struct PostTagJson {
-    tag_id: i64,
+    tag_id: TagId,
     tag_slug: Tag,
     tag_display: TagLabel,
 }
@@ -681,7 +681,7 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(record.tags.len(), 1);
-        assert_eq!(record.tags[0].tag_id, 1);
+        assert_eq!(record.tags[0].tag_id, TagId::from(1));
         assert_eq!(record.tags[0].tag_slug, "rust");
         assert_eq!(record.tags[0].tag_display, "Rust");
     }

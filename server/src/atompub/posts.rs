@@ -551,13 +551,13 @@ pub async fn member_put(
 mod etag_tests {
     use super::*;
     use chrono::{TimeZone, Utc};
-    use common::ids::{PostId, UserId};
+    use common::ids::{PostId, TagId, UserId};
     use storage::{PostFormat, PostTag, RenderedHtml};
 
     fn mk_tag(post_id: i64, tag_id: i64, slug: &str, display: &str) -> PostTag {
         PostTag {
             post_id: PostId::from(post_id),
-            tag_id,
+            tag_id: TagId::from(tag_id),
             tag_slug: slug.parse().expect("parse tag slug"),
             tag_display: display.parse().expect("parse tag label"),
         }
