@@ -12,7 +12,7 @@ use crate::audience::AudienceName;
 use crate::backup::RetentionCount;
 use crate::display_name::DisplayName;
 use crate::email::Email;
-use crate::media::ContentHash;
+use crate::media::{ContentHash, Filename};
 use crate::post_title::PostTitle;
 use crate::token::RawToken;
 
@@ -95,4 +95,16 @@ pub fn parse_post_title(title: &str) -> PostTitle {
 #[must_use]
 pub fn parse_content_hash(s: &str) -> ContentHash {
     s.parse().expect("valid test content hash")
+}
+
+/// Parse `name` into a valid [`Filename`] for tests — the single place a test
+/// filename literal is parsed, so a malformed fixture fails loudly and the parse
+/// isn't re-spelled at every media store-seeding call site across the workspace.
+///
+/// # Panics
+///
+/// Panics if `name` is not a canonical safe path leaf.
+#[must_use]
+pub fn parse_filename(name: &str) -> Filename {
+    name.parse().expect("valid test filename")
 }

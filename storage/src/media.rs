@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use common::media::ContentHash;
+use common::media::{ContentHash, Filename};
 use sqlx::{Database, Pool};
 use thiserror::Error;
 
@@ -69,7 +69,7 @@ pub struct MediaRecord {
     /// SHA-256 content hash of the file (used for content-addressing and dedup).
     pub sha256: ContentHash,
     /// Original filename or a generated unique name.
-    pub filename: String,
+    pub filename: Filename,
     /// Whether the media is a local upload or a remote cache.
     pub source: MediaSource,
     /// MIME type (e.g., "image/jpeg").
@@ -124,7 +124,7 @@ pub trait MediaStorage: Send + Sync {
         &self,
         user_id: UserId,
         sha256: &ContentHash,
-        filename: &str,
+        filename: &Filename,
         source: &MediaSource,
     ) -> sqlx::Result<Option<MediaRecord>>;
 
@@ -148,7 +148,7 @@ pub trait MediaStorage: Send + Sync {
         &self,
         user_id: UserId,
         sha256: &ContentHash,
-        filename: &str,
+        filename: &Filename,
         source: &MediaSource,
     ) -> Result<(), DeleteMediaError>;
 
@@ -186,7 +186,7 @@ pub trait MediaDialect: Backend {
         pool: &Pool<Self>,
         user_id: UserId,
         sha256: &ContentHash,
-        filename: &str,
+        filename: &Filename,
         source: &str,
     ) -> Result<(), DeleteMediaError>;
 }
@@ -230,7 +230,7 @@ where
         )
         .bind(i64::from(record.user_id))
         .bind(record.sha256.as_ref())
-        .bind(record.filename.as_str())
+        .bind(record.filename.as_ref())
         .bind(record.source.as_str())
         .bind(record.content_type.as_str())
         .bind(record.size_bytes)
@@ -260,7 +260,7 @@ where
         &self,
         user_id: UserId,
         sha256: &ContentHash,
-        filename: &str,
+        filename: &Filename,
         source: &MediaSource,
     ) -> sqlx::Result<Option<MediaRecord>> {
         let row = sqlx::query_as::<_, crate::helpers::MediaRow>(
@@ -270,7 +270,7 @@ where
         )
         .bind(i64::from(user_id))
         .bind(sha256.as_ref())
-        .bind(filename)
+        .bind(filename.as_ref())
         .bind(source.as_str())
         .fetch_optional(&self.pool)
         .await?;
@@ -333,7 +333,7 @@ where
         &self,
         user_id: UserId,
         sha256: &ContentHash,
-        filename: &str,
+        filename: &Filename,
         source: &MediaSource,
     ) -> Result<(), DeleteMediaError> {
         DB::delete_media_row(&self.pool, user_id, sha256, filename, source.as_str()).await
@@ -388,7 +388,7 @@ pub const DEFAULT_USER_QUOTA_BYTES: i64 = 1_073_741_824;
 mod tests {
     use super::*;
     use crate::test_support::{backends, Backend, TestEnv};
-    use common::test_support::parse_content_hash;
+    use common::test_support::{parse_content_hash, parse_filename};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -403,7 +403,7 @@ mod tests {
         let record = MediaRecord {
             user_id: UserId::from(1),
             sha256: parse_content_hash(HASH),
-            filename: "test.jpg".to_string(),
+            filename: parse_filename("test.jpg"),
             source: MediaSource::Upload,
             content_type: "image/jpeg".to_string(),
             size_bytes: 1024,
@@ -424,7 +424,7 @@ mod tests {
             .get_media(
                 UserId::from(1),
                 &parse_content_hash(HASH),
-                "test.jpg",
+                &parse_filename("test.jpg"),
                 &MediaSource::Upload,
             )
             .await;
@@ -450,7 +450,7 @@ mod tests {
             .delete_media(
                 UserId::from(1),
                 &parse_content_hash(HASH),
-                "test.jpg",
+                &parse_filename("test.jpg"),
                 &MediaSource::Upload,
             )
             .await;

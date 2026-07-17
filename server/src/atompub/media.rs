@@ -11,7 +11,7 @@ use axum::Extension;
 use sha2::{Digest, Sha256};
 
 use common::atompub::{render_media_link_entry, MediaLinkEntry};
-use common::media::{media_url, sanitize_filename, ContentHash};
+use common::media::{media_url, ContentHash, Filename};
 use common::username::Username;
 use storage::{MediaRecord, MediaSource, MediaStorage, SiteConfigStorage};
 use web::auth::AuthUser;
@@ -66,10 +66,8 @@ pub async fn collection_post(
         .get("slug")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("upload");
-    let filename = sanitize_filename(raw_name);
-    if filename.is_empty() {
-        return Err(HandlerError::BadRequest);
-    }
+    // Door B: normalize the requested `Slug` to a safe leaf, rejecting empty as a 400.
+    let filename = Filename::sanitized(raw_name).map_err(|_| HandlerError::BadRequest)?;
     let content_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
@@ -128,12 +126,12 @@ pub async fn member_get(
     Extension(media): Extension<Arc<dyn MediaStorage>>,
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     auth_user: AuthUser,
-    Path((username, sha, filename)): Path<(Username, String, String)>,
+    Path((username, sha, filename)): Path<(Username, ContentHash, Filename)>,
 ) -> Result<Response, HandlerError> {
     super::require_user_match(&auth_user, &username)?;
-    // The hash comes from the URL (untrusted); a malformed one is a 404, same as a
-    // well-formed hash with no matching record.
-    let sha: ContentHash = sha.parse().map_err(|_| HandlerError::NotFound)?;
+    // `sha` and `filename` are parsed by the typed extractor: a malformed segment is a
+    // pre-handler 400. The URL is one we minted in the media-link entry, so a bad segment
+    // is the caller's fault, not a missing resource.
     let record = media
         .get_media(auth_user.user_id, &sha, &filename, &MediaSource::Upload)
         .await?
@@ -153,12 +151,11 @@ pub async fn member_get(
 pub async fn member_delete(
     Extension(media): Extension<Arc<dyn MediaStorage>>,
     auth_user: AuthUser,
-    Path((username, sha, filename)): Path<(Username, String, String)>,
+    Path((username, sha, filename)): Path<(Username, ContentHash, Filename)>,
 ) -> Result<Response, HandlerError> {
     super::require_user_match(&auth_user, &username)?;
-    // The hash comes from the URL (untrusted); a malformed one is a 404, matching
-    // the `NotFound` a nonexistent record already yields.
-    let sha: ContentHash = sha.parse().map_err(|_| HandlerError::NotFound)?;
+    // `sha` and `filename` are parsed by the typed extractor (a malformed segment is a
+    // pre-handler 400); a well-formed but absent record still yields `NotFound` below.
     media
         .delete_media(auth_user.user_id, &sha, &filename, &MediaSource::Upload)
         .await?;

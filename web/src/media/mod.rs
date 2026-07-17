@@ -1,4 +1,4 @@
-use common::media::ContentHash;
+use common::media::{ContentHash, Filename};
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -21,7 +21,7 @@ use crate::error::WebResult;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MediaItem {
     pub sha256: ContentHash,
-    pub filename: String,
+    pub filename: Filename,
     pub source: String,
     pub content_type: String,
     pub size_bytes: i64,
@@ -124,7 +124,7 @@ pub async fn media_usage() -> WebResult<MediaUsageData> {
 #[server(endpoint = "/delete_media")]
 pub async fn delete_media(
     sha256: ContentHash,
-    filename: String,
+    filename: Filename,
     source: String,
     force: Option<bool>,
 ) -> WebResult<DeleteMediaResult> {

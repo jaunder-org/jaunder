@@ -4,7 +4,8 @@ use common::password::Password;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::test_support::{
-    parse_audience_name, parse_content_hash, parse_display_name, parse_email, parse_raw_token,
+    parse_audience_name, parse_content_hash, parse_display_name, parse_email, parse_filename,
+    parse_raw_token,
 };
 use common::username::Username;
 use common::visibility::{
@@ -6858,7 +6859,7 @@ fn make_media_record(
     MediaRecord {
         user_id,
         sha256: parse_content_hash(sha256),
-        filename: filename.to_string(),
+        filename: parse_filename(filename),
         source,
         content_type: "image/jpeg".to_string(),
         size_bytes: 12345,
@@ -6890,7 +6891,12 @@ async fn create_and_get_media(#[case] backend: Backend) {
 
     let fetched = state
         .media
-        .get_media(user_id, &sha256, "test.jpg", &MediaSource::Upload)
+        .get_media(
+            user_id,
+            &sha256,
+            &parse_filename("test.jpg"),
+            &MediaSource::Upload,
+        )
         .await
         .unwrap();
     let fetched = fetched.expect("record should exist");
@@ -6950,13 +6956,23 @@ async fn delete_media_removes_record(#[case] backend: Backend) {
     state.media.create_media(&record).await.unwrap();
     state
         .media
-        .delete_media(user_id, &sha256, "del.jpg", &MediaSource::Upload)
+        .delete_media(
+            user_id,
+            &sha256,
+            &parse_filename("del.jpg"),
+            &MediaSource::Upload,
+        )
         .await
         .unwrap();
 
     let fetched = state
         .media
-        .get_media(user_id, &sha256, "del.jpg", &MediaSource::Upload)
+        .get_media(
+            user_id,
+            &sha256,
+            &parse_filename("del.jpg"),
+            &MediaSource::Upload,
+        )
         .await
         .unwrap();
     assert!(fetched.is_none(), "record should have been deleted");
@@ -6982,7 +6998,12 @@ async fn delete_nonexistent_returns_not_found(#[case] backend: Backend) {
         parse_content_hash("dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234");
     let err = state
         .media
-        .delete_media(user_id, &sha256, "ghost.jpg", &MediaSource::Upload)
+        .delete_media(
+            user_id,
+            &sha256,
+            &parse_filename("ghost.jpg"),
+            &MediaSource::Upload,
+        )
         .await
         .unwrap_err();
     assert!(

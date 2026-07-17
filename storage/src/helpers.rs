@@ -11,7 +11,7 @@ use crate::{
 };
 use common::display_name::DisplayName;
 use common::ids::{PostId, TagId, UserId};
-use common::media::ContentHash;
+use common::media::{ContentHash, Filename};
 use common::post_body::PostBody;
 use common::post_title::PostTitle;
 use common::slug::Slug;
@@ -313,6 +313,13 @@ pub(crate) fn media_record_from_row(row: MediaRow) -> sqlx::Result<MediaRecord> 
     // through the validating parse (like `source` above); a corrupt or hand-edited
     // value surfaces as a decode error rather than an invalid `ContentHash`.
     let sha256: ContentHash = sha256
+        .parse()
+        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    // The `filename` column is a canonical safe leaf (written through `Filename`'s
+    // sanitizing door on upload), so it goes through the validating parse (like
+    // `sha256` above); a corrupt or hand-edited value surfaces as a decode error
+    // rather than an un-sanitized `Filename`.
+    let filename: Filename = filename
         .parse()
         .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
     Ok(MediaRecord {
@@ -772,6 +779,25 @@ mod tests {
     }
 
     #[test]
+    fn media_record_from_row_rejects_invalid_filename() {
+        // A non-canonical filename (here one with a path separator) in the
+        // `filename` column decodes to an error rather than an un-sanitized
+        // `Filename` — the read-back mirror of the `sha256` guard above.
+        let row: MediaRow = (
+            1,
+            ROW_HASH.to_string(),
+            "../escape".to_string(),
+            "upload".to_string(),
+            "image/png".to_string(),
+            42,
+            None,
+            Utc::now(),
+        );
+        let err = media_record_from_row(row).unwrap_err();
+        assert!(matches!(err, sqlx::Error::Decode(_)));
+    }
+
+    #[test]
     fn media_record_from_row_accepts_valid_source() {
         let row: MediaRow = (
             1,
@@ -787,6 +813,7 @@ mod tests {
         assert_eq!(record.user_id, UserId::from(1));
         assert_eq!(record.source, MediaSource::Upload);
         assert_eq!(record.sha256, ROW_HASH);
+        assert_eq!(record.filename, "file.png");
     }
 
     #[test]

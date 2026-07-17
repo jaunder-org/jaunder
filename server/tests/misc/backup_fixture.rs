@@ -2,7 +2,9 @@ use chrono::{DateTime, Utc};
 use common::ids::{PostId, UserId};
 use common::password::Password;
 use common::tag::TagLabel;
-use common::test_support::{parse_audience_name, parse_content_hash, parse_display_name};
+use common::test_support::{
+    parse_audience_name, parse_content_hash, parse_display_name, parse_filename,
+};
 use common::username::Username;
 use common::visibility::{AudienceTarget, ViewerIdentity};
 use jaunder::cli::StorageArgs;
@@ -164,7 +166,7 @@ async fn seed_side_tables(state: &AppState, author: UserId) {
         .create_media(&MediaRecord {
             user_id: author,
             sha256: parse_content_hash(FIXTURE_MEDIA_SHA256),
-            filename: "photo.jpg".to_owned(),
+            filename: parse_filename("photo.jpg"),
             source: MediaSource::Upload,
             content_type: "image/jpeg".to_owned(),
             size_bytes: 4,
@@ -259,7 +261,7 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
             .get_media(
                 ids.author,
                 &parse_content_hash(FIXTURE_MEDIA_SHA256),
-                "photo.jpg",
+                &parse_filename("photo.jpg"),
                 &MediaSource::Upload
             )
             .await

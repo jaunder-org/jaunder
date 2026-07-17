@@ -40,7 +40,7 @@ where
 #[derive(Debug, Serialize)]
 pub struct UploadResponse {
     pub sha256: ContentHash,
-    pub filename: String,
+    pub filename: Filename,
     pub content_type: String,
     pub size_bytes: i64,
     pub url: String,
