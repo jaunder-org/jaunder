@@ -319,9 +319,21 @@ where
             .await?
         };
 
-        rows.into_iter()
-            .map(crate::helpers::media_record_from_row)
-            .collect()
+        // Skip (don't fail the whole list on) a row that fails to decode — a corrupt
+        // or hand-edited `sha256`/`source`/`filename` column that no longer satisfies
+        // its newtype invariant. `get_media`/`find_by_hash` stay strict (a direct
+        // lookup surfaces the error), but a single bad row must not 500 a user's entire
+        // media list and hide every other item.
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| match crate::helpers::media_record_from_row(row) {
+                Ok(record) => Some(record),
+                Err(error) => {
+                    tracing::warn!(%error, "skipping undecodable media row in list_media");
+                    None
+                }
+            })
+            .collect())
     }
 
     #[tracing::instrument(

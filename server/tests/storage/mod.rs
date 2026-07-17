@@ -6910,6 +6910,67 @@ async fn create_and_get_media(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
+async fn list_media_skips_rows_that_fail_to_decode(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let user_id = state
+        .users
+        .create_user(
+            &username("mediauser_corrupt"),
+            &password("password123"),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+    // A valid record via the normal (validating) path.
+    let good_sha = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234";
+    let record = make_media_record(user_id, good_sha, "good.jpg", MediaSource::Upload);
+    state.media.create_media(&record).await.unwrap();
+
+    // A row whose `filename` column is a non-canonical value, inserted directly to
+    // bypass the validating `create_media` (the `Filename` type makes an un-sanitized
+    // name unconstructible in Rust). `media_record_from_row` fails to decode it.
+    // created_at/source_url are omitted so both backends' column defaults apply.
+    env.base
+        .pool()
+        .execute(&format!(
+            "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
+             VALUES ({}, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', \
+             '../escape', 'upload', 'image/png', 10)",
+            i64::from(user_id),
+        ))
+        .await
+        .unwrap();
+
+    // list_media returns the decodable row and silently skips the corrupt one, rather
+    // than failing the whole query (which would hide the user's valid media too).
+    let listed = state.media.list_media(user_id, None, 10, 0).await.unwrap();
+    assert_eq!(
+        listed.len(),
+        1,
+        "the corrupt row must be skipped and the valid row returned"
+    );
+    assert_eq!(listed[0].filename, "good.jpg");
+
+    // A direct lookup of the corrupt row still surfaces the decode error (single-row
+    // lookups stay strict — only the list path degrades gracefully).
+    let direct = state
+        .media
+        .find_by_hash(
+            &parse_content_hash("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            &MediaSource::Upload,
+        )
+        .await;
+    assert!(
+        direct.is_err(),
+        "a direct lookup of the corrupt row must error"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn duplicate_media_returns_already_exists(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
