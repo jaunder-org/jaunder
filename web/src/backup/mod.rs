@@ -10,7 +10,7 @@ use leptos::prelude::*;
 // vertical's components do (ungated, host-compiled — audiences keeps them inline in its
 // mod.rs; backup splits them into this `ui` submodule).
 mod ui;
-pub use ui::BackupSettingsPage;
+pub use ui::{BackupBanner, BackupSettingsPage};
 
 #[cfg(feature = "server")]
 pub(crate) mod server;
