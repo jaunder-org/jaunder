@@ -31,6 +31,10 @@ pub struct SubscriptionId(i64);
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, IdNewtype)]
 pub struct ChannelId(i64);
 
+/// A tag's row id (distinct from the string `Tag` slug / `TagLabel` display).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, IdNewtype)]
+pub struct TagId(i64);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,5 +137,17 @@ mod tests {
         assert!("nope".parse::<ChannelId>().is_err());
         assert_eq!(serde_json::to_string(&id).unwrap(), "9");
         assert_eq!(serde_json::from_str::<ChannelId>("9").unwrap(), id);
+    }
+
+    #[test]
+    fn tag_id_exercises_the_generated_surface() {
+        // Covers this type's generated From/Into/Display/FromStr/serde impls.
+        let id = TagId::from(9);
+        assert_eq!(i64::from(id), 9);
+        assert_eq!(id.to_string(), "9");
+        assert_eq!("9".parse::<TagId>().unwrap(), id);
+        assert!("nope".parse::<TagId>().is_err());
+        assert_eq!(serde_json::to_string(&id).unwrap(), "9");
+        assert_eq!(serde_json::from_str::<TagId>("9").unwrap(), id);
     }
 }

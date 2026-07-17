@@ -187,8 +187,7 @@ pub fn post_to_entry(post: &PostRecord, base_url: &str) -> Entry {
 mod tests {
     use super::*;
     use chrono::{DateTime, Utc};
-    use common::ids::PostId;
-    use common::ids::UserId;
+    use common::ids::{PostId, TagId, UserId};
 
     // -----------------------------------------------------------------------
     // format_wire seam tests
@@ -539,7 +538,7 @@ mod tests {
             .enumerate()
             .map(|(i, (tag_slug, tag_display))| storage::PostTag {
                 post_id: PostId::from(post_id),
-                tag_id: i64::try_from(i).expect("tag index fits in i64") + 1,
+                tag_id: TagId::from(i64::try_from(i).expect("tag index fits in i64") + 1),
                 tag_slug: tag_slug.parse().expect("parse tag"),
                 tag_display: tag_display.parse().expect("parse tag label"),
             })

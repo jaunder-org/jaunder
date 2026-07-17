@@ -6,7 +6,7 @@ use sqlx::{Database, Pool};
 use thiserror::Error;
 
 use common::feed::FeedPath;
-use common::ids::{AudienceId, PostId, UserId};
+use common::ids::{AudienceId, PostId, TagId, UserId};
 use common::post_body::PostBody;
 use common::post_title::PostTitle;
 use common::slug::Slug;
@@ -240,7 +240,7 @@ pub struct UpdatePostInput {
 /// A tag record returned by [`PostStorage`] tag queries.
 #[derive(Clone, Debug)]
 pub struct TagRecord {
-    pub tag_id: i64,
+    pub tag_id: TagId,
     pub tag_slug: Tag,
 }
 
@@ -248,7 +248,7 @@ pub struct TagRecord {
 #[derive(Clone, Debug)]
 pub struct PostTag {
     pub post_id: PostId,
-    pub tag_id: i64,
+    pub tag_id: TagId,
     pub tag_slug: Tag,
     /// The original case-sensitive display name of the tag.
     pub tag_display: TagLabel,
@@ -1339,7 +1339,7 @@ where
                     .map_err(|_| sqlx::Error::Decode("invalid tag label".into()))?;
                 Ok(PostTag {
                     post_id: PostId::from(post_id),
-                    tag_id,
+                    tag_id: TagId::from(tag_id),
                     tag_slug,
                     tag_display,
                 })
@@ -1585,7 +1585,10 @@ where
                 let tag_slug: Tag = tag_slug_str
                     .parse()
                     .map_err(|_| sqlx::Error::Decode("invalid tag format".into()))?;
-                Ok(TagRecord { tag_id, tag_slug })
+                Ok(TagRecord {
+                    tag_id: TagId::from(tag_id),
+                    tag_slug,
+                })
             })
             .collect()
     }
@@ -2242,7 +2245,7 @@ mod tests {
     fn post_tag(slug: &str, display: &str) -> PostTag {
         PostTag {
             post_id: PostId::from(1),
-            tag_id: 0,
+            tag_id: TagId::from(0),
             tag_slug: slug.parse::<Tag>().expect("valid tag slug"),
             tag_display: display.parse::<TagLabel>().expect("valid tag label"),
         }
