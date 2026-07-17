@@ -14,6 +14,7 @@ use common::ids::AudienceId;
 use common::slug::Slug;
 use common::tag::TagLabel;
 use common::username::Username;
+use common::visibility::AudienceBase;
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
 
@@ -433,8 +434,13 @@ pub fn AudiencePicker(selection: RwSignal<AudienceSelection>) -> impl IntoView {
         }
     });
 
-    let base_options = ["public", "subscribers", "private"];
-    let base_labels = ["Public", "Subscribers", "Private (only me)"];
+    // Each base variant paired with its UI caption in one place, so the two
+    // can't drift out of order.
+    let base_options = [
+        (AudienceBase::Public, "Public"),
+        (AudienceBase::Subscribers, "Subscribers"),
+        (AudienceBase::Private, "Private (only me)"),
+    ];
 
     view! {
         <div class="j-field-row" style="grid-template-columns:auto 1fr">
@@ -445,21 +451,18 @@ pub fn AudiencePicker(selection: RwSignal<AudienceSelection>) -> impl IntoView {
                 id="audience-base"
                 class="j-field-val"
                 on:change=move |ev| {
-                    selection
-                        .update(|sel| {
-                            sel.base = event_target_value(&ev);
-                        });
+                    if let Ok(base) = AudienceBase::try_from(event_target_value(&ev).as_str()) {
+                        selection.update(|sel| sel.base = base);
+                    }
                 }
             >
                 {base_options
-                    .iter()
-                    .zip(base_labels)
-                    .map(|(value, label)| {
-                        let value = (*value).to_string();
+                    .into_iter()
+                    .map(|(base, label)| {
                         view! {
                             <option
-                                value=value.clone()
-                                selected=move || selection.get().base == value
+                                value=base.as_str()
+                                selected=move || selection.get().base == base
                             >
                                 {label}
                             </option>
@@ -502,7 +505,7 @@ fn audience_checkbox(
     let id = AudienceId::from(audience.audience_id);
     let input_id = format!("audience-named-{id}");
     let checked = move || selection.get().named.contains(&id);
-    let disabled = move || selection.get().base == "private";
+    let disabled = move || selection.get().base == AudienceBase::Private;
     view! {
         <label style="display:block" for=input_id.clone()>
             <input
@@ -559,7 +562,7 @@ pub fn PostCreateForm(
     // A new post starts at the site-wide default audience; default to Public
     // until that resolves.
     let audience = RwSignal::new(AudienceSelection {
-        base: "public".to_string(),
+        base: AudienceBase::Public,
         named: Vec::new(),
     });
     let default_audience = crate::server_resource(|| (), |()| default_audience_selection());

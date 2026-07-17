@@ -5,6 +5,7 @@ use chrono::Datelike;
 use common::ids::{PostId, UserId};
 use common::tag::TagLabel;
 use common::test_support::parse_audience_name;
+use common::visibility::AudienceBase;
 use storage::{PostFormat, RenderedHtml};
 use web::posts::{
     AudienceSelection, CreatePostResult, DraftSummary, PublishPostResult, TimelinePage,
@@ -3477,7 +3478,7 @@ async fn default_audience_selection_returns_public_by_default(#[case] backend: B
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let selection: AudienceSelection = serde_json::from_str(&body).unwrap();
-    assert_eq!(selection.base, "public");
+    assert_eq!(selection.base, AudienceBase::Public);
     assert!(selection.named.is_empty());
 }
 
@@ -3527,7 +3528,7 @@ async fn post_audience_selection_returns_public_for_new_post(#[case] backend: Ba
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let selection: AudienceSelection = serde_json::from_str(&body).unwrap();
     // A post created with no audience field defaults to Public.
-    assert_eq!(selection.base, "public");
+    assert_eq!(selection.base, AudienceBase::Public);
     assert!(selection.named.is_empty());
 }
 

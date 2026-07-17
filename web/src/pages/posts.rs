@@ -22,6 +22,7 @@ use crate::{
 };
 use common::feed::FeedSurface;
 use common::ids::PostId;
+use common::visibility::AudienceBase;
 use common::{slug::Slug, tag::Tag, username::Username};
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
@@ -640,7 +641,7 @@ pub fn EditPostPage() -> impl IntoView {
     // Pre-selected with the post's current targeting (defaults to Public until
     // it resolves).
     let audience = RwSignal::new(AudienceSelection {
-        base: "public".to_string(),
+        base: AudienceBase::Public,
         named: Vec::new(),
     });
     // ServerAction dispatches happen only on the client; this redirect-on-publish
