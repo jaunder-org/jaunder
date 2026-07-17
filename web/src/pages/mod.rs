@@ -52,8 +52,12 @@ use leptos_router::{
 fn AppShell() -> impl IntoView {
     let theme = use_context::<RwSignal<String>>()
         .unwrap_or_else(|| RwSignal::new(DEFAULT_THEME.to_string()));
+    // `data-theme` must be a plain dynamic attribute, NOT `attr:data-theme`: the
+    // Leptos `attr:` directive prefix is only for spreading onto a component; on a
+    // plain element it leaks a literal `attr:data-theme` attribute into the hydrated
+    // DOM and the `.j-root[data-theme=...]` theme selector stops matching (#22).
     view! {
-        <div class="j-root" attr:data-theme=move || theme.get()>
+        <div class="j-root" data-theme=move || theme.get()>
             <div class="j-shell">
                 <Sidebar />
                 <div class="j-main-region">
