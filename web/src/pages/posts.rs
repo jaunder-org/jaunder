@@ -661,15 +661,28 @@ pub fn EditPostPage() -> impl IntoView {
         }
     });
 
+    // A missing or unparseable `post_id` is honest absence, not a real id: derive
+    // `Option<PostId>` and short-circuit `None` to a client-side not-found in each
+    // fetcher, rather than minting a sentinel id and paying a round-trip that only
+    // ever returns not-found (#487).
     let post_id_param = move || {
         params
             .get()
             .get("post_id")
             .and_then(|v| v.parse::<PostId>().ok())
-            .unwrap_or(PostId::from(-1))
     };
-    let post = crate::server_resource(post_id_param, get_post_preview);
-    let current_audience = crate::server_resource(post_id_param, post_audience_selection);
+    let post = crate::server_resource(post_id_param, |maybe_id| async move {
+        match maybe_id {
+            Some(id) => get_post_preview(id).await,
+            None => Err(WebError::not_found("Post")),
+        }
+    });
+    let current_audience = crate::server_resource(post_id_param, |maybe_id| async move {
+        match maybe_id {
+            Some(id) => post_audience_selection(id).await,
+            None => Err(WebError::not_found("Post")),
+        }
+    });
     // Client-only: copying the resolved Resource into `audience` must not run
     // during SSR, where the future can resolve after the per-request reactive
     // owner is disposed (web-style-guide.md §9). The picker is seeded with the
