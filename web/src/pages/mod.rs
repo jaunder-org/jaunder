@@ -14,7 +14,7 @@ pub(crate) mod timeline;
 pub mod ui;
 pub mod upload;
 pub use ui::{
-    Avatar, Chip, Dot, Icon, Icons, InlineComposer, PostCard, PostDisplay, Sidebar, Topbar,
+    Avatar, Icon, Icons, InlineComposer, PostCard, PostDisplay, Sidebar, Topbar,
 };
 pub use upload::{MediaPanel, MediaUploadButton};
 

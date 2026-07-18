@@ -121,37 +121,6 @@ pub fn Avatar(name: String, #[prop(default = 38)] size: u32) -> impl IntoView {
     }
 }
 
-// ─── 3.3 Dot ──────────────────────────────────────────────────
-
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Leptos #[component] props are stored by the framework and must be owned; \
-              the borrow clippy suggests isn't expressible in a component signature"
-)]
-#[component]
-pub fn Dot(proto: String) -> impl IntoView {
-    let style = format!("background: var(--c-{proto})");
-    view! { <span class="j-dot" style=style></span> }
-}
-
-// ─── 3.4 Chip ─────────────────────────────────────────────────
-
-#[component]
-pub fn Chip(
-    label: String,
-    #[prop(optional)] proto: Option<String>,
-    #[prop(optional)] count: Option<u32>,
-    #[prop(default = false)] active: bool,
-) -> impl IntoView {
-    let class = if active { "j-chip is-active" } else { "j-chip" };
-    view! {
-        <span class=class>
-            {proto.map(|p| view! { <Dot proto=p /> })} <span>{label}</span>
-            {count.map(|n| view! { <span class="j-n">{n}</span> })}
-        </span>
-    }
-}
-
 // ─── 3.5 Topbar ───────────────────────────────────────────────
 
 pub use crate::ui::Topbar;
