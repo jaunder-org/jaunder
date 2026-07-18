@@ -1,7 +1,8 @@
 # Web Component Style Guide
 
-How page components in `web/src/pages/` and the shared widgets in
-`web/src/pages/ui.rs` should be structured so that pages look and feel the same.
+How page components (each vertical's wasm-only `component.rs` — see §8) and the
+shared widgets in `web/src/ui/` should be structured so that pages look and feel
+the same.
 
 This guide is **descriptive of the design system we already have**
 (`server/assets/jaunder.css` + the `Topbar` / `PostCard` / `PostCreateForm`
@@ -24,7 +25,7 @@ view! {
 }
 ```
 
-- **`Topbar`** lives in `web/src/pages/ui.rs`. Do not write a bare
+- **`Topbar`** lives in `web/src/ui/topbar.rs`. Do not write a bare
   `<h1>"Title"</h1>` at the top of a page — that is the legacy style and should
   be migrated.
 - `title` is required; `sub` is optional but should describe the page
@@ -118,15 +119,16 @@ button).
 
 ## 6. Shared components
 
-Always reach for the helper in `web/src/pages/ui.rs` before writing a new layout
-primitive:
+Always reach for an existing shared helper before writing a new layout primitive
+— leaf primitives live in `web/src/ui/` (`Avatar`, `Icon`, `TagList`, `Topbar`);
+the rest still sit in `web/src/pages/ui.rs` while #312 dissolves it:
 
 | Helper                            | Purpose                                             |
 | --------------------------------- | --------------------------------------------------- |
 | `Topbar`                          | Page header (see §1)                                |
 | `BackupBanner`                    | Global "backups not configured" banner              |
 | `Avatar`                          | User initials chip; size in px                      |
-| `Chip`, `Dot`, `Icon`             | Sidebar / inline accents                            |
+| `Icon`                            | Sidebar / inline accents                            |
 | `PostCard`                        | Renders a `TimelinePostSummary` with author actions |
 | `PostDisplay`                     | Renders a post without the author action column     |
 | `PostCreateForm`                  | Compose-new-post form (compact and full variants)   |
@@ -142,7 +144,7 @@ For list views, the available CSS primitives are:
   action column. Use for ad-hoc lists that don't fit a table.
 
 If you find yourself copying a layout block (e.g. a draft row, a toolbar) into a
-second place, lift it into `ui.rs`.
+second place, lift it into `web/src/ui/`.
 
 ## 7. CSS conventions
 
@@ -156,16 +158,19 @@ second place, lift it into `ui.rs`.
 
 ## 8. Server function module structure
 
-Feature modules in `web/src/` follow the **server submodule pattern** — see
-[ADR-0013](../decisions/0013-server-submodule-pattern.md) for the full
-rationale.
+Feature modules in `web/src/` follow the **file-level host/wasm split** — see
+[ADR-0070](adr/0070-web-vertical-wasm-only-component-files.md) (supersedes
+ADR-0056; ADR-0013 records the original server-submodule half). Existing
+verticals are still converging onto this layout (the #526 migration) — new code
+follows it; old code matches it after its vertical's convergence issue.
 
 Each feature is a directory module:
 
 ```text
 web/src/feature/
-├── mod.rs     # Shared DTOs + #[server] functions with real bodies
-└── server.rs  # Module-private helpers and tests (omit if not needed)
+├── mod.rs        # Shared wire DTOs + #[server] functions with real bodies
+├── server.rs     # Host-only helpers and tests (omit if not needed)
+└── component.rs  # #[component] UI + browser-bound code (omit if no UI)
 ```
 
 At the top of `mod.rs`:
@@ -175,6 +180,8 @@ At the top of `mod.rs`:
 mod server;
 #[cfg(feature = "server")]
 use server::*;   // all server-only helpers come into scope here
+#[cfg(target_arch = "wasm32")]
+mod component;   // the vertical's UI — wasm-only, never host-compiled
 ```
 
 Every `#[server]` body is wrapped with `boundary!("function_name", { ... })`. No
@@ -185,6 +192,13 @@ bodies — the `#[server]` proc-macro already cfg-gates bodies to SSR, and
 `server.rs` is only created when the module has genuine private helpers worth
 naming (multi-step transactions, helpers shared across multiple server
 functions, unit tests). Small features may keep everything in `mod.rs`.
+
+`component.rs` is wasm-only by its `mod` declaration and carries **zero cfg
+gates inside the file** — it may call `client::` primitives and `web-sys`
+directly, and it never host-compiles. Keep pure, host-testable logic
+(validation, signal/form state, codecs) **out** of `component.rs`, in ungated
+host-tested files — extraction precedes gating. The only `target_arch` cfgs in
+`web/src` are these `mod` declarations.
 
 ## 9. SSR-safe Resource patterns
 
@@ -199,10 +213,10 @@ Two anti-patterns to avoid (both have caused production panics — see the saved
    resource resolves before SSR finishes, causing random/flaky server-side test
    coverage (e.g., in `home.rs` or `posts.rs`).
 
-   **Always wrap client-only `Effect::new` calls (and their containing blocks if
-   necessary) in `#[cfg(target_arch = "wasm32")]`** so they are completely
-   stripped from server-side compilation, ensuring 100% deterministic
-   server-side test coverage and avoiding unnecessary execution.
+   **Client-only `Effect::new` belongs in the vertical's wasm-only
+   `component.rs`** (§8), where it is structurally stripped from every host
+   build — never add an `Effect::new` to host-compiled code, and never re-gate
+   it per-call inside a file.
 
 2. **SSR-eager `Resource` calling `expect_context::<Arc<dyn FooStorage>>()`.**
    The same disposal race can hit the context lookup. Consumers take a specific
@@ -223,10 +237,9 @@ Two anti-patterns to avoid (both have caused production panics — see the saved
    then `await` (mirror `get_registration_policy`; `require_auth` is await-safe
    because it reads its `Parts` context synchronously before its own await).
 
-When in doubt, mirror `home.rs`: a plain `Effect::new` (gated with
-`#[cfg(target_arch = "wasm32")]`) that copies the resolved page into signals and
-only writes when the value actually changes (to prevent remounting child
-components).
+When in doubt, mirror `home.rs`: a plain `Effect::new` (in wasm-only component
+code) that copies the resolved page into signals and only writes when the value
+actually changes (to prevent remounting child components).
 
 **Don't hand-roll the sticky copy for a flat list.** When the retained value is
 a plain `Vec`/scalar (not a keyed store — that's §10's `patched`) driven by an
