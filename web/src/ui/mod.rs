@@ -4,7 +4,9 @@
 //! (projector) live together in one file here (ADR-0056).
 
 pub mod avatar;
+pub mod icon;
 pub mod topbar;
 
 pub use avatar::Avatar;
+pub use icon::{Icon, Icons};
 pub use topbar::Topbar;

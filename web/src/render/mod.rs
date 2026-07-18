@@ -16,6 +16,7 @@
 use crate::posts::{PostResponse, TimelinePage, TimelinePostSummary};
 use crate::tags::TagSummary;
 use crate::ui::avatar;
+use crate::ui::icon;
 use crate::ui::topbar::render_topbar;
 use common::render::RenderedHtml;
 use common::tag::Tag;
@@ -539,7 +540,7 @@ pub(crate) fn render_tag_list(tags: &[TagSummary], ctx: &TagCtx) -> String {
 }
 
 /// SVG path `d` attribute strings for all Jaunder icons. Shared by the reactive
-/// `pages::ui::Icon` component and the pure [`render_icon`].
+/// [`crate::ui::Icon`] component and the pure [`crate::ui::icon::render`].
 pub struct Icons;
 
 impl Icons {
@@ -597,20 +598,6 @@ pub const SIDEBAR_SOURCES: &[(&str, &str, &str)] = &[
     ("jsonfeed", "Manton", "manton.org"),
 ];
 
-/// One inline icon `<svg class="j-icon">`, matching the reactive `pages::ui::Icon`.
-#[must_use]
-pub fn render_icon(path: &str, size: u32) -> String {
-    format!(
-        concat!(
-            "<svg class=\"j-icon\" width=\"{size}\" height=\"{size}\" viewBox=\"0 0 20 20\" ",
-            "fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" ",
-            "stroke-linejoin=\"round\"><path d=\"{path}\"></path></svg>",
-        ),
-        size = size,
-        path = path,
-    )
-}
-
 /// The inner HTML of the **anonymous** `<aside class="j-sidebar">`: brand, search,
 /// the public nav (items with an href and no auth requirement — just "Home"),
 /// the sources section, and an empty footer. The reactive `pages::ui::Sidebar`
@@ -626,7 +613,7 @@ pub fn render_sidebar(active_key: &str) -> String {
     let _ = write!(
         out,
         "<div class=\"j-search\">{}<span>Search</span><span class=\"j-kbd\">\u{2318}K</span></div>",
-        render_icon(Icons::SEARCH, 14),
+        icon::render(Icons::SEARCH, 14),
     );
     out.push_str("<nav class=\"j-nav\">");
     for &(key, label, icon_path, href, auth_required) in NAV_ITEMS {
@@ -638,7 +625,7 @@ pub fn render_sidebar(active_key: &str) -> String {
         let _ = write!(
             out,
             "<a class=\"j-nav-item{active}\" href=\"{href}\">{icon}<span>{label}</span></a>",
-            icon = render_icon(icon_path, 16),
+            icon = icon::render(icon_path, 16),
         );
     }
     out.push_str("</nav><div><div class=\"j-sb-head\"><span>Sources</span><span class=\"j-sb-add\">+</span></div>");
@@ -1275,19 +1262,6 @@ mod tests {
         assert!(
             html.contains("<a class=\"j-nav-item\" href=\"/\">"),
             "{html}"
-        );
-    }
-
-    #[test]
-    fn icon_matches_reactive_component_markup() {
-        assert_eq!(
-            render_icon(Icons::HOME, 16),
-            format!(
-                "<svg class=\"j-icon\" width=\"16\" height=\"16\" viewBox=\"0 0 20 20\" \
-                 fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" \
-                 stroke-linejoin=\"round\"><path d=\"{}\"></path></svg>",
-                Icons::HOME
-            )
         );
     }
 }

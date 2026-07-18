@@ -70,37 +70,9 @@ pub fn TagList(tags: Vec<TagSummary>, context: TagContext) -> impl IntoView {
     view! { <span class="j-tag-list">{chips}</span> }.into_any()
 }
 
-// ─── Icons ────────────────────────────────────────────────────
-
-/// SVG path `d` strings — re-exported from the pure `render` layer so the
-/// reactive [`Icon`] component and the projector's [`crate::render::render_icon`]
-/// share one source of truth.
-pub use crate::render::Icons;
-
-// ─── 3.1 Icon ─────────────────────────────────────────────────
-
-#[component]
-pub fn Icon(path: &'static str, #[prop(default = 16)] size: u32) -> impl IntoView {
-    view! {
-        <svg
-            class="j-icon"
-            width=size
-            height=size
-            viewBox="0 0 20 20"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.6"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-        >
-            <path d=path />
-        </svg>
-    }
-}
-
 // ─── moved to web::ui (strangler shims, #522) ─────────────────
 
-pub use crate::ui::{Avatar, Topbar};
+pub use crate::ui::{Avatar, Icon, Icons, Topbar};
 
 // ─── 3.6 PostCard ─────────────────────────────────────────────
 
