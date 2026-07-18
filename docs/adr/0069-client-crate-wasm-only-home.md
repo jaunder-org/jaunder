@@ -1,6 +1,9 @@
 # ADR-0069: `client` crate — the wasm-only browser-infrastructure home
 
-- Status: proposed
+- Status: accepted
+- Note: re-scoped by ADR-0070 (web verticals split host/wasm at the file level)
+  — components are wasm-only consumers of `client`, not dual-target; the charter
+  (crate-level gate, no domain types, `web`/`csr` → `client` only) stands
 - Date: 2026-07-17
 - Issue: [#513](https://github.com/jaunder-org/jaunder/issues/513)
 

@@ -1,6 +1,8 @@
 # ADR-0056: web converges on the canonical co-located Leptos CSR layout
 
-- Status: accepted
+- Status: superseded
+- Note: superseded by ADR-0070 (web verticals split host/wasm at the file level)
+  — co-location retained; the feature-only / dead-but-exempt gating reversed
 - Date: 2026-07-07
 - Issue: [#303](https://github.com/jaunder-org/jaunder/issues/303)
 

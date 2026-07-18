@@ -83,7 +83,7 @@ convention). See the Status column below for each ADR's current status.
 | [0053](adr/0053-storage-test-homing-and-dual-backend.md)           | Storage test homing and the dual-backend presumption                                                         | accepted   |
 | [0054](adr/0054-backup-test-homing-and-uniform-restore-failure.md) | Backup test homing and the uniform restore-failure contract                                                  | accepted   |
 | [0055](adr/0055-web-host-wasm-boundary-module-level.md)            | web host/wasm boundary is module-level, not line-level                                                       | superseded |
-| [0056](adr/0056-web-canonical-colocated-leptos.md)                 | web converges on the canonical co-located Leptos CSR layout                                                  | accepted   |
+| [0056](adr/0056-web-canonical-colocated-leptos.md)                 | web converges on the canonical co-located Leptos CSR layout                                                  | superseded |
 | [0057](adr/0057-e2e-capture-dir-contract.md)                       | Single `JAUNDER_CAPTURE_DIR` output-dir contract for e2e capture                                             | accepted   |
 | [0058](adr/0058-host-crate-layering.md)                            | A `host` crate for strictly-host-focused shared code                                                         | accepted   |
 | [0059](adr/0059-thin-web-shell-error-layering.md)                  | The thin web shell and the T1→T2→T3 error pipeline                                                           | accepted   |
@@ -96,7 +96,8 @@ convention). See the Status column below for each ADR's current status.
 | [0066](adr/0066-server-fn-test-registrar-guard.md)                 | Guard the server-fn test registrar with an xtask check                                                       | proposed   |
 | [0067](adr/0067-server-integration-tests-one-binary.md)            | Server integration tests are one binary                                                                      | accepted   |
 | [0068](adr/0068-tag-identity-label-split.md)                       | A domain value with a canonical identity and a preserved label is two newtypes, not one                      | proposed   |
-| [0069](adr/0069-client-crate-wasm-only-home.md)                    | `client` crate — the wasm-only browser-infrastructure home                                                   | proposed   |
+| [0069](adr/0069-client-crate-wasm-only-home.md)                    | `client` crate — the wasm-only browser-infrastructure home                                                   | accepted   |
+| [0070](adr/0070-web-vertical-wasm-only-component-files.md)         | web verticals split host/wasm at the file level — wasm-only `component.rs`                                   | accepted   |
 
 <!-- adr-table:end -->
 
