@@ -35,7 +35,7 @@ referenced below as **AC1**–**AC10**.
   `[lib]` block (default `rlib`), **empty `[dependencies]`** (no browser deps —
   added by follow-on issues when first used).
 - **ADR draft already authored** at
-  `docs/adr/drafts/client-crate-wasm-only-home.md` (AC9), its content validated
+  `docs/adr/0069-client-crate-wasm-only-home.md` (AC9), its content validated
   against AC9's six sub-points (0058 activation, 0056 reconciliation, 0055
   rules, charter, coverage position, gate wiring) in the spec soundness review.
   It is gitignored (draft-out-of-git flow) and is **not** committed by this plan
@@ -127,7 +127,7 @@ workspace = true
 //! only on wasm. Every module relocated here inherits that gate, so it needs no
 //! per-item `#[cfg]` and no `#[client_only]` marker.
 //!
-//! See docs/adr/drafts/client-crate-wasm-only-home.md.
+//! See docs/adr/0069-client-crate-wasm-only-home.md.
 #![cfg(target_arch = "wasm32")]
 ```
 

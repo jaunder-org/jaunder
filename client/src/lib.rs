@@ -10,5 +10,5 @@
 //! only on wasm. Every module relocated here inherits that gate, so it needs no
 //! per-item `#[cfg]` and no `#[client_only]` marker.
 //!
-//! See docs/adr/drafts/client-crate-wasm-only-home.md.
+//! See docs/adr/0069-client-crate-wasm-only-home.md.
 #![cfg(target_arch = "wasm32")]

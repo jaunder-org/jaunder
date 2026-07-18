@@ -62,7 +62,7 @@ and a single crate-level cfg gate:
 //! The symmetric wasm peer of `host`: holds only raw browser glue
 //! (web_sys / js_sys / wasm_bindgen / wasm-side leptos plumbing) and never our
 //! domain types. Depends on no workspace crate except `common` (+ `macros`).
-//! See docs/adr/drafts/client-crate-wasm-only-home.md (ADR-0058 trio).
+//! See docs/adr/0069-client-crate-wasm-only-home.md (ADR-0058 trio).
 #![cfg(target_arch = "wasm32")]
 ```
 
@@ -124,7 +124,7 @@ existing single wasm-clippy step rather than adding a second one:
 
 ### The ADR (new draft)
 
-Author a numberless draft at `docs/adr/drafts/client-crate-wasm-only-home.md`
+Author a numberless draft at `docs/adr/0069-client-crate-wasm-only-home.md`
 (heading `# ADR-DRAFT: …`, referenced by path; `cargo xtask adr promote` numbers
 it at ship). It must:
 
@@ -181,7 +181,7 @@ Each is observable so ship's conformance review can tell delivered from not.
    no primitive is relocated; the Nix source filters and any cargo-leptos/csr
    wiring are unchanged.
 9. **ADR recorded.** A numberless draft exists at
-   `docs/adr/drafts/client-crate-wasm-only-home.md` with heading
+   `docs/adr/0069-client-crate-wasm-only-home.md` with heading
    `# ADR-DRAFT: …`, covering: activation of the ADR-0058 client peer (0058
    cross-linked, not superseded); reconciliation with ADR-0056 (not the #303
    split); ADR-0055's surviving rules bind on `client`; the charter (layering,
