@@ -5,9 +5,10 @@ use crate::ids::{AudienceId, ChannelId, UserId};
 use std::fmt;
 
 macro_rules! str_enum {
-    ($name:ident { $($variant:ident => $s:literal),+ $(,)? }) => {
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-        pub enum $name { $($variant),+ }
+    // Internal: the inherent `as_str`, `TryFrom<&str>`, and `Display` impls,
+    // shared by every public arm so the enum-definition and the impls stay in
+    // one place.
+    (@impls $name:ident { $($variant:ident => $s:literal),+ }) => {
         impl $name {
             pub fn as_str(&self) -> &'static str {
                 match self { $(Self::$variant => $s),+ }
@@ -23,11 +24,55 @@ macro_rules! str_enum {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str(self.as_str()) }
         }
     };
+    // Internal: wire `Serialize`/`Deserialize` routed through `as_str`/`TryFrom`,
+    // so the invocation's string literals are the single source of truth for the
+    // wire form (no `rename_all` drift).
+    (@serde $name:ident { $($s:literal),+ }) => {
+        impl ::serde::Serialize for $name {
+            fn serialize<S: ::serde::Serializer>(&self, s: S) -> ::core::result::Result<S::Ok, S::Error> {
+                s.serialize_str(self.as_str())
+            }
+        }
+        impl<'de> ::serde::Deserialize<'de> for $name {
+            fn deserialize<D: ::serde::Deserializer<'de>>(d: D) -> ::core::result::Result<Self, D::Error> {
+                // Fully-qualify: the `Deserialize` trait is not `use`d in this
+                // module, so a bare `String::deserialize` method path would not
+                // resolve at the macro-expansion site.
+                let s = <::std::string::String as ::serde::Deserialize>::deserialize(d)?;
+                Self::try_from(s.as_str())
+                    .map_err(|()| <D::Error as ::serde::de::Error>::unknown_variant(&s, &[$($s),+]))
+            }
+        }
+    };
+    // Plain string enum: DB/lookup facing, no serde.
+    ($name:ident { $($variant:ident => $s:literal),+ $(,)? }) => {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        pub enum $name { $($variant),+ }
+        str_enum!(@impls $name { $($variant => $s),+ });
+    };
+    // Wire-facing string enum: adds serde. The variant tagged `default` becomes
+    // the derived `Default` (kept first so the `#[default]` attaches to it).
+    (serde $name:ident { default $dvar:ident => $ds:literal $(, $variant:ident => $s:literal)* $(,)? }) => {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+        pub enum $name {
+            #[default]
+            $dvar,
+            $($variant),*
+        }
+        str_enum!(@impls $name { $dvar => $ds $(, $variant => $s)* });
+        str_enum!(@serde $name { $ds $(, $s)* });
+    };
 }
 
 str_enum!(Channel { Local => "local" });
 str_enum!(SubscriptionStatus { Active => "active", Pending => "pending", Blocked => "blocked" });
 str_enum!(TargetKind { Public => "public", Subscribers => "subscribers", Named => "named" });
+
+// The mutually-exclusive built-in audience base chosen in the editor / API — the
+// typed form of the audience-picker's `base`. Composes with named audiences by
+// union except for `Private` (author-only), which is the safe, non-widening
+// `Default` (faithful to the prior empty-string -> author-only fall-through). #499.
+str_enum!(serde AudienceBase { default Private => "private", Public => "public", Subscribers => "subscribers" });
 
 /// Who is reading. Wider than Layer A needs (only `Anonymous` and the local
 /// channel are constructed today) so non-local channels need no signature change
@@ -147,6 +192,52 @@ mod tests {
         ] {
             assert_eq!(k.to_string(), k.as_str());
         }
+        for b in [
+            AudienceBase::Public,
+            AudienceBase::Subscribers,
+            AudienceBase::Private,
+        ] {
+            assert_eq!(b.to_string(), b.as_str());
+            assert_eq!(AudienceBase::try_from(b.as_str()), Ok(b));
+        }
+    }
+
+    #[test]
+    fn audience_base_serializes_to_lowercase_literal() {
+        assert_eq!(
+            serde_json::to_string(&AudienceBase::Public).unwrap(),
+            "\"public\""
+        );
+        assert_eq!(
+            serde_json::to_string(&AudienceBase::Subscribers).unwrap(),
+            "\"subscribers\""
+        );
+        assert_eq!(
+            serde_json::to_string(&AudienceBase::Private).unwrap(),
+            "\"private\""
+        );
+    }
+
+    #[test]
+    fn audience_base_deserializes_from_literal() {
+        for v in [
+            AudienceBase::Public,
+            AudienceBase::Subscribers,
+            AudienceBase::Private,
+        ] {
+            let json = serde_json::to_string(&v).unwrap();
+            assert_eq!(serde_json::from_str::<AudienceBase>(&json).unwrap(), v);
+        }
+    }
+
+    #[test]
+    fn audience_base_deserialize_rejects_unknown() {
+        assert!(serde_json::from_str::<AudienceBase>("\"bogus\"").is_err());
+    }
+
+    #[test]
+    fn audience_base_default_is_private() {
+        assert_eq!(AudienceBase::default(), AudienceBase::Private);
     }
 
     #[test]
