@@ -15,10 +15,7 @@
 
 use crate::posts::{PostResponse, TimelinePage, TimelinePostSummary};
 use crate::tags::TagSummary;
-use crate::ui::avatar;
-use crate::ui::icon;
-use crate::ui::taglist;
-use crate::ui::topbar::render_topbar;
+use crate::ui::{avatar, icon, taglist, topbar};
 use common::render::RenderedHtml;
 use common::tag::Tag;
 use common::username::Username;
@@ -276,7 +273,7 @@ pub(crate) fn render_body(seed: &PageSeed) -> String {
         ),
         // Home (anonymous "Local" mode): Topbar + hero + a bare `j-scroll` of posts.
         PageSeed::SiteTimeline(page) => {
-            let topbar = render_topbar(
+            let topbar = topbar::render(
                 "jaunder.local",
                 Some("Read-only \u{00b7} posts originating on this instance"),
                 "<a href=\"/login\" class=\"j-btn\">Sign in</a>\
@@ -297,14 +294,14 @@ pub(crate) fn render_body(seed: &PageSeed) -> String {
             )
         }
         PageSeed::Profile { username, page } => render_timeline_page(
-            &render_topbar(&format!("Posts by {username}"), Some("User timeline"), ""),
+            &topbar::render(&format!("Posts by {username}"), Some("User timeline"), ""),
             &page.posts,
             page.has_more,
             &TagCtx::ForUser(username.clone()),
             "No posts yet.",
         ),
         PageSeed::SiteTag { tag, page } => render_timeline_page(
-            &render_topbar(&format!("#{tag}"), Some("Posts on this instance"), ""),
+            &topbar::render(&format!("#{tag}"), Some("Posts on this instance"), ""),
             &page.posts,
             page.has_more,
             &TagCtx::SiteWide,
@@ -315,7 +312,7 @@ pub(crate) fn render_body(seed: &PageSeed) -> String {
             tag,
             page,
         } => render_timeline_page(
-            &render_topbar(
+            &topbar::render(
                 &format!("#{tag}"),
                 Some(&format!("Posts by ~{username}")),
                 "",
