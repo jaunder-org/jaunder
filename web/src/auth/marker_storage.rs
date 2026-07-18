@@ -12,11 +12,11 @@
 
 use super::marker::{decode_marker, encode_marker, MARKER_KEY};
 
-/// Read + decode the marker. `None` when absent, malformed, **or** the store could
+/// Get + decode the marker. `None` when absent, malformed, **or** the store could
 /// not be read — an unreadable marker is treated as "no marker" (anonymous chrome),
 /// which the reconcile `Effect` corrects if the session says otherwise.
 #[must_use]
-pub fn read() -> Option<String> {
+pub fn get() -> Option<String> {
     client::storage::get(MARKER_KEY)
         .ok()
         .flatten()
@@ -29,8 +29,8 @@ pub fn set(username: &str) {
     let _ = client::storage::set(MARKER_KEY, &encode_marker(username));
 }
 
-/// Remove the marker. A failed clear is non-fatal — the reconcile `Effect` clears a
-/// stale marker against a dead session on the next load.
-pub fn clear() {
+/// Remove the marker. A failed removal is non-fatal — the reconcile `Effect` clears
+/// a stale marker against a dead session on the next load.
+pub fn remove() {
     let _ = client::storage::remove(MARKER_KEY);
 }

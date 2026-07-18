@@ -220,7 +220,7 @@ pub fn LogoutPage() -> impl IntoView {
     // next paint is anonymous. wasm-only; the server clears the real cookie.
     Effect::new(move |_| {
         if let Some(Ok(())) = logout_action.value().get() {
-            crate::auth::marker_storage::clear();
+            crate::auth::marker_storage::remove();
         }
     });
 
