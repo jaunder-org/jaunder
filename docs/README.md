@@ -96,6 +96,7 @@ convention). See the Status column below for each ADR's current status.
 | [0066](adr/0066-server-fn-test-registrar-guard.md)                 | Guard the server-fn test registrar with an xtask check                                                       | proposed   |
 | [0067](adr/0067-server-integration-tests-one-binary.md)            | Server integration tests are one binary                                                                      | accepted   |
 | [0068](adr/0068-tag-identity-label-split.md)                       | A domain value with a canonical identity and a preserved label is two newtypes, not one                      | proposed   |
+| [0069](adr/0069-client-crate-wasm-only-home.md)                    | `client` crate — the wasm-only browser-infrastructure home                                                   | proposed   |
 
 <!-- adr-table:end -->
 

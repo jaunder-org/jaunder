@@ -57,9 +57,15 @@ pub fn specs(mode: Mode) -> Vec<StepSpec> {
         },
         // wasm-clippy — `web::pages` compiles wasm-only (#300), so the host `clippy`
         // step above never sees it. Lint it on the wasm target: `-p web --features csr`
-        // pulls `pages/` into the compile under `target_arch = "wasm32"`. This
-        // necessarily re-lints the whole `web` crate on wasm; two lints are governed
-        // elsewhere and allowed here TEMPORARILY (each tracked to its owner):
+        // pulls `pages/` into the compile under `target_arch = "wasm32"`. The wasm-only
+        // `client` crate (ADR-0058 trio; #513) is linted in the same invocation — it
+        // compiles only under `target_arch = "wasm32"` (empty rlib on host), so this is
+        // its sole clippy gate. `--features csr` is a `web` feature; under resolver v2 it
+        // binds only to `web`, so featureless `client` rides the same command — if `web`'s
+        // `csr` is ever renamed, this arg needs updating too. This necessarily re-lints
+        // the whole `web` crate on wasm;
+        // two lints are governed elsewhere and allowed here TEMPORARILY (each tracked to
+        // its owner):
         //   -A clippy::too_many_arguments      — the create_post/update_post #[server]
         //     fns; the fn-level #[allow] doesn't reach the wasm macro expansion. REMOVE
         //     when #299 restructures their args (they'll drop below 7).
@@ -73,6 +79,8 @@ pub fn specs(mode: Mode) -> Vec<StepSpec> {
                 "clippy",
                 "-p",
                 "web",
+                "-p",
+                "client",
                 "--features",
                 "csr",
                 "--target",
@@ -201,6 +209,36 @@ mod tests {
                     "--",
                     "-D",
                     "warnings"
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn wasm_clippy_lints_web_and_client() {
+        for mode in [Mode::Check, Mode::Fix] {
+            let s = specs(mode);
+            let wasm_clippy = find(&s, "wasm-clippy");
+            assert_eq!(wasm_clippy.program, "cargo");
+            assert_eq!(
+                wasm_clippy.args,
+                [
+                    "clippy",
+                    "-p",
+                    "web",
+                    "-p",
+                    "client",
+                    "--features",
+                    "csr",
+                    "--target",
+                    "wasm32-unknown-unknown",
+                    "--",
+                    "-D",
+                    "warnings",
+                    "-A",
+                    "clippy::too_many_arguments",
+                    "-A",
+                    "unfulfilled_lint_expectations",
                 ]
             );
         }
