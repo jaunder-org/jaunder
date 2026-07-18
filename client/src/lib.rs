@@ -12,3 +12,8 @@
 //!
 //! See docs/adr/0069-client-crate-wasm-only-home.md.
 #![cfg(target_arch = "wasm32")]
+
+/// Generic browser `localStorage` key/value primitive (#514). Raw string KV, no
+/// domain types — the `web`/`csr` home for what were scattered `web_sys::Storage`
+/// call sites.
+pub mod storage;
