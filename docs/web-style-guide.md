@@ -168,37 +168,51 @@ Each feature is a directory module:
 
 ```text
 web/src/feature/
-├── mod.rs        # Shared wire DTOs + #[server] functions with real bodies
+├── mod.rs        # Module wiring only: mod declarations + re-exports
+├── api.rs        # Shared wire DTOs + #[server] functions with real bodies
 ├── server.rs     # Host-only helpers and tests (omit if not needed)
 └── component.rs  # #[component] UI + browser-bound code (omit if no UI)
 ```
 
-At the top of `mod.rs`:
+`mod.rs` declares and re-exports — nothing else:
+
+```rust
+mod api;
+#[cfg(feature = "server")]
+mod server;
+#[cfg(target_arch = "wasm32")]
+mod component;   // the vertical's UI — wasm-only, never host-compiled
+
+pub use api::{CreateThing, ThingDto, create_thing};
+#[cfg(target_arch = "wasm32")]
+pub use component::ThingPage;
+```
+
+The re-exports keep external call-site and server-fn-registrar paths
+(`web::feature::CreateThing`) stable, so relocating items into `api.rs` never
+touches consumers. At the top of `api.rs`:
 
 ```rust
 #[cfg(feature = "server")]
-mod server;
-#[cfg(feature = "server")]
-use server::*;   // all server-only helpers come into scope here
-#[cfg(target_arch = "wasm32")]
-mod component;   // the vertical's UI — wasm-only, never host-compiled
+use super::server::*;   // all server-only helpers come into scope here
 ```
 
 Every `#[server]` body is wrapped with `boundary!("function_name", { ... })`. No
 per-import `#[cfg(feature = "server")]` annotations appear inside function
-bodies — the `#[server]` proc-macro already cfg-gates bodies to SSR, and
-`use server::*` covers all server-only imports in one place.
+bodies — the `#[server]` proc-macro already cfg-gates bodies to SSR, and the
+single grouped import covers all server-only imports in one place.
 
 `server.rs` is only created when the module has genuine private helpers worth
 naming (multi-step transactions, helpers shared across multiple server
-functions, unit tests). Small features may keep everything in `mod.rs`.
+functions, unit tests). Small features may keep everything in `api.rs`.
 
 `component.rs` is wasm-only by its `mod` declaration and carries **zero cfg
 gates inside the file** — it may call `client::` primitives and `web-sys`
 directly, and it never host-compiles. Keep pure, host-testable logic
 (validation, signal/form state, codecs) **out** of `component.rs`, in ungated
 host-tested files — extraction precedes gating. The only `target_arch` cfgs in
-`web/src` are these `mod` declarations.
+`web/src` are these wiring lines — the `mod component;` declarations and their
+paired `pub use` re-exports.
 
 ## 9. SSR-safe Resource patterns
 

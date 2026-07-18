@@ -1,6 +1,8 @@
 # ADR-0070: web verticals split host/wasm at the file level — wasm-only `component.rs`
 
 - Status: accepted
+- Note: amended 2026-07-18 (#530) — `#[server]` endpoints and wire types move
+  from `mod.rs` to `api.rs`; `mod.rs` is module wiring only
 - Date: 2026-07-18
 - Issue: [#526](https://github.com/jaunder-org/jaunder/issues/526)
 
@@ -43,10 +45,19 @@ directly — the direct call is the simpler code we actually want to write.
 vertical splits host and wasm code at the **file** level, inside the existing
 single crate.
 
-1. **Per-vertical layout.** A vertical (`audiences/`, `posts/`, …) is:
-   - `mod.rs` — ungated: shared wire types, the `#[server]` fn declarations, at
-     most one grouped `#[cfg(feature = "server")]` support-import gate, and the
-     gated module declarations below.
+1. **Per-vertical layout** (as amended by #530). A vertical (`audiences/`,
+   `posts/`, …) is:
+   - `mod.rs` — **module wiring only**: the module declarations (`mod api;`, the
+     gated `mod server;`/`mod component;`) and the re-exports
+     (`pub use api::{…};`,
+     `#[cfg(target_arch = "wasm32")] pub use component::{…};`). No items of its
+     own — declaring endpoints here would mix the collection-point concern with
+     the API surface.
+   - `api.rs` — the vertical's API surface: shared wire types and the
+     `#[server]` endpoint declarations, dual-compiled, plus at most one grouped
+     `#[cfg(feature = "server")]` support-import gate for the bodies. The
+     `mod.rs` re-exports keep external call-site and registrar paths
+     (`web::<vertical>::<Leaf>`) stable.
    - `server.rs` — host-only support for the `#[server]` bodies, declared
      `#[cfg(feature = "server")] mod server;`.
    - `component.rs` — the `#[component]` UI and all browser-bound code, declared
@@ -58,9 +69,10 @@ single crate.
 
 2. **Gate axes are fixed.** `feature = "server"` expresses server-ness;
    `#[cfg(target_arch = "wasm32")]` expresses browser-ness and appears **only on
-   `mod` declarations** in `web/src`. A scan-style xtask check (modeled on the
-   existing syn/scan steps; tracked by the re-scoped #520) enforces the
-   mod-declaration-only rule.
+   module-wiring declarations** in `web/src` — a `mod` declaration or its paired
+   re-export (`pub use component::{…};`), never on items inside a leaf file. A
+   scan-style xtask check (modeled on the existing syn/scan steps; tracked by
+   the re-scoped #520) enforces the wiring-only rule.
 
 3. **`#[server]` fns stay ungated and dual-compiled.** The wasm side needs the
    generated client stub; the host side needs the handler and the registrar
@@ -83,7 +95,7 @@ single crate.
    substituted for wasm-only code.
 
 7. **Milestone 14's endgame is re-scoped.** "Zero `target_arch` cfgs in `web`"
-   becomes "`target_arch` only at `mod` declarations." The final ratchet (#520)
+   becomes "`target_arch` only on module-wiring lines." The final ratchet (#520)
    still drops `js-sys`/`wasm-bindgen` from `web` and retires `#[client_only]`,
    and now also retires the `#[component]` coverage exemption and the A1 guard's
    component arm — dead machinery once no ungated component remains.
