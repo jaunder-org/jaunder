@@ -194,7 +194,7 @@ pub fn PostDisplay(
 /// even though the anonymous seed data has `is_author = false`. `false` on the
 /// host build (no marker) — the affordance is wasm-only chrome.
 fn marker_matches(author: &str) -> bool {
-    crate::auth::marker::read().as_deref() == Some(author)
+    crate::auth::marker_storage::get().as_deref() == Some(author)
 }
 
 #[component]
@@ -864,13 +864,13 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
             match res {
                 Ok(Some(u)) => {
                     let u = u.to_string();
-                    crate::auth::marker::set(&u);
+                    crate::auth::marker_storage::set(&u);
                     if owner.get_untracked().as_deref() != Some(u.as_str()) {
                         owner.set(Some(u));
                     }
                 }
                 Ok(None) => {
-                    crate::auth::marker::clear();
+                    crate::auth::marker_storage::remove();
                     if owner.get_untracked().is_some() {
                         owner.set(None);
                     }
@@ -901,7 +901,7 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
 /// set, `None` on the host build (the sidebar only ever renders in wasm). Lets the
 /// sidebar pick authed vs. anon synchronously at mount (#181), no async gate.
 fn marker_username_on_boot() -> Option<String> {
-    crate::auth::marker::read()
+    crate::auth::marker_storage::get()
 }
 
 /// The authenticated sidebar chrome (brand, search, nav + operator admin links,

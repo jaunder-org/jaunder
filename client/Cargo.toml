@@ -5,6 +5,8 @@ edition = "2021"
 license = "GPL-3.0-only"
 
 [dependencies]
+wasm-bindgen = { workspace = true }
+web-sys = { workspace = true, features = ["Window", "Storage"] }
 
 [lints]
 workspace = true

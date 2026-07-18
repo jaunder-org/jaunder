@@ -47,7 +47,7 @@ pub fn RegisterPage() -> impl IntoView {
     // still owns the real session cookie.
     Effect::new(move |_| {
         if let Some(Ok(_)) = register_action.value().get() {
-            crate::auth::marker::set(&username.value.get_untracked());
+            crate::auth::marker_storage::set(&username.value.get_untracked());
         }
     });
 
@@ -149,7 +149,7 @@ pub fn LoginPage() -> impl IntoView {
     // (#181, ADR-0044) — the client's synchronous pre-paint boot source. wasm-only.
     Effect::new(move |_| {
         if let Some(Ok(_)) = login_action.value().get() {
-            crate::auth::marker::set(&username.value.get_untracked());
+            crate::auth::marker_storage::set(&username.value.get_untracked());
         }
     });
 
@@ -220,7 +220,7 @@ pub fn LogoutPage() -> impl IntoView {
     // next paint is anonymous. wasm-only; the server clears the real cookie.
     Effect::new(move |_| {
         if let Some(Ok(())) = logout_action.value().get() {
-            crate::auth::marker::clear();
+            crate::auth::marker_storage::remove();
         }
     });
 
