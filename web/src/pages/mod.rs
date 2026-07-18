@@ -91,8 +91,9 @@ pub fn App() -> impl IntoView {
 
     let theme = RwSignal::new(DEFAULT_THEME.to_string());
 
-    // On WASM: restore theme from localStorage on startup.
-    if let Some(val) = client::storage::get(THEME_KEY) {
+    // On WASM: restore theme from localStorage on startup. A read failure (storage
+    // unavailable) falls back to the default theme — cosmetic, nothing to recover.
+    if let Ok(Some(val)) = client::storage::get(THEME_KEY) {
         if !val.is_empty() {
             theme.set(val);
         }
@@ -100,9 +101,11 @@ pub fn App() -> impl IntoView {
 
     provide_context(theme);
 
-    // On WASM: persist theme to localStorage whenever it changes.
+    // On WASM: persist theme to localStorage whenever it changes. Theme persistence
+    // is cosmetic, so a write failure (e.g. quota) is deliberately ignored at this
+    // caller rather than surfaced — the primitive reports it; we choose not to act.
     Effect::new(move |_| {
-        client::storage::set(THEME_KEY, &theme.get());
+        let _ = client::storage::set(THEME_KEY, &theme.get());
     });
 
     view! {
