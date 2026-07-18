@@ -98,32 +98,9 @@ pub fn Icon(path: &'static str, #[prop(default = 16)] size: u32) -> impl IntoVie
     }
 }
 
-// ─── 3.2 Avatar ───────────────────────────────────────────────
+// ─── moved to web::ui (strangler shims, #522) ─────────────────
 
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Leptos #[component] props are stored by the framework and must be owned; \
-              the borrow clippy suggests isn't expressible in a component signature"
-)]
-#[component]
-pub fn Avatar(name: String, #[prop(default = 38)] size: u32) -> impl IntoView {
-    let (initials, hue) = crate::render::avatar_parts(&name);
-    // Integer equivalent of `(size as f32 * 0.36).round()`; must match
-    // `render::render_avatar` so SSR and reactive output coincide.
-    let font_size = (size * 36 + 50) / 100;
-    let style = format!(
-        "width:{size}px;height:{size}px;background:oklch(0.58 0.07 {hue});font-size:{font_size}px"
-    );
-    view! {
-        <div class="j-av" style=style>
-            {initials}
-        </div>
-    }
-}
-
-// ─── 3.5 Topbar ───────────────────────────────────────────────
-
-pub use crate::ui::Topbar;
+pub use crate::ui::{Avatar, Topbar};
 
 // ─── 3.6 PostCard ─────────────────────────────────────────────
 

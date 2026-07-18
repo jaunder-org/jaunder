@@ -15,6 +15,7 @@
 
 use crate::posts::{PostResponse, TimelinePage, TimelinePostSummary};
 use crate::tags::TagSummary;
+use crate::ui::avatar;
 use crate::ui::topbar::render_topbar;
 use common::render::RenderedHtml;
 use common::tag::Tag;
@@ -87,8 +88,9 @@ pub enum TagCtx {
 
 /// Derives `(initials, hue)` from a display name. `initials`: first character of
 /// each of the first two whitespace-separated words, uppercased. `hue`: sum of
-/// all char codes mod 360. Shared by the reactive `Avatar` component and the
-/// pure [`render_avatar`] so a seeded avatar and its reactive re-render coincide.
+/// all char codes mod 360. Shared by the reactive [`crate::ui::Avatar`] component
+/// and the pure [`crate::ui::avatar::render`] so a seeded avatar and its reactive
+/// re-render coincide.
 #[must_use]
 pub fn avatar_parts(name: &str) -> (String, u32) {
     let initials: String = name
@@ -99,20 +101,6 @@ pub fn avatar_parts(name: &str) -> (String, u32) {
         .collect();
     let hue: u32 = name.chars().fold(0u32, |acc, c| acc + c as u32) % 360;
     (initials, hue)
-}
-
-/// One avatar chip as `<div class="j-av" …>`, byte-identical to the reactive
-/// `pages::ui::Avatar` component's output for the same `(name, size)`.
-#[must_use]
-pub fn render_avatar(name: &str, size: u32) -> String {
-    let (initials, hue) = avatar_parts(name);
-    // Integer equivalent of `(size as f32 * 0.36).round()`, avoiding float casts;
-    // `+ 50` gives round-half-up. `size` is a small avatar dimension.
-    let font_size = (size * 36 + 50) / 100;
-    format!(
-        "<div class=\"j-av\" style=\"width:{size}px;height:{size}px;background:oklch(0.58 0.07 {hue});font-size:{font_size}px\">{initials}</div>",
-        initials = escape_html(&initials),
-    )
 }
 
 /// Formats an RFC-3339 timestamp as `"YYYY-MM-DD HH:MM"`, falling back to the raw
@@ -437,7 +425,7 @@ pub(crate) fn render_post_inner(view: &PostView) -> String {
             "<div style=\"flex:1;min-width:0\">{content}</div>",
             "</div>",
         ),
-        avatar = render_avatar(view.username, 38),
+        avatar = avatar::render(view.username, 38),
         content = render_post_content(view),
     )
 }
@@ -1134,20 +1122,6 @@ mod tests {
         let html = render_body(&PageSeed::Permalink(post));
         // The time is formatted (mirroring the reactive `format_post_time`), not raw.
         assert!(html.contains("2026-01-02 03:04"), "{html}");
-    }
-
-    #[test]
-    fn avatar_matches_reactive_component_markup() {
-        // Must stay byte-identical to `pages::ui::Avatar` for size 38.
-        let (initials, hue) = avatar_parts("Mara Ek");
-        assert_eq!(initials, "ME");
-        let html = render_avatar("Mara Ek", 38);
-        assert_eq!(
-            html,
-            format!(
-                "<div class=\"j-av\" style=\"width:38px;height:38px;background:oklch(0.58 0.07 {hue});font-size:14px\">ME</div>"
-            )
-        );
     }
 
     #[test]
