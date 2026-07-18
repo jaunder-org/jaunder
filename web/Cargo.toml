@@ -16,6 +16,7 @@ leptos_axum = { workspace = true, optional = true }
 reactive_stores.workspace = true
 
 axum = { workspace = true, optional = true }
+client = { path = "../client" }
 common.workspace = true
 host = { path = "../host", optional = true }
 macros = { path = "../macros" }

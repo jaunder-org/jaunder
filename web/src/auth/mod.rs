@@ -6,9 +6,15 @@ use common::invite::ProfferedInviteCode;
 use common::username::Username;
 use leptos::prelude::*;
 
-/// The client-side advisory auth marker (#181, ADR-0044). Pure encode/decode are
-/// host-testable; `read`/`set`/`clear` are wasm-only (localStorage).
+/// The client-side advisory auth marker (#181, ADR-0044). Pure encode/decode +
+/// `MARKER_KEY` are host-testable here; the wasm-only `localStorage` binding
+/// (`read`/`set`/`clear`) lives in [`marker_storage`].
 pub mod marker;
+
+/// Browser `localStorage` binding of the auth marker (wasm-only): `read`/`set`/
+/// `clear` over [`client::storage`] + the [`marker`] codec (#514).
+#[cfg(target_arch = "wasm32")]
+pub mod marker_storage;
 
 #[cfg(feature = "server")]
 mod server;

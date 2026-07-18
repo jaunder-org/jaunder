@@ -4,6 +4,9 @@
 //! the server authorizes every mutation. The pre-paint `<head>` script
 //! (`render::PREPAINT_SCRIPT`) reads the SAME key + `.username` field, so the
 //! encode/decode shape here and that script must stay in sync.
+//!
+//! Pure codec only: the wasm-only `localStorage` binding lives in
+//! [`super::marker_storage`] (#514).
 
 use serde::{Deserialize, Serialize};
 
@@ -30,35 +33,6 @@ pub fn decode_marker(raw: &str) -> Option<String> {
     }
     let m: Owned = serde_json::from_str(raw).ok()?;
     (!m.username.is_empty()).then_some(m.username)
-}
-
-#[cfg(target_arch = "wasm32")]
-fn storage() -> Option<web_sys::Storage> {
-    web_sys::window()?.local_storage().ok().flatten()
-}
-
-/// Read + decode the marker from localStorage (browser-only).
-#[cfg(target_arch = "wasm32")]
-#[must_use]
-pub fn read() -> Option<String> {
-    let raw = storage()?.get_item(MARKER_KEY).ok().flatten()?;
-    decode_marker(&raw)
-}
-
-/// Write the marker for `username` (browser-only).
-#[cfg(target_arch = "wasm32")]
-pub fn set(username: &str) {
-    if let Some(s) = storage() {
-        let _ = s.set_item(MARKER_KEY, &encode_marker(username));
-    }
-}
-
-/// Remove the marker (browser-only).
-#[cfg(target_arch = "wasm32")]
-pub fn clear() {
-    if let Some(s) = storage() {
-        let _ = s.remove_item(MARKER_KEY);
-    }
 }
 
 #[cfg(test)]
