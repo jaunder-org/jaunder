@@ -17,6 +17,7 @@ use crate::posts::{PostResponse, TimelinePage, TimelinePostSummary};
 use crate::tags::TagSummary;
 use crate::ui::avatar;
 use crate::ui::icon;
+use crate::ui::taglist;
 use crate::ui::topbar::render_topbar;
 use common::render::RenderedHtml;
 use common::tag::Tag;
@@ -480,7 +481,7 @@ pub(crate) fn render_post_content(view: &PostView) -> String {
         banner_html = banner_html,
         summary_html = summary_html,
         body = view.rendered_html,
-        tags = render_tag_list(view.tags, view.tag_ctx),
+        tags = taglist::render(view.tags, view.tag_ctx),
     )
 }
 
@@ -506,37 +507,6 @@ fn render_timeline_page(
         )
     };
     format!("{topbar}<div class=\"j-scroll\"><div class=\"j-page\">{inner}</div></div>")
-}
-
-/// The footer tag chips: a `<span class="j-tag-list">` of `<span class="j-tag-cell">`
-/// chips, each a `#display` link to `/tags/:slug`, plus the "· here" link under
-/// [`TagCtx::ForUser`]. The reactive post markup injects this via `inner_html`, so
-/// there is one source of truth for the chip markup (it replaced the old reactive
-/// `TagList` component).
-#[must_use]
-pub(crate) fn render_tag_list(tags: &[TagSummary], ctx: &TagCtx) -> String {
-    if tags.is_empty() {
-        return String::new();
-    }
-    let mut out = String::from("<span class=\"j-tag-list\">");
-    for tag in tags {
-        let slug = escape_html(&tag.slug);
-        let _ = write!(
-            out,
-            "<span class=\"j-tag-cell\"><a class=\"j-tag\" href=\"/tags/{slug}\">#{display}</a>",
-            display = escape_html(&tag.display),
-        );
-        if let TagCtx::ForUser(username) = ctx {
-            let _ = write!(
-                out,
-                "<a class=\"j-tag-here\" href=\"/~{user}/tags/{slug}\" title=\"On this blog\">\u{00b7} here</a>",
-                user = escape_html(username),
-            );
-        }
-        out.push_str("</span>");
-    }
-    out.push_str("</span>");
-    out
 }
 
 /// SVG path `d` attribute strings for all Jaunder icons. Shared by the reactive
@@ -1109,43 +1079,6 @@ mod tests {
         let html = render_body(&PageSeed::Permalink(post));
         // The time is formatted (mirroring the reactive `format_post_time`), not raw.
         assert!(html.contains("2026-01-02 03:04"), "{html}");
-    }
-
-    #[test]
-    fn tag_list_site_wide_has_hash_chip_and_no_here_link() {
-        let tags = [TagSummary {
-            slug: "rust".parse().unwrap(),
-            display: "Rust".parse().unwrap(),
-        }];
-        let html = render_tag_list(&tags, &TagCtx::SiteWide);
-        assert_eq!(
-            html,
-            "<span class=\"j-tag-list\"><span class=\"j-tag-cell\">\
-             <a class=\"j-tag\" href=\"/tags/rust\">#Rust</a></span></span>"
-        );
-    }
-
-    #[test]
-    fn tag_list_for_user_adds_here_link() {
-        let tags = [TagSummary {
-            slug: "rust".parse().unwrap(),
-            display: "Rust".parse().unwrap(),
-        }];
-        let html = render_tag_list(
-            &tags,
-            &TagCtx::ForUser("alice".parse::<Username>().unwrap()),
-        );
-        assert!(
-            html.contains(
-                "<a class=\"j-tag-here\" href=\"/~alice/tags/rust\" title=\"On this blog\">"
-            ),
-            "{html}"
-        );
-    }
-
-    #[test]
-    fn empty_tag_list_renders_nothing() {
-        assert_eq!(render_tag_list(&[], &TagCtx::SiteWide), "");
     }
 
     #[test]

@@ -5,8 +5,10 @@
 
 pub mod avatar;
 pub mod icon;
+pub mod taglist;
 pub mod topbar;
 
 pub use avatar::Avatar;
 pub use icon::{Icon, Icons};
+pub use taglist::TagList;
 pub use topbar::Topbar;
