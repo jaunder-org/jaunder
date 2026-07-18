@@ -4,7 +4,23 @@
 
 use leptos::prelude::*;
 
-use crate::render::{avatar_parts, escape_html};
+use crate::render::escape_html;
+
+/// Derives `(initials, hue)` from a display name. `initials`: first character of
+/// each of the first two whitespace-separated words, uppercased. `hue`: sum of all
+/// char codes mod 360. Shared by the reactive [`Avatar`] and the pure [`render`]
+/// twin so a seeded avatar and its reactive re-render coincide.
+#[must_use]
+fn avatar_parts(name: &str) -> (String, u32) {
+    let initials: String = name
+        .split_whitespace()
+        .take(2)
+        .filter_map(|word| word.chars().next())
+        .map(|c| c.to_ascii_uppercase())
+        .collect();
+    let hue: u32 = name.chars().fold(0u32, |acc, c| acc + c as u32) % 360;
+    (initials, hue)
+}
 
 /// One avatar chip as `<div class="j-av" …>`, byte-identical to the reactive
 /// [`Avatar`] component's output for the same `(name, size)`.
@@ -45,8 +61,7 @@ pub fn Avatar(name: String, #[prop(default = 38)] size: u32) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::render;
-    use crate::render::avatar_parts;
+    use super::{avatar_parts, render};
 
     #[test]
     fn avatar_matches_reactive_component_markup() {
@@ -60,5 +75,50 @@ mod tests {
                 "<div class=\"j-av\" style=\"width:38px;height:38px;background:oklch(0.58 0.07 {hue});font-size:14px\">ME</div>"
             )
         );
+    }
+
+    #[test]
+    fn avatar_parts_single_word() {
+        let (initials, _hue) = avatar_parts("Mara");
+        assert_eq!(initials, "M");
+    }
+
+    #[test]
+    fn avatar_parts_two_words() {
+        let (initials, _hue) = avatar_parts("Mara Ek");
+        assert_eq!(initials, "ME");
+    }
+
+    #[test]
+    fn avatar_parts_more_than_two_words_uses_first_two() {
+        let (initials, _hue) = avatar_parts("Mara Jane Ek");
+        assert_eq!(initials, "MJ");
+    }
+
+    #[test]
+    fn avatar_parts_empty_name() {
+        let (initials, hue) = avatar_parts("");
+        assert_eq!(initials, "");
+        assert_eq!(hue, 0);
+    }
+
+    #[test]
+    fn avatar_parts_hue_is_in_range() {
+        let (_initials, hue) = avatar_parts("Some User");
+        assert!(hue < 360);
+    }
+
+    #[test]
+    fn avatar_parts_hue_is_deterministic() {
+        let (_, h1) = avatar_parts("Mara Ek");
+        let (_, h2) = avatar_parts("Mara Ek");
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn avatar_parts_hue_differs_for_different_names() {
+        let (_, h1) = avatar_parts("Alice");
+        let (_, h2) = avatar_parts("Bob");
+        assert_ne!(h1, h2);
     }
 }

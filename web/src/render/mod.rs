@@ -85,23 +85,6 @@ pub enum TagCtx {
     ForUser(Username),
 }
 
-/// Derives `(initials, hue)` from a display name. `initials`: first character of
-/// each of the first two whitespace-separated words, uppercased. `hue`: sum of
-/// all char codes mod 360. Shared by the reactive [`crate::ui::Avatar`] component
-/// and the pure [`crate::ui::avatar::render`] so a seeded avatar and its reactive
-/// re-render coincide.
-#[must_use]
-pub fn avatar_parts(name: &str) -> (String, u32) {
-    let initials: String = name
-        .split_whitespace()
-        .take(2)
-        .filter_map(|word| word.chars().next())
-        .map(|c| c.to_ascii_uppercase())
-        .collect();
-    let hue: u32 = name.chars().fold(0u32, |acc, c| acc + c as u32) % 360;
-    (initials, hue)
-}
-
 /// Formats an RFC-3339 timestamp as `"YYYY-MM-DD HH:MM"`, falling back to the raw
 /// string if it contains no `T` separator. Shared with the reactive components so
 /// the projected post time and the reactive re-render coincide.
@@ -661,51 +644,6 @@ mod tests {
     #[test]
     fn default_theme_is_nonempty() {
         assert!(!DEFAULT_THEME.is_empty());
-    }
-
-    #[test]
-    fn avatar_parts_single_word() {
-        let (initials, _hue) = avatar_parts("Mara");
-        assert_eq!(initials, "M");
-    }
-
-    #[test]
-    fn avatar_parts_two_words() {
-        let (initials, _hue) = avatar_parts("Mara Ek");
-        assert_eq!(initials, "ME");
-    }
-
-    #[test]
-    fn avatar_parts_more_than_two_words_uses_first_two() {
-        let (initials, _hue) = avatar_parts("Mara Jane Ek");
-        assert_eq!(initials, "MJ");
-    }
-
-    #[test]
-    fn avatar_parts_empty_name() {
-        let (initials, hue) = avatar_parts("");
-        assert_eq!(initials, "");
-        assert_eq!(hue, 0);
-    }
-
-    #[test]
-    fn avatar_parts_hue_is_in_range() {
-        let (_initials, hue) = avatar_parts("Some User");
-        assert!(hue < 360);
-    }
-
-    #[test]
-    fn avatar_parts_hue_is_deterministic() {
-        let (_, h1) = avatar_parts("Mara Ek");
-        let (_, h2) = avatar_parts("Mara Ek");
-        assert_eq!(h1, h2);
-    }
-
-    #[test]
-    fn avatar_parts_hue_differs_for_different_names() {
-        let (_, h1) = avatar_parts("Alice");
-        let (_, h2) = avatar_parts("Bob");
-        assert_ne!(h1, h2);
     }
 
     #[test]
