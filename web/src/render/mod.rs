@@ -15,7 +15,7 @@
 
 use crate::posts::{PostResponse, TimelinePage, TimelinePostSummary};
 use crate::tags::TagSummary;
-use crate::ui::topbar::render_topbar;
+use crate::ui::{avatar, icon, taglist, topbar};
 use common::render::RenderedHtml;
 use common::tag::Tag;
 use common::username::Username;
@@ -83,36 +83,6 @@ pub enum PageSeed {
 pub enum TagCtx {
     SiteWide,
     ForUser(Username),
-}
-
-/// Derives `(initials, hue)` from a display name. `initials`: first character of
-/// each of the first two whitespace-separated words, uppercased. `hue`: sum of
-/// all char codes mod 360. Shared by the reactive `Avatar` component and the
-/// pure [`render_avatar`] so a seeded avatar and its reactive re-render coincide.
-#[must_use]
-pub fn avatar_parts(name: &str) -> (String, u32) {
-    let initials: String = name
-        .split_whitespace()
-        .take(2)
-        .filter_map(|word| word.chars().next())
-        .map(|c| c.to_ascii_uppercase())
-        .collect();
-    let hue: u32 = name.chars().fold(0u32, |acc, c| acc + c as u32) % 360;
-    (initials, hue)
-}
-
-/// One avatar chip as `<div class="j-av" …>`, byte-identical to the reactive
-/// `pages::ui::Avatar` component's output for the same `(name, size)`.
-#[must_use]
-pub fn render_avatar(name: &str, size: u32) -> String {
-    let (initials, hue) = avatar_parts(name);
-    // Integer equivalent of `(size as f32 * 0.36).round()`, avoiding float casts;
-    // `+ 50` gives round-half-up. `size` is a small avatar dimension.
-    let font_size = (size * 36 + 50) / 100;
-    format!(
-        "<div class=\"j-av\" style=\"width:{size}px;height:{size}px;background:oklch(0.58 0.07 {hue});font-size:{font_size}px\">{initials}</div>",
-        initials = escape_html(&initials),
-    )
 }
 
 /// Formats an RFC-3339 timestamp as `"YYYY-MM-DD HH:MM"`, falling back to the raw
@@ -286,7 +256,7 @@ pub(crate) fn render_body(seed: &PageSeed) -> String {
         ),
         // Home (anonymous "Local" mode): Topbar + hero + a bare `j-scroll` of posts.
         PageSeed::SiteTimeline(page) => {
-            let topbar = render_topbar(
+            let topbar = topbar::render(
                 "jaunder.local",
                 Some("Read-only \u{00b7} posts originating on this instance"),
                 "<a href=\"/login\" class=\"j-btn\">Sign in</a>\
@@ -307,14 +277,14 @@ pub(crate) fn render_body(seed: &PageSeed) -> String {
             )
         }
         PageSeed::Profile { username, page } => render_timeline_page(
-            &render_topbar(&format!("Posts by {username}"), Some("User timeline"), ""),
+            &topbar::render(&format!("Posts by {username}"), Some("User timeline"), ""),
             &page.posts,
             page.has_more,
             &TagCtx::ForUser(username.clone()),
             "No posts yet.",
         ),
         PageSeed::SiteTag { tag, page } => render_timeline_page(
-            &render_topbar(&format!("#{tag}"), Some("Posts on this instance"), ""),
+            &topbar::render(&format!("#{tag}"), Some("Posts on this instance"), ""),
             &page.posts,
             page.has_more,
             &TagCtx::SiteWide,
@@ -325,7 +295,7 @@ pub(crate) fn render_body(seed: &PageSeed) -> String {
             tag,
             page,
         } => render_timeline_page(
-            &render_topbar(
+            &topbar::render(
                 &format!("#{tag}"),
                 Some(&format!("Posts by ~{username}")),
                 "",
@@ -437,7 +407,7 @@ pub(crate) fn render_post_inner(view: &PostView) -> String {
             "<div style=\"flex:1;min-width:0\">{content}</div>",
             "</div>",
         ),
-        avatar = render_avatar(view.username, 38),
+        avatar = avatar::render(view.username, 38),
         content = render_post_content(view),
     )
 }
@@ -491,7 +461,7 @@ pub(crate) fn render_post_content(view: &PostView) -> String {
         banner_html = banner_html,
         summary_html = summary_html,
         body = view.rendered_html,
-        tags = render_tag_list(view.tags, view.tag_ctx),
+        tags = taglist::render(view.tags, view.tag_ctx),
     )
 }
 
@@ -519,39 +489,8 @@ fn render_timeline_page(
     format!("{topbar}<div class=\"j-scroll\"><div class=\"j-page\">{inner}</div></div>")
 }
 
-/// The footer tag chips: a `<span class="j-tag-list">` of `<span class="j-tag-cell">`
-/// chips, each a `#display` link to `/tags/:slug`, plus the "· here" link under
-/// [`TagCtx::ForUser`]. The reactive post markup injects this via `inner_html`, so
-/// there is one source of truth for the chip markup (it replaced the old reactive
-/// `TagList` component).
-#[must_use]
-pub(crate) fn render_tag_list(tags: &[TagSummary], ctx: &TagCtx) -> String {
-    if tags.is_empty() {
-        return String::new();
-    }
-    let mut out = String::from("<span class=\"j-tag-list\">");
-    for tag in tags {
-        let slug = escape_html(&tag.slug);
-        let _ = write!(
-            out,
-            "<span class=\"j-tag-cell\"><a class=\"j-tag\" href=\"/tags/{slug}\">#{display}</a>",
-            display = escape_html(&tag.display),
-        );
-        if let TagCtx::ForUser(username) = ctx {
-            let _ = write!(
-                out,
-                "<a class=\"j-tag-here\" href=\"/~{user}/tags/{slug}\" title=\"On this blog\">\u{00b7} here</a>",
-                user = escape_html(username),
-            );
-        }
-        out.push_str("</span>");
-    }
-    out.push_str("</span>");
-    out
-}
-
 /// SVG path `d` attribute strings for all Jaunder icons. Shared by the reactive
-/// `pages::ui::Icon` component and the pure [`render_icon`].
+/// [`crate::ui::Icon`] component and the pure [`crate::ui::icon::render`].
 pub struct Icons;
 
 impl Icons {
@@ -609,20 +548,6 @@ pub const SIDEBAR_SOURCES: &[(&str, &str, &str)] = &[
     ("jsonfeed", "Manton", "manton.org"),
 ];
 
-/// One inline icon `<svg class="j-icon">`, matching the reactive `pages::ui::Icon`.
-#[must_use]
-pub fn render_icon(path: &str, size: u32) -> String {
-    format!(
-        concat!(
-            "<svg class=\"j-icon\" width=\"{size}\" height=\"{size}\" viewBox=\"0 0 20 20\" ",
-            "fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" ",
-            "stroke-linejoin=\"round\"><path d=\"{path}\"></path></svg>",
-        ),
-        size = size,
-        path = path,
-    )
-}
-
 /// The inner HTML of the **anonymous** `<aside class="j-sidebar">`: brand, search,
 /// the public nav (items with an href and no auth requirement — just "Home"),
 /// the sources section, and an empty footer. The reactive `pages::ui::Sidebar`
@@ -638,7 +563,7 @@ pub fn render_sidebar(active_key: &str) -> String {
     let _ = write!(
         out,
         "<div class=\"j-search\">{}<span>Search</span><span class=\"j-kbd\">\u{2318}K</span></div>",
-        render_icon(Icons::SEARCH, 14),
+        icon::render(Icons::SEARCH, 14),
     );
     out.push_str("<nav class=\"j-nav\">");
     for &(key, label, icon_path, href, auth_required) in NAV_ITEMS {
@@ -650,7 +575,7 @@ pub fn render_sidebar(active_key: &str) -> String {
         let _ = write!(
             out,
             "<a class=\"j-nav-item{active}\" href=\"{href}\">{icon}<span>{label}</span></a>",
-            icon = render_icon(icon_path, 16),
+            icon = icon::render(icon_path, 16),
         );
     }
     out.push_str("</nav><div><div class=\"j-sb-head\"><span>Sources</span><span class=\"j-sb-add\">+</span></div>");
@@ -719,51 +644,6 @@ mod tests {
     #[test]
     fn default_theme_is_nonempty() {
         assert!(!DEFAULT_THEME.is_empty());
-    }
-
-    #[test]
-    fn avatar_parts_single_word() {
-        let (initials, _hue) = avatar_parts("Mara");
-        assert_eq!(initials, "M");
-    }
-
-    #[test]
-    fn avatar_parts_two_words() {
-        let (initials, _hue) = avatar_parts("Mara Ek");
-        assert_eq!(initials, "ME");
-    }
-
-    #[test]
-    fn avatar_parts_more_than_two_words_uses_first_two() {
-        let (initials, _hue) = avatar_parts("Mara Jane Ek");
-        assert_eq!(initials, "MJ");
-    }
-
-    #[test]
-    fn avatar_parts_empty_name() {
-        let (initials, hue) = avatar_parts("");
-        assert_eq!(initials, "");
-        assert_eq!(hue, 0);
-    }
-
-    #[test]
-    fn avatar_parts_hue_is_in_range() {
-        let (_initials, hue) = avatar_parts("Some User");
-        assert!(hue < 360);
-    }
-
-    #[test]
-    fn avatar_parts_hue_is_deterministic() {
-        let (_, h1) = avatar_parts("Mara Ek");
-        let (_, h2) = avatar_parts("Mara Ek");
-        assert_eq!(h1, h2);
-    }
-
-    #[test]
-    fn avatar_parts_hue_differs_for_different_names() {
-        let (_, h1) = avatar_parts("Alice");
-        let (_, h2) = avatar_parts("Bob");
-        assert_ne!(h1, h2);
     }
 
     #[test]
@@ -1137,57 +1017,6 @@ mod tests {
     }
 
     #[test]
-    fn avatar_matches_reactive_component_markup() {
-        // Must stay byte-identical to `pages::ui::Avatar` for size 38.
-        let (initials, hue) = avatar_parts("Mara Ek");
-        assert_eq!(initials, "ME");
-        let html = render_avatar("Mara Ek", 38);
-        assert_eq!(
-            html,
-            format!(
-                "<div class=\"j-av\" style=\"width:38px;height:38px;background:oklch(0.58 0.07 {hue});font-size:14px\">ME</div>"
-            )
-        );
-    }
-
-    #[test]
-    fn tag_list_site_wide_has_hash_chip_and_no_here_link() {
-        let tags = [TagSummary {
-            slug: "rust".parse().unwrap(),
-            display: "Rust".parse().unwrap(),
-        }];
-        let html = render_tag_list(&tags, &TagCtx::SiteWide);
-        assert_eq!(
-            html,
-            "<span class=\"j-tag-list\"><span class=\"j-tag-cell\">\
-             <a class=\"j-tag\" href=\"/tags/rust\">#Rust</a></span></span>"
-        );
-    }
-
-    #[test]
-    fn tag_list_for_user_adds_here_link() {
-        let tags = [TagSummary {
-            slug: "rust".parse().unwrap(),
-            display: "Rust".parse().unwrap(),
-        }];
-        let html = render_tag_list(
-            &tags,
-            &TagCtx::ForUser("alice".parse::<Username>().unwrap()),
-        );
-        assert!(
-            html.contains(
-                "<a class=\"j-tag-here\" href=\"/~alice/tags/rust\" title=\"On this blog\">"
-            ),
-            "{html}"
-        );
-    }
-
-    #[test]
-    fn empty_tag_list_renders_nothing() {
-        assert_eq!(render_tag_list(&[], &TagCtx::SiteWide), "");
-    }
-
-    #[test]
     fn post_content_always_shows_the_header_time() {
         // Viewer-independent (#181, ADR-0044 D4): the timestamp stays in the header
         // for every viewer, so the owner's own-post content column coincides with
@@ -1301,19 +1130,6 @@ mod tests {
         assert!(
             html.contains("<a class=\"j-nav-item\" href=\"/\">"),
             "{html}"
-        );
-    }
-
-    #[test]
-    fn icon_matches_reactive_component_markup() {
-        assert_eq!(
-            render_icon(Icons::HOME, 16),
-            format!(
-                "<svg class=\"j-icon\" width=\"16\" height=\"16\" viewBox=\"0 0 20 20\" \
-                 fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" \
-                 stroke-linejoin=\"round\"><path d=\"{}\"></path></svg>",
-                Icons::HOME
-            )
         );
     }
 }

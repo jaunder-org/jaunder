@@ -1,4 +1,4 @@
-//! Topbar — the chrome bar. The pure `render_topbar` (server projector) and the
+//! Topbar — the chrome bar. The pure `render` (server projector) and the
 //! reactive `Topbar` (CSR client) are twins: the same `<div class="j-topbar">`
 //! markup produced two ways. Co-located per ADR-0056.
 
@@ -8,7 +8,7 @@ use leptos::prelude::*;
 /// `right` is trusted HTML for the `j-topbar-right` slot (e.g. the home Sign-in /
 /// Register buttons); `title`/`sub` are escaped.
 #[must_use]
-pub(crate) fn render_topbar(title: &str, sub: Option<&str>, right: &str) -> String {
+pub(crate) fn render(title: &str, sub: Option<&str>, right: &str) -> String {
     let sub_html = sub.map_or_else(String::new, |s| {
         format!(
             "<div class=\"j-sub\">{}</div>",
@@ -22,7 +22,7 @@ pub(crate) fn render_topbar(title: &str, sub: Option<&str>, right: &str) -> Stri
 }
 
 /// The reactive half of the twin: title + optional sub + optional right-slot
-/// children. Twins [`render_topbar`] — keep their markup coincident.
+/// children. Twins [`render`] — keep their markup coincident.
 #[component]
 pub fn Topbar(
     #[prop(into)] title: TextProp,
@@ -45,12 +45,12 @@ pub fn Topbar(
 
 #[cfg(test)]
 mod tests {
-    use super::render_topbar;
+    use super::render;
 
     #[test]
     fn topbar_with_sub_matches_reactive_component_markup() {
         // Must stay byte-identical to the reactive `Topbar`.
-        let html = render_topbar("Title", Some("Subtitle"), "");
+        let html = render("Title", Some("Subtitle"), "");
         assert_eq!(
             html,
             "<div class=\"j-topbar\"><div><h1>Title</h1>\
@@ -62,7 +62,7 @@ mod tests {
     #[test]
     fn topbar_without_sub_matches_reactive_component_markup() {
         // Must stay byte-identical to the reactive `Topbar`.
-        let html = render_topbar("Title", None, "");
+        let html = render("Title", None, "");
         assert_eq!(
             html,
             "<div class=\"j-topbar\"><div><h1>Title</h1></div>\

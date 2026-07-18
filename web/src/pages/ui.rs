@@ -21,140 +21,14 @@ use leptos_router::hooks::use_location;
 /// Linking context for a post's footer tag chips — re-exported from the pure
 /// `render` layer (`SiteWide` / `ForUser`) so the reactive components and the
 /// projector share one type. See [`crate::render::TagCtx`]. Anonymous posts get
-/// their chips from the pure [`crate::render::render_tag_list`] (byte-coincident
-/// with the projector, injected via `inner_html`); the authored post view — which
-/// the projector never renders — uses the reactive [`TagList`] below.
+/// their chips from the pure [`crate::ui::taglist::render`] (byte-coincident with
+/// the projector, injected via `inner_html`); the authored post view — which the
+/// projector never renders — uses the reactive [`crate::ui::TagList`].
 pub use crate::render::TagCtx as TagContext;
 
-/// Renders a post's tags as clickable chips for the reactive authored post view
-/// (kept markup-equivalent to [`crate::render::render_tag_list`], the anonymous /
-/// projector path). See [`TagContext`] for the linking behavior.
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Leptos #[component] props are stored by the framework and must be owned; \
-              the borrow clippy suggests isn't expressible in a component signature"
-)]
-#[component]
-pub fn TagList(tags: Vec<TagSummary>, context: TagContext) -> impl IntoView {
-    if tags.is_empty() {
-        return ().into_any();
-    }
-    let chips: Vec<_> = tags
-        .into_iter()
-        .map(|tag| {
-            let slug = tag.slug.clone();
-            let here = match &context {
-                TagContext::ForUser(username) => {
-                    let here_href = format!("/~{username}/tags/{slug}");
-                    Some(view! {
-                        <a class="j-tag-here" href=here_href title="On this blog">
-                            "\u{00b7} here"
-                        </a>
-                    })
-                }
-                TagContext::SiteWide => None,
-            };
-            let chip_href = format!("/tags/{slug}");
-            // TagLabel isn't IntoRender/IntoAttributeValue — stringify for the view.
-            view! {
-                <span class="j-tag-cell">
-                    <a class="j-tag" href=chip_href>
-                        "#"
-                        {tag.display.to_string()}
-                    </a>
-                    {here}
-                </span>
-            }
-        })
-        .collect();
-    view! { <span class="j-tag-list">{chips}</span> }.into_any()
-}
+// ─── moved to web::ui (strangler shims, #522) ─────────────────
 
-// ─── Icons ────────────────────────────────────────────────────
-
-/// SVG path `d` strings — re-exported from the pure `render` layer so the
-/// reactive [`Icon`] component and the projector's [`crate::render::render_icon`]
-/// share one source of truth.
-pub use crate::render::Icons;
-
-// ─── 3.1 Icon ─────────────────────────────────────────────────
-
-#[component]
-pub fn Icon(path: &'static str, #[prop(default = 16)] size: u32) -> impl IntoView {
-    view! {
-        <svg
-            class="j-icon"
-            width=size
-            height=size
-            viewBox="0 0 20 20"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.6"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-        >
-            <path d=path />
-        </svg>
-    }
-}
-
-// ─── 3.2 Avatar ───────────────────────────────────────────────
-
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Leptos #[component] props are stored by the framework and must be owned; \
-              the borrow clippy suggests isn't expressible in a component signature"
-)]
-#[component]
-pub fn Avatar(name: String, #[prop(default = 38)] size: u32) -> impl IntoView {
-    let (initials, hue) = crate::render::avatar_parts(&name);
-    // Integer equivalent of `(size as f32 * 0.36).round()`; must match
-    // `render::render_avatar` so SSR and reactive output coincide.
-    let font_size = (size * 36 + 50) / 100;
-    let style = format!(
-        "width:{size}px;height:{size}px;background:oklch(0.58 0.07 {hue});font-size:{font_size}px"
-    );
-    view! {
-        <div class="j-av" style=style>
-            {initials}
-        </div>
-    }
-}
-
-// ─── 3.3 Dot ──────────────────────────────────────────────────
-
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Leptos #[component] props are stored by the framework and must be owned; \
-              the borrow clippy suggests isn't expressible in a component signature"
-)]
-#[component]
-pub fn Dot(proto: String) -> impl IntoView {
-    let style = format!("background: var(--c-{proto})");
-    view! { <span class="j-dot" style=style></span> }
-}
-
-// ─── 3.4 Chip ─────────────────────────────────────────────────
-
-#[component]
-pub fn Chip(
-    label: String,
-    #[prop(optional)] proto: Option<String>,
-    #[prop(optional)] count: Option<u32>,
-    #[prop(default = false)] active: bool,
-) -> impl IntoView {
-    let class = if active { "j-chip is-active" } else { "j-chip" };
-    view! {
-        <span class=class>
-            {proto.map(|p| view! { <Dot proto=p /> })} <span>{label}</span>
-            {count.map(|n| view! { <span class="j-n">{n}</span> })}
-        </span>
-    }
-}
-
-// ─── 3.5 Topbar ───────────────────────────────────────────────
-
-pub use crate::ui::Topbar;
+pub use crate::ui::{Avatar, Icon, Icons, TagList, Topbar};
 
 // ─── 3.6 PostCard ─────────────────────────────────────────────
 
