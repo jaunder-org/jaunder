@@ -103,7 +103,7 @@ test. Its verification is the wasm-clippy compile/lint step (run via
 `cargo xtask check`) plus the e2e in Task 4. No host test is written for it
 (writing a fake host stub is forbidden by the charter).
 
-- [ ] **Step 1: Add the `web-sys` dependency to `client`.**
+- [x] **Step 1: Add the `web-sys` dependency to `client`.**
 
 In `client/Cargo.toml`, under `[dependencies]` (currently empty), add:
 
@@ -115,7 +115,7 @@ web-sys = { workspace = true, features = ["Window", "Storage"] }
 `local_storage()`/`get_item`/`set_item`/`remove_item`. No
 `js-sys`/`wasm-bindgen`/`common` — the primitive constructs no `JsValue`.)
 
-- [ ] **Step 2: Declare the module in `client/src/lib.rs`.**
+- [x] **Step 2: Declare the module in `client/src/lib.rs`.**
 
 After the existing crate doc + `#![cfg(target_arch = "wasm32")]` line, append:
 
@@ -126,7 +126,7 @@ After the existing crate doc + `#![cfg(target_arch = "wasm32")]` line, append:
 pub mod storage;
 ```
 
-- [ ] **Step 3: Write `client/src/storage.rs`.**
+- [x] **Step 3: Write `client/src/storage.rs`.**
 
 Signature is fixed by the Interfaces block; there is no branch a host test could
 pin (wasm-only), so the body is written out in full:
@@ -164,7 +164,7 @@ pub fn remove(key: &str) {
 }
 ```
 
-- [ ] **Step 4: Verify it compiles + lints on wasm.**
+- [x] **Step 4: Verify it compiles + lints on wasm.**
 
 Run: `devtool run -- cargo xtask check --no-test` Expected: PASS — the
 wasm-clippy step compiles `-p client` for `wasm32-unknown-unknown` and lints
@@ -172,7 +172,7 @@ wasm-clippy step compiles `-p client` for `wasm32-unknown-unknown` and lints
 iterating faster: `cargo clippy -p client --target wasm32-unknown-unknown`
 directly.)
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add client/Cargo.toml client/src/lib.rs client/src/storage.rs
@@ -213,7 +213,7 @@ git add docs/superpowers/specs/2026-07-18-issue-514-client-localstorage.md \
   - `web::auth::marker_storage` (wasm-only) gains: `read() -> Option<String>`,
     `set(username: &str)`, `clear()`.
 
-- [ ] **Step 1: Confirm the regression guard fails to move (baseline).**
+- [x] **Step 1: Confirm the regression guard fails to move (baseline).**
 
 The three codec tests in `marker.rs` (`round_trips_username`,
 `decode_rejects_malformed`, `encode_escapes_json`) are the contract that the
@@ -222,7 +222,7 @@ codec is unchanged. Run them now to confirm green baseline:
 Run: `cargo nextest run -p web marker` Expected: PASS (3 tests) — establishes
 the codec behavior we must preserve.
 
-- [ ] **Step 2: Add the `client` dependency to `web`.**
+- [x] **Step 2: Add the `client` dependency to `web`.**
 
 In `web/Cargo.toml`, under `[dependencies]`, add (alphabetically near
 `cfg-if`/`common`):
@@ -234,7 +234,7 @@ client = { path = "../client" }
 Unconditional — `client` is an empty rlib on host, so the host build is
 unaffected.
 
-- [ ] **Step 3: Shrink `web/src/auth/marker.rs` to codec-only.**
+- [x] **Step 3: Shrink `web/src/auth/marker.rs` to codec-only.**
 
 Delete the `storage()`, `read()`, `set()`, `clear()` fns (lines 35-62) **and**
 their `#[cfg(target_arch = "wasm32")]` attributes. The file's top module doc
@@ -307,7 +307,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 4: Create `web/src/auth/marker_storage.rs`.**
+- [x] **Step 4: Create `web/src/auth/marker_storage.rs`.**
 
 ```rust
 //! Browser (`localStorage`) binding of the auth marker (#181, ADR-0044). The pure
@@ -334,7 +334,7 @@ pub fn clear() {
 }
 ```
 
-- [ ] **Step 5: Wire the module + fix the stale doc in `web/src/auth/mod.rs`.**
+- [x] **Step 5: Wire the module + fix the stale doc in `web/src/auth/mod.rs`.**
 
 Replace the current lines 9-11:
 
@@ -358,7 +358,7 @@ pub mod marker;
 pub mod marker_storage;
 ```
 
-- [ ] **Step 6: Repoint the 7 call sites** from
+- [x] **Step 6: Repoint the 7 call sites** from
       `crate::auth::marker::{read,set,clear}` to
       `crate::auth::marker_storage::{read,set,clear}` (the `marker::` codec path
       is unaffected — no call site touches `encode`/`decode`/`MARKER_KEY`):
@@ -377,7 +377,7 @@ pub mod marker_storage;
 - `web/src/pages/ui.rs:1030` — `crate::auth::marker::read()` →
   `crate::auth::marker_storage::read()`
 
-- [ ] **Step 7: Run the codec regression guard + full gate.**
+- [x] **Step 7: Run the codec regression guard + full gate.**
 
 Run: `cargo nextest run -p web marker` Expected: PASS (3 tests) — codec
 unchanged.
@@ -387,7 +387,7 @@ codec compiles/tests; `pages`+`marker_storage` are wasm-only, not host-compiled)
 and wasm-clippy (compiles `marker_storage` + repointed wasm call sites against
 `client::storage`) both clean.
 
-- [ ] **Step 8: Commit.**
+- [x] **Step 8: Commit.**
 
 ```bash
 git add web/Cargo.toml web/src/auth/marker.rs web/src/auth/marker_storage.rs \
@@ -415,7 +415,7 @@ is a 1:1 plumbing swap (identical semantics: `get_item`→`get`, `set_item`→`s
 same non-empty guard); behavior is covered by `theme.spec.ts` in Task 4. No new
 test.
 
-- [ ] **Step 1: Rewrite the theme read-on-boot** (`web/src/pages/mod.rs`,
+- [x] **Step 1: Rewrite the theme read-on-boot** (`web/src/pages/mod.rs`,
       currently lines 92-99):
 
 ```rust
@@ -427,7 +427,7 @@ test.
     }
 ```
 
-- [ ] **Step 2: Rewrite the theme persist-Effect** (currently lines 103-109):
+- [x] **Step 2: Rewrite the theme persist-Effect** (currently lines 103-109):
 
 ```rust
     // On WASM: persist theme to localStorage whenever it changes.
@@ -436,7 +436,7 @@ test.
     });
 ```
 
-- [ ] **Step 3: Drop the now-unused `Storage` feature from `web`.**
+- [x] **Step 3: Drop the now-unused `Storage` feature from `web`.**
 
 In `web/Cargo.toml`, remove the `"Storage",` line from the `web-sys` `features`
 array (leaving `Window`, `Document`, `Element`, `Location`, `File`, `FileList`,
@@ -444,13 +444,13 @@ array (leaving `Window`, `Document`, `Element`, `Location`, `File`, `FileList`,
 `Response`). Manifest hygiene — `web` no longer references `web_sys::Storage`
 directly.
 
-- [ ] **Step 4: Run the full gate.**
+- [x] **Step 4: Run the full gate.**
 
 Run: `devtool run -- cargo xtask check` Expected: PASS — host + wasm-clippy
 clean. (`web` still compiles even without its own `Storage` feature: Cargo
 unifies it in via `client`.)
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add web/src/pages/mod.rs web/Cargo.toml
@@ -465,27 +465,27 @@ git commit -m "refactor(web): persist theme via client::storage (#514)"
 
 **Interfaces:** none.
 
-- [ ] **Step 1: AC1 — no raw storage glue remains in `web`.**
+- [x] **Step 1: AC1 — no raw storage glue remains in `web`.**
 
 Run: `rg 'web_sys::Storage|local_storage\(' web/src` Expected: **zero** matches.
 
-- [ ] **Step 2: AC2 — `marker.rs` is cfg-free.**
+- [x] **Step 2: AC2 — `marker.rs` is cfg-free.**
 
 Run: `rg 'target_arch|web_sys' web/src/auth/marker.rs` Expected: **zero**
 matches.
 
-- [ ] **Step 3: AC3/AC7 — codec + drift-guard tests host-side.**
+- [x] **Step 3: AC3/AC7 — codec + drift-guard tests host-side.**
 
 Run: `cargo nextest run -p web marker` (AC3: 3 codec tests) and confirm the
 `render` drift-guard test still passes within the full suite. Expected: PASS.
 
-- [ ] **Step 4: AC8 — full host gate.**
+- [x] **Step 4: AC8 — full host gate.**
 
 Run (foreground, `timeout: 600000` — a coverage rebuild):
 `devtool run -- cargo xtask check` Expected: PASS — static + clippy +
 wasm-clippy + Nix coverage; no coverage-gate regression.
 
-- [ ] **Step 5: AC5/AC6 — behavior e2e.**
+- [x] **Step 5: AC5/AC6 — behavior e2e.**
 
 Run (foreground, long timeout; CI also runs the full
 `{sqlite,postgres}×{chromium,firefox}` matrix):
@@ -494,7 +494,7 @@ Run (foreground, long timeout; CI also runs the full
 and `theme.spec.ts` (`.j-root` real `data-theme` after hydration; theme read
 path via `client::storage`).
 
-- [ ] **Step 6: Hand off to jaunder-ship** once all audits + gate + e2e are
+- [x] **Step 6: Hand off to jaunder-ship** once all audits + gate + e2e are
       green. (No commit in this task.)
 
 ## Self-Review

@@ -21,6 +21,10 @@ pub use upload::{MediaPanel, MediaUploadButton};
 /// server-painted shell and this reactive `AppShell` share one value.
 pub use crate::render::DEFAULT_THEME;
 
+/// The localStorage key holding the persisted theme. Local to `web` — unlike the
+/// auth marker's key, it is not shared with the pre-paint script or any other layer.
+const THEME_KEY: &str = "jaunder_theme";
+
 use crate::audiences::AudiencesPage;
 use crate::backup::{BackupBanner, BackupSettingsPage};
 use crate::pages::auth::{LoginPage, LogoutPage, RegisterPage};
@@ -88,11 +92,9 @@ pub fn App() -> impl IntoView {
     let theme = RwSignal::new(DEFAULT_THEME.to_string());
 
     // On WASM: restore theme from localStorage on startup.
-    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
-        if let Ok(Some(val)) = storage.get_item("jaunder_theme") {
-            if !val.is_empty() {
-                theme.set(val);
-            }
+    if let Some(val) = client::storage::get(THEME_KEY) {
+        if !val.is_empty() {
+            theme.set(val);
         }
     }
 
@@ -100,10 +102,7 @@ pub fn App() -> impl IntoView {
 
     // On WASM: persist theme to localStorage whenever it changes.
     Effect::new(move |_| {
-        let val = theme.get();
-        if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
-            let _ = storage.set_item("jaunder_theme", &val);
-        }
+        client::storage::set(THEME_KEY, &theme.get());
     });
 
     view! {

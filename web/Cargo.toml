@@ -34,7 +34,6 @@ web-sys = { workspace = true, features = [
     "Document",
     "Element",
     "Location",
-    "Storage",
     "File",
     "FileList",
     "FormData",
