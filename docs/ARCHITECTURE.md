@@ -10,21 +10,21 @@ decoupled storage layer (see [ADR-0001](decisions/0001-storage-backends.md)).
 
 The workspace is divided into four primary crates:
 
-| Crate     | Target       | Responsibility                                                                                                             |
-| --------- | ------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| `server`  | Binary / Lib | Axum web server, storage implementations (SQLite/Postgres), CLI commands, and SSR (Server-Side Rendering).                 |
-| `web`     | Library      | Shared frontend logic: components, routing, and reactive state. Compiled to both native and WASM.                          |
-| `hydrate` | WASM Binary  | Thin wrapper around `web` that "hydrates" the static HTML sent by the server in the browser.                               |
-| `common`  | Library      | Shared logic and data structures: storage traits, auth types, mailer, and utility modules used by both `server` and `web`. |
+| Crate    | Target       | Responsibility                                                                                                             |
+| -------- | ------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `server` | Binary / Lib | Axum web server, storage implementations (SQLite/Postgres), CLI commands, and SSR (Server-Side Rendering).                 |
+| `web`    | Library      | Shared frontend logic: components, routing, and reactive state. Compiled to both native and WASM.                          |
+| `csr`    | WASM Binary  | Browser entry point: boots the client-side-rendered (CSR) bundle, mounting `web::App` via `web::mount_csr()`.              |
+| `common` | Library      | Shared logic and data structures: storage traits, auth types, mailer, and utility modules used by both `server` and `web`. |
 
 ## Component Overview
 
 ```mermaid
 graph TD
     subgraph Client [Browser]
-        WASM[hydrate crate]
+        WASM[csr crate]
         DOM[DOM]
-        WASM -->|Hydrates| DOM
+        WASM -->|Mounts CSR| DOM
     end
 
     subgraph Backend [Server Binary]
@@ -105,7 +105,7 @@ correlate events across the backend and the end-to-end test runner (see
 ### Tracing Layers
 
 1.  **Backend**: Rust spans produced via `tracing` in the `server` crate.
-2.  **E2E (Automatic)**: Per-test spans capturing navigation, hydration, and
+2.  **E2E (Automatic)**: Per-test spans capturing navigation, actions, and
     resource summaries.
 3.  **E2E (Semantic)**: Manual flow timing for domain-specific analysis.
 
@@ -127,7 +127,7 @@ The project includes specialized tools for analyzing system behavior and
 performance:
 
 - **`cargo xtask traces analyze`**: Processes JSONL trace artifacts to report on
-  slowest spans, hydration hotspots, and navigation phase bottlenecks.
+  slowest spans, action/long-task hotspots, and navigation phase bottlenecks.
 - **`cargo xtask traces run`**: Builds the e2e VM checks and runs
   `traces analyze` on their exported traces in one step.
 - **`cargo xtask audit-wasm`**: Measures deterministic WASM bundle sizes (raw,

@@ -17,7 +17,7 @@ instead of duplicating project policy.
 - `common/`: code shared between other packages
 - `end2end/`: Playwright end-to-end tests
 - `elisp/`: Emacs blogging client (`jaunder.el`), ERT-tested
-- `hydrate/`: frontend driver
+- `csr/`: WASM frontend entry (the client-side-rendered bundle)
 - `storage/`: storage traits, records, migrations, and backend-specific storage
   support
 - `server/`: backend, CLI, server runner, and integration tests
@@ -291,9 +291,8 @@ Jaunder uses OpenTelemetry for deep performance analysis (see
 
   The analyzer reports on:
   - Slowest spans overall and per `e2e.test`.
-  - Top navigation and action hotspots.
-  - `commit -> hydration` splits by `cacheWarmth`.
-  - Hydration component hotspots (`wasm_init`, `leptos_hydrate`, etc.).
+  - Top action, navigation-phase, long-task, and resource-initiator hotspots.
+  - Long-task totals and `e2e.test` duration by project.
 
   **Optional Filters**:
   - `--top N`: Limit the number of rows in each section.
@@ -530,8 +529,8 @@ force-fitted with artificial tests:
 - **Leptos page components** (`web/src/pages/*.rs`): `#[component]` bodies
   render view trees, validated by the e2e matrix — **structurally exempt** (no
   marker needed).
-- **WASM entry point** (`hydrate/src/lib.rs`): runs only in the browser WASM
-  context — `cov:ignore`'d.
+- **WASM entry point** (`csr/src/lib.rs`): runs only in the browser WASM context
+  — `cov:ignore`'d.
 - **A few PostgreSQL storage error branches** (`storage/src/postgres/*`) and
   **asset serving** (`server/src/assets.rs`, compile-time embedded assets):
   unreachable or impractical to exercise host-side — `cov:ignore`'d. A

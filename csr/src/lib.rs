@@ -1,5 +1,5 @@
 // web::App's ParentRoute generates a wide route tuple; raise the recursion limit
-// to monomorphize it (mirrors hydrate/src/lib.rs and web/src/lib.rs).
+// to monomorphize it (mirrors web/src/lib.rs).
 #![recursion_limit = "512"]
 
 // The e2e suite waits on `body[data-hydrated]` (end2end/tests/hydration.ts) as the
