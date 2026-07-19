@@ -841,14 +841,14 @@ mod tests {
     #[test]
     fn candidate_slug_returns_seed_for_first_attempt() {
         let base: Slug = "hello-world".parse().unwrap();
-        assert_eq!(candidate_slug(&base, 0), "hello-world");
+        assert_eq!(candidate_slug(&base, 0).unwrap().as_ref(), "hello-world");
     }
 
     #[test]
     fn candidate_slug_appends_numeric_suffix_after_conflict() {
         let base: Slug = "hello-world".parse().unwrap();
-        assert_eq!(candidate_slug(&base, 1), "hello-world-2");
-        assert_eq!(candidate_slug(&base, 2), "hello-world-3");
+        assert_eq!(candidate_slug(&base, 1).unwrap().as_ref(), "hello-world-2");
+        assert_eq!(candidate_slug(&base, 2).unwrap().as_ref(), "hello-world-3");
     }
 
     #[cfg(feature = "server")]
