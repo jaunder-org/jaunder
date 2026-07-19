@@ -211,7 +211,7 @@ fn render_discovery(seed: &PageSeed) -> String {
 }
 
 /// Human-readable feed title per surface — the pure mirror of the reactive
-/// `web::feed_discovery::surface_label`.
+/// `web::feed_discovery::labels::surface_label`.
 fn feed_label(surface: &common::feed::FeedSurface) -> String {
     use common::feed::FeedSurface;
     match surface {
