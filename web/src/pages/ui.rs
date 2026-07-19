@@ -182,7 +182,7 @@ pub fn PostDisplay(
             let inner_content = crate::render::render_post_content(&view);
             view! {
                 <article class="j-post">
-                    <Avatar name=post.username.to_string() size=38 />
+                    <Avatar name=post.username.clone() size=38 />
                     <div style="min-width:0;display:flex;gap:8px;align-items:flex-start">
                         <div style="flex:1;min-width:0" inner_html=inner_content></div>
                         {children()}
@@ -493,7 +493,7 @@ pub fn PostCreateForm(
         };
         view! {
             <div class="j-composer-row">
-                <Avatar name=username.map(String::from).unwrap_or_default() size=36 />
+                {username.map(|u| view! { <Avatar name=u size=36 /> })}
                 <div class="j-composer-body">
                     <ComposerFields
                         body=body
@@ -917,6 +917,11 @@ fn marker_username_on_boot() -> Option<String> {
 fn authed_sidebar(active_key: &str, username: &str, is_operator: bool) -> impl IntoView {
     let active_key = active_key.to_string();
     let username = username.to_string();
+    // Footer avatar takes a typed `Username`. The marker is stored from a validated
+    // username at login, so this parse effectively always succeeds; a malformed
+    // marker deliberately shows no avatar (`None`) rather than one built from garbage,
+    // while the raw string still renders as the footer label below.
+    let avatar_name = username.parse::<Username>().ok();
     view! {
         <div style="display:contents">
             <a class="j-brand" href="/" style="text-decoration:none;color:inherit">
@@ -977,11 +982,10 @@ fn authed_sidebar(active_key: &str, username: &str, is_operator: bool) -> impl I
                     .collect::<Vec<_>>()}
             </div>
             <div class="j-sb-foot">
-                <Avatar name=username.clone() size=28 />
+                {avatar_name.map(|u| view! { <Avatar name=u size=28 /> })}
                 <div style="font-size:13px;flex:1;min-width:0">
                     <div style="font-weight:500">{username}</div>
-                </div>
-                <a href="/logout" style="font-size:11px;color:var(--muted)">
+                </div> <a href="/logout" style="font-size:11px;color:var(--muted)">
                     "Sign out"
                 </a>
             </div>

@@ -1,3 +1,4 @@
+use common::username::Username;
 use leptos::prelude::*;
 
 use super::markup::avatar_parts;
@@ -10,7 +11,7 @@ use super::markup::avatar_parts;
               the borrow clippy suggests isn't expressible in a component signature"
 )]
 #[component]
-pub fn Avatar(name: String, #[prop(default = 38)] size: u32) -> impl IntoView {
+pub fn Avatar(name: Username, #[prop(default = 38)] size: u32) -> impl IntoView {
     let (initials, hue) = avatar_parts(&name);
     // Integer equivalent of `(size as f32 * 0.36).round()`; must match the pure
     // `render` twin so SSR and reactive output coincide.
