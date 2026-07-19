@@ -625,7 +625,7 @@ pub async fn seed_posts(
             crate::seed_post_input(
                 user_id,
                 format!("seed-{i}").parse().expect("valid slug"),
-                format!("# Post {i}\n\nbody"),
+                format!("# Post {i}\n\nbody").into(),
                 published,
             )
         })

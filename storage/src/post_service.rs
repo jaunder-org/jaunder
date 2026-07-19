@@ -105,14 +105,14 @@ pub fn render_post_input(content: RenderedPostContent) -> CreatePostInput {
 pub fn seed_post_input(
     user_id: UserId,
     slug: Slug,
-    body: String,
+    body: PostBody,
     published: bool,
 ) -> CreatePostInput {
     render_post_input(RenderedPostContent {
         user_id,
         title: None,
         slug,
-        body: body.into(),
+        body,
         format: PostFormat::Markdown,
         published_at: published.then(Utc::now),
         summary: None,
