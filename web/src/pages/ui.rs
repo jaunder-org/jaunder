@@ -21,14 +21,19 @@ use leptos_router::hooks::use_location;
 /// Linking context for a post's footer tag chips — re-exported from the pure
 /// `render` layer (`SiteWide` / `ForUser`) so the reactive components and the
 /// projector share one type. See [`crate::render::TagCtx`]. Anonymous posts get
-/// their chips from the pure [`crate::ui::taglist::render`] (byte-coincident with
+/// their chips from the pure [`crate::taglist::render`] (byte-coincident with
 /// the projector, injected via `inner_html`); the authored post view — which the
-/// projector never renders — uses the reactive [`crate::ui::TagList`].
+/// projector never renders — uses the reactive [`crate::taglist::TagList`].
 pub use crate::render::TagCtx as TagContext;
 
-// ─── moved to web::ui (strangler shims, #522) ─────────────────
+// ─── re-exported from the top-level leaf modules (avatar, icon, taglist, topbar) ─────────────────
 
-pub use crate::ui::{Avatar, Icon, Icons, TagList, Topbar};
+pub use crate::{
+    avatar::Avatar,
+    icon::{Icon, Icons},
+    taglist::TagList,
+    topbar::Topbar,
+};
 
 // ─── 3.6 PostCard ─────────────────────────────────────────────
 

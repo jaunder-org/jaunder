@@ -1,8 +1,8 @@
 # Web Component Style Guide
 
 How page components (each vertical's wasm-only `component.rs` — see §8) and the
-shared widgets in `web/src/ui/` should be structured so that pages look and feel
-the same.
+shared leaf widgets (top-level modules like `web/src/topbar/`) should be
+structured so that pages look and feel the same.
 
 This guide is **descriptive of the design system we already have**
 (`server/assets/jaunder.css` + the `Topbar` / `PostCard` / `PostCreateForm`
@@ -25,7 +25,7 @@ view! {
 }
 ```
 
-- **`Topbar`** lives in `web/src/ui/topbar.rs`. Do not write a bare
+- **`Topbar`** lives in `web/src/topbar/` (`component.rs`). Do not write a bare
   `<h1>"Title"</h1>` at the top of a page — that is the legacy style and should
   be migrated.
 - `title` is required; `sub` is optional but should describe the page
@@ -120,8 +120,9 @@ button).
 ## 6. Shared components
 
 Always reach for an existing shared helper before writing a new layout primitive
-— leaf primitives live in `web/src/ui/` (`Avatar`, `Icon`, `TagList`, `Topbar`);
-the rest still sit in `web/src/pages/ui.rs` while #312 dissolves it:
+— leaf primitives live in their own **top-level modules**
+(`web/src/{avatar,icon,taglist,topbar}/`, exposing `Avatar`, `Icon`, `TagList`,
+`Topbar`); the rest still sit in `web/src/pages/ui.rs` while #312 dissolves it:
 
 | Helper                            | Purpose                                             |
 | --------------------------------- | --------------------------------------------------- |
@@ -144,7 +145,10 @@ For list views, the available CSS primitives are:
   action column. Use for ad-hoc lists that don't fit a table.
 
 If you find yourself copying a layout block (e.g. a draft row, a toolbar) into a
-second place, lift it into `web/src/ui/`.
+second place, lift it into a shared leaf module — a top-level
+`web/src/<widget>/` directory following the `avatar`/`icon`/`taglist`/`topbar`
+shape: `markup.rs` for any pure (host-tested) `render()` twin, wasm-only
+`component.rs` for the `#[component]`.
 
 ## 7. CSS conventions
 

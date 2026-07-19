@@ -7,7 +7,7 @@ use super::{get_registration_policy, Register};
 use crate::auth::marker_storage;
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
-use crate::ui::Topbar;
+use crate::topbar::Topbar;
 use common::password::Password;
 use common::username::Username;
 use leptos::prelude::*;

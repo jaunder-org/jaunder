@@ -3,6 +3,9 @@
 - Status: accepted
 - Note: amended 2026-07-18 (#530) — `#[server]` endpoints and wire types move
   from `mod.rs` to `api.rs`; `mod.rs` is module wiring only
+- Note: amended 2026-07-18 (#527) — the shared leaf widgets (`avatar`, `icon`,
+  `taglist`, `topbar`) are dissolved out of `ui/` into top-level directory
+  modules; see the amendment under Decision point 5
 - Date: 2026-07-18
 - Issue: [#526](https://github.com/jaunder-org/jaunder/issues/526)
 
@@ -87,6 +90,13 @@ single crate.
    dirs where none exists: cockpit, home, timeline). The `App` + Router shell
    keeps a wasm gate at whatever home it moves to. Shared widgets (`ui/`) become
    wasm-gated shared component files the same way.
+
+   > **Amended (#527):** the shared leaf widgets are not kept under `ui/`. Each
+   > (`avatar`, `icon`, `taglist`, `topbar`) is promoted to a **top-level
+   > directory module** — `mod.rs` (wiring) + ungated `markup.rs` (the pure
+   > `render()` twin the projector calls, host-tested) + wasm-only
+   > `component.rs` — and `ui/` is dissolved. Shared presentation leaves are
+   > therefore top-level modules, not a `ui/` sub-tree.
 
 6. **ADR-0055's retained principles carry forward unchanged**: pure,
    host-testable logic (validation, form/signal state of the `Field<T>` kind,
