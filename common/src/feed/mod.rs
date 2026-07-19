@@ -27,7 +27,7 @@ pub use json::render_json;
 /// getter/setter rather than per-key read chains.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeedsConfig {
-    pub min_items: u32,
-    pub min_days: u32,
+    pub min_items: FeedMinItems,
+    pub min_days: FeedMinDays,
     pub websub_hub_url: Option<String>,
 }

@@ -2920,6 +2920,7 @@ async fn soft_delete_excludes_post_from_lists(#[case] backend: Backend) {
 async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] backend: Backend) {
     use chrono::Duration;
     use common::feed::{FeedSurface, HybridWindow};
+    use common::test_support::{parse_feed_min_days, parse_feed_min_items};
 
     let env = backend.setup().await;
     let state = &env.state;
@@ -2981,8 +2982,8 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
     // and the future post are excluded by their respective filters; the union
     // still picks at least 3 by ROW_NUMBER, so we get exactly those 3.
     let window = HybridWindow {
-        min_items: 3,
-        min_days: 30,
+        min_items: parse_feed_min_items("3"),
+        min_days: parse_feed_min_days("30"),
     };
     let site = state
         .posts
@@ -2997,8 +2998,8 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
     // Site feed with min_items=5: top 5 includes all four real posts plus
     // Bob's, regardless of age — total 5 (alice-old-2 included by count).
     let big = HybridWindow {
-        min_items: 5,
-        min_days: 30,
+        min_items: parse_feed_min_items("5"),
+        min_days: parse_feed_min_days("30"),
     };
     let site_big = state
         .posts
@@ -3011,8 +3012,8 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
     // (alice-recent-1, alice-recent-2) and "Alice's posts in last 30 days"
     // (same two) → 2. The 100/200-day-old posts and future are excluded.
     let alice_window = HybridWindow {
-        min_items: 2,
-        min_days: 30,
+        min_items: parse_feed_min_items("2"),
+        min_days: parse_feed_min_days("30"),
     };
     let alice_feed = state
         .posts
@@ -3037,8 +3038,8 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
                 username: "wbob".parse().unwrap(),
             },
             &HybridWindow {
-                min_items: 10,
-                min_days: 1,
+                min_items: parse_feed_min_items("10"),
+                min_days: parse_feed_min_days("1"),
             },
             now,
             &ViewerIdentity::Anonymous,
@@ -3076,8 +3077,8 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
                 tag: "rust".parse().unwrap(),
             },
             &HybridWindow {
-                min_items: 20,
-                min_days: 30,
+                min_items: parse_feed_min_items("20"),
+                min_days: parse_feed_min_days("30"),
             },
             now,
             &ViewerIdentity::Anonymous,
@@ -3095,8 +3096,8 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
                 tag: "rust".parse().unwrap(),
             },
             &HybridWindow {
-                min_items: 20,
-                min_days: 30,
+                min_items: parse_feed_min_items("20"),
+                min_days: parse_feed_min_days("30"),
             },
             now,
             &ViewerIdentity::Anonymous,
@@ -3114,8 +3115,8 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
                 tag: "rust".parse().unwrap(),
             },
             &HybridWindow {
-                min_items: 20,
-                min_days: 30,
+                min_items: parse_feed_min_items("20"),
+                min_days: parse_feed_min_days("30"),
             },
             now,
             &ViewerIdentity::Anonymous,

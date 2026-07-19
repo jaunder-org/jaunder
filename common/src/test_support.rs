@@ -12,6 +12,7 @@ use crate::audience::AudienceName;
 use crate::backup::RetentionCount;
 use crate::display_name::DisplayName;
 use crate::email::Email;
+use crate::feed::{FeedMinDays, FeedMinItems};
 use crate::media::{ContentHash, Filename};
 use crate::post_title::PostTitle;
 use crate::token::RawToken;
@@ -63,6 +64,30 @@ pub fn parse_display_name(name: &str) -> DisplayName {
 #[must_use]
 pub fn parse_retention_count(s: &str) -> RetentionCount {
     s.parse().expect("valid test retention count")
+}
+
+/// Parse `s` into a [`FeedMinItems`] for tests — the single place a test feed-min-items
+/// literal is parsed, so a malformed fixture (e.g. `"0"`) fails loudly and the parse isn't
+/// re-spelled at every `HybridWindow`/`FeedsConfig` construction site.
+///
+/// # Panics
+///
+/// Panics if `s` is not a whole number of at least 1.
+#[must_use]
+pub fn parse_feed_min_items(s: &str) -> FeedMinItems {
+    s.parse().expect("valid test feeds.min_items")
+}
+
+/// Parse `s` into a [`FeedMinDays`] for tests — the single place a test feed-min-days
+/// literal is parsed, so a malformed fixture (e.g. `"0"`) fails loudly and the parse isn't
+/// re-spelled at every `HybridWindow`/`FeedsConfig` construction site.
+///
+/// # Panics
+///
+/// Panics if `s` is not a whole number of at least 1.
+#[must_use]
+pub fn parse_feed_min_days(s: &str) -> FeedMinDays {
+    s.parse().expect("valid test feeds.min_days")
 }
 
 /// Parse `s` into a [`RawToken`] for tests — the single place a test token literal is
