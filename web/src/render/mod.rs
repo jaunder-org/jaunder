@@ -15,7 +15,7 @@
 
 use crate::posts::{PostResponse, TimelinePage, TimelinePostSummary};
 use crate::tags::TagSummary;
-use crate::ui::{avatar, icon, taglist, topbar};
+use crate::{avatar, icon, taglist, topbar};
 use common::render::RenderedHtml;
 use common::tag::Tag;
 use common::username::Username;
@@ -490,7 +490,7 @@ fn render_timeline_page(
 }
 
 /// SVG path `d` attribute strings for all Jaunder icons. Shared by the reactive
-/// [`crate::ui::Icon`] component and the pure [`crate::ui::icon::render`].
+/// [`crate::icon::Icon`] component and the pure [`crate::icon::render`].
 pub struct Icons;
 
 impl Icons {

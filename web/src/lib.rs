@@ -20,12 +20,14 @@ macro_rules! boundary {
 
 pub mod audiences;
 pub mod auth;
+pub mod avatar;
 pub mod backup;
 pub mod email;
 pub mod error;
 pub mod feed_discovery;
 pub mod feed_events;
 pub mod forms;
+pub mod icon;
 pub mod invites;
 pub mod media;
 #[cfg(target_arch = "wasm32")]
@@ -39,10 +41,11 @@ pub mod render;
 pub mod sessions;
 pub mod site;
 pub mod subscriptions;
+pub mod taglist;
 pub mod tags;
 #[cfg(all(test, feature = "server"))]
 mod test_support;
-pub mod ui;
+pub mod topbar;
 pub mod viewer;
 
 pub use error::server_resource;

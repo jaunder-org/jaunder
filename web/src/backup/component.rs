@@ -1,7 +1,7 @@
 use crate::backup::{backup_warning_visible, get_backup_settings, UpdateBackupSettings};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
-use crate::ui::Topbar;
+use crate::topbar::Topbar;
 use common::backup::{BackupConfig, BackupMode, BackupSchedule, RetentionCount};
 use leptos::prelude::*;
 use strum::VariantArray;

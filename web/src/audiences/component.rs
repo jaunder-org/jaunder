@@ -12,7 +12,7 @@ use crate::error::WebResult;
 use crate::forms::Field as ValidatedField;
 use crate::reactive::{invalidator_scope, Invalidator, ListState};
 use crate::render::Icons;
-use crate::ui::Topbar;
+use crate::topbar::Topbar;
 use common::audience::AudienceName;
 use common::ids::AudienceId;
 use leptos::prelude::*;

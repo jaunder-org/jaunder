@@ -1,9 +1,3 @@
-//! Avatar — the initials chip. The pure [`render`] (server projector) and the
-//! reactive [`Avatar`] (CSR client) are twins: the same `<div class="j-av">`
-//! markup produced two ways. Co-located per ADR-0056.
-
-use leptos::prelude::*;
-
 use crate::render::escape_html;
 
 /// Derives `(initials, hue)` from a display name. `initials`: first character of
@@ -11,7 +5,7 @@ use crate::render::escape_html;
 /// char codes mod 360. Shared by the reactive [`Avatar`] and the pure [`render`]
 /// twin so a seeded avatar and its reactive re-render coincide.
 #[must_use]
-fn avatar_parts(name: &str) -> (String, u32) {
+pub(crate) fn avatar_parts(name: &str) -> (String, u32) {
     let initials: String = name
         .split_whitespace()
         .take(2)
@@ -34,29 +28,6 @@ pub(crate) fn render(name: &str, size: u32) -> String {
         "<div class=\"j-av\" style=\"width:{size}px;height:{size}px;background:oklch(0.58 0.07 {hue});font-size:{font_size}px\">{initials}</div>",
         initials = escape_html(&initials),
     )
-}
-
-/// The reactive half of the twin: an initials chip derived from `name`.
-/// Twins [`render`] — keep their markup coincident.
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Leptos #[component] props are stored by the framework and must be owned; \
-              the borrow clippy suggests isn't expressible in a component signature"
-)]
-#[component]
-pub fn Avatar(name: String, #[prop(default = 38)] size: u32) -> impl IntoView {
-    let (initials, hue) = avatar_parts(&name);
-    // Integer equivalent of `(size as f32 * 0.36).round()`; must match the pure
-    // `render` twin so SSR and reactive output coincide.
-    let font_size = (size * 36 + 50) / 100;
-    let style = format!(
-        "width:{size}px;height:{size}px;background:oklch(0.58 0.07 {hue});font-size:{font_size}px"
-    );
-    view! {
-        <div class="j-av" style=style>
-            {initials}
-        </div>
-    }
 }
 
 #[cfg(test)]
