@@ -1,8 +1,27 @@
 # ADR-0013: Server Submodule Pattern for Web-Layer Modules
 
-- Status: accepted
+- Status: superseded
+- Note: superseded by ADR-0070 (web verticals split host/wasm at the file level)
 - Deciders: mdorman, Claude Sonnet
 - Date: 2026-05-23
+
+> **Superseded (2026-07-18, #315) by ADR-0070** (via ADR-0056, itself now
+> superseded). This ADR introduced a gated `server.rs` to move a feature's
+> server-only implementation out of `mod.rs` and cut the `#[cfg]` noise threaded
+> through every function. ADR-0070 reorganizes the whole vertical into a
+> four-file layout — `mod.rs` (module wiring only), `api.rs` (the `#[server]`
+> endpoints + wire types), `server.rs` (host-only support), and `component.rs`
+> (the wasm-only `#[component]` UI). So `server.rs` is **retained and
+> re-legitimized** as one of the four files — exactly this ADR's role for
+> genuinely shared server-only infrastructure (e.g. `auth`'s extractors and
+> cookie helpers). What changes: the `#[server]` bodies now live in `api.rs`,
+> not `mod.rs`; and the per-function
+> `#[cfg_attr(feature = "server", tracing::instrument(…))]` ceremony this ADR
+> relied on is gone — `tracing` is an unconditional `web` dependency, so
+> `#[tracing::instrument]` is written plainly (a no-op on the wasm client, per
+> ADR-0011). Server-only **import blocks** may still be
+> `#[cfg(feature = "server")]`, now grouped as the single support block in
+> `api.rs`.
 
 ## Context and Problem Statement
 

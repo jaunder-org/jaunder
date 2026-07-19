@@ -40,7 +40,7 @@ convention). See the Status column below for each ADR's current status.
 | [0010](adr/0010-protocol-integration.md)                           | Multi-Protocol Integration Strategy                                                                          | accepted   |
 | [0011](adr/0011-unified-observability.md)                          | Unified Observability Strategy                                                                               | accepted   |
 | [0012](adr/0012-environment-aware-timeouts.md)                     | Environment-Aware E2E Timeouts                                                                               | accepted   |
-| [0013](adr/0013-server-submodule-pattern.md)                       | Server Submodule Pattern for Web-Layer Modules                                                               | accepted   |
+| [0013](adr/0013-server-submodule-pattern.md)                       | Server Submodule Pattern for Web-Layer Modules                                                               | superseded |
 | [0014](adr/0014-atompub-authentication.md)                         | AtomPub Authentication via App-Specific Passwords                                                            | accepted   |
 | [0015](adr/0015-atompub-serialization-surfaces.md)                 | Separate Serialization Surfaces for Syndication and AtomPub                                                  | accepted   |
 | [0016](adr/0016-dependency-injection-and-appstate.md)              | Dependency Injection, the `AppState` Bundle, and the Composition Root                                        | accepted   |

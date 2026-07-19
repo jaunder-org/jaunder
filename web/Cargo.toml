@@ -44,7 +44,7 @@ web-sys = { workspace = true, features = [
     "Response",
 ] }
 thiserror.workspace = true
-tracing = { workspace = true, optional = true }
+tracing = { workspace = true }
 
 # Browser-only: used to convert the compose form's naive `datetime-local`
 # value (author local time) to a UTC RFC3339 instant via `js_sys::Date`.
@@ -76,7 +76,6 @@ server = [
     "dep:axum",
     "dep:chrono",
     "dep:storage",
-    "dep:tracing",
 ]
 
 [lints.clippy]
