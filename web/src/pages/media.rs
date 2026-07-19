@@ -1,8 +1,7 @@
 use crate::{
     error::WebError,
-    media::{list_my_media, media_usage, DeleteMedia, DeleteMediaResult, MediaItem},
+    media::{list_my_media, media_usage, DeleteMedia, DeleteMediaResult, MediaItem, MediaUpload},
     pages::ui::Topbar,
-    pages::MediaUploadButton,
     render::format_bytes,
 };
 use leptos::prelude::*;
@@ -34,7 +33,7 @@ pub fn MediaPage() -> impl IntoView {
                 "Upload"
             </div>
             <div style="margin-bottom:24px">
-                <MediaUploadButton
+                <MediaUpload
                     on_uploaded=Callback::new(move |_url: String| {
                         upload_version.update(|v| *v += 1);
                     })

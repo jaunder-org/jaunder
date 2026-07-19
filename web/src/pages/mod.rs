@@ -11,9 +11,7 @@ pub(crate) mod signal_read;
 pub mod site;
 pub(crate) mod timeline;
 pub mod ui;
-pub mod upload;
 pub use ui::{Avatar, Icon, Icons, InlineComposer, PostCard, PostDisplay, Sidebar, Topbar};
-pub use upload::{MediaPanel, MediaUploadButton};
 
 /// Default theme identifier (the CSS variable pack applied via `data-theme` on the
 /// root element). Defined in `crate::render` (the shell layer) so the projector's

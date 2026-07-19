@@ -1,20 +1,34 @@
+//! The media vertical's wasm-only UI (ADR-0070): the upload control and its
+//! browser `fetch` glue. Declared `#[cfg(target_arch = "wasm32")] mod component;`
+//! in `media/mod.rs`, so this file is wasm-only by its `mod` declaration and
+//! carries no cfg gates of its own; it calls browser APIs directly. The pure
+//! response-parse is factored to the host-tested [`super::api::extract_upload_url`].
+
 use leptos::prelude::*;
 
-/// A button that lets the user pick a file and immediately uploads it to
-/// `/media/upload` via JavaScript fetch (no page navigation).
+/// A media upload control: a button that opens the file picker and immediately
+/// uploads the chosen file to `/media/upload` via a JS `fetch` (no navigation).
 ///
-/// `on_uploaded` is called with the media URL string on success.
-/// `on_error` is called with a human-readable message on failure.
+/// `on_uploaded` / `on_error`, when provided, fire with the media URL or a
+/// human-readable error. When `show_result` is set the widget also renders the
+/// uploaded URL (read-only, click-to-select) and any error inline below the button
+/// — the self-contained mode the compose form uses. (This merges the former
+/// `MediaUploadButton` primitive and `MediaPanel` wrapper into one component.)
 #[component]
-pub fn MediaUploadButton(
+pub fn MediaUpload(
     /// Called with the `/media/upload/...` URL when the upload succeeds.
-    #[prop(into)]
-    on_uploaded: Callback<String>,
+    #[prop(into, optional)]
+    on_uploaded: Option<Callback<String>>,
     /// Called with an error message when the upload fails.
     #[prop(into, optional)]
     on_error: Option<Callback<String>>,
+    /// When true, render the uploaded URL and any error inline below the button.
+    #[prop(optional)]
+    show_result: bool,
 ) -> impl IntoView {
     let uploading = RwSignal::new(false);
+    let last_media_url = RwSignal::new(Option::<String>::None);
+    let upload_error = RwSignal::new(Option::<String>::None);
     let file_input = NodeRef::<leptos::html::Input>::new();
 
     let open_picker = move |_| {
@@ -53,10 +67,21 @@ pub fn MediaUploadButton(
             let result = upload_file(form_data).await;
             uploading.set(false);
             match result {
-                Ok(url) => on_uploaded.run(url),
+                Ok(url) => {
+                    if let Some(cb) = on_uploaded {
+                        cb.run(url.clone());
+                    }
+                    if show_result {
+                        last_media_url.set(Some(url));
+                        upload_error.set(None);
+                    }
+                }
                 Err(msg) => {
                     if let Some(cb) = on_error {
-                        cb.run(msg);
+                        cb.run(msg.clone());
+                    }
+                    if show_result {
+                        upload_error.set(Some(msg));
                     }
                 }
             }
@@ -68,58 +93,11 @@ pub fn MediaUploadButton(
         <button type="button" class="j-btn" disabled=move || uploading.get() on:click=open_picker>
             {move || if uploading.get() { "Uploading\u{2026}" } else { "Attach media" }}
         </button>
-    }
-}
-
-/// Self-contained media upload widget: button, uploaded-URL display, and error.
-/// Drop this into any `ActionForm` aside that needs media upload.
-#[component]
-pub fn MediaPanel() -> impl IntoView {
-    let last_media_url = RwSignal::new(Option::<String>::None);
-    let upload_error = RwSignal::new(Option::<String>::None);
-
-    view! {
-        <MediaUploadButton
-            on_uploaded=Callback::new(move |url: String| {
-                last_media_url.set(Some(url));
-                upload_error.set(None);
-            })
-            on_error=Callback::new(move |msg: String| {
-                upload_error.set(Some(msg));
-            })
-        />
+        {move || show_result.then(|| last_media_url.get()).flatten().map(uploaded_url_view)}
         {move || {
-            last_media_url
-                .get()
-                .map(|url| {
-                    view! {
-                        <div style="margin-top:8px">
-                            <div style="font-size:12px;color:#888;margin-bottom:4px">
-                                "Uploaded URL:"
-                            </div>
-                            <input
-                                type="text"
-                                readonly
-                                value=url.clone()
-                                class="j-field-val"
-                                style="font-size:12px;cursor:text"
-                                on:click=move |ev| {
-                                    use leptos::wasm_bindgen::JsCast;
-                                    let _ = ev
-                                        .target()
-                                        .and_then(|t| {
-                                            t.dyn_into::<web_sys::HtmlInputElement>().ok()
-                                        })
-                                        .map(|i| i.select());
-                                }
-                            />
-                        </div>
-                    }
-                })
-        }}
-        {move || {
-            upload_error
-                .get()
+            show_result
+                .then(|| upload_error.get())
+                .flatten()
                 .map(|msg| {
                     view! {
                         <p class="error" style="margin-top:6px;font-size:12px">
@@ -131,13 +109,37 @@ pub fn MediaPanel() -> impl IntoView {
     }
 }
 
+/// The read-only, click-to-select "Uploaded URL" box shown below the button in the
+/// `show_result` mode. Extracted from [`MediaUpload`] to keep that component within
+/// the line budget; a plain view helper (like `render_media_row` in this vertical).
+fn uploaded_url_view(url: String) -> impl IntoView {
+    view! {
+        <div style="margin-top:8px">
+            <div style="font-size:12px;color:#888;margin-bottom:4px">"Uploaded URL:"</div>
+            <input
+                type="text"
+                readonly
+                value=url
+                class="j-field-val"
+                style="font-size:12px;cursor:text"
+                on:click=move |ev| {
+                    use leptos::wasm_bindgen::JsCast;
+                    let _ = ev
+                        .target()
+                        .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                        .map(|i| i.select());
+                }
+            />
+        </div>
+    }
+}
+
 async fn upload_file(form_data: web_sys::FormData) -> Result<String, String> {
-    // crap:allow: wasm-only browser glue — a `fetch` POST to /media/upload from
-    // the compose form's FormData. Not host-instrumentable (`web_sys::window` /
-    // `fetch`); its verification is the media-upload e2e. Was
-    // `#[cfg(target_arch = "wasm32")]`-excluded before `pages/` became
-    // module-gated wasm-only (#300); the CRAP metric source-parses it now that the
-    // fn-level gate is gone, so accept the drift explicitly.
+    // crap:allow: wasm-only browser glue — a `fetch` POST to /media/upload. Not
+    // host-instrumentable (`web_sys::window` / `fetch`), so it is uncovered and
+    // CRAP source-parses it (a plain async fn, not a CRAP-exempt `#[component]`);
+    // its verification is the media-upload e2e. The pure response parse is factored
+    // out to the host-tested `super::api::extract_upload_url`.
     use leptos::wasm_bindgen::JsCast;
     use leptos::wasm_bindgen::JsValue;
     use wasm_bindgen_futures::JsFuture;
@@ -175,11 +177,5 @@ async fn upload_file(form_data: web_sys::FormData) -> Result<String, String> {
         .as_string()
         .ok_or_else(|| "response body is not a string".to_string())?;
 
-    let parsed: serde_json::Value =
-        serde_json::from_str(&body).map_err(|_| "invalid JSON in response".to_string())?;
-
-    parsed["url"]
-        .as_str()
-        .map(ToString::to_string)
-        .ok_or_else(|| "response JSON missing 'url' field".to_string())
+    super::api::extract_upload_url(&body)
 }
