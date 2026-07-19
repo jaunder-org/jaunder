@@ -1,7 +1,7 @@
-use crate::auth::get_registration_policy;
 use crate::error::WebError;
 use crate::invites::{list_invites, CreateInvite};
 use crate::pages::Topbar;
+use crate::registration::get_registration_policy;
 use leptos::prelude::*;
 
 /// Invites page — lists invites (metadata only; raw codes are never sent to the client,

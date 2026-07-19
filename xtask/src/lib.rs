@@ -18,7 +18,7 @@ mod steps {
     pub mod e2e_local;
     pub mod host_tests;
     pub mod nix;
-    pub mod proffered_invite_code_check;
+    pub mod proffered_secret_check;
     pub mod rendered_html_from_trusted_check;
     pub mod sequence_check;
     pub mod server_fn_registrar_check;
@@ -291,7 +291,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::adr_check::run(&mut result);
             steps::test_pattern_check::run(&mut result);
             steps::server_fn_registrar_check::run(&mut result);
-            steps::proffered_invite_code_check::run(&mut result);
+            steps::proffered_secret_check::run(&mut result);
             steps::rendered_html_from_trusted_check::run(&mut result);
             steps::host_tests::run(&sh, &mut result);
             if !no_test {
@@ -321,7 +321,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::adr_check::run(&mut result);
             steps::test_pattern_check::run(&mut result);
             steps::server_fn_registrar_check::run(&mut result);
-            steps::proffered_invite_code_check::run(&mut result);
+            steps::proffered_secret_check::run(&mut result);
             steps::rendered_html_from_trusted_check::run(&mut result);
             steps::host_tests::run(&sh, &mut result);
             steps::nix::coverage(&mut result);

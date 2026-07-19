@@ -26,10 +26,7 @@ use {
 };
 
 #[server(endpoint = "/backup_warning_visible")]
-#[cfg_attr(
-    feature = "server",
-    tracing::instrument(name = "web.backup.warning_visible")
-)]
+#[tracing::instrument(name = "web.backup.warning_visible")]
 pub async fn backup_warning_visible() -> WebResult<bool> {
     boundary!("backup_warning_visible", {
         let auth = match require_auth().await {
@@ -56,10 +53,7 @@ pub async fn backup_warning_visible() -> WebResult<bool> {
 }
 
 #[server(endpoint = "/current_user_is_operator")]
-#[cfg_attr(
-    feature = "server",
-    tracing::instrument(name = "web.backup.current_user_is_operator")
-)]
+#[tracing::instrument(name = "web.backup.current_user_is_operator")]
 pub async fn current_user_is_operator() -> WebResult<bool> {
     boundary!("current_user_is_operator", {
         let auth = match require_auth().await {
@@ -77,10 +71,7 @@ pub async fn current_user_is_operator() -> WebResult<bool> {
 }
 
 #[server(endpoint = "/get_backup_settings")]
-#[cfg_attr(
-    feature = "server",
-    tracing::instrument(name = "web.backup.get_settings")
-)]
+#[tracing::instrument(name = "web.backup.get_settings")]
 pub async fn get_backup_settings() -> WebResult<BackupConfig> {
     boundary!("get_backup_settings", {
         require_operator().await?;
@@ -93,12 +84,9 @@ pub async fn get_backup_settings() -> WebResult<BackupConfig> {
 }
 
 #[server(endpoint = "/update_backup_settings")]
-#[cfg_attr(
-    feature = "server",
-    tracing::instrument(
-        name = "web.backup.update_settings",
-        skip(destination_path, schedule, retention_count, mode)
-    )
+#[tracing::instrument(
+    name = "web.backup.update_settings",
+    skip(destination_path, schedule, retention_count, mode)
 )]
 pub async fn update_backup_settings(
     destination_path: String,
