@@ -33,10 +33,55 @@ impl FromStr for Password {
     type Err = PasswordError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.len() < MIN_LENGTH {
-            return Err(PasswordError::PasswordTooShort);
-        }
+        validate_password_shape(s)?;
         Ok(Password(s.to_owned()))
+    }
+}
+
+/// The shared shape invariant for a plaintext password: at least [`MIN_LENGTH`]
+/// characters. Both [`Password`] and [`ProfferedPassword`] delegate to it, so the
+/// inbound wire type and the domain type cannot drift (mirrors invite codes'
+/// `common::token::validate_shape`).
+fn validate_password_shape(s: &str) -> Result<(), PasswordError> {
+    if s.len() < MIN_LENGTH {
+        return Err(PasswordError::PasswordTooShort);
+    }
+    Ok(())
+}
+
+/// A raw plaintext password as **submitted by a client** during registration,
+/// login, or password-reset confirmation.
+///
+/// The serde-capable _inbound_ twin of the secret [`Password`], per ADR-0063's
+/// inbound-secret variant (`#[str_newtype(secret, serde)]`): redacting `Debug`,
+/// `AsRef<str>`, `TryFrom<String>`, and the validating serde bridge — but no
+/// `Display`/`Deref`/owned-`String`. It exists only to be validated (client-side
+/// per ADR-0065, and again on the wire at deserialize), travel client→server, and
+/// be converted into [`Password`]. A `proffered-secret` xtask gate pins it to
+/// `#[server]` parameter positions, so a plaintext password can never be rendered
+/// or returned to a client.
+#[derive(Clone, StrNewtype)]
+#[str_newtype(secret, serde)]
+pub struct ProfferedPassword(String);
+
+impl FromStr for ProfferedPassword {
+    type Err = PasswordError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        validate_password_shape(s)?;
+        Ok(ProfferedPassword(s.to_owned()))
+    }
+}
+
+impl TryFrom<ProfferedPassword> for Password {
+    type Error = PasswordError;
+
+    /// Converts a client-submitted password into the domain type. `ProfferedPassword`
+    /// was already validated at construction, so this cannot actually fail — but it
+    /// re-runs the shared validator rather than relying on that (no infallible
+    /// cross-type constructor). Mirrors `InviteCode: TryFrom<ProfferedInviteCode>`.
+    fn try_from(p: ProfferedPassword) -> Result<Self, Self::Error> {
+        p.as_ref().parse()
     }
 }
 
@@ -113,6 +158,40 @@ mod tests {
         assert!("".parse::<Password>().is_err());
         assert!("short".parse::<Password>().is_err());
         assert!("1234567".parse::<Password>().is_err());
+    }
+
+    #[test]
+    fn proffered_from_str_valid_and_invalid() {
+        assert!("12345678".parse::<ProfferedPassword>().is_ok());
+        assert!("short".parse::<ProfferedPassword>().is_err());
+        assert!("".parse::<ProfferedPassword>().is_err());
+    }
+
+    #[test]
+    fn proffered_serde_roundtrips_and_validates_on_the_wire() {
+        let p: ProfferedPassword = "password123".parse().unwrap();
+        assert_eq!(serde_json::to_string(&p).unwrap(), "\"password123\"");
+        let back: ProfferedPassword = serde_json::from_str("\"password123\"").unwrap();
+        assert_eq!(back.as_ref(), "password123");
+        // Deserialize routes through the shared shape validator, so a too-short
+        // password is rejected on the wire.
+        assert!(serde_json::from_str::<ProfferedPassword>("\"short\"").is_err());
+    }
+
+    #[test]
+    fn proffered_debug_is_redacted() {
+        let raw = "supersecret123";
+        let p: ProfferedPassword = raw.parse().unwrap();
+        let out = format!("{p:?}");
+        assert!(!out.contains(raw));
+        assert_eq!(out, "ProfferedPassword([redacted])");
+    }
+
+    #[test]
+    fn proffered_converts_into_password() {
+        let p: ProfferedPassword = "password123".parse().unwrap();
+        let pw = Password::try_from(p).expect("valid proffered password converts");
+        assert_eq!(pw.as_ref(), "password123");
     }
 
     #[test]
