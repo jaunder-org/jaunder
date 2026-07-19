@@ -2,8 +2,9 @@
 
 - Issue: [#527](https://github.com/jaunder-org/jaunder/issues/527) (amended
   2026-07-18 by [#530](https://github.com/jaunder-org/jaunder/issues/530))
-- Design record: [ADR-0070](../../adr/0070-web-vertical-wasm-only-component-files.md),
-  **as amended by #530** (four-file layout; `mod.rs` is wiring only). This cycle
+- Design record:
+  [ADR-0070](../../adr/0070-web-vertical-wasm-only-component-files.md), **as
+  amended by #530** (four-file layout; `mod.rs` is wiring only). This cycle
   additionally amends ADR-0070 §5 — see Decision D2.
 - Milestone: Web: canonical Leptos CSR convergence
 - Status: draft, pending approval
@@ -23,14 +24,14 @@ web/src/feature/
 └── component.rs  # #[component] UI + browser-bound code (wasm-only)
 ```
 
-`#[cfg(target_arch = "wasm32")]` appears **only on module-wiring declarations** —
-a `mod` declaration or its **paired re-export** (`pub use component::{…}`). Pure,
-host-testable logic (`render()` twins, `Field<T>`, `field_error`, wire codecs)
-stays ungated and host-tested; extraction precedes gating.
+`#[cfg(target_arch = "wasm32")]` appears **only on module-wiring declarations**
+— a `mod` declaration or its **paired re-export** (`pub use component::{…}`).
+Pure, host-testable logic (`render()` twins, `Field<T>`, `field_error`, wire
+codecs) stays ungated and host-tested; extraction precedes gating.
 
-This is the **first** retrofit under ADR-0070 — #526 landed only the ADR document
-and #530 only amends it — so the conventions chosen here template the rest of the
-milestone.
+This is the **first** retrofit under ADR-0070 — #526 landed only the ADR
+document and #530 only amends it — so the conventions chosen here template the
+rest of the milestone.
 
 ## In scope (touched code)
 
@@ -41,7 +42,8 @@ milestone.
 - `web/src/tags/` (vertical: **api split only** — no components)
 - `web/src/feed_discovery.rs`
 - `web/src/forms.rs`
-- Consumer path updates forced by the above (`render/mod.rs`, `pages/`, `lib.rs`)
+- Consumer path updates forced by the above (`render/mod.rs`, `pages/`,
+  `lib.rs`)
 - Doc fixes owned by **this** issue: ADR-0070 §5 (the `ui/` dissolution) and
   `docs/web-style-guide.md` §6 (shared-components list), plus in-file layout
   comments made stale by the change.
@@ -55,8 +57,8 @@ milestone.
 - Retrofitting `pages/` (already wholly wasm-only via `lib.rs`'s
   `#[cfg(target_arch = "wasm32")] pub mod pages;`).
 - Writing the `#520` "wiring-only" xtask gate (future).
-- Retiring `#[client_only]` / the `#[component]` coverage exemption / the A1 guard
-  (milestone-14 endgame, #520). None appear in the touched files.
+- Retiring `#[client_only]` / the `#[component]` coverage exemption / the A1
+  guard (milestone-14 endgame, #520). None appear in the touched files.
 - Any behavior change to the host projector (`web/src/render/`), `#[server]`
   bodies, wire types, or validation logic. Server-fn **registrar paths**
   (`web::<vertical>::<fn>`, #426 gate) stay byte-stable via `mod.rs` re-exports.
@@ -65,7 +67,8 @@ milestone.
 
 ### D1 — wasm-only components are exposed via gated `pub use` re-exports
 
-Each `mod.rs` re-exports its component behind the gate so call sites stay stable:
+Each `mod.rs` re-exports its component behind the gate so call sites stay
+stable:
 
 ```rust
 #[cfg(target_arch = "wasm32")]
@@ -80,8 +83,9 @@ The amended ADR-0070 §2 **explicitly blesses this**: `target_arch` may sit on "
 
 ### D2 — the four `ui/` leaves become top-level **directory** modules; `ui/` is dissolved
 
-Each leaf is promoted out of `ui/` into its own top-level directory, following the
-wiring-only shape (no `api.rs`/`server.rs` — these are pure-logic + UI only):
+Each leaf is promoted out of `ui/` into its own top-level directory, following
+the wiring-only shape (no `api.rs`/`server.rs` — these are pure-logic + UI
+only):
 
 ```
 web/src/avatar/mod.rs        # wiring only: mod decls + re-exports
@@ -94,9 +98,9 @@ web/src/avatar/component.rs  # #[cfg(target_arch="wasm32")]: #[component] Avatar
 
 - The pure file is named `markup.rs` (the pure twin produces markup strings) to
   avoid a module/fn `render` name clash; the re-exported fn keeps its name so
-  `render/mod.rs` still calls `avatar::render` / `icon::render` / etc. unchanged.
-  (File name is a nicety — the plan may pick a better one; the constraint is only
-  that the re-exported symbol names are stable.)
+  `render/mod.rs` still calls `avatar::render` / `icon::render` / etc.
+  unchanged. (File name is a nicety — the plan may pick a better one; the
+  constraint is only that the re-exported symbol names are stable.)
 - `Icons` (defined in `render/mod.rs`) is re-exported **ungated** from
   `icon/mod.rs` (`pub use crate::render::Icons;`); `Icon` is the gated component
   re-export. This preserves the issue's "`Icon` gated, `Icons` not" split.
@@ -120,12 +124,12 @@ coverage" comment). No unrelated refactors.
 ### D4 — `feed_discovery/` becomes a directory (pure logic extracted, components gated)
 
 `feed_discovery.rs` holds two `#[component]`s (`FeedDiscovery`, `RsdDiscovery`)
-**and pure host-tested logic** — `surface_label` (`:65`), `rsd_href` (`:60`), and
-five `#[cfg(test)]` unit tests (`:74–121`). No `#[server]` fns → no `api.rs`. It
-splits into a directory:
+**and pure host-tested logic** — `surface_label` (`:65`), `rsd_href` (`:60`),
+and five `#[cfg(test)]` unit tests (`:74–121`). No `#[server]` fns → no
+`api.rs`. It splits into a directory:
 
-- `feed_discovery/mod.rs` — wiring only: mod decls + gated `pub use` re-exports of
-  `FeedDiscovery` / `RsdDiscovery`.
+- `feed_discovery/mod.rs` — wiring only: mod decls + gated `pub use` re-exports
+  of `FeedDiscovery` / `RsdDiscovery`.
 - `feed_discovery/labels.rs` — ungated: `surface_label`, `rsd_href`, the five
   tests.
 - `feed_discovery/component.rs` — `#[cfg(target_arch="wasm32")]`: the two
@@ -138,8 +142,9 @@ rejected — it violates ADR-0070 §6.
 
 `forms.rs` splits into a directory (no `#[server]` fns → no `api.rs`):
 
-- `forms/mod.rs` — wiring only: mod decls + re-exports (`pub use field::{Field,
-  field_error};`, gated `pub use component::ValidatedInput;`).
+- `forms/mod.rs` — wiring only: mod decls + re-exports
+  (`pub use field::{Field, field_error};`, gated
+  `pub use component::ValidatedInput;`).
 - `forms/field.rs` — ungated: `Field<T>`, `field_error`, and the host tests
   (which exercise `Field` under an `Owner`).
 - `forms/component.rs` — `#[cfg(target_arch="wasm32")]`: the sole component
@@ -148,23 +153,24 @@ rejected — it violates ADR-0070 §6.
 ### D6 — api split for the four server verticals; subscriptions/tags are api-only
 
 Move each vertical's `#[server]` endpoints + wire DTOs out of `mod.rs` into
-`api.rs`; `mod.rs` becomes wiring only; re-exports keep registrar/call-site paths
-stable (D1 / #530).
+`api.rs`; `mod.rs` becomes wiring only; re-exports keep registrar/call-site
+paths stable (D1 / #530).
 
-- **audiences** (8 `#[server]` fns, 2 DTOs `AudienceSummary`/`SubscriberSummary`,
-  5 components, the keyed-store types `AudienceListData` (`reactive_stores`
-  `Store`, keyed on `AudienceSummary` rows) and `AudienceList` (generated by the
-  `invalidator_scope!` macro), server-gated tests): `api.rs` (endpoints + DTOs +
-  grouped `#[cfg(feature="server")] use super::server::*`), `server.rs`
-  (server-only support + server-gated tests), `component.rs` (5 components +
+- **audiences** (8 `#[server]` fns, 2 DTOs
+  `AudienceSummary`/`SubscriberSummary`, 5 components, the keyed-store types
+  `AudienceListData` (`reactive_stores` `Store`, keyed on `AudienceSummary`
+  rows) and `AudienceList` (generated by the `invalidator_scope!` macro),
+  server-gated tests): `api.rs` (endpoints + DTOs + grouped
+  `#[cfg(feature="server")] use super::server::*`), `server.rs` (server-only
+  support + server-gated tests), `component.rs` (5 components +
   `AudienceListData`/`AudienceList`), `mod.rs` wiring.
   - **Dual-role `AudienceSummary`:** it is both a wire DTO (`Serialize`/
     `Deserialize`, returned by `list_my_audiences`) **and** a keyed-store row
-    (`derive(Store, Patch)`). It stays in `api.rs` carrying its `reactive_stores`
-    derives (so `api.rs` imports `reactive_stores`); `AudienceListData` in
-    `component.rs` references it as `super::api::AudienceSummary`. This is the one
-    place the "DTOs→api.rs / store types→component.rs" line has an intentional
-    overlap.
+    (`derive(Store, Patch)`). It stays in `api.rs` carrying its
+    `reactive_stores` derives (so `api.rs` imports `reactive_stores`);
+    `AudienceListData` in `component.rs` references it as
+    `super::api::AudienceSummary`. This is the one place the "DTOs→api.rs /
+    store types→component.rs" line has an intentional overlap.
 - **backup** (4 `#[server]` fns + wire types; existing `server.rs`; `ui.rs` → 2
   components): `api.rs` (endpoints + wire types; absorbs the `mod.rs`-level
   `use server::require_operator`), keep `server.rs`, rename `ui.rs` →
@@ -175,8 +181,8 @@ stable (D1 / #530).
   `component.rs`.
 - **tags** (1 `#[server]` fn `list_tags`, DTO `TagSummary`, consts
   `DEFAULT_TAG_LIMIT`/`MAX_TAG_LIMIT`, **host** tests, **no components**):
-  `api.rs` (endpoint + DTO + consts + the `#[cfg(test)]` host tests, which run on
-  host since `api.rs` is dual-compiled), `mod.rs` wiring. No `server.rs`, no
+  `api.rs` (endpoint + DTO + consts + the `#[cfg(test)]` host tests, which run
+  on host since `api.rs` is dual-compiled), `mod.rs` wiring. No `server.rs`, no
   `component.rs`.
 
 ## Acceptance criteria
@@ -189,9 +195,9 @@ not.
 - `rg -n '#\[component\]'` across the touched modules shows every `#[component]`
   inside a file whose `mod` declaration carries `#[cfg(target_arch = "wasm32")]`
   (a `component.rs`).
-- Every `target_arch = "wasm32"` cfg introduced sits on a `mod` declaration or its
-  paired `pub use component::{…}` re-export — never on a `#[component]`, a struct,
-  or an fn directly inside a file.
+- Every `target_arch = "wasm32"` cfg introduced sits on a `mod` declaration or
+  its paired `pub use component::{…}` re-export — never on a `#[component]`, a
+  struct, or an fn directly inside a file.
 
 ### AC2 — every retrofitted vertical's `mod.rs` is wiring-only; endpoints live in `api.rs`
 
@@ -199,31 +205,31 @@ not.
   contain only `mod`/`pub use` lines (module wiring + re-exports) — no
   `#[server]` fn, no DTO, no `#[component]`, no pure logic of their own.
 - Each vertical's `#[server]` endpoints and wire DTOs live in that vertical's
-  `api.rs`; `api.rs` carries at most one grouped `#[cfg(feature = "server")] use
-  super::server::*;` for its bodies.
+  `api.rs`; `api.rs` carries at most one grouped
+  `#[cfg(feature = "server")] use super::server::*;` for its bodies.
 - Each `mod.rs` re-exports the **generated server-fn types** (the PascalCase
   structs the `#[server]` macro emits — `CreateAudience`, `ListTags`,
-  `BackupWarningVisible`, `SubscribeTo`, …), not merely the snake_case fns + DTOs.
-  The registrar (`server/tests`) resolves `register_explicit::<web::<vertical>::
-  <Type>>()` by real path, so an omitted type re-export breaks the registrar test
-  binary's compile (the #426 syn-gate, which matches by leaf name, would **not**
-  catch it). Registrar paths (`web::audiences::CreateAudience`,
-  `web::subscriptions::SubscribeTo`, `web::tags::ListTags`, `web::backup::*`)
-  still resolve.
+  `BackupWarningVisible`, `SubscribeTo`, …), not merely the snake_case fns +
+  DTOs. The registrar (`server/tests`) resolves
+  `register_explicit::<web::<vertical>:: <Type>>()` by real path, so an omitted
+  type re-export breaks the registrar test binary's compile (the #426 syn-gate,
+  which matches by leaf name, would **not** catch it). Registrar paths
+  (`web::audiences::CreateAudience`, `web::subscriptions::SubscribeTo`,
+  `web::tags::ListTags`, `web::backup::*`) still resolve.
 
 ### AC3 — pure/host surfaces untouched in behavior and still host-tested
 
-- The pure `render()` twins (`avatar`/`icon`/`taglist`/`topbar`), `avatar_parts`,
-  and the `Icons` re-export stay ungated and host-compilable; `render/mod.rs`
-  still calls them, unchanged apart from import/doc-link paths.
-- `feed_discovery::{surface_label, rsd_href}` + their five tests stay host-tested
-  (in `feed_discovery/labels.rs`). The intra-doc link in `render/mod.rs:214`
-  (`web::feed_discovery::surface_label`) is repointed to
+- The pure `render()` twins (`avatar`/`icon`/`taglist`/`topbar`),
+  `avatar_parts`, and the `Icons` re-export stay ungated and host-compilable;
+  `render/mod.rs` still calls them, unchanged apart from import/doc-link paths.
+- `feed_discovery::{surface_label, rsd_href}` + their five tests stay
+  host-tested (in `feed_discovery/labels.rs`). The intra-doc link in
+  `render/mod.rs:214` (`web::feed_discovery::surface_label`) is repointed to
   `web::feed_discovery::labels::surface_label` so the rustdoc-link lint stays
   green.
-- `forms::Field<T>` + `forms::field_error` + their `Owner`-scoped host tests stay
-  ungated (in `forms/field.rs`); `ValidatedInput<T>` is the only gated `forms`
-  item.
+- `forms::Field<T>` + `forms::field_error` + their `Owner`-scoped host tests
+  stay ungated (in `forms/field.rs`); `ValidatedInput<T>` is the only gated
+  `forms` item.
 - `tags`' host tests (`tag_label_validation_agrees_client_and_server`,
   `tag_summary_preserves_casing_with_canonical_slug`) still run on host.
 - The `ui`-leaf parity/unit tests stay host-side and pass — they assert on the
@@ -231,10 +237,11 @@ not.
 
 ### AC4 — `ui/` is gone; consumer paths updated
 
-- `web/src/ui/` does not exist; `lib.rs` declares `pub mod avatar; pub mod icon;
-  pub mod taglist; pub mod topbar;` (and no `pub mod ui;`).
-- No `crate::ui::` / top-level `ui::` reference remains in `web/src`; every former
-  consumer (`render/mod.rs:18`+doc-links, `audiences`, `backup`,
+- `web/src/ui/` does not exist; `lib.rs` declares
+  `pub mod avatar; pub mod icon; pub mod taglist; pub mod topbar;` (and no
+  `pub mod ui;`).
+- No `crate::ui::` / top-level `ui::` reference remains in `web/src`; every
+  former consumer (`render/mod.rs:18`+doc-links, `audiences`, `backup`,
   `pages/ui.rs:31`+doc-links) resolves to the new top-level path.
 - `crate::pages::ui` and `crate::backup::ui`→`backup::component` handled per D6;
   `crate::pages::ui` is otherwise untouched except its import paths.
@@ -245,8 +252,9 @@ not.
   "ungated for coverage" comment is corrected.
 - `feed_discovery/` and `forms/` follow D4/D5; each leaf directory follows D2.
 - audiences' keyed-store types (`AudienceListData`, `AudienceList`) move into
-  `audiences/component.rs`; the wire DTOs stay in `api.rs` (with `AudienceSummary`
-  keeping its `Store`/`Patch` derives there per D6's dual-role note).
+  `audiences/component.rs`; the wire DTOs stay in `api.rs` (with
+  `AudienceSummary` keeping its `Store`/`Patch` derives there per D6's dual-role
+  note).
 
 ### AC6 — docs reflect reality (this issue's slice only)
 
@@ -262,8 +270,8 @@ not.
 - Host `web` tests pass (twins, parity, `Field<T>`, `field_error`, `tags` host
   tests, server-gated vertical tests).
 - `wasm-clippy` (`-p web -p client`) is clean.
-- `cargo xtask validate` (static + coverage + e2e all four backend×browser combos)
-  is green; e2e behavior for the touched surfaces is unchanged.
+- `cargo xtask validate` (static + coverage + e2e all four backend×browser
+  combos) is green; e2e behavior for the touched surfaces is unchanged.
 
 ## Coordination note
 
