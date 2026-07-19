@@ -1889,7 +1889,7 @@ where
     .bind(now)
     .bind(now)
     .bind(input.published_at)
-    .bind(input.summary.clone())
+    .bind(input.summary.as_deref())
     .fetch_one(&mut *conn)
     .await
     .map_err(|e| match e {

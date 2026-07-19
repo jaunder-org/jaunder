@@ -105,14 +105,14 @@ pub fn render_post_input(content: RenderedPostContent) -> CreatePostInput {
 pub fn seed_post_input(
     user_id: UserId,
     slug: Slug,
-    body: String,
+    body: PostBody,
     published: bool,
 ) -> CreatePostInput {
     render_post_input(RenderedPostContent {
         user_id,
         title: None,
         slug,
-        body: body.into(),
+        body,
         format: PostFormat::Markdown,
         published_at: published.then(Utc::now),
         summary: None,
@@ -399,17 +399,24 @@ impl From<PerformCreationError> for host::error::InternalError {
 }
 
 /// Generates a unique slug attempt using a suffix for attempts > 0.
-#[must_use]
-pub fn candidate_slug(slug_seed: &Slug, attempt: usize) -> String {
+///
+/// # Errors
+///
+/// Returns `Err(InvalidSlug)` if the suffixed candidate is not a valid `Slug`. By
+/// construction the base is truncated to keep the candidate within
+/// `MAX_SLUG_CHARS`, so this is not expected in practice; attempt 0 (the seed) is
+/// always valid.
+pub fn candidate_slug(slug_seed: &Slug, attempt: usize) -> Result<Slug, InvalidSlug> {
     if attempt == 0 {
-        return slug_seed.to_string(); // already ≤ MAX_SLUG_CHARS (a valid Slug)
+        return Ok(slug_seed.clone()); // already a valid Slug (≤ MAX_SLUG_CHARS)
     }
     // Keep the suffixed candidate within the slug length cap: a seed already at
     // the cap plus "-{n}" would otherwise exceed it and be rejected by from_str.
     let suffix = format!("-{}", attempt + 1);
     let max_base = common::slug::MAX_SLUG_CHARS.saturating_sub(suffix.chars().count());
     let base: String = slug_seed.chars().take(max_base).collect();
-    format!("{}{suffix}", base.trim_end_matches('-'))
+    // Single validity chokepoint: funnel the suffixed candidate through from_str.
+    format!("{}{suffix}", base.trim_end_matches('-')).parse()
 }
 
 /// Raw, front-end-supplied inputs to [`perform_post_creation`].
@@ -489,10 +496,8 @@ pub async fn perform_post_creation(
     };
 
     for attempt in 0..max_attempts {
-        let slug_string = candidate_slug(&slug_seed, attempt);
-        let slug = slug_string
-            .parse::<Slug>()
-            .map_err(PerformCreationError::InvalidSlug)?;
+        let slug =
+            candidate_slug(&slug_seed, attempt).map_err(PerformCreationError::InvalidSlug)?;
 
         match create_rendered_post(
             storage,
@@ -771,24 +776,24 @@ mod tests {
         // be rejected by from_str; candidate_slug truncates the base to fit. The
         // seed is a valid Slug, so it is by construction ≤ MAX_SLUG_CHARS.
         let seed: Slug = "a".repeat(MAX_SLUG_CHARS).parse().unwrap();
-        let c = candidate_slug(&seed, 1);
+        // `unwrap` is itself the validity check: candidate_slug parses internally,
+        // so a candidate exceeding the cap would fail here.
+        let c = candidate_slug(&seed, 1).unwrap();
         assert!(c.chars().count() <= MAX_SLUG_CHARS);
         assert!(c.ends_with("-2"));
-        assert!(c.parse::<Slug>().is_ok());
 
         // Truncation that would land on a '-' trims it so no "--" boundary forms:
         // an at-cap seed whose 78th char (the base cutoff for a "-2" suffix) is '-'.
         let seed2: Slug = format!("{}-{}", "a".repeat(77), "b".repeat(2))
             .parse()
             .unwrap();
-        let c2 = candidate_slug(&seed2, 1);
+        let c2 = candidate_slug(&seed2, 1).unwrap();
         assert!(c2.chars().count() <= MAX_SLUG_CHARS);
         assert!(!c2.contains("--"));
-        assert!(c2.parse::<Slug>().is_ok());
 
         // attempt 0 returns the seed unchanged.
         let hello: Slug = "hello".parse().unwrap();
-        assert_eq!(candidate_slug(&hello, 0), "hello");
+        assert_eq!(candidate_slug(&hello, 0).unwrap().as_ref(), "hello");
     }
 
     #[apply(backends)]

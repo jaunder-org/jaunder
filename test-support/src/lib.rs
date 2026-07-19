@@ -82,7 +82,7 @@ pub async fn seed_posts_for_user(
         inputs.push(seed_post_input(
             user.user_id,
             slug,
-            seed_body(prefix, i),
+            seed_body(prefix, i).into(),
             published,
         ));
     }
