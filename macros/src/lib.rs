@@ -6,6 +6,7 @@ use proc_macro::TokenStream;
 use syn::{parse_macro_input, Data, DeriveInput, Fields};
 
 mod id_newtype;
+mod num_newtype;
 mod str_newtype;
 
 /// Marks a **client-only reactive helper**: code that runs only in the browser (a
@@ -194,6 +195,49 @@ pub fn id_newtype_derive(item: TokenStream) -> TokenStream {
     id_newtype::expand(&input).into()
 }
 
+/// Derives the ADR-0063 **numeric-value trailer** for a `struct X(I)` over an integer `I`
+/// with a declarative bound. Unlike `StrNewtype` (whose `FromStr` is hand-written) and
+/// `IdNewtype` (which enforces no value invariant), a numeric bound is declarative, so this
+/// derive *generates* the whole trailer from `#[num_newtype(...)]`: a self-contained error
+/// type, `get()`, a validating `FromStr`, `Display`, an optional compile-checked `Default`,
+/// and a validating transparent-integer serde bridge (out-of-range rejected on the wire).
+/// The std `#[derive]`s (`Clone`/`Copy`/`Debug`/`PartialEq`/`Eq`/`Hash`/`Ord`) stay in the
+/// user's list.
+///
+/// Options: `inner = <ty>` (**required**, the wrapped integer type; the tuple field must be
+/// exactly this type), `min` / `max` (inclusive bounds, each optional — the check is emitted
+/// only for a declared side), `default = <int>` (generates a `Default` guarded so an
+/// out-of-range default is a compile error), and `error = "…"` (overrides the generated
+/// `Display` message).
+///
+/// ```
+/// use macros::NumNewtype;
+/// use std::str::FromStr;
+/// #[derive(Clone, Copy, Debug, PartialEq, Eq, NumNewtype)]
+/// #[num_newtype(inner = u32, min = 1, default = 20)]
+/// struct MinItems(u32);
+///
+/// assert_eq!("7".parse::<MinItems>().unwrap().get(), 7);
+/// assert!("0".parse::<MinItems>().is_err());          // below `min`
+/// assert_eq!(MinItems::default().get(), 20);          // compile-checked default
+/// assert_eq!(serde_json::to_string(&MinItems::default()).unwrap(), "20"); // bare integer
+/// assert!(serde_json::from_str::<MinItems>("0").is_err());                // wire rejection
+/// ```
+///
+/// Applying the derive to anything but a single-field tuple struct is a compile error:
+///
+/// ```compile_fail
+/// use macros::NumNewtype;
+/// #[derive(NumNewtype)]
+/// #[num_newtype(inner = u32)]
+/// struct NotATuple { n: u32 }
+/// ```
+#[proc_macro_derive(NumNewtype, attributes(num_newtype))]
+pub fn num_newtype_derive(item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as DeriveInput);
+    num_newtype::expand(&input).into()
+}
+
 /// Validates that `input` is a **non-generic** single-field tuple struct (`struct X(T)`) —
 /// the shape both newtype derives require — returning a spanned error (rendered as
 /// `compile_error!`) otherwise. `macro_name`/`example` shape the diagnostic. Generics are
@@ -357,5 +401,118 @@ mod tests {
         assert!(id_newtype::expand(&input)
             .to_string()
             .contains("compile_error"));
+    }
+
+    #[test]
+    fn num_newtype_wrong_shape_emits_compile_error() {
+        let input: DeriveInput = parse_quote! {
+            #[num_newtype(inner = u32)]
+            struct X { a: u32 }
+        };
+        assert!(num_newtype::expand(&input)
+            .to_string()
+            .contains("compile_error"));
+    }
+
+    #[test]
+    fn num_newtype_missing_inner_emits_compile_error() {
+        let input: DeriveInput = parse_quote! {
+            #[num_newtype(min = 1)]
+            struct X(u32);
+        };
+        assert!(num_newtype::expand(&input)
+            .to_string()
+            .contains("compile_error"));
+    }
+
+    #[test]
+    fn num_newtype_inner_type_mismatch_emits_compile_error() {
+        // Field is `u32` but `inner = i64` — the declared inner disagrees with the field.
+        let input: DeriveInput = parse_quote! {
+            #[num_newtype(inner = i64, min = 1)]
+            struct X(u32);
+        };
+        assert!(num_newtype::expand(&input)
+            .to_string()
+            .contains("compile_error"));
+    }
+
+    #[test]
+    fn num_newtype_unknown_option_emits_compile_error() {
+        let input: DeriveInput = parse_quote! {
+            #[num_newtype(inner = u32, bogus = 1)]
+            struct X(u32);
+        };
+        assert!(num_newtype::expand(&input)
+            .to_string()
+            .contains("compile_error"));
+    }
+
+    #[test]
+    fn num_newtype_min_max_default_emit_full_trailer() {
+        let input: DeriveInput = parse_quote! {
+            #[num_newtype(inner = u32, min = 1, max = 100, default = 20)]
+            struct X(u32);
+        };
+        let out = num_newtype::expand(&input).to_string();
+        assert!(!out.contains("compile_error"));
+        assert!(out.contains("FromStr"));
+        assert!(out.contains("Default"));
+        assert!(out.contains("Serialize"));
+        assert!(out.contains("Deserialize"));
+        // Both bound checks present — `v < min` and `v > max` (the `v` prefix is unique to
+        // the generated checks; a bare `> ` also occurs in generics).
+        assert!(out.contains("v < 1"));
+        assert!(out.contains("v > 100"));
+    }
+
+    #[test]
+    fn num_newtype_min_only_omits_max_check_and_default() {
+        let input: DeriveInput = parse_quote! {
+            #[num_newtype(inner = usize, min = 1)]
+            struct X(usize);
+        };
+        let out = num_newtype::expand(&input).to_string();
+        assert!(!out.contains("compile_error"));
+        assert!(out.contains("v < 1"));
+        // No `max` side (`v > `), no `default` impl.
+        assert!(!out.contains("v > "));
+        assert!(!out.contains("impl :: core :: default :: Default"));
+    }
+
+    #[test]
+    fn num_newtype_error_message_overrides_generated() {
+        let input: DeriveInput = parse_quote! {
+            #[num_newtype(inner = u32, min = 1, error = "must be a whole number of at least 1")]
+            struct X(u32);
+        };
+        let out = num_newtype::expand(&input).to_string();
+        assert!(out.contains("must be a whole number of at least 1"));
+    }
+
+    #[test]
+    fn num_newtype_max_only_emits_max_check_and_at_most_message() {
+        let input: DeriveInput = parse_quote! {
+            #[num_newtype(inner = u32, max = 100)]
+            struct X(u32);
+        };
+        let out = num_newtype::expand(&input).to_string();
+        assert!(!out.contains("compile_error"));
+        assert!(out.contains("v > 100"));
+        assert!(!out.contains("v < ")); // no `min` side
+        assert!(out.contains("at most 100"));
+    }
+
+    #[test]
+    fn num_newtype_no_bounds_generates_valid_integer_message() {
+        let input: DeriveInput = parse_quote! {
+            #[num_newtype(inner = u32)]
+            struct X(u32);
+        };
+        let out = num_newtype::expand(&input).to_string();
+        assert!(!out.contains("compile_error"));
+        assert!(out.contains("a valid integer"));
+        assert!(!out.contains("v < "));
+        assert!(!out.contains("v > "));
     }
 }
