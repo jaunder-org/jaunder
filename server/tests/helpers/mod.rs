@@ -33,8 +33,8 @@ pub fn ensure_server_fns_registered() {
         server_fn::axum::register_explicit::<web::backup::CurrentUserIsOperator>();
         server_fn::axum::register_explicit::<web::backup::GetBackupSettings>();
         server_fn::axum::register_explicit::<web::backup::UpdateBackupSettings>();
-        server_fn::axum::register_explicit::<web::auth::GetRegistrationPolicy>();
-        server_fn::axum::register_explicit::<web::auth::Register>();
+        server_fn::axum::register_explicit::<web::registration::GetRegistrationPolicy>();
+        server_fn::axum::register_explicit::<web::registration::Register>();
         server_fn::axum::register_explicit::<web::auth::Login>();
         server_fn::axum::register_explicit::<web::auth::Logout>();
         server_fn::axum::register_explicit::<web::email::RequestEmailVerification>();

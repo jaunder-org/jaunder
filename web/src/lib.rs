@@ -34,6 +34,7 @@ pub mod password_reset;
 pub mod posts;
 pub mod profile;
 pub mod reactive;
+pub mod registration;
 pub mod render;
 pub mod sessions;
 pub mod site;

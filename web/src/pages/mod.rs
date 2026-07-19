@@ -1,4 +1,3 @@
-pub mod auth;
 pub mod cockpit;
 pub mod email;
 pub mod home;
@@ -26,8 +25,8 @@ pub use crate::render::DEFAULT_THEME;
 const THEME_KEY: &str = "jaunder_theme";
 
 use crate::audiences::AudiencesPage;
+use crate::auth::{LoginPage, LogoutPage};
 use crate::backup::{BackupBanner, BackupSettingsPage};
-use crate::pages::auth::{LoginPage, LogoutPage, RegisterPage};
 use crate::pages::cockpit::CockpitPage;
 use crate::pages::email::{EmailPage, VerifyEmailPage};
 use crate::pages::home::HomePage;
@@ -41,6 +40,7 @@ use crate::pages::posts::{
 use crate::pages::profile::ProfilePage;
 use crate::pages::sessions::SessionsPage;
 use crate::pages::site::SiteSettingsPage;
+use crate::registration::RegisterPage;
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, Title};
 use leptos_router::{
