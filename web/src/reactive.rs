@@ -195,6 +195,11 @@ pub enum ListState {
 ///     struct AudienceList
 /// }
 /// ```
+// Consumers of this macro are wasm-only `component.rs` files (the generated context-scope
+// newtype is browser-bound reactive UI, ADR-0070); the only host build that references it is
+// this module's own `#[cfg(test)]` coverage below. Gating the definition to those targets
+// keeps the plain host-lib build from flagging it as an unused macro.
+#[cfg(any(target_arch = "wasm32", test))]
 macro_rules! invalidator_scope {
     ($(#[$meta:meta])* $vis:vis struct $name:ident) => {
         $(#[$meta])*
@@ -209,6 +214,9 @@ macro_rules! invalidator_scope {
         }
     };
 }
+// The re-export is consumed only by the wasm-only `component.rs` files; this module's own
+// `#[cfg(test)]` use reaches the definition by textual scope, not through the re-export.
+#[cfg(target_arch = "wasm32")]
 pub(crate) use invalidator_scope;
 
 #[cfg(test)]
