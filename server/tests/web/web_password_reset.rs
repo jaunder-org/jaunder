@@ -292,3 +292,47 @@ async fn confirm_password_reset_with_used_token_returns_error(#[case] backend: B
     .await;
     assert_ne!(status, StatusCode::OK);
 }
+
+// A too-short `new_password` is rejected at the wire (the `ProfferedPassword` arg
+// fails to deserialize via `validate_password_shape`) before the reset is applied —
+// the parallel of `register_short_password_returns_error`, for the reset endpoint.
+#[apply(backends)]
+#[tokio::test]
+async fn confirm_password_reset_with_short_password_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let mailer = Arc::new(CapturingMailSender::new());
+
+    let (user_id, _) = create_user_with_verified_email(&state, "frank", "frank@example.com").await;
+
+    let expires_at = Utc::now() + chrono::Duration::hours(1);
+    let raw_token = state
+        .password_resets
+        .create_password_reset(user_id, expires_at)
+        .await
+        .unwrap();
+
+    let body = format!("token={raw_token}&new_password=short");
+    let (status, _body) = post_form_with_mailer(
+        Arc::clone(&state),
+        mailer.clone() as Arc<dyn common::mailer::MailSender>,
+        "/api/confirm_password_reset",
+        body,
+        None,
+    )
+    .await;
+
+    assert_ne!(status, StatusCode::OK);
+
+    // The reset must not have been applied: the original password still authenticates.
+    let auth = state
+        .users
+        .authenticate(
+            &"frank".parse::<Username>().unwrap(),
+            &"password123".parse().unwrap(),
+        )
+        .await;
+    assert!(
+        auth.is_ok(),
+        "a too-short new password must be rejected without applying the reset"
+    );
+}
