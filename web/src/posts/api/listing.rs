@@ -13,14 +13,15 @@ use common::{
 };
 
 use crate::error::WebResult;
-use crate::posts::deserialize_rendered_html;
 use crate::tags::TagSummary;
+
+use super::deserialize_rendered_html;
 
 #[cfg(feature = "server")]
 use {
-    super::server::timeline_post_summary,
     crate::auth::require_auth,
     crate::error::{InternalError, InternalResult},
+    crate::posts::server::timeline_post_summary,
     crate::viewer::viewer_identity,
     common::ids::UserId,
     common::visibility::{viewer_user_id, ViewerIdentity},
