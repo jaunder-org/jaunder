@@ -516,4 +516,123 @@ mod tests {
         assert!(!out.contains("v < "));
         assert!(!out.contains("v > "));
     }
+
+    /// True iff the emitted stream carries the three sqlx bridge impls.
+    fn has_sqlx_bridge(out: &str) -> bool {
+        out.contains("sqlx :: Type")
+            && out.contains("sqlx :: Encode")
+            && out.contains("sqlx :: Decode")
+    }
+
+    #[test]
+    fn str_newtype_default_emits_sqlx_bridge() {
+        // Default (non-secret) type: the validating sqlx bridge is on, feature-gated,
+        // and routes Decode through FromStr.
+        let input: DeriveInput = parse_quote! {
+            struct X(String);
+        };
+        let out = str_newtype::expand(&input).to_string();
+        assert!(has_sqlx_bridge(&out));
+        assert!(out.contains("cfg (feature = \"sqlx\")"));
+        assert!(out.contains("from_str"));
+    }
+
+    #[test]
+    fn str_newtype_no_sqlx_omits_the_bridge() {
+        // `no_sqlx` opts a non-secret must-not-store type (RawToken) out of the bridge.
+        let input: DeriveInput = parse_quote! {
+            #[str_newtype(no_sqlx)]
+            struct X(String);
+        };
+        let out = str_newtype::expand(&input).to_string();
+        assert!(!has_sqlx_bridge(&out));
+        // The rest of the default trailer is still there.
+        assert!(out.contains("Serialize"));
+    }
+
+    #[test]
+    fn str_newtype_secret_omits_the_bridge() {
+        // A secret is bridge-less by default (must not be storable).
+        let input: DeriveInput = parse_quote! {
+            #[str_newtype(secret)]
+            struct X(String);
+        };
+        let out = str_newtype::expand(&input).to_string();
+        assert!(!has_sqlx_bridge(&out));
+    }
+
+    #[test]
+    fn str_newtype_secret_sqlx_readds_the_bridge() {
+        // `secret, sqlx`: the redacting trailer plus the validating sqlx bridge
+        // (InviteCode — a stored secret).
+        let input: DeriveInput = parse_quote! {
+            #[str_newtype(secret, sqlx)]
+            struct X(String);
+        };
+        let out = str_newtype::expand(&input).to_string();
+        assert!(out.contains("redacted"));
+        assert!(has_sqlx_bridge(&out));
+        assert!(out.contains("from_str"));
+    }
+
+    #[test]
+    fn str_newtype_infallible_emits_the_infallible_sqlx_bridge() {
+        // Infallible types are stored: the bridge is on by default and Decode wraps via
+        // From<String> (no FromStr).
+        let input: DeriveInput = parse_quote! {
+            #[str_newtype(infallible)]
+            struct X(String);
+        };
+        let out = str_newtype::expand(&input).to_string();
+        assert!(has_sqlx_bridge(&out));
+        assert!(!out.contains("from_str"));
+    }
+
+    #[test]
+    fn str_newtype_infallible_no_sqlx_omits_the_bridge() {
+        let input: DeriveInput = parse_quote! {
+            #[str_newtype(infallible, no_sqlx)]
+            struct X(String);
+        };
+        let out = str_newtype::expand(&input).to_string();
+        assert!(!has_sqlx_bridge(&out));
+    }
+
+    #[test]
+    fn str_newtype_no_sqlx_with_secret_emits_compile_error() {
+        // A secret is already bridge-less — `no_sqlx` is redundant/invalid.
+        let input: DeriveInput = parse_quote! {
+            #[str_newtype(secret, no_sqlx)]
+            struct X(String);
+        };
+        assert!(str_newtype::expand(&input)
+            .to_string()
+            .contains("compile_error"));
+    }
+
+    #[test]
+    fn str_newtype_no_sqlx_with_sqlx_emits_compile_error() {
+        // `sqlx, no_sqlx` (no `secret`, so the `no_sqlx && secret` guard is skipped and
+        // the `no_sqlx && sqlx` exclusivity arm fires).
+        let input: DeriveInput = parse_quote! {
+            #[str_newtype(sqlx, no_sqlx)]
+            struct X(String);
+        };
+        assert!(str_newtype::expand(&input)
+            .to_string()
+            .contains("compile_error"));
+    }
+
+    #[test]
+    fn str_newtype_bare_sqlx_without_secret_emits_compile_error() {
+        // Bare `sqlx` is only meaningful on a secret; non-secret types get the bridge
+        // by default.
+        let input: DeriveInput = parse_quote! {
+            #[str_newtype(sqlx)]
+            struct X(String);
+        };
+        assert!(str_newtype::expand(&input)
+            .to_string()
+            .contains("compile_error"));
+    }
 }

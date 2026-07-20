@@ -80,31 +80,30 @@ where
     DB: Backend,
     crate::helpers::InviteRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    // `InviteCode` binds/decodes as itself via the sqlx bridge (#438), which delegates
+    // to `String`; these bounds make that bridge available on the generic backend.
+    String: sqlx::Type<DB>,
+    for<'q> String: sqlx::Encode<'q, DB>,
     for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     async fn create_invite(&self, expires_at: DateTime<Utc>) -> sqlx::Result<InviteCode> {
-        let code = host::token::generate();
+        // Mint a typed `InviteCode` up front (infallible trusted door) and bind it
+        // directly, so the code is a domain value end-to-end with no raw-`String` bind
+        // and no fallible re-parse on the return (#438).
+        let code = host::invite::generate();
         let now = Utc::now();
 
         sqlx::query("INSERT INTO invites (code, created_at, expires_at) VALUES ($1, $2, $3)")
-            .bind(code.as_ref())
+            .bind(&code)
             .bind(now)
             .bind(expires_at)
             .execute(&self.pool)
             .await?;
 
-        // The freshly generated token is canonical base64url, so this cannot fail; the
-        // map keeps `expect_used` clean rather than relying on that. `InviteCode` has no
-        // `TryFrom<RawToken>`, so reach it through its validating `FromStr`.
-        // cov:ignore-start unreachable: a freshly generated token always parses
-        code.as_ref()
-            .parse::<InviteCode>()
-            .map_err(|e| sqlx::Error::Decode(Box::new(e)))
-        // cov:ignore-stop
+        Ok(code)
     }
 
     async fn use_invite(&self, code: &InviteCode, user_id: UserId) -> Result<(), UseInviteError> {
@@ -121,7 +120,7 @@ where
         )
         .bind(now)
         .bind(i64::from(user_id))
-        .bind(code.as_ref())
+        .bind(code)
         .bind(now)
         .fetch_optional(&self.pool)
         .await
@@ -136,14 +135,13 @@ where
             "SELECT code, created_at, expires_at, used_at, used_by \
              FROM invites WHERE code = $1",
         )
-        .bind(code.as_ref())
+        .bind(code)
         .fetch_optional(&self.pool)
         .await
         .map_err(|_| UseInviteError::NotFound)?
         .ok_or(UseInviteError::NotFound)?;
 
-        let record =
-            crate::helpers::invite_record_from_row(row).map_err(|_| UseInviteError::NotFound)?;
+        let record = crate::helpers::invite_record_from_row(row);
         if record.used_at.is_some() {
             return Err(UseInviteError::AlreadyUsed);
         }
@@ -158,19 +156,84 @@ where
         .fetch_all(&self.pool)
         .await?;
 
-        rows.into_iter()
+        // A corrupt/migrated `code` column is rejected as a decode error by the
+        // `query_as` above (the sqlx bridge validates through `FromStr`), so building
+        // the records here is infallible.
+        Ok(rows
+            .into_iter()
             .map(crate::helpers::invite_record_from_row)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| sqlx::Error::Decode(Box::new(e))) // cov:ignore unreachable: stored codes are canonical (data-integrity guard)
+            .collect())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, Backend, TestEnv};
+    use crate::test_support::{backends, parse_invite_code, Backend, CloseablePool, TestEnv};
     use rstest::*;
     use rstest_reuse::*;
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn create_invite_round_trips_the_code(#[case] backend: Backend) {
+        // Keep the whole `TestEnv` bound: dropping `base` unlinks the SQLite file
+        // (ADR-0053 TempDir hazard).
+        let env = backend.setup().await;
+        let expires_at = Utc::now() + chrono::Duration::days(7);
+
+        // `create_invite` binds a typed `InviteCode`; `list_invites` decodes the
+        // `code` column straight back into `InviteCode` — exercising both bridge
+        // directions.
+        let code = env.state.invites.create_invite(expires_at).await.unwrap();
+        let invites = env.state.invites.list_invites().await.unwrap();
+
+        assert_eq!(invites.len(), 1);
+        assert_eq!(invites[0].code.as_ref(), code.as_ref());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn list_invites_rejects_a_malformed_code_column(#[case] backend: Backend) {
+        let TestEnv { state, base } = backend.setup().await;
+        let now = Utc::now();
+        let expires_at = now + chrono::Duration::days(7);
+
+        // Seed a row whose `code` column holds a value `InviteCode::from_str`
+        // rejects (a space is not a base64url character), binding it as a raw `&str`
+        // so the bad value actually lands in the column (the typed bind could not).
+        let sql = "INSERT INTO invites (code, created_at, expires_at) VALUES ($1, $2, $3)";
+        match base.pool() {
+            CloseablePool::Sqlite(pool) => {
+                sqlx::query(sql)
+                    .bind("bad code")
+                    .bind(now)
+                    .bind(expires_at)
+                    .execute(pool)
+                    .await
+                    .unwrap();
+            }
+            CloseablePool::Postgres(pool) => {
+                sqlx::query(sql)
+                    .bind("bad code")
+                    .bind(now)
+                    .bind(expires_at)
+                    .execute(pool)
+                    .await
+                    .unwrap();
+            }
+        }
+
+        // The read decodes the `code` column into `InviteCode` via the sqlx bridge,
+        // which validates through `FromStr`; the malformed value surfaces as a
+        // column-decode error rather than being silently admitted (covers the bridge's
+        // `Decode` error arm). `query_as` reports a failed column decode as
+        // `ColumnDecode`, not the hand-rolled `Decode` the old re-parse produced.
+        let err = state.invites.list_invites().await.unwrap_err();
+        assert!(
+            matches!(err, sqlx::Error::ColumnDecode { .. }),
+            "expected a column-decode error, got: {err:?}"
+        );
+    }
 
     #[apply(backends)]
     #[tokio::test]
@@ -187,7 +250,7 @@ mod tests {
     async fn use_invite_with_closed_pool_returns_error(#[case] backend: Backend) {
         let TestEnv { state, base } = backend.setup().await;
         base.close_pool().await;
-        let code = "code".parse::<InviteCode>().unwrap();
+        let code = parse_invite_code("code");
         let result = state.invites.use_invite(&code, UserId::from(1)).await;
         assert!(matches!(result, Err(UseInviteError::NotFound)));
     }

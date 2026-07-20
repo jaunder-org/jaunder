@@ -15,6 +15,7 @@ macros = { path = "../macros" }
 orgize.workspace = true
 pulldown-cmark.workspace = true
 serde = { workspace = true, features = ["derive"] }
+sqlx = { workspace = true, optional = true }
 strum.workspace = true
 thiserror.workspace = true
 rss = { version = "2", default-features = false, features = ["builders", "atom"] }
@@ -29,6 +30,10 @@ unicode-segmentation = "1"
 getrandom = { version = "0.2", features = ["js"] }
 
 [features]
+# Optional, host-only sqlx bridge for `#[derive(StrNewtype)]` types (Type/Encode/
+# Decode). Off by default and never enabled for wasm — the CSR/wasm build pulls
+# `common` without it, so `sqlx` is never in the wasm dependency graph.
+sqlx = ["dep:sqlx"]
 test-utils = ["cheap-kdf"]
 cheap-kdf = []
 # Compiles `common::test_support` (shared test fixtures) for downstream test crates;

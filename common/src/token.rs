@@ -72,7 +72,11 @@ pub fn validate_shape(s: &str) -> Result<(), InvalidTokenShape> {
 /// let hash = common::token::TokenHash::from_str("abc").unwrap();
 /// let _ = raw == hash; // no cross-type PartialEq
 /// ```
+// `no_sqlx`: a `RawToken` must be hashed to a `TokenHash` before it touches the DB,
+// so it deliberately gets no `sqlx::Encode` — `.bind(raw_token)` is a compile error
+// (#438). Its sibling `TokenHash` carries the default bridge.
 #[derive(Clone, StrNewtype)]
+#[str_newtype(no_sqlx)]
 pub struct RawToken(String);
 
 impl fmt::Debug for RawToken {

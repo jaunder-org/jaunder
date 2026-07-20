@@ -29,7 +29,7 @@ impl SessionDialect for Postgres {
              JOIN users u ON updated.user_id = u.user_id",
         )
         .bind(now)
-        .bind(token_hash.as_ref())
+        .bind(token_hash)
         .fetch_optional(pool)
         .await
     }

@@ -10,13 +10,14 @@ use crate::{
     SessionRecord, UserRecord,
 };
 use common::display_name::DisplayName;
+use common::email::Email;
 use common::ids::{PostId, TagId, UserId};
 use common::media::{ContentHash, Filename};
 use common::post_body::PostBody;
 use common::post_title::PostTitle;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
-use common::token::{InvalidTokenShape, TokenHash};
+use common::token::TokenHash;
 use common::username::Username;
 use host::invite::InviteCode;
 
@@ -26,12 +27,12 @@ use host::invite::InviteCode;
 
 pub(crate) type UserRecordParts = (
     i64,
-    String,
-    Option<String>,
+    Username,
+    Option<DisplayName>,
     Option<String>,
     DateTime<Utc>,
     Option<DateTime<Utc>>,
-    Option<String>,
+    Option<Email>,
     bool,
     bool,
 );
@@ -48,20 +49,12 @@ pub(crate) fn build_user_record(
         email_verified,
         is_operator,
     ): UserRecordParts,
-) -> sqlx::Result<UserRecord> {
-    let username = username
-        .parse()
-        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-    let display_name = display_name
-        .map(|s| {
-            s.parse::<DisplayName>()
-                .map_err(|e| sqlx::Error::Decode(Box::new(e)))
-        })
-        .transpose()?;
-    let email = email
-        .map(|s| s.parse().map_err(|e| sqlx::Error::Decode(Box::new(e))))
-        .transpose()?;
-    Ok(UserRecord {
+) -> UserRecord {
+    // The `username`, `display_name`, and `email` columns decode straight into
+    // their domain newtypes via the sqlx bridge (#438), which validates through
+    // `FromStr`, so a corrupt/migrated value is rejected as a column-decode error
+    // before we ever get here — this build step is now infallible.
+    UserRecord {
         user_id: UserId::from(user_id),
         username,
         display_name,
@@ -71,7 +64,7 @@ pub(crate) fn build_user_record(
         email,
         email_verified,
         is_operator,
-    })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -79,26 +72,25 @@ pub(crate) fn build_user_record(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn build_session_record(
-    token_hash: String,
+    token_hash: TokenHash,
     user_id: i64,
-    username: &str,
+    username: Username,
     label: String,
     created_at: DateTime<Utc>,
     last_used_at: DateTime<Utc>,
-) -> sqlx::Result<SessionRecord> {
-    let username = username
-        .parse()
-        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-    Ok(SessionRecord {
-        // The `token_hash` column is written only by `create_session` (canonical
-        // base64url digest), so this is a trusted rebuild of our own stored value.
-        token_hash: TokenHash::from_digest(token_hash),
+) -> SessionRecord {
+    // The `token_hash` and `username` columns decode straight into their domain
+    // newtypes via the sqlx bridge (#438), which validates through `FromStr`, so a
+    // corrupt/migrated value is rejected as a column-decode error before we ever
+    // get here — this build step is now infallible.
+    SessionRecord {
+        token_hash,
         user_id: UserId::from(user_id),
         username,
         label,
         created_at,
         last_used_at,
-    })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -106,34 +98,39 @@ pub(crate) fn build_session_record(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn build_invite_record(
-    code: String,
+    code: InviteCode,
     created_at: DateTime<Utc>,
     expires_at: DateTime<Utc>,
     used_at: Option<DateTime<Utc>>,
     used_by: Option<i64>,
-) -> Result<InviteRecord, InvalidTokenShape> {
-    // The `code` column is written only by `create_invite` (canonical base64url), so a
-    // parse failure is a data-integrity condition; callers surface it as a storage error.
-    Ok(InviteRecord {
-        code: InviteCode::try_from(code)?,
+) -> InviteRecord {
+    // The `code` column decodes straight into `InviteCode` via the sqlx bridge (#438),
+    // which validates through `FromStr`, so a corrupt/migrated value is rejected as a
+    // decode error before we ever get here — this build step is now infallible.
+    InviteRecord {
+        code,
         created_at,
         expires_at,
         used_at,
         used_by: used_by.map(UserId::from),
-    })
+    }
 }
 
 // ---------------------------------------------------------------------------
 // PostRecord helpers
 // ---------------------------------------------------------------------------
 
+// `author_username`/`title`/`slug`/`body` decode straight into their domain
+// newtypes via the sqlx bridge (#438). `format` (a `PostFormat` enum) and
+// `rendered_html` (`RenderedHtml`, hand-rolled — #502) are not string newtypes,
+// so they stay `String` and keep their existing parse / `from_trusted` handling.
 pub(crate) type PostRecordParts = (
     i64,
     i64,
-    String,
-    Option<String>,
-    String,
-    String,
+    Username,
+    Option<PostTitle>,
+    Slug,
+    PostBody,
     String,
     String,
     DateTime<Utc>,
@@ -191,12 +188,12 @@ pub(crate) fn build_post_record(
         tags_json,
     ): PostRecordParts,
 ) -> sqlx::Result<PostRecord> {
-    let author_username = author_username
-        .parse::<Username>()
-        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-    let slug = slug
-        .parse::<Slug>()
-        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    // `author_username`, `title`, `slug`, and `body` already arrived as their
+    // domain newtypes — the sqlx bridge (#438) decoded each column (and, for the
+    // infallible `PostTitle`/`PostBody`, `From`-wrapped it, which also trims the
+    // title), so a corrupt/migrated `username`/`slug` value is rejected as a
+    // column-decode error before we get here. `format` (a `PostFormat` enum) and
+    // the JSON `tags` still parse here, so this step stays fallible.
     let format = format
         .parse::<PostFormat>()
         .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
@@ -207,12 +204,9 @@ pub(crate) fn build_post_record(
         post_id,
         user_id: UserId::from(user_id),
         author_username,
-        // `PostTitle::from` trims; stored titles are already trimmed at write, so this
-        // is a no-op that also defensively normalizes any out-of-band row. `PostBody`
-        // wraps verbatim.
-        title: title.map(PostTitle::from),
+        title,
         slug,
-        body: PostBody::from(body),
+        body,
         format,
         // Trusted rebuild: this column only ever holds prior `render()` output.
         rendered_html: RenderedHtml::from_trusted(rendered_html),
@@ -231,28 +225,35 @@ pub(crate) fn build_post_record(
 
 pub(crate) type UserRow = (
     i64,
-    String,
-    Option<String>,
+    Username,
+    Option<DisplayName>,
     Option<String>,
     DateTime<Utc>,
     Option<DateTime<Utc>>,
-    Option<String>,
+    Option<Email>,
     bool,
     bool,
 );
 
-pub(crate) fn user_record_from_row(row: UserRow) -> sqlx::Result<UserRecord> {
+pub(crate) fn user_record_from_row(row: UserRow) -> UserRecord {
     build_user_record(row)
 }
 
-pub(crate) type SessionRow = (String, i64, String, String, DateTime<Utc>, DateTime<Utc>);
+pub(crate) type SessionRow = (
+    TokenHash,
+    i64,
+    Username,
+    String,
+    DateTime<Utc>,
+    DateTime<Utc>,
+);
 
-pub(crate) fn session_record_from_row(row: SessionRow) -> sqlx::Result<SessionRecord> {
+pub(crate) fn session_record_from_row(row: SessionRow) -> SessionRecord {
     let (token_hash, user_id, username, label, created_at, last_used_at) = row;
     build_session_record(
         token_hash,
         user_id,
-        &username,
+        username,
         label,
         created_at,
         last_used_at,
@@ -260,25 +261,28 @@ pub(crate) fn session_record_from_row(row: SessionRow) -> sqlx::Result<SessionRe
 }
 
 pub(crate) type InviteRow = (
-    String,
+    InviteCode,
     DateTime<Utc>,
     DateTime<Utc>,
     Option<DateTime<Utc>>,
     Option<i64>,
 );
 
-pub(crate) fn invite_record_from_row(row: InviteRow) -> Result<InviteRecord, InvalidTokenShape> {
+pub(crate) fn invite_record_from_row(row: InviteRow) -> InviteRecord {
     let (code, created_at, expires_at, used_at, used_by) = row;
     build_invite_record(code, created_at, expires_at, used_at, used_by)
 }
 
+// Mirrors [`PostRecordParts`]: the `username`/`title`/`slug`/`body` columns
+// decode straight into their newtypes via the sqlx bridge (#438); `format` and
+// `rendered_html` stay `String` (see the `PostRecordParts` note).
 pub(crate) type PostRow = (
     i64,
     i64,
-    String,
-    Option<String>,
-    String,
-    String,
+    Username,
+    Option<PostTitle>,
+    Slug,
+    PostBody,
     String,
     String,
     DateTime<Utc>,
@@ -295,8 +299,8 @@ pub(crate) fn post_record_from_row(row: PostRow) -> sqlx::Result<PostRecord> {
 
 pub(crate) type MediaRow = (
     i64,
-    String,
-    String,
+    ContentHash,
+    Filename,
     String,
     String,
     i64,
@@ -306,20 +310,12 @@ pub(crate) type MediaRow = (
 
 pub(crate) fn media_record_from_row(row: MediaRow) -> sqlx::Result<MediaRecord> {
     let (user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at) = row;
+    // `sha256` and `filename` already arrived as their domain newtypes — the sqlx
+    // bridge (#438) decoded each column through its validating `FromStr`, so a
+    // corrupt or hand-edited value is rejected as a column-decode error before we
+    // get here (was a hand re-parse). `source` (a `MediaSource` enum) still parses
+    // here, so this step stays fallible.
     let source: MediaSource = source
-        .parse()
-        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-    // The `sha256` column is a canonical hex string, not a raw digest, so it goes
-    // through the validating parse (like `source` above); a corrupt or hand-edited
-    // value surfaces as a decode error rather than an invalid `ContentHash`.
-    let sha256: ContentHash = sha256
-        .parse()
-        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-    // The `filename` column is a canonical safe leaf (written through `Filename`'s
-    // sanitizing door on upload), so it goes through the validating parse (like
-    // `sha256` above); a corrupt or hand-edited value surfaces as a decode error
-    // rather than an un-sanitized `Filename`.
-    let filename: Filename = filename
         .parse()
         .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
     Ok(MediaRecord {
@@ -432,23 +428,28 @@ pub(crate) async fn verify_password(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::parse_invite_code;
     use chrono::Utc;
+    use common::test_support::{
+        parse_content_hash, parse_display_name, parse_email, parse_filename, parse_password,
+        parse_slug, parse_token_hash, parse_username,
+    };
 
     #[test]
     fn test_build_user_record() {
         let now = Utc::now();
         let parts: UserRecordParts = (
             1,
-            "alice".to_string(),
-            Some("Alice".to_string()),
+            parse_username("alice"),
+            Some(parse_display_name("Alice")),
             Some("Bio".to_string()),
             now,
             Some(now),
-            Some("alice@example.com".to_string()),
+            Some(parse_email("alice@example.com")),
             true,
             false,
         );
-        let record = build_user_record(parts).unwrap();
+        let record = build_user_record(parts);
         assert_eq!(record.user_id, UserId::from(1));
         assert_eq!(record.username, "alice");
         assert_eq!(record.email.unwrap(), "alice@example.com");
@@ -458,14 +459,13 @@ mod tests {
     fn test_build_session_record() {
         let now = Utc::now();
         let record = build_session_record(
-            "hash".to_string(),
+            parse_token_hash("hash"),
             1,
-            "alice",
+            parse_username("alice"),
             "label".to_string(),
             now,
             now,
-        )
-        .unwrap();
+        );
         assert_eq!(record.token_hash, "hash");
         assert_eq!(record.username, "alice");
     }
@@ -476,13 +476,12 @@ mod tests {
         let expires_at = created_at + chrono::Duration::days(7);
         let used_at = created_at + chrono::Duration::hours(1);
         let record = build_invite_record(
-            "invite-code".to_string(),
+            parse_invite_code("invite-code"),
             created_at,
             expires_at,
             Some(used_at),
             Some(7),
-        )
-        .unwrap();
+        );
 
         assert_eq!(record.code.as_ref(), "invite-code");
         assert_eq!(record.created_at, created_at);
@@ -497,10 +496,10 @@ mod tests {
         let record = build_post_record((
             10,
             20,
-            "alice".to_string(),
-            Some("Hello".to_string()),
-            "hello-world".to_string(),
-            "Body".to_string(),
+            parse_username("alice"),
+            Some("Hello".into()),
+            parse_slug("hello-world"),
+            "Body".into(),
             "markdown".to_string(),
             "<p>Body</p>".to_string(),
             now,
@@ -522,29 +521,11 @@ mod tests {
         assert!(record.tags.is_empty());
     }
 
-    #[test]
-    fn test_build_post_record_rejects_invalid_slug() {
-        let now = Utc::now();
-        let err = build_post_record((
-            10,
-            20,
-            "alice".to_string(),
-            Some("Hello".to_string()),
-            "not a slug".to_string(),
-            "Body".to_string(),
-            "markdown".to_string(),
-            "<p>Body</p>".to_string(),
-            now,
-            now,
-            None,
-            None,
-            None,
-            "[]".to_string(),
-        ))
-        .unwrap_err();
-
-        assert!(matches!(err, sqlx::Error::Decode(_)));
-    }
+    // `build_post_record` no longer parses `username`/`slug`: they decode straight
+    // into `Username`/`Slug` via the sqlx bridge (#438), so a malformed stored
+    // value is rejected as a `ColumnDecode` error at the query boundary (covered by
+    // `posts.rs`'s decode-error test), not here. `format` and the JSON `tags` still
+    // parse in `build_post_record`, so those rejections stay below.
 
     #[test]
     fn test_build_post_record_rejects_invalid_format() {
@@ -552,35 +533,11 @@ mod tests {
         let err = build_post_record((
             10,
             20,
-            "alice".to_string(),
-            Some("Hello".to_string()),
-            "hello-world".to_string(),
-            "Body".to_string(),
+            parse_username("alice"),
+            Some("Hello".into()),
+            parse_slug("hello-world"),
+            "Body".into(),
             "invalid_format".to_string(),
-            "<p>Body</p>".to_string(),
-            now,
-            now,
-            None,
-            None,
-            None,
-            "[]".to_string(),
-        ))
-        .unwrap_err();
-
-        assert!(matches!(err, sqlx::Error::Decode(_)));
-    }
-
-    #[test]
-    fn test_build_post_record_rejects_invalid_username() {
-        let now = Utc::now();
-        let err = build_post_record((
-            10,
-            20,
-            "Invalid Username".to_string(),
-            Some("Hello".to_string()),
-            "hello-world".to_string(),
-            "Body".to_string(),
-            "markdown".to_string(),
             "<p>Body</p>".to_string(),
             now,
             now,
@@ -597,13 +554,13 @@ mod tests {
     // guard:no-backend — password hashing/verification; no database
     #[tokio::test]
     async fn test_hash_and_verify_password() {
-        let password: common::password::Password = "password123".parse().unwrap();
+        let password: common::password::Password = parse_password("password123");
         let hash = hash_password(password.clone()).await.unwrap();
 
         assert!(verify_password(password.clone(), hash.clone())
             .await
             .unwrap());
-        assert!(!verify_password("other-pass".parse().unwrap(), hash)
+        assert!(!verify_password(parse_password("other-pass"), hash)
             .await
             .unwrap());
     }
@@ -611,60 +568,22 @@ mod tests {
     // guard:no-backend — password hashing/verification; no database
     #[tokio::test]
     async fn test_verify_password_rejects_invalid_hash() {
-        let err = verify_password("password123".parse().unwrap(), "not-a-hash".to_string())
+        let err = verify_password(parse_password("password123"), "not-a-hash".to_string())
             .await
             .unwrap_err();
 
         assert_eq!(err.kind(), io::ErrorKind::Other);
     }
 
-    #[test]
-    fn build_user_record_rejects_invalid_username() {
-        let parts: UserRecordParts = (
-            1,
-            "Invalid Username".to_string(),
-            None,
-            None,
-            Utc::now(),
-            None,
-            None,
-            false,
-            false,
-        );
-        let err = build_user_record(parts).unwrap_err();
-        assert!(matches!(err, sqlx::Error::Decode(_)));
-    }
+    // `build_user_record` no longer parses: `username`/`display_name`/`email`
+    // decode straight into their newtypes via the sqlx bridge (#438), so a
+    // malformed stored value is rejected as a `ColumnDecode` error at the query
+    // boundary (covered by `users.rs`'s decode-error tests), not here.
 
-    #[test]
-    fn build_user_record_rejects_invalid_email() {
-        let parts: UserRecordParts = (
-            1,
-            "alice".to_string(),
-            None,
-            None,
-            Utc::now(),
-            None,
-            Some("not-an-email".to_string()),
-            false,
-            false,
-        );
-        let err = build_user_record(parts).unwrap_err();
-        assert!(matches!(err, sqlx::Error::Decode(_)));
-    }
-
-    #[test]
-    fn build_session_record_rejects_invalid_username() {
-        let err = build_session_record(
-            "hash".to_string(),
-            1,
-            "Invalid Username",
-            "label".to_string(),
-            Utc::now(),
-            Utc::now(),
-        )
-        .unwrap_err();
-        assert!(matches!(err, sqlx::Error::Decode(_)));
-    }
+    // `build_session_record` no longer parses: `token_hash`/`username` decode
+    // straight into their newtypes via the sqlx bridge (#438), so a malformed
+    // stored value is rejected as a `ColumnDecode` error at the query boundary
+    // (covered by `sessions.rs`'s decode-error test), not here.
 
     #[test]
     fn build_post_record_with_valid_tags_json_parses_tags() {
@@ -673,10 +592,10 @@ mod tests {
         let record = build_post_record((
             10,
             20,
-            "alice".to_string(),
+            parse_username("alice"),
             None,
-            "hello-world".to_string(),
-            "Body".to_string(),
+            parse_slug("hello-world"),
+            "Body".into(),
             "markdown".to_string(),
             "<p>Body</p>".to_string(),
             now,
@@ -699,10 +618,10 @@ mod tests {
         let err = build_post_record((
             10,
             20,
-            "alice".to_string(),
+            parse_username("alice"),
             None,
-            "hello-world".to_string(),
-            "Body".to_string(),
+            parse_slug("hello-world"),
+            "Body".into(),
             "markdown".to_string(),
             "<p>Body</p>".to_string(),
             now,
@@ -724,10 +643,10 @@ mod tests {
         let err = build_post_record((
             10,
             20,
-            "alice".to_string(),
+            parse_username("alice"),
             None,
-            "hello-world".to_string(),
-            "Body".to_string(),
+            parse_slug("hello-world"),
+            "Body".into(),
             "markdown".to_string(),
             "<p>Body</p>".to_string(),
             now,
@@ -748,8 +667,8 @@ mod tests {
     fn media_record_from_row_rejects_invalid_source() {
         let row: MediaRow = (
             1,
-            ROW_HASH.to_string(),
-            "file.png".to_string(),
+            parse_content_hash(ROW_HASH),
+            parse_filename("file.png"),
             "not-a-source".to_string(),
             "image/png".to_string(),
             42,
@@ -760,49 +679,18 @@ mod tests {
         assert!(matches!(err, sqlx::Error::Decode(_)));
     }
 
-    #[test]
-    fn media_record_from_row_rejects_invalid_sha256() {
-        // A non-canonical hash (here too short) in the `sha256` column decodes to
-        // an error rather than an invalid `ContentHash`.
-        let row: MediaRow = (
-            1,
-            "sha256".to_string(),
-            "file.png".to_string(),
-            "upload".to_string(),
-            "image/png".to_string(),
-            42,
-            None,
-            Utc::now(),
-        );
-        let err = media_record_from_row(row).unwrap_err();
-        assert!(matches!(err, sqlx::Error::Decode(_)));
-    }
-
-    #[test]
-    fn media_record_from_row_rejects_invalid_filename() {
-        // A non-canonical filename (here one with a path separator) in the
-        // `filename` column decodes to an error rather than an un-sanitized
-        // `Filename` — the read-back mirror of the `sha256` guard above.
-        let row: MediaRow = (
-            1,
-            ROW_HASH.to_string(),
-            "../escape".to_string(),
-            "upload".to_string(),
-            "image/png".to_string(),
-            42,
-            None,
-            Utc::now(),
-        );
-        let err = media_record_from_row(row).unwrap_err();
-        assert!(matches!(err, sqlx::Error::Decode(_)));
-    }
+    // `media_record_from_row` no longer hand-parses `sha256`/`filename`: those columns
+    // decode straight into `ContentHash`/`Filename` via the sqlx bridge (#438), so a
+    // malformed stored value is rejected as a `ColumnDecode` error at the query boundary
+    // (covered by `media.rs`'s decode-error test), not here — a `MediaRow` cannot even
+    // hold an invalid value. Only `source` (a `MediaSource` enum) still parses here.
 
     #[test]
     fn media_record_from_row_accepts_valid_source() {
         let row: MediaRow = (
             1,
-            ROW_HASH.to_string(),
-            "file.png".to_string(),
+            parse_content_hash(ROW_HASH),
+            parse_filename("file.png"),
             "upload".to_string(),
             "image/png".to_string(),
             42,
@@ -820,18 +708,18 @@ mod tests {
     fn session_and_invite_row_helpers_round_trip() {
         let now = Utc::now();
         let session: SessionRow = (
-            "tokenhash".to_string(),
+            parse_token_hash("tokenhash"),
             1,
-            "alice".to_string(),
+            parse_username("alice"),
             "label".to_string(),
             now,
             now,
         );
-        let session_record = session_record_from_row(session).unwrap();
+        let session_record = session_record_from_row(session);
         assert_eq!(session_record.user_id, UserId::from(1));
 
-        let invite: InviteRow = ("code".to_string(), now, now, None, None);
-        let invite_record = invite_record_from_row(invite).unwrap();
+        let invite: InviteRow = (parse_invite_code("code"), now, now, None, None);
+        let invite_record = invite_record_from_row(invite);
         assert_eq!(invite_record.code.as_ref(), "code");
     }
 
@@ -840,7 +728,7 @@ mod tests {
         let now = Utc::now();
         let row: UserRow = (
             1,
-            "alice".to_string(),
+            parse_username("alice"),
             None,
             None,
             now,
@@ -849,7 +737,7 @@ mod tests {
             false,
             false,
         );
-        let record = user_record_from_row(row).unwrap();
+        let record = user_record_from_row(row);
         assert_eq!(record.user_id, UserId::from(1));
     }
 
@@ -859,10 +747,10 @@ mod tests {
         let row: PostRow = (
             10,
             20,
-            "alice".to_string(),
+            parse_username("alice"),
             None,
-            "hello-world".to_string(),
-            "Body".to_string(),
+            parse_slug("hello-world"),
+            "Body".into(),
             "markdown".to_string(),
             "<p>Body</p>".to_string(),
             now,
@@ -917,9 +805,7 @@ mod tests {
         // equalize timing (§2.1). It must be a well-formed Argon2 hash so the
         // verification does real work and returns Ok(false) for a non-matching
         // password — not a fast Err that would reintroduce a timing oracle.
-        let wrong: common::password::Password = "definitely-not-the-dummy"
-            .parse()
-            .expect("meets minimum length");
+        let wrong = parse_password("definitely-not-the-dummy");
         let result = verify_password(wrong, dummy_password_hash().to_string())
             .await
             .expect("dummy hash must be well-formed");
@@ -931,9 +817,7 @@ mod tests {
         // Timing parity requires the dummy hash to carry the same Argon2
         // parameters as real password hashes (verify cost is derived from the
         // hash string's encoded params).
-        let real = "some-real-password"
-            .parse::<common::password::Password>()
-            .expect("meets minimum length")
+        let real = parse_password("some-real-password")
             .hash()
             .expect("hashing succeeds");
         // PHC format: $argon2id$v=19$<params>$<salt>$<hash>
@@ -946,19 +830,19 @@ mod tests {
         let now = Utc::now();
         let row: UserRow = (
             1,
-            "alice".to_string(),
-            Some("Alice".to_string()),
+            parse_username("alice"),
+            Some(parse_display_name("Alice")),
             Some("Bio".to_string()),
             now,
             Some(now),
-            Some("alice@example.com".to_string()),
+            Some(parse_email("alice@example.com")),
             true,
             false,
         );
-        let record = user_record_from_row(row).unwrap();
+        let record = user_record_from_row(row);
         assert_eq!(record.user_id, UserId::from(1));
         assert_eq!(record.username, "alice");
-        assert_eq!(record.display_name, Some("Alice".parse().unwrap()));
+        assert_eq!(record.display_name, Some(parse_display_name("Alice")));
         assert_eq!(record.bio, Some("Bio".to_string()));
         assert_eq!(record.created_at, now);
         assert_eq!(record.last_authenticated_at, Some(now));
@@ -969,8 +853,8 @@ mod tests {
     #[test]
     fn invite_record_from_row_maps_some_fields() {
         let now = Utc::now();
-        let row: InviteRow = ("code".to_string(), now, now, Some(now), Some(1));
-        let record = invite_record_from_row(row).unwrap();
+        let row: InviteRow = (parse_invite_code("code"), now, now, Some(now), Some(1));
+        let record = invite_record_from_row(row);
         assert_eq!(record.code.as_ref(), "code");
         assert_eq!(record.created_at, now);
         assert_eq!(record.expires_at, now);

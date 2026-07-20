@@ -1,3 +1,11 @@
+// The sqlx storage bridge the `StrNewtype` derive emits (#438) is server-only:
+// `common`'s `sqlx` feature must never be enabled for a wasm target. Enabling it there
+// would already fail to build — `sqlx` pulls native deps that don't compile for
+// wasm32 — but that surfaces as a wall of downstream errors; this guard turns the
+// mis-wiring into one clear message at the source instead.
+#[cfg(all(target_arch = "wasm32", feature = "sqlx"))]
+compile_error!("common's `sqlx` feature must not be enabled for wasm32 targets (#438)");
+
 pub mod atompub;
 pub mod audience;
 pub mod auth;

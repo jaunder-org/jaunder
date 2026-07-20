@@ -19,8 +19,12 @@ use macros::StrNewtype;
 /// Secret-bearing per ADR-0063 (`#[str_newtype(secret)]`): redacting `Debug`,
 /// `AsRef<str>`, `TryFrom<String>` — no `Display`, no serde. Deliberate egress (the CLI
 /// invitation URL, a future email) is a single explicit `code.as_ref()`.
+///
+/// `sqlx` re-opts the storage bridge: an `InviteCode` *is* persisted (the `invites`
+/// table), so it needs `Encode`/`Decode` even though `secret` drops the bridge by
+/// default (#438).
 #[derive(Clone, StrNewtype)]
-#[str_newtype(secret)]
+#[str_newtype(secret, sqlx)]
 pub struct InviteCode(String);
 
 impl FromStr for InviteCode {
@@ -41,6 +45,18 @@ impl TryFrom<ProfferedInviteCode> for InviteCode {
     fn try_from(p: ProfferedInviteCode) -> Result<Self, Self::Error> {
         p.as_ref().parse()
     }
+}
+
+/// Mints a fresh invite code: the 32-byte base64url secret from
+/// [`crate::token::generate`], wrapped in the domain type without re-validation.
+///
+/// A freshly minted code is canonical base64url by construction, so this is the
+/// trusted-mint counterpart to the validating [`FromStr`] inbound door: it lets
+/// `create_invite` store a typed `InviteCode` end-to-end with no fallible
+/// re-parse (#438). Mirrors `common::token::RawToken::from_generated`.
+#[must_use]
+pub fn generate() -> InviteCode {
+    InviteCode(crate::token::generate().as_ref().to_owned())
 }
 
 #[cfg(test)]
@@ -75,5 +91,15 @@ mod tests {
         let raw = "abcABC012_-";
         let code: InviteCode = raw.parse().unwrap();
         assert_eq!(code.as_ref(), raw);
+    }
+
+    #[test]
+    fn generate_mints_distinct_canonical_codes() {
+        let a = generate();
+        let b = generate();
+        // Distinct high-entropy values.
+        assert_ne!(a.as_ref(), b.as_ref());
+        // A minted code is canonical, so it round-trips through the validating door.
+        assert!(a.as_ref().parse::<InviteCode>().is_ok());
     }
 }

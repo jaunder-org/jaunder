@@ -79,7 +79,7 @@ impl FeedEventDialect for Postgres {
             // (enqueue takes a validated FeedPath). Such a row is an unactionable
             // work item, so collect it for purge rather than failing the whole batch
             // (which would wedge the worker on the corrupt row forever).
-            let Ok(feed_path) = FeedPath::try_from(r.get::<String, _>("feed_url")) else {
+            let Ok(feed_path) = r.try_get::<FeedPath, _>("feed_url") else {
                 corrupt.push(id);
                 continue;
             };

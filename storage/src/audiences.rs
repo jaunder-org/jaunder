@@ -24,7 +24,7 @@ pub struct AudienceRecord {
     /// Unique internal identifier.
     pub audience_id: AudienceId,
     /// Author-unique display name.
-    pub name: String,
+    pub name: AudienceName,
     /// When the audience row was created.
     pub created_at: DateTime<Utc>,
 }
@@ -152,9 +152,15 @@ where
     DB: Backend,
     // Restated from `Backend` (supertrait where-clauses don't propagate; ADR-0019).
     (i64,): for<'r> sqlx::FromRow<'r, DB::Row>,
-    (i64, String, DateTime<Utc>): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (i64, AudienceName, DateTime<Utc>): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    // `AudienceName` binds and decodes as itself via the sqlx bridge (#438), which
+    // delegates to `String`; these bounds make that bridge available on the generic
+    // backend (the `name` column decodes into `AudienceName`, and the create/rename
+    // binds encode `&AudienceName`).
+    String: sqlx::Type<DB>,
+    for<'q> String: sqlx::Encode<'q, DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
@@ -173,7 +179,7 @@ where
             "INSERT INTO audiences (author_user_id, name) VALUES ($1, $2) RETURNING audience_id",
         )
         .bind(i64::from(author_user_id))
-        .bind(name.as_ref())
+        .bind(name)
         .fetch_one(&self.pool)
         .await
         {
@@ -202,7 +208,7 @@ where
             "UPDATE audiences SET name = $1 WHERE author_user_id = $2 AND audience_id = $3 \
              RETURNING audience_id",
         )
-        .bind(name.as_ref())
+        .bind(name)
         .bind(i64::from(author_user_id))
         .bind(i64::from(audience_id))
         .fetch_optional(&self.pool)
@@ -248,7 +254,7 @@ where
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn list_audiences(&self, author_user_id: UserId) -> sqlx::Result<Vec<AudienceRecord>> {
-        let rows = sqlx::query_as::<_, (i64, String, DateTime<Utc>)>(
+        let rows = sqlx::query_as::<_, (i64, AudienceName, DateTime<Utc>)>(
             "SELECT audience_id, name, created_at FROM audiences \
              WHERE author_user_id = $1 ORDER BY audience_id",
         )
@@ -340,7 +346,59 @@ where
 #[cfg(test)]
 mod tests {
     use super::AudienceError;
+    use crate::test_support::{backends, seed_user, Backend};
+    use common::test_support::parse_audience_name;
     use host::error::{ErrorKind, InternalError};
+    use rstest::*;
+    use rstest_reuse::*;
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn audience_name_round_trips_through_create_and_list(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let author = seed_user(&env.state).await;
+        let id = env
+            .state
+            .audiences
+            .create_audience(author, &parse_audience_name("Close Friends"))
+            .await
+            .unwrap();
+        let listed = env.state.audiences.list_audiences(author).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].audience_id, id);
+        // `name` decodes straight into `AudienceName` via the sqlx bridge (#438).
+        assert_eq!(listed[0].name, "Close Friends");
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn list_audiences_surfaces_a_column_decode_error_for_a_malformed_name(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let author = seed_user(&env.state).await;
+        // A whitespace-only name bypasses `AudienceName` validation (which
+        // `create_audience` enforces) — only reachable via DB tampering. The
+        // validating bridge `Decode` rejects it on read as a column-decode error.
+        env.base
+            .pool()
+            .execute(&format!(
+                "INSERT INTO audiences (author_user_id, name) VALUES ({}, '   ')",
+                i64::from(author)
+            ))
+            .await
+            .unwrap();
+        let err = env
+            .state
+            .audiences
+            .list_audiences(author)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, sqlx::Error::ColumnDecode { .. }),
+            "expected a column-decode error, got: {err:?}"
+        );
+    }
 
     // Behavior-preserving translation of the former `web` `map_audience_error`
     // tests: each variant's `(kind, public_message)` is what the deleted mapper

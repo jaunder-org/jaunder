@@ -827,8 +827,8 @@ where
     PostRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     (i64,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (bool,): for<'r> sqlx::FromRow<'r, DB::Row>,
-    (i64, i64, String, String): for<'r> sqlx::FromRow<'r, DB::Row>,
-    (i64, String): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (i64, i64, Tag, TagLabel): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (i64, Tag): for<'r> sqlx::FromRow<'r, DB::Row>,
     (String, Option<i64>): for<'r> sqlx::FromRow<'r, DB::Row>,
     (DateTime<Utc>,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (String, DateTime<Utc>): for<'r> sqlx::FromRow<'r, DB::Row>,
@@ -836,6 +836,14 @@ where
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<&'q str>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<String>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    // `Slug`/`Tag`/`Username` bind and decode as themselves via the sqlx bridge
+    // (#438), which delegates to `String`; this pair makes that bridge available
+    // on the generic backend (the reads decode the `slug`/`tag_slug`/`username`
+    // columns straight into their newtypes). The `Option<&PostTitle>` bound is the
+    // nullable `title` bind, forwarded from `write_post_in_tx` (create paths).
+    String: sqlx::Type<DB>,
+    for<'q> String: sqlx::Encode<'q, DB>,
+    for<'q> Option<&'q PostTitle>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<i64>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<DateTime<Utc>>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -984,8 +992,8 @@ where
             date_clause = DB::PERMALINK_DATE_CLAUSE,
         );
         let query = sqlx::query_as::<_, PostRow>(&sql)
-            .bind(username.as_ref())
-            .bind(slug.as_ref())
+            .bind(username)
+            .bind(slug)
             .bind(date_str.as_str())
             .bind(now);
         let row = binds.bind_onto(query).fetch_optional(&self.pool).await?;
@@ -1069,7 +1077,7 @@ where
                  LIMIT ${limit_idx}"
             );
             let query = sqlx::query_as::<_, PostRow>(&sql)
-                .bind(username.as_ref())
+                .bind(username)
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
                 .bind(i64::from(cursor.post_id))
@@ -1097,9 +1105,7 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRow>(&sql)
-                .bind(username.as_ref())
-                .bind(now);
+            let query = sqlx::query_as::<_, PostRow>(&sql).bind(username).bind(now);
             binds
                 .bind_onto(query)
                 .bind(i64::from(limit))
@@ -1318,7 +1324,7 @@ where
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn get_tags_for_post(&self, post_id: PostId) -> sqlx::Result<Vec<PostTag>> {
-        let rows = sqlx::query_as::<_, (i64, i64, String, String)>(
+        let rows = sqlx::query_as::<_, (i64, i64, Tag, TagLabel)>(
             "SELECT pt.post_id, pt.tag_id, t.tag_slug, pt.tag_display
              FROM post_tags pt
              JOIN tags t ON pt.tag_id = t.tag_id
@@ -1329,22 +1335,18 @@ where
         .fetch_all(&self.pool)
         .await?;
 
-        rows.into_iter()
-            .map(|(post_id, tag_id, tag_slug_str, tag_display_str)| {
-                let tag_slug: Tag = tag_slug_str
-                    .parse()
-                    .map_err(|_| sqlx::Error::Decode("invalid tag format".into()))?;
-                let tag_display: TagLabel = tag_display_str
-                    .parse()
-                    .map_err(|_| sqlx::Error::Decode("invalid tag label".into()))?;
-                Ok(PostTag {
-                    post_id: PostId::from(post_id),
-                    tag_id: TagId::from(tag_id),
-                    tag_slug,
-                    tag_display,
-                })
+        // `tag_slug`/`tag_display` decode straight into `Tag`/`TagLabel` via the
+        // sqlx bridge (#438), so a malformed stored value is rejected as a
+        // column-decode error above; this is a straight field-move.
+        Ok(rows
+            .into_iter()
+            .map(|(post_id, tag_id, tag_slug, tag_display)| PostTag {
+                post_id: PostId::from(post_id),
+                tag_id: TagId::from(tag_id),
+                tag_slug,
+                tag_display,
             })
-            .collect()
+            .collect())
     }
 
     #[tracing::instrument(
@@ -1362,7 +1364,7 @@ where
     ) -> Result<Vec<PostRecord>, ListByTagError> {
         let tag_exists: bool =
             sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = $1")
-                .bind(tag_slug.as_ref())
+                .bind(tag_slug)
                 .fetch_one(&self.pool)
                 .await?;
 
@@ -1394,7 +1396,7 @@ where
                  LIMIT ${limit_idx}"
             );
             let query = sqlx::query_as::<_, PostRow>(&sql)
-                .bind(tag_slug.as_ref())
+                .bind(tag_slug)
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
                 .bind(i64::from(cursor.post_id))
@@ -1424,9 +1426,7 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRow>(&sql)
-                .bind(tag_slug.as_ref())
-                .bind(now);
+            let query = sqlx::query_as::<_, PostRow>(&sql).bind(tag_slug).bind(now);
             binds
                 .bind_onto(query)
                 .bind(i64::from(limit))
@@ -1456,7 +1456,7 @@ where
     ) -> Result<Vec<PostRecord>, ListByTagError> {
         let tag_exists: bool =
             sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = $1")
-                .bind(tag_slug.as_ref())
+                .bind(tag_slug)
                 .fetch_one(&self.pool)
                 .await?;
 
@@ -1490,7 +1490,7 @@ where
             );
             let query = sqlx::query_as::<_, PostRow>(&sql)
                 .bind(i64::from(user_id))
-                .bind(tag_slug.as_ref())
+                .bind(tag_slug)
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
                 .bind(i64::from(cursor.post_id))
@@ -1523,7 +1523,7 @@ where
             );
             let query = sqlx::query_as::<_, PostRow>(&sql)
                 .bind(i64::from(user_id))
-                .bind(tag_slug.as_ref())
+                .bind(tag_slug)
                 .bind(now);
             binds
                 .bind_onto(query)
@@ -1557,7 +1557,7 @@ where
 
         let rows = match pattern {
             Some(ref like) => {
-                sqlx::query_as::<_, (i64, String)>(
+                sqlx::query_as::<_, (i64, Tag)>(
                     "SELECT tag_id, tag_slug FROM tags
                      WHERE tag_slug LIKE $1
                      ORDER BY tag_slug
@@ -1569,7 +1569,7 @@ where
                 .await?
             }
             None => {
-                sqlx::query_as::<_, (i64, String)>(
+                sqlx::query_as::<_, (i64, Tag)>(
                     "SELECT tag_id, tag_slug FROM tags
                      ORDER BY tag_slug
                      LIMIT $1",
@@ -1580,17 +1580,15 @@ where
             }
         };
 
-        rows.into_iter()
-            .map(|(tag_id, tag_slug_str)| {
-                let tag_slug: Tag = tag_slug_str
-                    .parse()
-                    .map_err(|_| sqlx::Error::Decode("invalid tag format".into()))?;
-                Ok(TagRecord {
-                    tag_id: TagId::from(tag_id),
-                    tag_slug,
-                })
+        // `tag_slug` decodes straight into `Tag` via the sqlx bridge (#438), so a
+        // malformed stored value is rejected as a column-decode error above.
+        Ok(rows
+            .into_iter()
+            .map(|(tag_id, tag_slug)| TagRecord {
+                tag_id: TagId::from(tag_id),
+                tag_slug,
             })
-            .collect()
+            .collect())
     }
 
     #[tracing::instrument(
@@ -1868,6 +1866,14 @@ where
     for<'q> Option<String>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<DateTime<Utc>>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    // `Slug`/`PostBody` bind as themselves and `PostTitle` as `Option<&PostTitle>`
+    // via the sqlx bridge (#438), which delegates to `String`; these bounds make
+    // that bridge available on the generic backend (the `Option<&…>` pair covers
+    // the nullable `title` bind, mirroring the `Option<&str>` the old `as_deref`
+    // bind required).
+    String: sqlx::Type<DB>,
+    for<'q> String: sqlx::Encode<'q, DB>,
+    for<'q> Option<&'q PostTitle>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     (i64,): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
@@ -1881,10 +1887,14 @@ where
          RETURNING post_id",
     )
     .bind(i64::from(input.user_id))
-    .bind(input.title.as_deref())
-    .bind(input.slug.as_ref())
-    .bind(&*input.body)
+    // `Option::as_ref` → `Option<&PostTitle>` (a typed newtype bind, not an
+    // `AsRef<str>` strip); the sqlx bridge encodes `Option<&PostTitle>`.
+    .bind(input.title.as_ref())
+    .bind(&input.slug)
+    .bind(&input.body)
     .bind(format.as_str())
+    // `RenderedHtml` is hand-rolled and has no sqlx bridge yet (#502), so this stays a
+    // bare-`&str` bind until its trailer is aligned.
     .bind(input.rendered_html.as_ref())
     .bind(now)
     .bind(now)
@@ -1973,6 +1983,11 @@ where
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    // `Username`/`Tag` bind as themselves via the sqlx bridge (#438), which
+    // delegates to `String`; this pair makes that bridge available on the generic
+    // backend for the surface `username`/`tag` binds.
+    String: sqlx::Type<DB>,
+    for<'q> String: sqlx::Encode<'q, DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
@@ -1996,7 +2011,7 @@ where
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRow>(&sql)
                 .bind(now)
-                .bind(username.as_ref())
+                .bind(username)
                 .bind(min_items)
                 .bind(cutoff);
             binds.bind_onto(query).fetch_all(pool).await
@@ -2007,7 +2022,7 @@ where
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRow>(&sql)
                 .bind(now)
-                .bind(tag.as_ref())
+                .bind(tag)
                 .bind(min_items)
                 .bind(cutoff);
             binds.bind_onto(query).fetch_all(pool).await
@@ -2019,8 +2034,8 @@ where
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRow>(&sql)
                 .bind(now)
-                .bind(username.as_ref())
-                .bind(tag.as_ref())
+                .bind(username)
+                .bind(tag)
                 .bind(min_items)
                 .bind(cutoff);
             binds.bind_onto(query).fetch_all(pool).await
@@ -2144,6 +2159,11 @@ where
     (DateTime<Utc>,): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    // `Username`/`Tag` bind as themselves via the sqlx bridge (#438), which
+    // delegates to `String`; this pair makes that bridge available on the generic
+    // backend for the surface `username`/`tag` binds.
+    String: sqlx::Type<DB>,
+    for<'q> String: sqlx::Encode<'q, DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
@@ -2169,7 +2189,7 @@ where
                  ORDER BY p.published_at DESC LIMIT 1",
             )
             .bind(now)
-            .bind(username.as_ref())
+            .bind(username)
             .fetch_optional(pool)
             .await?
         }
@@ -2183,7 +2203,7 @@ where
                  ORDER BY p.published_at DESC LIMIT 1",
             )
             .bind(now)
-            .bind(tag.as_ref())
+            .bind(tag)
             .fetch_optional(pool)
             .await?
         }
@@ -2198,8 +2218,8 @@ where
                  ORDER BY p.published_at DESC LIMIT 1",
             )
             .bind(now)
-            .bind(username.as_ref())
-            .bind(tag.as_ref())
+            .bind(username)
+            .bind(tag)
             .fetch_optional(pool)
             .await?
         }
@@ -2210,8 +2230,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, seed_user, Backend};
-    use common::test_support::parse_username;
+    use crate::test_support::{backends, seed_user, Backend, CloseablePool};
+    use common::test_support::{
+        parse_post_title, parse_slug, parse_tag, parse_tag_label, parse_username,
+    };
     use rstest::*;
     use rstest_reuse::*;
 
@@ -2247,8 +2269,8 @@ mod tests {
         PostTag {
             post_id: PostId::from(1),
             tag_id: TagId::from(0),
-            tag_slug: slug.parse::<Tag>().expect("valid tag slug"),
-            tag_display: display.parse::<TagLabel>().expect("valid tag label"),
+            tag_slug: parse_tag(slug),
+            tag_display: parse_tag_label(display),
         }
     }
 
@@ -2257,9 +2279,9 @@ mod tests {
         let existing = vec![post_tag("rust", "Rust"), post_tag("leptos", "Leptos")];
         let desired: Vec<TagLabel> = vec![
             // Same slug as an existing tag (different casing): kept, not re-added.
-            "Rust".parse().unwrap(),
+            parse_tag_label("Rust"),
             // New slug: added.
-            "wasm".parse().unwrap(),
+            parse_tag_label("wasm"),
         ];
 
         let diff = post_tag_diff(&existing, &desired);
@@ -2321,9 +2343,9 @@ mod tests {
         let mut post = PostRecord {
             post_id: PostId::from(1),
             user_id: UserId::from(1),
-            author_username: "author".parse().unwrap(),
+            author_username: parse_username("author"),
             title: Some("My Title".into()),
-            slug: "my-slug".parse().unwrap(),
+            slug: parse_slug("my-slug"),
             body: "\n\n   The first non-empty line of the body is here. \n\n Another line.".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted(
@@ -2358,9 +2380,9 @@ mod tests {
         let post = PostRecord {
             post_id: PostId::from(1),
             user_id: UserId::from(1),
-            author_username: "author".parse().unwrap(),
+            author_username: parse_username("author"),
             title: Some("My Title".into()),
-            slug: "hello-world".parse().unwrap(),
+            slug: parse_slug("hello-world"),
             body: "My body".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>My body</p>"),
@@ -2384,7 +2406,7 @@ mod tests {
         let input = CreatePostInput {
             user_id,
             title: Some("Test Title".into()),
-            slug: "test-slug".parse().unwrap(),
+            slug: parse_slug("test-slug"),
             body: "Test body".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Test body</p>"),
@@ -2412,7 +2434,7 @@ mod tests {
         let input = CreatePostInput {
             user_id: UserId::from(1),
             title: Some("Test".into()),
-            slug: "test-post".parse().unwrap(),
+            slug: parse_slug("test-post"),
             body: "body".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
@@ -2462,7 +2484,7 @@ mod tests {
             .create_post(&CreatePostInput {
                 user_id: uid,
                 title: Some("Post".into()),
-                slug: "post".parse().unwrap(),
+                slug: parse_slug("post"),
                 body: "body".into(),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
@@ -2486,7 +2508,7 @@ mod tests {
         let result = env
             .state
             .posts
-            .tag_post(post_id, &"rust".parse().unwrap())
+            .tag_post(post_id, &parse_tag_label("rust"))
             .await;
         assert!(matches!(result, Err(TaggingError::Internal(_))));
     }
@@ -2503,7 +2525,7 @@ mod tests {
         let mk = |slug: &str, published: bool| CreatePostInput {
             user_id: uid,
             title: Some(format!("Post {slug}").into()),
-            slug: slug.parse().unwrap(),
+            slug: parse_slug(slug),
             body: "body".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
@@ -2630,9 +2652,9 @@ mod tests {
         let post = PostRecord {
             post_id: PostId::from(42),
             user_id: UserId::from(1),
-            author_username: "author".parse().unwrap(),
+            author_username: parse_username("author"),
             title: None,
-            slug: "hello-world".parse().unwrap(),
+            slug: parse_slug("hello-world"),
             body: "".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted(""),
@@ -2713,7 +2735,7 @@ mod tests {
             year,
             month,
             day,
-            &"no-such-slug".parse().unwrap(),
+            &parse_slug("no-such-slug"),
         )
         .await
         .unwrap();
@@ -2730,7 +2752,7 @@ mod tests {
             .create_post(&CreatePostInput {
                 user_id,
                 title: Some("Post".into()),
-                slug: "post".parse().unwrap(),
+                slug: parse_slug("post"),
                 body: "body".into(),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
@@ -2746,7 +2768,7 @@ mod tests {
         apply_post_tag_diff(
             posts,
             post_id,
-            &["rust".parse().unwrap(), "web".parse().unwrap()],
+            &[parse_tag_label("rust"), parse_tag_label("web")],
         )
         .await
         .unwrap();
@@ -2761,7 +2783,7 @@ mod tests {
         assert_eq!(slugs, vec!["rust".to_string(), "web".to_string()]);
 
         // Narrowing the desired set removes the dropped tag.
-        apply_post_tag_diff(posts, post_id, &["rust".parse().unwrap()])
+        apply_post_tag_diff(posts, post_id, &[parse_tag_label("rust")])
             .await
             .unwrap();
         let remaining: Vec<String> = posts
@@ -2784,7 +2806,7 @@ mod tests {
             .create_post(&CreatePostInput {
                 user_id,
                 title: Some("Post".into()),
-                slug: "post".parse().unwrap(),
+                slug: parse_slug("post"),
                 body: "body".into(),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
@@ -2799,7 +2821,7 @@ mod tests {
         // Tagging with a case-preserving label stores the canonical slug and the
         // author's casing; both read back intact on either backend.
         posts
-            .tag_post(post_id, &"Rust".parse::<TagLabel>().unwrap())
+            .tag_post(post_id, &parse_tag_label("Rust"))
             .await
             .unwrap();
 
@@ -2807,6 +2829,139 @@ mod tests {
         assert_eq!(tags.len(), 1);
         assert_eq!(tags[0].tag_slug, "rust"); // canonical slug (lowercased)
         assert_eq!(tags[0].tag_display, "Rust"); // author casing preserved
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn post_round_trips_slug_title_body_username_and_tag(#[case] backend: Backend) {
+        // Keep the whole `TestEnv` bound: dropping `base` unlinks the SQLite file
+        // (ADR-0053 TempDir hazard).
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await; // username "testuser"
+        let posts = &*env.state.posts;
+
+        // `create_post` binds a typed `Slug`, `Option<&PostTitle>`, and `&PostBody`;
+        // `tag_post` binds a `TagLabel`. The read decodes the `slug`/`title`/`body`/
+        // author-`username` columns and the JSON `tag_slug`/`tag_display` straight
+        // back into their newtypes — exercising both bridge directions (#438).
+        let slug: Slug = parse_slug("round-trip");
+        let title = parse_post_title("A Round-Trip Title");
+        let body: PostBody = "the round-trip body".into();
+        let post_id = posts
+            .create_post(&CreatePostInput {
+                user_id,
+                title: Some(title.clone()),
+                slug: slug.clone(),
+                body: body.clone(),
+                format: PostFormat::Markdown,
+                rendered_html: RenderedHtml::from_trusted("<p>the round-trip body</p>"),
+                published_at: None,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
+            })
+            .await
+            .unwrap();
+        posts
+            .tag_post(post_id, &parse_tag_label("Rust"))
+            .await
+            .unwrap();
+
+        let record = posts
+            .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.slug, slug);
+        assert_eq!(record.title, Some(title));
+        assert_eq!(record.body, body);
+        assert_eq!(record.author_username, "testuser");
+        assert_eq!(record.tags.len(), 1);
+        assert_eq!(record.tags[0].tag_slug, "rust");
+        assert_eq!(record.tags[0].tag_display, "Rust");
+
+        // A post with no title exercises the `None` decode path for
+        // `Option<PostTitle>`.
+        let untitled_id = posts
+            .create_post(&CreatePostInput {
+                user_id,
+                title: None,
+                slug: parse_slug("no-title"),
+                body: "body".into(),
+                format: PostFormat::Markdown,
+                rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
+                published_at: None,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
+            })
+            .await
+            .unwrap();
+        let untitled = posts
+            .get_post_by_id(untitled_id, &ViewerIdentity::Anonymous)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(untitled.title, None);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn get_post_rejects_a_malformed_slug_column(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let posts = &*env.state.posts;
+        let post_id = posts
+            .create_post(&CreatePostInput {
+                user_id,
+                title: None,
+                slug: parse_slug("good-slug"),
+                body: "body".into(),
+                format: PostFormat::Markdown,
+                rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
+                published_at: None,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
+            })
+            .await
+            .unwrap();
+
+        // Overwrite the `slug` column with a value `Slug::from_str` rejects (a space
+        // is not a valid slug character), binding it as a raw `&str` so the bad
+        // value actually lands in the column — the typed bind could not produce it.
+        let sql = "UPDATE posts SET slug = $1 WHERE post_id = $2";
+        match env.base.pool() {
+            CloseablePool::Sqlite(pool) => {
+                sqlx::query(sql)
+                    .bind("not a slug")
+                    .bind(i64::from(post_id))
+                    .execute(pool)
+                    .await
+                    .unwrap();
+            }
+            CloseablePool::Postgres(pool) => {
+                sqlx::query(sql)
+                    .bind("not a slug")
+                    .bind(i64::from(post_id))
+                    .execute(pool)
+                    .await
+                    .unwrap();
+            }
+        }
+
+        // The read decodes the `slug` column into `Slug` via the sqlx bridge, which
+        // validates through `FromStr`; the malformed value surfaces as a
+        // column-decode error rather than being silently admitted (covers the
+        // bridge's `Decode` error arm).
+        let err = posts
+            .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, sqlx::Error::ColumnDecode { .. }),
+            "expected a column-decode error, got: {err:?}"
+        );
     }
 
     #[apply(backends)]
@@ -2842,7 +2997,7 @@ mod tests {
             year,
             month,
             day,
-            &"no-such-draft".parse().unwrap(),
+            &parse_slug("no-such-draft"),
         )
         .await
         .unwrap();
@@ -2864,7 +3019,7 @@ mod tests {
             .returning(|_user_id, _cursor, _limit, _now| {
                 let base = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap();
                 let username = parse_username("author");
-                let slug = "other-slug".parse::<Slug>().unwrap();
+                let slug = parse_slug("other-slug");
                 let page = (0..50_i64)
                     .map(|i| PostRecord {
                         post_id: PostId::from(i),
@@ -2886,7 +3041,7 @@ mod tests {
                 Ok(page)
             });
 
-        let searched = "target-slug".parse::<Slug>().unwrap();
+        let searched = parse_slug("target-slug");
         let result =
             find_draft_by_permalink_for_user(&mock, UserId::from(1), 2020, 1, 1, &searched)
                 .await

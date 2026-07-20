@@ -135,6 +135,11 @@ where
     SessionRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    // `TokenHash`/`Username` bind/decode as themselves via the sqlx bridge (#438),
+    // which delegates to `String`; these bounds make that bridge available on the
+    // generic backend (the `SessionRow: FromRow` bound above threads the decode).
+    String: sqlx::Type<DB>,
+    for<'q> String: sqlx::Encode<'q, DB>,
     for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
@@ -152,7 +157,7 @@ where
             "INSERT INTO sessions (token_hash, user_id, label, created_at, last_used_at)
              VALUES ($1, $2, $3, $4, $5)",
         )
-        .bind(token_hash.as_ref())
+        .bind(token_hash)
         .bind(i64::from(user_id))
         .bind(label)
         .bind(now)
@@ -178,7 +183,7 @@ where
             .await?
             .ok_or(SessionAuthError::SessionNotFound)?;
 
-        let record = session_record_from_row(row)?;
+        let record = session_record_from_row(row);
         Ok(record)
     }
 
@@ -189,7 +194,7 @@ where
     )]
     async fn revoke_session(&self, token_hash: &TokenHash) -> sqlx::Result<()> {
         sqlx::query("DELETE FROM sessions WHERE token_hash = $1")
-            .bind(token_hash.as_ref())
+            .bind(token_hash)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -205,14 +210,17 @@ where
         .fetch_all(&self.pool)
         .await?;
 
-        rows.into_iter().map(session_record_from_row).collect()
+        // A corrupt/migrated `token_hash` or `username` column is rejected as a
+        // decode error by the `query_as` above (the sqlx bridge validates through
+        // `FromStr`), so building the records here is infallible.
+        Ok(rows.into_iter().map(session_record_from_row).collect())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, Backend, TestEnv};
+    use crate::test_support::{backends, seed_user, Backend, CloseablePool, TestEnv};
     use common::test_support::parse_raw_token;
     use rstest::*;
     use rstest_reuse::*;
@@ -227,6 +235,78 @@ mod tests {
             .authenticate(&parse_raw_token("dGVzdA"))
             .await;
         assert!(matches!(result, Err(SessionAuthError::Internal(_))));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn session_round_trips_token_hash_and_username(#[case] backend: Backend) {
+        // Keep the whole `TestEnv` bound: dropping `base` unlinks the SQLite file
+        // (ADR-0053 TempDir hazard).
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+
+        // `create_session` binds the `TokenHash`; `authenticate`/`list_sessions`
+        // decode the `token_hash` and joined `username` columns straight back into
+        // their newtypes via the sqlx bridge (#438).
+        let raw_token = env
+            .state
+            .sessions
+            .create_session(user_id, "Test Device")
+            .await
+            .unwrap();
+        let expected_hash = host::token::hash(&raw_token).unwrap();
+
+        let record = env.state.sessions.authenticate(&raw_token).await.unwrap();
+        assert_eq!(record.token_hash, expected_hash);
+        assert_eq!(record.user_id, user_id);
+
+        let listed = env.state.sessions.list_sessions(user_id).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].token_hash, expected_hash);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn list_sessions_rejects_a_malformed_token_hash_column(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        env.state
+            .sessions
+            .create_session(user_id, "Test Device")
+            .await
+            .unwrap();
+
+        // Overwrite the `token_hash` column with a value `TokenHash::from_str`
+        // rejects (a space is not a valid token character), binding it as a raw
+        // `&str` so the bad value actually lands in the column — the typed bind
+        // could not produce it.
+        let sql = "UPDATE sessions SET token_hash = $1";
+        match env.base.pool() {
+            CloseablePool::Sqlite(pool) => {
+                sqlx::query(sql)
+                    .bind("bad hash")
+                    .execute(pool)
+                    .await
+                    .unwrap();
+            }
+            CloseablePool::Postgres(pool) => {
+                sqlx::query(sql)
+                    .bind("bad hash")
+                    .execute(pool)
+                    .await
+                    .unwrap();
+            }
+        }
+
+        // The read decodes the `token_hash` column into `TokenHash` via the sqlx
+        // bridge, which validates through `FromStr`; the malformed value surfaces
+        // as a column-decode error rather than being silently admitted (covers the
+        // bridge's `Decode` error arm).
+        let err = env.state.sessions.list_sessions(user_id).await.unwrap_err();
+        assert!(
+            matches!(err, sqlx::Error::ColumnDecode { .. }),
+            "expected a column-decode error, got: {err:?}"
+        );
     }
 
     #[test]

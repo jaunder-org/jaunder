@@ -35,19 +35,28 @@ pub trait FeedCacheStorage: Send + Sync {
     async fn delete(&self, feed_path: &FeedPath) -> Result<(), FeedCacheError>;
 }
 
-type CacheTuple = (String, String, String, String, DateTime<Utc>, DateTime<Utc>);
+type CacheTuple = (
+    FeedPath,
+    String,
+    String,
+    String,
+    DateTime<Utc>,
+    DateTime<Utc>,
+);
 
-fn row_from_tuple(t: CacheTuple) -> Result<FeedCacheRow, sqlx::Error> {
-    Ok(FeedCacheRow {
-        // The feed_url column is written only via a validated FeedPath, so a
-        // parse failure means DB corruption; surface it as Decode.
-        feed_path: FeedPath::try_from(t.0).map_err(|e| sqlx::Error::Decode(Box::new(e)))?, // cov:ignore
+// Infallible: the `feed_url` column decodes straight into `FeedPath` via the sqlx
+// bridge (#438), which validates through `FromStr` at the query boundary — so a
+// corrupt/migrated value is already rejected as a `ColumnDecode` error before this
+// mapper runs (was a hand `FeedPath::try_from` re-parse with a `cov:ignore`).
+fn row_from_tuple(t: CacheTuple) -> FeedCacheRow {
+    FeedCacheRow {
+        feed_path: t.0,
         body: t.1,
         etag: t.2,
         content_type: t.3,
         updated_at: t.4,
         generated_at: t.5,
-    })
+    }
 }
 
 /// Generic [`FeedCacheStorage`] backed by any [`Backend`] database.
@@ -71,6 +80,12 @@ where
     DB: Backend,
     CacheTuple: for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    // `FeedPath` binds and decodes as itself via the sqlx bridge (#438), which
+    // delegates to `String`; these bounds make that bridge available on the generic
+    // backend (the `feed_url` column decodes into `FeedPath`, and the binds encode
+    // `&FeedPath`).
+    String: sqlx::Type<DB>,
+    for<'q> String: sqlx::Encode<'q, DB>,
     for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
@@ -85,10 +100,10 @@ where
             "SELECT feed_url, body, etag, content_type, updated_at, generated_at \
              FROM feed_cache WHERE feed_url = $1",
         )
-        .bind(feed_path.as_ref())
+        .bind(feed_path)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(row_from_tuple).transpose()?)
+        Ok(row.map(row_from_tuple))
     }
 
     #[tracing::instrument(
@@ -107,7 +122,7 @@ where
                updated_at = excluded.updated_at, \
                generated_at = excluded.generated_at",
         )
-        .bind(row.feed_path.as_ref())
+        .bind(&row.feed_path)
         .bind(row.body.as_str())
         .bind(row.etag.as_str())
         .bind(row.content_type.as_str())
@@ -125,7 +140,7 @@ where
     )]
     async fn delete(&self, feed_path: &FeedPath) -> Result<(), FeedCacheError> {
         sqlx::query("DELETE FROM feed_cache WHERE feed_url = $1")
-            .bind(feed_path.as_ref())
+            .bind(feed_path)
             .execute(&self.pool)
             .await?;
         Ok(())

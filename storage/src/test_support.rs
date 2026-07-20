@@ -19,6 +19,8 @@ use async_trait::async_trait;
 use common::feed::FeedPath;
 use common::ids::{PostId, UserId};
 use common::mailer::{MailSender, NoopMailSender};
+use common::test_support::{parse_password, parse_slug, parse_username};
+use host::invite::InviteCode;
 use sqlx::{Connection, PgPool, SqlitePool};
 use std::collections::BTreeMap;
 use std::sync::{
@@ -608,6 +610,19 @@ pub fn fp(s: &str) -> FeedPath {
     s.parse().expect("valid feed path")
 }
 
+/// Parse `s` into a valid [`InviteCode`] for tests — the single place a test
+/// invite-code literal is parsed. Lives here rather than `common::test_support`
+/// because `InviteCode` is a `host` type (`common` cannot name it), and `storage`
+/// depends on `host`, so this is reachable from every `storage` test module.
+///
+/// # Panics
+///
+/// Panics if `s` is not a validly-shaped invite code.
+#[must_use]
+pub fn parse_invite_code(s: &str) -> InviteCode {
+    s.parse().expect("valid test invite code")
+}
+
 /// `published == true` sets `published_at = now` so list/timeline endpoints
 /// return them; `false` leaves them as drafts. Returns ids in creation order.
 ///
@@ -624,7 +639,7 @@ pub async fn seed_posts(
         .map(|i| {
             crate::seed_post_input(
                 user_id,
-                format!("seed-{i}").parse().expect("valid slug"),
+                parse_slug(&format!("seed-{i}")),
                 format!("# Post {i}\n\nbody").into(),
                 published,
             )
@@ -647,8 +662,8 @@ pub async fn seed_user(state: &Arc<AppState>) -> UserId {
     state
         .users
         .create_user(
-            &"testuser".parse().expect("valid username"),
-            &"password123".parse().expect("valid password"),
+            &parse_username("testuser"),
+            &parse_password("password123"),
             None,
             false,
         )

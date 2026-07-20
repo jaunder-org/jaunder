@@ -357,6 +357,7 @@ async fn schema_checksum(connection: &mut PgConnection) -> Result<String, Backup
 mod tests {
     use super::*;
     use crate::test_support::{postgres_only, Backend, CloseablePool};
+    use common::test_support::{parse_password, parse_username};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -403,8 +404,8 @@ mod tests {
             .state
             .users
             .create_user(
-                &"userone".parse().expect("valid username"),
-                &"password123".parse().expect("valid password"),
+                &parse_username("userone"),
+                &parse_password("password123"),
                 None,
                 false,
             )

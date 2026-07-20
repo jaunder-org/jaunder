@@ -78,7 +78,10 @@ where
     (i64,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (Option<DateTime<Utc>>, DateTime<Utc>): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    // `TokenHash` binds as itself via the sqlx bridge (#438), which delegates to
+    // `String`; these bounds make that bridge available on the generic backend.
+    String: sqlx::Type<DB>,
+    for<'q> String: sqlx::Encode<'q, DB>,
     for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
@@ -95,7 +98,7 @@ where
             "INSERT INTO password_resets (token_hash, user_id, created_at, expires_at)
              VALUES ($1, $2, $3, $4)",
         )
-        .bind(token_hash.as_ref())
+        .bind(token_hash)
         .bind(i64::from(user_id))
         .bind(now)
         .bind(expires_at)
@@ -124,7 +127,7 @@ where
              RETURNING user_id",
         )
         .bind(now)
-        .bind(token_hash.as_ref())
+        .bind(&token_hash)
         .bind(now)
         .fetch_optional(&self.pool)
         .await?;
@@ -136,7 +139,7 @@ where
         let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
             "SELECT used_at, expires_at FROM password_resets WHERE token_hash = $1",
         )
-        .bind(token_hash.as_ref())
+        .bind(&token_hash)
         .fetch_optional(&self.pool)
         .await?;
 
@@ -147,10 +150,37 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, Backend, TestEnv};
+    use crate::test_support::{backends, seed_user, Backend, TestEnv};
     use common::test_support::parse_raw_token;
     use rstest::*;
     use rstest_reuse::*;
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn password_reset_round_trips_the_token(#[case] backend: Backend) {
+        // Keep the whole `TestEnv` bound: dropping `base` unlinks the SQLite file
+        // (ADR-0053 TempDir hazard).
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
+
+        // `create_password_reset` binds the `TokenHash`; `use_password_reset`
+        // re-binds the hash of the same raw token to atomically claim the stored
+        // row — a round trip through the `token_hash` column's sqlx bridge (#438).
+        let raw_token = env
+            .state
+            .password_resets
+            .create_password_reset(user_id, expires_at)
+            .await
+            .unwrap();
+        let claimed = env
+            .state
+            .password_resets
+            .use_password_reset(&raw_token)
+            .await
+            .unwrap();
+        assert_eq!(claimed, user_id);
+    }
 
     #[apply(backends)]
     #[tokio::test]

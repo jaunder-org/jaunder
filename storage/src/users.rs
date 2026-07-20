@@ -212,13 +212,13 @@ where
     UserRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     (
         i64,
-        String,
-        Option<String>,
+        Username,
+        Option<DisplayName>,
         Option<String>,
         DateTime<Utc>,
         Option<DateTime<Utc>>,
         String,
-        Option<String>,
+        Option<Email>,
         bool,
         bool,
     ): for<'r> sqlx::FromRow<'r, DB::Row>,
@@ -226,6 +226,15 @@ where
     usize: sqlx::ColumnIndex<DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    // `Username`/`DisplayName`/`Email` bind/decode as themselves via the sqlx
+    // bridge (#438), which delegates to `String`; these bounds make that bridge
+    // available on the generic backend (the `String` pair covers the by-value
+    // newtype impls; the `Option<&…>` pairs cover the nullable profile binds,
+    // mirroring the `Option<&str>` bound the old `&**`-deref binds required).
+    String: sqlx::Type<DB>,
+    for<'q> String: sqlx::Encode<'q, DB>,
+    for<'q> Option<&'q DisplayName>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<&'q Email>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> bool: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<&'q str>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -259,9 +268,9 @@ where
              VALUES ($1, $2, $3, $4, $5)
              RETURNING user_id",
         )
-        .bind(username.as_ref())
+        .bind(username)
         .bind(password_hash.as_str())
-        .bind(display_name.map(|d| &**d))
+        .bind(display_name)
         .bind(now)
         .bind(is_operator)
         .fetch_one(&self.pool)
@@ -294,13 +303,13 @@ where
             _,
             (
                 i64,
-                String,
-                Option<String>,
+                Username,
+                Option<DisplayName>,
                 Option<String>,
                 DateTime<Utc>,
                 Option<DateTime<Utc>>,
                 String,
-                Option<String>,
+                Option<Email>,
                 bool,
                 bool,
             ),
@@ -309,7 +318,7 @@ where
                     password_hash, email, email_verified, is_operator
              FROM users WHERE username = $1",
         )
-        .bind(username.as_ref())
+        .bind(username)
         .fetch_optional(&self.pool)
         .instrument(tracing::info_span!(
             "storage.user.authenticate.lookup_user",
@@ -367,7 +376,7 @@ where
             .await
             .map_err(|e| UserAuthError::Internal(Box::new(e)))?;
 
-        crate::helpers::build_user_record((
+        Ok(crate::helpers::build_user_record((
             user_id,
             username,
             display_name,
@@ -377,8 +386,7 @@ where
             email,
             email_verified,
             is_operator,
-        ))
-        .map_err(|e| UserAuthError::Internal(Box::new(e)))
+        )))
     }
 
     async fn get_user(&self, user_id: UserId) -> sqlx::Result<Option<UserRecord>> {
@@ -390,7 +398,7 @@ where
         .bind(i64::from(user_id))
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(user_record_from_row).transpose()?)
+        Ok(row.map(user_record_from_row))
     }
 
     async fn get_user_by_username(&self, username: &Username) -> sqlx::Result<Option<UserRecord>> {
@@ -399,10 +407,10 @@ where
                     email, email_verified, is_operator
              FROM users WHERE username = $1",
         )
-        .bind(username.as_ref())
+        .bind(username)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(user_record_from_row).transpose()?)
+        Ok(row.map(user_record_from_row))
     }
 
     async fn update_profile<'a>(
@@ -411,7 +419,7 @@ where
         update: &ProfileUpdate<'a>,
     ) -> sqlx::Result<()> {
         sqlx::query("UPDATE users SET display_name = $1, bio = $2 WHERE user_id = $3")
-            .bind(update.display_name.map(|d| &**d))
+            .bind(update.display_name)
             .bind(update.bio)
             .bind(i64::from(user_id))
             .execute(&self.pool)
@@ -426,7 +434,7 @@ where
         verified: bool,
     ) -> sqlx::Result<()> {
         sqlx::query("UPDATE users SET email = $1, email_verified = $2 WHERE user_id = $3")
-            .bind(email.map(|e| &**e))
+            .bind(email)
             .bind(verified)
             .bind(i64::from(user_id))
             .execute(&self.pool)
@@ -451,9 +459,118 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, seed_user, Backend};
+    use crate::test_support::{backends, seed_user, Backend, CloseablePool};
+    use common::test_support::{parse_display_name, parse_email, parse_password, parse_username};
     use rstest::*;
     use rstest_reuse::*;
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn user_round_trips_username_display_name_and_email(#[case] backend: Backend) {
+        // Keep the whole `TestEnv` bound: dropping `base` unlinks the SQLite file
+        // (ADR-0053 TempDir hazard).
+        let env = backend.setup().await;
+
+        // `create_user` binds a typed `Username` + `Option<&DisplayName>`, and
+        // `set_email` binds `Option<&Email>`; the reads decode each column straight
+        // back into its newtype — exercising both bridge directions.
+        let username: Username = parse_username("alice");
+        let display_name = parse_display_name("Alice Example");
+        let user_id = env
+            .state
+            .users
+            .create_user(
+                &username,
+                &parse_password("password123"),
+                Some(&display_name),
+                false,
+            )
+            .await
+            .unwrap();
+
+        let email = parse_email("alice@example.com");
+        env.state
+            .users
+            .set_email(user_id, Some(&email), true)
+            .await
+            .unwrap();
+
+        let record = env.state.users.get_user(user_id).await.unwrap().unwrap();
+        assert_eq!(record.username, username);
+        assert_eq!(record.display_name, Some(display_name));
+        assert_eq!(record.email, Some(email));
+
+        // `get_user_by_username` binds the `Username` and decodes the same columns
+        // via a second query.
+        let by_name = env
+            .state
+            .users
+            .get_user_by_username(&username)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(by_name.username, username);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn user_round_trips_absent_display_name_and_email(#[case] backend: Backend) {
+        // The `None` decode path for `Option<DisplayName>` / `Option<Email>`.
+        let env = backend.setup().await;
+        let username: Username = parse_username("bob");
+        let user_id = env
+            .state
+            .users
+            .create_user(&username, &parse_password("password123"), None, false)
+            .await
+            .unwrap();
+
+        let record = env.state.users.get_user(user_id).await.unwrap().unwrap();
+        assert_eq!(record.username, username);
+        assert_eq!(record.display_name, None);
+        assert_eq!(record.email, None);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn get_user_rejects_a_malformed_username_column(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+
+        // Overwrite the `username` column with a value `Username::from_str`
+        // rejects (a space is not a valid username character), binding it as a raw
+        // `&str` so the bad value actually lands in the column — the typed bind
+        // could not produce it.
+        let sql = "UPDATE users SET username = $1 WHERE user_id = $2";
+        match env.base.pool() {
+            CloseablePool::Sqlite(pool) => {
+                sqlx::query(sql)
+                    .bind("bad name")
+                    .bind(i64::from(user_id))
+                    .execute(pool)
+                    .await
+                    .unwrap();
+            }
+            CloseablePool::Postgres(pool) => {
+                sqlx::query(sql)
+                    .bind("bad name")
+                    .bind(i64::from(user_id))
+                    .execute(pool)
+                    .await
+                    .unwrap();
+            }
+        }
+
+        // The read decodes the `username` column into `Username` via the sqlx
+        // bridge, which validates through `FromStr`; the malformed value surfaces
+        // as a column-decode error rather than being silently admitted (covers the
+        // bridge's `Decode` error arm).
+        let err = env.state.users.get_user(user_id).await.unwrap_err();
+        assert!(
+            matches!(err, sqlx::Error::ColumnDecode { .. }),
+            "expected a column-decode error, got: {err:?}"
+        );
+    }
 
     #[apply(backends)]
     #[tokio::test]
@@ -463,7 +580,7 @@ mod tests {
         let result = env
             .state
             .users
-            .authenticate(&"alice".parse().unwrap(), &"password123".parse().unwrap())
+            .authenticate(&parse_username("alice"), &parse_password("password123"))
             .await;
         // §3.1a: the underlying sqlx::Error is preserved as a typed source
         // (not stringified), so the boundary can classify it.
@@ -490,10 +607,7 @@ mod tests {
         let result = env
             .state
             .users
-            .authenticate(
-                &"testuser".parse().unwrap(),
-                &"password123".parse().unwrap(),
-            )
+            .authenticate(&parse_username("testuser"), &parse_password("password123"))
             .await;
         assert!(matches!(result, Err(UserAuthError::Internal(_))));
     }
@@ -513,10 +627,7 @@ mod tests {
         let result = env
             .state
             .users
-            .authenticate(
-                &"testuser".parse().unwrap(),
-                &"password123".parse().unwrap(),
-            )
+            .authenticate(&parse_username("testuser"), &parse_password("password123"))
             .await;
         assert!(matches!(result, Err(UserAuthError::Internal(_))));
     }
@@ -538,10 +649,7 @@ mod tests {
         let result = env
             .state
             .users
-            .authenticate(
-                &"testuser".parse().unwrap(),
-                &"password123".parse().unwrap(),
-            )
+            .authenticate(&parse_username("testuser"), &parse_password("password123"))
             .await;
         assert!(matches!(result, Err(UserAuthError::Internal(_))));
     }
@@ -588,10 +696,7 @@ mod tests {
         let result = env
             .state
             .users
-            .authenticate(
-                &"testuser".parse().unwrap(),
-                &"password123".parse().unwrap(),
-            )
+            .authenticate(&parse_username("testuser"), &parse_password("password123"))
             .await;
         assert!(matches!(result, Err(UserAuthError::Internal(_))));
     }
@@ -604,8 +709,8 @@ mod tests {
             .state
             .users
             .create_user(
-                &"alice".parse().unwrap(),
-                &"force-hash-error-for-test-coverage".parse().unwrap(),
+                &parse_username("alice"),
+                &parse_password("force-hash-error-for-test-coverage"),
                 None,
                 false,
             )
@@ -620,8 +725,8 @@ mod tests {
         env.state
             .users
             .create_user(
-                &"alice".parse().unwrap(),
-                &"password123".parse().unwrap(),
+                &parse_username("alice"),
+                &parse_password("password123"),
                 None,
                 false,
             )
@@ -631,8 +736,8 @@ mod tests {
             .state
             .users
             .authenticate(
-                &"alice".parse().unwrap(),
-                &"force-verify-error-for-test-coverage".parse().unwrap(),
+                &parse_username("alice"),
+                &parse_password("force-verify-error-for-test-coverage"),
             )
             .await;
         assert!(matches!(result, Err(UserAuthError::Internal(_))));

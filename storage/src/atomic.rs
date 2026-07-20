@@ -134,8 +134,10 @@ pub trait AtomicOps: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, Backend};
-    use common::test_support::{parse_display_name, parse_raw_token, parse_username};
+    use crate::test_support::{backends, parse_invite_code, Backend};
+    use common::test_support::{
+        parse_display_name, parse_password, parse_raw_token, parse_username,
+    };
     use rstest::*;
     use rstest_reuse::*;
 
@@ -171,7 +173,7 @@ mod tests {
         let env = backend.setup().await;
         let code = seed_invite(&env.state).await;
         let username = parse_username("alice");
-        let password: Password = "force-hash-error-for-test-coverage".parse().unwrap();
+        let password: Password = parse_password("force-hash-error-for-test-coverage");
         let result = env
             .state
             .atomic
@@ -194,7 +196,7 @@ mod tests {
             .await
             .unwrap();
         let username = parse_username("alice");
-        let password: Password = "password123".parse().unwrap();
+        let password: Password = parse_password("password123");
         let result = env
             .state
             .atomic
@@ -209,7 +211,7 @@ mod tests {
         let env = backend.setup().await;
         env.base.close_pool().await;
         let username = parse_username("alice");
-        let password: Password = "password123".parse().unwrap();
+        let password: Password = parse_password("password123");
         let display_name = parse_display_name("Alice");
 
         assert!(env
@@ -232,7 +234,7 @@ mod tests {
                 &password,
                 Some(&display_name),
                 false,
-                &"code".parse::<InviteCode>().unwrap(),
+                &parse_invite_code("code"),
             )
             .await
             .is_err());

@@ -22,6 +22,7 @@ mod steps {
     pub mod rendered_html_from_trusted_check;
     pub mod sequence_check;
     pub mod server_fn_registrar_check;
+    pub mod sqlx_newtype_bind_check;
     pub mod static_checks;
     pub mod test_pattern_check;
 }
@@ -292,6 +293,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::test_pattern_check::run(&mut result);
             steps::server_fn_registrar_check::run(&mut result);
             steps::proffered_secret_check::run(&mut result);
+            steps::sqlx_newtype_bind_check::run(&mut result);
             steps::rendered_html_from_trusted_check::run(&mut result);
             steps::host_tests::run(&sh, &mut result);
             if !no_test {
@@ -322,6 +324,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::test_pattern_check::run(&mut result);
             steps::server_fn_registrar_check::run(&mut result);
             steps::proffered_secret_check::run(&mut result);
+            steps::sqlx_newtype_bind_check::run(&mut result);
             steps::rendered_html_from_trusted_check::run(&mut result);
             steps::host_tests::run(&sh, &mut result);
             steps::nix::coverage(&mut result);

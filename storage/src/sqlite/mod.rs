@@ -214,7 +214,7 @@ impl AtomicOps for SqliteAtomicOps {
             let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
                 "SELECT used_at, expires_at FROM invites WHERE code = $1",
             )
-            .bind(invite_code.as_ref())
+            .bind(invite_code)
             .fetch_optional(&mut *conn)
             .await?
             .ok_or(RegisterWithInviteError::InviteNotFound)?;
@@ -238,9 +238,9 @@ impl AtomicOps for SqliteAtomicOps {
                  VALUES ($1, $2, $3, $4, $5)
                  RETURNING user_id",
             )
-            .bind(username.as_ref())
+            .bind(username)
             .bind(&password_hash)
-            .bind(display_name.map(|d| &**d))
+            .bind(display_name)
             .bind(now)
             .bind(is_operator)
             .fetch_one(&mut *conn)
@@ -257,7 +257,7 @@ impl AtomicOps for SqliteAtomicOps {
             sqlx::query("UPDATE invites SET used_at = $1, used_by = $2 WHERE code = $3")
                 .bind(now)
                 .bind(i64::from(user_id))
-                .bind(invite_code.as_ref())
+                .bind(invite_code)
                 .execute(&mut *conn)
                 .await?;
 
@@ -298,7 +298,7 @@ impl AtomicOps for SqliteAtomicOps {
              RETURNING user_id",
         )
         .bind(now)
-        .bind(token_hash.as_ref())
+        .bind(&token_hash)
         .bind(now)
         .fetch_optional(&mut *tx)
         .await?;
@@ -307,7 +307,7 @@ impl AtomicOps for SqliteAtomicOps {
             let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
                 "SELECT used_at, expires_at FROM password_resets WHERE token_hash = $1",
             )
-            .bind(token_hash.as_ref())
+            .bind(&token_hash)
             .fetch_optional(&mut *tx)
             .await?;
 

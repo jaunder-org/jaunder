@@ -21,7 +21,7 @@ impl SessionDialect for Sqlite {
         let mut tx = pool.begin().await?;
         sqlx::query("UPDATE sessions SET last_used_at = $1 WHERE token_hash = $2")
             .bind(now)
-            .bind(token_hash.as_ref())
+            .bind(token_hash)
             .execute(&mut *tx)
             .await?;
 
@@ -31,7 +31,7 @@ impl SessionDialect for Sqlite {
              JOIN users u ON u.user_id = s.user_id
              WHERE s.token_hash = $1",
         )
-        .bind(token_hash.as_ref())
+        .bind(token_hash)
         .fetch_optional(&mut *tx)
         .await?;
 

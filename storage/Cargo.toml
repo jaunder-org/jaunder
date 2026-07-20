@@ -5,7 +5,7 @@ edition = "2021"
 license = "GPL-3.0-only"
 
 [dependencies]
-common.workspace = true
+common = { workspace = true, features = ["sqlx"] }
 host = { path = "../host" }
 anyhow.workspace = true
 async-trait.workspace = true
