@@ -173,13 +173,15 @@ value _does_ have a rejecting invariant, so it takes a numeric trailer with a
 **validating** twist: `struct RetentionCount(usize)` deriving
 `Clone, Copy, Debug, PartialEq, Eq`, plus a `FromStr` that trims, parses the
 inner integer, then enforces the declared `min`/`max` bound (the single
-chokepoint); a `get()` accessor; `Display`; a **compile-checked `Default`**; and
-a **validating** transparent-integer serde bridge (deserialize re-runs the
-bound, so an out-of-range value is rejected on the wire, exactly as a string
-newtype's serde rejects a malformed string). The inner integer type
-(`u32`/`usize`/`i64`/…) and the bounds are per-type, so — unlike the ID trailer,
-which is fixed — the numeric-value trailer is **parameterized** (see §3). First
-users: `RetentionCount` (#455), `FeedMinItems`/`FeedMinDays` (#535).
+chokepoint); a `value()` accessor and a `From<Self>` for the inner integer (the
+idiomatic extraction, mirroring the ID trailer's `From<Self> for i64`);
+`Display`; a **compile-checked `Default`**; and a **validating**
+transparent-integer serde bridge (deserialize re-runs the bound, so an
+out-of-range value is rejected on the wire, exactly as a string newtype's serde
+rejects a malformed string). The inner integer type (`u32`/`usize`/`i64`/…) and
+the bounds are per-type, so — unlike the ID trailer, which is fixed — the
+numeric-value trailer is **parameterized** (see §3). First users:
+`RetentionCount` (#455), `FeedMinItems`/`FeedMinDays` (#535).
 
 ### 3. The trailer is generated, not hand-written
 
@@ -195,16 +197,17 @@ _generates_ its `FromStr` too — a non-validating delegate to `i64`'s parse, pe
 **validating** one: because a numeric bound is declarative, the rule is not
 per-type prose but attributes —
 `#[num_newtype(inner = u32, min = 1, default = 20)]` (optional `max`, `error`) —
-from which the derive emits the bound-checking `FromStr`, `get()`, `Display`, a
-compile-checked `Default`, a self-contained error type (no `thiserror` in
-emitted code), and the validating serde bridge. So a numeric-value newtype is a
-struct, a derive, and one attribute line — no hand-written `FromStr` at all. The
-std derives stay in the user's `#[derive(...)]` list so per-type variation is
-expressed idiomatically (Slug omits `Hash`, Tag adds `Ord`, a secret omits
-`Debug` so the generated redacting one applies). The serde bridge is emitted as
-**direct `Serialize`/`Deserialize` impls**, not a `#[serde(try_from/into)]`
-attribute (serialize borrows instead of cloning into a `String`; deserialize
-routes through `FromStr` so invalid input is rejected on the wire). No inherent
+from which the derive emits the bound-checking `FromStr`, a `value()` accessor
+and `From<Self>` for the inner integer, `Display`, a compile-checked `Default`,
+a self-contained error type (no `thiserror` in emitted code), and the validating
+serde bridge. So a numeric-value newtype is a struct, a derive, and one
+attribute line — no hand-written `FromStr` at all. The std derives stay in the
+user's `#[derive(...)]` list so per-type variation is expressed idiomatically
+(Slug omits `Hash`, Tag adds `Ord`, a secret omits `Debug` so the generated
+redacting one applies). The serde bridge is emitted as **direct
+`Serialize`/`Deserialize` impls**, not a `#[serde(try_from/into)]` attribute
+(serialize borrows instead of cloning into a `String`; deserialize routes
+through `FromStr` so invalid input is rejected on the wire). No inherent
 `as_str()` is generated — the `str` traits replace it. A new domain newtype is
 then a struct, a derive, and a `FromStr` — not 40 lines of boilerplate that
 drift apart over time.
