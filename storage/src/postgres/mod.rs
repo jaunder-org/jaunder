@@ -122,9 +122,9 @@ impl AtomicOps for PostgresAtomicOps {
              VALUES ($1, $2, $3, $4, $5)
              RETURNING user_id",
         )
-        .bind(username.as_ref())
+        .bind(username)
         .bind(&password_hash)
-        .bind(display_name.map(|d| &**d))
+        .bind(display_name)
         .bind(now)
         .bind(is_operator)
         .fetch_one(&mut *tx)

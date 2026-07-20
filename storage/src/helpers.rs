@@ -10,6 +10,7 @@ use crate::{
     SessionRecord, UserRecord,
 };
 use common::display_name::DisplayName;
+use common::email::Email;
 use common::ids::{PostId, TagId, UserId};
 use common::media::{ContentHash, Filename};
 use common::post_body::PostBody;
@@ -26,12 +27,12 @@ use host::invite::InviteCode;
 
 pub(crate) type UserRecordParts = (
     i64,
-    String,
-    Option<String>,
+    Username,
+    Option<DisplayName>,
     Option<String>,
     DateTime<Utc>,
     Option<DateTime<Utc>>,
-    Option<String>,
+    Option<Email>,
     bool,
     bool,
 );
@@ -48,20 +49,12 @@ pub(crate) fn build_user_record(
         email_verified,
         is_operator,
     ): UserRecordParts,
-) -> sqlx::Result<UserRecord> {
-    let username = username
-        .parse()
-        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-    let display_name = display_name
-        .map(|s| {
-            s.parse::<DisplayName>()
-                .map_err(|e| sqlx::Error::Decode(Box::new(e)))
-        })
-        .transpose()?;
-    let email = email
-        .map(|s| s.parse().map_err(|e| sqlx::Error::Decode(Box::new(e))))
-        .transpose()?;
-    Ok(UserRecord {
+) -> UserRecord {
+    // The `username`, `display_name`, and `email` columns decode straight into
+    // their domain newtypes via the sqlx bridge (#438), which validates through
+    // `FromStr`, so a corrupt/migrated value is rejected as a column-decode error
+    // before we ever get here — this build step is now infallible.
+    UserRecord {
         user_id: UserId::from(user_id),
         username,
         display_name,
@@ -71,7 +64,7 @@ pub(crate) fn build_user_record(
         email,
         email_verified,
         is_operator,
-    })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -232,17 +225,17 @@ pub(crate) fn build_post_record(
 
 pub(crate) type UserRow = (
     i64,
-    String,
-    Option<String>,
+    Username,
+    Option<DisplayName>,
     Option<String>,
     DateTime<Utc>,
     Option<DateTime<Utc>>,
-    Option<String>,
+    Option<Email>,
     bool,
     bool,
 );
 
-pub(crate) fn user_record_from_row(row: UserRow) -> sqlx::Result<UserRecord> {
+pub(crate) fn user_record_from_row(row: UserRow) -> UserRecord {
     build_user_record(row)
 }
 
@@ -440,16 +433,16 @@ mod tests {
         let now = Utc::now();
         let parts: UserRecordParts = (
             1,
-            "alice".to_string(),
-            Some("Alice".to_string()),
+            "alice".parse().unwrap(),
+            Some("Alice".parse().unwrap()),
             Some("Bio".to_string()),
             now,
             Some(now),
-            Some("alice@example.com".to_string()),
+            Some("alice@example.com".parse().unwrap()),
             true,
             false,
         );
-        let record = build_user_record(parts).unwrap();
+        let record = build_user_record(parts);
         assert_eq!(record.user_id, UserId::from(1));
         assert_eq!(record.username, "alice");
         assert_eq!(record.email.unwrap(), "alice@example.com");
@@ -618,39 +611,10 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::Other);
     }
 
-    #[test]
-    fn build_user_record_rejects_invalid_username() {
-        let parts: UserRecordParts = (
-            1,
-            "Invalid Username".to_string(),
-            None,
-            None,
-            Utc::now(),
-            None,
-            None,
-            false,
-            false,
-        );
-        let err = build_user_record(parts).unwrap_err();
-        assert!(matches!(err, sqlx::Error::Decode(_)));
-    }
-
-    #[test]
-    fn build_user_record_rejects_invalid_email() {
-        let parts: UserRecordParts = (
-            1,
-            "alice".to_string(),
-            None,
-            None,
-            Utc::now(),
-            None,
-            Some("not-an-email".to_string()),
-            false,
-            false,
-        );
-        let err = build_user_record(parts).unwrap_err();
-        assert!(matches!(err, sqlx::Error::Decode(_)));
-    }
+    // `build_user_record` no longer parses: `username`/`display_name`/`email`
+    // decode straight into their newtypes via the sqlx bridge (#438), so a
+    // malformed stored value is rejected as a `ColumnDecode` error at the query
+    // boundary (covered by `users.rs`'s decode-error tests), not here.
 
     #[test]
     fn build_session_record_rejects_invalid_username() {
@@ -840,7 +804,7 @@ mod tests {
         let now = Utc::now();
         let row: UserRow = (
             1,
-            "alice".to_string(),
+            "alice".parse().unwrap(),
             None,
             None,
             now,
@@ -849,7 +813,7 @@ mod tests {
             false,
             false,
         );
-        let record = user_record_from_row(row).unwrap();
+        let record = user_record_from_row(row);
         assert_eq!(record.user_id, UserId::from(1));
     }
 
@@ -946,16 +910,16 @@ mod tests {
         let now = Utc::now();
         let row: UserRow = (
             1,
-            "alice".to_string(),
-            Some("Alice".to_string()),
+            "alice".parse().unwrap(),
+            Some("Alice".parse().unwrap()),
             Some("Bio".to_string()),
             now,
             Some(now),
-            Some("alice@example.com".to_string()),
+            Some("alice@example.com".parse().unwrap()),
             true,
             false,
         );
-        let record = user_record_from_row(row).unwrap();
+        let record = user_record_from_row(row);
         assert_eq!(record.user_id, UserId::from(1));
         assert_eq!(record.username, "alice");
         assert_eq!(record.display_name, Some("Alice".parse().unwrap()));
