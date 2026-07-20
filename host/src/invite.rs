@@ -47,6 +47,18 @@ impl TryFrom<ProfferedInviteCode> for InviteCode {
     }
 }
 
+/// Mints a fresh invite code: the 32-byte base64url secret from
+/// [`crate::token::generate`], wrapped in the domain type without re-validation.
+///
+/// A freshly minted code is canonical base64url by construction, so this is the
+/// trusted-mint counterpart to the validating [`FromStr`] inbound door: it lets
+/// `create_invite` store a typed `InviteCode` end-to-end with no fallible
+/// re-parse (#438). Mirrors `common::token::RawToken::from_generated`.
+#[must_use]
+pub fn generate() -> InviteCode {
+    InviteCode(crate::token::generate().as_ref().to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -79,5 +91,15 @@ mod tests {
         let raw = "abcABC012_-";
         let code: InviteCode = raw.parse().unwrap();
         assert_eq!(code.as_ref(), raw);
+    }
+
+    #[test]
+    fn generate_mints_distinct_canonical_codes() {
+        let a = generate();
+        let b = generate();
+        // Distinct high-entropy values.
+        assert_ne!(a.as_ref(), b.as_ref());
+        // A minted code is canonical, so it round-trips through the validating door.
+        assert!(a.as_ref().parse::<InviteCode>().is_ok());
     }
 }

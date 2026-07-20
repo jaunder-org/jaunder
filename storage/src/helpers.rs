@@ -16,7 +16,7 @@ use common::post_body::PostBody;
 use common::post_title::PostTitle;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
-use common::token::{InvalidTokenShape, TokenHash};
+use common::token::TokenHash;
 use common::username::Username;
 use host::invite::InviteCode;
 
@@ -106,21 +106,22 @@ pub(crate) fn build_session_record(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn build_invite_record(
-    code: String,
+    code: InviteCode,
     created_at: DateTime<Utc>,
     expires_at: DateTime<Utc>,
     used_at: Option<DateTime<Utc>>,
     used_by: Option<i64>,
-) -> Result<InviteRecord, InvalidTokenShape> {
-    // The `code` column is written only by `create_invite` (canonical base64url), so a
-    // parse failure is a data-integrity condition; callers surface it as a storage error.
-    Ok(InviteRecord {
-        code: InviteCode::try_from(code)?,
+) -> InviteRecord {
+    // The `code` column decodes straight into `InviteCode` via the sqlx bridge (#438),
+    // which validates through `FromStr`, so a corrupt/migrated value is rejected as a
+    // decode error before we ever get here — this build step is now infallible.
+    InviteRecord {
+        code,
         created_at,
         expires_at,
         used_at,
         used_by: used_by.map(UserId::from),
-    })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -260,14 +261,14 @@ pub(crate) fn session_record_from_row(row: SessionRow) -> sqlx::Result<SessionRe
 }
 
 pub(crate) type InviteRow = (
-    String,
+    InviteCode,
     DateTime<Utc>,
     DateTime<Utc>,
     Option<DateTime<Utc>>,
     Option<i64>,
 );
 
-pub(crate) fn invite_record_from_row(row: InviteRow) -> Result<InviteRecord, InvalidTokenShape> {
+pub(crate) fn invite_record_from_row(row: InviteRow) -> InviteRecord {
     let (code, created_at, expires_at, used_at, used_by) = row;
     build_invite_record(code, created_at, expires_at, used_at, used_by)
 }
@@ -476,13 +477,12 @@ mod tests {
         let expires_at = created_at + chrono::Duration::days(7);
         let used_at = created_at + chrono::Duration::hours(1);
         let record = build_invite_record(
-            "invite-code".to_string(),
+            "invite-code".parse().unwrap(),
             created_at,
             expires_at,
             Some(used_at),
             Some(7),
-        )
-        .unwrap();
+        );
 
         assert_eq!(record.code.as_ref(), "invite-code");
         assert_eq!(record.created_at, created_at);
@@ -830,8 +830,8 @@ mod tests {
         let session_record = session_record_from_row(session).unwrap();
         assert_eq!(session_record.user_id, UserId::from(1));
 
-        let invite: InviteRow = ("code".to_string(), now, now, None, None);
-        let invite_record = invite_record_from_row(invite).unwrap();
+        let invite: InviteRow = ("code".parse().unwrap(), now, now, None, None);
+        let invite_record = invite_record_from_row(invite);
         assert_eq!(invite_record.code.as_ref(), "code");
     }
 
@@ -969,8 +969,8 @@ mod tests {
     #[test]
     fn invite_record_from_row_maps_some_fields() {
         let now = Utc::now();
-        let row: InviteRow = ("code".to_string(), now, now, Some(now), Some(1));
-        let record = invite_record_from_row(row).unwrap();
+        let row: InviteRow = ("code".parse().unwrap(), now, now, Some(now), Some(1));
+        let record = invite_record_from_row(row);
         assert_eq!(record.code.as_ref(), "code");
         assert_eq!(record.created_at, now);
         assert_eq!(record.expires_at, now);
