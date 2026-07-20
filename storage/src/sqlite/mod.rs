@@ -298,7 +298,7 @@ impl AtomicOps for SqliteAtomicOps {
              RETURNING user_id",
         )
         .bind(now)
-        .bind(token_hash.as_ref())
+        .bind(&token_hash)
         .bind(now)
         .fetch_optional(&mut *tx)
         .await?;
@@ -307,7 +307,7 @@ impl AtomicOps for SqliteAtomicOps {
             let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
                 "SELECT used_at, expires_at FROM password_resets WHERE token_hash = $1",
             )
-            .bind(token_hash.as_ref())
+            .bind(&token_hash)
             .fetch_optional(&mut *tx)
             .await?;
 

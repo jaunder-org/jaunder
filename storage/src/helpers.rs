@@ -72,26 +72,25 @@ pub(crate) fn build_user_record(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn build_session_record(
-    token_hash: String,
+    token_hash: TokenHash,
     user_id: i64,
-    username: &str,
+    username: Username,
     label: String,
     created_at: DateTime<Utc>,
     last_used_at: DateTime<Utc>,
-) -> sqlx::Result<SessionRecord> {
-    let username = username
-        .parse()
-        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-    Ok(SessionRecord {
-        // The `token_hash` column is written only by `create_session` (canonical
-        // base64url digest), so this is a trusted rebuild of our own stored value.
-        token_hash: TokenHash::from_digest(token_hash),
+) -> SessionRecord {
+    // The `token_hash` and `username` columns decode straight into their domain
+    // newtypes via the sqlx bridge (#438), which validates through `FromStr`, so a
+    // corrupt/migrated value is rejected as a column-decode error before we ever
+    // get here — this build step is now infallible.
+    SessionRecord {
+        token_hash,
         user_id: UserId::from(user_id),
         username,
         label,
         created_at,
         last_used_at,
-    })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -239,14 +238,21 @@ pub(crate) fn user_record_from_row(row: UserRow) -> UserRecord {
     build_user_record(row)
 }
 
-pub(crate) type SessionRow = (String, i64, String, String, DateTime<Utc>, DateTime<Utc>);
+pub(crate) type SessionRow = (
+    TokenHash,
+    i64,
+    Username,
+    String,
+    DateTime<Utc>,
+    DateTime<Utc>,
+);
 
-pub(crate) fn session_record_from_row(row: SessionRow) -> sqlx::Result<SessionRecord> {
+pub(crate) fn session_record_from_row(row: SessionRow) -> SessionRecord {
     let (token_hash, user_id, username, label, created_at, last_used_at) = row;
     build_session_record(
         token_hash,
         user_id,
-        &username,
+        username,
         label,
         created_at,
         last_used_at,
@@ -452,14 +458,13 @@ mod tests {
     fn test_build_session_record() {
         let now = Utc::now();
         let record = build_session_record(
-            "hash".to_string(),
+            "hash".parse().unwrap(),
             1,
-            "alice",
+            "alice".parse().unwrap(),
             "label".to_string(),
             now,
             now,
-        )
-        .unwrap();
+        );
         assert_eq!(record.token_hash, "hash");
         assert_eq!(record.username, "alice");
     }
@@ -616,19 +621,10 @@ mod tests {
     // malformed stored value is rejected as a `ColumnDecode` error at the query
     // boundary (covered by `users.rs`'s decode-error tests), not here.
 
-    #[test]
-    fn build_session_record_rejects_invalid_username() {
-        let err = build_session_record(
-            "hash".to_string(),
-            1,
-            "Invalid Username",
-            "label".to_string(),
-            Utc::now(),
-            Utc::now(),
-        )
-        .unwrap_err();
-        assert!(matches!(err, sqlx::Error::Decode(_)));
-    }
+    // `build_session_record` no longer parses: `token_hash`/`username` decode
+    // straight into their newtypes via the sqlx bridge (#438), so a malformed
+    // stored value is rejected as a `ColumnDecode` error at the query boundary
+    // (covered by `sessions.rs`'s decode-error test), not here.
 
     #[test]
     fn build_post_record_with_valid_tags_json_parses_tags() {
@@ -784,14 +780,14 @@ mod tests {
     fn session_and_invite_row_helpers_round_trip() {
         let now = Utc::now();
         let session: SessionRow = (
-            "tokenhash".to_string(),
+            "tokenhash".parse().unwrap(),
             1,
-            "alice".to_string(),
+            "alice".parse().unwrap(),
             "label".to_string(),
             now,
             now,
         );
-        let session_record = session_record_from_row(session).unwrap();
+        let session_record = session_record_from_row(session);
         assert_eq!(session_record.user_id, UserId::from(1));
 
         let invite: InviteRow = ("code".parse().unwrap(), now, now, None, None);

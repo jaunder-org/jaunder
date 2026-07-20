@@ -98,10 +98,15 @@ impl<DB: Database> EmailVerificationStore<DB> {
 impl<DB> EmailVerificationStorage for EmailVerificationStore<DB>
 where
     DB: Backend,
-    (i64, String): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (i64, Email): for<'r> sqlx::FromRow<'r, DB::Row>,
     (Option<DateTime<Utc>>, DateTime<Utc>): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    // `TokenHash` binds and `Email` binds/decodes as themselves via the sqlx
+    // bridge (#438), which delegates to `String`; these bounds make that bridge
+    // available on the generic backend (the `(i64, Email): FromRow` bound above
+    // threads the `Email` decode).
+    String: sqlx::Type<DB>,
+    for<'q> String: sqlx::Encode<'q, DB>,
     for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
@@ -135,9 +140,9 @@ where
              (token_hash, user_id, email, created_at, expires_at)
              VALUES ($1, $2, $3, $4, $5)",
         )
-        .bind(token_hash.as_ref())
+        .bind(token_hash)
         .bind(i64::from(user_id))
-        .bind(&**email)
+        .bind(email)
         .bind(now)
         .bind(expires_at)
         .execute(&mut *tx)
@@ -162,24 +167,28 @@ where
         // statement is the "claim" — no separate read is needed first, so two
         // concurrent requests cannot both succeed.  RETURNING gives us the
         // data we need without a second round-trip.
-        let claimed = sqlx::query_as::<_, (i64, String)>(
+        // The `email` column decodes straight into `Email` via the sqlx bridge
+        // (#438), which validates through `FromStr`. A genuine storage fault (e.g.
+        // a closed pool) still maps to `NotFound` as before, but a corrupt/migrated
+        // `email` value is a data-integrity fault, so its `ColumnDecode` error is
+        // surfaced as `Internal` — mirroring the pre-bridge hand-parse, which also
+        // reported a corrupt value as an internal decode error.
+        let claimed = sqlx::query_as::<_, (i64, Email)>(
             "UPDATE email_verifications SET used_at = $1
              WHERE token_hash = $2 AND used_at IS NULL AND expires_at > $3
              RETURNING user_id, email",
         )
         .bind(now)
-        .bind(token_hash.as_ref())
+        .bind(&token_hash)
         .bind(now)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|_| UseEmailVerificationError::NotFound)?;
+        .map_err(|e| match e {
+            sqlx::Error::ColumnDecode { .. } => UseEmailVerificationError::Internal(e),
+            _ => UseEmailVerificationError::NotFound,
+        })?;
 
         if let Some((user_id, email)) = claimed {
-            // The address was validated when stored; a parse failure here means
-            // the stored value was corrupted, which we surface as a decode error.
-            let email = email
-                .parse::<Email>()
-                .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
             return Ok((UserId::from(user_id), email));
         }
 
@@ -187,7 +196,7 @@ where
         let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
             "SELECT used_at, expires_at FROM email_verifications WHERE token_hash = $1",
         )
-        .bind(token_hash.as_ref())
+        .bind(&token_hash)
         .fetch_optional(&self.pool)
         .await
         .map_err(|_| UseEmailVerificationError::NotFound)?;
@@ -199,10 +208,95 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, Backend, TestEnv};
+    use crate::test_support::{backends, seed_user, Backend, CloseablePool, TestEnv};
     use common::test_support::{parse_email, parse_raw_token};
     use rstest::*;
     use rstest_reuse::*;
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn email_verification_round_trips_user_and_email(#[case] backend: Backend) {
+        // Keep the whole `TestEnv` bound: dropping `base` unlinks the SQLite file
+        // (ADR-0053 TempDir hazard).
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let email = parse_email("alice@example.com");
+        let expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
+
+        // `create_email_verification` binds the `TokenHash` and the `Email`;
+        // `use_email_verification` re-binds the hash to claim the row and decodes
+        // the `email` column straight back into `Email` via the sqlx bridge (#438).
+        let raw_token = env
+            .state
+            .email_verifications
+            .create_email_verification(user_id, &email, expires_at)
+            .await
+            .unwrap();
+
+        let (claimed_user, claimed_email) = env
+            .state
+            .email_verifications
+            .use_email_verification(&raw_token)
+            .await
+            .unwrap();
+        assert_eq!(claimed_user, user_id);
+        assert_eq!(claimed_email, email);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn use_email_verification_with_corrupt_email_column_returns_internal(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let email = parse_email("alice@example.com");
+        let expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
+        let raw_token = env
+            .state
+            .email_verifications
+            .create_email_verification(user_id, &email, expires_at)
+            .await
+            .unwrap();
+
+        // Overwrite the `email` column with a value `Email::from_str` rejects,
+        // binding it as a raw `&str` so the bad value actually lands in the column.
+        let sql = "UPDATE email_verifications SET email = $1";
+        match env.base.pool() {
+            CloseablePool::Sqlite(pool) => {
+                sqlx::query(sql)
+                    .bind("not-an-email")
+                    .execute(pool)
+                    .await
+                    .unwrap();
+            }
+            CloseablePool::Postgres(pool) => {
+                sqlx::query(sql)
+                    .bind("not-an-email")
+                    .execute(pool)
+                    .await
+                    .unwrap();
+            }
+        }
+
+        // The claim query decodes the `email` column into `Email` via the sqlx
+        // bridge; a corrupt value is a data-integrity fault, surfaced as
+        // `Internal(ColumnDecode)` — distinct from the not-found path (covers the
+        // decode arm of the claim query's error mapping).
+        let err = env
+            .state
+            .email_verifications
+            .use_email_verification(&raw_token)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                UseEmailVerificationError::Internal(sqlx::Error::ColumnDecode { .. })
+            ),
+            "expected Internal(ColumnDecode), got: {err:?}"
+        );
+    }
 
     #[test]
     fn use_email_verification_error_maps_each_variant_to_expected_kind() {
