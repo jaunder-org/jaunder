@@ -15,6 +15,7 @@ use crate::email::Email;
 use crate::media::{ContentHash, Filename};
 use crate::post_title::PostTitle;
 use crate::token::RawToken;
+use crate::username::Username;
 
 /// Parse `addr` into a valid [`Email`] for tests — the single place a test email
 /// literal is parsed, so a malformed fixture fails loudly and the parse isn't
@@ -107,4 +108,16 @@ pub fn parse_content_hash(s: &str) -> ContentHash {
 #[must_use]
 pub fn parse_filename(name: &str) -> Filename {
     name.parse().expect("valid test filename")
+}
+
+/// Parse `name` into a valid [`Username`] for tests — the single place a test
+/// username literal is parsed, so a malformed fixture fails loudly and the parse
+/// isn't re-spelled at every call site across the workspace.
+///
+/// # Panics
+///
+/// Panics if `name` is not a valid username (`[a-z0-9_-]+`).
+#[must_use]
+pub fn parse_username(name: &str) -> Username {
+    name.parse().expect("valid test username")
 }

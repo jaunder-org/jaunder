@@ -10,13 +10,15 @@
 //! propagated to callers that could not act on it — the policy choice this advisory
 //! layer is entitled to make on the primitive's truthful `Result`.
 
+use common::username::Username;
+
 use super::marker::{decode_marker, encode_marker, MARKER_KEY};
 
 /// Get + decode the marker. `None` when absent, malformed, **or** the store could
 /// not be read — an unreadable marker is treated as "no marker" (anonymous chrome),
 /// which the reconcile `Effect` corrects if the session says otherwise.
 #[must_use]
-pub fn get() -> Option<String> {
+pub fn get() -> Option<Username> {
     client::storage::get(MARKER_KEY)
         .ok()
         .flatten()
@@ -25,7 +27,7 @@ pub fn get() -> Option<String> {
 
 /// Write the marker for `username`. A failed write is non-fatal — the reconcile
 /// `Effect` re-writes it on the next load.
-pub fn set(username: &str) {
+pub fn set(username: &Username) {
     let _ = client::storage::set(MARKER_KEY, &encode_marker(username));
 }
 

@@ -198,8 +198,8 @@ pub fn PostDisplay(
 /// client-side signal that the viewer owns this post, so its action column shows
 /// even though the anonymous seed data has `is_author = false`. `false` on the
 /// host build (no marker) — the affordance is wasm-only chrome.
-fn marker_matches(author: &str) -> bool {
-    crate::auth::marker_storage::get().as_deref() == Some(author)
+fn marker_matches(author: &Username) -> bool {
+    crate::auth::marker_storage::get().as_ref() == Some(author)
 }
 
 #[component]
@@ -868,9 +868,8 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
         if let Some(res) = reconcile.get() {
             match res {
                 Ok(Some(u)) => {
-                    let u = u.to_string();
                     crate::auth::marker_storage::set(&u);
-                    if owner.get_untracked().as_deref() != Some(u.as_str()) {
+                    if owner.get_untracked().as_ref() != Some(&u) {
                         owner.set(Some(u));
                     }
                 }
@@ -905,7 +904,7 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
 /// Boot-time marker read: `Some(username)` in the browser when the auth marker is
 /// set, `None` on the host build (the sidebar only ever renders in wasm). Lets the
 /// sidebar pick authed vs. anon synchronously at mount (#181), no async gate.
-fn marker_username_on_boot() -> Option<String> {
+fn marker_username_on_boot() -> Option<Username> {
     crate::auth::marker_storage::get()
 }
 
@@ -914,14 +913,9 @@ fn marker_username_on_boot() -> Option<String> {
 /// reconciled render (#181) so both are byte-for-byte the same authed markup —
 /// only its inputs change from awaited values to these params.
 // cov:ignore-start
-fn authed_sidebar(active_key: &str, username: &str, is_operator: bool) -> impl IntoView {
+fn authed_sidebar(active_key: &str, username: &Username, is_operator: bool) -> impl IntoView {
     let active_key = active_key.to_string();
-    let username = username.to_string();
-    // Footer avatar takes a typed `Username`. The marker is stored from a validated
-    // username at login, so this parse effectively always succeeds; a malformed
-    // marker deliberately shows no avatar (`None`) rather than one built from garbage,
-    // while the raw string still renders as the footer label below.
-    let avatar_name = username.parse::<Username>().ok();
+    let username = username.clone();
     view! {
         <div style="display:contents">
             <a class="j-brand" href="/" style="text-decoration:none;color:inherit">
@@ -982,10 +976,11 @@ fn authed_sidebar(active_key: &str, username: &str, is_operator: bool) -> impl I
                     .collect::<Vec<_>>()}
             </div>
             <div class="j-sb-foot">
-                {avatar_name.map(|u| view! { <Avatar name=u size=28 /> })}
+                <Avatar name=username.clone() size=28 />
                 <div style="font-size:13px;flex:1;min-width:0">
-                    <div style="font-weight:500">{username}</div>
-                </div> <a href="/logout" style="font-size:11px;color:var(--muted)">
+                    <div style="font-weight:500">{username.to_string()}</div>
+                </div>
+                <a href="/logout" style="font-size:11px;color:var(--muted)">
                     "Sign out"
                 </a>
             </div>
