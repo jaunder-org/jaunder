@@ -13,7 +13,7 @@ use common::bio::Bio;
 use common::display_name::DisplayName;
 use common::email::Email;
 use common::ids::{PostId, TagId, UserId};
-use common::media::{ContentHash, Filename};
+use common::media::{ContentHash, ContentType, Filename};
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
@@ -306,7 +306,7 @@ pub(crate) type MediaRow = (
     ContentHash,
     Filename,
     String,
-    String,
+    ContentType,
     i64,
     Option<String>,
     DateTime<Utc>,
@@ -435,8 +435,8 @@ mod tests {
     use crate::test_support::parse_invite_code;
     use chrono::Utc;
     use common::test_support::{
-        parse_bio, parse_content_hash, parse_display_name, parse_email, parse_filename,
-        parse_password, parse_slug, parse_token_hash, parse_username,
+        parse_bio, parse_content_hash, parse_content_type, parse_display_name, parse_email,
+        parse_filename, parse_password, parse_slug, parse_token_hash, parse_username,
     };
 
     #[test]
@@ -674,7 +674,7 @@ mod tests {
             parse_content_hash(ROW_HASH),
             parse_filename("file.png"),
             "not-a-source".to_string(),
-            "image/png".to_string(),
+            parse_content_type("image/png"),
             42,
             None,
             Utc::now(),
@@ -696,7 +696,7 @@ mod tests {
             parse_content_hash(ROW_HASH),
             parse_filename("file.png"),
             "upload".to_string(),
-            "image/png".to_string(),
+            parse_content_type("image/png"),
             42,
             None,
             Utc::now(),

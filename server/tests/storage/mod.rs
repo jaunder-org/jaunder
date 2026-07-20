@@ -4,8 +4,8 @@ use common::password::Password;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::test_support::{
-    parse_audience_name, parse_bio, parse_content_hash, parse_display_name, parse_email,
-    parse_filename, parse_raw_token,
+    parse_audience_name, parse_bio, parse_content_hash, parse_content_type, parse_display_name,
+    parse_email, parse_filename, parse_raw_token,
 };
 use common::username::Username;
 use common::visibility::{
@@ -6862,7 +6862,7 @@ fn make_media_record(
         sha256: parse_content_hash(sha256),
         filename: parse_filename(filename),
         source,
-        content_type: "image/jpeg".to_string(),
+        content_type: parse_content_type("image/jpeg"),
         size_bytes: 12345,
         source_url: None,
         created_at: chrono::Utc::now(),

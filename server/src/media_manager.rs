@@ -8,7 +8,8 @@ use tokio::io::AsyncWriteExt;
 
 use common::ids::UserId;
 use common::media::{
-    detect_content_type, media_path, media_url, ContentHash, Filename, MaxFileSize, UserQuota,
+    detect_content_type, media_path, media_url, ContentHash, ContentType, Filename, MaxFileSize,
+    UserQuota,
 };
 use storage::{CreateMediaError, MediaRecord, MediaSource, MediaStorage, SiteConfigStorage};
 use web::auth::AuthUser;
@@ -38,7 +39,7 @@ pub struct MediaManager {
 #[derive(Debug)]
 struct UploadMetadata {
     filename: Filename,
-    content_type: String,
+    content_type: ContentType,
     sha256_hex: ContentHash,
     size_bytes: i64,
 }
@@ -76,7 +77,7 @@ impl MediaManager {
         let (max_file_size, user_quota) = self.get_limits().await?;
 
         let filename = Self::validate_filename(field.file_name())?;
-        let content_type = Self::get_content_type(field.content_type(), &filename);
+        let content_type = Self::get_content_type(field.content_type(), &filename)?;
 
         let tmp_path = self.create_temp_file().await?;
 
@@ -108,8 +109,24 @@ impl MediaManager {
             .map_err(|_| anyhow::anyhow!(MediaError::BadRequest("Invalid filename".to_owned())))
     }
 
-    pub fn get_content_type(content_type: Option<&str>, filename: &str) -> String {
-        content_type.map_or_else(|| detect_content_type(filename).to_owned(), str::to_owned)
+    /// The single validating content-type door, shared by the multipart and atompub intake
+    /// paths: a present client `Content-Type` is validated (a malformed one is a bad
+    /// request), an absent one is detected from the filename.
+    ///
+    /// # Errors
+    ///
+    /// Returns `anyhow::Error` (`MediaError::BadRequest`) when `content_type` is present but
+    /// not a valid `type/subtype` media type.
+    pub fn get_content_type(
+        content_type: Option<&str>,
+        filename: &str,
+    ) -> anyhow::Result<ContentType> {
+        match content_type {
+            Some(c) => c.parse().map_err(|_| {
+                anyhow::anyhow!(MediaError::BadRequest("Invalid content type".to_owned()))
+            }),
+            None => Ok(detect_content_type(filename)),
+        }
     }
 
     #[must_use]
@@ -198,7 +215,7 @@ impl MediaManager {
         user_id: UserId,
         sha256_hex: &ContentHash,
         filename: &Filename,
-        content_type: &str,
+        content_type: &ContentType,
         size_bytes: i64,
     ) -> anyhow::Result<()> {
         let record = MediaRecord {
@@ -206,7 +223,7 @@ impl MediaManager {
             sha256: sha256_hex.clone(),
             filename: filename.clone(),
             source: MediaSource::Upload,
-            content_type: content_type.to_owned(),
+            content_type: content_type.clone(),
             size_bytes,
             source_url: None,
             created_at: Utc::now(),
@@ -298,7 +315,7 @@ impl MediaManager {
         let (max_file_size, user_quota) = self.get_limits().await?;
         // `filename` is already a validated `Filename` (the caller ran Door B on the
         // client's name), so there is no re-sanitize here.
-        let content_type = Self::get_content_type(Some(content_type), filename);
+        let content_type = Self::get_content_type(Some(content_type), filename)?;
 
         let size_bytes = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
         if size_bytes > max_file_size.value() {
@@ -364,7 +381,7 @@ impl MediaManager {
 mod tests {
     use super::*;
     use crate::test_support::{media, migrated_sqlite_db, site_config, users};
-    use common::test_support::{parse_content_hash, parse_filename};
+    use common::test_support::{parse_content_hash, parse_content_type, parse_filename};
     use storage::MEDIA_MAX_FILE_SIZE_BYTES_KEY;
     use tempfile::TempDir;
 
@@ -393,6 +410,21 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn get_content_type_validates_present_and_detects_absent() {
+        // The single door (#495): a malformed present client `Content-Type` is a bad
+        // request, a valid one is taken verbatim, and an absent one is detected.
+        assert!(MediaManager::get_content_type(Some("garbage"), "x.png").is_err());
+        assert_eq!(
+            MediaManager::get_content_type(Some("image/png"), "x.bin").unwrap(),
+            "image/png"
+        );
+        assert_eq!(
+            MediaManager::get_content_type(None, "photo.jpg").unwrap(),
+            "image/jpeg"
+        );
+    }
+
     // guard:no-backend — mock store
     #[tokio::test]
     async fn register_in_db_maps_internal_create_error() {
@@ -414,7 +446,7 @@ mod tests {
                     "deadbeef00000000000000000000000000000000000000000000000000000000",
                 ),
                 &parse_filename("file.png"),
-                "image/png",
+                &parse_content_type("image/png"),
                 100,
             )
             .await
