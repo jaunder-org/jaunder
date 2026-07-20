@@ -29,15 +29,17 @@ commit with **`jaunder-commit`**.
 
 - [x] 1. Multipart spike — **decision gate** for Option A vs B. → **Option B**
      (see Spike outcome below).
-- [ ] 2. Split `media/mod.rs` → `api.rs` + wiring-only `mod.rs` (paths stable).
-- [ ] 3. Extract the pure response-`url` sliver into a host-tested ungated fn.
-- [ ] 4. Create `media/component.rs`: move `MediaPage`; consolidate the two
+- [x] 2. Split `media/mod.rs` → `api.rs` + wiring-only `mod.rs` (paths stable).
+- [x] 3. Extract the pure response-`url` sliver into a host-tested ungated fn.
+- [x] 4. Create `media/component.rs`: move `MediaPage`; consolidate the two
      upload widgets into one; migrate both call sites.
-- [ ] 5. Land the upload glue — **Option B**: relocate the `web_sys` glue into
+- [x] 5. Land the upload glue — **Option B**: relocate the `web_sys` glue into
      `component.rs` (axum route retained).
-- [ ] 6. Delete `pages/media.rs` + `pages/upload.rs`; rewire `pages/mod.rs`, the
-     router, `pages/ui.rs`, and the registrar.
-- [ ] 7. Full `cargo xtask validate` (no ADR — Option B).
+- [x] 6. Delete `pages/media.rs` + `pages/upload.rs`; rewire `pages/mod.rs`, the
+     router, `pages/ui.rs`, and the post-editor call site. (No `server.rs` —
+     nothing non-trivial peeled out. No registrar change — the `web::media::{…}`
+     `#[server]` paths were preserved by the `api.rs` re-exports in Task 2.)
+- [ ] 7. Full `cargo xtask validate` (e2e) at ship (no ADR — Option B).
 
 ## Spike outcome (2026-07-19) — Option B (fallback)
 
