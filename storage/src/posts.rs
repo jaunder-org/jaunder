@@ -2450,6 +2450,63 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
+    async fn update_post_persists_and_clears_summary(#[case] backend: Backend) {
+        // `update_post` writes the `summary` column (previously omitted from the SET
+        // clause, so an edited summary was silently dropped). An edit replaces the
+        // value; `None` clears it. The returned record reflects the RETURNING row.
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let posts = &*env.state.posts;
+
+        let post_id = posts
+            .create_post(&CreatePostInput {
+                user_id,
+                title: Some("Test Title".into()),
+                slug: parse_slug("summary-edit"),
+                body: "Test body".into(),
+                format: PostFormat::Markdown,
+                rendered_html: RenderedHtml::from_trusted("<p>Test body</p>"),
+                published_at: None,
+                summary: Some(parse_post_summary("original summary")),
+                audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
+            })
+            .await
+            .unwrap();
+
+        let update = |summary| UpdatePostInput {
+            title: Some("Test Title".into()),
+            slug: parse_slug("summary-edit"),
+            body: "Test body".into(),
+            format: PostFormat::Markdown,
+            rendered_html: RenderedHtml::from_trusted("<p>Test body</p>"),
+            unpublish: false,
+            explicit_published_at: None,
+            summary,
+            audiences: vec![AudienceTarget::Public],
+        };
+
+        // An edit replaces the summary.
+        let changed = posts
+            .update_post(
+                post_id,
+                user_id,
+                &update(Some(parse_post_summary("edited summary"))),
+            )
+            .await
+            .unwrap();
+        assert_eq!(changed.summary, Some(parse_post_summary("edited summary")));
+
+        // `None` clears it.
+        let cleared = posts
+            .update_post(post_id, user_id, &update(None))
+            .await
+            .unwrap();
+        assert_eq!(cleared.summary, None);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn reading_post_with_overlong_summary_in_db_errors(#[case] backend: Backend) {
         // A pre-existing row whose summary exceeds MAX_POST_SUMMARY_CHARS (the
         // column is unbounded TEXT) must surface as an error at the strict read
