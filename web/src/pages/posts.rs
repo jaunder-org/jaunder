@@ -22,6 +22,7 @@ use crate::{
 };
 use common::feed::FeedSurface;
 use common::ids::PostId;
+use common::pagination::PageSize;
 use common::visibility::AudienceBase;
 use common::{slug::Slug, tag::Tag, username::Username};
 use leptos::prelude::*;
@@ -352,7 +353,7 @@ pub fn UserTimelinePage() -> impl IntoView {
         move || (username.get(), mutate_version.get()),
         |(username, _)| async move {
             let username = username.ok_or_else(|| WebError::validation("Invalid username"))?;
-            list_user_posts(username, None, None, Some(50)).await
+            list_user_posts(username, None, None, Some(PageSize::default())).await
         },
     );
 
@@ -437,7 +438,7 @@ pub fn UserTimelinePage() -> impl IntoView {
             username,
             cursor_created_at: next_cursor_created_at.get_untracked(),
             cursor_post_id: next_cursor_post_id.get_untracked(),
-            limit: Some(50),
+            limit: Some(PageSize::default()),
         });
     };
 
@@ -933,7 +934,7 @@ pub fn DraftsPage() -> impl IntoView {
                 delete_action.version().get(),
             )
         },
-        |_| list_drafts(None, None, Some(50)),
+        |_| list_drafts(None, None, Some(PageSize::default())),
     );
 
     view! {
@@ -1122,7 +1123,7 @@ pub fn SiteTagPage() -> impl IntoView {
             let Some(tag) = tag else {
                 return Err(WebError::validation("Invalid tag"));
             };
-            list_posts_by_tag(tag, None, None, Some(50)).await
+            list_posts_by_tag(tag, None, None, Some(PageSize::default())).await
         },
     );
 
@@ -1199,7 +1200,7 @@ pub fn SiteTagPage() -> impl IntoView {
             tag: tag_value,
             cursor_created_at: next_cursor_created_at.get_untracked(),
             cursor_post_id: next_cursor_post_id.get_untracked(),
-            limit: Some(50),
+            limit: Some(PageSize::default()),
         });
     };
 
@@ -1301,7 +1302,7 @@ pub fn UserTagPage() -> impl IntoView {
             let Some(tag) = tag else {
                 return Err(WebError::validation("Invalid tag"));
             };
-            list_user_posts_by_tag(username, tag, None, None, Some(50)).await
+            list_user_posts_by_tag(username, tag, None, None, Some(PageSize::default())).await
         },
     );
 
@@ -1384,7 +1385,7 @@ pub fn UserTagPage() -> impl IntoView {
             tag: tag_value,
             cursor_created_at: next_cursor_created_at.get_untracked(),
             cursor_post_id: next_cursor_post_id.get_untracked(),
-            limit: Some(50),
+            limit: Some(PageSize::default()),
         });
     };
 

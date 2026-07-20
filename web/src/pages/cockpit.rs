@@ -5,13 +5,14 @@
 //! into the feed with zero clicks. An anonymous / expired visitor bounces to
 //! `/login`. This is the former `home.rs` Feed branch moved to its proper home.
 
+use common::pagination::PageSize;
 use common::username::Username;
 use leptos::prelude::*;
 use leptos_router::components::Redirect;
 
 use crate::auth::current_user;
 use crate::pages::signal_read::read_signal;
-use crate::pages::timeline::{TimelineRows, TimelineState, PAGE_SIZE};
+use crate::pages::timeline::{TimelineRows, TimelineState};
 use crate::pages::ui::{InlineComposer, Topbar};
 use crate::posts::list_home_feed;
 
@@ -32,7 +33,7 @@ pub fn CockpitPage() -> impl IntoView {
         move || refresh_version.get(),
         |_| async move {
             match current_user().await {
-                Ok(Some(user)) => list_home_feed(None, None, Some(PAGE_SIZE))
+                Ok(Some(user)) => list_home_feed(None, None, Some(PageSize::default()))
                     .await
                     .map(|page| Some((user, page))),
                 Ok(None) => Ok(None),
