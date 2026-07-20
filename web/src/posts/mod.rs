@@ -22,6 +22,16 @@ mod component;
 // `PostDisplay`, reachable crate-wide as `crate::posts::render::…`.
 pub(crate) mod render;
 
+// Pure, host-tested parsing/formatting logic (ADR-0070 §6, ADR-0055): the
+// permalink route-param decoder and the draft-row display computation, extracted
+// out of the wasm-only components so they stay host-compiled and coverage-measured.
+mod parse;
+
+// Re-exported at the (public) `crate::posts::…` path so the pure `parse` fns are
+// reachable exported items on the host build too — consumed only by the wasm-only
+// `component`, an unexported `parse` fn would fail the host build as `dead_code`.
+pub use parse::{draft_row_display, parse_permalink_params, DraftRowDisplay};
+
 // The API surface — re-exported so external call sites and the server-fn
 // registrar keep the stable `crate::posts::…` paths despite living in `api.rs`.
 pub use api::{
@@ -51,10 +61,14 @@ pub use api::{
 #[cfg(feature = "server")]
 pub use server::post_response;
 
-// The wasm-only reactive UI (ADR-0070). Re-exported so the pages/ layer keeps the
-// stable `crate::posts::…` paths; the private helpers (`marker_matches`,
-// `audience_checkbox`) stay unexported.
+// The wasm-only reactive UI (ADR-0070): the post widgets and the routed page
+// components (moved from `pages/`, #323). Re-exported so the `pages/` router keeps
+// the stable `crate::posts::…` paths; the private helpers (`marker_matches`,
+// `audience_checkbox`, `SubscribeButton`, `permalink_first_paint`, the `render_*`
+// row/form/result builders) stay unexported.
 #[cfg(target_arch = "wasm32")]
 pub use component::{
-    AudiencePicker, ComposerFields, InlineComposer, PostCard, PostCreateForm, PostDisplay, TagInput,
+    AudiencePicker, ComposerFields, CreatePostPage, DraftPreviewPage, DraftsPage, EditPostPage,
+    InlineComposer, PostCard, PostCreateForm, PostDisplay, PostPage, SiteTagPage, TagInput,
+    UserTagPage, UserTimelinePage,
 };
