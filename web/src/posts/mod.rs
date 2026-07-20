@@ -12,6 +12,11 @@ mod api;
 #[cfg(feature = "server")]
 mod server;
 
+// The pure post-render twins (host-compiled leaf, ADR-0070): plain-string HTML
+// builders shared by the projector (`crate::render`) and the reactive
+// `PostDisplay`, reachable crate-wide as `crate::posts::render::…`.
+pub(crate) mod render;
+
 // The API surface — re-exported so external call sites and the server-fn
 // registrar keep the stable `crate::posts::…` paths despite living in `api.rs`.
 pub use api::{

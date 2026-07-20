@@ -154,12 +154,12 @@ pub fn PostDisplay(
     tag_context: TagContext,
     #[prop(optional)] children: Option<Children>,
 ) -> impl IntoView {
-    let time_label = crate::render::format_post_time(post.published_at);
+    let time_label = crate::posts::render::format_post_time(post.published_at);
     // Built once and shared by both arms so the authored content column is the SAME
     // pure, viewer-independent render the projector paints (#181, ADR-0044 D4) — no
     // hand-rebuilt markup and no is_author-driven content change that could diverge
     // and reintroduce a flash. The action column is layered on additively.
-    let view = crate::render::PostView {
+    let view = crate::posts::render::PostView {
         username: &post.username,
         title: post.title.as_deref(),
         banner: banner.as_deref(),
@@ -178,7 +178,7 @@ pub fn PostDisplay(
         // not the component" (ADR-0041 §4). The projector only ever renders this
         // anonymous view, so this is the only path that must coincide.
         None => {
-            let inner = crate::render::render_post_inner(&view);
+            let inner = crate::posts::render::render_post_inner(&view);
             view! { <article class="j-post" inner_html=inner></article> }.into_any()
         }
         // Authored layout (own posts, with the action column). The content column is
@@ -189,7 +189,7 @@ pub fn PostDisplay(
         // hand-rebuilt reactive header/title/body markup, which had diverged from
         // the projector — the divergence that kept the authored path from coinciding.
         Some(children) => {
-            let inner_content = crate::render::render_post_content(&view);
+            let inner_content = crate::posts::render::render_post_content(&view);
             view! {
                 <article class="j-post">
                     <Avatar name=post.username.clone() size=38 />

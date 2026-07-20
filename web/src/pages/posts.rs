@@ -124,7 +124,7 @@ fn permalink_first_paint(seed_post: Option<crate::posts::PostResponse>) -> AnyVi
             // own `j-scroll`/`j-page`. `display:contents` keeps the host wrapper out
             // of the layout so it coincides with the projector's permalink page.
             // cov:ignore-start
-            let html = crate::render::permalink_article(&post);
+            let html = crate::posts::render::permalink_article(&post);
             view! { <div style="display:contents" inner_html=html></div> }.into_any()
             // cov:ignore-stop
         }
