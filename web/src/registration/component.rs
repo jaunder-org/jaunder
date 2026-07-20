@@ -53,7 +53,7 @@ pub fn RegisterPage() -> impl IntoView {
     Effect::new(move |_| {
         if let Some(Ok(_)) = register_action.value().get() {
             if let Some(input) = register_action.input().get() {
-                marker_storage::set(input.username.as_ref());
+                marker_storage::set(&input.username);
             }
         }
     });

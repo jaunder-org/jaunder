@@ -25,7 +25,7 @@ pub fn LoginPage() -> impl IntoView {
     Effect::new(move |_| {
         if let Some(Ok(_)) = login_action.value().get() {
             if let Some(input) = login_action.input().get() {
-                marker_storage::set(input.username.as_ref());
+                marker_storage::set(&input.username);
             }
         }
     });
