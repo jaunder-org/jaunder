@@ -218,7 +218,7 @@ async fn operator_can_update_backup_settings_to_archive_mode(#[case] backend: Ba
 // the request struct deserializes — before the fn body — so the guard is the type, not an
 // in-body validation string. Assert the request is refused (non-OK), not a specific message,
 // since the message is now the framework's, not ours. `retention_count=0` is rejected because
-// `RetentionCount` wraps `NonZeroUsize` (the prune-everything footgun is unrepresentable).
+// `RetentionCount`'s min-1 invariant makes the prune-everything footgun unrepresentable.
 #[apply(backends_matrix)]
 #[case::empty_schedule(
     "destination_path=%2Fsrv%2Fbackups&schedule=+++&retention_count=5&mode=directory"
