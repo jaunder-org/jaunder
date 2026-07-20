@@ -518,7 +518,7 @@ pub async fn list_drafts(
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
         let parsed_cursor =
-            parse_post_cursor(cursor_created_at.map(|c| c.to_string()), cursor_post_id)?;
+            parse_post_cursor(cursor_created_at.map(UtcInstant::value), cursor_post_id)?;
         let page_size = limit.unwrap_or_default();
         let drafts = posts
             .list_drafts_by_user(
@@ -701,7 +701,7 @@ mod tests {
         use super::TimelinePostSummary;
         use common::ids::PostId;
         use common::render::RenderedHtml;
-        use common::time::UtcInstant;
+        use common::test_support::parse_utc_instant;
 
         let original = TimelinePostSummary {
             post_id: PostId::from(1),
@@ -710,8 +710,8 @@ mod tests {
             summary: None,
             slug: "hello".parse::<Slug>().unwrap(),
             rendered_html: RenderedHtml::from_trusted("<p>hi</p>"),
-            created_at: "2026-01-01T00:00:00Z".parse::<UtcInstant>().unwrap(),
-            published_at: "2026-01-01T00:00:00Z".parse::<UtcInstant>().unwrap(),
+            created_at: parse_utc_instant("2026-01-01T00:00:00Z"),
+            published_at: parse_utc_instant("2026-01-01T00:00:00Z"),
             permalink: "/~alice/2026/01/01/hello".into(),
             is_author: false,
             tags: vec![],

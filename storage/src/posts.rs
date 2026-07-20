@@ -370,23 +370,17 @@ pub fn to_post_cursor(post: &PostRecord) -> PostCursor {
 ///
 /// # Errors
 ///
-/// Returns a validation error if only one component is present, or if
-/// `cursor_created_at` is not a valid RFC3339 instant.
+/// Returns a validation error if only one component is present.
 pub fn parse_post_cursor(
-    cursor_created_at: Option<String>,
+    cursor_created_at: Option<DateTime<Utc>>,
     cursor_post_id: Option<PostId>,
 ) -> InternalResult<Option<PostCursor>> {
     match (cursor_created_at, cursor_post_id) {
         (None, None) => Ok(None),
-        (Some(created_at), Some(post_id)) => {
-            let created_at = chrono::DateTime::parse_from_rfc3339(created_at.trim())
-                .map_err(|e| InternalError::validation_source("invalid cursor_created_at", e))?
-                .with_timezone(&Utc);
-            Ok(Some(PostCursor {
-                created_at,
-                post_id,
-            }))
-        }
+        (Some(created_at), Some(post_id)) => Ok(Some(PostCursor {
+            created_at,
+            post_id,
+        })),
         _ => Err(InternalError::validation(
             "cursor_created_at and cursor_post_id must be provided together",
         )),
@@ -2667,7 +2661,7 @@ mod tests {
         };
 
         let cursor = to_post_cursor(&post);
-        let parsed = parse_post_cursor(Some(cursor.created_at.to_rfc3339()), Some(cursor.post_id))
+        let parsed = parse_post_cursor(Some(cursor.created_at), Some(cursor.post_id))
             .unwrap()
             .expect("both components present yields a cursor");
         assert_eq!(parsed.created_at, post.created_at);
@@ -2681,7 +2675,12 @@ mod tests {
 
     #[test]
     fn parse_post_cursor_rejects_half_a_cursor() {
-        assert!(parse_post_cursor(Some("2026-04-12T08:30:00Z".to_string()), None).is_err());
+        use chrono::TimeZone;
+        assert!(parse_post_cursor(
+            Some(Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap()),
+            None
+        )
+        .is_err());
     }
 
     #[test]

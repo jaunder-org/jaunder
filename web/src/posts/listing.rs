@@ -94,7 +94,7 @@ pub async fn fetch_user_posts(
     posts: &dyn PostStorage,
     viewer: &ViewerIdentity,
     username: &Username,
-    cursor_created_at: Option<String>,
+    cursor_created_at: Option<chrono::DateTime<chrono::Utc>>,
     cursor_post_id: Option<PostId>,
     limit: Option<PageSize>,
 ) -> InternalResult<TimelinePage> {
@@ -127,7 +127,7 @@ pub async fn fetch_user_posts(
 pub async fn fetch_local_timeline(
     posts: &dyn PostStorage,
     viewer: &ViewerIdentity,
-    cursor_created_at: Option<String>,
+    cursor_created_at: Option<chrono::DateTime<chrono::Utc>>,
     cursor_post_id: Option<PostId>,
     limit: Option<PageSize>,
 ) -> InternalResult<TimelinePage> {
@@ -163,7 +163,7 @@ pub async fn list_user_posts(
             posts.as_ref(),
             &viewer,
             &username,
-            cursor_created_at.map(|c| c.to_string()),
+            cursor_created_at.map(UtcInstant::value),
             cursor_post_id,
             limit,
         )
@@ -184,7 +184,7 @@ pub async fn list_local_timeline(
         fetch_local_timeline(
             posts.as_ref(),
             &viewer,
-            cursor_created_at.map(|c| c.to_string()),
+            cursor_created_at.map(UtcInstant::value),
             cursor_post_id,
             limit,
         )
@@ -203,7 +203,7 @@ pub async fn list_home_feed(
         let auth = require_auth().await?;
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
-        let cursor = parse_post_cursor(cursor_created_at.map(|c| c.to_string()), cursor_post_id)?;
+        let cursor = parse_post_cursor(cursor_created_at.map(UtcInstant::value), cursor_post_id)?;
         let viewer = viewer_identity().await;
         let page_size = limit.unwrap_or_default();
         let fetch_limit = page_size.value().saturating_add(1);
@@ -248,7 +248,7 @@ pub async fn fetch_posts_by_tag(
     posts: &dyn PostStorage,
     viewer: &ViewerIdentity,
     tag: &Tag,
-    cursor_created_at: Option<String>,
+    cursor_created_at: Option<chrono::DateTime<chrono::Utc>>,
     cursor_post_id: Option<PostId>,
     limit: Option<PageSize>,
 ) -> InternalResult<TimelinePage> {
@@ -328,7 +328,7 @@ pub async fn list_posts_by_tag(
             posts.as_ref(),
             &viewer,
             &tag,
-            cursor_created_at.map(|c| c.to_string()),
+            cursor_created_at.map(UtcInstant::value),
             cursor_post_id,
             limit,
         )
@@ -349,7 +349,7 @@ pub async fn list_user_posts_by_tag(
         let posts = expect_context::<Arc<dyn PostStorage>>();
         let users = expect_context::<Arc<dyn UserStorage>>();
         let viewer = viewer_identity().await;
-        let cursor = parse_post_cursor(cursor_created_at.map(|c| c.to_string()), cursor_post_id)?;
+        let cursor = parse_post_cursor(cursor_created_at.map(UtcInstant::value), cursor_post_id)?;
         fetch_user_posts_by_tag(
             posts.as_ref(),
             users.as_ref(),
