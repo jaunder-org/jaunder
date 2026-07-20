@@ -352,7 +352,7 @@ fn render_media_row(item: &MediaItem, delete_action: ServerAction<DeleteMedia>) 
                     {filename.clone()}
                 </a>
             </td>
-            <td>{item.content_type.clone()}</td>
+            <td>{item.content_type.to_string()}</td>
             <td>{size_label}</td>
             <td>{source.clone()}</td>
             <td>{created_at}</td>

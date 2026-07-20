@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use common::media::{ContentHash, Filename};
+use common::media::{ContentHash, ContentType, Filename};
 use sqlx::{Database, FromRow, Pool};
 use thiserror::Error;
 
@@ -73,7 +73,7 @@ pub struct MediaRecord {
     /// Whether the media is a local upload or a remote cache.
     pub source: MediaSource,
     /// MIME type (e.g., "image/jpeg").
-    pub content_type: String,
+    pub content_type: ContentType,
     /// Size of the file in bytes.
     pub size_bytes: i64,
     /// For cached media, the original remote URL.
@@ -238,7 +238,7 @@ where
         .bind(&record.sha256)
         .bind(&record.filename)
         .bind(record.source.as_str())
-        .bind(record.content_type.as_str())
+        .bind(&record.content_type)
         .bind(record.size_bytes)
         .bind(record.source_url.clone())
         .bind(record.created_at)
@@ -414,7 +414,7 @@ pub const MEDIA_CACHE_POLICY_DEFAULT_KEY: &str = "media.cache_policy_default";
 mod tests {
     use super::*;
     use crate::test_support::{backends, seed_user, Backend, TestEnv};
-    use common::test_support::{parse_content_hash, parse_filename};
+    use common::test_support::{parse_content_hash, parse_content_type, parse_filename};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -431,7 +431,7 @@ mod tests {
             sha256: parse_content_hash(HASH),
             filename: parse_filename("photo.jpg"),
             source: MediaSource::Upload,
-            content_type: "image/jpeg".to_string(),
+            content_type: parse_content_type("image/jpeg"),
             size_bytes: 2048,
             source_url: None,
             created_at: chrono::Utc::now(),
@@ -497,7 +497,7 @@ mod tests {
             sha256: parse_content_hash(HASH),
             filename: parse_filename("good.jpg"),
             source: MediaSource::Upload,
-            content_type: "image/jpeg".to_string(),
+            content_type: parse_content_type("image/jpeg"),
             size_bytes: 1,
             source_url: None,
             created_at: chrono::Utc::now(),
@@ -542,7 +542,7 @@ mod tests {
             sha256: parse_content_hash(HASH),
             filename: parse_filename("test.jpg"),
             source: MediaSource::Upload,
-            content_type: "image/jpeg".to_string(),
+            content_type: parse_content_type("image/jpeg"),
             size_bytes: 1024,
             source_url: None,
             created_at: chrono::Utc::now(),

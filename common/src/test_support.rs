@@ -14,7 +14,7 @@ use crate::bio::Bio;
 use crate::display_name::DisplayName;
 use crate::email::Email;
 use crate::feed::{FeedMinDays, FeedMinItems};
-use crate::media::{ContentHash, Filename, MaxFileSize, UserQuota};
+use crate::media::{ContentHash, ContentType, Filename, MaxFileSize, UserQuota};
 use crate::pagination::PageSize;
 use crate::password::Password;
 use crate::post_summary::PostSummary;
@@ -177,6 +177,18 @@ pub fn parse_content_hash(s: &str) -> ContentHash {
 #[must_use]
 pub fn parse_filename(name: &str) -> Filename {
     name.parse().expect("valid test filename")
+}
+
+/// Parse `s` into a valid [`ContentType`] for tests — the single place a test content-type
+/// literal is parsed, so a malformed fixture fails loudly and the parse isn't re-spelled at
+/// every media store-seeding call site across the workspace.
+///
+/// # Panics
+///
+/// Panics if `s` is not a valid `type/subtype` media type.
+#[must_use]
+pub fn parse_content_type(s: &str) -> ContentType {
+    s.parse().expect("valid test content type")
 }
 
 /// Parse `s` into a [`MaxFileSize`] for tests — the single place a test media

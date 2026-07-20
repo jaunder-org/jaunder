@@ -21,7 +21,7 @@ use quick_xml::{Reader, Writer};
 
 use super::xml::{write_empty_element, write_link, write_text_element};
 use super::{AtomPubError, APP_NS, ATOM_NS, J_NS};
-use crate::media::Filename;
+use crate::media::{ContentType, Filename};
 
 // ---------------------------------------------------------------------------
 // Draft flag (app:control/app:draft) helpers
@@ -598,7 +598,7 @@ pub struct MediaLinkEntry {
     /// `<content src=...>` — the absolute URL of the binary.
     pub content_src: String,
     /// MIME type of the binary.
-    pub content_type: String,
+    pub content_type: ContentType,
     /// Publication timestamp, RFC 3339.
     pub published_rfc3339: String,
     /// Last-update timestamp, RFC 3339.
@@ -623,7 +623,7 @@ pub fn render_media_link_entry(entry: &MediaLinkEntry) -> String {
     write_text_element(&mut writer, "published", &entry.published_rfc3339);
 
     let content_attrs = [
-        ("type", entry.content_type.as_str()),
+        ("type", entry.content_type.as_ref()),
         ("src", entry.content_src.as_str()),
     ];
     write_empty_element(&mut writer, "content", &content_attrs);
@@ -638,7 +638,7 @@ pub fn render_media_link_entry(entry: &MediaLinkEntry) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::parse_filename;
+    use crate::test_support::{parse_content_type, parse_filename};
 
     fn content_parts(entry: &Entry) -> (Option<&str>, Option<&str>) {
         match entry.content() {
@@ -1034,7 +1034,7 @@ mod tests {
             edit_uri: "https://h/atompub/alice/media/abc/pic.png".to_string(),
             edit_media_uri: "https://h/media/upload/ab/c0/abc/pic.png".to_string(),
             content_src: "https://h/media/upload/ab/c0/abc/pic.png".to_string(),
-            content_type: "image/png".to_string(),
+            content_type: parse_content_type("image/png"),
             published_rfc3339: "2026-06-01T00:00:00Z".to_string(),
             updated_rfc3339: "2026-06-01T00:00:00Z".to_string(),
         });

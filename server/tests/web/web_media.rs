@@ -16,7 +16,7 @@ use rstest_reuse::*;
 
 use crate::helpers::{post_form, session_cookie, test_options};
 use common::media::{MaxFileSize, UserQuota};
-use common::test_support::{parse_content_hash, parse_filename};
+use common::test_support::{parse_content_hash, parse_content_type, parse_filename};
 use storage::test_support::{backends, backends_matrix, noop_mailer, Backend, TestEnv};
 
 // ─── media_usage ──────────────────────────────────────────────
@@ -165,7 +165,7 @@ async fn list_my_media_returns_inserted_item(#[case] backend: Backend) {
         ),
         filename: parse_filename("photo.jpg"),
         source: MediaSource::Upload,
-        content_type: "image/jpeg".to_string(),
+        content_type: parse_content_type("image/jpeg"),
         size_bytes: 1024,
         source_url: None,
         created_at: Utc::now(),
@@ -218,7 +218,7 @@ async fn list_my_media_with_source_filter(#[case] backend: Backend) {
         ),
         filename: parse_filename("clip.mp4"),
         source: MediaSource::Upload,
-        content_type: "video/mp4".to_string(),
+        content_type: parse_content_type("video/mp4"),
         size_bytes: 512,
         source_url: None,
         created_at: Utc::now(),
@@ -274,7 +274,7 @@ async fn delete_media_succeeds_for_existing_item(#[case] backend: Backend) {
         ),
         filename: parse_filename("test.png"),
         source: MediaSource::Upload,
-        content_type: "image/png".to_string(),
+        content_type: parse_content_type("image/png"),
         size_bytes: 42,
         source_url: None,
         created_at: Utc::now(),
@@ -338,7 +338,7 @@ async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend:
         ),
         filename: parse_filename("inline.png"),
         source: MediaSource::Upload,
-        content_type: "image/png".to_string(),
+        content_type: parse_content_type("image/png"),
         size_bytes: 42,
         source_url: None,
         created_at: Utc::now(),
