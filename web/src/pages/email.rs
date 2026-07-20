@@ -78,7 +78,15 @@ pub fn VerifyEmailPage() -> impl IntoView {
 
     let query = use_query_map();
     let token = move || query.with(|q| q.get("token").unwrap_or_default());
-    let result = crate::server_resource(token, verify_email);
+    // `verify_email` now takes a typed `RawToken`. Parse the URL's token client-side
+    // (ADR-0065 pre-validation): a malformed token short-circuits to a validation error
+    // with no server round-trip; a well-formed one is verified server-side as before.
+    let result = crate::server_resource(token, |raw: String| async move {
+        let token: common::token::RawToken = raw
+            .parse()
+            .map_err(|_| crate::error::WebError::validation("invalid verification token"))?;
+        verify_email(token).await
+    });
 
     view! {
         <Topbar title="Verify Email" />

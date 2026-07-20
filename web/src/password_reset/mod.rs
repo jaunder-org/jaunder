@@ -3,7 +3,6 @@ use {
     chrono::Duration,
     common::mailer::{EmailMessage, MailSender},
     common::password::Password,
-    common::token::RawToken,
     std::sync::Arc,
     storage::{AtomicOps, PasswordResetStorage, UserStorage},
 };
@@ -11,10 +10,11 @@ use {
 #[cfg(feature = "server")]
 use crate::error::InternalError;
 use crate::error::WebResult;
-// `Username` / `ProfferedPassword` are ungated: they type the `request_password_reset`
-// / `confirm_password_reset` wire args, so the generated arg structs reference them on
-// both the client and server builds.
+// `Username` / `ProfferedPassword` / `RawToken` are ungated: they type the
+// `request_password_reset` / `confirm_password_reset` wire args, so the generated arg
+// structs reference them on both the client and server builds.
 use common::password::ProfferedPassword;
+use common::token::RawToken;
 use common::username::Username;
 use leptos::prelude::*;
 
@@ -75,20 +75,18 @@ pub async fn request_password_reset(username: Username) -> WebResult<()> {
 
 #[server(endpoint = "/confirm_password_reset")]
 pub async fn confirm_password_reset(
-    token: String,
+    token: RawToken,
     new_password: ProfferedPassword,
 ) -> WebResult<()> {
     boundary!("confirm_password_reset", {
         let atomic = expect_context::<Arc<dyn AtomicOps>>();
 
         // `new_password` is the inbound-secret twin (ADR-0063); convert into the
-        // serde-free domain `Password` at the boundary.
+        // serde-free domain `Password` at the boundary. `token` is a `RawToken` wire
+        // arg — its serde bridge already rejected a malformed shape on decode.
         let password = Password::try_from(new_password)?;
 
-        let raw_token = RawToken::try_from(token)
-            .map_err(|_| InternalError::validation("invalid reset token"))?;
-
-        atomic.confirm_password_reset(&raw_token, &password).await?;
+        atomic.confirm_password_reset(&token, &password).await?;
 
         host::metrics::password_reset(host::metrics::PasswordResetEvent::Completed);
         Ok(())

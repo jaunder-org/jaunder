@@ -3,15 +3,16 @@ use {
     crate::auth::require_auth,
     crate::error::InternalError,
     common::mailer::{EmailMessage, MailSender},
-    common::token::RawToken,
     std::sync::Arc,
     storage::{EmailVerificationStorage, UserStorage},
 };
 
 use crate::error::WebResult;
-// Unconditional: `Email` is the typed `#[server]` argument, so the generated request
-// struct must carry it on both the client (serialize) and server (deserialize) sides.
+// Unconditional: `Email` / `RawToken` are typed `#[server]` arguments, so the generated
+// request structs must carry them on both the client (serialize) and server
+// (deserialize) sides.
 use common::email::Email;
+use common::token::RawToken;
 use leptos::prelude::*;
 
 /// Sends a verification email to `email`. Requires authentication.
@@ -57,17 +58,14 @@ pub async fn request_email_verification(email: Email) -> WebResult<()> {
 /// Consumes a verification token and marks the associated email as verified
 /// on the user account.
 #[server(endpoint = "/verify_email")]
-pub async fn verify_email(token: String) -> WebResult<()> {
+pub async fn verify_email(token: RawToken) -> WebResult<()> {
     boundary!("verify_email", {
         let email_verifications = expect_context::<Arc<dyn EmailVerificationStorage>>();
         let users = expect_context::<Arc<dyn UserStorage>>();
 
-        let raw_token = RawToken::try_from(token)
-            .map_err(|_| InternalError::validation("invalid verification token"))?;
-
-        let (user_id, email_addr) = email_verifications
-            .use_email_verification(&raw_token)
-            .await?;
+        // `token` is a `RawToken` wire arg — its serde bridge already rejected a
+        // malformed shape on decode, so no in-body re-parse is needed.
+        let (user_id, email_addr) = email_verifications.use_email_verification(&token).await?;
 
         users
             .set_email(user_id, Some(&email_addr), true)

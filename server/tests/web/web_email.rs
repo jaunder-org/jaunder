@@ -158,6 +158,30 @@ async fn verify_email_with_unknown_token_returns_error(#[case] backend: Backend)
 
 #[apply(backends)]
 #[tokio::test]
+async fn verify_email_with_malformed_token_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let mailer = Arc::new(CapturingMailSender::new());
+
+    // `bad!token` is not valid base64url shape, so `RawToken` rejects it — in-body today,
+    // at wire-decode once `token` is typed. Either way a non-OK response.
+    let (status, _body) = post_form_with_mailer(
+        Arc::clone(&state),
+        mailer.clone() as Arc<dyn common::mailer::MailSender>,
+        "/api/verify_email",
+        "token=bad!token",
+        None,
+    )
+    .await;
+
+    assert_ne!(
+        status,
+        StatusCode::OK,
+        "a malformed verification token must be rejected"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn request_email_verification_unauthorized_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
