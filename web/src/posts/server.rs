@@ -118,15 +118,15 @@ mod tests {
     fn post_response_carries_summary() {
         use crate::posts::server::post_response;
         use chrono::{TimeZone, Utc};
+        use common::test_support::parse_username;
         use common::{
             ids::{PostId, UserId},
             slug::Slug,
-            username::Username,
         };
         use storage::{PostFormat, PostRecord, RenderedHtml};
 
         let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
-        let author_username = "author".parse::<Username>().unwrap();
+        let author_username = parse_username("author");
         let slug = "hello-world".parse::<Slug>().unwrap();
 
         let response = post_response(

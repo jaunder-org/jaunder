@@ -698,6 +698,7 @@ mod tests {
     };
     use common::ids::AudienceId;
     use common::slug::Slug;
+    use common::test_support::parse_username;
     use common::visibility::{AudienceBase, AudienceTarget};
     use storage::candidate_slug;
 
@@ -717,11 +718,10 @@ mod tests {
         use super::TimelinePostSummary;
         use common::ids::PostId;
         use common::render::RenderedHtml;
-        use common::username::Username;
 
         let original = TimelinePostSummary {
             post_id: PostId::from(1),
-            username: "alice".parse::<Username>().unwrap(),
+            username: parse_username("alice"),
             title: Some("T".into()),
             summary: None,
             slug: "hello".parse::<Slug>().unwrap(),
@@ -859,7 +859,6 @@ mod tests {
         use common::{
             ids::{PostId, UserId},
             slug::Slug,
-            username::Username,
         };
         use storage::{PostFormat, PostRecord, RenderedHtml};
 
@@ -870,7 +869,7 @@ mod tests {
             PostRecord {
                 post_id: PostId::from(1),
                 user_id: UserId::from(2),
-                author_username: "author".parse::<Username>().unwrap(),
+                author_username: parse_username("author"),
                 title: None,
                 slug,
                 body: "Titleless note".into(),
@@ -900,12 +899,11 @@ mod tests {
         use common::{
             ids::{PostId, UserId},
             slug::Slug,
-            username::Username,
         };
         use storage::{PostFormat, PostRecord, RenderedHtml};
 
         let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
-        let author_username = "author".parse::<Username>().unwrap();
+        let author_username = parse_username("author");
         let slug = "hello-world".parse::<Slug>().unwrap();
 
         let draft = post_response(
@@ -966,7 +964,7 @@ mod server_tests {
     use chrono::Utc;
     use common::ids::{ChannelId, PostId, UserId};
     use common::slug::Slug;
-    use common::username::Username;
+    use common::test_support::parse_username;
     use leptos::prelude::provide_context;
     use leptos::reactive::owner::Owner;
     use std::sync::Arc;
@@ -980,7 +978,7 @@ mod server_tests {
         PostRecord {
             post_id: PostId::from(1),
             user_id,
-            author_username: "alice".parse::<Username>().unwrap(),
+            author_username: parse_username("alice"),
             title: Some("t".into()),
             slug: "hello-world".parse::<Slug>().unwrap(),
             body: "body".into(),

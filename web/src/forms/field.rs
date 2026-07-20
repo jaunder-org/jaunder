@@ -152,6 +152,7 @@ mod tests {
     use common::password::Password;
     use common::slug::Slug;
     use common::tag::Tag;
+    use common::test_support::parse_username;
     use common::username::Username;
     use leptos::reactive::owner::Owner;
 
@@ -209,7 +210,7 @@ mod tests {
         f.value.set("alice".to_owned());
         f.error.set(field_error::<Username>("alice"));
         assert!(f.is_valid());
-        assert_eq!(f.parsed(), "alice".parse::<Username>().ok());
+        assert_eq!(f.parsed(), Some(parse_username("alice")));
         f.touch();
         assert!(f.is_touched());
         f.reset();

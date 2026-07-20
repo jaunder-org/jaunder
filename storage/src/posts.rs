@@ -2211,6 +2211,7 @@ where
 mod tests {
     use super::*;
     use crate::test_support::{backends, seed_user, Backend};
+    use common::test_support::parse_username;
     use rstest::*;
     use rstest_reuse::*;
 
@@ -2862,7 +2863,7 @@ mod tests {
         mock.expect_list_drafts_by_user()
             .returning(|_user_id, _cursor, _limit, _now| {
                 let base = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap();
-                let username = "author".parse::<Username>().unwrap();
+                let username = parse_username("author");
                 let slug = "other-slug".parse::<Slug>().unwrap();
                 let page = (0..50_i64)
                     .map(|i| PostRecord {

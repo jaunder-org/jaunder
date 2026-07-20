@@ -208,19 +208,19 @@ pub fn classify_current_user(result: InternalResult<AuthUser>) -> InternalResult
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::test_support::parse_raw_token;
+    use common::test_support::{parse_raw_token, parse_username};
     use leptos::prelude::{provide_context, Owner};
 
     #[test]
     fn verify_basic_username_passes_without_expected_username() {
-        let user: Username = "alice".parse().unwrap();
+        let user = parse_username("alice");
         assert!(verify_basic_username(&user, None).is_ok());
     }
 
     #[test]
     fn verify_basic_username_passes_on_match() {
-        let user: Username = "alice".parse().unwrap();
-        let expected: Username = "alice".parse().unwrap();
+        let user = parse_username("alice");
+        let expected = parse_username("alice");
         assert!(verify_basic_username(&user, Some(&expected)).is_ok());
     }
 
@@ -228,15 +228,15 @@ mod tests {
     fn verify_basic_username_match_is_case_insensitive() {
         // #344: Username lowercases at construction, so a differently-cased Basic
         // username still matches the authenticated session's user.
-        let authenticated: Username = "alice".parse().unwrap();
-        let expected: Username = "Alice".parse().unwrap(); // normalizes to "alice"
+        let authenticated = parse_username("alice");
+        let expected = parse_username("Alice"); // normalizes to "alice"
         assert!(verify_basic_username(&authenticated, Some(&expected)).is_ok());
     }
 
     #[test]
     fn verify_basic_username_rejects_mismatch() {
-        let user: Username = "alice".parse().unwrap();
-        let expected: Username = "mallory".parse().unwrap();
+        let user = parse_username("alice");
+        let expected = parse_username("mallory");
         assert!(matches!(
             verify_basic_username(&user, Some(&expected)),
             Err(AuthRejection::BasicUsernameMismatch)
