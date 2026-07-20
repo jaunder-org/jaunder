@@ -29,21 +29,21 @@ all `cov:ignore` / `read_signal!`.
 
 **Tasks.**
 
-- [ ] 1. `api.rs` split — 15 `#[server]` fns + DTOs out of
+- [x] 1. `api.rs` split — 15 `#[server]` fns + DTOs out of
      `mod.rs`+`listing.rs`; `mod.rs` → wiring; `server.rs` absorbs listing's
      server helpers; registrar paths stable.
-- [ ] 2. `render.rs` carve — pure render twins out of `render/mod.rs` +
+- [x] 2. `render.rs` carve — pure render twins out of `render/mod.rs` +
      coincidence tests; `escape_html`/`PageSeed` stay shared.
-- [ ] 3. Widget pull — posts `#[component]`s + helpers out of `pages/ui.rs` into
+- [x] 3. Widget pull — posts `#[component]`s + helpers out of `pages/ui.rs` into
      `component.rs`; re-export; repoint
      `timeline.rs`/`cockpit.rs`/`pages/ui.rs`.
 - [ ] 4. Routed components — `pages/posts.rs` → `component.rs`; retire
      `cov:ignore`; extract pure `post_data`/`render_draft_row` helpers
      host-tested; inline `read_signal!`; carry `location().replace`; repoint
      `pages/mod.rs`; delete `pages/posts.rs`.
-- [ ] 5. datetime → `chrono` — host-tested local→UTC `UtcInstant` constructor in
+- [x] 5. datetime → `chrono` — host-tested local→UTC `UtcInstant` constructor in
      `common::time`; drop `js_sys::Date`.
-- [ ] 6. #299 — fold `create_post`/`update_post` into typed arg-structs; drop
+- [x] 6. #299 — fold `create_post`/`update_post` into typed arg-structs; drop
      the `too_many_arguments` allow; e2e-verify.
 - [ ] 7. Full `cargo xtask validate` (e2e + coincidence tests).
 
