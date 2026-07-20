@@ -42,13 +42,13 @@ pub async fn service_document(
     let doc = ServiceDocument {
         workspace_title: username.to_string(),
         posts_collection: CollectionDecl {
-            href: compose(base.as_ref(), &posts_path).unwrap_or(posts_path),
+            href: compose(base.as_ref(), &posts_path),
             title: "Posts".to_string(),
             accept: vec!["application/atom+xml;type=entry".to_string()],
             categories,
         },
         media_collection: CollectionDecl {
-            href: compose(base.as_ref(), &media_path).unwrap_or(media_path),
+            href: compose(base.as_ref(), &media_path),
             title: "Media".to_string(),
             accept: MEDIA_ACCEPT.iter().map(|s| (*s).to_string()).collect(),
             categories: Vec::new(),

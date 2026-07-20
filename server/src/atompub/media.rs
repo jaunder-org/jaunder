@@ -28,12 +28,12 @@ fn media_link_entry(
     username: &Username,
 ) -> MediaLinkEntry {
     let binary_path = media_url("upload", &record.sha256, &record.filename);
-    let binary = compose(base, &binary_path).unwrap_or(binary_path);
+    let binary = compose(base, &binary_path);
     let edit_path = format!(
         "/atompub/{username}/media/{}/{}",
         record.sha256, record.filename
     );
-    let edit = compose(base, &edit_path).unwrap_or(edit_path);
+    let edit = compose(base, &edit_path);
     let timestamp = record.created_at.to_rfc3339();
     MediaLinkEntry {
         id: edit.clone(),

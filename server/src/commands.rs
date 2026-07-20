@@ -306,8 +306,7 @@ pub async fn cmd_user_invite(storage: &StorageArgs, expires_in: Option<u64>) -> 
     // configured base URL, print a ready-to-send invitation link; otherwise the bare code.
     match state.site_config.get_identity().await?.base_url {
         Some(base_url) => {
-            let register_path = "/register".to_owned();
-            let register_url = compose(Some(&base_url), &register_path).unwrap_or(register_path);
+            let register_url = compose(Some(&base_url), "/register");
             println!("{register_url}?invite_code={}", code.as_ref());
         }
         None => println!("{}", code.as_ref()),

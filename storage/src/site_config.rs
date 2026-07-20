@@ -117,16 +117,26 @@ pub trait SiteConfigStorage: Send + Sync {
             .unwrap_or_default())
     }
 
-    /// Returns the configured `WebSub` hub URL, if any. An empty stored value
-    /// is treated as unset; a non-empty value that is not a valid absolute
-    /// `http(s)` URL surfaces as a decode error (the validating read boundary).
+    /// Returns the configured `WebSub` hub URL, if any. An empty stored value is
+    /// treated as unset; a non-empty value that no longer parses as an absolute
+    /// `http(s)` URL (corruption, or legacy data pre-dating this validation) is
+    /// **purged** and read as unset — mirroring the `feed_events` unparseable-`feed_url`
+    /// purge, so a bad stored value never hard-fails the read.
     async fn get_feeds_websub_hub_url(&self) -> sqlx::Result<Option<AbsoluteUrl>> {
-        self.get(FEEDS_WEBSUB_HUB_URL_KEY)
+        let Some(raw) = self
+            .get(FEEDS_WEBSUB_HUB_URL_KEY)
             .await?
             .and_then(common::text::non_empty_owned)
-            .map(|v| v.parse::<AbsoluteUrl>())
-            .transpose()
-            .map_err(|e| sqlx::Error::Decode(Box::new(e)))
+        else {
+            return Ok(None);
+        };
+        if let Ok(url) = raw.parse::<AbsoluteUrl>() {
+            Ok(Some(url))
+        } else {
+            tracing::warn!("purging unparseable stored feeds.websub_hub_url");
+            self.delete(FEEDS_WEBSUB_HUB_URL_KEY).await?;
+            Ok(None)
+        }
     }
 
     /// Returns the feed-generation configuration as a single group, applying
@@ -148,13 +158,25 @@ pub trait SiteConfigStorage: Send + Sync {
             .await?
             .and_then(common::text::non_empty_owned)
             .unwrap_or_else(|| DEFAULT_SITE_TITLE.to_owned());
-        let base_url = self
+        let base_url = match self
             .get(SITE_BASE_URL_KEY)
             .await?
             .and_then(common::text::non_empty_owned)
-            .map(|v| v.parse::<AbsoluteUrl>())
-            .transpose()
-            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+        {
+            None => None,
+            Some(raw) => {
+                if let Ok(url) = raw.parse::<AbsoluteUrl>() {
+                    Some(url)
+                } else {
+                    // Purge a corrupt/legacy unparseable value and read as unset (as
+                    // `get_feeds_websub_hub_url` does), so a bad `base_url` never bricks
+                    // feed regeneration or the settings page it would otherwise 500.
+                    tracing::warn!("purging unparseable stored site.base_url");
+                    self.delete(SITE_BASE_URL_KEY).await?;
+                    None
+                }
+            }
+        };
         Ok(SiteIdentity { title, base_url })
     }
 
@@ -666,16 +688,21 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn feeds_websub_hub_url_rejects_invalid_stored_value(#[case] backend: Backend) {
-        // A non-empty stored value that is not a valid absolute http(s) URL surfaces as
-        // a read error (the validating getter boundary), not a silent None.
+    async fn feeds_websub_hub_url_purges_unparseable_stored_value(#[case] backend: Backend) {
+        // A non-empty stored value that no longer parses as an absolute http(s) URL is
+        // purged and read as unset (self-heal, mirroring the feed_events feed_url purge).
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
         storage
             .set(super::FEEDS_WEBSUB_HUB_URL_KEY, "not-a-url")
             .await
             .unwrap();
-        assert!(storage.get_feeds_websub_hub_url().await.is_err());
+        assert_eq!(storage.get_feeds_websub_hub_url().await.unwrap(), None);
+        // The corrupt value was deleted, not merely ignored.
+        assert_eq!(
+            storage.get(super::FEEDS_WEBSUB_HUB_URL_KEY).await.unwrap(),
+            None
+        );
     }
 
     #[apply(backends)]
@@ -717,16 +744,18 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn identity_rejects_invalid_stored_base_url(#[case] backend: Backend) {
-        // A non-empty stored base_url that is not a valid absolute http(s) URL surfaces
-        // as a read error (the validating getter boundary), not a silent None.
+    async fn identity_purges_unparseable_stored_base_url(#[case] backend: Backend) {
+        // A corrupt/legacy unparseable base_url is purged and read as unset, so it never
+        // bricks the identity read (which feeds and the settings page depend on).
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
         storage
             .set(super::SITE_BASE_URL_KEY, "not-a-url")
             .await
             .unwrap();
-        assert!(storage.get_identity().await.is_err());
+        assert_eq!(storage.get_identity().await.unwrap().base_url, None);
+        // The corrupt value was deleted, not merely ignored.
+        assert_eq!(storage.get(super::SITE_BASE_URL_KEY).await.unwrap(), None);
     }
 
     #[apply(backends)]

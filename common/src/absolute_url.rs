@@ -68,14 +68,19 @@ impl AbsoluteUrl {
 /// when `SiteIdentity.base_url` is unset. The base-set branch goes through
 /// [`AbsoluteUrl::join`] (correct slash boundary + encoding).
 ///
-/// # Errors
-///
-/// Returns [`InvalidAbsoluteUrl`] if a base is present but joining `path` onto it
-/// fails (see [`AbsoluteUrl::join`]).
-pub fn compose(base: Option<&AbsoluteUrl>, path: &str) -> Result<String, InvalidAbsoluteUrl> {
-    match base {
-        Some(b) => Ok(b.join(path)?.into()),
-        None => Ok(path.to_owned()),
+/// Infallible by design: [`AbsoluteUrl::join`] only rejects a non-`http(s)`/unparseable
+/// `path`, and every call site passes a server-built canonical `/…` path, so the error
+/// is unreachable — it falls back to the relative `path` rather than surfacing a
+/// `Result` no caller would branch on. Use [`AbsoluteUrl::join`] directly when the
+/// error matters.
+#[must_use]
+pub fn compose(base: Option<&AbsoluteUrl>, path: &str) -> String {
+    let Some(b) = base else {
+        return path.to_owned();
+    };
+    match b.join(path) {
+        Ok(url) => url.into(),
+        Err(_) => path.to_owned(), // cov:ignore unreachable: callers pass canonical paths
     }
 }
 
@@ -199,14 +204,14 @@ mod tests {
     fn compose_uses_base_when_present() {
         let base = "https://example.com/".parse::<AbsoluteUrl>().unwrap();
         assert_eq!(
-            compose(Some(&base), "/feed.rss").unwrap(),
+            compose(Some(&base), "/feed.rss"),
             "https://example.com/feed.rss"
         );
     }
 
     #[test]
     fn compose_falls_back_to_relative_when_no_base() {
-        assert_eq!(compose(None, "/feed.rss").unwrap(), "/feed.rss");
-        assert_eq!(compose(None, "/").unwrap(), "/");
+        assert_eq!(compose(None, "/feed.rss"), "/feed.rss");
+        assert_eq!(compose(None, "/"), "/");
     }
 }

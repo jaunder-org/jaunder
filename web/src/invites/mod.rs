@@ -65,8 +65,7 @@ pub async fn create_invite(expires_in_hours: Option<u64>, recipient_email: Email
         // Deliberate egress of the secret via `AsRef` (InviteCode has no Display/serde).
         // Compose base + `/register` (correct slash boundary) then append the code as a
         // raw query param, preserving its exact spelling.
-        let register_path = "/register".to_owned();
-        let register_url = compose(Some(&base_url), &register_path).unwrap_or(register_path);
+        let register_url = compose(Some(&base_url), "/register");
         let link = format!("{register_url}?invite_code={}", code.as_ref());
         let message = EmailMessage {
             from: None,

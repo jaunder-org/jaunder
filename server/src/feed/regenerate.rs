@@ -64,13 +64,9 @@ pub async fn regenerate_feed(
     let items = build_feed_items(posts, &published).await?;
 
     // `compose` joins `base` + a canonical path, or emits the relative path when no
-    // base is configured. Every path here is a server-built canonical path and `base`
-    // is a validated origin, so `compose` cannot actually fail; the eager
-    // `unwrap_or(<relative path>)` reuses the path we already built as an unreachable
-    // fallback (and keeps the composition off the `?`/coverage error path).
+    // base is configured (both the self URL and each surface's canonical HTML URL).
     let base = identity.base_url.as_ref();
-    let self_path = feed_path.to_string();
-    let self_url = compose(base, &self_path).unwrap_or(self_path);
+    let self_url = compose(base, feed_path);
     let canonical_path = match &surface {
         FeedSurface::Site => "/".to_owned(),
         // urlencoding::encode (external) takes &str.
@@ -80,7 +76,7 @@ pub async fn regenerate_feed(
             format!("/~{username}/tags/{}/", urlencoding::encode(tag.as_ref()))
         }
     };
-    let canonical_url = compose(base, &canonical_path).unwrap_or(canonical_path);
+    let canonical_url = compose(base, &canonical_path);
 
     let updated_at = items.iter().map(|i| i.updated_at).max().unwrap_or(now);
     let title = compute_title(&identity.title, &surface);

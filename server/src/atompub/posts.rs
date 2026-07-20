@@ -164,7 +164,7 @@ pub async fn collection_get(
 
     let base = base_url(site_config.as_ref()).await;
     let collection_path = format!("/atompub/{username}/posts");
-    let collection_url = compose(base.as_ref(), &collection_path).unwrap_or(collection_path);
+    let collection_url = compose(base.as_ref(), &collection_path);
 
     let next = if has_more {
         records.last().map(|last| {
@@ -449,7 +449,7 @@ fn post_entry_response(
     username: &Username,
 ) -> Response {
     let location_path = format!("/atompub/{username}/posts/{}", post.post_id);
-    let location = compose(base, &location_path).unwrap_or(location_path);
+    let location = compose(base, &location_path);
     let xml = entry_to_xml(&post_to_entry(post, base));
     (
         status,

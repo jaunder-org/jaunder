@@ -202,10 +202,8 @@ impl FeedWorker {
     ) {
         if let Some(hub) = hub_url {
             let base = identity.and_then(|i| i.base_url.as_ref());
-            // compose can't fail here (canonical feed path + valid base); the eager
-            // `unwrap_or(rel)` reuses the relative feed_url as an unreachable fallback.
-            let rel = feed_url.to_owned();
-            let absolute = compose(base, &rel).unwrap_or(rel);
+            // `compose` joins base + the feed path (or emits the relative path unset).
+            let absolute = compose(base, feed_url);
             tracing::info!(feed_url, hub, attempt, "feed.websub.ping.attempted");
 
             let result = self.websub.send_publish(hub, &absolute).await;

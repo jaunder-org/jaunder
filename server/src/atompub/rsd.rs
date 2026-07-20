@@ -32,9 +32,9 @@ pub async fn rsd_document(
 ) -> Result<Response, StatusCode> {
     let base = base_url(site_config.as_ref()).await;
     let service_path = "/atompub/service".to_owned();
-    let service_url = compose(base.as_ref(), &service_path).unwrap_or(service_path);
+    let service_url = compose(base.as_ref(), &service_path);
     let homepage_path = format!("/~{username}");
-    let homepage_url = compose(base.as_ref(), &homepage_path).unwrap_or(homepage_path);
+    let homepage_url = compose(base.as_ref(), &homepage_path);
     let xml = render_rsd_document(&service_url, &homepage_url);
 
     Ok((

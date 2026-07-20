@@ -140,7 +140,7 @@ pub fn post_to_entry(post: &PostRecord, base_url: Option<&AbsoluteUrl>) -> Entry
     let edit_path = format!("/atompub/{username}/posts/{}", post.post_id);
     // compose can't fail (server-built path + valid base); the eager `unwrap_or`
     // reuses the relative path we already built as an unreachable fallback.
-    let edit_uri = compose(base_url, &edit_path).unwrap_or(edit_path);
+    let edit_uri = compose(base_url, &edit_path);
 
     // Content: the post's format becomes the wire media `type` (native source form).
     let content_type = format_to_wire(&post.format);
@@ -155,7 +155,7 @@ pub fn post_to_entry(post: &PostRecord, base_url: Option<&AbsoluteUrl>) -> Entry
         let alt_path = post.permalink();
         links.push(Link {
             rel: "alternate".into(),
-            href: compose(base_url, &alt_path).unwrap_or(alt_path),
+            href: compose(base_url, &alt_path),
             ..Default::default()
         });
     }
