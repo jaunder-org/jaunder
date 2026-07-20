@@ -13,6 +13,7 @@ use crate::tags::TagSummary;
 use common::ids::AudienceId;
 use common::slug::Slug;
 use common::tag::TagLabel;
+use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::AudienceBase;
 use leptos::prelude::*;
@@ -115,7 +116,7 @@ pub fn ComposerFields(
 // `#[must_use]`; the crate-wide `must_use_candidate = "allow"` (Cargo.toml, #94)
 // means clippy no longer flags it, so we assert it by hand.
 #[must_use]
-pub(crate) fn local_datetime_to_utc_rfc3339(local: &str) -> Option<String> {
+fn local_datetime_to_utc_rfc3339(local: &str) -> Option<String> {
     let trimmed = local.trim();
     if trimmed.is_empty() {
         return None;
@@ -127,6 +128,15 @@ pub(crate) fn local_datetime_to_utc_rfc3339(local: &str) -> Option<String> {
         return None;
     }
     date.to_iso_string().as_string()
+}
+
+/// Parses a `datetime-local` control's raw value into the UTC [`UtcInstant`] used for the
+/// `publish_at` wire arg — the browser local→UTC conversion
+/// ([`local_datetime_to_utc_rfc3339`]) followed by the domain parse, in one place. `None`
+/// for an empty/unparseable field (i.e. publish now).
+#[must_use]
+pub(crate) fn publish_at_from_local(local: &str) -> Option<UtcInstant> {
+    local_datetime_to_utc_rfc3339(local).and_then(|s| s.parse::<UtcInstant>().ok())
 }
 
 #[expect(
@@ -144,7 +154,7 @@ pub fn PostDisplay(
     tag_context: TagContext,
     #[prop(optional)] children: Option<Children>,
 ) -> impl IntoView {
-    let time_label = crate::render::format_post_time(&post.published_at);
+    let time_label = crate::render::format_post_time(post.published_at);
     // Built once and shared by both arms so the authored content column is the SAME
     // pure, viewer-independent render the projector paints (#181, ADR-0044 D4) — no
     // hand-rebuilt markup and no is_author-driven content change that could diverge
@@ -473,7 +483,7 @@ pub fn PostCreateForm(
                 format: format.get(),
                 slug_override: None,
                 publish: false,
-                publish_at: local_datetime_to_utc_rfc3339(&publish_at.get()),
+                publish_at: publish_at_from_local(&publish_at.get()),
                 tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
                 summary: Some(summary.get()),
                 audience: Some(audience.get()),
@@ -485,7 +495,7 @@ pub fn PostCreateForm(
                 format: format.get(),
                 slug_override: None,
                 publish: true,
-                publish_at: local_datetime_to_utc_rfc3339(&publish_at.get()),
+                publish_at: publish_at_from_local(&publish_at.get()),
                 tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
                 summary: Some(summary.get()),
                 audience: Some(audience.get()),
@@ -589,7 +599,7 @@ pub fn PostCreateForm(
                 format: format.get(),
                 slug_override: slug_field.parsed(),
                 publish,
-                publish_at: local_datetime_to_utc_rfc3339(&publish_at.get()),
+                publish_at: publish_at_from_local(&publish_at.get()),
                 tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
                 summary: Some(summary.get()),
                 audience: Some(audience.get()),

@@ -1,7 +1,9 @@
 use crate::error::WebError;
-use crate::invites::{list_invites, CreateInvite};
+use crate::forms::{Field, ValidatedInput};
+use crate::invites::{list_invites, CreateInvite, InviteInfo};
 use crate::pages::Topbar;
 use crate::registration::get_registration_policy;
+use common::email::Email;
 use leptos::prelude::*;
 
 /// Invites page — lists invites (metadata only; raw codes are never sent to the client,
@@ -13,6 +15,7 @@ use leptos::prelude::*;
 #[component]
 pub fn InvitesPage() -> impl IntoView {
     let create_action = ServerAction::<CreateInvite>::new();
+    let recipient = Field::<Email>::new();
     let policy = crate::server_resource(|| (), |()| get_registration_policy());
     let invites = crate::server_resource(move || create_action.version().get(), |_| list_invites());
 
@@ -42,15 +45,24 @@ pub fn InvitesPage() -> impl IntoView {
                             Ok(list) => {
                                 view! {
                                     <ActionForm action=create_action>
-                                        <label>
-                                            "Invitee email"
-                                            <input type="email" name="recipient_email" required=true />
-                                        </label>
+                                        <ValidatedInput<
+                                        Email,
+                                    >
+                                            label="Invitee email"
+                                            name="recipient_email"
+                                            input_type="email"
+                                            autocomplete="email"
+                                            field=recipient
+                                        />
                                         <label>
                                             "Expires in hours"
                                             <input type="number" name="expires_in_hours" />
                                         </label>
-                                        <button type="submit" class="j-btn is-primary">
+                                        <button
+                                            type="submit"
+                                            class="j-btn is-primary"
+                                            prop:disabled=move || !recipient.is_valid()
+                                        >
                                             "Send Invite"
                                         </button>
                                     </ActionForm>
@@ -63,7 +75,7 @@ pub fn InvitesPage() -> impl IntoView {
                                                     let to = create_action
                                                         .input()
                                                         .get()
-                                                        .map(|args| args.recipient_email)
+                                                        .map(|args| args.recipient_email.to_string())
                                                         .unwrap_or_default();
                                                     // Echo the recipient the operator just submitted
                                                     // (from the action's input) to confirm delivery.
@@ -80,23 +92,7 @@ pub fn InvitesPage() -> impl IntoView {
                                     <ul>
                                         {list
                                             .into_iter()
-                                            .map(|i| {
-                                                view! {
-                                                    <li>
-                                                        "Expires: " {i.expires_at.clone()}
-                                                        {i
-                                                            .used_at
-                                                            .clone()
-                                                            .map(|t| {
-                                                                view! {
-                                                                    " (used at "
-                                                                    {t}
-                                                                    ")"
-                                                                }
-                                                            })}
-                                                    </li>
-                                                }
-                                            })
+                                            .map(|i| render_invite_row(&i))
                                             .collect::<Vec<_>>()}
                                     </ul>
                                 }
@@ -108,5 +104,23 @@ pub fn InvitesPage() -> impl IntoView {
                 </Suspense>
             </div>
         </div>
+    }
+}
+
+/// Renders a single invite row: its expiry and, if used, when.
+fn render_invite_row(i: &InviteInfo) -> impl IntoView {
+    view! {
+        <li>
+            "Expires: " {i.expires_at.to_string()}
+            {i
+                .used_at
+                .map(|t| {
+                    view! {
+                        " (used at "
+                        {t.to_string()}
+                        ")"
+                    }
+                })}
+        </li>
     }
 }

@@ -18,6 +18,7 @@ use crate::tags::TagSummary;
 use crate::{avatar, icon, taglist, topbar};
 use common::render::RenderedHtml;
 use common::tag::Tag;
+use common::time::UtcInstant;
 use common::username::Username;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
@@ -85,19 +86,12 @@ pub enum TagCtx {
     ForUser(Username),
 }
 
-/// Formats an RFC-3339 timestamp as `"YYYY-MM-DD HH:MM"`, falling back to the raw
-/// string if it contains no `T` separator. Shared with the reactive components so
-/// the projected post time and the reactive re-render coincide.
+/// Formats a [`UtcInstant`] as `"YYYY-MM-DD HH:MM"` (UTC wall-clock). Shared with
+/// the reactive components so the projected post time and the reactive re-render
+/// coincide.
 #[must_use]
-pub fn format_post_time(ts: &str) -> String {
-    if let Some(t_pos) = ts.find('T') {
-        let date = &ts[..t_pos];
-        let rest = &ts[t_pos + 1..];
-        let time = if rest.len() >= 5 { &rest[..5] } else { rest };
-        format!("{date} {time}")
-    } else {
-        ts.to_owned()
-    }
+pub fn format_post_time(ts: UtcInstant) -> String {
+    ts.value().format("%Y-%m-%d %H:%M").to_string()
 }
 
 /// Escape text for safe interpolation into HTML element or attribute content.
@@ -319,7 +313,7 @@ pub(crate) fn permalink_article(post: &PostResponse) -> String {
         banner: None,
         summary: post.summary.as_deref(),
         rendered_html: &post.rendered_html,
-        time: &format_post_time(post.published_at.as_deref().unwrap_or(&post.created_at)),
+        time: &format_post_time(post.published_at.unwrap_or(post.created_at)),
         permalink: post.permalink.as_deref().unwrap_or_default(),
         tags: &post.tags,
         tag_ctx: &ctx,
@@ -360,7 +354,7 @@ fn render_posts(posts: &[TimelinePostSummary], tag_ctx: &TagCtx) -> String {
             banner: None,
             summary: post.summary.as_deref(),
             rendered_html: &post.rendered_html,
-            time: &format_post_time(&post.published_at),
+            time: &format_post_time(post.published_at),
             permalink: &post.permalink,
             tags: &post.tags,
             tag_ctx,
@@ -617,7 +611,7 @@ pub fn format_bytes(bytes: i64) -> String {
 mod tests {
     use super::*;
     use common::ids::PostId;
-    use common::test_support::parse_username;
+    use common::test_support::{parse_username, parse_utc_instant};
 
     #[test]
     fn format_bytes_displays_bytes_below_kb() {
@@ -649,29 +643,22 @@ mod tests {
 
     #[test]
     fn format_post_time_includes_time_portion() {
-        assert_eq!(
-            format_post_time("2026-04-23T10:30:00+00:00"),
-            "2026-04-23 10:30"
-        );
+        let ts = parse_utc_instant("2026-04-23T10:30:00+00:00");
+        assert_eq!(format_post_time(ts), "2026-04-23 10:30");
     }
 
     #[test]
-    fn format_post_time_handles_date_only_input() {
-        // Input with no 'T' separator — return as-is.
-        assert_eq!(format_post_time("2026-04-23"), "2026-04-23");
-    }
-
-    #[test]
-    fn format_post_time_handles_negative_offset() {
-        assert_eq!(
-            format_post_time("2026-04-23T15:45:00-05:00"),
-            "2026-04-23 15:45"
-        );
+    fn format_post_time_canonicalizes_offset_to_utc() {
+        // A non-UTC offset is canonicalized to UTC before formatting: 15:45-05:00
+        // is 20:45Z.
+        let ts = parse_utc_instant("2026-04-23T15:45:00-05:00");
+        assert_eq!(format_post_time(ts), "2026-04-23 20:45");
     }
 
     #[test]
     fn format_post_time_handles_utc_z_suffix() {
-        assert_eq!(format_post_time("2026-04-23T10:30:00Z"), "2026-04-23 10:30");
+        let ts = parse_utc_instant("2026-04-23T10:30:00Z");
+        assert_eq!(format_post_time(ts), "2026-04-23 10:30");
     }
 
     #[test]
@@ -758,8 +745,8 @@ mod tests {
             body: "raw".into(),
             format: "markdown".into(),
             rendered_html: RenderedHtml::from_trusted("<p>Hi <em>there</em></p>"),
-            created_at: "2026-01-02T03:04:05Z".into(),
-            published_at: Some("2026-01-02T03:04:05Z".into()),
+            created_at: parse_utc_instant("2026-01-02T03:04:05Z"),
+            published_at: Some(parse_utc_instant("2026-01-02T03:04:05Z")),
             is_draft: false,
             is_author: false,
             permalink: Some("/~alice/2026/01/02/hello".into()),
@@ -779,8 +766,8 @@ mod tests {
             summary: Some("An excerpt".into()),
             slug: "first".parse().unwrap(),
             rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
-            created_at: "2026-01-01T00:00:00Z".into(),
-            published_at: "2026-01-01T00:00:00Z".into(),
+            created_at: parse_utc_instant("2026-01-01T00:00:00Z"),
+            published_at: parse_utc_instant("2026-01-01T00:00:00Z"),
             permalink: "/~bob/2026/01/01/first".into(),
             is_author: false,
             tags: vec![],

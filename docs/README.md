@@ -99,6 +99,7 @@ convention). See the Status column below for each ADR's current status.
 | [0069](adr/0069-client-crate-wasm-only-home.md)                    | `client` crate — the wasm-only browser-infrastructure home                                                   | accepted   |
 | [0070](adr/0070-web-vertical-wasm-only-component-files.md)         | web verticals split host/wasm at the file level — wasm-only `component.rs`                                   | accepted   |
 | [0071](adr/0071-sqlx-string-newtype-bridge.md)                     | Transparent sqlx bridge for string newtypes                                                                  | accepted   |
+| [0072](adr/0072-timestamps-cross-boundary-as-utcinstant.md)        | Timestamps cross the web boundary as a `UtcInstant` newtype (chrono is already in the wasm bundle)           | proposed   |
 
 <!-- adr-table:end -->
 

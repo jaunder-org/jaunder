@@ -5,6 +5,7 @@ use chrono::Datelike;
 use common::ids::{PostId, UserId};
 use common::tag::TagLabel;
 use common::test_support::parse_audience_name;
+use common::time::UtcInstant;
 use common::visibility::AudienceBase;
 use storage::{PostFormat, RenderedHtml};
 use web::posts::{
@@ -821,17 +822,14 @@ async fn get_post_returns_not_found_for_missing_post(#[case] backend: Backend) {
 
 async fn list_drafts_form(
     state: Arc<storage::AppState>,
-    cursor_created_at: Option<&str>,
+    cursor_created_at: Option<UtcInstant>,
     cursor_post_id: Option<PostId>,
     limit: u32,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
     let mut parts = vec![format!("limit={limit}")];
     if let (Some(created_at), Some(post_id)) = (cursor_created_at, cursor_post_id) {
-        parts.push(format!(
-            "cursor_created_at={}",
-            created_at.replace('+', "%2B")
-        ));
+        parts.push(format!("cursor_created_at={created_at}"));
         parts.push(format!("cursor_post_id={post_id}"));
     }
     post_form(state, "/api/list_drafts", parts.join("&"), cookie).await
@@ -854,17 +852,14 @@ async fn publish_post_form(
 async fn list_user_posts_form(
     state: Arc<storage::AppState>,
     username: &str,
-    cursor_created_at: Option<&str>,
+    cursor_created_at: Option<UtcInstant>,
     cursor_post_id: Option<PostId>,
     limit: u32,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
     let mut parts = vec![format!("username={username}"), format!("limit={limit}")];
     if let (Some(created_at), Some(post_id)) = (cursor_created_at, cursor_post_id) {
-        parts.push(format!(
-            "cursor_created_at={}",
-            created_at.replace('+', "%2B")
-        ));
+        parts.push(format!("cursor_created_at={created_at}"));
         parts.push(format!("cursor_post_id={post_id}"));
     }
     post_form(state, "/api/list_user_posts", parts.join("&"), cookie).await
@@ -891,17 +886,14 @@ async fn list_user_posts_by_tag_form(
 
 async fn list_local_timeline_form(
     state: Arc<storage::AppState>,
-    cursor_created_at: Option<&str>,
+    cursor_created_at: Option<UtcInstant>,
     cursor_post_id: Option<PostId>,
     limit: u32,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
     let mut parts = vec![format!("limit={limit}")];
     if let (Some(created_at), Some(post_id)) = (cursor_created_at, cursor_post_id) {
-        parts.push(format!(
-            "cursor_created_at={}",
-            created_at.replace('+', "%2B")
-        ));
+        parts.push(format!("cursor_created_at={created_at}"));
         parts.push(format!("cursor_post_id={post_id}"));
     }
     post_form(state, "/api/list_local_timeline", parts.join("&"), cookie).await
@@ -909,17 +901,14 @@ async fn list_local_timeline_form(
 
 async fn list_home_feed_form(
     state: Arc<storage::AppState>,
-    cursor_created_at: Option<&str>,
+    cursor_created_at: Option<UtcInstant>,
     cursor_post_id: Option<PostId>,
     limit: u32,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
     let mut parts = vec![format!("limit={limit}")];
     if let (Some(created_at), Some(post_id)) = (cursor_created_at, cursor_post_id) {
-        parts.push(format!(
-            "cursor_created_at={}",
-            created_at.replace('+', "%2B")
-        ));
+        parts.push(format!("cursor_created_at={created_at}"));
         parts.push(format!("cursor_post_id={post_id}"));
     }
     post_form(state, "/api/list_home_feed", parts.join("&"), cookie).await
@@ -1408,7 +1397,7 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
 
     let (status, body) = list_drafts_form(
         Arc::clone(&state),
-        Some(&first_entry.created_at),
+        Some(first_entry.created_at),
         Some(first_entry.post_id),
         10,
         Some(&author_cookie),
@@ -1749,10 +1738,14 @@ async fn publish_post_rejects_non_author(#[case] backend: Backend) {
 }
 
 // Shape B — invalid-cursor cluster across the four cursor-paginated endpoints.
-// Each fires two requests with identical assertions: a half-specified cursor
-// ("must be provided together") and an unparseable timestamp ("invalid
-// cursor_created_at"); only the endpoint URI and the (already username-encoded
-// where required) request bodies vary. An author session is always created and
+// Each fires two requests: a half-specified cursor (a valid instant with no
+// `cursor_post_id`, rejected by the handler's "must be provided together"
+// pairing check) and an unparseable timestamp. The latter is now a typed
+// `Option<UtcInstant>` wire arg (ADR-0065), so an unparseable value fails at
+// arg-decode — before the handler body — rather than reaching the handler's
+// "invalid cursor_created_at" check; we assert only that the request is
+// rejected. Only the endpoint URI and the (already username-encoded where
+// required) request bodies vary. An author session is always created and
 // passed — the public endpoints ignore it but still run the same cursor
 // validation, so a single setup serves every row without branching.
 #[apply(backends_matrix)]
@@ -1813,8 +1806,10 @@ async fn list_rejects_invalid_cursor_inputs(
     assert!(body.contains("must be provided together"), "body: {body}");
 
     let (status, body) = post_form(state, uri, bad_time_body.to_string(), Some(&cookie)).await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("invalid cursor_created_at"), "body: {body}");
+    // An unparseable instant is rejected at typed-arg decode (ADR-0065), before
+    // the handler runs — a hard decode error, not the handler's validation
+    // message. Assert the request fails rather than pinning the decode-layer text.
+    assert_ne!(status, StatusCode::OK, "body: {body}");
 }
 
 #[apply(backends)]
@@ -2000,7 +1995,7 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination(#[case] 
     let (status, body) = list_user_posts_form(
         Arc::clone(&state),
         "author",
-        first_page.next_cursor_created_at.as_deref(),
+        first_page.next_cursor_created_at,
         first_page.next_cursor_post_id,
         50,
         None,
@@ -2117,7 +2112,7 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
 
     let (status, body) = list_local_timeline_form(
         Arc::clone(&state),
-        first_page.next_cursor_created_at.as_deref(),
+        first_page.next_cursor_created_at,
         first_page.next_cursor_post_id,
         50,
         None,
@@ -2220,7 +2215,7 @@ async fn list_home_feed_returns_authenticated_users_published_posts_only(#[case]
 
     let (status, body) = list_home_feed_form(
         Arc::clone(&state),
-        first_page.next_cursor_created_at.as_deref(),
+        first_page.next_cursor_created_at,
         first_page.next_cursor_post_id,
         50,
         Some(&author_cookie),

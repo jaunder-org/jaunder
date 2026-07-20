@@ -341,7 +341,7 @@ fn render_media_row(item: &MediaItem, delete_action: ServerAction<DeleteMedia>) 
     let sha256 = item.sha256.to_string();
     let source = item.source.clone();
     let size_label = format_bytes(item.size_bytes);
-    let created_at = item.created_at.clone();
+    let created_at = item.created_at.to_string();
 
     view! {
         <tr>

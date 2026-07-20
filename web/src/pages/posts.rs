@@ -9,8 +9,8 @@ use crate::{
     pages::{
         signal_read::read_signal,
         ui::{
-            local_datetime_to_utc_rfc3339, AudiencePicker, ComposerFields, PostCard,
-            PostCreateForm, PostDisplay, TagContext, TagInput, Topbar,
+            publish_at_from_local, AudiencePicker, ComposerFields, PostCard, PostCreateForm,
+            PostDisplay, TagContext, TagInput, Topbar,
         },
     },
     posts::{
@@ -23,6 +23,7 @@ use crate::{
 use common::feed::FeedSurface;
 use common::ids::PostId;
 use common::pagination::PageSize;
+use common::time::UtcInstant;
 use common::visibility::AudienceBase;
 use common::{slug::Slug, tag::Tag, username::Username};
 use leptos::prelude::*;
@@ -223,11 +224,10 @@ pub fn PostPage() -> impl IntoView {
                                     summary: fetched.summary.clone(),
                                     slug: fetched.slug.clone(),
                                     rendered_html: fetched.rendered_html.clone(),
-                                    created_at: fetched.created_at.clone(),
+                                    created_at: fetched.created_at,
                                     published_at: fetched
                                         .published_at
-                                        .clone()
-                                        .unwrap_or_else(|| fetched.created_at.clone()),
+                                        .unwrap_or(fetched.created_at),
                                     permalink: fetched.permalink.clone().unwrap_or_default(),
                                     is_author: fetched.is_author,
                                     tags: fetched.tags.clone(),
@@ -358,7 +358,7 @@ pub fn UserTimelinePage() -> impl IntoView {
     );
 
     let timeline = RwSignal::new(Vec::<TimelinePostSummary>::new());
-    let next_cursor_created_at = RwSignal::new(None::<String>);
+    let next_cursor_created_at = RwSignal::new(None::<UtcInstant>);
     let next_cursor_post_id = RwSignal::new(None::<PostId>);
     let has_more = RwSignal::new(false);
     let error = RwSignal::new(None::<String>);
@@ -552,11 +552,10 @@ pub fn DraftPreviewPage() -> impl IntoView {
                                     summary: fetched.summary.clone(),
                                     slug: fetched.slug.clone(),
                                     rendered_html: fetched.rendered_html.clone(),
-                                    created_at: fetched.created_at.clone(),
+                                    created_at: fetched.created_at,
                                     published_at: fetched
                                         .published_at
-                                        .clone()
-                                        .unwrap_or_else(|| fetched.created_at.clone()),
+                                        .unwrap_or(fetched.created_at),
                                     permalink: fetched.permalink.clone().unwrap_or_default(),
                                     is_author: true,
                                     tags: fetched.tags.clone(),
@@ -715,7 +714,7 @@ pub fn EditPostPage() -> impl IntoView {
                                     format: format.get(),
                                     slug_override: slug_field.parsed(),
                                     publish,
-                                    publish_at: local_datetime_to_utc_rfc3339(&publish_at.get()),
+                                    publish_at: publish_at_from_local(&publish_at.get()),
                                     tags: Some(
                                         post_tags.get().into_iter().map(|t| t.display).collect(),
                                     ),
@@ -1016,7 +1015,7 @@ fn render_draft_row(
     // distinctly from a true draft so the author can tell the two apart on this
     // shared "not-yet-live" surface. Full management UI is out of scope (#15).
     // cov:ignore-start
-    let scheduled_badge = draft.scheduled_at.clone().map(|when| {
+    let scheduled_badge = draft.scheduled_at.map(|when| {
         view! { <span class="j-badge j-badge-scheduled">{format!("Scheduled for {when}")}</span> }
     });
     view! {
@@ -1128,7 +1127,7 @@ pub fn SiteTagPage() -> impl IntoView {
     );
 
     let timeline = RwSignal::new(Vec::<TimelinePostSummary>::new());
-    let next_cursor_created_at = RwSignal::new(None::<String>);
+    let next_cursor_created_at = RwSignal::new(None::<UtcInstant>);
     let next_cursor_post_id = RwSignal::new(None::<PostId>);
     let has_more = RwSignal::new(false);
     let error = RwSignal::new(None::<String>);
@@ -1307,7 +1306,7 @@ pub fn UserTagPage() -> impl IntoView {
     );
 
     let timeline = RwSignal::new(Vec::<TimelinePostSummary>::new());
-    let next_cursor_created_at = RwSignal::new(None::<String>);
+    let next_cursor_created_at = RwSignal::new(None::<UtcInstant>);
     let next_cursor_post_id = RwSignal::new(None::<PostId>);
     let has_more = RwSignal::new(false);
     let error = RwSignal::new(None::<String>);
