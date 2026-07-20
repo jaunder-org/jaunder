@@ -23,6 +23,7 @@ use crate::{
 use common::feed::FeedSurface;
 use common::ids::PostId;
 use common::pagination::PageSize;
+use common::post_summary::PostSummary;
 use common::time::UtcInstant;
 use common::visibility::AudienceBase;
 use common::{slug::Slug, tag::Tag, username::Username};
@@ -633,7 +634,9 @@ pub fn EditPostPage() -> impl IntoView {
     let body = RwSignal::new(String::new());
     let format = RwSignal::new("markdown".to_string());
     let slug_field = Field::<Slug>::optional();
-    let summary = RwSignal::new(String::new());
+    // Optional summary: parent-owned validated field (ADR-0065 direct-bind), so an
+    // over-cap entry disables save and an empty field submits `None` (omit → clear).
+    let summary_field = Field::<PostSummary>::optional();
     // Optional scheduled-publish time for an unpublished/draft post (naive
     // local wall-clock from a `datetime-local` control); empty publishes now.
     let publish_at = RwSignal::new(String::new());
@@ -702,7 +705,9 @@ pub fn EditPostPage() -> impl IntoView {
                         body.set(String::from(fetched.body.clone()));
                         format.set(fetched.format.clone());
                         slug_field.value.set(fetched.slug.to_string());
-                        summary.set(fetched.summary.clone().unwrap_or_default());
+                        summary_field
+                            .value
+                            .set(fetched.summary.as_deref().unwrap_or_default().to_owned());
                         post_tags.set(fetched.tags.clone());
                         let post_id = fetched.post_id;
                         let is_published = fetched.published_at.is_some();
@@ -718,7 +723,7 @@ pub fn EditPostPage() -> impl IntoView {
                                     tags: Some(
                                         post_tags.get().into_iter().map(|t| t.display).collect(),
                                     ),
-                                    summary: common::text::non_empty_owned(summary.get()),
+                                    summary: summary_field.parsed(),
                                     audience: Some(audience.get()),
                                 });
                         };
@@ -796,11 +801,21 @@ pub fn EditPostPage() -> impl IntoView {
                                                 placeholder="Optional summary or excerpt"
                                                 class="j-field-val"
                                                 rows=3
-                                                prop:value=summary
+                                                prop:value=summary_field.value
                                                 on:input=move |ev| {
-                                                    summary.set(event_target_value(&ev));
+                                                    let v = event_target_value(&ev);
+                                                    summary_field.value.set(v.clone());
+                                                    summary_field.error.set(summary_field.error_for(&v));
                                                 }
+                                                on:blur=move |_| summary_field.touch()
                                             />
+                                            {move || {
+                                                summary_field
+                                                    .is_touched()
+                                                    .then(|| summary_field.error.get())
+                                                    .flatten()
+                                                    .map(|msg| view! { <p class="error">{msg}</p> })
+                                            }}
                                         </div>
                                         <div style="margin-top:10px">
                                             <TagInput tags=post_tags />
@@ -851,7 +866,9 @@ pub fn EditPostPage() -> impl IntoView {
                                                     type="button"
                                                     name="publish"
                                                     value="true"
-                                                    prop:disabled=move || !slug_field.is_valid()
+                                                    prop:disabled=move || {
+                                                        !slug_field.is_valid() || !summary_field.is_valid()
+                                                    }
                                                     on:click=move |_| dispatch_update(true)
                                                 >
                                                     "Save"
@@ -865,7 +882,9 @@ pub fn EditPostPage() -> impl IntoView {
                                                     type="button"
                                                     name="publish"
                                                     value="false"
-                                                    prop:disabled=move || !slug_field.is_valid()
+                                                    prop:disabled=move || {
+                                                        !slug_field.is_valid() || !summary_field.is_valid()
+                                                    }
                                                     on:click=move |_| dispatch_update(false)
                                                 >
                                                     "Save draft"
@@ -875,7 +894,9 @@ pub fn EditPostPage() -> impl IntoView {
                                                     type="button"
                                                     name="publish"
                                                     value="true"
-                                                    prop:disabled=move || !slug_field.is_valid()
+                                                    prop:disabled=move || {
+                                                        !slug_field.is_valid() || !summary_field.is_valid()
+                                                    }
                                                     on:click=move |_| dispatch_update(true)
                                                 >
                                                     "Publish"
@@ -1008,8 +1029,7 @@ fn render_draft_row(
     let label = draft
         .title
         .clone()
-        .map(String::from)
-        .unwrap_or(draft.summary_label.clone());
+        .map_or_else(|| draft.summary_label.to_string(), String::from);
     // cov:ignore-stop
     // A scheduled post (future `published_at`) carries `scheduled_at`; mark it
     // distinctly from a true draft so the author can tell the two apart on this

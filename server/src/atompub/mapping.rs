@@ -8,6 +8,7 @@
 use chrono::{DateTime, Utc};
 use common::atompub::{is_draft, set_draft, set_j_slug, Category, Content, Entry, Link, Text};
 use common::post_body::PostBody;
+use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
 use common::tag::TagLabel;
 use storage::{PostFormat, PostRecord};
@@ -21,8 +22,9 @@ pub struct PostFields {
     pub body: PostBody,
     /// Format/markup language of the body.
     pub format: PostFormat,
-    /// Optional summary/excerpt.
-    pub summary: Option<String>,
+    /// Optional summary/excerpt (validated `PostSummary`; an over-cap wire value
+    /// is dropped on ingest, mirroring the lenient category handling below).
+    pub summary: Option<PostSummary>,
     /// Categories/tags extracted from the entry (author labels).
     pub categories: Vec<TagLabel>,
     /// Whether the entry is marked as draft.
@@ -85,7 +87,13 @@ pub fn entry_to_post_fields(entry: &Entry, default_format: PostFormat) -> PostFi
         let raw = entry.title().as_str();
         (!raw.trim().is_empty()).then(|| PostTitle::from(raw))
     };
-    let summary = entry.summary().map(|t| t.as_str().to_string());
+    // The entry's `<summary>` becomes a validated `PostSummary`. Like the invalid
+    // `<category>` term below, an over-cap/blank summary is silently dropped rather
+    // than failing the whole entry (lenient ingest, R5) — `entry_to_post_fields`
+    // stays infallible.
+    let summary = entry
+        .summary()
+        .and_then(|t| t.as_str().parse::<PostSummary>().ok());
     // atom `<category term>` values are arbitrary RFC-4287 protocol strings (the
     // atom `Entry` model holds them as `String`, not our domain tag) — this is the
     // boundary where a conforming term becomes a `TagLabel`. `entry_to_post_fields`
@@ -158,7 +166,9 @@ pub fn post_to_entry(post: &PostRecord, base_url: &str) -> Entry {
             value: Some(String::from(post.body.clone())),
             ..Default::default()
         }),
-        summary: post.summary.clone().map(Text::plain),
+        // ADR-0063 §5: read the summary out to a plain `String` at the atom Entry
+        // boundary (mirrors the `title` handling elsewhere in this mapper).
+        summary: post.summary.as_deref().map(|s| Text::plain(s.to_owned())),
         categories: post
             .tags
             .iter()
@@ -188,6 +198,7 @@ mod tests {
     use super::*;
     use chrono::{DateTime, Utc};
     use common::ids::{PostId, TagId, UserId};
+    use common::test_support::parse_post_summary;
 
     // -----------------------------------------------------------------------
     // format_wire seam tests
@@ -371,7 +382,10 @@ mod tests {
         let entry = common::atompub::entry_from_xml(xml).expect("parse entry");
         let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
 
-        assert_eq!(fields.summary, Some("This is a summary".to_string()));
+        assert_eq!(
+            fields.summary,
+            Some(parse_post_summary("This is a summary"))
+        );
     }
 
     #[test]
@@ -557,7 +571,7 @@ mod tests {
             updated_at: Utc::now(),
             published_at,
             deleted_at: None,
-            summary: summary.map(std::string::ToString::to_string),
+            summary: summary.map(parse_post_summary),
             tags: tags_vec,
         }
     }

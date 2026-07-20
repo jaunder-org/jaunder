@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 
 use crate::ids::PostId;
+use crate::post_summary::PostSummary;
 use crate::post_title::PostTitle;
 use crate::render::RenderedHtml;
 use crate::tag::TagLabel;
@@ -21,7 +22,7 @@ pub struct FeedItem {
     pub id: PostId, // last_post_id input to ETag
     pub title: Option<PostTitle>,
     pub permalink: String,
-    pub summary: Option<String>,
+    pub summary: Option<PostSummary>,
     pub content_html: RenderedHtml,
     pub published_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

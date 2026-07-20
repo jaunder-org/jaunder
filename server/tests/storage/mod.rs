@@ -4,8 +4,8 @@ use common::password::Password;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::test_support::{
-    parse_audience_name, parse_content_hash, parse_display_name, parse_email, parse_filename,
-    parse_raw_token,
+    parse_audience_name, parse_bio, parse_content_hash, parse_display_name, parse_email,
+    parse_filename, parse_raw_token,
 };
 use common::username::Username;
 use common::visibility::{
@@ -1143,7 +1143,7 @@ async fn update_profile_persists_changes(#[case] backend: Backend) {
             user_id,
             &ProfileUpdate {
                 display_name: Some(&parse_display_name("David")),
-                bio: Some("A bio"),
+                bio: Some(&parse_bio("A bio")),
             },
         )
         .await

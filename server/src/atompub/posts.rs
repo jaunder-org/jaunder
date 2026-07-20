@@ -552,6 +552,7 @@ mod etag_tests {
     use super::*;
     use chrono::{TimeZone, Utc};
     use common::ids::{PostId, TagId, UserId};
+    use common::test_support::parse_post_summary;
     use storage::{PostFormat, PostTag, RenderedHtml};
 
     fn mk_tag(post_id: i64, tag_id: i64, slug: &str, display: &str) -> PostTag {
@@ -581,7 +582,7 @@ mod etag_tests {
             updated_at: t,
             published_at: Some(t),
             deleted_at: None,
-            summary: Some("Summary".to_string()),
+            summary: Some(parse_post_summary("Summary")),
             tags: vec![mk_tag(1, 1, "rust", "Rust"), mk_tag(1, 2, "emacs", "Emacs")],
         }
     }
@@ -639,7 +640,7 @@ mod etag_tests {
         assert_ne!(flip(&|p| p.title = Some("Other".into())), e); // title value
         assert_ne!(flip(&|p| p.title = None), e); // title present->absent
         assert_ne!(flip(&|p| p.body = "Different body.".into()), e); // body
-        assert_ne!(flip(&|p| p.summary = Some("Other".to_string())), e); // summary value
+        assert_ne!(flip(&|p| p.summary = Some(parse_post_summary("Other"))), e); // summary value
         assert_ne!(flip(&|p| p.summary = None), e); // summary present->absent
         assert_ne!(flip(&|p| p.format = PostFormat::Markdown), e); // format
         assert_ne!(

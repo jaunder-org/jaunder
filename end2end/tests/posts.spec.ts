@@ -56,6 +56,59 @@ test("authenticated user can create a post with a summary", async ({
   await expect(page.locator("article")).toContainText("This is a summary");
 });
 
+// #545: an over-long summary (> MAX_POST_SUMMARY_CHARS = 500) is rejected
+// client-side by the shared PostSummary FromStr — the newtype's own message shows
+// inline once touched, and the publish button is disabled (ADR-0065
+// disable-until-valid, gated on summary validity alongside the slug).
+test("over-long post summary shows an inline error and gates submit", async ({
+  registeredPage: page,
+}) => {
+  await goto(page, "/posts/new");
+
+  await page.fill(SEL.postBody, "# Over Cap\n\nBody text");
+  const summaryInput = page.locator("#compose-summary");
+  await summaryInput.fill("a".repeat(501));
+  await summaryInput.blur();
+
+  await expect(page.locator(SEL.error)).toBeVisible();
+  await expect(page.locator(SEL.publishButton("true"))).toBeDisabled();
+});
+
+// #545: a summary set on create can be cleared on edit. Under the typed
+// Option<PostSummary> wire arg an emptied summary is omitted (dispatched as None),
+// persisting as cleared — verified in the browser: create with a summary, edit,
+// empty the field, save, then reopen the editor and confirm it is empty.
+test("clearing a post summary on edit persists as empty", async ({
+  registeredPage: page,
+}) => {
+  test.slow();
+  await goto(page, "/posts/new");
+  await page.fill(SEL.postBody, "# Clearable\n\nbody");
+  await page.fill("#compose-summary", "A summary to remove");
+  await click(page, SEL.publishButton("false"));
+  await waitForSelector(page, SEL.saveSummary);
+
+  const summary = page.locator(SEL.saveSummary);
+  const postIdMatch = (await summary
+    .locator('[data-test="preview-link"]')
+    .getAttribute("href"))!.match(/\/draft\/(\d+)\/preview/);
+  expect(postIdMatch).toBeTruthy();
+  const postId = postIdMatch![1];
+
+  // Edit: the summary prefills; clear it and save.
+  await goto(page, `/posts/${postId}/edit`);
+  await expect(page.locator("#edit-summary")).toHaveValue(
+    "A summary to remove",
+  );
+  await page.fill("#edit-summary", "");
+  await click(page, SEL.publishButton("false"));
+  await waitForSelector(page, SEL.saveSummary);
+
+  // Reopen the editor: the summary is now empty (cleared via None-omission).
+  await goto(page, `/posts/${postId}/edit`);
+  await expect(page.locator("#edit-summary")).toHaveValue("");
+});
+
 test("authenticated user can save a draft through the UI", async ({
   registeredPage: page,
 }) => {

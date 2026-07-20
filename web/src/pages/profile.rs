@@ -2,6 +2,7 @@ use crate::error::WebError;
 use crate::forms::Field;
 use crate::pages::Topbar;
 use crate::profile::{get_default_post_format, get_profile, SetDefaultPostFormat, UpdateProfile};
+use common::bio::Bio;
 use common::display_name::DisplayName;
 use leptos::prelude::*;
 
@@ -10,13 +11,13 @@ use leptos::prelude::*;
 pub fn ProfilePage() -> impl IntoView {
     let update_action = ServerAction::<UpdateProfile>::new();
     let profile = crate::server_resource(move || update_action.version().get(), |_| get_profile());
-    // Client-validated display name (optional: empty clears it) + a plain bio
-    // buffer, owned by the component so the bespoke form can `.dispatch` the typed
+    // Client-validated display name and bio (both optional: empty clears them),
+    // owned by the component so the bespoke form can `.dispatch` the typed
     // `UpdateProfile` args — the ADR-0065 direct-bind pattern (mirrors the post
-    // compose/edit forms), replacing the former `<ActionForm>` whose string field
-    // could not carry a validated `Option<DisplayName>`.
+    // compose/edit forms), replacing the former `<ActionForm>` whose string fields
+    // could not carry validated `Option<DisplayName>`/`Option<Bio>`.
     let dn_field = Field::<DisplayName>::optional();
-    let bio = RwSignal::new(String::new());
+    let bio_field = Field::<Bio>::optional();
 
     view! {
         <Topbar title="Profile" sub="Your details" />
@@ -33,12 +34,14 @@ pub fn ProfilePage() -> impl IntoView {
                                     .set(
                                         data.display_name.as_deref().unwrap_or_default().to_string(),
                                     );
-                                bio.set(data.bio.as_deref().unwrap_or_default().to_string());
+                                bio_field
+                                    .value
+                                    .set(data.bio.as_deref().unwrap_or_default().to_string());
                                 let submit = move |_| {
                                     update_action
                                         .dispatch(UpdateProfile {
                                             display_name: dn_field.parsed(),
-                                            bio: bio.get(),
+                                            bio: bio_field.parsed(),
                                         });
                                 };
                                 // Seed the form from the persisted profile. This re-runs
@@ -72,14 +75,28 @@ pub fn ProfilePage() -> impl IntoView {
                                         "Bio"
                                         <textarea
                                             name="bio"
-                                            prop:value=bio
-                                            on:input=move |ev| bio.set(event_target_value(&ev))
+                                            prop:value=bio_field.value
+                                            on:input=move |ev| {
+                                                let v = event_target_value(&ev);
+                                                bio_field.value.set(v.clone());
+                                                bio_field.error.set(bio_field.error_for(&v));
+                                            }
+                                            on:blur=move |_| bio_field.touch()
                                         />
                                     </label>
+                                    {move || {
+                                        bio_field
+                                            .is_touched()
+                                            .then(|| bio_field.error.get())
+                                            .flatten()
+                                            .map(|msg| view! { <p class="error">{msg}</p> })
+                                    }}
                                     <button
                                         type="button"
                                         class="j-btn is-primary"
-                                        prop:disabled=move || !dn_field.is_valid()
+                                        prop:disabled=move || {
+                                            !dn_field.is_valid() || !bio_field.is_valid()
+                                        }
                                         on:click=submit
                                     >
                                         "Update Profile"

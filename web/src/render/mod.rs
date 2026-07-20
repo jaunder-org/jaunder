@@ -121,7 +121,7 @@ pub fn render_head(seed: &PageSeed) -> String {
             post.title
                 .clone()
                 .map_or_else(|| format!("Post by {}", post.username), String::from),
-            post.summary.clone().unwrap_or_default(),
+            post.summary.as_deref().unwrap_or_default().to_owned(),
         ),
         PageSeed::Profile { username, .. } => (format!("Posts by {username}"), String::new()),
         PageSeed::SiteTimeline(_) => ("Jaunder".to_string(), String::new()),
@@ -611,7 +611,7 @@ pub fn format_bytes(bytes: i64) -> String {
 mod tests {
     use super::*;
     use common::ids::PostId;
-    use common::test_support::{parse_username, parse_utc_instant};
+    use common::test_support::{parse_post_summary, parse_username, parse_utc_instant};
 
     #[test]
     fn format_bytes_displays_bytes_below_kb() {
@@ -763,7 +763,7 @@ mod tests {
             post_id: PostId::from(1),
             username: parse_username("bob"),
             title: Some("First".into()),
-            summary: Some("An excerpt".into()),
+            summary: Some(parse_post_summary("An excerpt")),
             slug: "first".parse().unwrap(),
             rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
             created_at: parse_utc_instant("2026-01-01T00:00:00Z"),
