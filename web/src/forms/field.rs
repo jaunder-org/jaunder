@@ -147,6 +147,7 @@ mod tests {
     // `common` has no top-level re-exports — qualify by module.
     use common::audience::AudienceName;
     use common::backup::BackupSchedule;
+    use common::bio::{Bio, MAX_BIO_CHARS};
     use common::display_name::DisplayName;
     use common::email::Email;
     use common::password::Password;
@@ -212,6 +213,23 @@ mod tests {
         assert_eq!(f.error_for(""), None);
         assert!(f.error_for(&over).is_some());
         assert_eq!(f.error_for("A short summary"), None);
+        drop(owner);
+    }
+
+    #[test]
+    fn bio_field_error_reports_over_cap_and_allows_empty_when_optional() {
+        // Over-cap is the newtype's own `FromStr::Err` message; a valid bio is None.
+        let over = "a".repeat(MAX_BIO_CHARS + 1);
+        assert!(field_error::<Bio>(&over).is_some());
+        assert_eq!(field_error::<Bio>("About me"), None);
+        // Under `Field::optional`, an empty bio is "not provided" (valid → None);
+        // a non-empty over-cap value still gates submit.
+        let owner = Owner::new();
+        owner.set();
+        let f = Field::<Bio>::optional();
+        assert_eq!(f.error_for(""), None);
+        assert!(f.error_for(&over).is_some());
+        assert_eq!(f.error_for("About me"), None);
         drop(owner);
     }
 

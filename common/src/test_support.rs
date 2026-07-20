@@ -10,6 +10,7 @@
 
 use crate::audience::AudienceName;
 use crate::backup::RetentionCount;
+use crate::bio::Bio;
 use crate::display_name::DisplayName;
 use crate::email::Email;
 use crate::feed::{FeedMinDays, FeedMinItems};
@@ -58,6 +59,18 @@ pub fn parse_audience_name(name: &str) -> AudienceName {
 #[must_use]
 pub fn parse_display_name(name: &str) -> DisplayName {
     name.parse().expect("valid test display name")
+}
+
+/// Parse `s` into a valid [`Bio`] for tests — the single place a test bio literal is
+/// parsed, so a malformed fixture (empty or over the length bound) fails loudly and the
+/// validating `FromStr` isn't re-spelled at every profile fixture across the workspace.
+///
+/// # Panics
+///
+/// Panics if `s` is empty/whitespace-only or longer than the length bound.
+#[must_use]
+pub fn parse_bio(s: &str) -> Bio {
+    s.parse().expect("valid test bio")
 }
 
 /// Parse `s` into a valid [`RetentionCount`] for tests — the single place a test

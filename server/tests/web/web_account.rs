@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use common::mailer::test_utils::CapturingMailSender;
 use common::mailer::MailSender;
-use common::test_support::parse_display_name;
+use common::test_support::{parse_bio, parse_display_name};
 use common::username::Username;
 use storage::{AppState, ProfileUpdate};
 
@@ -36,7 +36,7 @@ async fn get_profile_returns_display_name_and_bio(#[case] backend: Backend) {
             user_id,
             &ProfileUpdate {
                 display_name: Some(&parse_display_name("Alice Smith")),
-                bio: Some("Hello world"),
+                bio: Some(&parse_bio("Hello world")),
             },
         )
         .await
@@ -603,7 +603,7 @@ async fn update_profile_with_empty_fields_sets_to_none(#[case] backend: Backend)
             user_id,
             &ProfileUpdate {
                 display_name: Some(&parse_display_name("Initial")),
-                bio: Some("Initial Bio"),
+                bio: Some(&parse_bio("Initial Bio")),
             },
         )
         .await
@@ -616,14 +616,14 @@ async fn update_profile_with_empty_fields_sets_to_none(#[case] backend: Backend)
         .unwrap();
     let cookie_header = session_cookie(&raw_token);
 
-    // Clearing the display name is the dispatch-`None` path: the typed
-    // `Option<DisplayName>` wire arg is *omitted* (serde decodes a missing
-    // Option field to `None`); an empty `display_name=` would instead fail to
-    // parse. Empty `bio=` clears via `non_empty`.
+    // Clearing either field is the dispatch-`None` path: the typed
+    // `Option<DisplayName>`/`Option<Bio>` wire args are *omitted* (serde decodes a
+    // missing Option field to `None`). An empty `display_name=`/`bio=` would instead
+    // fail to parse (ADR-0065), so the clear body omits both fields entirely.
     let (status, _) = post_form(
         Arc::clone(&state),
         "/api/update_profile",
-        "bio=",
+        "",
         Some(&cookie_header),
     )
     .await;

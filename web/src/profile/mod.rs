@@ -1,5 +1,6 @@
 // Shared imports (no cfg needed)
 use crate::error::WebResult;
+use common::bio::Bio;
 use common::display_name::DisplayName;
 use common::email::Email;
 use common::username::Username;
@@ -24,7 +25,7 @@ use {
 pub struct ProfileData {
     pub username: Username,
     pub display_name: Option<DisplayName>,
-    pub bio: Option<String>,
+    pub bio: Option<Bio>,
     pub email: Option<Email>,
     pub email_verified: bool,
 }
@@ -51,21 +52,21 @@ pub async fn get_profile() -> WebResult<ProfileData> {
 
 /// Updates the authenticated user's display name and bio.
 ///
-/// `display_name` is a typed [`DisplayName`] wire arg pre-validated on the client
-/// (ADR-0065): `None` clears it, `Some` is already trimmed/bounded. `bio` is
-/// free-form; blank (empty or whitespace-only) clears it.
+/// `display_name` and `bio` are typed wire args pre-validated on the client
+/// (ADR-0065): `None` clears (the field is omitted), `Some` is already
+/// trimmed/bounded. Both `Option`s model presence, so no `non_empty` shim is
+/// needed — an empty wire value is rejected at decode, clearing goes via omission.
 #[server(endpoint = "/update_profile")]
-pub async fn update_profile(display_name: Option<DisplayName>, bio: String) -> WebResult<()> {
+pub async fn update_profile(display_name: Option<DisplayName>, bio: Option<Bio>) -> WebResult<()> {
     boundary!("update_profile", {
         let auth = require_auth().await?;
         let users = expect_context::<Arc<dyn UserStorage>>();
-        let b = common::text::non_empty(&bio);
         users
             .update_profile(
                 auth.user_id,
                 &ProfileUpdate {
                     display_name: display_name.as_ref(),
-                    bio: b,
+                    bio: bio.as_ref(),
                 },
             )
             .await

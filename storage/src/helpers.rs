@@ -9,6 +9,7 @@ use crate::{
     InviteRecord, MediaRecord, MediaSource, PostFormat, PostRecord, PostTag, RenderedHtml,
     SessionRecord, UserRecord,
 };
+use common::bio::Bio;
 use common::display_name::DisplayName;
 use common::email::Email;
 use common::ids::{PostId, TagId, UserId};
@@ -30,7 +31,7 @@ pub(crate) type UserRecordParts = (
     i64,
     Username,
     Option<DisplayName>,
-    Option<String>,
+    Option<Bio>,
     DateTime<Utc>,
     Option<DateTime<Utc>>,
     Option<Email>,
@@ -230,7 +231,7 @@ pub(crate) type UserRow = (
     i64,
     Username,
     Option<DisplayName>,
-    Option<String>,
+    Option<Bio>,
     DateTime<Utc>,
     Option<DateTime<Utc>>,
     Option<Email>,
@@ -434,8 +435,8 @@ mod tests {
     use crate::test_support::parse_invite_code;
     use chrono::Utc;
     use common::test_support::{
-        parse_content_hash, parse_display_name, parse_email, parse_filename, parse_password,
-        parse_slug, parse_token_hash, parse_username,
+        parse_bio, parse_content_hash, parse_display_name, parse_email, parse_filename,
+        parse_password, parse_slug, parse_token_hash, parse_username,
     };
 
     #[test]
@@ -445,7 +446,7 @@ mod tests {
             1,
             parse_username("alice"),
             Some(parse_display_name("Alice")),
-            Some("Bio".to_string()),
+            Some(parse_bio("Bio")),
             now,
             Some(now),
             Some(parse_email("alice@example.com")),
@@ -835,7 +836,7 @@ mod tests {
             1,
             parse_username("alice"),
             Some(parse_display_name("Alice")),
-            Some("Bio".to_string()),
+            Some(parse_bio("Bio")),
             now,
             Some(now),
             Some(parse_email("alice@example.com")),
@@ -846,7 +847,7 @@ mod tests {
         assert_eq!(record.user_id, UserId::from(1));
         assert_eq!(record.username, "alice");
         assert_eq!(record.display_name, Some(parse_display_name("Alice")));
-        assert_eq!(record.bio, Some("Bio".to_string()));
+        assert_eq!(record.bio, Some(parse_bio("Bio")));
         assert_eq!(record.created_at, now);
         assert_eq!(record.last_authenticated_at, Some(now));
         assert_eq!(record.email.unwrap(), "alice@example.com");
