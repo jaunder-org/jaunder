@@ -460,7 +460,7 @@ where
 mod tests {
     use super::*;
     use crate::test_support::{backends, seed_user, Backend, CloseablePool};
-    use common::test_support::{parse_display_name, parse_email};
+    use common::test_support::{parse_display_name, parse_email, parse_password, parse_username};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -474,14 +474,14 @@ mod tests {
         // `create_user` binds a typed `Username` + `Option<&DisplayName>`, and
         // `set_email` binds `Option<&Email>`; the reads decode each column straight
         // back into its newtype — exercising both bridge directions.
-        let username: Username = "alice".parse().unwrap();
+        let username: Username = parse_username("alice");
         let display_name = parse_display_name("Alice Example");
         let user_id = env
             .state
             .users
             .create_user(
                 &username,
-                &"password123".parse().unwrap(),
+                &parse_password("password123"),
                 Some(&display_name),
                 false,
             )
@@ -517,11 +517,11 @@ mod tests {
     async fn user_round_trips_absent_display_name_and_email(#[case] backend: Backend) {
         // The `None` decode path for `Option<DisplayName>` / `Option<Email>`.
         let env = backend.setup().await;
-        let username: Username = "bob".parse().unwrap();
+        let username: Username = parse_username("bob");
         let user_id = env
             .state
             .users
-            .create_user(&username, &"password123".parse().unwrap(), None, false)
+            .create_user(&username, &parse_password("password123"), None, false)
             .await
             .unwrap();
 
@@ -580,7 +580,7 @@ mod tests {
         let result = env
             .state
             .users
-            .authenticate(&"alice".parse().unwrap(), &"password123".parse().unwrap())
+            .authenticate(&parse_username("alice"), &parse_password("password123"))
             .await;
         // §3.1a: the underlying sqlx::Error is preserved as a typed source
         // (not stringified), so the boundary can classify it.
@@ -607,10 +607,7 @@ mod tests {
         let result = env
             .state
             .users
-            .authenticate(
-                &"testuser".parse().unwrap(),
-                &"password123".parse().unwrap(),
-            )
+            .authenticate(&parse_username("testuser"), &parse_password("password123"))
             .await;
         assert!(matches!(result, Err(UserAuthError::Internal(_))));
     }
@@ -630,10 +627,7 @@ mod tests {
         let result = env
             .state
             .users
-            .authenticate(
-                &"testuser".parse().unwrap(),
-                &"password123".parse().unwrap(),
-            )
+            .authenticate(&parse_username("testuser"), &parse_password("password123"))
             .await;
         assert!(matches!(result, Err(UserAuthError::Internal(_))));
     }
@@ -655,10 +649,7 @@ mod tests {
         let result = env
             .state
             .users
-            .authenticate(
-                &"testuser".parse().unwrap(),
-                &"password123".parse().unwrap(),
-            )
+            .authenticate(&parse_username("testuser"), &parse_password("password123"))
             .await;
         assert!(matches!(result, Err(UserAuthError::Internal(_))));
     }
@@ -705,10 +696,7 @@ mod tests {
         let result = env
             .state
             .users
-            .authenticate(
-                &"testuser".parse().unwrap(),
-                &"password123".parse().unwrap(),
-            )
+            .authenticate(&parse_username("testuser"), &parse_password("password123"))
             .await;
         assert!(matches!(result, Err(UserAuthError::Internal(_))));
     }
@@ -721,8 +709,8 @@ mod tests {
             .state
             .users
             .create_user(
-                &"alice".parse().unwrap(),
-                &"force-hash-error-for-test-coverage".parse().unwrap(),
+                &parse_username("alice"),
+                &parse_password("force-hash-error-for-test-coverage"),
                 None,
                 false,
             )
@@ -737,8 +725,8 @@ mod tests {
         env.state
             .users
             .create_user(
-                &"alice".parse().unwrap(),
-                &"password123".parse().unwrap(),
+                &parse_username("alice"),
+                &parse_password("password123"),
                 None,
                 false,
             )
@@ -748,8 +736,8 @@ mod tests {
             .state
             .users
             .authenticate(
-                &"alice".parse().unwrap(),
-                &"force-verify-error-for-test-coverage".parse().unwrap(),
+                &parse_username("alice"),
+                &parse_password("force-verify-error-for-test-coverage"),
             )
             .await;
         assert!(matches!(result, Err(UserAuthError::Internal(_))));

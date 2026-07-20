@@ -1887,10 +1887,14 @@ where
          RETURNING post_id",
     )
     .bind(i64::from(input.user_id))
+    // `Option::as_ref` → `Option<&PostTitle>` (a typed newtype bind, not an
+    // `AsRef<str>` strip); the sqlx bridge encodes `Option<&PostTitle>`.
     .bind(input.title.as_ref())
     .bind(&input.slug)
     .bind(&input.body)
     .bind(format.as_str())
+    // `RenderedHtml` is hand-rolled and has no sqlx bridge yet (#502), so this stays a
+    // bare-`&str` bind until its trailer is aligned.
     .bind(input.rendered_html.as_ref())
     .bind(now)
     .bind(now)
@@ -2227,7 +2231,9 @@ where
 mod tests {
     use super::*;
     use crate::test_support::{backends, seed_user, Backend, CloseablePool};
-    use common::test_support::{parse_post_title, parse_username};
+    use common::test_support::{
+        parse_post_title, parse_slug, parse_tag, parse_tag_label, parse_username,
+    };
     use rstest::*;
     use rstest_reuse::*;
 
@@ -2263,8 +2269,8 @@ mod tests {
         PostTag {
             post_id: PostId::from(1),
             tag_id: TagId::from(0),
-            tag_slug: slug.parse::<Tag>().expect("valid tag slug"),
-            tag_display: display.parse::<TagLabel>().expect("valid tag label"),
+            tag_slug: parse_tag(slug),
+            tag_display: parse_tag_label(display),
         }
     }
 
@@ -2273,9 +2279,9 @@ mod tests {
         let existing = vec![post_tag("rust", "Rust"), post_tag("leptos", "Leptos")];
         let desired: Vec<TagLabel> = vec![
             // Same slug as an existing tag (different casing): kept, not re-added.
-            "Rust".parse().unwrap(),
+            parse_tag_label("Rust"),
             // New slug: added.
-            "wasm".parse().unwrap(),
+            parse_tag_label("wasm"),
         ];
 
         let diff = post_tag_diff(&existing, &desired);
@@ -2337,9 +2343,9 @@ mod tests {
         let mut post = PostRecord {
             post_id: PostId::from(1),
             user_id: UserId::from(1),
-            author_username: "author".parse().unwrap(),
+            author_username: parse_username("author"),
             title: Some("My Title".into()),
-            slug: "my-slug".parse().unwrap(),
+            slug: parse_slug("my-slug"),
             body: "\n\n   The first non-empty line of the body is here. \n\n Another line.".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted(
@@ -2374,9 +2380,9 @@ mod tests {
         let post = PostRecord {
             post_id: PostId::from(1),
             user_id: UserId::from(1),
-            author_username: "author".parse().unwrap(),
+            author_username: parse_username("author"),
             title: Some("My Title".into()),
-            slug: "hello-world".parse().unwrap(),
+            slug: parse_slug("hello-world"),
             body: "My body".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>My body</p>"),
@@ -2400,7 +2406,7 @@ mod tests {
         let input = CreatePostInput {
             user_id,
             title: Some("Test Title".into()),
-            slug: "test-slug".parse().unwrap(),
+            slug: parse_slug("test-slug"),
             body: "Test body".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Test body</p>"),
@@ -2428,7 +2434,7 @@ mod tests {
         let input = CreatePostInput {
             user_id: UserId::from(1),
             title: Some("Test".into()),
-            slug: "test-post".parse().unwrap(),
+            slug: parse_slug("test-post"),
             body: "body".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
@@ -2478,7 +2484,7 @@ mod tests {
             .create_post(&CreatePostInput {
                 user_id: uid,
                 title: Some("Post".into()),
-                slug: "post".parse().unwrap(),
+                slug: parse_slug("post"),
                 body: "body".into(),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
@@ -2502,7 +2508,7 @@ mod tests {
         let result = env
             .state
             .posts
-            .tag_post(post_id, &"rust".parse().unwrap())
+            .tag_post(post_id, &parse_tag_label("rust"))
             .await;
         assert!(matches!(result, Err(TaggingError::Internal(_))));
     }
@@ -2519,7 +2525,7 @@ mod tests {
         let mk = |slug: &str, published: bool| CreatePostInput {
             user_id: uid,
             title: Some(format!("Post {slug}").into()),
-            slug: slug.parse().unwrap(),
+            slug: parse_slug(slug),
             body: "body".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
@@ -2646,9 +2652,9 @@ mod tests {
         let post = PostRecord {
             post_id: PostId::from(42),
             user_id: UserId::from(1),
-            author_username: "author".parse().unwrap(),
+            author_username: parse_username("author"),
             title: None,
-            slug: "hello-world".parse().unwrap(),
+            slug: parse_slug("hello-world"),
             body: "".into(),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted(""),
@@ -2729,7 +2735,7 @@ mod tests {
             year,
             month,
             day,
-            &"no-such-slug".parse().unwrap(),
+            &parse_slug("no-such-slug"),
         )
         .await
         .unwrap();
@@ -2746,7 +2752,7 @@ mod tests {
             .create_post(&CreatePostInput {
                 user_id,
                 title: Some("Post".into()),
-                slug: "post".parse().unwrap(),
+                slug: parse_slug("post"),
                 body: "body".into(),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
@@ -2762,7 +2768,7 @@ mod tests {
         apply_post_tag_diff(
             posts,
             post_id,
-            &["rust".parse().unwrap(), "web".parse().unwrap()],
+            &[parse_tag_label("rust"), parse_tag_label("web")],
         )
         .await
         .unwrap();
@@ -2777,7 +2783,7 @@ mod tests {
         assert_eq!(slugs, vec!["rust".to_string(), "web".to_string()]);
 
         // Narrowing the desired set removes the dropped tag.
-        apply_post_tag_diff(posts, post_id, &["rust".parse().unwrap()])
+        apply_post_tag_diff(posts, post_id, &[parse_tag_label("rust")])
             .await
             .unwrap();
         let remaining: Vec<String> = posts
@@ -2800,7 +2806,7 @@ mod tests {
             .create_post(&CreatePostInput {
                 user_id,
                 title: Some("Post".into()),
-                slug: "post".parse().unwrap(),
+                slug: parse_slug("post"),
                 body: "body".into(),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
@@ -2815,7 +2821,7 @@ mod tests {
         // Tagging with a case-preserving label stores the canonical slug and the
         // author's casing; both read back intact on either backend.
         posts
-            .tag_post(post_id, &"Rust".parse::<TagLabel>().unwrap())
+            .tag_post(post_id, &parse_tag_label("Rust"))
             .await
             .unwrap();
 
@@ -2838,7 +2844,7 @@ mod tests {
         // `tag_post` binds a `TagLabel`. The read decodes the `slug`/`title`/`body`/
         // author-`username` columns and the JSON `tag_slug`/`tag_display` straight
         // back into their newtypes — exercising both bridge directions (#438).
-        let slug: Slug = "round-trip".parse().unwrap();
+        let slug: Slug = parse_slug("round-trip");
         let title = parse_post_title("A Round-Trip Title");
         let body: PostBody = "the round-trip body".into();
         let post_id = posts
@@ -2857,7 +2863,7 @@ mod tests {
             .await
             .unwrap();
         posts
-            .tag_post(post_id, &"Rust".parse::<TagLabel>().unwrap())
+            .tag_post(post_id, &parse_tag_label("Rust"))
             .await
             .unwrap();
 
@@ -2880,7 +2886,7 @@ mod tests {
             .create_post(&CreatePostInput {
                 user_id,
                 title: None,
-                slug: "no-title".parse().unwrap(),
+                slug: parse_slug("no-title"),
                 body: "body".into(),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
@@ -2909,7 +2915,7 @@ mod tests {
             .create_post(&CreatePostInput {
                 user_id,
                 title: None,
-                slug: "good-slug".parse().unwrap(),
+                slug: parse_slug("good-slug"),
                 body: "body".into(),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
@@ -2991,7 +2997,7 @@ mod tests {
             year,
             month,
             day,
-            &"no-such-draft".parse().unwrap(),
+            &parse_slug("no-such-draft"),
         )
         .await
         .unwrap();
@@ -3013,7 +3019,7 @@ mod tests {
             .returning(|_user_id, _cursor, _limit, _now| {
                 let base = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap();
                 let username = parse_username("author");
-                let slug = "other-slug".parse::<Slug>().unwrap();
+                let slug = parse_slug("other-slug");
                 let page = (0..50_i64)
                     .map(|i| PostRecord {
                         post_id: PostId::from(i),
@@ -3035,7 +3041,7 @@ mod tests {
                 Ok(page)
             });
 
-        let searched = "target-slug".parse::<Slug>().unwrap();
+        let searched = parse_slug("target-slug");
         let result =
             find_draft_by_permalink_for_user(&mock, UserId::from(1), 2020, 1, 1, &searched)
                 .await

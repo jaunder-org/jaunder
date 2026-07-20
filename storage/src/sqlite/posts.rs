@@ -86,10 +86,14 @@ impl PostDialect for Sqlite {
                            created_at, updated_at, published_at, deleted_at, summary,
                            COALESCE((SELECT json_group_array(json_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = posts.post_id), '[]') AS tags",
             )
+            // `Option::as_ref` → `Option<&PostTitle>` (a typed newtype bind, not an
+            // `AsRef<str>` strip); the sqlx bridge encodes `Option<&PostTitle>`.
             .bind(input.title.as_ref())
             .bind(&input.slug)
             .bind(&input.body)
             .bind(input.format.to_string())
+            // `RenderedHtml` is hand-rolled and has no sqlx bridge yet (#502), so this
+            // stays a bare-`&str` bind until its trailer is aligned.
             .bind(input.rendered_html.as_ref())
             // $6 unpublish, $7/$8 explicit_published_at (bound twice: NULL-test
             // then value), $9 now (COALESCE fallback), $10 now (updated_at).

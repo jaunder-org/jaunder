@@ -169,7 +169,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, Backend, CloseablePool, TestEnv};
+    use crate::test_support::{backends, parse_invite_code, Backend, CloseablePool, TestEnv};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -250,7 +250,7 @@ mod tests {
     async fn use_invite_with_closed_pool_returns_error(#[case] backend: Backend) {
         let TestEnv { state, base } = backend.setup().await;
         base.close_pool().await;
-        let code = "code".parse::<InviteCode>().unwrap();
+        let code = parse_invite_code("code");
         let result = state.invites.use_invite(&code, UserId::from(1)).await;
         assert!(matches!(result, Err(UseInviteError::NotFound)));
     }

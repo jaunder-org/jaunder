@@ -14,8 +14,11 @@ use crate::display_name::DisplayName;
 use crate::email::Email;
 use crate::feed::{FeedMinDays, FeedMinItems};
 use crate::media::{ContentHash, Filename, MaxFileSize, UserQuota};
+use crate::password::Password;
 use crate::post_title::PostTitle;
-use crate::token::RawToken;
+use crate::slug::Slug;
+use crate::tag::{Tag, TagLabel};
+use crate::token::{RawToken, TokenHash};
 use crate::username::Username;
 
 /// Parse `addr` into a valid [`Email`] for tests — the single place a test email
@@ -169,4 +172,64 @@ pub fn parse_user_quota(s: &str) -> UserQuota {
 #[must_use]
 pub fn parse_username(name: &str) -> Username {
     name.parse().expect("valid test username")
+}
+
+/// Parse `s` into a valid [`Slug`] for tests — the single place a test slug literal
+/// is parsed, so a malformed fixture fails loudly and the normalizing `FromStr` isn't
+/// re-spelled at every post-seeding call site across the workspace.
+///
+/// # Panics
+///
+/// Panics if `s` is not a valid slug.
+#[must_use]
+pub fn parse_slug(s: &str) -> Slug {
+    s.parse().expect("valid test slug")
+}
+
+/// Parse `s` into a valid [`TokenHash`] for tests — the single place a test
+/// token-hash literal is parsed, so a malformed fixture fails loudly and the parse
+/// isn't re-spelled at every session-row fixture across the workspace.
+///
+/// # Panics
+///
+/// Panics if `s` is not a valid token hash.
+#[must_use]
+pub fn parse_token_hash(s: &str) -> TokenHash {
+    s.parse().expect("valid test token hash")
+}
+
+/// Parse `s` into a valid [`Password`] for tests — the single place a test password
+/// literal is parsed, so a too-short fixture fails loudly and the validating `FromStr`
+/// isn't re-spelled at every `create_user`/`verify_password` call site.
+///
+/// # Panics
+///
+/// Panics if `s` does not meet the minimum-length requirement.
+#[must_use]
+pub fn parse_password(s: &str) -> Password {
+    s.parse().expect("valid test password")
+}
+
+/// Parse `s` into a valid [`Tag`] (a canonical tag slug) for tests — the single place
+/// a test tag-slug literal is parsed, so a malformed fixture fails loudly and the parse
+/// isn't re-spelled at every tag fixture across the workspace.
+///
+/// # Panics
+///
+/// Panics if `s` is not a valid tag slug.
+#[must_use]
+pub fn parse_tag(s: &str) -> Tag {
+    s.parse().expect("valid test tag slug")
+}
+
+/// Parse `s` into a valid [`TagLabel`] (a case-preserving tag label) for tests — the
+/// single place a test tag-label literal is parsed, so a malformed fixture fails loudly
+/// and the parse isn't re-spelled at every `tag_post`/`apply_post_tag_diff` call site.
+///
+/// # Panics
+///
+/// Panics if `s` is not a valid tag label.
+#[must_use]
+pub fn parse_tag_label(s: &str) -> TagLabel {
+    s.parse().expect("valid test tag label")
 }

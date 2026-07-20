@@ -600,6 +600,7 @@ mod tests {
     use crate::test_support::{
         backends, recorded_postgres_url, sqlite_url, Backend, CloseablePool,
     };
+    use common::test_support::{parse_password, parse_username};
     use rstest::*;
     use rstest_reuse::*;
     use std::str::FromStr;
@@ -787,8 +788,8 @@ mod tests {
         env.state
             .users
             .create_user(
-                &"alice".parse().expect("valid username"),
-                &"password123".parse().expect("valid password"),
+                &parse_username("alice"),
+                &parse_password("password123"),
                 None,
                 false,
             )
@@ -1188,8 +1189,8 @@ mod tests {
                 .state
                 .users
                 .create_user(
-                    &username.parse().expect("valid username"),
-                    &"password123".parse().expect("valid password"),
+                    &parse_username(username),
+                    &parse_password("password123"),
                     None,
                     false,
                 )

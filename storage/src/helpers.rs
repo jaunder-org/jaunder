@@ -428,20 +428,24 @@ pub(crate) async fn verify_password(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::parse_invite_code;
     use chrono::Utc;
-    use common::test_support::{parse_content_hash, parse_filename};
+    use common::test_support::{
+        parse_content_hash, parse_display_name, parse_email, parse_filename, parse_password,
+        parse_slug, parse_token_hash, parse_username,
+    };
 
     #[test]
     fn test_build_user_record() {
         let now = Utc::now();
         let parts: UserRecordParts = (
             1,
-            "alice".parse().unwrap(),
-            Some("Alice".parse().unwrap()),
+            parse_username("alice"),
+            Some(parse_display_name("Alice")),
             Some("Bio".to_string()),
             now,
             Some(now),
-            Some("alice@example.com".parse().unwrap()),
+            Some(parse_email("alice@example.com")),
             true,
             false,
         );
@@ -455,9 +459,9 @@ mod tests {
     fn test_build_session_record() {
         let now = Utc::now();
         let record = build_session_record(
-            "hash".parse().unwrap(),
+            parse_token_hash("hash"),
             1,
-            "alice".parse().unwrap(),
+            parse_username("alice"),
             "label".to_string(),
             now,
             now,
@@ -472,7 +476,7 @@ mod tests {
         let expires_at = created_at + chrono::Duration::days(7);
         let used_at = created_at + chrono::Duration::hours(1);
         let record = build_invite_record(
-            "invite-code".parse().unwrap(),
+            parse_invite_code("invite-code"),
             created_at,
             expires_at,
             Some(used_at),
@@ -492,9 +496,9 @@ mod tests {
         let record = build_post_record((
             10,
             20,
-            "alice".parse().unwrap(),
+            parse_username("alice"),
             Some("Hello".into()),
-            "hello-world".parse().unwrap(),
+            parse_slug("hello-world"),
             "Body".into(),
             "markdown".to_string(),
             "<p>Body</p>".to_string(),
@@ -529,9 +533,9 @@ mod tests {
         let err = build_post_record((
             10,
             20,
-            "alice".parse().unwrap(),
+            parse_username("alice"),
             Some("Hello".into()),
-            "hello-world".parse().unwrap(),
+            parse_slug("hello-world"),
             "Body".into(),
             "invalid_format".to_string(),
             "<p>Body</p>".to_string(),
@@ -550,13 +554,13 @@ mod tests {
     // guard:no-backend — password hashing/verification; no database
     #[tokio::test]
     async fn test_hash_and_verify_password() {
-        let password: common::password::Password = "password123".parse().unwrap();
+        let password: common::password::Password = parse_password("password123");
         let hash = hash_password(password.clone()).await.unwrap();
 
         assert!(verify_password(password.clone(), hash.clone())
             .await
             .unwrap());
-        assert!(!verify_password("other-pass".parse().unwrap(), hash)
+        assert!(!verify_password(parse_password("other-pass"), hash)
             .await
             .unwrap());
     }
@@ -564,7 +568,7 @@ mod tests {
     // guard:no-backend — password hashing/verification; no database
     #[tokio::test]
     async fn test_verify_password_rejects_invalid_hash() {
-        let err = verify_password("password123".parse().unwrap(), "not-a-hash".to_string())
+        let err = verify_password(parse_password("password123"), "not-a-hash".to_string())
             .await
             .unwrap_err();
 
@@ -588,9 +592,9 @@ mod tests {
         let record = build_post_record((
             10,
             20,
-            "alice".parse().unwrap(),
+            parse_username("alice"),
             None,
-            "hello-world".parse().unwrap(),
+            parse_slug("hello-world"),
             "Body".into(),
             "markdown".to_string(),
             "<p>Body</p>".to_string(),
@@ -614,9 +618,9 @@ mod tests {
         let err = build_post_record((
             10,
             20,
-            "alice".parse().unwrap(),
+            parse_username("alice"),
             None,
-            "hello-world".parse().unwrap(),
+            parse_slug("hello-world"),
             "Body".into(),
             "markdown".to_string(),
             "<p>Body</p>".to_string(),
@@ -639,9 +643,9 @@ mod tests {
         let err = build_post_record((
             10,
             20,
-            "alice".parse().unwrap(),
+            parse_username("alice"),
             None,
-            "hello-world".parse().unwrap(),
+            parse_slug("hello-world"),
             "Body".into(),
             "markdown".to_string(),
             "<p>Body</p>".to_string(),
@@ -704,9 +708,9 @@ mod tests {
     fn session_and_invite_row_helpers_round_trip() {
         let now = Utc::now();
         let session: SessionRow = (
-            "tokenhash".parse().unwrap(),
+            parse_token_hash("tokenhash"),
             1,
-            "alice".parse().unwrap(),
+            parse_username("alice"),
             "label".to_string(),
             now,
             now,
@@ -714,7 +718,7 @@ mod tests {
         let session_record = session_record_from_row(session);
         assert_eq!(session_record.user_id, UserId::from(1));
 
-        let invite: InviteRow = ("code".parse().unwrap(), now, now, None, None);
+        let invite: InviteRow = (parse_invite_code("code"), now, now, None, None);
         let invite_record = invite_record_from_row(invite);
         assert_eq!(invite_record.code.as_ref(), "code");
     }
@@ -724,7 +728,7 @@ mod tests {
         let now = Utc::now();
         let row: UserRow = (
             1,
-            "alice".parse().unwrap(),
+            parse_username("alice"),
             None,
             None,
             now,
@@ -743,9 +747,9 @@ mod tests {
         let row: PostRow = (
             10,
             20,
-            "alice".parse().unwrap(),
+            parse_username("alice"),
             None,
-            "hello-world".parse().unwrap(),
+            parse_slug("hello-world"),
             "Body".into(),
             "markdown".to_string(),
             "<p>Body</p>".to_string(),
@@ -801,9 +805,7 @@ mod tests {
         // equalize timing (§2.1). It must be a well-formed Argon2 hash so the
         // verification does real work and returns Ok(false) for a non-matching
         // password — not a fast Err that would reintroduce a timing oracle.
-        let wrong: common::password::Password = "definitely-not-the-dummy"
-            .parse()
-            .expect("meets minimum length");
+        let wrong = parse_password("definitely-not-the-dummy");
         let result = verify_password(wrong, dummy_password_hash().to_string())
             .await
             .expect("dummy hash must be well-formed");
@@ -815,9 +817,7 @@ mod tests {
         // Timing parity requires the dummy hash to carry the same Argon2
         // parameters as real password hashes (verify cost is derived from the
         // hash string's encoded params).
-        let real = "some-real-password"
-            .parse::<common::password::Password>()
-            .expect("meets minimum length")
+        let real = parse_password("some-real-password")
             .hash()
             .expect("hashing succeeds");
         // PHC format: $argon2id$v=19$<params>$<salt>$<hash>
@@ -830,19 +830,19 @@ mod tests {
         let now = Utc::now();
         let row: UserRow = (
             1,
-            "alice".parse().unwrap(),
-            Some("Alice".parse().unwrap()),
+            parse_username("alice"),
+            Some(parse_display_name("Alice")),
             Some("Bio".to_string()),
             now,
             Some(now),
-            Some("alice@example.com".parse().unwrap()),
+            Some(parse_email("alice@example.com")),
             true,
             false,
         );
         let record = user_record_from_row(row);
         assert_eq!(record.user_id, UserId::from(1));
         assert_eq!(record.username, "alice");
-        assert_eq!(record.display_name, Some("Alice".parse().unwrap()));
+        assert_eq!(record.display_name, Some(parse_display_name("Alice")));
         assert_eq!(record.bio, Some("Bio".to_string()));
         assert_eq!(record.created_at, now);
         assert_eq!(record.last_authenticated_at, Some(now));
@@ -853,7 +853,7 @@ mod tests {
     #[test]
     fn invite_record_from_row_maps_some_fields() {
         let now = Utc::now();
-        let row: InviteRow = ("code".parse().unwrap(), now, now, Some(now), Some(1));
+        let row: InviteRow = (parse_invite_code("code"), now, now, Some(now), Some(1));
         let record = invite_record_from_row(row);
         assert_eq!(record.code.as_ref(), "code");
         assert_eq!(record.created_at, now);

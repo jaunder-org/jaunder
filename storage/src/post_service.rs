@@ -553,6 +553,7 @@ pub async fn perform_post_creation(
 mod tests {
     use super::*;
     use crate::test_support::{backends, seed_user, Backend};
+    use common::test_support::{parse_password, parse_slug, parse_username};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -628,7 +629,7 @@ mod tests {
         // The override arrives already validated as a `Slug` (the wire/CLI boundary
         // parses it); an invalid override can no longer reach this layer — that
         // rejection now lives at the boundary (web `field_error` + the serde bridge).
-        let slug: Slug = "my-custom-slug".parse().unwrap();
+        let slug: Slug = parse_slug("my-custom-slug");
         let record = perform_post_creation(
             storage,
             PostCreation {
@@ -775,7 +776,7 @@ mod tests {
         // A seed already at the cap: the naive "{seed}-2" would be 82 chars and
         // be rejected by from_str; candidate_slug truncates the base to fit. The
         // seed is a valid Slug, so it is by construction ≤ MAX_SLUG_CHARS.
-        let seed: Slug = "a".repeat(MAX_SLUG_CHARS).parse().unwrap();
+        let seed: Slug = parse_slug(&"a".repeat(MAX_SLUG_CHARS));
         // `unwrap` is itself the validity check: candidate_slug parses internally,
         // so a candidate exceeding the cap would fail here.
         let c = candidate_slug(&seed, 1).unwrap();
@@ -784,15 +785,13 @@ mod tests {
 
         // Truncation that would land on a '-' trims it so no "--" boundary forms:
         // an at-cap seed whose 78th char (the base cutoff for a "-2" suffix) is '-'.
-        let seed2: Slug = format!("{}-{}", "a".repeat(77), "b".repeat(2))
-            .parse()
-            .unwrap();
+        let seed2: Slug = parse_slug(&format!("{}-{}", "a".repeat(77), "b".repeat(2)));
         let c2 = candidate_slug(&seed2, 1).unwrap();
         assert!(c2.chars().count() <= MAX_SLUG_CHARS);
         assert!(!c2.contains("--"));
 
         // attempt 0 returns the seed unchanged.
-        let hello: Slug = "hello".parse().unwrap();
+        let hello: Slug = parse_slug("hello");
         assert_eq!(candidate_slug(&hello, 0).unwrap().as_ref(), "hello");
     }
 
@@ -1180,8 +1179,8 @@ mod tests {
             .state
             .users
             .create_user(
-                &"userb".parse().unwrap(),
-                &"password123".parse().unwrap(),
+                &parse_username("userb"),
+                &parse_password("password123"),
                 None,
                 false,
             )
