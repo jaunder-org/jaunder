@@ -14,7 +14,7 @@ pub trait HasPublishedAt {
 impl HybridWindow {
     #[must_use]
     pub fn cutoff_date(&self, now: DateTime<Utc>) -> DateTime<Utc> {
-        now - Duration::days(i64::from(self.min_days.get()))
+        now - Duration::days(i64::from(self.min_days.value()))
     }
 
     /// `posts` must be ordered by `published_at DESC`.
@@ -25,7 +25,7 @@ impl HybridWindow {
         let cutoff = self.cutoff_date(now);
         let mut end = 0usize;
         for (i, p) in posts.iter().enumerate() {
-            if i < self.min_items.get() as usize || p.published_at() >= cutoff {
+            if i < self.min_items.value() as usize || p.published_at() >= cutoff {
                 end = i + 1;
             } else {
                 break;
@@ -55,8 +55,8 @@ mod tests {
     #[test]
     fn default_window_uses_documented_defaults() {
         let w = HybridWindow::default();
-        assert_eq!(w.min_items.get(), 20);
-        assert_eq!(w.min_days.get(), 30);
+        assert_eq!(w.min_items.value(), 20);
+        assert_eq!(w.min_days.value(), 30);
     }
 
     #[test]

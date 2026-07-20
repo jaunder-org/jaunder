@@ -74,14 +74,25 @@ fn error_type(err_name: &Ident, message: &TokenStream) -> TokenStream {
     }
 }
 
-/// `impl X { pub fn get(self) -> I }` — the inner accessor (inners here are `Copy`).
+/// `impl X { pub fn value(self) -> I }` plus `From<X> for I` — the inner accessor and its
+/// idiomatic conversion (inners here are `Copy`). Only the extraction direction is emitted;
+/// a `From<I> for X` would be an unchecked constructor that bypasses the bound.
 fn accessor(name: &Ident, inner: &Type) -> TokenStream {
     quote! {
         impl #name {
             #[doc = "The inner value (within the declared bounds)."]
             #[must_use]
-            pub fn get(self) -> #inner {
+            pub fn value(self) -> #inner {
                 self.0
+            }
+        }
+
+        // Idiomatic extraction, mirroring `IdNewtype`'s `From<Self> for i64`, so a caller can
+        // write `#inner::from(x)` / `x.into()` where that reads better than `x.value()`.
+        #[automatically_derived]
+        impl ::core::convert::From<#name> for #inner {
+            fn from(v: #name) -> Self {
+                v.0
             }
         }
     }

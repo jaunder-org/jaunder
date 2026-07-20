@@ -102,8 +102,9 @@ impl Default for BackupSchedule {
 /// (`server::backup::prune_backups`) can never remove every backup — including one just
 /// created. Constructed via [`FromStr`]/serde (both reject 0 via the min-1 bound) or
 /// [`RetentionCount::default`] (7). The `NumNewtype` derive supplies the whole trailer —
-/// validating `FromStr`, `get`, `Display`, the compile-checked `Default`, and the
-/// transparent-`usize` serde bridge — plus the [`InvalidRetentionCount`] error type.
+/// validating `FromStr`, `value` (+ `From<Self> for usize`), `Display`, the compile-checked
+/// `Default`, and the transparent-`usize` serde bridge — plus the [`InvalidRetentionCount`]
+/// error type.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, NumNewtype)]
 #[num_newtype(
     inner = usize,
@@ -137,8 +138,8 @@ mod tests {
 
     #[test]
     fn retention_count_parses_and_rejects_zero_and_non_integers() {
-        assert_eq!("1".parse::<RetentionCount>().unwrap().get(), 1);
-        assert_eq!("  7  ".parse::<RetentionCount>().unwrap().get(), 7);
+        assert_eq!("1".parse::<RetentionCount>().unwrap().value(), 1);
+        assert_eq!("  7  ".parse::<RetentionCount>().unwrap().value(), 7);
         for bad in ["0", "", "-1", "abc", "1.5"] {
             assert!(
                 bad.parse::<RetentionCount>().is_err(),
@@ -156,7 +157,8 @@ mod tests {
     #[test]
     fn retention_count_default_is_seven_and_display_round_trips() {
         let d = RetentionCount::default();
-        assert_eq!(d.get(), 7);
+        assert_eq!(d.value(), 7);
+        assert_eq!(usize::from(d), 7); // From<Self> for the inner
         assert_eq!(d.to_string().parse::<RetentionCount>().unwrap(), d);
     }
 

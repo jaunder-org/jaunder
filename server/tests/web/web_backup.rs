@@ -25,7 +25,7 @@ async fn operator_gets_default_backup_settings(#[case] backend: Backend) {
     let settings: BackupConfig = serde_json::from_str(&body).unwrap();
     assert_eq!(settings.destination_path, None);
     assert_eq!(settings.schedule, "0 0 0 * * *");
-    assert_eq!(settings.retention_count.get(), 7);
+    assert_eq!(settings.retention_count.value(), 7);
     assert_eq!(settings.mode, BackupMode::Directory);
 }
 
@@ -94,7 +94,7 @@ async fn operator_gets_configured_backup_settings(#[case] backend: Backend) {
     let settings: BackupConfig = serde_json::from_str(&body).unwrap();
     assert_eq!(settings.destination_path, Some("/srv/backups".to_string()));
     assert_eq!(settings.schedule, "0 30 2 * * *");
-    assert_eq!(settings.retention_count.get(), 4);
+    assert_eq!(settings.retention_count.value(), 4);
     assert_eq!(settings.mode, BackupMode::Archive);
 }
 
@@ -130,7 +130,7 @@ async fn operator_gets_defaults_for_invalid_backup_settings(#[case] backend: Bac
     let settings: BackupConfig = serde_json::from_str(&body).unwrap();
     assert_eq!(settings.destination_path, Some("/srv/backups".to_string()));
     assert_eq!(settings.schedule, "0 0 0 * * *");
-    assert_eq!(settings.retention_count.get(), 7);
+    assert_eq!(settings.retention_count.value(), 7);
     assert_eq!(settings.mode, BackupMode::Directory);
 }
 

@@ -217,9 +217,10 @@ pub fn id_newtype_derive(item: TokenStream) -> TokenStream {
 /// #[num_newtype(inner = u32, min = 1, default = 20)]
 /// struct MinItems(u32);
 ///
-/// assert_eq!("7".parse::<MinItems>().unwrap().get(), 7);
+/// assert_eq!("7".parse::<MinItems>().unwrap().value(), 7);
 /// assert!("0".parse::<MinItems>().is_err());          // below `min`
-/// assert_eq!(MinItems::default().get(), 20);          // compile-checked default
+/// assert_eq!(MinItems::default().value(), 20);        // compile-checked default
+/// assert_eq!(u32::from(MinItems::default()), 20);     // From<Self> for the inner
 /// assert_eq!(serde_json::to_string(&MinItems::default()).unwrap(), "20"); // bare integer
 /// assert!(serde_json::from_str::<MinItems>("0").is_err());                // wire rejection
 /// ```
