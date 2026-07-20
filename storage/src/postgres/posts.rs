@@ -88,9 +88,9 @@ impl PostDialect for Postgres {
                        created_at, updated_at, published_at, deleted_at, summary,
                        COALESCE((SELECT json_agg(json_build_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = posts.post_id), '[]'::json)::text AS tags",
         )
-        .bind(input.title.as_deref())
-        .bind(input.slug.as_ref())
-        .bind(&*input.body)
+        .bind(input.title.as_ref())
+        .bind(&input.slug)
+        .bind(&input.body)
         .bind(input.format.to_string())
         .bind(input.rendered_html.as_ref())
         // $6 unpublish, $7/$8 explicit_published_at (bound twice: NULL-test
@@ -133,13 +133,13 @@ impl PostDialect for Postgres {
         }
 
         sqlx::query("INSERT INTO tags (tag_slug) VALUES ($1) ON CONFLICT DO NOTHING")
-            .bind(slug.as_ref())
+            .bind(&slug)
             .execute(&mut *tx)
             .await?;
 
         let tag_id: i64 =
             sqlx::query_scalar::<_, i64>("SELECT tag_id FROM tags WHERE tag_slug = $1")
-                .bind(slug.as_ref())
+                .bind(&slug)
                 .fetch_one(&mut *tx)
                 .await?;
 
@@ -147,7 +147,7 @@ impl PostDialect for Postgres {
             sqlx::query("INSERT INTO post_tags (post_id, tag_id, tag_display) VALUES ($1, $2, $3)")
                 .bind(i64::from(post_id))
                 .bind(tag_id)
-                .bind(tag.as_ref())
+                .bind(tag)
                 .execute(&mut *tx)
                 .await;
 
@@ -177,7 +177,7 @@ impl PostDialect for Postgres {
              WHERE post_id = $1 AND tag_id = (SELECT tag_id FROM tags WHERE tag_slug = $2)",
         )
         .bind(i64::from(post_id))
-        .bind(tag_slug.as_ref())
+        .bind(tag_slug)
         .execute(pool)
         .await?
         .rows_affected();

@@ -120,13 +120,17 @@ pub(crate) fn build_invite_record(
 // PostRecord helpers
 // ---------------------------------------------------------------------------
 
+// `author_username`/`title`/`slug`/`body` decode straight into their domain
+// newtypes via the sqlx bridge (#438). `format` (a `PostFormat` enum) and
+// `rendered_html` (`RenderedHtml`, hand-rolled — #502) are not string newtypes,
+// so they stay `String` and keep their existing parse / `from_trusted` handling.
 pub(crate) type PostRecordParts = (
     i64,
     i64,
-    String,
-    Option<String>,
-    String,
-    String,
+    Username,
+    Option<PostTitle>,
+    Slug,
+    PostBody,
     String,
     String,
     DateTime<Utc>,
@@ -184,12 +188,12 @@ pub(crate) fn build_post_record(
         tags_json,
     ): PostRecordParts,
 ) -> sqlx::Result<PostRecord> {
-    let author_username = author_username
-        .parse::<Username>()
-        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-    let slug = slug
-        .parse::<Slug>()
-        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    // `author_username`, `title`, `slug`, and `body` already arrived as their
+    // domain newtypes — the sqlx bridge (#438) decoded each column (and, for the
+    // infallible `PostTitle`/`PostBody`, `From`-wrapped it, which also trims the
+    // title), so a corrupt/migrated `username`/`slug` value is rejected as a
+    // column-decode error before we get here. `format` (a `PostFormat` enum) and
+    // the JSON `tags` still parse here, so this step stays fallible.
     let format = format
         .parse::<PostFormat>()
         .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
@@ -200,12 +204,9 @@ pub(crate) fn build_post_record(
         post_id,
         user_id: UserId::from(user_id),
         author_username,
-        // `PostTitle::from` trims; stored titles are already trimmed at write, so this
-        // is a no-op that also defensively normalizes any out-of-band row. `PostBody`
-        // wraps verbatim.
-        title: title.map(PostTitle::from),
+        title,
         slug,
-        body: PostBody::from(body),
+        body,
         format,
         // Trusted rebuild: this column only ever holds prior `render()` output.
         rendered_html: RenderedHtml::from_trusted(rendered_html),
@@ -272,13 +273,16 @@ pub(crate) fn invite_record_from_row(row: InviteRow) -> InviteRecord {
     build_invite_record(code, created_at, expires_at, used_at, used_by)
 }
 
+// Mirrors [`PostRecordParts`]: the `username`/`title`/`slug`/`body` columns
+// decode straight into their newtypes via the sqlx bridge (#438); `format` and
+// `rendered_html` stay `String` (see the `PostRecordParts` note).
 pub(crate) type PostRow = (
     i64,
     i64,
-    String,
-    Option<String>,
-    String,
-    String,
+    Username,
+    Option<PostTitle>,
+    Slug,
+    PostBody,
     String,
     String,
     DateTime<Utc>,
@@ -495,10 +499,10 @@ mod tests {
         let record = build_post_record((
             10,
             20,
-            "alice".to_string(),
-            Some("Hello".to_string()),
-            "hello-world".to_string(),
-            "Body".to_string(),
+            "alice".parse().unwrap(),
+            Some("Hello".into()),
+            "hello-world".parse().unwrap(),
+            "Body".into(),
             "markdown".to_string(),
             "<p>Body</p>".to_string(),
             now,
@@ -520,29 +524,11 @@ mod tests {
         assert!(record.tags.is_empty());
     }
 
-    #[test]
-    fn test_build_post_record_rejects_invalid_slug() {
-        let now = Utc::now();
-        let err = build_post_record((
-            10,
-            20,
-            "alice".to_string(),
-            Some("Hello".to_string()),
-            "not a slug".to_string(),
-            "Body".to_string(),
-            "markdown".to_string(),
-            "<p>Body</p>".to_string(),
-            now,
-            now,
-            None,
-            None,
-            None,
-            "[]".to_string(),
-        ))
-        .unwrap_err();
-
-        assert!(matches!(err, sqlx::Error::Decode(_)));
-    }
+    // `build_post_record` no longer parses `username`/`slug`: they decode straight
+    // into `Username`/`Slug` via the sqlx bridge (#438), so a malformed stored
+    // value is rejected as a `ColumnDecode` error at the query boundary (covered by
+    // `posts.rs`'s decode-error test), not here. `format` and the JSON `tags` still
+    // parse in `build_post_record`, so those rejections stay below.
 
     #[test]
     fn test_build_post_record_rejects_invalid_format() {
@@ -550,35 +536,11 @@ mod tests {
         let err = build_post_record((
             10,
             20,
-            "alice".to_string(),
-            Some("Hello".to_string()),
-            "hello-world".to_string(),
-            "Body".to_string(),
+            "alice".parse().unwrap(),
+            Some("Hello".into()),
+            "hello-world".parse().unwrap(),
+            "Body".into(),
             "invalid_format".to_string(),
-            "<p>Body</p>".to_string(),
-            now,
-            now,
-            None,
-            None,
-            None,
-            "[]".to_string(),
-        ))
-        .unwrap_err();
-
-        assert!(matches!(err, sqlx::Error::Decode(_)));
-    }
-
-    #[test]
-    fn test_build_post_record_rejects_invalid_username() {
-        let now = Utc::now();
-        let err = build_post_record((
-            10,
-            20,
-            "Invalid Username".to_string(),
-            Some("Hello".to_string()),
-            "hello-world".to_string(),
-            "Body".to_string(),
-            "markdown".to_string(),
             "<p>Body</p>".to_string(),
             now,
             now,
@@ -633,10 +595,10 @@ mod tests {
         let record = build_post_record((
             10,
             20,
-            "alice".to_string(),
+            "alice".parse().unwrap(),
             None,
-            "hello-world".to_string(),
-            "Body".to_string(),
+            "hello-world".parse().unwrap(),
+            "Body".into(),
             "markdown".to_string(),
             "<p>Body</p>".to_string(),
             now,
@@ -659,10 +621,10 @@ mod tests {
         let err = build_post_record((
             10,
             20,
-            "alice".to_string(),
+            "alice".parse().unwrap(),
             None,
-            "hello-world".to_string(),
-            "Body".to_string(),
+            "hello-world".parse().unwrap(),
+            "Body".into(),
             "markdown".to_string(),
             "<p>Body</p>".to_string(),
             now,
@@ -684,10 +646,10 @@ mod tests {
         let err = build_post_record((
             10,
             20,
-            "alice".to_string(),
+            "alice".parse().unwrap(),
             None,
-            "hello-world".to_string(),
-            "Body".to_string(),
+            "hello-world".parse().unwrap(),
+            "Body".into(),
             "markdown".to_string(),
             "<p>Body</p>".to_string(),
             now,
@@ -819,10 +781,10 @@ mod tests {
         let row: PostRow = (
             10,
             20,
-            "alice".to_string(),
+            "alice".parse().unwrap(),
             None,
-            "hello-world".to_string(),
-            "Body".to_string(),
+            "hello-world".parse().unwrap(),
+            "Body".into(),
             "markdown".to_string(),
             "<p>Body</p>".to_string(),
             now,
