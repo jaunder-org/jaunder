@@ -39,11 +39,13 @@ async fn create_published_post_enqueues_expected_feeds(
     let cookie = session_cookie(&token);
 
     let body = json!({
-        "body": "Test post",
-        "format": "markdown",
-        "slug_override": None::<String>,
-        "publish": true,
-        "tags": tags
+        "args": {
+            "body": "Test post",
+            "format": "markdown",
+            "slug_override": None::<String>,
+            "publish": true,
+            "tags": tags
+        }
     });
 
     let (status, _response) =
@@ -85,11 +87,13 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
     let cookie = session_cookie(&token);
 
     let create_body = json!({
-        "body": "Test post",
-        "format": "markdown",
-        "slug_override": None::<String>,
-        "publish": true,
-        "tags": Some(vec!["rust".to_string(), "web".to_string()])
+        "args": {
+            "body": "Test post",
+            "format": "markdown",
+            "slug_override": None::<String>,
+            "publish": true,
+            "tags": Some(vec!["rust".to_string(), "web".to_string()])
+        }
     });
 
     let (status, create_response) = post_json(
@@ -118,12 +122,14 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
 
     // Union should be {leptos, rust, web} = 3 tags
     let update_body = json!({
-        "post_id": post_id,
-        "body": "Updated post",
-        "format": "markdown",
-        "slug_override": None::<String>,
-        "publish": false,
-        "tags": Some(vec!["rust".to_string(), "leptos".to_string()])
+        "args": {
+            "post_id": post_id,
+            "body": "Updated post",
+            "format": "markdown",
+            "slug_override": None::<String>,
+            "publish": false,
+            "tags": Some(vec!["rust".to_string(), "leptos".to_string()])
+        }
     });
 
     let (status, _) = post_json(
@@ -171,11 +177,13 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend
     let cookie = session_cookie(&token);
 
     let create_body = json!({
-        "body": "Test post",
-        "format": "markdown",
-        "slug_override": None::<String>,
-        "publish": true,
-        "tags": Some(vec!["rust".to_string()])
+        "args": {
+            "body": "Test post",
+            "format": "markdown",
+            "slug_override": None::<String>,
+            "publish": true,
+            "tags": Some(vec!["rust".to_string()])
+        }
     });
 
     let (status, create_response) = post_json(
@@ -248,11 +256,13 @@ async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
     let cookie = session_cookie(&token);
 
     let create_body = json!({
-        "body": "Test post",
-        "format": "markdown",
-        "slug_override": None::<String>,
-        "publish": true,
-        "tags": Some(vec!["rust".to_string()])
+        "args": {
+            "body": "Test post",
+            "format": "markdown",
+            "slug_override": None::<String>,
+            "publish": true,
+            "tags": Some(vec!["rust".to_string()])
+        }
     });
 
     let (status, create_response) = post_json(
@@ -325,11 +335,13 @@ async fn delete_draft_post_enqueues_nothing(#[case] backend: Backend) {
     let cookie = session_cookie(&token);
 
     let create_body = json!({
-        "body": "Test draft",
-        "format": "markdown",
-        "slug_override": None::<String>,
-        "publish": false,
-        "tags": Some(vec!["rust".to_string()])
+        "args": {
+            "body": "Test draft",
+            "format": "markdown",
+            "slug_override": None::<String>,
+            "publish": false,
+            "tags": Some(vec!["rust".to_string()])
+        }
     });
 
     let (status, create_response) = post_json(

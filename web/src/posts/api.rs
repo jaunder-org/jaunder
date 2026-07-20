@@ -212,6 +212,36 @@ pub struct PostResponse {
     pub summary: Option<String>,
 }
 
+/// Bundled arguments for [`create_post`]. The eight fields are the RPC input
+/// contract; bundling them into a typed struct nests the JSON wire under `args`
+/// (#299).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreatePostArgs {
+    pub body: PostBody,
+    pub format: String,
+    pub slug_override: Option<Slug>,
+    pub publish: bool,
+    pub publish_at: Option<UtcInstant>,
+    pub tags: Option<Vec<TagLabel>>,
+    pub summary: Option<String>,
+    pub audience: Option<AudienceSelection>,
+}
+
+/// Bundled arguments for [`update_post`]. Like [`CreatePostArgs`] with a leading
+/// `post_id`; bundling nests the JSON wire under `args` (#299).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdatePostArgs {
+    pub post_id: PostId,
+    pub body: PostBody,
+    pub format: String,
+    pub slug_override: Option<Slug>,
+    pub publish: bool,
+    pub publish_at: Option<UtcInstant>,
+    pub tags: Option<Vec<TagLabel>>,
+    pub summary: Option<String>,
+    pub audience: Option<AudienceSelection>,
+}
+
 /// Creates a post for the authenticated user.
 ///
 /// `publish_at` is an optional UTC instant supplied by the compose form's
@@ -219,22 +249,18 @@ pub struct PostResponse {
 /// RFC 3339 wire string; expressible in the `#[server]` signature on both the
 /// server and the wasm client). The browser converts the author's local
 /// `datetime-local` value to UTC before sending.
-// `#[expect]` can't be used here: the `#[server]` macro emits too_many_arguments from
-// its own expansion, so a fn-level expectation is always reported "unfulfilled". A plain
-// `#[allow]` is the only mechanism that suppresses a macro-emitted lint. The args are the
-// RPC input contract — bundling them into a struct would change the JSON wire shape. (#94)
-#[allow(clippy::too_many_arguments)]
 #[server(endpoint = "/create_post", input = Json)]
-pub async fn create_post(
-    body: PostBody,
-    format: String,
-    slug_override: Option<Slug>,
-    publish: bool,
-    publish_at: Option<UtcInstant>,
-    tags: Option<Vec<TagLabel>>,
-    summary: Option<String>,
-    audience: Option<AudienceSelection>,
-) -> WebResult<CreatePostResult> {
+pub async fn create_post(args: CreatePostArgs) -> WebResult<CreatePostResult> {
+    let CreatePostArgs {
+        body,
+        format,
+        slug_override,
+        publish,
+        publish_at,
+        tags,
+        summary,
+        audience,
+    } = args;
     boundary!("create_post", {
         let auth = require_auth().await?;
         let posts = expect_context::<Arc<dyn PostStorage>>();
@@ -370,23 +396,22 @@ pub async fn get_post_preview(post_id: PostId) -> WebResult<PostResponse> {
 }
 
 /// Updates an existing post for the authenticated author.
-// See `create_post`: `#[expect]` is always "unfulfilled" against the `#[server]` macro's
-// own emission, so a justified `#[allow]` is the only working suppression here. (#94)
-#[allow(clippy::too_many_arguments)]
+///
+/// `publish_at` is an optional UTC instant from the editor's datetime control.
+/// See `create_post` for why it crosses the boundary as a [`UtcInstant`].
 #[server(endpoint = "/update_post", input = Json)]
-pub async fn update_post(
-    post_id: PostId,
-    body: PostBody,
-    format: String,
-    slug_override: Option<Slug>,
-    publish: bool,
-    // Optional UTC instant from the editor's datetime control. See
-    // `create_post` for why this crosses the boundary as a `UtcInstant`.
-    publish_at: Option<UtcInstant>,
-    tags: Option<Vec<TagLabel>>,
-    summary: Option<String>,
-    audience: Option<AudienceSelection>,
-) -> WebResult<UpdatePostResult> {
+pub async fn update_post(args: UpdatePostArgs) -> WebResult<UpdatePostResult> {
+    let UpdatePostArgs {
+        post_id,
+        body,
+        format,
+        slug_override,
+        publish,
+        publish_at,
+        tags,
+        summary,
+        audience,
+    } = args;
     boundary!("update_post", {
         let auth = require_auth().await?;
         let posts = expect_context::<Arc<dyn PostStorage>>();

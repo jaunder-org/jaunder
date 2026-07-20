@@ -42,10 +42,12 @@ async fn create_post_json(
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
     let payload = serde_json::json!({
-        "body": body,
-        "format": format,
-        "slug_override": slug_override,
-        "publish": publish,
+        "args": {
+            "body": body,
+            "format": format,
+            "slug_override": slug_override,
+            "publish": publish,
+        }
     });
     post_json(state, "/api/create_post", payload, cookie).await
 }
@@ -60,11 +62,13 @@ async fn update_post_json(
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
     let payload = serde_json::json!({
-        "post_id": post_id,
-        "body": body,
-        "format": format,
-        "slug_override": slug_override,
-        "publish": publish,
+        "args": {
+            "post_id": post_id,
+            "body": body,
+            "format": format,
+            "slug_override": slug_override,
+            "publish": publish,
+        }
     });
     post_json(state, "/api/update_post", payload, cookie).await
 }
@@ -1515,10 +1519,12 @@ async fn create_post_with_future_publish_at_is_scheduled(#[case] backend: Backen
 
     let future = chrono::Utc.with_ymd_and_hms(2099, 1, 1, 0, 0, 0).unwrap();
     let payload = serde_json::json!({
-        "body": "scheduled body",
-        "format": "markdown",
-        "publish": true,
-        "publish_at": future.to_rfc3339(),
+        "args": {
+            "body": "scheduled body",
+            "format": "markdown",
+            "publish": true,
+            "publish_at": future.to_rfc3339(),
+        }
     });
     let (status, body) = post_json(
         Arc::clone(&state),
@@ -2785,11 +2791,13 @@ async fn create_post_applies_tags_from_param(#[case] backend: Backend) {
     let (_base, state, cookie) = login_and_state(backend).await;
 
     let payload = serde_json::json!({
-        "body": "# Tagged via API\n\nbody",
-        "format": "markdown",
-        "slug_override": null,
-        "publish": true,
-        "tags": ["Rust", "web-dev"],
+        "args": {
+            "body": "# Tagged via API\n\nbody",
+            "format": "markdown",
+            "slug_override": null,
+            "publish": true,
+            "tags": ["Rust", "web-dev"],
+        }
     });
     let (status, body) = post_json(
         Arc::clone(&state),
@@ -2817,11 +2825,13 @@ async fn create_post_rejects_invalid_tag_token(#[case] backend: Backend) {
     let (_base, state, cookie) = login_and_state(backend).await;
 
     let payload = serde_json::json!({
-        "body": "# Bad Tag\n\nbody",
-        "format": "markdown",
-        "slug_override": null,
-        "publish": true,
-        "tags": ["rust", "not a valid tag!"],
+        "args": {
+            "body": "# Bad Tag\n\nbody",
+            "format": "markdown",
+            "slug_override": null,
+            "publish": true,
+            "tags": ["rust", "not a valid tag!"],
+        }
     });
     let (status, body) = post_json(state, "/api/create_post", payload, Some(&cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
@@ -2838,11 +2848,13 @@ async fn create_post_rejects_more_than_25_tags(#[case] backend: Backend) {
     let many: Vec<String> = (0..26).map(|n| format!("tag{n}")).collect();
 
     let payload = serde_json::json!({
-        "body": "# Too Many\n\nbody",
-        "format": "markdown",
-        "slug_override": null,
-        "publish": true,
-        "tags": many,
+        "args": {
+            "body": "# Too Many\n\nbody",
+            "format": "markdown",
+            "slug_override": null,
+            "publish": true,
+            "tags": many,
+        }
     });
     let (status, body) = post_json(state, "/api/create_post", payload, Some(&cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
@@ -2856,11 +2868,13 @@ async fn update_post_applies_tag_set_diff(#[case] backend: Backend) {
 
     // Create with two tags.
     let create_payload = serde_json::json!({
-        "body": "# Diff Me\n\nbody",
-        "format": "markdown",
-        "slug_override": null,
-        "publish": false,
-        "tags": ["rust", "old-tag"],
+        "args": {
+            "body": "# Diff Me\n\nbody",
+            "format": "markdown",
+            "slug_override": null,
+            "publish": false,
+            "tags": ["rust", "old-tag"],
+        }
     });
     let (status, body) = post_json(
         Arc::clone(&state),
@@ -2874,12 +2888,14 @@ async fn update_post_applies_tag_set_diff(#[case] backend: Backend) {
 
     // Update: replace old-tag with new-tag, keep rust.
     let update_payload = serde_json::json!({
-        "post_id": created.post_id,
-        "body": "# Diff Me\n\nbody",
-        "format": "markdown",
-        "slug_override": null,
-        "publish": false,
-        "tags": ["rust", "new-tag"],
+        "args": {
+            "post_id": created.post_id,
+            "body": "# Diff Me\n\nbody",
+            "format": "markdown",
+            "slug_override": null,
+            "publish": false,
+            "tags": ["rust", "new-tag"],
+        }
     });
     let (status, body) = post_json(
         Arc::clone(&state),
@@ -2944,11 +2960,13 @@ async fn list_posts_by_tag_returns_matching_posts_from_all_users(#[case] backend
         let state = Arc::clone(&state);
         async move {
             let payload = serde_json::json!({
-                "body": body,
-                "format": "markdown",
-                "slug_override": null,
-                "publish": true,
-                "tags": tags,
+                "args": {
+                    "body": body,
+                    "format": "markdown",
+                    "slug_override": null,
+                    "publish": true,
+                    "tags": tags,
+                }
             });
             let (status, body) = post_json(state, "/api/create_post", payload, Some(&cookie)).await;
             assert_eq!(status, StatusCode::OK, "create body: {body}");
@@ -3031,11 +3049,13 @@ async fn list_user_posts_by_tag_scopes_to_user(#[case] backend: Backend) {
         let state = Arc::clone(&state);
         async move {
             let payload = serde_json::json!({
-                "body": body,
-                "format": "markdown",
-                "slug_override": null,
-                "publish": true,
-                "tags": ["shared"],
+                "args": {
+                    "body": body,
+                    "format": "markdown",
+                    "slug_override": null,
+                    "publish": true,
+                    "tags": ["shared"],
+                }
             });
             let (status, body) = post_json(state, "/api/create_post", payload, Some(&cookie)).await;
             assert_eq!(status, StatusCode::OK, "create body: {body}");
@@ -3069,11 +3089,13 @@ async fn update_post_with_tags_unset_leaves_existing_tags_alone(#[case] backend:
 
     // Create with one tag.
     let create_payload = serde_json::json!({
-        "body": "# Untouched\n\nbody",
-        "format": "markdown",
-        "slug_override": null,
-        "publish": false,
-        "tags": ["keep"],
+        "args": {
+            "body": "# Untouched\n\nbody",
+            "format": "markdown",
+            "slug_override": null,
+            "publish": false,
+            "tags": ["keep"],
+        }
     });
     let (status, body) = post_json(
         Arc::clone(&state),
@@ -3087,11 +3109,13 @@ async fn update_post_with_tags_unset_leaves_existing_tags_alone(#[case] backend:
 
     // Update without including the tags key (None on the server side).
     let update_payload = serde_json::json!({
-        "post_id": created.post_id,
-        "body": "# Untouched edited\n\nbody",
-        "format": "markdown",
-        "slug_override": null,
-        "publish": false,
+        "args": {
+            "post_id": created.post_id,
+            "body": "# Untouched edited\n\nbody",
+            "format": "markdown",
+            "slug_override": null,
+            "publish": false,
+        }
     });
     let (status, body) = post_json(
         Arc::clone(&state),

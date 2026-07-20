@@ -20,10 +20,10 @@ use crate::media::MediaUpload;
 use crate::posts::{
     default_audience_selection, draft_row_display, get_post, get_post_preview, list_drafts,
     list_posts_by_tag, list_user_posts, list_user_posts_by_tag, parse_permalink_params,
-    post_audience_selection, AudienceSelection, CreatePost, CreatePostResult, DeletePost,
-    DraftRowDisplay, DraftSummary, ListPostsByTag, ListUserPosts, ListUserPostsByTag, PostResponse,
-    PublishPost, PublishPostResult, TimelinePostSummary, UnpublishPost, UpdatePost,
-    UpdatePostResult,
+    post_audience_selection, AudienceSelection, CreatePost, CreatePostArgs, CreatePostResult,
+    DeletePost, DraftRowDisplay, DraftSummary, ListPostsByTag, ListUserPosts, ListUserPostsByTag,
+    PostResponse, PublishPost, PublishPostResult, TimelinePostSummary, UnpublishPost, UpdatePost,
+    UpdatePostArgs, UpdatePostResult,
 };
 use crate::render::TagCtx as TagContext;
 use crate::subscriptions::{is_subscribed_to, SubscribeTo, UnsubscribeFrom};
@@ -438,26 +438,30 @@ pub fn PostCreateForm(
     if compact {
         let dispatch_save = move |_| {
             create_action.dispatch(CreatePost {
-                body: body.get().into(),
-                format: format.get(),
-                slug_override: None,
-                publish: false,
-                publish_at: utc_instant_from_local(&publish_at.get()),
-                tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
-                summary: Some(summary.get()),
-                audience: Some(audience.get()),
+                args: CreatePostArgs {
+                    body: body.get().into(),
+                    format: format.get(),
+                    slug_override: None,
+                    publish: false,
+                    publish_at: utc_instant_from_local(&publish_at.get()),
+                    tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
+                    summary: Some(summary.get()),
+                    audience: Some(audience.get()),
+                },
             });
         };
         let dispatch_publish = move |_| {
             create_action.dispatch(CreatePost {
-                body: body.get().into(),
-                format: format.get(),
-                slug_override: None,
-                publish: true,
-                publish_at: utc_instant_from_local(&publish_at.get()),
-                tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
-                summary: Some(summary.get()),
-                audience: Some(audience.get()),
+                args: CreatePostArgs {
+                    body: body.get().into(),
+                    format: format.get(),
+                    slug_override: None,
+                    publish: true,
+                    publish_at: utc_instant_from_local(&publish_at.get()),
+                    tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
+                    summary: Some(summary.get()),
+                    audience: Some(audience.get()),
+                },
             });
         };
         view! {
@@ -554,14 +558,16 @@ pub fn PostCreateForm(
         let slug_field = Field::<Slug>::optional();
         let dispatch_create = move |publish: bool| {
             create_action.dispatch(CreatePost {
-                body: body.get().into(),
-                format: format.get(),
-                slug_override: slug_field.parsed(),
-                publish,
-                publish_at: utc_instant_from_local(&publish_at.get()),
-                tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
-                summary: Some(summary.get()),
-                audience: Some(audience.get()),
+                args: CreatePostArgs {
+                    body: body.get().into(),
+                    format: format.get(),
+                    slug_override: slug_field.parsed(),
+                    publish,
+                    publish_at: utc_instant_from_local(&publish_at.get()),
+                    tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
+                    summary: Some(summary.get()),
+                    audience: Some(audience.get()),
+                },
             });
         };
         view! {
@@ -1659,17 +1665,19 @@ pub fn EditPostPage() -> impl IntoView {
                         let dispatch_update = move |publish: bool| {
                             update_post_action
                                 .dispatch(UpdatePost {
-                                    post_id,
-                                    body: body.get().into(),
-                                    format: format.get(),
-                                    slug_override: slug_field.parsed(),
-                                    publish,
-                                    publish_at: utc_instant_from_local(&publish_at.get()),
-                                    tags: Some(
-                                        post_tags.get().into_iter().map(|t| t.display).collect(),
-                                    ),
-                                    summary: common::text::non_empty_owned(summary.get()),
-                                    audience: Some(audience.get()),
+                                    args: UpdatePostArgs {
+                                        post_id,
+                                        body: body.get().into(),
+                                        format: format.get(),
+                                        slug_override: slug_field.parsed(),
+                                        publish,
+                                        publish_at: utc_instant_from_local(&publish_at.get()),
+                                        tags: Some(
+                                            post_tags.get().into_iter().map(|t| t.display).collect(),
+                                        ),
+                                        summary: common::text::non_empty_owned(summary.get()),
+                                        audience: Some(audience.get()),
+                                    },
                                 });
                         };
                         view! {
