@@ -22,4 +22,4 @@ pub use api::{
 pub use api::extract_upload_url;
 
 #[cfg(target_arch = "wasm32")]
-pub use component::MediaUpload;
+pub use component::{MediaPage, MediaUpload};
