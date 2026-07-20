@@ -84,7 +84,7 @@ fn site_settings_form(
                         type="url"
                         name="base_url"
                         placeholder="https://example.com"
-                        prop:value=identity.base_url.unwrap_or_default()
+                        prop:value=identity.base_url.map(String::from).unwrap_or_default()
                     />
                     <span class="j-site-help">
                         "Leave blank to disable or enter a fully-qualified https URL."

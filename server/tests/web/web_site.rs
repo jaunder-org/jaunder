@@ -86,7 +86,7 @@ async fn update_site_identity_round_trips_via_get(#[case] backend: Backend) {
     assert_eq!(get_status, StatusCode::OK, "body: {get_body}");
     let identity: SiteIdentity = serde_json::from_str(&get_body).expect("json");
     assert_eq!(identity.title, "My Blog");
-    assert_eq!(identity.base_url, Some("https://example.com".to_string()));
+    assert_eq!(identity.base_url.as_deref(), Some("https://example.com/"));
 }
 
 #[apply(backends)]

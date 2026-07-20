@@ -10,6 +10,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Extension;
 use sha2::{Digest, Sha256};
 
+use common::absolute_url::{compose, AbsoluteUrl};
 use common::atompub::{render_media_link_entry, MediaLinkEntry};
 use common::media::{media_url, ContentHash, Filename};
 use common::username::Username;
@@ -21,15 +22,18 @@ use super::{base_url, HandlerError};
 const ENTRY_CONTENT_TYPE: &str = "application/atom+xml;type=entry;charset=utf-8";
 
 /// Builds the media-link entry for a stored media record.
-fn media_link_entry(record: &MediaRecord, base: &str, username: &Username) -> MediaLinkEntry {
-    let binary = format!(
-        "{base}{}",
-        media_url("upload", &record.sha256, &record.filename)
-    );
-    let edit = format!(
-        "{base}/atompub/{username}/media/{}/{}",
+fn media_link_entry(
+    record: &MediaRecord,
+    base: Option<&AbsoluteUrl>,
+    username: &Username,
+) -> MediaLinkEntry {
+    let binary_path = media_url("upload", &record.sha256, &record.filename);
+    let binary = compose(base, &binary_path).unwrap_or(binary_path);
+    let edit_path = format!(
+        "/atompub/{username}/media/{}/{}",
         record.sha256, record.filename
     );
+    let edit = compose(base, &edit_path).unwrap_or(edit_path);
     let timestamp = record.created_at.to_rfc3339();
     MediaLinkEntry {
         id: edit.clone(),
@@ -98,7 +102,7 @@ pub async fn collection_post(
         .ok_or(HandlerError::Internal)?;
 
     let base = base_url(site_config.as_ref()).await;
-    let entry = media_link_entry(&record, &base, &username);
+    let entry = media_link_entry(&record, base.as_ref(), &username);
     let xml = render_media_link_entry(&entry);
     let status = if existed {
         StatusCode::OK
@@ -138,7 +142,7 @@ pub async fn member_get(
         .ok_or(HandlerError::NotFound)?;
 
     let base = base_url(site_config.as_ref()).await;
-    let entry = media_link_entry(&record, &base, &username);
+    let entry = media_link_entry(&record, base.as_ref(), &username);
     let xml = render_media_link_entry(&entry);
     Ok(([(header::CONTENT_TYPE, ENTRY_CONTENT_TYPE)], xml).into_response())
 }

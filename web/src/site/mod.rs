@@ -6,7 +6,10 @@ use leptos::prelude::*;
 use crate::backup::server::require_operator;
 
 #[cfg(feature = "server")]
-use {crate::error::InternalError, std::sync::Arc, storage::SiteConfigStorage};
+use {
+    crate::error::InternalError, common::absolute_url::AbsoluteUrl, std::sync::Arc,
+    storage::SiteConfigStorage,
+};
 
 #[server(endpoint = "/get_site_identity")]
 #[tracing::instrument(name = "web.site.get_identity")]
@@ -32,17 +35,13 @@ pub async fn update_site_identity(title: String, base_url: String) -> WebResult<
             return Err(InternalError::validation("site title cannot be empty"));
         }
 
+        // `AbsoluteUrl::from_str` is the single scheme/normalization chokepoint now:
+        // empty clears to `None`, and a non-http(s)/malformed value is rejected here.
         let base_url = match common::text::non_empty(&base_url) {
             None => None,
-            Some(trimmed) => {
-                let trimmed = trimmed.trim_end_matches('/');
-                if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
-                    return Err(InternalError::validation(
-                        "base URL must be an absolute http or https URL",
-                    ));
-                }
-                Some(trimmed.to_string())
-            }
+            Some(trimmed) => Some(trimmed.parse::<AbsoluteUrl>().map_err(|_| {
+                InternalError::validation("base URL must be an absolute http or https URL")
+            })?),
         };
 
         let identity = SiteIdentity { title, base_url };

@@ -11,6 +11,7 @@ use axum::Extension;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use common::absolute_url::{compose, AbsoluteUrl};
 use common::atompub::{entry_from_xml, entry_to_xml, render_feed, FeedMeta};
 use common::ids::PostId;
 use common::pagination::PageSize;
@@ -162,7 +163,8 @@ pub async fn collection_get(
     }
 
     let base = base_url(site_config.as_ref()).await;
-    let collection_url = format!("{base}/atompub/{username}/posts");
+    let collection_path = format!("/atompub/{username}/posts");
+    let collection_url = compose(base.as_ref(), &collection_path).unwrap_or(collection_path);
 
     let next = if has_more {
         records.last().map(|last| {
@@ -176,7 +178,10 @@ pub async fn collection_get(
         None
     };
 
-    let entries: Vec<_> = records.iter().map(|p| post_to_entry(p, &base)).collect();
+    let entries: Vec<_> = records
+        .iter()
+        .map(|p| post_to_entry(p, base.as_ref()))
+        .collect();
 
     let updated_rfc3339 = records.first().map_or_else(
         || chrono::Utc::now().to_rfc3339(),
@@ -264,7 +269,7 @@ pub async fn member_get(
     )
     .await?;
     let base = base_url(site_config.as_ref()).await;
-    let entry = post_to_entry(&post, &base);
+    let entry = post_to_entry(&post, base.as_ref());
     let xml = entry_to_xml(&entry);
     Ok((
         [
@@ -412,7 +417,12 @@ pub async fn collection_post(
             .get_post_by_id(post_id, &viewer)
             .await?
             .ok_or(HandlerError::NotFound)?;
-        return Ok(post_entry_response(StatusCode::OK, &post, &base, &username));
+        return Ok(post_entry_response(
+            StatusCode::OK,
+            &post,
+            base.as_ref(),
+            &username,
+        ));
     }
 
     // Fresh create: a non-conflict error propagates via `?`.
@@ -425,7 +435,7 @@ pub async fn collection_post(
     Ok(post_entry_response(
         StatusCode::CREATED,
         &post,
-        &base,
+        base.as_ref(),
         &username,
     ))
 }
@@ -435,10 +445,11 @@ pub async fn collection_post(
 fn post_entry_response(
     status: StatusCode,
     post: &PostRecord,
-    base: &str,
+    base: Option<&AbsoluteUrl>,
     username: &Username,
 ) -> Response {
-    let location = format!("{base}/atompub/{username}/posts/{}", post.post_id);
+    let location_path = format!("/atompub/{username}/posts/{}", post.post_id);
+    let location = compose(base, &location_path).unwrap_or(location_path);
     let xml = entry_to_xml(&post_to_entry(post, base));
     (
         status,
@@ -533,7 +544,7 @@ pub async fn member_put(
         .ok_or(HandlerError::Internal)?;
 
     let base = base_url(site_config.as_ref()).await;
-    let entry_out = post_to_entry(&post, &base);
+    let entry_out = post_to_entry(&post, base.as_ref());
     let xml = entry_to_xml(&entry_out);
 
     Ok((

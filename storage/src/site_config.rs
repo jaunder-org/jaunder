@@ -148,26 +148,22 @@ pub trait SiteConfigStorage: Send + Sync {
             .await?
             .and_then(common::text::non_empty_owned)
             .unwrap_or_else(|| DEFAULT_SITE_TITLE.to_owned());
-        let base_url = self.get(SITE_BASE_URL_KEY).await?.and_then(|v| {
-            let trimmed = v.trim().trim_end_matches('/').to_owned();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed)
-            }
-        });
+        let base_url = self
+            .get(SITE_BASE_URL_KEY)
+            .await?
+            .and_then(common::text::non_empty_owned)
+            .map(|v| v.parse::<AbsoluteUrl>())
+            .transpose()
+            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
         Ok(SiteIdentity { title, base_url })
     }
 
     /// Stores the site identity (title and base URL).
-    /// For `base_url`, an empty string is stored when `None` is provided.
-    /// Trailing slashes on the base URL are stripped on write.
+    /// For `base_url`, an empty string is stored when `None` is provided; a set
+    /// value is stored in its canonical form (the `AbsoluteUrl` normalized it).
     async fn set_identity(&self, config: &SiteIdentity) -> sqlx::Result<()> {
         self.set(SITE_TITLE_KEY, &config.title).await?;
-        let base_url_value = config
-            .base_url
-            .as_deref()
-            .map_or("", |v| v.trim_end_matches('/'));
+        let base_url_value = config.base_url.as_deref().unwrap_or("");
         self.set(SITE_BASE_URL_KEY, base_url_value).await?;
         Ok(())
     }
@@ -705,18 +701,32 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn identity_returns_some_base_url_when_set_with_trailing_slash_stripped(
-        #[case] backend: Backend,
-    ) {
+    async fn identity_normalizes_stored_base_url_to_canonical_form(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
+        // A value stored WITHOUT a trailing slash (e.g. from before the AbsoluteUrl
+        // typing) still parses; the type normalizes it to the canonical slashed form.
         storage
-            .set(super::SITE_BASE_URL_KEY, "https://example.com/")
+            .set(super::SITE_BASE_URL_KEY, "https://example.com")
             .await
             .unwrap();
         let identity = storage.get_identity().await.expect("get_identity");
         assert_eq!(identity.title, common::site::DEFAULT_SITE_TITLE);
-        assert_eq!(identity.base_url.as_deref(), Some("https://example.com"));
+        assert_eq!(identity.base_url.as_deref(), Some("https://example.com/"));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn identity_rejects_invalid_stored_base_url(#[case] backend: Backend) {
+        // A non-empty stored base_url that is not a valid absolute http(s) URL surfaces
+        // as a read error (the validating getter boundary), not a silent None.
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
+        storage
+            .set(super::SITE_BASE_URL_KEY, "not-a-url")
+            .await
+            .unwrap();
+        assert!(storage.get_identity().await.is_err());
     }
 
     #[apply(backends)]
@@ -746,7 +756,7 @@ mod tests {
         let storage = &*env.state.site_config;
         let original = common::site::SiteIdentity {
             title: "Test Site".to_string(),
-            base_url: Some("https://test.example.com".to_string()),
+            base_url: Some(parse_absolute_url("https://test.example.com/")),
         };
         storage.set_identity(&original).await.expect("set_identity");
         let retrieved = storage.get_identity().await.expect("get_identity");
