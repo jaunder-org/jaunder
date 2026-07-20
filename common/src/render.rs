@@ -59,18 +59,20 @@ impl FromStr for PostFormat {
 /// The only ways to obtain one are [`render`] (mints new HTML) and
 /// [`RenderedHtml::from_trusted`] (rebuilds a value already produced by `render`
 /// and round-tripped through our own storage or wire); the latter is enforced by
-/// the `rendered-html-from-trusted` static check. Reading is convenient —
-/// `Display`, `AsRef<str>`, and `Deref<Target = str>` — but there is deliberately
-/// no *constructor* trait: no `From`/`TryFrom`/`FromStr`/`Deserialize`, so a raw
-/// `String` can never become a `RenderedHtml` (deref coercion is one-way — it
-/// reads out, never in).
+/// the `rendered-html-from-trusted` static check. Reading *out* is convenient —
+/// `Display`, `AsRef<str>`, `Borrow<str>`, `Deref<Target = str>`, `PartialEq<str>`,
+/// and `From<RenderedHtml> for String` (an *outbound* move of the inner) — but there
+/// is deliberately no *inbound constructor*: no `From<String>`/`TryFrom`/`FromStr`/
+/// `Deserialize`, so a raw `String` can never become a `RenderedHtml` (deref coercion
+/// is one-way — it reads out, never in).
 ///
 /// Constructing one from an arbitrary string does not compile:
 /// ```compile_fail
 /// let _ = common::render::RenderedHtml("<p>x</p>".to_string()); // private field
 /// ```
 /// ```compile_fail
-/// let _: common::render::RenderedHtml = "<p>x</p>".to_string().into(); // no From
+/// // no inbound `From<String>` (only the outbound `From<RenderedHtml> for String`)
+/// let _: common::render::RenderedHtml = "<p>x</p>".to_string().into();
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RenderedHtml(String);
@@ -115,6 +117,74 @@ impl serde::Serialize for RenderedHtml {
         serializer.serialize_str(&self.0)
     }
 }
+
+// The rest of the StrNewtype read-out trailer (#502), hand-written to preserve the
+// carve-outs: `Borrow`/`PartialEq` are read-only, and `From<Self> for String` moves the
+// inner out (it does not turn a `String` *into* a `RenderedHtml`), so the trust boundary
+// is untouched.
+impl std::borrow::Borrow<str> for RenderedHtml {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+// Move the inner `String` out — a free move, unlike `.to_string()` (a clone plus format
+// machinery). Mirrors every derive-trailer newtype's `From<Self> for String`.
+impl From<RenderedHtml> for String {
+    fn from(v: RenderedHtml) -> Self {
+        v.0
+    }
+}
+
+impl PartialEq<str> for RenderedHtml {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<&str> for RenderedHtml {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == **other
+    }
+}
+
+// Write-side sqlx bridge (#502): `RenderedHtml` is a first-class TEXT bind parameter,
+// delegating to the inner `String` — so storage binds it directly (`.bind(&rendered_html)`)
+// rather than via an `.as_ref()` str-strip.
+//
+// Deliberately NO `Decode`: a decode could only route through `from_trusted`
+// (`RenderedHtml` has no validating `FromStr`), which would bless ANY text column decoded
+// into it — e.g. a raw, un-rendered `body` — as trusted, unescaped HTML, invisible to the
+// `rendered-html-from-trusted` gate. Reads stay explicit: the `rendered_html` column
+// decodes as `String` and is rebuilt via the gated `from_trusted` in `build_post_record`.
+// `Type::compatible` is omitted (its trait default suffices) because it is consulted only
+// on that absent decode path.
+#[cfg(feature = "sqlx")]
+const _: () = {
+    impl<DB: sqlx::Database> sqlx::Type<DB> for RenderedHtml
+    where
+        String: sqlx::Type<DB>,
+    {
+        fn type_info() -> <DB as sqlx::Database>::TypeInfo {
+            <String as sqlx::Type<DB>>::type_info()
+        }
+    }
+
+    impl<'q, DB: sqlx::Database> sqlx::Encode<'q, DB> for RenderedHtml
+    where
+        String: sqlx::Encode<'q, DB>,
+    {
+        fn encode_by_ref(
+            &self,
+            buf: &mut <DB as sqlx::Database>::ArgumentBuffer<'q>,
+        ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+            <String as sqlx::Encode<'q, DB>>::encode_by_ref(&self.0, buf)
+        }
+        fn size_hint(&self) -> usize {
+            <String as sqlx::Encode<'q, DB>>::size_hint(&self.0)
+        }
+    }
+};
 
 // ---------------------------------------------------------------------------
 // Pure rendering functions
@@ -360,6 +430,31 @@ mod tests {
     fn rendered_html_serializes_as_the_raw_string() {
         let h = RenderedHtml::from_trusted("<b>x</b>");
         assert_eq!(serde_json::to_string(&h).unwrap(), "\"<b>x</b>\"");
+    }
+
+    #[test]
+    fn rendered_html_into_string_moves_inner() {
+        let h = RenderedHtml::from_trusted("<p>move me</p>");
+        let s: String = h.into();
+        assert_eq!(s, "<p>move me</p>");
+    }
+
+    #[test]
+    fn rendered_html_borrows_as_str() {
+        fn takes_borrow<T: std::borrow::Borrow<str>>(t: &T) -> &str {
+            t.borrow()
+        }
+        let h = RenderedHtml::from_trusted("<p>b</p>");
+        assert_eq!(takes_borrow(&h), "<p>b</p>");
+    }
+
+    #[test]
+    fn rendered_html_partial_eq_str_and_ref() {
+        let h = RenderedHtml::from_trusted("<p>x</p>");
+        assert!(h == "<p>x</p>"); // PartialEq<&str>
+        assert!(h == *"<p>x</p>"); // PartialEq<str>
+        assert!(h != "<p>y</p>"); // PartialEq<&str>, unequal
+        assert!(h != *"<p>y</p>"); // PartialEq<str>, unequal
     }
 
     #[test]

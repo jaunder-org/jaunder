@@ -1887,9 +1887,7 @@ where
     .bind(&input.slug)
     .bind(&input.body)
     .bind(format.as_str())
-    // `RenderedHtml` is hand-rolled and has no sqlx bridge yet (#502), so this stays a
-    // bare-`&str` bind until its trailer is aligned.
-    .bind(input.rendered_html.as_ref())
+    .bind(&input.rendered_html)
     .bind(now)
     .bind(now)
     .bind(input.published_at)

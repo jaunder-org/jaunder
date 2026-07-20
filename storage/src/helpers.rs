@@ -121,9 +121,11 @@ pub(crate) fn build_invite_record(
 // ---------------------------------------------------------------------------
 
 // `author_username`/`title`/`slug`/`body` decode straight into their domain
-// newtypes via the sqlx bridge (#438). `format` (a `PostFormat` enum) and
-// `rendered_html` (`RenderedHtml`, hand-rolled — #502) are not string newtypes,
-// so they stay `String` and keep their existing parse / `from_trusted` handling.
+// newtypes via the sqlx bridge (#438). `format` (a `PostFormat` enum) stays a
+// `String` that parses in `build_post_record`. `rendered_html` (`RenderedHtml`) has
+// a deliberately *write-only* sqlx bridge (#502: `Type`/`Encode`, no `Decode` — a
+// `Decode` would bless any text column as trusted HTML), so its column decodes as a
+// `String` here and is rebuilt via the gated `from_trusted` in `build_post_record`.
 pub(crate) type PostRecordParts = (
     i64,
     i64,

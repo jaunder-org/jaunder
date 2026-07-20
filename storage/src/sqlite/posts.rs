@@ -92,9 +92,7 @@ impl PostDialect for Sqlite {
             .bind(&input.slug)
             .bind(&input.body)
             .bind(input.format.to_string())
-            // `RenderedHtml` is hand-rolled and has no sqlx bridge yet (#502), so this
-            // stays a bare-`&str` bind until its trailer is aligned.
-            .bind(input.rendered_html.as_ref())
+            .bind(&input.rendered_html)
             // $6 unpublish, $7/$8 explicit_published_at (bound twice: NULL-test
             // then value), $9 now (COALESCE fallback), $10 now (updated_at).
             .bind(input.unpublish)
