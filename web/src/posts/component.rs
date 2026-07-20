@@ -4,8 +4,8 @@
 //! `#[cfg(target_arch = "wasm32")] mod component;` in `posts/mod.rs`, so this file
 //! is wasm-only by its `mod` declaration and carries no cfg gates of its own; it
 //! calls browser APIs directly. The pure, projector-coincident render twins live
-//! in the host-tested [`super::render`]; the scheduled-publish datetime helper is
-//! reached (transitionally) via [`crate::pages::ui::publish_at_from_local`].
+//! in the host-tested [`super::render`]; the scheduled-publish datetime conversion
+//! is the host-tested [`common::time::utc_instant_from_local`].
 
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
@@ -17,7 +17,6 @@ use crate::error::WebError;
 use crate::feed_discovery::{FeedDiscovery, RsdDiscovery};
 use crate::forms::Field;
 use crate::media::MediaUpload;
-use crate::pages::ui::publish_at_from_local;
 use crate::posts::{
     default_audience_selection, draft_row_display, get_post, get_post_preview, list_drafts,
     list_posts_by_tag, list_user_posts, list_user_posts_by_tag, parse_permalink_params,
@@ -35,6 +34,7 @@ use common::ids::{AudienceId, PostId};
 use common::pagination::PageSize;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
+use common::time::utc_instant_from_local;
 use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::AudienceBase;
@@ -442,7 +442,7 @@ pub fn PostCreateForm(
                 format: format.get(),
                 slug_override: None,
                 publish: false,
-                publish_at: publish_at_from_local(&publish_at.get()),
+                publish_at: utc_instant_from_local(&publish_at.get()),
                 tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
                 summary: Some(summary.get()),
                 audience: Some(audience.get()),
@@ -454,7 +454,7 @@ pub fn PostCreateForm(
                 format: format.get(),
                 slug_override: None,
                 publish: true,
-                publish_at: publish_at_from_local(&publish_at.get()),
+                publish_at: utc_instant_from_local(&publish_at.get()),
                 tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
                 summary: Some(summary.get()),
                 audience: Some(audience.get()),
@@ -558,7 +558,7 @@ pub fn PostCreateForm(
                 format: format.get(),
                 slug_override: slug_field.parsed(),
                 publish,
-                publish_at: publish_at_from_local(&publish_at.get()),
+                publish_at: utc_instant_from_local(&publish_at.get()),
                 tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
                 summary: Some(summary.get()),
                 audience: Some(audience.get()),
@@ -1664,7 +1664,7 @@ pub fn EditPostPage() -> impl IntoView {
                                     format: format.get(),
                                     slug_override: slug_field.parsed(),
                                     publish,
-                                    publish_at: publish_at_from_local(&publish_at.get()),
+                                    publish_at: utc_instant_from_local(&publish_at.get()),
                                     tags: Some(
                                         post_tags.get().into_iter().map(|t| t.display).collect(),
                                     ),

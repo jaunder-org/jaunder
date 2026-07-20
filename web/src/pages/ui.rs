@@ -2,7 +2,6 @@
 // wasm-only correction Effect.
 use crate::auth::current_user;
 use crate::backup::current_user_is_operator;
-use common::time::UtcInstant;
 use common::username::Username;
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
@@ -23,40 +22,6 @@ pub use crate::{
     taglist::TagList,
     topbar::Topbar,
 };
-
-/// Converts a `datetime-local` input value — a naive local wall-clock such as
-/// "2026-07-01T13:30" — into a UTC RFC3339 instant string for the server.
-/// Returns `None` for an empty/whitespace input (i.e. publish-now).
-///
-/// The browser's `Date` does the local→UTC conversion so it honors the
-/// author's timezone and DST. Form dispatch is client-only, so the non-wasm
-/// build only needs this to compile (the stub is never executed there).
-// Deliberate manual keep: this genuine helper (not a Leptos view) benefits from
-// `#[must_use]`; the crate-wide `must_use_candidate = "allow"` (Cargo.toml, #94)
-// means clippy no longer flags it, so we assert it by hand.
-#[must_use]
-fn local_datetime_to_utc_rfc3339(local: &str) -> Option<String> {
-    let trimmed = local.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    // `new Date("YYYY-MM-DDTHH:MM")` (time present, no offset) is parsed as
-    // local time per ECMAScript; `toISOString()` re-renders it in UTC.
-    let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_str(trimmed));
-    if date.get_time().is_nan() {
-        return None;
-    }
-    date.to_iso_string().as_string()
-}
-
-/// Parses a `datetime-local` control's raw value into the UTC [`UtcInstant`] used for the
-/// `publish_at` wire arg — the browser local→UTC conversion
-/// ([`local_datetime_to_utc_rfc3339`]) followed by the domain parse, in one place. `None`
-/// for an empty/unparseable field (i.e. publish now).
-#[must_use]
-pub(crate) fn publish_at_from_local(local: &str) -> Option<UtcInstant> {
-    local_datetime_to_utc_rfc3339(local).and_then(|s| s.parse::<UtcInstant>().ok())
-}
 
 // ─── 3.8 Sidebar ──────────────────────────────────────────────
 
