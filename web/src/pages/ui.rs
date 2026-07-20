@@ -4,7 +4,7 @@ use crate::audiences::{list_my_audiences, AudienceSummary};
 use crate::auth::current_user;
 use crate::backup::current_user_is_operator;
 use crate::forms::Field;
-use crate::pages::upload::MediaPanel;
+use crate::media::MediaUpload;
 use crate::posts::{
     default_audience_selection, AudienceSelection, CreatePost, CreatePostResult, DeletePost,
     TimelinePostSummary, UnpublishPost,
@@ -504,7 +504,7 @@ pub fn PostCreateForm(
                         show_seg=false
                         on_input=on_input.unwrap_or_else(|| Callback::new(move |()| {}))
                     />
-                    <MediaPanel />
+                    <MediaUpload show_result=true />
                     <div style="margin-top:10px">
                         <label class="j-field-label">"Summary"</label>
                         <textarea
@@ -706,7 +706,7 @@ pub fn PostCreateForm(
                         <div class="j-sb-head" style="padding:0 0 10px">
                             "Media"
                         </div>
-                        <MediaPanel />
+                        <MediaUpload show_result=true />
                     </div>
                     <div style="margin-top:auto;display:flex;align-items:center;gap:8px">
                         <button
