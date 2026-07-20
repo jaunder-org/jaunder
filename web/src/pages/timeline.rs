@@ -10,8 +10,7 @@ use common::pagination::PageSize;
 use common::time::UtcInstant;
 
 use crate::pages::signal_read::read_signal;
-use crate::pages::ui::PostCard;
-use crate::posts::{TimelinePage, TimelinePostSummary};
+use crate::posts::{PostCard, TimelinePage, TimelinePostSummary};
 
 use {crate::error::WebResult, leptos::task::spawn_local, std::future::Future};
 

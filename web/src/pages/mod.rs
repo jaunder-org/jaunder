@@ -10,7 +10,7 @@ pub(crate) mod signal_read;
 pub mod site;
 pub(crate) mod timeline;
 pub mod ui;
-pub use ui::{Avatar, Icon, Icons, InlineComposer, PostCard, PostDisplay, Sidebar, Topbar};
+pub use ui::{Avatar, Icon, Icons, Sidebar, Topbar};
 
 /// Default theme identifier (the CSS variable pack applied via `data-theme` on the
 /// root element). Defined in `crate::render` (the shell layer) so the projector's

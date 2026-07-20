@@ -8,7 +8,7 @@
 //! never sits on the public request path (the #173 escape). See
 //! `docs/adr/0041` and `docs/inbound-data-handling.md` §4.
 //!
-//! The markup mirrors `web::pages::ui::PostDisplay`'s class structure
+//! The markup mirrors `web::posts::PostDisplay`'s class structure
 //! (`article.j-post` → `j-post-head` / `j-post-title` / `j-post-body` /
 //! `j-post-foot`) so the seeded first paint and the reactive client-navigation
 //! fallback share styling.

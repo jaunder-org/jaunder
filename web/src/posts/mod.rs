@@ -12,6 +12,11 @@ mod api;
 #[cfg(feature = "server")]
 mod server;
 
+// The `#[component]` UI and browser-bound code — wasm-only by its `mod`
+// declaration (ADR-0070), so the file carries no cfg gates of its own.
+#[cfg(target_arch = "wasm32")]
+mod component;
+
 // The pure post-render twins (host-compiled leaf, ADR-0070): plain-string HTML
 // builders shared by the projector (`crate::render`) and the reactive
 // `PostDisplay`, reachable crate-wide as `crate::posts::render::…`.
@@ -45,3 +50,11 @@ pub use api::{
 // `fetch_post_record` straight from `storage`.
 #[cfg(feature = "server")]
 pub use server::post_response;
+
+// The wasm-only reactive UI (ADR-0070). Re-exported so the pages/ layer keeps the
+// stable `crate::posts::…` paths; the private helpers (`marker_matches`,
+// `audience_checkbox`) stay unexported.
+#[cfg(target_arch = "wasm32")]
+pub use component::{
+    AudiencePicker, ComposerFields, InlineComposer, PostCard, PostCreateForm, PostDisplay, TagInput,
+};
