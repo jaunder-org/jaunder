@@ -19,6 +19,7 @@ use crate::password::Password;
 use crate::post_title::PostTitle;
 use crate::slug::Slug;
 use crate::tag::{Tag, TagLabel};
+use crate::time::UtcInstant;
 use crate::token::{RawToken, TokenHash};
 use crate::username::Username;
 
@@ -245,4 +246,16 @@ pub fn parse_tag(s: &str) -> Tag {
 #[must_use]
 pub fn parse_tag_label(s: &str) -> TagLabel {
     s.parse().expect("valid test tag label")
+}
+
+/// Parse `s` into a valid [`UtcInstant`] for tests — the single place a test
+/// instant literal is parsed, so a malformed fixture fails loudly and the parse
+/// isn't re-spelled at every timeline/post fixture across the workspace.
+///
+/// # Panics
+///
+/// Panics if `s` is not a valid RFC3339 instant.
+#[must_use]
+pub fn parse_utc_instant(s: &str) -> UtcInstant {
+    s.parse().expect("valid test UTC instant")
 }

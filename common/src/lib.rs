@@ -29,6 +29,7 @@ pub mod tag;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 pub mod text;
+pub mod time;
 pub mod token;
 pub mod username;
 pub mod visibility;
