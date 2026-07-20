@@ -6,8 +6,9 @@
 //! pre-bridge idiom stripped a newtype down to its `&str` before binding —
 //! `.bind(x.as_ref())` (via `AsRef<str>`), `.bind(&*x)` / `.bind(&**x)` deref
 //! binds, and the `Option` map-deref forms `.bind(x.map(|v| &*v))` / `&**v`. All
-//! storage bind sites are already converted; this guard is the regression guard so
-//! the stringly idiom can't silently return.
+//! storage bind sites now bind the typed value — the derive newtypes via their
+//! bridge, and `RenderedHtml` via its hand-written write-only bridge (#502) — so
+//! this guard is the regression guard against the stringly idiom silently returning.
 //!
 //! The scan is line-based over every `.rs` under `storage/src`. A `.bind(` region
 //! that contains `.as_ref()` or a `&*` deref is a violation, unless the whole line
@@ -28,22 +29,16 @@ struct Allowed {
     reason: &'static str,
 }
 
-/// The two exempt bind-expressions. Each appears in `posts.rs` + `sqlite/posts.rs`
-/// + `postgres/posts.rs`; the substring match covers all three.
-const ALLOWLIST: &[Allowed] = &[
-    Allowed {
-        needle: "input.title.as_ref()",
-        // `title` is `Option<PostTitle>`, so this is `Option::as_ref()` →
-        // `Option<&PostTitle>` (a typed bind), NOT an `AsRef<str>` str-strip.
-        reason: "Option<PostTitle>::as_ref() — a typed Option bind, not an AsRef<str> strip",
-    },
-    Allowed {
-        needle: "input.rendered_html.as_ref()",
-        // `RenderedHtml` is the one hand-rolled string newtype with no sqlx bridge
-        // yet; its bridge (and this bind's conversion) is tracked by #502.
-        reason: "RenderedHtml has no sqlx bridge yet (#502) — stays stringly until then",
-    },
-];
+/// The one exempt bind-expression; it appears in `posts.rs`, `sqlite/posts.rs`, and
+/// `postgres/posts.rs`, and the substring match covers all three. (`RenderedHtml` was
+/// the other exemption until #502 gave it a sqlx `Encode` bridge and its binds became
+/// `.bind(&input.rendered_html)`, so it is now policed like any newtype.)
+const ALLOWLIST: &[Allowed] = &[Allowed {
+    needle: "input.title.as_ref()",
+    // `title` is `Option<PostTitle>`, so this is `Option::as_ref()` →
+    // `Option<&PostTitle>` (a typed bind), NOT an `AsRef<str>` str-strip.
+    reason: "Option<PostTitle>::as_ref() — a typed Option bind, not an AsRef<str> strip",
+}];
 
 /// Source root scanned recursively for `.rs` files.
 const POLICED_ROOT: &str = "storage/src";
@@ -186,12 +181,19 @@ mod tests {
     }
 
     #[test]
-    fn allowlisted_title_and_rendered_html_are_clean() {
-        let src = "\
-    .bind(input.title.as_ref())
-    .bind(input.rendered_html.as_ref())
-";
+    fn allowlisted_title_is_clean() {
+        let src = "    .bind(input.title.as_ref())\n";
         assert!(violations(src).is_empty());
+    }
+
+    #[test]
+    fn rendered_html_as_ref_bind_is_now_flagged() {
+        // #502 retired `RenderedHtml`'s allowlist entry once it gained a sqlx `Encode`
+        // bridge; the stringly `.as_ref()` bind must now be flagged like any newtype strip.
+        assert_eq!(
+            violations("    .bind(input.rendered_html.as_ref())\n"),
+            vec![1]
+        );
     }
 
     #[test]

@@ -64,9 +64,10 @@ default-on, `secret` drops it, a secret re-adds it explicitly.
 - **An `xtask` enforcement gate (`sqlx-newtype-bind`)** scans `storage/src` and
   fails on the stringly-bind idioms (`.bind(_.as_ref())`, `.bind(&*_)`,
   `.bind(&**_)`), so a newtype cannot silently be bound as a bare string again.
-  It carries a small, substring-matched allowlist for the two legitimate
-  `.as_ref()` binds (a typed `Option<PostTitle>::as_ref()`, and `RenderedHtml`
-  pending its bridge in #502).
+  It carries a small, substring-matched allowlist for the one legitimate
+  `.as_ref()` bind (a typed `Option<PostTitle>::as_ref()`). (#502 retired the
+  second entry, `RenderedHtml`, by giving that type a hand-written write-only
+  bridge — see Consequences.)
 
 ## Consequences
 
@@ -83,7 +84,12 @@ default-on, `secret` drops it, a secret re-adds it explicitly.
   query by accident.
 - Commits us to: the `common` optional-`sqlx`-feature seam (kept off for wasm by
   the `compile_error!` guard and the wasm-clippy gate); the `sqlx-newtype-bind`
-  gate and its allowlist, which shrinks to zero as `RenderedHtml` (#502) and any
-  future hand-rolled string newtype adopt the derive.
+  gate and its allowlist (down to one entry after #502).
 - Rules out per-type hand-written sqlx impls (orphan-rule-bound and duplicative)
-  and a storage-side wrapper type (second-class, conversion at every edge).
+  and a storage-side wrapper type (second-class, conversion at every edge) — for
+  derive-eligible newtypes. The lone sanctioned exception is `RenderedHtml`
+  (#502): a provenance type whose carve-outs (no `FromStr`, and a `Decode` would
+  launder an untrusted column into trusted unescaped HTML) rule the derive out,
+  so it gets a hand-written **write-only** bridge (`Type`+`Encode`, no
+  `Decode`); its column still decodes as `String` and is rebuilt via the gated
+  `from_trusted`.
