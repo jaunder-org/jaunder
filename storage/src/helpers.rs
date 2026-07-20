@@ -14,6 +14,7 @@ use common::email::Email;
 use common::ids::{PostId, TagId, UserId};
 use common::media::{ContentHash, Filename};
 use common::post_body::PostBody;
+use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
@@ -139,7 +140,7 @@ pub(crate) type PostRecordParts = (
     DateTime<Utc>,
     Option<DateTime<Utc>>,
     Option<DateTime<Utc>>,
-    Option<String>,
+    Option<PostSummary>,
     String,
 );
 
@@ -291,7 +292,7 @@ pub(crate) type PostRow = (
     DateTime<Utc>,
     Option<DateTime<Utc>>,
     Option<DateTime<Utc>>,
-    Option<String>,
+    Option<PostSummary>,
     String,
 );
 

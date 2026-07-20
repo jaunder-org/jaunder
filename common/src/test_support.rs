@@ -16,6 +16,7 @@ use crate::feed::{FeedMinDays, FeedMinItems};
 use crate::media::{ContentHash, Filename, MaxFileSize, UserQuota};
 use crate::pagination::PageSize;
 use crate::password::Password;
+use crate::post_summary::PostSummary;
 use crate::post_title::PostTitle;
 use crate::slug::Slug;
 use crate::tag::{Tag, TagLabel};
@@ -126,6 +127,19 @@ pub fn parse_raw_token(s: &str) -> RawToken {
 #[must_use]
 pub fn parse_post_title(title: &str) -> PostTitle {
     PostTitle::from(title.to_owned())
+}
+
+/// Parse `s` into a valid [`PostSummary`] for tests — the single place a test post-summary
+/// literal is parsed, so a malformed fixture (empty or over the length bound) fails loudly
+/// and the validating `FromStr` isn't re-spelled at every post/feed fixture across the
+/// workspace.
+///
+/// # Panics
+///
+/// Panics if `s` is empty/whitespace-only or longer than the length bound.
+#[must_use]
+pub fn parse_post_summary(s: &str) -> PostSummary {
+    s.parse().expect("valid test post summary")
 }
 
 /// Parse `s` into a valid [`ContentHash`] for tests — the single place a test

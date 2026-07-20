@@ -150,6 +150,7 @@ mod tests {
     use common::display_name::DisplayName;
     use common::email::Email;
     use common::password::Password;
+    use common::post_summary::{PostSummary, MAX_POST_SUMMARY_CHARS};
     use common::slug::Slug;
     use common::tag::Tag;
     use common::test_support::parse_username;
@@ -196,6 +197,23 @@ mod tests {
     // `Field<T>`'s methods are signal-only (no `Effect`/`Resource`), so — like
     // `Invalidator::{new, notify, track}` — they are host-tested under an `Owner`, not
     // `#[client_only]`-exempted.
+
+    #[test]
+    fn post_summary_field_error_reports_over_cap_and_allows_empty_when_optional() {
+        // Over-cap is the newtype's own `FromStr::Err` message; a valid summary is None.
+        let over = "a".repeat(MAX_POST_SUMMARY_CHARS + 1);
+        assert!(field_error::<PostSummary>(&over).is_some());
+        assert_eq!(field_error::<PostSummary>("A short summary"), None);
+        // Under `Field::optional`, an empty summary is "not provided" (valid → None);
+        // a non-empty over-cap value still gates submit.
+        let owner = Owner::new();
+        owner.set();
+        let f = Field::<PostSummary>::optional();
+        assert_eq!(f.error_for(""), None);
+        assert!(f.error_for(&over).is_some());
+        assert_eq!(f.error_for("A short summary"), None);
+        drop(owner);
+    }
 
     #[test]
     fn field_seeds_validity_and_tracks_input() {

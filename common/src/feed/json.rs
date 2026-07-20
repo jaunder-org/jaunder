@@ -18,7 +18,9 @@ pub fn render_json(meta: &FeedMetadata, items: &[FeedItem]) -> String {
                 o["title"] = Value::String(t.to_string());
             }
             if let Some(s) = &i.summary {
-                o["summary"] = Value::String(s.clone());
+                // ADR-0063 §5: read the summary out to a plain `String` at the
+                // serde_json boundary (mirrors the `title` handling above).
+                o["summary"] = Value::String(s.to_string());
             }
             if !i.tags.is_empty() {
                 o["tags"] = json!(i.tags);
@@ -50,7 +52,7 @@ mod tests {
     use super::*;
     use crate::ids::PostId;
     use crate::render::RenderedHtml;
-    use crate::test_support::parse_post_title;
+    use crate::test_support::{parse_post_summary, parse_post_title};
 
     fn meta(hub: Option<&str>) -> FeedMetadata {
         FeedMetadata {
@@ -72,7 +74,7 @@ mod tests {
             id: PostId::from(1),
             title: title.map(parse_post_title),
             permalink: "https://example.com/~alice/posts/1".into(),
-            summary: summary.map(str::to_string),
+            summary: summary.map(parse_post_summary),
             content_html: RenderedHtml::from_trusted("<p>hi</p>"),
             published_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
             updated_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),

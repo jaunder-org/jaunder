@@ -11,6 +11,7 @@ use crate::posts::{
 };
 use crate::tags::TagSummary;
 use common::ids::AudienceId;
+use common::post_summary::PostSummary;
 use common::slug::Slug;
 use common::tag::TagLabel;
 use common::time::UtcInstant;
@@ -441,7 +442,9 @@ pub fn PostCreateForm(
     let create_action = ServerAction::<CreatePost>::new();
     let body = RwSignal::new(String::new());
     let format = RwSignal::new("markdown".to_string());
-    let summary = RwSignal::new(String::new());
+    // Optional summary: parent-owned validated field (ADR-0065 direct-bind), so an
+    // over-cap entry disables submit and an empty field submits `None`.
+    let summary_field = Field::<PostSummary>::optional();
     // Optional scheduled-publish time (naive local wall-clock from a
     // `datetime-local` control); empty = publish now / draft. Only the
     // non-compact form renders the control; the compact composer leaves it
@@ -470,7 +473,7 @@ pub fn PostCreateForm(
             let created = created.clone();
             on_success.run(created);
             body.set(String::new());
-            summary.set(String::new());
+            summary_field.reset();
             publish_at.set(String::new());
             tags.set(Vec::new());
         }
@@ -485,7 +488,7 @@ pub fn PostCreateForm(
                 publish: false,
                 publish_at: publish_at_from_local(&publish_at.get()),
                 tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
-                summary: Some(summary.get()),
+                summary: summary_field.parsed(),
                 audience: Some(audience.get()),
             });
         };
@@ -497,7 +500,7 @@ pub fn PostCreateForm(
                 publish: true,
                 publish_at: publish_at_from_local(&publish_at.get()),
                 tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
-                summary: Some(summary.get()),
+                summary: summary_field.parsed(),
                 audience: Some(audience.get()),
             });
         };
@@ -522,11 +525,21 @@ pub fn PostCreateForm(
                             class="j-field-val"
                             rows=3
                             placeholder="Optional summary or excerpt"
-                            prop:value=summary
+                            prop:value=summary_field.value
                             on:input=move |ev| {
-                                summary.set(event_target_value(&ev));
+                                let v = event_target_value(&ev);
+                                summary_field.value.set(v.clone());
+                                summary_field.error.set(summary_field.error_for(&v));
                             }
+                            on:blur=move |_| summary_field.touch()
                         />
+                        {move || {
+                            summary_field
+                                .is_touched()
+                                .then(|| summary_field.error.get())
+                                .flatten()
+                                .map(|msg| view! { <p class="error">{msg}</p> })
+                        }}
                     </div>
                     <TagInput tags=tags />
                     <div class="j-composer-toolbar">
@@ -564,7 +577,9 @@ pub fn PostCreateForm(
                             type="button"
                             name="publish"
                             value="false"
-                            disabled=move || body.get().trim().is_empty()
+                            disabled=move || {
+                                body.get().trim().is_empty() || !summary_field.is_valid()
+                            }
                             on:click=dispatch_save
                         >
                             "Save draft"
@@ -574,7 +589,9 @@ pub fn PostCreateForm(
                             type="button"
                             name="publish"
                             value="true"
-                            disabled=move || body.get().trim().is_empty()
+                            disabled=move || {
+                                body.get().trim().is_empty() || !summary_field.is_valid()
+                            }
                             on:click=dispatch_publish
                         >
                             "Publish"
@@ -601,7 +618,7 @@ pub fn PostCreateForm(
                 publish,
                 publish_at: publish_at_from_local(&publish_at.get()),
                 tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
-                summary: Some(summary.get()),
+                summary: summary_field.parsed(),
                 audience: Some(audience.get()),
             });
         };
@@ -657,11 +674,21 @@ pub fn PostCreateForm(
                                 placeholder="Optional summary or excerpt"
                                 class="j-field-val"
                                 rows=3
-                                prop:value=summary
+                                prop:value=summary_field.value
                                 on:input=move |ev| {
-                                    summary.set(event_target_value(&ev));
+                                    let v = event_target_value(&ev);
+                                    summary_field.value.set(v.clone());
+                                    summary_field.error.set(summary_field.error_for(&v));
                                 }
+                                on:blur=move |_| summary_field.touch()
                             />
+                            {move || {
+                                summary_field
+                                    .is_touched()
+                                    .then(|| summary_field.error.get())
+                                    .flatten()
+                                    .map(|msg| view! { <p class="error">{msg}</p> })
+                            }}
                         </div>
                         <div style="margin-top:10px">
                             <TagInput tags=tags />
@@ -724,7 +751,9 @@ pub fn PostCreateForm(
                             type="button"
                             name="publish"
                             value="false"
-                            prop:disabled=move || !slug_field.is_valid()
+                            prop:disabled=move || {
+                                !slug_field.is_valid() || !summary_field.is_valid()
+                            }
                             on:click=move |_| dispatch_create(false)
                         >
                             "Save draft"
@@ -734,7 +763,9 @@ pub fn PostCreateForm(
                             type="button"
                             name="publish"
                             value="true"
-                            prop:disabled=move || !slug_field.is_valid()
+                            prop:disabled=move || {
+                                !slug_field.is_valid() || !summary_field.is_valid()
+                            }
                             on:click=move |_| dispatch_create(true)
                         >
                             "Publish"

@@ -23,6 +23,7 @@ use common::{
     ids::{AudienceId, PostId},
     pagination::PageSize,
     post_body::PostBody,
+    post_summary::PostSummary,
     post_title::PostTitle,
     render::RenderedHtml,
     slug::Slug,
@@ -62,7 +63,7 @@ pub struct CreatePostResult {
     pub published_at: Option<UtcInstant>,
     pub preview_url: String,
     pub permalink: Option<String>,
-    pub summary: Option<String>,
+    pub summary: Option<PostSummary>,
 }
 
 /// Result returned by [`update_post`].
@@ -73,7 +74,7 @@ pub struct UpdatePostResult {
     pub published_at: Option<UtcInstant>,
     pub preview_url: String,
     pub permalink: Option<String>,
-    pub summary: Option<String>,
+    pub summary: Option<PostSummary>,
 }
 
 /// The audience-picker selection as it crosses the server-fn boundary.
@@ -160,7 +161,7 @@ pub fn targets_to_audience_selection(
 pub struct DraftSummary {
     pub post_id: PostId,
     pub title: Option<PostTitle>,
-    pub summary_label: String,
+    pub summary_label: PostSummary,
     pub slug: Slug,
     pub created_at: UtcInstant,
     pub updated_at: UtcInstant,
@@ -212,7 +213,7 @@ pub struct PostResponse {
     /// Tags applied to this post, ordered by canonical slug.
     pub tags: Vec<TagSummary>,
     /// Optional summary/excerpt of the post.
-    pub summary: Option<String>,
+    pub summary: Option<PostSummary>,
 }
 
 /// Creates a post for the authenticated user.
@@ -235,7 +236,7 @@ pub async fn create_post(
     publish: bool,
     publish_at: Option<UtcInstant>,
     tags: Option<Vec<TagLabel>>,
-    summary: Option<String>,
+    summary: Option<PostSummary>,
     audience: Option<AudienceSelection>,
 ) -> WebResult<CreatePostResult> {
     boundary!("create_post", {
@@ -255,7 +256,9 @@ pub async fn create_post(
         } else {
             None
         };
-        let normalized_summary = summary.and_then(common::text::non_empty_owned);
+        // `PostSummary`'s `FromStr` already trims and rejects empty at arg-decode
+        // (ADR-0065), so the value is passed through typed — no `non_empty_owned`
+        // normalization needed.
         let audiences = audience_targets_or_public(audience.as_ref());
 
         let record = perform_post_creation(
@@ -268,7 +271,7 @@ pub async fn create_post(
                 slug_override: slug_override.as_ref(),
                 published_at,
                 max_attempts: 100,
-                summary: normalized_summary,
+                summary,
                 audiences,
                 idempotency_key: None,
             },
@@ -387,7 +390,7 @@ pub async fn update_post(
     // `create_post` for why this crosses the boundary as a `UtcInstant`.
     publish_at: Option<UtcInstant>,
     tags: Option<Vec<TagLabel>>,
-    summary: Option<String>,
+    summary: Option<PostSummary>,
     audience: Option<AudienceSelection>,
 ) -> WebResult<UpdatePostResult> {
     boundary!("update_post", {
@@ -410,7 +413,8 @@ pub async fn update_post(
         let new_tags = tags.map(common::tag::parse_and_validate_tags).transpose()?;
 
         let format = format.parse::<PostFormat>()?;
-        let normalized_summary = summary.and_then(common::text::non_empty_owned);
+        // See `create_post`: the typed `PostSummary` arg is already validated at
+        // decode, so no `non_empty_owned` normalization is applied here.
         let audiences = audience_targets_or_public(audience.as_ref());
 
         // A supplied time schedules/backdates; `None` lets storage keep an
@@ -431,7 +435,7 @@ pub async fn update_post(
                 } else {
                     PublishUpdate::Unpublish
                 },
-                summary: normalized_summary,
+                summary,
                 audiences,
             },
         )

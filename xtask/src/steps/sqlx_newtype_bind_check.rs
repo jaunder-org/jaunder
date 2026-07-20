@@ -29,16 +29,24 @@ struct Allowed {
     reason: &'static str,
 }
 
-/// The one exempt bind-expression; it appears in `posts.rs`, `sqlite/posts.rs`, and
+/// The two exempt bind-expressions; each appears in `posts.rs`, `sqlite/posts.rs`, and
 /// `postgres/posts.rs`, and the substring match covers all three. (`RenderedHtml` was
-/// the other exemption until #502 gave it a sqlx `Encode` bridge and its binds became
+/// also exempt until #502 gave it a sqlx `Encode` bridge and its binds became
 /// `.bind(&input.rendered_html)`, so it is now policed like any newtype.)
-const ALLOWLIST: &[Allowed] = &[Allowed {
-    needle: "input.title.as_ref()",
-    // `title` is `Option<PostTitle>`, so this is `Option::as_ref()` →
-    // `Option<&PostTitle>` (a typed bind), NOT an `AsRef<str>` str-strip.
-    reason: "Option<PostTitle>::as_ref() — a typed Option bind, not an AsRef<str> strip",
-}];
+const ALLOWLIST: &[Allowed] = &[
+    Allowed {
+        needle: "input.title.as_ref()",
+        // `title` is `Option<PostTitle>`, so this is `Option::as_ref()` →
+        // `Option<&PostTitle>` (a typed bind), NOT an `AsRef<str>` str-strip.
+        reason: "Option<PostTitle>::as_ref() — a typed Option bind, not an AsRef<str> strip",
+    },
+    Allowed {
+        needle: "input.summary.as_ref()",
+        // `summary` is `Option<PostSummary>`, so this is `Option::as_ref()` →
+        // `Option<&PostSummary>` (a typed bind), NOT an `AsRef<str>` str-strip.
+        reason: "Option<PostSummary>::as_ref() — a typed Option bind, not an AsRef<str> strip",
+    },
+];
 
 /// Source root scanned recursively for `.rs` files.
 const POLICED_ROOT: &str = "storage/src";

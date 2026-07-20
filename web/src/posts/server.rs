@@ -119,7 +119,7 @@ mod tests {
     fn post_response_carries_summary() {
         use crate::posts::server::post_response;
         use chrono::{TimeZone, Utc};
-        use common::test_support::parse_username;
+        use common::test_support::{parse_post_summary, parse_username};
         use common::{
             ids::{PostId, UserId},
             slug::Slug,
@@ -144,11 +144,11 @@ mod tests {
                 updated_at: base_time,
                 published_at: Some(base_time),
                 deleted_at: None,
-                summary: Some("the summary".into()),
+                summary: Some(parse_post_summary("the summary")),
                 tags: vec![],
             },
             true,
         );
-        assert_eq!(response.summary, Some("the summary".into()));
+        assert_eq!(response.summary, Some(parse_post_summary("the summary")));
     }
 }
