@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 
 use common::atompub::{entry_from_xml, entry_to_xml, render_feed, FeedMeta};
 use common::ids::PostId;
+use common::pagination::PageSize;
 use common::tag::TagLabel;
 use common::username::Username;
 use common::visibility::ViewerIdentity;
@@ -27,8 +28,10 @@ use super::{base_url, HandlerError};
 
 const FEED_CONTENT_TYPE: &str = "application/atom+xml;type=feed;charset=utf-8";
 const ENTRY_CONTENT_TYPE: &str = "application/atom+xml;type=entry;charset=utf-8";
-const DEFAULT_PAGE_SIZE: u32 = 25;
-const MAX_PAGE_SIZE: u32 = 50;
+/// `AtomPub`'s own default page size (its policy, distinct from the web default of 50);
+/// `PageSize::clamped` makes it a compile-time-checked in-range constant. The `1..=50` bound
+/// itself lives in `PageSize`.
+const DEFAULT_PAGE_SIZE: PageSize = PageSize::clamped(25);
 
 /// The storage dependencies the post handlers share, bundled into one extractor
 /// so a handler stays under the argument limit without suppressing the lint.
@@ -112,7 +115,7 @@ pub struct CollectionPaging {
     updated_before: Option<String>,
     /// `post_id` of the last item on the previous page.
     id_before: Option<PostId>,
-    /// Requested page size (clamped to `MAX_PAGE_SIZE`).
+    /// Requested page size (clamped into `PageSize`'s `1..=50` range).
     limit: Option<u32>,
 }
 
@@ -133,10 +136,7 @@ pub async fn collection_get(
 ) -> Result<Response, HandlerError> {
     super::require_user_match(&auth_user, &username)?;
 
-    let limit = paging
-        .limit
-        .unwrap_or(DEFAULT_PAGE_SIZE)
-        .clamp(1, MAX_PAGE_SIZE);
+    let limit = paging.limit.map_or(DEFAULT_PAGE_SIZE, PageSize::clamped);
 
     let cursor = match (&paging.updated_before, paging.id_before) {
         (Some(ts), Some(post_id)) => {
@@ -153,12 +153,12 @@ pub async fn collection_get(
 
     // Fetch one extra row to detect whether a next page exists.
     let mut records = posts
-        .list_collection_by_user(auth_user.user_id, cursor.as_ref(), limit + 1)
+        .list_collection_by_user(auth_user.user_id, cursor.as_ref(), limit.value() + 1)
         .await?;
 
-    let has_more = usize::try_from(limit).unwrap_or(usize::MAX) < records.len();
+    let has_more = usize::try_from(limit.value()).unwrap_or(usize::MAX) < records.len();
     if has_more {
-        records.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+        records.truncate(usize::try_from(limit.value()).unwrap_or(usize::MAX));
     }
 
     let base = base_url(site_config.as_ref()).await;
