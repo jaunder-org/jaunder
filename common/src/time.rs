@@ -7,7 +7,7 @@ use thiserror::Error;
 
 /// A UTC instant that crosses the web `#[server]` boundary as a domain value
 /// instead of a bare RFC 3339 `String` (ADR-0063; see
-/// `docs/adr/drafts/timestamps-cross-boundary-as-utcinstant.md`).
+/// `docs/adr/0072-timestamps-cross-boundary-as-utcinstant.md`).
 ///
 /// It wraps [`chrono::DateTime<Utc>`] and is **serde-transparent**: `#[derive]`d
 /// `Serialize`/`Deserialize` route straight through chrono's own serde (the

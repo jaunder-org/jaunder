@@ -21,7 +21,7 @@ CSR, `thiserror`, `cargo nextest`, `cargo xtask`.
 
 Spec: `docs/superpowers/specs/2026-07-19-issue-91-typed-server-fn-boundary.md`
 (the "what/why"; this plan is the "how"). ADR draft:
-`docs/adr/drafts/timestamps-cross-boundary-as-utcinstant.md`.
+`docs/adr/0072-timestamps-cross-boundary-as-utcinstant.md`.
 
 ## Global Constraints
 

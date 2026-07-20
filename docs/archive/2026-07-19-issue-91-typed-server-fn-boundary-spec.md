@@ -151,7 +151,7 @@ documented exception; excluded on purpose.
 
 Record as a **new ADR extending ADR-0063** (authored as a numberless draft via
 the `jaunder-adr` draft-out-of-git flow —
-`docs/adr/drafts/timestamps-cross-boundary-as-utcinstant.md`; numbered at ship
+`docs/adr/0072-timestamps-cross-boundary-as-utcinstant.md`; numbered at ship
 by `cargo xtask adr promote`): the `DateTime`-backed timestamp-newtype variant
 (hand-written RFC3339 serde bridge over chrono **core**, distinct from the
 `StrNewtype`/`IdNewtype` derives because neither fits a `DateTime` backing), and
