@@ -21,6 +21,7 @@ pub mod media;
 pub mod pagination;
 pub mod password;
 pub mod post_body;
+pub mod post_summary;
 pub mod post_title;
 pub mod render;
 pub mod site;
