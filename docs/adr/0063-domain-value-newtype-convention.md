@@ -180,8 +180,16 @@ transparent-integer serde bridge (deserialize re-runs the bound, so an
 out-of-range value is rejected on the wire, exactly as a string newtype's serde
 rejects a malformed string). The inner integer type (`u32`/`usize`/`i64`/…) and
 the bounds are per-type, so — unlike the ID trailer, which is fixed — the
-numeric-value trailer is **parameterized** (see §3). First users:
-`RetentionCount` (#455), `FeedMinItems`/`FeedMinDays` (#535).
+numeric-value trailer is **parameterized** (see §3). The range case (`min` +
+`max`) may additionally opt into **`clamp`**, which emits `MIN`/`MAX` associated
+consts and an infallible `const fn clamped(inner) -> Self` that coerces its
+argument into range. `clamped` is a **validated** door — it cannot yield an
+out-of-range value, so it does not weaken the invariant — and it is **opt-in**,
+so non-range or non-clamping numeric newtypes don't silently gain coercion. Its
+use case is a public bound that should **coerce** an out-of-range request rather
+than reject it on the wire (the AtomPub `?limit=` page size). First users:
+`RetentionCount` (#455), `FeedMinItems`/`FeedMinDays` (#535); `PageSize` (#537,
+the first `clamp` adopter).
 
 ### 3. The trailer is generated, not hand-written
 
@@ -200,17 +208,18 @@ per-type prose but attributes —
 from which the derive emits the bound-checking `FromStr`, a `value()` accessor
 and `From<Self>` for the inner integer, `Display`, a compile-checked `Default`,
 a self-contained error type (no `thiserror` in emitted code), and the validating
-serde bridge. So a numeric-value newtype is a struct, a derive, and one
-attribute line — no hand-written `FromStr` at all. The std derives stay in the
-user's `#[derive(...)]` list so per-type variation is expressed idiomatically
-(Slug omits `Hash`, Tag adds `Ord`, a secret omits `Debug` so the generated
-redacting one applies). The serde bridge is emitted as **direct
-`Serialize`/`Deserialize` impls**, not a `#[serde(try_from/into)]` attribute
-(serialize borrows instead of cloning into a `String`; deserialize routes
-through `FromStr` so invalid input is rejected on the wire). No inherent
-`as_str()` is generated — the `str` traits replace it. A new domain newtype is
-then a struct, a derive, and a `FromStr` — not 40 lines of boilerplate that
-drift apart over time.
+serde bridge — plus, under an opt-in `clamp` flag (which requires both `min` and
+`max`), `MIN`/`MAX` consts and an infallible `const fn clamped` (§2). So a
+numeric-value newtype is a struct, a derive, and one attribute line — no
+hand-written `FromStr` at all. The std derives stay in the user's
+`#[derive(...)]` list so per-type variation is expressed idiomatically (Slug
+omits `Hash`, Tag adds `Ord`, a secret omits `Debug` so the generated redacting
+one applies). The serde bridge is emitted as **direct `Serialize`/`Deserialize`
+impls**, not a `#[serde(try_from/into)]` attribute (serialize borrows instead of
+cloning into a `String`; deserialize routes through `FromStr` so invalid input
+is rejected on the wire). No inherent `as_str()` is generated — the `str` traits
+replace it. A new domain newtype is then a struct, a derive, and a `FromStr` —
+not 40 lines of boilerplate that drift apart over time.
 
 For a value whose invariant never rejects (only normalizes, or wraps verbatim),
 `#[str_newtype(infallible)]` supplies the trailer's
