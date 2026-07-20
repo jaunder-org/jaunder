@@ -299,8 +299,8 @@ pub(crate) fn post_record_from_row(row: PostRow) -> sqlx::Result<PostRecord> {
 
 pub(crate) type MediaRow = (
     i64,
-    String,
-    String,
+    ContentHash,
+    Filename,
     String,
     String,
     i64,
@@ -310,20 +310,12 @@ pub(crate) type MediaRow = (
 
 pub(crate) fn media_record_from_row(row: MediaRow) -> sqlx::Result<MediaRecord> {
     let (user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at) = row;
+    // `sha256` and `filename` already arrived as their domain newtypes — the sqlx
+    // bridge (#438) decoded each column through its validating `FromStr`, so a
+    // corrupt or hand-edited value is rejected as a column-decode error before we
+    // get here (was a hand re-parse). `source` (a `MediaSource` enum) still parses
+    // here, so this step stays fallible.
     let source: MediaSource = source
-        .parse()
-        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-    // The `sha256` column is a canonical hex string, not a raw digest, so it goes
-    // through the validating parse (like `source` above); a corrupt or hand-edited
-    // value surfaces as a decode error rather than an invalid `ContentHash`.
-    let sha256: ContentHash = sha256
-        .parse()
-        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-    // The `filename` column is a canonical safe leaf (written through `Filename`'s
-    // sanitizing door on upload), so it goes through the validating parse (like
-    // `sha256` above); a corrupt or hand-edited value surfaces as a decode error
-    // rather than an un-sanitized `Filename`.
-    let filename: Filename = filename
         .parse()
         .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
     Ok(MediaRecord {
@@ -437,6 +429,7 @@ pub(crate) async fn verify_password(
 mod tests {
     use super::*;
     use chrono::Utc;
+    use common::test_support::{parse_content_hash, parse_filename};
 
     #[test]
     fn test_build_user_record() {
@@ -670,8 +663,8 @@ mod tests {
     fn media_record_from_row_rejects_invalid_source() {
         let row: MediaRow = (
             1,
-            ROW_HASH.to_string(),
-            "file.png".to_string(),
+            parse_content_hash(ROW_HASH),
+            parse_filename("file.png"),
             "not-a-source".to_string(),
             "image/png".to_string(),
             42,
@@ -682,49 +675,18 @@ mod tests {
         assert!(matches!(err, sqlx::Error::Decode(_)));
     }
 
-    #[test]
-    fn media_record_from_row_rejects_invalid_sha256() {
-        // A non-canonical hash (here too short) in the `sha256` column decodes to
-        // an error rather than an invalid `ContentHash`.
-        let row: MediaRow = (
-            1,
-            "sha256".to_string(),
-            "file.png".to_string(),
-            "upload".to_string(),
-            "image/png".to_string(),
-            42,
-            None,
-            Utc::now(),
-        );
-        let err = media_record_from_row(row).unwrap_err();
-        assert!(matches!(err, sqlx::Error::Decode(_)));
-    }
-
-    #[test]
-    fn media_record_from_row_rejects_invalid_filename() {
-        // A non-canonical filename (here one with a path separator) in the
-        // `filename` column decodes to an error rather than an un-sanitized
-        // `Filename` — the read-back mirror of the `sha256` guard above.
-        let row: MediaRow = (
-            1,
-            ROW_HASH.to_string(),
-            "../escape".to_string(),
-            "upload".to_string(),
-            "image/png".to_string(),
-            42,
-            None,
-            Utc::now(),
-        );
-        let err = media_record_from_row(row).unwrap_err();
-        assert!(matches!(err, sqlx::Error::Decode(_)));
-    }
+    // `media_record_from_row` no longer hand-parses `sha256`/`filename`: those columns
+    // decode straight into `ContentHash`/`Filename` via the sqlx bridge (#438), so a
+    // malformed stored value is rejected as a `ColumnDecode` error at the query boundary
+    // (covered by `media.rs`'s decode-error test), not here — a `MediaRow` cannot even
+    // hold an invalid value. Only `source` (a `MediaSource` enum) still parses here.
 
     #[test]
     fn media_record_from_row_accepts_valid_source() {
         let row: MediaRow = (
             1,
-            ROW_HASH.to_string(),
-            "file.png".to_string(),
+            parse_content_hash(ROW_HASH),
+            parse_filename("file.png"),
             "upload".to_string(),
             "image/png".to_string(),
             42,

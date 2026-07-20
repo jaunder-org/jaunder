@@ -97,7 +97,10 @@ pub async fn list_my_audiences() -> WebResult<Vec<AudienceSummary>> {
             .into_iter()
             .map(|a| AudienceSummary {
                 audience_id: i64::from(a.audience_id),
-                name: a.name,
+                // `AudienceSummary` is a `reactive_stores` `Patch` row, so `name` stays a
+                // primitive `String` (the same `PatchField` carve-out as `audience_id`); the
+                // typed `AudienceName` from storage converts at this edge (ADR-0063).
+                name: a.name.into(),
             })
             .collect())
     })

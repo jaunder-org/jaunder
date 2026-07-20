@@ -32,8 +32,8 @@ impl MediaDialect for Sqlite {
             "DELETE FROM media WHERE user_id = $1 AND sha256 = $2 AND filename = $3 AND source = $4",
         )
         .bind(i64::from(user_id))
-        .bind(sha256.as_ref())
-        .bind(filename.as_ref())
+        .bind(sha256)
+        .bind(filename)
         .bind(source)
         .execute(pool)
         .await?;

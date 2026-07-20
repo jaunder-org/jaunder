@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use common::media::{ContentHash, Filename};
-use sqlx::{Database, Pool};
+use sqlx::{Database, FromRow, Pool};
 use thiserror::Error;
 
 use crate::backend::Backend;
@@ -213,6 +213,12 @@ where
     crate::helpers::MediaRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    // `ContentHash`/`Filename` bind and decode as themselves via the sqlx bridge
+    // (#438), which delegates to `String`; these bounds make that bridge available on
+    // the generic backend (the `sha256`/`filename` columns in `MediaRow` decode into
+    // their newtypes, and the write/lookup binds encode `&ContentHash`/`&Filename`).
+    String: sqlx::Type<DB>,
+    for<'q> String: sqlx::Encode<'q, DB>,
     for<'q> Option<String>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
@@ -229,8 +235,8 @@ where
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
         .bind(i64::from(record.user_id))
-        .bind(record.sha256.as_ref())
-        .bind(record.filename.as_ref())
+        .bind(&record.sha256)
+        .bind(&record.filename)
         .bind(record.source.as_str())
         .bind(record.content_type.as_str())
         .bind(record.size_bytes)
@@ -269,8 +275,8 @@ where
              WHERE user_id = $1 AND sha256 = $2 AND filename = $3 AND source = $4",
         )
         .bind(i64::from(user_id))
-        .bind(sha256.as_ref())
-        .bind(filename.as_ref())
+        .bind(sha256)
+        .bind(filename)
         .bind(source.as_str())
         .fetch_optional(&self.pool)
         .await?;
@@ -290,8 +296,13 @@ where
         limit: u32,
         offset: u32,
     ) -> sqlx::Result<Vec<MediaRecord>> {
+        // Fetch raw rows (not `query_as::<MediaRow>`) so each row decodes
+        // independently: with the sqlx bridge (#438) the `sha256`/`filename` columns
+        // now decode into their newtypes *inside* `MediaRow::from_row`, so a single
+        // corrupt row would fail a whole `query_as` `fetch_all`. Decoding per row (as
+        // the feed-event claim mapper does) lets us skip the bad one and keep the rest.
         let rows = if let Some(src) = source {
-            sqlx::query_as::<_, crate::helpers::MediaRow>(
+            sqlx::query(
                 "SELECT user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at
                  FROM media
                  WHERE user_id = $1 AND source = $2
@@ -305,7 +316,7 @@ where
             .fetch_all(&self.pool)
             .await?
         } else {
-            sqlx::query_as::<_, crate::helpers::MediaRow>(
+            sqlx::query(
                 "SELECT user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at
                  FROM media
                  WHERE user_id = $1
@@ -320,17 +331,21 @@ where
         };
 
         // Skip (don't fail the whole list on) a row that fails to decode — a corrupt
-        // or hand-edited `sha256`/`source`/`filename` column that no longer satisfies
-        // its newtype invariant. `get_media`/`find_by_hash` stay strict (a direct
-        // lookup surfaces the error), but a single bad row must not 500 a user's entire
-        // media list and hide every other item.
+        // or hand-edited `sha256`/`filename` column that no longer satisfies its
+        // newtype invariant (rejected inside `from_row`), or an invalid `source`.
+        // `get_media`/`find_by_hash` stay strict (a direct lookup surfaces the error),
+        // but a single bad row must not 500 a user's entire media list.
         Ok(rows
-            .into_iter()
-            .filter_map(|row| match crate::helpers::media_record_from_row(row) {
-                Ok(record) => Some(record),
-                Err(error) => {
-                    tracing::warn!(%error, "skipping undecodable media row in list_media");
-                    None
+            .iter()
+            .filter_map(|row| {
+                match crate::helpers::MediaRow::from_row(row)
+                    .and_then(crate::helpers::media_record_from_row)
+                {
+                    Ok(record) => Some(record),
+                    Err(error) => {
+                        tracing::warn!(%error, "skipping undecodable media row in list_media");
+                        None
+                    }
                 }
             })
             .collect())
@@ -376,7 +391,7 @@ where
              WHERE sha256 = $1 AND source = $2
              LIMIT 1",
         )
-        .bind(sha256.as_ref())
+        .bind(sha256)
         .bind(source.as_str())
         .fetch_optional(&self.pool)
         .await?;
@@ -398,13 +413,124 @@ pub const MEDIA_CACHE_POLICY_DEFAULT_KEY: &str = "media.cache_policy_default";
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, Backend, TestEnv};
+    use crate::test_support::{backends, seed_user, Backend, TestEnv};
     use common::test_support::{parse_content_hash, parse_filename};
     use rstest::*;
     use rstest_reuse::*;
 
     /// A canonical 64-char lowercase-hex content hash for fixtures.
     const HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn content_hash_and_filename_round_trip_through_create_and_get(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let record = MediaRecord {
+            user_id,
+            sha256: parse_content_hash(HASH),
+            filename: parse_filename("photo.jpg"),
+            source: MediaSource::Upload,
+            content_type: "image/jpeg".to_string(),
+            size_bytes: 2048,
+            source_url: None,
+            created_at: chrono::Utc::now(),
+        };
+        env.state.media.create_media(&record).await.unwrap();
+        let got = env
+            .state
+            .media
+            .get_media(
+                user_id,
+                &parse_content_hash(HASH),
+                &parse_filename("photo.jpg"),
+                &MediaSource::Upload,
+            )
+            .await
+            .unwrap()
+            .expect("present");
+        // `sha256`/`filename` decode straight into their newtypes via the sqlx bridge (#438).
+        assert_eq!(got.sha256, parse_content_hash(HASH));
+        assert_eq!(got.filename, parse_filename("photo.jpg"));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn find_by_hash_surfaces_a_column_decode_error_for_a_malformed_filename(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        // A non-canonical filename (`../evil`) bypasses `Filename` validation — only
+        // reachable via DB tampering. The `sha256`/`source` keys stay valid so the row
+        // is found; the validating bridge `Decode` then rejects the `filename` column
+        // on read as a column-decode error (`find_by_hash` is strict, unlike `list_media`).
+        env.base
+            .pool()
+            .execute(&format!(
+                "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
+                 VALUES ({}, '{HASH}', '../evil', 'upload', 'image/jpeg', 1)",
+                i64::from(user_id)
+            ))
+            .await
+            .unwrap();
+        let err = env
+            .state
+            .media
+            .find_by_hash(&parse_content_hash(HASH), &MediaSource::Upload)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, sqlx::Error::ColumnDecode { .. }),
+            "expected a column-decode error, got: {err:?}"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn list_media_skips_a_row_with_a_malformed_sha256_column(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        // A valid record is stored normally.
+        let good = MediaRecord {
+            user_id,
+            sha256: parse_content_hash(HASH),
+            filename: parse_filename("good.jpg"),
+            source: MediaSource::Upload,
+            content_type: "image/jpeg".to_string(),
+            size_bytes: 1,
+            source_url: None,
+            created_at: chrono::Utc::now(),
+        };
+        env.state.media.create_media(&good).await.unwrap();
+        // A second row's `sha256` is tampered to a non-hex value — only reachable via
+        // direct DB access, since `ContentHash::from_str` requires 64 lowercase hex chars.
+        // Every media read keys the query *on* `sha256`, so the observable behavior is
+        // `list_media`'s per-row skip: the validating bridge `Decode` rejects the
+        // non-canonical hash and the row is dropped rather than surfaced (mirrors the
+        // `filename` decode handling; #438). The skip *is* the proof `Decode` rejected it.
+        env.base
+            .pool()
+            .execute(&format!(
+                "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
+                 VALUES ({}, 'not-a-valid-hash', 'bad.jpg', 'upload', 'image/jpeg', 1)",
+                i64::from(user_id)
+            ))
+            .await
+            .unwrap();
+        let listed = env
+            .state
+            .media
+            .list_media(user_id, None, 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(
+            listed.len(),
+            1,
+            "the malformed-sha256 row must be skipped and the valid row kept"
+        );
+        assert_eq!(listed[0].sha256, parse_content_hash(HASH));
+    }
 
     #[apply(backends)]
     #[tokio::test]

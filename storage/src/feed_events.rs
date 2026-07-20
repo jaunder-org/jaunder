@@ -159,6 +159,12 @@ impl<DB> FeedEventStorage for FeedEventStore<DB>
 where
     DB: FeedEventDialect,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    // `FeedPath` binds and decodes as itself via the sqlx bridge (#438), which
+    // delegates to `String`; these bounds make that bridge available on the generic
+    // backend (the `enqueue` bind encodes `&FeedPath`; the per-dialect claim
+    // row-mappers decode the `feed_url` column into `FeedPath`).
+    String: sqlx::Type<DB>,
+    for<'q> String: sqlx::Encode<'q, DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
     (i64,): for<'r> sqlx::FromRow<'r, DB::Row>,
@@ -171,7 +177,7 @@ where
     async fn enqueue(&self, feed_path: &FeedPath) -> Result<FeedEventId, FeedEventError> {
         let id: i64 =
             sqlx::query_scalar("INSERT INTO feed_events (feed_url) VALUES ($1) RETURNING id")
-                .bind(feed_path.as_ref())
+                .bind(feed_path)
                 .fetch_one(&self.pool)
                 .await?;
         Ok(FeedEventId::from(id))
