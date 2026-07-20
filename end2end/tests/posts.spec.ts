@@ -793,3 +793,34 @@ test("authenticated user can delete a draft from the drafts page", async ({
   await expect(page.locator(".success")).toContainText("Draft deleted.");
   await expect(page.locator("body")).not.toContainText("Draft To Delete");
 });
+
+test("scheduling a post shows a Scheduled-for badge on the drafts page", async ({
+  registeredPage: page,
+}) => {
+  test.slow();
+  // A fixed far-future wall-clock time keeps the post unambiguously *scheduled*
+  // no matter when the suite runs, with no Date arithmetic that could drift.
+  // The non-compact composer's optional schedule control is `#compose-publish-at`
+  // (a `datetime-local` input); a future time plus Publish creates a post whose
+  // `published_at` is in the future. Such posts surface on the drafts page with a
+  // "Scheduled for …" badge (`.j-badge-scheduled`) rather than going live.
+  const FUTURE_DATETIME_LOCAL = "2999-01-01T09:00";
+
+  await goto(page, "/posts/new");
+  await page.fill(
+    SEL.postBody,
+    "# Scheduled Draft\n\nbody for a scheduled post",
+  );
+  await page.fill("#compose-publish-at", FUTURE_DATETIME_LOCAL);
+  await click(page, SEL.publishButton("true"));
+  await waitForSelector(page, SEL.saveSummary);
+
+  // The scheduled post lists on /drafts (published_at in the future), marked with
+  // the "Scheduled for …" badge that distinguishes it from a true draft.
+  await goto(page, "/drafts");
+  const scheduledRow = page.locator("li", { hasText: "Scheduled Draft" });
+  await expect(scheduledRow).toBeVisible();
+  const badge = scheduledRow.locator(".j-badge-scheduled");
+  await expect(badge).toBeVisible();
+  await expect(badge).toContainText("Scheduled for");
+});

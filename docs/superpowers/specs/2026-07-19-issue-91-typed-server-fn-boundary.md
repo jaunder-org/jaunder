@@ -122,9 +122,14 @@ arg-decode validates `publish_at`.
   browser's local→UTC wall-clock conversion is a genuine browser concern,
   orthogonal to chrono (migrating it to chrono is ADR-0056's separate scope).
   Its RFC3339 output is parsed into `UtcInstant`; the submit path constructs
-  `UtcInstant::from_str(..)`. Clearing a scheduled time is by **omission** →
-  `None` (ADR-0065 optional-field clearing: an empty wire string is rejected;
-  absence decodes to `None`).
+  `UtcInstant::from_str(..)`. An empty datetime field yields `None` (the
+  control's helper returns `None` on empty input), which on **create** publishes
+  immediately. Wire mechanics (unchanged by the typing): an empty wire string is
+  rejected; an omitted value decodes to `None` (serde_qs skips `None`). Note:
+  there is **no** "unschedule an already-scheduled post by clearing the field"
+  flow in the current UI (the edit page hides the control once
+  `published_at.is_some()`) — that is a pre-existing product gap, unrelated to
+  #91's typing, filed as #549.
 
 ### Adoption — the free existing-type win (no new type)
 
@@ -191,10 +196,13 @@ sibling milestone-13 issues). Migrating the client datetime helper from
    disabled.
 5. **Behavior preserved end-to-end:** scheduled publishing still works — an e2e
    drives the datetime control, schedules a post (`publish_at` set), and
-   verifies the scheduled badge; and verifies the **clear** path (omit →
-   unscheduled) per ADR-0065. Cursor pagination still pages correctly (the typed
-   cursor round-trips). Timestamp display in drafts/timeline/invites/media is
-   unchanged for the user.
+   verifies the scheduled badge on `/drafts`. The
+   create-with-omitted-`publish_at` → publish-now path is covered by the
+   `create_post_publish_without_publish_at_is_live_now` integration test (there
+   is no unschedule-via-clear flow in the product — see the Decision note; a
+   separate product gap, #549). Cursor pagination still pages correctly (the
+   typed cursor round-trips — 3 existing e2e "Load more" tests). Timestamp
+   display in drafts/timeline/invites/media is unchanged for the user.
 6. **wasm-bundle impact noted:** `cargo xtask audit-wasm` delta recorded in the
    PR; expected ≈ 0 (chrono is already in the bundle).
 7. **A new ADR extending ADR-0063** (draft-out-of-git, numbered at ship) records
