@@ -1,6 +1,7 @@
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use common::time::UtcInstant;
 use common::token::{RawToken, TokenHash};
 
 use crate::error::WebResult;
@@ -15,8 +16,8 @@ use {
 pub struct SessionInfo {
     pub token_hash: TokenHash,
     pub label: String,
-    pub created_at: String,
-    pub last_used_at: String,
+    pub created_at: UtcInstant,
+    pub last_used_at: UtcInstant,
     pub is_current: bool,
 }
 
@@ -34,8 +35,8 @@ pub async fn list_sessions() -> WebResult<Vec<SessionInfo>> {
                 is_current: r.token_hash == auth.token_hash,
                 token_hash: r.token_hash,
                 label: r.label,
-                created_at: r.created_at.to_rfc3339(),
-                last_used_at: r.last_used_at.to_rfc3339(),
+                created_at: UtcInstant::from(r.created_at),
+                last_used_at: UtcInstant::from(r.last_used_at),
             })
             .collect())
     })

@@ -17,6 +17,7 @@ use {
 };
 
 use common::ids::PostId;
+use common::time::UtcInstant;
 
 use crate::error::WebResult;
 
@@ -29,7 +30,7 @@ pub struct MediaItem {
     pub content_type: String,
     pub size_bytes: i64,
     pub url: String,
-    pub created_at: String,
+    pub created_at: UtcInstant,
 }
 
 /// Storage usage returned by [`media_usage`].
@@ -109,7 +110,7 @@ pub async fn list_my_media(
                     content_type: r.content_type,
                     size_bytes: r.size_bytes,
                     url,
-                    created_at: r.created_at.to_rfc3339(),
+                    created_at: UtcInstant::from(r.created_at),
                 }
             })
             .collect())

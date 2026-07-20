@@ -3,14 +3,15 @@ use {
     crate::auth::require_auth,
     crate::error::InternalError,
     chrono::Utc,
-    common::email::Email,
     common::mailer::{EmailMessage, MailSender},
     std::sync::Arc,
     storage::{load_registration_policy, InviteStorage, RegistrationPolicy, SiteConfigStorage},
 };
 
 use crate::error::WebResult;
+use common::email::Email;
 use common::ids::UserId;
+use common::time::UtcInstant;
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -21,9 +22,9 @@ use serde::{Deserialize, Serialize};
 /// prints the invitation URL; #433 will email them).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InviteInfo {
-    pub created_at: String,
-    pub expires_at: String,
-    pub used_at: Option<String>,
+    pub created_at: UtcInstant,
+    pub expires_at: UtcInstant,
+    pub used_at: Option<UtcInstant>,
     pub used_by: Option<UserId>,
 }
 
@@ -32,24 +33,20 @@ pub struct InviteInfo {
 /// code is never returned to the client (#400) — it is delivered only as the link in
 /// the email (mirrors `request_password_reset`).
 #[server(endpoint = "/create_invite")]
-pub async fn create_invite(
-    expires_in_hours: Option<u64>,
-    recipient_email: String,
-) -> WebResult<()> {
+pub async fn create_invite(expires_in_hours: Option<u64>, recipient_email: Email) -> WebResult<()> {
     boundary!("create_invite", {
         let _auth = require_auth().await?;
         let invites = expect_context::<Arc<dyn InviteStorage>>();
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
         let mailer = expect_context::<Arc<dyn MailSender>>();
 
-        // Validate the base URL and the recipient up front, before creating the invite:
-        // a failure here must not leave an undelivered invite behind (no orphan).
+        // Validate the base URL up front, before creating the invite: a failure here
+        // must not leave an undelivered invite behind (no orphan). The recipient is
+        // already a validated `Email` — the typed `#[server]` arg rejects a malformed
+        // address at decode time (ADR-0065), so no in-handler parse is needed.
         let base_url = site_config.get_identity().await?.base_url.ok_or_else(|| {
             InternalError::validation("set the site base URL before emailing invites")
         })?;
-        let recipient = recipient_email
-            .parse::<Email>()
-            .map_err(|_| InternalError::validation("invalid recipient email address"))?;
 
         let hours = expires_in_hours.unwrap_or(168);
         let duration = i64::try_from(hours)
@@ -68,7 +65,7 @@ pub async fn create_invite(
         let link = format!("{base_url}/register?invite_code={}", code.as_ref());
         let message = EmailMessage {
             from: None,
-            to: vec![recipient],
+            to: vec![recipient_email],
             subject: "You've been invited to Jaunder".to_string(),
             body_text: format!(
                 "You've been invited to create an account. Click the link below to register:\n\n{link}\n\nThis invitation expires in {hours} hours."
@@ -100,9 +97,9 @@ pub async fn list_invites() -> WebResult<Vec<InviteInfo>> {
         Ok(records
             .into_iter()
             .map(|r| InviteInfo {
-                created_at: r.created_at.to_rfc3339(),
-                expires_at: r.expires_at.to_rfc3339(),
-                used_at: r.used_at.map(|t| t.to_rfc3339()),
+                created_at: UtcInstant::from(r.created_at),
+                expires_at: UtcInstant::from(r.expires_at),
+                used_at: r.used_at.map(UtcInstant::from),
                 used_by: r.used_by,
             })
             .collect())
