@@ -12,6 +12,13 @@ syn = { workspace = true }
 quote = { workspace = true }
 proc-macro2 = { workspace = true }
 
+[features]
+# The `StrNewtype` derive emits `#[cfg(feature = "sqlx")]`-gated impls that resolve
+# against the *consuming* crate's `sqlx` feature (e.g. `common`'s). Declared here — with
+# no deps — so that cfg is a recognized value when `macros`'s own integration tests
+# expand the derive, keeping the `unexpected_cfgs` lint quiet without pulling in sqlx.
+sqlx = []
+
 [dev-dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
