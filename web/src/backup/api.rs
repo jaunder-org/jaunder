@@ -90,7 +90,7 @@ pub async fn update_backup_settings(
 
         // `schedule`, `retention_count`, and `mode` are already validated: they arrive typed
         // (`BackupSchedule` / `RetentionCount` / `BackupMode`), so the arg `Deserialize` ran
-        // their `FromStr`/`NonZeroUsize`/enum parse. Legitimate clients only submit valid values
+        // their `FromStr`/min-1-bound/enum parse. Legitimate clients only submit valid values
         // (the cron and retention fields pre-validate per ADR-0065, and the mode `<select>` can
         // only emit a real variant), so an invalid value reaches here only from a non-browser
         // caller.

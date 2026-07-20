@@ -3,7 +3,7 @@
 use crate::backend::Backend;
 use async_trait::async_trait;
 use common::backup::{BackupConfig, BackupMode, BackupSchedule, RetentionCount};
-use common::feed::FeedsConfig;
+use common::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
 use common::site::{SiteIdentity, DEFAULT_SITE_TITLE};
 use common::visibility::AudienceTarget;
 use sqlx::{Database, Pool};
@@ -77,25 +77,27 @@ pub trait SiteConfigStorage: Send + Sync {
     }
 
     /// Returns the configured `feeds.min_items` value, falling back to the
-    /// default ([`DEFAULT_FEEDS_MIN_ITEMS`]) if unset or unparseable.
-    async fn get_feeds_min_items(&self) -> sqlx::Result<u32> {
+    /// [`FeedMinItems`] default (20) if unset or unparseable (including a stored `0`,
+    /// which the min-1 invariant rejects).
+    async fn get_feeds_min_items(&self) -> sqlx::Result<FeedMinItems> {
         Ok(self
             .get(FEEDS_MIN_ITEMS_KEY)
             .await?
             .as_deref()
-            .and_then(|v| v.trim().parse::<u32>().ok())
-            .unwrap_or(DEFAULT_FEEDS_MIN_ITEMS))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_default())
     }
 
     /// Returns the configured `feeds.min_days` value, falling back to the
-    /// default ([`DEFAULT_FEEDS_MIN_DAYS`]) if unset or unparseable.
-    async fn get_feeds_min_days(&self) -> sqlx::Result<u32> {
+    /// [`FeedMinDays`] default (30) if unset or unparseable (including a stored `0`,
+    /// which the min-1 invariant rejects).
+    async fn get_feeds_min_days(&self) -> sqlx::Result<FeedMinDays> {
         Ok(self
             .get(FEEDS_MIN_DAYS_KEY)
             .await?
             .as_deref()
-            .and_then(|v| v.trim().parse::<u32>().ok())
-            .unwrap_or(DEFAULT_FEEDS_MIN_DAYS))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_default())
     }
 
     /// Returns the configured `WebSub` hub URL, if any. An empty stored value
@@ -221,11 +223,6 @@ pub const FEEDS_MIN_DAYS_KEY: &str = "feeds.min_days";
 /// disables `WebSub` pings.
 pub const FEEDS_WEBSUB_HUB_URL_KEY: &str = "feeds.websub_hub_url";
 
-/// Default for [`FEEDS_MIN_ITEMS_KEY`]: include at least 20 items in every feed.
-pub const DEFAULT_FEEDS_MIN_ITEMS: u32 = 20;
-/// Default for [`FEEDS_MIN_DAYS_KEY`]: include items from the last 30 days.
-pub const DEFAULT_FEEDS_MIN_DAYS: u32 = 30;
-
 /// Key for the site-wide default post audience. Valid stored values are the
 /// built-in audiences `public`/`subscribers`/`private`; anything else (or
 /// unset) is read back as [`AudienceTarget::Public`].
@@ -331,8 +328,8 @@ where
 mod tests {
     use crate::test_support::{backends, Backend};
     use common::backup::{BackupConfig, BackupMode, RetentionCount};
-    use common::feed::FeedsConfig;
-    use common::test_support::parse_retention_count;
+    use common::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
+    use common::test_support::{parse_feed_min_days, parse_feed_min_items, parse_retention_count};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -391,8 +388,8 @@ mod tests {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
         let config = storage.get_feeds_config().await.unwrap();
-        assert_eq!(config.min_items, super::DEFAULT_FEEDS_MIN_ITEMS);
-        assert_eq!(config.min_days, super::DEFAULT_FEEDS_MIN_DAYS);
+        assert_eq!(config.min_items, FeedMinItems::default());
+        assert_eq!(config.min_days, FeedMinDays::default());
         assert_eq!(config.websub_hub_url, None);
     }
 
@@ -402,8 +399,8 @@ mod tests {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
         let config = FeedsConfig {
-            min_items: 42,
-            min_days: 7,
+            min_items: parse_feed_min_items("42"),
+            min_days: parse_feed_min_days("7"),
             websub_hub_url: Some("https://hub.example.com".to_owned()),
         };
         storage.set_feeds_config(&config).await.unwrap();
@@ -497,7 +494,7 @@ mod tests {
         let storage = &*env.state.site_config;
         assert_eq!(
             storage.get_feeds_min_items().await.unwrap(),
-            super::DEFAULT_FEEDS_MIN_ITEMS
+            FeedMinItems::default()
         );
     }
 
@@ -507,12 +504,15 @@ mod tests {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
         storage.set(super::FEEDS_MIN_ITEMS_KEY, "50").await.unwrap();
-        assert_eq!(storage.get_feeds_min_items().await.unwrap(), 50);
+        assert_eq!(
+            storage.get_feeds_min_items().await.unwrap(),
+            parse_feed_min_items("50")
+        );
     }
 
     #[apply(backends)]
     #[tokio::test]
-    async fn feeds_min_items_falls_back_when_invalid(#[case] backend: Backend) {
+    async fn feeds_min_items_falls_back_when_invalid_or_zero(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
         storage
@@ -521,7 +521,13 @@ mod tests {
             .unwrap();
         assert_eq!(
             storage.get_feeds_min_items().await.unwrap(),
-            super::DEFAULT_FEEDS_MIN_ITEMS
+            FeedMinItems::default()
+        );
+        // A stored `0` is rejected by the min-1 invariant and also falls back.
+        storage.set(super::FEEDS_MIN_ITEMS_KEY, "0").await.unwrap();
+        assert_eq!(
+            storage.get_feeds_min_items().await.unwrap(),
+            FeedMinItems::default()
         );
     }
 
@@ -532,7 +538,7 @@ mod tests {
         let storage = &*env.state.site_config;
         assert_eq!(
             storage.get_feeds_min_days().await.unwrap(),
-            super::DEFAULT_FEEDS_MIN_DAYS
+            FeedMinDays::default()
         );
     }
 
@@ -542,7 +548,10 @@ mod tests {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
         storage.set(super::FEEDS_MIN_DAYS_KEY, "60").await.unwrap();
-        assert_eq!(storage.get_feeds_min_days().await.unwrap(), 60);
+        assert_eq!(
+            storage.get_feeds_min_days().await.unwrap(),
+            parse_feed_min_days("60")
+        );
     }
 
     #[apply(backends)]

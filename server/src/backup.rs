@@ -61,7 +61,7 @@ async fn run_scheduled_backup(
         mode: config.mode,
     })
     .await?;
-    let pruned = prune_backups(destination_root, config.retention_count.get())?;
+    let pruned = prune_backups(destination_root, config.retention_count.value())?;
     host::metrics::backup_bytes(backup_size_bytes(&destination_path));
     host::metrics::backup_pruned(u64::try_from(pruned).unwrap_or(u64::MAX));
     tracing::info!(path = %destination_path.display(), "scheduled backup complete");

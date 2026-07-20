@@ -1610,7 +1610,7 @@ where
         // query. Only the JSON tag aggregation differs per backend, so the SQL
         // is shared via `DB::TAGS_SUBQUERY`.
         let cutoff = window.cutoff_date(now);
-        let min_items = i64::from(window.min_items);
+        let min_items = i64::from(window.min_items.value());
         let rows = list_published_in_window_rows::<DB>(
             &self.pool, surface, now, cutoff, min_items, viewer,
         )

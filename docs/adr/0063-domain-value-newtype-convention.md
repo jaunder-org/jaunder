@@ -166,17 +166,40 @@ yields `String`; a `subscriber_ref`), so `"42".parse::<UserId>()` works. It is
 **not** a validating chokepoint like a string newtype's `FromStr` (an id has no
 invariant beyond "is an integer"); no other `str` traits are provided.
 
+**Numeric values** are the third case: a scalar integer config value with a
+**bound** — a retention count (`>= 1`), a feed's minimum item/day window
+(`>= 1`), a byte-size limit, a page size (`1..=N`). Unlike an id, a numeric
+value _does_ have a rejecting invariant, so it takes a numeric trailer with a
+**validating** twist: `struct RetentionCount(usize)` deriving
+`Clone, Copy, Debug, PartialEq, Eq`, plus a `FromStr` that trims, parses the
+inner integer, then enforces the declared `min`/`max` bound (the single
+chokepoint); a `get()` accessor; `Display`; a **compile-checked `Default`**; and
+a **validating** transparent-integer serde bridge (deserialize re-runs the
+bound, so an out-of-range value is rejected on the wire, exactly as a string
+newtype's serde rejects a malformed string). The inner integer type
+(`u32`/`usize`/`i64`/…) and the bounds are per-type, so — unlike the ID trailer,
+which is fixed — the numeric-value trailer is **parameterized** (see §3). First
+users: `RetentionCount` (#455), `FeedMinItems`/`FeedMinDays` (#535).
+
 ### 3. The trailer is generated, not hand-written
 
 The trailer is mechanical and identical across types, so it lives in a
-`#[derive(StrNewtype)]` (and `#[derive(IdNewtype)]`) proc-macro in the
-**`macros` crate** (ADR-0062) — its second tenant. For a **string** newtype the
-derive generates everything except `FromStr` **and the std `#[derive]`s**
-(`Clone`/`Debug`/`PartialEq`/`Eq`/`Hash`/`Ord`/`Copy`). `FromStr` stays
-hand-written because the validation/normalization rule is the one genuinely
-per-type part. (A **numeric** `IdNewtype` has no such rule, so it _generates_
-its `FromStr` too — a non-validating delegate to `i64`'s parse, per §2.) The std
-derives stay in the user's `#[derive(...)]` list so per-type variation is
+`#[derive(StrNewtype)]` (and `#[derive(IdNewtype)]` / `#[derive(NumNewtype)]`)
+proc-macro in the **`macros` crate** (ADR-0062) — its second tenant. For a
+**string** newtype the derive generates everything except `FromStr` **and the
+std `#[derive]`s** (`Clone`/`Debug`/`PartialEq`/`Eq`/`Hash`/`Ord`/`Copy`).
+`FromStr` stays hand-written because the validation/normalization rule is the
+one genuinely per-type part. (A **numeric** `IdNewtype` has no such rule, so it
+_generates_ its `FromStr` too — a non-validating delegate to `i64`'s parse, per
+§2.) A **numeric value** (`NumNewtype`) _also_ generates its `FromStr`, but a
+**validating** one: because a numeric bound is declarative, the rule is not
+per-type prose but attributes —
+`#[num_newtype(inner = u32, min = 1, default = 20)]` (optional `max`, `error`) —
+from which the derive emits the bound-checking `FromStr`, `get()`, `Display`, a
+compile-checked `Default`, a self-contained error type (no `thiserror` in
+emitted code), and the validating serde bridge. So a numeric-value newtype is a
+struct, a derive, and one attribute line — no hand-written `FromStr` at all. The
+std derives stay in the user's `#[derive(...)]` list so per-type variation is
 expressed idiomatically (Slug omits `Hash`, Tag adds `Ord`, a secret omits
 `Debug` so the generated redacting one applies). The serde bridge is emitted as
 **direct `Serialize`/`Deserialize` impls**, not a `#[serde(try_from/into)]`
@@ -239,9 +262,10 @@ to that point.
   and traits return them without forcing `parse().expect()` at consumers — the
   concrete unblock for #14. New value classes follow; #17's ID sweep and its
   token/hash split are independent tracks.
-- **A second proc-macro.** `macros` gains `StrNewtype`/`IdNewtype`. Per ADR-0062
-  the crate is build-time only with no runtime footprint; the derive must stay a
-  pure code generator (it emits trait impls, nothing observable at runtime).
+- **A second proc-macro.** `macros` gains `StrNewtype`/`IdNewtype` (and later
+  `NumNewtype` for bounded numeric values, #535). Per ADR-0062 the crate is
+  build-time only with no runtime footprint; the derive must stay a pure code
+  generator (it emits trait impls, nothing observable at runtime).
 - **Incremental, never big-bang.** Threading a type through storage and the DTOs
   is a large mechanical diff. Each value class is its own reviewable change
   (`preparatory refactor` → behavior unchanged), never one sweeping commit.

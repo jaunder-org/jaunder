@@ -434,8 +434,8 @@ mod tests {
             .times(0..)
             .returning(|| {
                 Ok(common::feed::FeedsConfig {
-                    min_items: 10,
-                    min_days: 30,
+                    min_items: common::test_support::parse_feed_min_items("10"),
+                    min_days: common::test_support::parse_feed_min_days("30"),
                     websub_hub_url: None,
                 })
             });

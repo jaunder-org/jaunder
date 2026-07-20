@@ -1,18 +1,10 @@
+use super::{FeedMinDays, FeedMinItems};
 use chrono::{DateTime, Duration, Utc};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct HybridWindow {
-    pub min_items: u32,
-    pub min_days: u32,
-}
-
-impl Default for HybridWindow {
-    fn default() -> Self {
-        Self {
-            min_items: 20,
-            min_days: 30,
-        }
-    }
+    pub min_items: FeedMinItems,
+    pub min_days: FeedMinDays,
 }
 
 pub trait HasPublishedAt {
@@ -22,7 +14,7 @@ pub trait HasPublishedAt {
 impl HybridWindow {
     #[must_use]
     pub fn cutoff_date(&self, now: DateTime<Utc>) -> DateTime<Utc> {
-        now - Duration::days(i64::from(self.min_days))
+        now - Duration::days(i64::from(self.min_days.value()))
     }
 
     /// `posts` must be ordered by `published_at DESC`.
@@ -33,7 +25,7 @@ impl HybridWindow {
         let cutoff = self.cutoff_date(now);
         let mut end = 0usize;
         for (i, p) in posts.iter().enumerate() {
-            if i < self.min_items as usize || p.published_at() >= cutoff {
+            if i < self.min_items.value() as usize || p.published_at() >= cutoff {
                 end = i + 1;
             } else {
                 break;
@@ -46,6 +38,7 @@ impl HybridWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{parse_feed_min_days, parse_feed_min_items};
 
     #[derive(Debug)]
     struct P(DateTime<Utc>);
@@ -62,26 +55,20 @@ mod tests {
     #[test]
     fn default_window_uses_documented_defaults() {
         let w = HybridWindow::default();
-        assert_eq!(w.min_items, 20);
-        assert_eq!(w.min_days, 30);
+        assert_eq!(w.min_items.value(), 20);
+        assert_eq!(w.min_days.value(), 30);
     }
 
     #[test]
     fn empty_input_returns_empty() {
-        let w = HybridWindow {
-            min_items: 20,
-            min_days: 30,
-        };
+        let w = HybridWindow::default();
         let now = Utc::now();
         assert!(w.select::<P>(&[], now).is_empty());
     }
 
     #[test]
     fn fewer_than_min_items_returns_all() {
-        let w = HybridWindow {
-            min_items: 20,
-            min_days: 30,
-        };
+        let w = HybridWindow::default();
         let now = Utc::now();
         let posts: Vec<P> = (0..5).map(|i| at(i, now)).collect();
         assert_eq!(w.select(&posts, now).len(), 5);
@@ -89,10 +76,7 @@ mod tests {
 
     #[test]
     fn quiet_blog_includes_min_items_even_if_all_older_than_min_days() {
-        let w = HybridWindow {
-            min_items: 20,
-            min_days: 30,
-        };
+        let w = HybridWindow::default();
         let now = Utc::now();
         // 25 posts, all 100+ days ago
         let posts: Vec<P> = (0..25).map(|i| at(100 + i, now)).collect();
@@ -102,10 +86,7 @@ mod tests {
 
     #[test]
     fn busy_blog_includes_full_day_window_beyond_min_items() {
-        let w = HybridWindow {
-            min_items: 20,
-            min_days: 30,
-        };
+        let w = HybridWindow::default();
         let now = Utc::now();
         // 50 posts all within the last 30 days
         let posts: Vec<P> = (0..50).map(|i| at(i / 2, now)).collect();
@@ -115,8 +96,8 @@ mod tests {
     #[test]
     fn union_stops_at_first_post_failing_both() {
         let w = HybridWindow {
-            min_items: 3,
-            min_days: 30,
+            min_items: parse_feed_min_items("3"),
+            min_days: parse_feed_min_days("30"),
         };
         let now = Utc::now();
         // posts at days_ago = [1, 2, 3, 100, 200] (5 posts)

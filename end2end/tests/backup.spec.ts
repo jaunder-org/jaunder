@@ -56,8 +56,8 @@ test("backup mode select is generated from the enum variants", async ({
 });
 
 // #455: the retention field is client-validated (ValidatedInput<RetentionCount>, ADR-0065) —
-// RetentionCount wraps NonZeroUsize, so 0 (which would let pruning remove every backup) is
-// rejected in the browser and disables Save before the request is sent.
+// RetentionCount enforces a min-1 invariant, so 0 (which would let pruning remove every backup)
+// is rejected in the browser and disables Save before the request is sent.
 test("backup retention field gates submit until a count of at least 1 is entered", async ({
   page,
 }) => {
