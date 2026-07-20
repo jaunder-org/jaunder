@@ -138,8 +138,7 @@ pub fn entry_to_post_fields(entry: &Entry, default_format: PostFormat) -> PostFi
 pub fn post_to_entry(post: &PostRecord, base_url: Option<&AbsoluteUrl>) -> Entry {
     let username = &*post.author_username;
     let edit_path = format!("/atompub/{username}/posts/{}", post.post_id);
-    // compose can't fail (server-built path + valid base); the eager `unwrap_or`
-    // reuses the relative path we already built as an unreachable fallback.
+    // `compose` joins base + the edit path (or emits the relative path when unset).
     let edit_uri = compose(base_url, &edit_path);
 
     // Content: the post's format becomes the wire media `type` (native source form).
