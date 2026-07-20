@@ -4,7 +4,7 @@
 //! wiring only and re-exports these under the stable `crate::media::…` paths that
 //! external call sites and the server-fn registrar depend on.
 
-use common::media::{ContentHash, Filename};
+use common::media::{ContentHash, Filename, MaxFileSize, UserQuota};
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -13,10 +13,7 @@ use {
     crate::auth::require_auth,
     crate::error::InternalError,
     std::sync::Arc,
-    storage::{
-        MediaSource, MediaStorage, PostStorage, SiteConfigStorage, DEFAULT_MAX_FILE_SIZE_BYTES,
-        DEFAULT_USER_QUOTA_BYTES, MEDIA_MAX_FILE_SIZE_BYTES_KEY, MEDIA_USER_QUOTA_BYTES_KEY,
-    },
+    storage::{MediaSource, MediaStorage, PostStorage, SiteConfigStorage},
 };
 
 use common::ids::PostId;
@@ -39,8 +36,8 @@ pub struct MediaItem {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MediaUsageData {
     pub used_bytes: i64,
-    pub quota_bytes: i64,
-    pub max_file_size_bytes: i64,
+    pub quota_bytes: UserQuota,
+    pub max_file_size_bytes: MaxFileSize,
 }
 
 /// Result returned by [`delete_media`].
@@ -128,18 +125,8 @@ pub async fn media_usage() -> WebResult<MediaUsageData> {
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
 
         let used_bytes = media.get_user_upload_usage(auth.user_id).await?;
-
-        let quota_bytes = site_config
-            .get(MEDIA_USER_QUOTA_BYTES_KEY)
-            .await?
-            .and_then(|v| v.parse::<i64>().ok())
-            .unwrap_or(DEFAULT_USER_QUOTA_BYTES);
-
-        let max_file_size_bytes = site_config
-            .get(MEDIA_MAX_FILE_SIZE_BYTES_KEY)
-            .await?
-            .and_then(|v| v.parse::<i64>().ok())
-            .unwrap_or(DEFAULT_MAX_FILE_SIZE_BYTES);
+        let quota_bytes = site_config.get_media_user_quota().await?;
+        let max_file_size_bytes = site_config.get_media_max_file_size().await?;
 
         Ok(MediaUsageData {
             used_bytes,

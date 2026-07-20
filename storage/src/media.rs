@@ -391,10 +391,9 @@ pub const MEDIA_MAX_FILE_SIZE_BYTES_KEY: &str = "media.max_file_size_bytes";
 pub const MEDIA_USER_QUOTA_BYTES_KEY: &str = "media.user_quota_bytes";
 /// Key for the site-wide default media cache policy.
 pub const MEDIA_CACHE_POLICY_DEFAULT_KEY: &str = "media.cache_policy_default";
-/// Default maximum file size (50 MiB) if not configured.
-pub const DEFAULT_MAX_FILE_SIZE_BYTES: i64 = 52_428_800;
-/// Default per-user quota (1 GiB) if not configured.
-pub const DEFAULT_USER_QUOTA_BYTES: i64 = 1_073_741_824;
+// The defaults (50 MiB / 1 GiB) now live on the `common::media::MaxFileSize` /
+// `UserQuota` newtypes' `#[num_newtype(default = …)]`, applied by the
+// `SiteConfigStorage::get_media_*` getters.
 
 #[cfg(test)]
 mod tests {

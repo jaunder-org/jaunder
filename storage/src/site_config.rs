@@ -1,9 +1,11 @@
 //! Site-wide configuration storage.
 
 use crate::backend::Backend;
+use crate::media::{MEDIA_MAX_FILE_SIZE_BYTES_KEY, MEDIA_USER_QUOTA_BYTES_KEY};
 use async_trait::async_trait;
 use common::backup::{BackupConfig, BackupMode, BackupSchedule, RetentionCount};
 use common::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
+use common::media::{MaxFileSize, UserQuota};
 use common::site::{SiteIdentity, DEFAULT_SITE_TITLE};
 use common::visibility::AudienceTarget;
 use sqlx::{Database, Pool};
@@ -34,14 +36,28 @@ pub trait SiteConfigStorage: Send + Sync {
     /// `jaunder site-config unset`.
     async fn delete(&self, key: &str) -> sqlx::Result<bool>;
 
-    /// Returns the integer value for a configuration key, or the default if not set/invalid.
-    async fn get_int(&self, key: &str, default: i64) -> i64 {
-        self.get(key)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|v| v.parse::<i64>().ok())
-            .unwrap_or(default)
+    /// Returns the configured media max upload size, falling back to the
+    /// [`MaxFileSize`] default (50 MiB) if unset or unparseable (including a stored
+    /// `0`/negative, which the positive invariant rejects).
+    async fn get_media_max_file_size(&self) -> sqlx::Result<MaxFileSize> {
+        Ok(self
+            .get(MEDIA_MAX_FILE_SIZE_BYTES_KEY)
+            .await?
+            .as_deref()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_default())
+    }
+
+    /// Returns the configured per-user media quota, falling back to the
+    /// [`UserQuota`] default (1 GiB) if unset or unparseable (including a stored
+    /// `0`/negative, which the positive invariant rejects).
+    async fn get_media_user_quota(&self) -> sqlx::Result<UserQuota> {
+        Ok(self
+            .get(MEDIA_USER_QUOTA_BYTES_KEY)
+            .await?
+            .as_deref()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_default())
     }
 
     /// Returns the backup configuration from stored values, using defaults for missing/invalid fields.
@@ -329,7 +345,11 @@ mod tests {
     use crate::test_support::{backends, Backend};
     use common::backup::{BackupConfig, BackupMode, RetentionCount};
     use common::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
-    use common::test_support::{parse_feed_min_days, parse_feed_min_items, parse_retention_count};
+    use common::media::{MaxFileSize, UserQuota};
+    use common::test_support::{
+        parse_feed_min_days, parse_feed_min_items, parse_max_file_size, parse_retention_count,
+        parse_user_quota,
+    };
     use rstest::*;
     use rstest_reuse::*;
 
@@ -551,6 +571,61 @@ mod tests {
         assert_eq!(
             storage.get_feeds_min_days().await.unwrap(),
             parse_feed_min_days("60")
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn media_max_file_size_defaults_overrides_and_rejects_zero(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
+        assert_eq!(
+            storage.get_media_max_file_size().await.unwrap(),
+            MaxFileSize::default()
+        );
+        storage
+            .set(super::MEDIA_MAX_FILE_SIZE_BYTES_KEY, "1024")
+            .await
+            .unwrap();
+        assert_eq!(
+            storage.get_media_max_file_size().await.unwrap(),
+            parse_max_file_size("1024")
+        );
+        // A stored 0/negative is rejected by the positive invariant → falls back.
+        storage
+            .set(super::MEDIA_MAX_FILE_SIZE_BYTES_KEY, "0")
+            .await
+            .unwrap();
+        assert_eq!(
+            storage.get_media_max_file_size().await.unwrap(),
+            MaxFileSize::default()
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn media_user_quota_defaults_overrides_and_rejects_negative(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
+        assert_eq!(
+            storage.get_media_user_quota().await.unwrap(),
+            UserQuota::default()
+        );
+        storage
+            .set(super::MEDIA_USER_QUOTA_BYTES_KEY, "2048")
+            .await
+            .unwrap();
+        assert_eq!(
+            storage.get_media_user_quota().await.unwrap(),
+            parse_user_quota("2048")
+        );
+        storage
+            .set(super::MEDIA_USER_QUOTA_BYTES_KEY, "-5")
+            .await
+            .unwrap();
+        assert_eq!(
+            storage.get_media_user_quota().await.unwrap(),
+            UserQuota::default()
         );
     }
 

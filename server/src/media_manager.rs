@@ -7,12 +7,10 @@ use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
 use common::ids::UserId;
-use common::media::{detect_content_type, media_path, media_url, ContentHash, Filename};
-use storage::{
-    CreateMediaError, MediaRecord, MediaSource, MediaStorage, SiteConfigStorage,
-    DEFAULT_MAX_FILE_SIZE_BYTES, DEFAULT_USER_QUOTA_BYTES, MEDIA_MAX_FILE_SIZE_BYTES_KEY,
-    MEDIA_USER_QUOTA_BYTES_KEY,
+use common::media::{
+    detect_content_type, media_path, media_url, ContentHash, Filename, MaxFileSize, UserQuota,
 };
+use storage::{CreateMediaError, MediaRecord, MediaSource, MediaStorage, SiteConfigStorage};
 use web::auth::AuthUser;
 
 use axum::http::StatusCode;
@@ -138,16 +136,9 @@ impl MediaManager {
         }
     }
 
-    async fn get_limits(&self) -> anyhow::Result<(i64, i64)> {
-        let max_file_size = self
-            .site_config
-            .get_int(MEDIA_MAX_FILE_SIZE_BYTES_KEY, DEFAULT_MAX_FILE_SIZE_BYTES)
-            .await;
-
-        let user_quota = self
-            .site_config
-            .get_int(MEDIA_USER_QUOTA_BYTES_KEY, DEFAULT_USER_QUOTA_BYTES)
-            .await;
+    async fn get_limits(&self) -> anyhow::Result<(MaxFileSize, UserQuota)> {
+        let max_file_size = self.site_config.get_media_max_file_size().await?;
+        let user_quota = self.site_config.get_media_user_quota().await?;
         Ok((max_file_size, user_quota))
     }
 
@@ -163,11 +154,11 @@ impl MediaManager {
         &self,
         user_id: UserId,
         size_bytes: i64,
-        user_quota: i64,
+        user_quota: UserQuota,
     ) -> anyhow::Result<()> {
         let current_usage = self.media.get_user_upload_usage(user_id).await?;
 
-        if current_usage + size_bytes > user_quota {
+        if current_usage + size_bytes > user_quota.value() {
             anyhow::bail!(MediaError::InsufficientStorage);
         }
         Ok(())
@@ -238,7 +229,7 @@ impl MediaManager {
         user_id: UserId,
         metadata: UploadMetadata,
         tmp_path: &Path,
-        user_quota: i64,
+        user_quota: UserQuota,
     ) -> anyhow::Result<crate::media::UploadResponse> {
         if let Err(e) = self
             .check_quota(user_id, metadata.size_bytes, user_quota)
@@ -310,7 +301,7 @@ impl MediaManager {
         let content_type = Self::get_content_type(Some(content_type), filename);
 
         let size_bytes = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
-        if size_bytes > max_file_size {
+        if size_bytes > max_file_size.value() {
             anyhow::bail!(MediaError::PayloadTooLarge);
         }
 
@@ -334,7 +325,7 @@ impl MediaManager {
         &self,
         field: &mut axum::extract::multipart::Field<'_>,
         tmp_path: &Path,
-        max_file_size: i64,
+        max_file_size: MaxFileSize,
     ) -> anyhow::Result<(ContentHash, i64)> {
         let mut file = fs::File::create(tmp_path).await?;
         let mut hasher = Sha256::new();
@@ -342,7 +333,7 @@ impl MediaManager {
 
         while let Some(chunk) = field.chunk().await? {
             bytes_written += i64::try_from(chunk.len()).unwrap_or(i64::MAX);
-            if bytes_written > max_file_size {
+            if bytes_written > max_file_size.value() {
                 anyhow::bail!(MediaError::PayloadTooLarge);
             }
 
@@ -374,6 +365,7 @@ mod tests {
     use super::*;
     use crate::test_support::{media, migrated_sqlite_db, site_config, users};
     use common::test_support::{parse_content_hash, parse_filename};
+    use storage::MEDIA_MAX_FILE_SIZE_BYTES_KEY;
     use tempfile::TempDir;
 
     #[test]

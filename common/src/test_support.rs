@@ -13,7 +13,7 @@ use crate::backup::RetentionCount;
 use crate::display_name::DisplayName;
 use crate::email::Email;
 use crate::feed::{FeedMinDays, FeedMinItems};
-use crate::media::{ContentHash, Filename};
+use crate::media::{ContentHash, Filename, MaxFileSize, UserQuota};
 use crate::post_title::PostTitle;
 use crate::token::RawToken;
 use crate::username::Username;
@@ -133,6 +133,30 @@ pub fn parse_content_hash(s: &str) -> ContentHash {
 #[must_use]
 pub fn parse_filename(name: &str) -> Filename {
     name.parse().expect("valid test filename")
+}
+
+/// Parse `s` into a [`MaxFileSize`] for tests — the single place a test media
+/// max-file-size literal is parsed, so a malformed fixture (e.g. `"0"`) fails loudly
+/// and the parse isn't re-spelled at every site-config seeding call site.
+///
+/// # Panics
+///
+/// Panics if `s` is not a positive number of bytes.
+#[must_use]
+pub fn parse_max_file_size(s: &str) -> MaxFileSize {
+    s.parse().expect("valid test media max file size")
+}
+
+/// Parse `s` into a [`UserQuota`] for tests — the single place a test media
+/// user-quota literal is parsed, so a malformed fixture (e.g. `"0"`) fails loudly
+/// and the parse isn't re-spelled at every site-config seeding call site.
+///
+/// # Panics
+///
+/// Panics if `s` is not a positive number of bytes.
+#[must_use]
+pub fn parse_user_quota(s: &str) -> UserQuota {
+    s.parse().expect("valid test media user quota")
 }
 
 /// Parse `name` into a valid [`Username`] for tests — the single place a test

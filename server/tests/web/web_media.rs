@@ -15,6 +15,7 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{post_form, session_cookie, test_options};
+use common::media::{MaxFileSize, UserQuota};
 use common::test_support::{parse_content_hash, parse_filename};
 use storage::test_support::{backends, backends_matrix, noop_mailer, Backend, TestEnv};
 
@@ -46,11 +47,10 @@ async fn media_usage_returns_defaults_for_authenticated_user(#[case] backend: Ba
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let usage: MediaUsageData = serde_json::from_str(&body).expect("response should be valid JSON");
     assert_eq!(usage.used_bytes, 0);
-    assert!(usage.quota_bytes > 0, "quota_bytes should be positive");
-    assert!(
-        usage.max_file_size_bytes > 0,
-        "max_file_size_bytes should be positive"
-    );
+    // No media config is set, so the getters return the type defaults (1 GiB / 50 MiB),
+    // carried unchanged across the wire by the transparent-i64 serde bridge.
+    assert_eq!(usage.quota_bytes, UserQuota::default());
+    assert_eq!(usage.max_file_size_bytes, MaxFileSize::default());
 }
 
 // Shape B — every media server-fn refuses an unauthenticated request the same
