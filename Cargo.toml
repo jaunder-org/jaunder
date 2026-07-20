@@ -86,6 +86,7 @@ web-sys = "0.3.82"
 js-sys = "0.3.82"
 urlencoding = "2"
 percent-encoding = "2"
+url = "2.5.8"
 
 # proc-macro toolchain for the `macros` crate (build-time only)
 syn = "2"
