@@ -2,7 +2,6 @@ pub mod cockpit;
 pub mod email;
 pub mod home;
 pub mod invites;
-pub mod media;
 pub mod password_reset;
 pub mod posts;
 pub mod profile;
@@ -11,9 +10,7 @@ pub(crate) mod signal_read;
 pub mod site;
 pub(crate) mod timeline;
 pub mod ui;
-pub mod upload;
 pub use ui::{Avatar, Icon, Icons, InlineComposer, PostCard, PostDisplay, Sidebar, Topbar};
-pub use upload::{MediaPanel, MediaUploadButton};
 
 /// Default theme identifier (the CSS variable pack applied via `data-theme` on the
 /// root element). Defined in `crate::render` (the shell layer) so the projector's
@@ -27,11 +24,11 @@ const THEME_KEY: &str = "jaunder_theme";
 use crate::audiences::AudiencesPage;
 use crate::auth::{LoginPage, LogoutPage};
 use crate::backup::{BackupBanner, BackupSettingsPage};
+use crate::media::MediaPage;
 use crate::pages::cockpit::CockpitPage;
 use crate::pages::email::{EmailPage, VerifyEmailPage};
 use crate::pages::home::HomePage;
 use crate::pages::invites::InvitesPage;
-use crate::pages::media::MediaPage;
 use crate::pages::password_reset::{ForgotPasswordPage, ResetPasswordPage};
 use crate::pages::posts::{
     CreatePostPage, DraftPreviewPage, DraftsPage, EditPostPage, PostPage, SiteTagPage, UserTagPage,

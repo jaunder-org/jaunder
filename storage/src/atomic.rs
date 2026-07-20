@@ -135,7 +135,7 @@ pub trait AtomicOps: Send + Sync {
 mod tests {
     use super::*;
     use crate::test_support::{backends, Backend};
-    use common::test_support::{parse_display_name, parse_raw_token};
+    use common::test_support::{parse_display_name, parse_raw_token, parse_username};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -170,7 +170,7 @@ mod tests {
     async fn create_user_with_invite_hash_failure_returns_internal_error(#[case] backend: Backend) {
         let env = backend.setup().await;
         let code = seed_invite(&env.state).await;
-        let username: Username = "alice".parse().unwrap();
+        let username = parse_username("alice");
         let password: Password = "force-hash-error-for-test-coverage".parse().unwrap();
         let result = env
             .state
@@ -193,7 +193,7 @@ mod tests {
             .execute("ALTER TABLE users RENAME COLUMN username TO username_renamed")
             .await
             .unwrap();
-        let username: Username = "alice".parse().unwrap();
+        let username = parse_username("alice");
         let password: Password = "password123".parse().unwrap();
         let result = env
             .state
@@ -208,7 +208,7 @@ mod tests {
     async fn storage_methods_on_closed_pool_return_errors(#[case] backend: Backend) {
         let env = backend.setup().await;
         env.base.close_pool().await;
-        let username: Username = "alice".parse().unwrap();
+        let username = parse_username("alice");
         let password: Password = "password123".parse().unwrap();
         let display_name = parse_display_name("Alice");
 

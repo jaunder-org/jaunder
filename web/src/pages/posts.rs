@@ -1,4 +1,5 @@
 use crate::forms::Field;
+use crate::media::MediaUpload;
 use crate::subscriptions::{is_subscribed_to, SubscribeTo, UnsubscribeFrom};
 use crate::tags::TagSummary;
 use crate::{
@@ -11,7 +12,6 @@ use crate::{
             local_datetime_to_utc_rfc3339, AudiencePicker, ComposerFields, PostCard,
             PostCreateForm, PostDisplay, TagContext, TagInput, Topbar,
         },
-        MediaPanel,
     },
     posts::{
         get_post, get_post_preview, list_drafts, list_posts_by_tag, list_user_posts,
@@ -841,7 +841,7 @@ pub fn EditPostPage() -> impl IntoView {
                                         <div class="j-sb-head" style="padding:0 0 10px">
                                             "Media"
                                         </div>
-                                        <MediaPanel />
+                                        <MediaUpload show_result=true />
                                     </div>
                                     <div class="j-edit-form-actions">
                                         {if is_published {

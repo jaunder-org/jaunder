@@ -33,7 +33,7 @@ mod tests {
     use super::super::is_subscribed_to;
     use crate::test_support::auth_parts;
     use common::ids::UserId;
-    use common::username::Username;
+    use common::test_support::parse_username;
     use leptos::prelude::provide_context;
     use leptos::reactive::owner::Owner;
     use std::sync::Arc;
@@ -44,7 +44,7 @@ mod tests {
     fn user(user_id: UserId, username: &str) -> UserRecord {
         UserRecord {
             user_id,
-            username: username.parse::<Username>().unwrap(),
+            username: parse_username(username),
             display_name: None,
             bio: None,
             created_at: chrono::Utc::now(),
@@ -70,7 +70,7 @@ mod tests {
 
         // `resolve_author` rejects the self-target, so the fn short-circuits to
         // `Ok(false)` without ever consulting the subscription store.
-        let result = is_subscribed_to("alice".parse::<Username>().unwrap()).await;
+        let result = is_subscribed_to(parse_username("alice")).await;
         drop(owner);
         assert!(!result.unwrap());
     }

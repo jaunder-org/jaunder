@@ -22,6 +22,7 @@ pub(crate) fn surface_label(surface: &FeedSurface) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::test_support::parse_username;
 
     #[test]
     fn labels_site_surface() {
@@ -30,10 +31,7 @@ mod tests {
 
     #[test]
     fn rsd_href_targets_user_discovery_doc() {
-        assert_eq!(
-            rsd_href(&"alice".parse::<Username>().unwrap()),
-            "/~alice/rsd.xml"
-        );
+        assert_eq!(rsd_href(&parse_username("alice")), "/~alice/rsd.xml");
     }
 
     #[test]

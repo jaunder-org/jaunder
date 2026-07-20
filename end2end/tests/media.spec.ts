@@ -87,7 +87,7 @@ test.describe("Media upload and serving", () => {
     page,
   }, testInfo) => {
     await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 30000));
-    // The /app cockpit shows the InlineComposer (#181), which includes MediaPanel.
+    // The /app cockpit shows the InlineComposer (#181), which includes MediaUpload.
     await goto(page, "/app");
     await waitForSelector(page, ".j-composer");
     const fileInput = page.locator(".j-composer input[type='file']").first();
