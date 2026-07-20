@@ -117,12 +117,12 @@ concurrently.
 
 **Files:**
 
-- Create: `docs/adr/drafts/url-crate-for-absolute-url-normalization.md`
+- Create: `docs/adr/0073-url-crate-for-absolute-url-normalization.md`
   (numberless draft; `cargo xtask adr promote` numbers it at ship —
   **jaunder-adr**).
 
 - [x] **Step 1: Write the ADR draft.** →
-      `docs/adr/drafts/url-crate-for-absolute-url-normalization.md`. Follow
+      `docs/adr/0073-url-crate-for-absolute-url-normalization.md`. Follow
       **jaunder-adr** (numberless draft format). Content:
   - **Context:** absolute feed/site URLs need
     scheme/host-case/percent-encoding/trailing-slash normalization (ADR-0063
