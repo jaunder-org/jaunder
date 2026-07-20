@@ -617,6 +617,7 @@ pub fn format_bytes(bytes: i64) -> String {
 mod tests {
     use super::*;
     use common::ids::PostId;
+    use common::test_support::parse_username;
 
     #[test]
     fn format_bytes_displays_bytes_below_kb() {
@@ -694,8 +695,8 @@ mod tests {
         // render_post_content into the same content <div> the projector's anonymous
         // render_post_inner wraps. render_post_content is viewer-independent, so the
         // authed re-render cannot diverge from the paint — no localized flash.
-        let ctx = TagCtx::ForUser("alice".parse::<Username>().unwrap());
-        let author: Username = "alice".parse().unwrap();
+        let ctx = TagCtx::ForUser(parse_username("alice"));
+        let author = parse_username("alice");
         let body = RenderedHtml::from_trusted("<p>b</p>");
         let view = PostView {
             username: &author,
@@ -751,7 +752,7 @@ mod tests {
     fn sample_post() -> PostResponse {
         PostResponse {
             post_id: PostId::from(7),
-            username: "alice".parse::<Username>().unwrap(),
+            username: parse_username("alice"),
             title: Some("Hello & <World>".into()),
             slug: "hello".parse().unwrap(),
             body: "raw".into(),
@@ -773,7 +774,7 @@ mod tests {
     fn sample_summary() -> TimelinePostSummary {
         TimelinePostSummary {
             post_id: PostId::from(1),
-            username: "bob".parse::<Username>().unwrap(),
+            username: parse_username("bob"),
             title: Some("First".into()),
             summary: Some("An excerpt".into()),
             slug: "first".parse().unwrap(),
@@ -832,7 +833,7 @@ mod tests {
             has_more: false,
         };
         let html = render_body(&PageSeed::Profile {
-            username: "bob".parse::<Username>().unwrap(),
+            username: parse_username("bob"),
             page,
         });
         assert!(html.contains("Posts by bob"), "expected heading: {html}");
@@ -870,7 +871,7 @@ mod tests {
             ),
             (
                 PageSeed::Profile {
-                    username: "bob".parse::<Username>().unwrap(),
+                    username: parse_username("bob"),
                     page: one_post_page(),
                 },
                 "<title>Posts by bob</title>",
@@ -884,7 +885,7 @@ mod tests {
             ),
             (
                 PageSeed::UserTag {
-                    username: "bob".parse::<Username>().unwrap(),
+                    username: parse_username("bob"),
                     tag: "rust".parse().unwrap(),
                     page: one_post_page(),
                 },
@@ -913,7 +914,7 @@ mod tests {
         assert!(site.contains("First"), "expected post rendered: {site}");
 
         let user = render_body(&PageSeed::UserTag {
-            username: "bob".parse::<Username>().unwrap(),
+            username: parse_username("bob"),
             tag: "rust".parse().unwrap(),
             page: one_post_page(),
         });
@@ -980,7 +981,7 @@ mod tests {
             has_more: false,
         };
         let profile = render_body(&PageSeed::Profile {
-            username: "bob".parse::<Username>().unwrap(),
+            username: parse_username("bob"),
             page: empty.clone(),
         });
         assert!(profile.contains("<p>No posts yet.</p>"), "{profile}");
@@ -1022,7 +1023,7 @@ mod tests {
         // for every viewer, so the owner's own-post content column coincides with
         // the projector's anonymous paint (the action column is purely additive).
         let ctx = TagCtx::SiteWide;
-        let author: Username = "bob".parse().unwrap();
+        let author = parse_username("bob");
         let body = RenderedHtml::from_trusted("<p>b</p>");
         let view = PostView {
             username: &author,
@@ -1042,7 +1043,7 @@ mod tests {
     #[test]
     fn post_content_renders_draft_banner_when_present() {
         let ctx = TagCtx::SiteWide;
-        let author: Username = "bob".parse().unwrap();
+        let author = parse_username("bob");
         let body = RenderedHtml::from_trusted("<p>b</p>");
         let view = PostView {
             username: &author,
@@ -1069,7 +1070,7 @@ mod tests {
     #[test]
     fn post_article_wraps_inner_in_j_post_article() {
         let ctx = TagCtx::SiteWide;
-        let author: Username = "bob".parse().unwrap();
+        let author = parse_username("bob");
         let body = RenderedHtml::from_trusted("<p>b</p>");
         let view = PostView {
             username: &author,

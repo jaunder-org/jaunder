@@ -355,14 +355,14 @@ mod tests {
     use super::{fetch_posts_by_tag, fetch_user_posts_by_tag};
     use common::ids::UserId;
     use common::tag::Tag;
-    use common::username::Username;
+    use common::test_support::parse_username;
     use common::visibility::ViewerIdentity;
     use storage::{ListByTagError, MockPostStorage, MockUserStorage, UserRecord};
 
     fn user(user_id: UserId, username: &str) -> UserRecord {
         UserRecord {
             user_id,
-            username: username.parse::<Username>().unwrap(),
+            username: parse_username(username),
             display_name: None,
             bio: None,
             created_at: chrono::Utc::now(),
@@ -411,7 +411,7 @@ mod tests {
             &posts,
             &users,
             &ViewerIdentity::Anonymous,
-            &"author".parse::<Username>().unwrap(),
+            &parse_username("author"),
             &"rust".parse::<Tag>().unwrap(),
             None,
             None,

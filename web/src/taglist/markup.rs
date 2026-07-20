@@ -38,7 +38,7 @@ mod tests {
     use super::render;
     use crate::render::TagCtx;
     use crate::tags::TagSummary;
-    use common::username::Username;
+    use common::test_support::parse_username;
 
     #[test]
     fn tag_list_site_wide_has_hash_chip_and_no_here_link() {
@@ -60,10 +60,7 @@ mod tests {
             slug: "rust".parse().unwrap(),
             display: "Rust".parse().unwrap(),
         }];
-        let html = render(
-            &tags,
-            &TagCtx::ForUser("alice".parse::<Username>().unwrap()),
-        );
+        let html = render(&tags, &TagCtx::ForUser(parse_username("alice")));
         assert!(
             html.contains(
                 "<a class=\"j-tag-here\" href=\"/~alice/tags/rust\" title=\"On this blog\">"
