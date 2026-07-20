@@ -2,9 +2,10 @@
 //! `struct X(I)` over an integer `I`, with a declarative bound. Unlike `StrNewtype` (whose
 //! `FromStr` is hand-written per type) and `IdNewtype` (which has no value invariant at
 //! all), a numeric bound is declarative, so this derive *generates* the whole trailer from
-//! `#[num_newtype(...)]` attributes: a validating `FromStr`, a `get()` accessor, `Display`,
-//! an optional compile-checked `Default`, a validating transparent-integer serde bridge,
-//! and a self-contained error type. The std `#[derive]`s stay in the user's list.
+//! `#[num_newtype(...)]` attributes: a validating `FromStr`, a `value()` accessor, `Display`,
+//! an optional compile-checked `Default`, a validating transparent-integer serde bridge, an
+//! optional `clamp` affordance (`MIN`/`MAX` + a coercing `clamped` constructor), and a
+//! self-contained error type. The std `#[derive]`s stay in the user's list.
 
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -18,6 +19,8 @@ struct Opts {
     max: Option<LitInt>,
     default: Option<LitInt>,
     error: Option<LitStr>,
+    /// Opt-in: emit `MIN`/`MAX` and a coercing `clamped` constructor. Requires both bounds.
+    clamp: bool,
 }
 
 /// Expands `#[derive(NumNewtype)]` on a single-field tuple struct. On the wrong shape, a
@@ -34,6 +37,31 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
     if let Err(e) = require_field_matches_inner(input, &opts.inner) {
         return e.to_compile_error();
     }
+    // `clamp` needs both ends of the range to coerce into; a one-sided bound can't clamp.
+    if opts.clamp && (opts.min.is_none() || opts.max.is_none()) {
+        return syn::Error::new_spanned(
+            &input.ident,
+            "num_newtype `clamp` requires both `min` and `max`",
+        )
+        .to_compile_error();
+    }
+    // A `min > max` range is nonsensical: `FromStr`/serde would reject every value, and a
+    // `clamped` door (if opted in) would coerce into an empty range and could return an
+    // out-of-range value — so reject it at compile time and keep `clamped`'s invariant true.
+    let bogus_range = opts
+        .min
+        .as_ref()
+        .and_then(|m| m.base10_parse::<i128>().ok())
+        .zip(
+            opts.max
+                .as_ref()
+                .and_then(|m| m.base10_parse::<i128>().ok()),
+        )
+        .is_some_and(|(lo, hi)| lo > hi);
+    if bogus_range {
+        return syn::Error::new_spanned(&input.ident, "num_newtype `min` must not exceed `max`")
+            .to_compile_error();
+    }
 
     let name = &input.ident;
     let err_name = quote::format_ident!("Invalid{}", name);
@@ -43,6 +71,7 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
     let display = display_impl(name);
     let default_impl = default_impl(name, &opts);
     let serde = serde_impl(name, &err_name, &opts);
+    let clamped = clamped_impl(name, &opts);
 
     quote! {
         #error_ty
@@ -51,6 +80,7 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
         #display
         #default_impl
         #serde
+        #clamped
     }
 }
 
@@ -165,6 +195,45 @@ fn default_impl(name: &Ident, opts: &Opts) -> TokenStream {
     }
 }
 
+/// The opt-in `clamp` affordance: `MIN`/`MAX` associated consts and an infallible
+/// `const fn clamped` that coerces its argument into `MIN..=MAX`. `Ord::clamp` isn't `const`,
+/// so the bound is hand-rolled with `<`/`>` (const-evaluable on integer inners). Emitted only
+/// under the `clamp` flag, which `expand` has already proven carries both bounds with
+/// `min <= max` — so `clamped` can never yield an out-of-range value and does not weaken the
+/// newtype's invariant.
+fn clamped_impl(name: &Ident, opts: &Opts) -> TokenStream {
+    if !opts.clamp {
+        return quote! {};
+    }
+    let (Some(min), Some(max)) = (opts.min.as_ref(), opts.max.as_ref()) else {
+        // cov:ignore-start unreachable: `expand` rejects `clamp` without both bounds
+        return quote! {};
+        // cov:ignore-stop
+    };
+    let inner = &opts.inner;
+    quote! {
+        impl #name {
+            #[doc = "Inclusive lower bound of the declared range."]
+            pub const MIN: #inner = #min;
+            #[doc = "Inclusive upper bound of the declared range."]
+            pub const MAX: #inner = #max;
+
+            #[doc = "Coerce `v` into `MIN..=MAX`; infallible (the result is always in range)."]
+            #[must_use]
+            pub const fn clamped(v: #inner) -> Self {
+                let v = if v < Self::MIN {
+                    Self::MIN
+                } else if v > Self::MAX {
+                    Self::MAX
+                } else {
+                    v
+                };
+                Self(v)
+            }
+        }
+    }
+}
+
 /// Transparent-integer serde: the wire form is a bare integer, so a DTO field adopts the
 /// type with no serialized-shape change. Deserialize re-runs the bound check, so an
 /// out-of-range value is rejected on the wire (mapped to a serde custom error).
@@ -249,15 +318,17 @@ fn require_field_matches_inner(input: &DeriveInput, inner: &Type) -> syn::Result
     }
 }
 
-/// Reads `#[num_newtype(inner = <ty>, min = <int>, max = <int>, default = <int>, error = "...")]`.
-/// `inner` is required; a missing `inner`, an unknown key, or a malformed value is a spanned
-/// error rendered as `compile_error!`.
+/// Reads `#[num_newtype(inner = <ty>, min = <int>, max = <int>, default = <int>, error = "...", clamp)]`.
+/// `inner` is required; `clamp` is a bare flag (requires both bounds, validated in `expand`).
+/// A missing `inner`, an unknown key, or a malformed value is a spanned error rendered as
+/// `compile_error!`.
 fn parse_opts(input: &DeriveInput) -> syn::Result<Opts> {
     let mut inner: Option<Type> = None;
     let mut min: Option<LitInt> = None;
     let mut max: Option<LitInt> = None;
     let mut default: Option<LitInt> = None;
     let mut error: Option<LitStr> = None;
+    let mut clamp = false;
 
     let mut saw_attr = false;
     for attr in &input.attrs {
@@ -279,9 +350,13 @@ fn parse_opts(input: &DeriveInput) -> syn::Result<Opts> {
                 } else if meta.path.is_ident("error") {
                     error = Some(meta.value()?.parse()?);
                     Ok(())
+                } else if meta.path.is_ident("clamp") {
+                    // A bare flag — no `= value`.
+                    clamp = true;
+                    Ok(())
                 } else {
                     Err(meta.error(
-                        "unknown `num_newtype` option (expected `inner`, `min`, `max`, `default`, or `error`)",
+                        "unknown `num_newtype` option (expected `inner`, `min`, `max`, `default`, `error`, or `clamp`)",
                     ))
                 }
             })?;
@@ -302,5 +377,6 @@ fn parse_opts(input: &DeriveInput) -> syn::Result<Opts> {
         max,
         default,
         error,
+        clamp,
     })
 }
