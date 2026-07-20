@@ -7,6 +7,7 @@ use leptos::prelude::*;
 
 use common::ids::PostId;
 use common::pagination::PageSize;
+use common::time::UtcInstant;
 
 use crate::pages::signal_read::read_signal;
 use crate::pages::ui::PostCard;
@@ -19,7 +20,7 @@ use {crate::error::WebResult, leptos::task::spawn_local, std::future::Future};
 #[derive(Clone, Copy)]
 pub(crate) struct TimelineState {
     pub rows: RwSignal<Vec<TimelinePostSummary>>,
-    pub next_cursor_created_at: RwSignal<Option<String>>,
+    pub next_cursor_created_at: RwSignal<Option<UtcInstant>>,
     pub next_cursor_post_id: RwSignal<Option<PostId>>,
     pub has_more: RwSignal<bool>,
     pub loading_more: RwSignal<bool>,
@@ -76,7 +77,7 @@ impl TimelineState {
 /// it. `fetch` is the page's list fn (`list_local_timeline` / `list_home_feed`).
 pub(crate) fn spawn_load_more<F, Fut>(state: TimelineState, fetch: F)
 where
-    F: FnOnce(Option<String>, Option<PostId>, Option<PageSize>) -> Fut + 'static,
+    F: FnOnce(Option<UtcInstant>, Option<PostId>, Option<PageSize>) -> Fut + 'static,
     Fut: Future<Output = WebResult<TimelinePage>> + 'static,
 {
     if state.loading_more.get_untracked() || !state.has_more.get_untracked() {

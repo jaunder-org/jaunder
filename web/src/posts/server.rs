@@ -1,6 +1,7 @@
 use crate::error::{ErrorClass, ErrorKind, InternalError, WebError};
 use crate::tags::TagSummary;
 use common::ids::UserId;
+use common::time::UtcInstant;
 use leptos::context::use_context;
 use leptos_axum::ResponseOptions;
 use storage::{PostRecord, PostTag};
@@ -30,8 +31,8 @@ pub fn timeline_post_summary(
         summary,
         slug,
         rendered_html,
-        created_at: created_at.to_rfc3339(),
-        published_at: published_at.to_rfc3339(),
+        created_at: UtcInstant::from(created_at),
+        published_at: UtcInstant::from(published_at),
         permalink,
         is_author: viewer_user_id == Some(user_id),
         tags: post_tags_to_summaries(tags),
@@ -73,9 +74,9 @@ pub fn post_response(post: PostRecord, is_author: bool) -> super::PostResponse {
         body,
         format: format.to_string(),
         rendered_html,
-        created_at: created_at.to_rfc3339(),
+        created_at: UtcInstant::from(created_at),
         is_draft: published_at.is_none(),
-        published_at: published_at.map(|t| t.to_rfc3339()),
+        published_at: published_at.map(UtcInstant::from),
         is_author,
         tags: post_tags_to_summaries(tags),
         permalink,

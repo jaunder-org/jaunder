@@ -27,6 +27,7 @@ use common::{
     render::RenderedHtml,
     slug::Slug,
     tag::TagLabel,
+    time::UtcInstant,
     username::Username,
     visibility::AudienceBase,
 };
@@ -41,7 +42,7 @@ use {
     crate::error::InternalError,
     crate::feed_events::enqueue_feed_events,
     crate::viewer::viewer_identity,
-    chrono::{DateTime, Utc},
+    chrono::Utc,
     common::tag::Tag,
     std::{collections::BTreeSet, sync::Arc},
     storage::{
@@ -57,8 +58,8 @@ use {
 pub struct CreatePostResult {
     pub post_id: PostId,
     pub slug: Slug,
-    pub created_at: String,
-    pub published_at: Option<String>,
+    pub created_at: UtcInstant,
+    pub published_at: Option<UtcInstant>,
     pub preview_url: String,
     pub permalink: Option<String>,
     pub summary: Option<String>,
@@ -69,7 +70,7 @@ pub struct CreatePostResult {
 pub struct UpdatePostResult {
     pub post_id: PostId,
     pub slug: Slug,
-    pub published_at: Option<String>,
+    pub published_at: Option<UtcInstant>,
     pub preview_url: String,
     pub permalink: Option<String>,
     pub summary: Option<String>,
@@ -161,12 +162,12 @@ pub struct DraftSummary {
     pub title: Option<PostTitle>,
     pub summary_label: String,
     pub slug: Slug,
-    pub created_at: String,
-    pub updated_at: String,
-    /// RFC3339 UTC publication instant for a *scheduled* post (`published_at`
+    pub created_at: UtcInstant,
+    pub updated_at: UtcInstant,
+    /// UTC publication instant for a *scheduled* post (`published_at`
     /// in the future); `None` for true drafts. Drives the "Scheduled for …"
     /// author marker.
-    pub scheduled_at: Option<String>,
+    pub scheduled_at: Option<UtcInstant>,
     pub preview_url: String,
     pub edit_url: String,
     pub permalink: String,
@@ -177,7 +178,7 @@ pub struct DraftSummary {
 pub struct PublishPostResult {
     pub post_id: PostId,
     pub slug: Slug,
-    pub published_at: String,
+    pub published_at: UtcInstant,
     pub permalink: String,
 }
 
@@ -202,8 +203,8 @@ pub struct PostResponse {
     pub format: String,
     #[serde(deserialize_with = "deserialize_rendered_html")]
     pub rendered_html: RenderedHtml,
-    pub created_at: String,
-    pub published_at: Option<String>,
+    pub created_at: UtcInstant,
+    pub published_at: Option<UtcInstant>,
     pub is_draft: bool,
     pub is_author: bool,
     /// Permalink URL for published posts; `None` for drafts.
@@ -214,30 +215,13 @@ pub struct PostResponse {
     pub summary: Option<String>,
 }
 
-/// Parses the wire `publish_at` (an optional RFC3339 UTC instant from the
-/// compose/editor datetime control) into a `DateTime<Utc>`. An absent or
-/// blank value is `None`; a present-but-unparseable value is a validation
-/// error.
-#[cfg(feature = "server")]
-fn parse_publish_at(raw: Option<&str>) -> crate::error::InternalResult<Option<DateTime<Utc>>> {
-    raw.and_then(common::text::non_empty)
-        .map(|s| {
-            DateTime::parse_from_rfc3339(s)
-                .map(|dt| dt.with_timezone(&Utc))
-                .map_err(|e| {
-                    InternalError::validation_source(format!("invalid publish_at: {e}"), e)
-                })
-        })
-        .transpose()
-}
-
 /// Creates a post for the authenticated user.
 ///
-/// `publish_at` is an optional RFC3339 UTC instant supplied by the compose
-/// form's datetime control. It is carried as a `String` (not `DateTime<Utc>`)
-/// because `chrono` is a `server`-only dependency here and the server-fn
-/// signature must also compile for the wasm client. The wire is UTC; the
-/// browser converts the author's local `datetime-local` value before sending.
+/// `publish_at` is an optional UTC instant supplied by the compose form's
+/// datetime control, carried as a [`UtcInstant`] (serde-transparent over an
+/// RFC 3339 wire string; expressible in the `#[server]` signature on both the
+/// server and the wasm client). The browser converts the author's local
+/// `datetime-local` value to UTC before sending.
 // `#[expect]` can't be used here: the `#[server]` macro emits too_many_arguments from
 // its own expansion, so a fn-level expectation is always reported "unfulfilled". A plain
 // `#[allow]` is the only mechanism that suppresses a macro-emitted lint. The args are the
@@ -249,7 +233,7 @@ pub async fn create_post(
     format: String,
     slug_override: Option<Slug>,
     publish: bool,
-    publish_at: Option<String>,
+    publish_at: Option<UtcInstant>,
     tags: Option<Vec<TagLabel>>,
     summary: Option<String>,
     audience: Option<AudienceSelection>,
@@ -267,10 +251,7 @@ pub async fn create_post(
         // Publish + a supplied time = scheduled (future) or backdated (past);
         // publish + no time = live now; not publishing = draft (NULL).
         let published_at = if publish {
-            Some(match parse_publish_at(publish_at.as_deref())? {
-                Some(at) => at,
-                None => Utc::now(),
-            })
+            Some(publish_at.map_or_else(Utc::now, UtcInstant::value))
         } else {
             None
         };
@@ -294,8 +275,8 @@ pub async fn create_post(
         )
         .await?;
 
-        let created_at = record.created_at.to_rfc3339();
-        let published_at_str = record.published_at.map(|timestamp| timestamp.to_rfc3339());
+        let created_at = UtcInstant::from(record.created_at);
+        let published_at = record.published_at.map(UtcInstant::from);
         // Only published posts have a public permalink. For drafts, the permalink is None.
         let permalink = record.published_at.is_some().then(|| record.permalink());
         let preview_url = format!("/draft/{}/preview", record.post_id);
@@ -304,7 +285,7 @@ pub async fn create_post(
             post_id: record.post_id,
             slug: record.slug,
             created_at,
-            published_at: published_at_str,
+            published_at,
             preview_url,
             permalink,
             summary: record.summary,
@@ -402,9 +383,9 @@ pub async fn update_post(
     format: String,
     slug_override: Option<Slug>,
     publish: bool,
-    // Optional RFC3339 UTC instant from the editor's datetime control. See
-    // `create_post` for why this crosses the boundary as a `String`.
-    publish_at: Option<String>,
+    // Optional UTC instant from the editor's datetime control. See
+    // `create_post` for why this crosses the boundary as a `UtcInstant`.
+    publish_at: Option<UtcInstant>,
     tags: Option<Vec<TagLabel>>,
     summary: Option<String>,
     audience: Option<AudienceSelection>,
@@ -434,7 +415,7 @@ pub async fn update_post(
 
         // A supplied time schedules/backdates; `None` lets storage keep an
         // existing timestamp or stamp `now` for a not-yet-published post.
-        let publish_at = parse_publish_at(publish_at.as_deref())?;
+        let publish_at = publish_at.map(UtcInstant::value);
 
         let record = perform_post_update(
             posts.as_ref(),
@@ -472,7 +453,7 @@ pub async fn update_post(
             .await
             .map_err(InternalError::storage)?;
 
-        let published_at_str = record.published_at.map(|t| t.to_rfc3339());
+        let published_at = record.published_at.map(UtcInstant::from);
         // Only published posts have a public permalink. For drafts, the permalink is None.
         let permalink = record.published_at.is_some().then(|| record.permalink());
 
@@ -480,7 +461,7 @@ pub async fn update_post(
         Ok(UpdatePostResult {
             post_id,
             slug: record.slug,
-            published_at: published_at_str,
+            published_at,
             preview_url: format!("/draft/{post_id}/preview"),
             permalink,
             summary: record.summary,
@@ -528,7 +509,7 @@ pub async fn post_audience_selection(post_id: PostId) -> WebResult<AudienceSelec
 /// Lists drafts for the authenticated user.
 #[server(endpoint = "/list_drafts")]
 pub async fn list_drafts(
-    cursor_created_at: Option<String>,
+    cursor_created_at: Option<UtcInstant>,
     cursor_post_id: Option<PostId>,
     limit: Option<PageSize>,
 ) -> WebResult<Vec<DraftSummary>> {
@@ -536,7 +517,8 @@ pub async fn list_drafts(
         let auth = require_auth().await?;
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
-        let parsed_cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
+        let parsed_cursor =
+            parse_post_cursor(cursor_created_at.map(|c| c.to_string()), cursor_post_id)?;
         let page_size = limit.unwrap_or_default();
         let drafts = posts
             .list_drafts_by_user(
@@ -554,14 +536,14 @@ pub async fn list_drafts(
                 // `list_drafts_by_user` only returns drafts (`published_at`
                 // NULL) and scheduled posts (`published_at` in the future), so
                 // a `Some(published_at)` here is necessarily a scheduled time.
-                let scheduled_at = draft.published_at.map(|t| t.to_rfc3339());
+                let scheduled_at = draft.published_at.map(UtcInstant::from);
                 DraftSummary {
                     post_id: draft.post_id,
                     title: draft.title.clone(),
                     summary_label: draft.fallback_summary_label(),
                     slug: draft.slug.clone(),
-                    created_at: draft.created_at.to_rfc3339(),
-                    updated_at: draft.updated_at.to_rfc3339(),
+                    created_at: UtcInstant::from(draft.created_at),
+                    updated_at: UtcInstant::from(draft.updated_at),
                     scheduled_at,
                     preview_url: format!("/draft/{}/preview", draft.post_id),
                     edit_url: format!("/posts/{}/edit", draft.post_id),
@@ -624,7 +606,7 @@ pub async fn publish_post(post_id: PostId) -> WebResult<PublishPostResult> {
         Ok(PublishPostResult {
             post_id: updated.post_id,
             slug: updated.slug.clone(),
-            published_at: published_at.to_rfc3339(),
+            published_at: UtcInstant::from(published_at),
             permalink: updated.permalink(),
         })
     })
@@ -719,6 +701,7 @@ mod tests {
         use super::TimelinePostSummary;
         use common::ids::PostId;
         use common::render::RenderedHtml;
+        use common::time::UtcInstant;
 
         let original = TimelinePostSummary {
             post_id: PostId::from(1),
@@ -727,8 +710,8 @@ mod tests {
             summary: None,
             slug: "hello".parse::<Slug>().unwrap(),
             rendered_html: RenderedHtml::from_trusted("<p>hi</p>"),
-            created_at: "2026-01-01T00:00:00Z".into(),
-            published_at: "2026-01-01T00:00:00Z".into(),
+            created_at: "2026-01-01T00:00:00Z".parse::<UtcInstant>().unwrap(),
+            published_at: "2026-01-01T00:00:00Z".parse::<UtcInstant>().unwrap(),
             permalink: "/~alice/2026/01/01/hello".into(),
             is_author: false,
             tags: vec![],
@@ -737,17 +720,6 @@ mod tests {
         let round_tripped: TimelinePostSummary = serde_json::from_str(&json).unwrap();
         assert_eq!(round_tripped.rendered_html.as_ref(), "<p>hi</p>");
         assert_eq!(round_tripped, original);
-    }
-
-    // The `publish_at` parse-failure branch: an unparseable RFC3339 value yields a
-    // Validation error carrying the friendly wire message (the chrono source rides the
-    // anyhow chain rather than being flattened via `.to_string()`).
-    #[cfg(feature = "server")]
-    #[test]
-    fn parse_publish_at_rejects_unparseable_value() {
-        let err = super::parse_publish_at(Some("not-a-date")).unwrap_err();
-        assert_eq!(err.kind(), crate::error::ErrorKind::Validation);
-        assert!(err.public_message().starts_with("invalid publish_at:"));
     }
 
     #[test]
