@@ -107,6 +107,44 @@ async fn list_my_media_returns_empty_for_new_user(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
+async fn list_my_media_rejects_out_of_range_limit(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let user_id = state
+        .users
+        .create_user(
+            &"erin".parse().expect("valid username"),
+            &"password123".parse().expect("valid password"),
+            None,
+            false,
+        )
+        .await
+        .expect("create_user failed");
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .expect("create_session failed");
+    let cookie = session_cookie(&token);
+
+    // `limit=999` is outside PageSize's `1..=50`; the typed wire arg rejects it on
+    // deserialization instead of fetching an unbounded page.
+    let (status, _body) = post_form(
+        Arc::clone(&state),
+        "/api/list_my_media",
+        "limit=999",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_ne!(
+        status,
+        StatusCode::OK,
+        "out-of-range media limit must be rejected"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn list_my_media_returns_inserted_item(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let user_id = state

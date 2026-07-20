@@ -6,6 +6,8 @@
 
 use leptos::prelude::*;
 
+use common::pagination::PageSize;
+
 use super::{list_my_media, media_usage, DeleteMedia, DeleteMediaResult, MediaItem};
 use crate::error::WebError;
 use crate::render::format_bytes;
@@ -202,7 +204,7 @@ pub fn MediaPage() -> impl IntoView {
 
     let media_list = crate::server_resource(
         move || (delete_action.version().get(), upload_version.get()),
-        |_: (usize, u32)| list_my_media(None, Some(50), Some(0)),
+        |_: (usize, u32)| list_my_media(None, Some(PageSize::default()), Some(0)),
     );
 
     view! {

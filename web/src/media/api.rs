@@ -17,6 +17,7 @@ use {
 };
 
 use common::ids::PostId;
+use common::pagination::PageSize;
 use common::time::UtcInstant;
 
 use crate::error::WebResult;
@@ -78,7 +79,7 @@ pub fn extract_upload_url(body: &str) -> Result<String, String> {
 #[server(endpoint = "/list_my_media")]
 pub async fn list_my_media(
     source: Option<String>,
-    limit: Option<u32>,
+    limit: Option<PageSize>,
     offset: Option<u32>,
 ) -> WebResult<Vec<MediaItem>> {
     boundary!("list_my_media", {
@@ -94,7 +95,7 @@ pub async fn list_my_media(
             .list_media(
                 auth.user_id,
                 source_filter.as_ref(),
-                limit.unwrap_or(50),
+                limit.unwrap_or_default().value(),
                 offset.unwrap_or(0),
             )
             .await?;
