@@ -18,7 +18,7 @@ pub fn render_atom(meta: &FeedMetadata, items: &[FeedItem]) -> String {
     ];
     if let Some(hub) = &meta.hub_url {
         links.push(Link {
-            href: hub.clone(),
+            href: hub.to_string(),
             rel: "hub".to_string(),
             ..Default::default()
         });
@@ -83,7 +83,7 @@ mod tests {
     use crate::feed::metadata::{FeedItem, FeedMetadata};
     use crate::ids::PostId;
     use crate::render::RenderedHtml;
-    use crate::test_support::{parse_post_summary, parse_post_title};
+    use crate::test_support::{parse_absolute_url, parse_post_summary, parse_post_title};
 
     fn meta(hub: Option<&str>) -> FeedMetadata {
         FeedMetadata {
@@ -91,7 +91,7 @@ mod tests {
             description: Some("A site".into()),
             canonical_url: "https://example.com/".into(),
             self_url: "https://example.com/feed.atom".into(),
-            hub_url: hub.map(str::to_string),
+            hub_url: hub.map(parse_absolute_url),
             updated_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
         }
     }

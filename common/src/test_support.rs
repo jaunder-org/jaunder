@@ -8,6 +8,7 @@
 // self-flags if the scaffolding ever stops using `expect`.
 #![expect(clippy::expect_used)]
 
+use crate::absolute_url::AbsoluteUrl;
 use crate::audience::AudienceName;
 use crate::backup::RetentionCount;
 use crate::bio::Bio;
@@ -24,6 +25,18 @@ use crate::tag::{Tag, TagLabel};
 use crate::time::UtcInstant;
 use crate::token::{RawToken, TokenHash};
 use crate::username::Username;
+
+/// Parse `s` into a valid [`AbsoluteUrl`] for tests — the single place a test
+/// absolute-URL literal is parsed, so a malformed fixture fails loudly and the parse
+/// isn't re-spelled at every call site across the workspace.
+///
+/// # Panics
+///
+/// Panics if `s` is not a valid absolute `http(s)` URL.
+#[must_use]
+pub fn parse_absolute_url(s: &str) -> AbsoluteUrl {
+    s.parse().expect("valid test absolute URL")
+}
 
 /// Parse `addr` into a valid [`Email`] for tests — the single place a test email
 /// literal is parsed, so a malformed fixture fails loudly and the parse isn't

@@ -3,6 +3,7 @@
 use crate::backend::Backend;
 use crate::media::{MEDIA_MAX_FILE_SIZE_BYTES_KEY, MEDIA_USER_QUOTA_BYTES_KEY};
 use async_trait::async_trait;
+use common::absolute_url::AbsoluteUrl;
 use common::backup::{BackupConfig, BackupMode, BackupSchedule, RetentionCount};
 use common::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
 use common::media::{MaxFileSize, UserQuota};
@@ -117,12 +118,15 @@ pub trait SiteConfigStorage: Send + Sync {
     }
 
     /// Returns the configured `WebSub` hub URL, if any. An empty stored value
-    /// is treated as unset.
-    async fn get_feeds_websub_hub_url(&self) -> sqlx::Result<Option<String>> {
-        Ok(self
-            .get(FEEDS_WEBSUB_HUB_URL_KEY)
+    /// is treated as unset; a non-empty value that is not a valid absolute
+    /// `http(s)` URL surfaces as a decode error (the validating read boundary).
+    async fn get_feeds_websub_hub_url(&self) -> sqlx::Result<Option<AbsoluteUrl>> {
+        self.get(FEEDS_WEBSUB_HUB_URL_KEY)
             .await?
-            .and_then(common::text::non_empty_owned))
+            .and_then(common::text::non_empty_owned)
+            .map(|v| v.parse::<AbsoluteUrl>())
+            .transpose()
+            .map_err(|e| sqlx::Error::Decode(Box::new(e)))
     }
 
     /// Returns the feed-generation configuration as a single group, applying
@@ -347,8 +351,8 @@ mod tests {
     use common::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
     use common::media::{MaxFileSize, UserQuota};
     use common::test_support::{
-        parse_feed_min_days, parse_feed_min_items, parse_max_file_size, parse_retention_count,
-        parse_user_quota,
+        parse_absolute_url, parse_feed_min_days, parse_feed_min_items, parse_max_file_size,
+        parse_retention_count, parse_user_quota,
     };
     use rstest::*;
     use rstest_reuse::*;
@@ -421,7 +425,7 @@ mod tests {
         let config = FeedsConfig {
             min_items: parse_feed_min_items("42"),
             min_days: parse_feed_min_days("7"),
-            websub_hub_url: Some("https://hub.example.com".to_owned()),
+            websub_hub_url: Some(parse_absolute_url("https://hub.example.com/")),
         };
         storage.set_feeds_config(&config).await.unwrap();
         let loaded = storage.get_feeds_config().await.unwrap();
@@ -662,6 +666,20 @@ mod tests {
             .await
             .unwrap();
         assert!(storage.get_feeds_websub_hub_url().await.unwrap().is_none());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn feeds_websub_hub_url_rejects_invalid_stored_value(#[case] backend: Backend) {
+        // A non-empty stored value that is not a valid absolute http(s) URL surfaces as
+        // a read error (the validating getter boundary), not a silent None.
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
+        storage
+            .set(super::FEEDS_WEBSUB_HUB_URL_KEY, "not-a-url")
+            .await
+            .unwrap();
+        assert!(storage.get_feeds_websub_hub_url().await.is_err());
     }
 
     #[apply(backends)]
