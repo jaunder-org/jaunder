@@ -44,53 +44,69 @@ pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
     };
     let name = &input.ident;
 
-    if matches!(opts.kind, Kind::Secret) {
-        let trailer = secret_trailer(name);
-        // A secret re-opens serde only when it must cross the wire *inbound*
-        // (`secret, serde`); its inbound-only role is enforced by an xtask gate.
-        let serde = if opts.serde {
-            serde_impls(name)
-        } else {
-            quote! {}
-        };
-        // A secret is bridge-less by default (a secret must not be storable);
-        // `secret, sqlx` re-adds the validating sqlx bridge to one that genuinely
-        // is stored (`InviteCode`).
-        let sqlx = if opts.sqlx {
-            sqlx_impls(name)
-        } else {
-            quote! {}
-        };
-        return quote! {
-            #trailer
-            #serde
-            #sqlx
-        };
+    // The sqlx storage bridge is a per-kind decision (default-on except secret),
+    // computed once here; each trailer is a sibling helper, so the three arms stay
+    // short and parallel.
+    let sqlx = sqlx_bridge(&opts, name);
+    match opts.kind {
+        // The tight secret surface; `secret, serde` re-opens the serde bridge for an
+        // inbound wire value (its inbound-only role is enforced by an xtask gate).
+        Kind::Secret => {
+            let trailer = secret_trailer(name);
+            let serde = if opts.serde {
+                serde_impls(name)
+            } else {
+                quote! {}
+            };
+            quote! {
+                #trailer
+                #serde
+                #sqlx
+            }
+        }
+        // Construction never rejects (a hand-written `From<String>` chokepoint), so the
+        // trailer omits `FromStr`/`TryFrom` and the bridges route through `From<String>`.
+        Kind::Infallible => {
+            let trailer = infallible_trailer(name);
+            quote! {
+                #trailer
+                #sqlx
+            }
+        }
+        // The full ergonomic trailer plus the validating serde and sqlx bridges.
+        Kind::Default => {
+            let trailer = default_trailer(name);
+            let serde = serde_impls(name);
+            quote! {
+                #trailer
+                #serde
+                #sqlx
+            }
+        }
     }
+}
 
-    if matches!(opts.kind, Kind::Infallible) {
-        let trailer = infallible_trailer(name);
-        // The infallible sqlx bridge is on by default (infallible types are stored);
-        // `no_sqlx` opts out.
-        let sqlx = if opts.no_sqlx {
-            quote! {}
-        } else {
-            sqlx_impls_infallible(name)
-        };
-        return quote! {
-            #trailer
-            #sqlx
-        };
+/// The sqlx storage bridge for `name`, per the default-on-except-secret policy: a
+/// non-secret type gets it unless `no_sqlx` opts out (`RawToken`); a `secret` gets it
+/// only with an explicit `sqlx` (a stored secret, `InviteCode`). `Infallible` types
+/// decode via `From<String>`; the rest validate via `FromStr`. The `opts` guarantees
+/// from `parse_opts` (no bare `sqlx` off a secret, no `no_sqlx` on a secret) keep the
+/// arms consistent.
+fn sqlx_bridge(opts: &Opts, name: &syn::Ident) -> proc_macro2::TokenStream {
+    match opts.kind {
+        Kind::Secret if opts.sqlx => sqlx_impls(name),
+        Kind::Secret => quote! {},
+        _ if opts.no_sqlx => quote! {},
+        Kind::Infallible => sqlx_impls_infallible(name),
+        Kind::Default => sqlx_impls(name),
     }
+}
 
-    let serde = serde_impls(name);
-    // The validating sqlx bridge is on by default for a non-secret type; `no_sqlx`
-    // opts a must-not-store type out (`RawToken`).
-    let sqlx = if opts.no_sqlx {
-        quote! {}
-    } else {
-        sqlx_impls(name)
-    };
+/// The full **ergonomic default trailer**: `Display`, `AsRef`/`Borrow`/`Deref<str>`,
+/// `TryFrom<String>` (the fallible door, via `FromStr`), `From<Self> for String`, and
+/// `PartialEq<str>`/`<&str>`. The serde and sqlx bridges are appended by [`expand`], so
+/// this mirrors [`secret_trailer`]/[`infallible_trailer`] as one of the three trailers.
+fn default_trailer(name: &syn::Ident) -> proc_macro2::TokenStream {
     quote! {
         #[automatically_derived]
         impl ::core::fmt::Display for #name {
@@ -149,9 +165,6 @@ pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
                 self.0 == **other
             }
         }
-
-        #serde
-        #sqlx
     }
 }
 
