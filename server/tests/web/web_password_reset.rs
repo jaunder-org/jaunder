@@ -252,6 +252,31 @@ async fn confirm_password_reset_with_invalid_token_returns_error(#[case] backend
     assert_ne!(status, StatusCode::OK);
 }
 
+#[apply(backends)]
+#[tokio::test]
+async fn confirm_password_reset_with_malformed_token_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let mailer = Arc::new(CapturingMailSender::new());
+
+    // `bad!token` is outside base64url, so `RawToken` rejects it (at wire-decode once
+    // `token` is typed). `new_password` is valid-length, so the failure isolates to the
+    // token.
+    let (status, _body) = post_form_with_mailer(
+        Arc::clone(&state),
+        mailer.clone() as Arc<dyn common::mailer::MailSender>,
+        "/api/confirm_password_reset",
+        "token=bad!token&new_password=newpassword456",
+        None,
+    )
+    .await;
+
+    assert_ne!(
+        status,
+        StatusCode::OK,
+        "a malformed reset token must be rejected"
+    );
+}
+
 // M3.11.13: confirm_password_reset with an already-used token returns an error.
 #[apply(backends)]
 #[tokio::test]
