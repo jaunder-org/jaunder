@@ -23,5 +23,13 @@ tokio = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = ["metrics", "testing"] }
 tracing-subscriber = { workspace = true }
 
+[features]
+# `host` is server-only (never built for wasm — ADR-0058), so the sqlx storage
+# bridge on its newtypes (e.g. `InviteCode`) is on by default. The feature only
+# gates the `#[cfg(feature = "sqlx")]` impls the `StrNewtype` derive emits (#438);
+# `sqlx` itself is a non-optional dep above.
+default = ["sqlx"]
+sqlx = []
+
 [lints]
 workspace = true

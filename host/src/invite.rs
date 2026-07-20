@@ -19,8 +19,12 @@ use macros::StrNewtype;
 /// Secret-bearing per ADR-0063 (`#[str_newtype(secret)]`): redacting `Debug`,
 /// `AsRef<str>`, `TryFrom<String>` — no `Display`, no serde. Deliberate egress (the CLI
 /// invitation URL, a future email) is a single explicit `code.as_ref()`.
+///
+/// `sqlx` re-opts the storage bridge: an `InviteCode` *is* persisted (the `invites`
+/// table), so it needs `Encode`/`Decode` even though `secret` drops the bridge by
+/// default (#438).
 #[derive(Clone, StrNewtype)]
-#[str_newtype(secret)]
+#[str_newtype(secret, sqlx)]
 pub struct InviteCode(String);
 
 impl FromStr for InviteCode {
