@@ -50,6 +50,9 @@ impl PostSummary {
     /// `storage::PostRecord::fallback_summary_label` and
     /// `common::render::derive_post_metadata` — each of which falls back through a
     /// non-empty body line, title, then slug.
+    ///
+    /// The cut today is a raw scalar-count boundary (`chars().take(MAX)`), which can slice
+    /// mid-word; #564 tracks making it word-/sentence-aware (the cap stays the ceiling).
     #[must_use]
     pub fn truncated(s: &str) -> Self {
         let trimmed = s.trim();
