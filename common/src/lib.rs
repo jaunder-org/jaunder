@@ -18,6 +18,7 @@ pub mod invite;
 pub mod mailbox;
 pub mod mailer;
 pub mod media;
+pub mod pagination;
 pub mod password;
 pub mod post_body;
 pub mod post_title;

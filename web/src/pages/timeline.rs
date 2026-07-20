@@ -6,15 +6,13 @@
 use leptos::prelude::*;
 
 use common::ids::PostId;
+use common::pagination::PageSize;
 
 use crate::pages::signal_read::read_signal;
 use crate::pages::ui::PostCard;
 use crate::posts::{TimelinePage, TimelinePostSummary};
 
 use {crate::error::WebResult, leptos::task::spawn_local, std::future::Future};
-
-/// The fetch page size shared by both timelines' initial + load-more requests.
-pub(crate) const PAGE_SIZE: u32 = 50;
 
 /// The reactive state of a cursor-paginated timeline — the six signals both pages
 /// previously declared verbatim, plus the transitions over them.
@@ -78,7 +76,7 @@ impl TimelineState {
 /// it. `fetch` is the page's list fn (`list_local_timeline` / `list_home_feed`).
 pub(crate) fn spawn_load_more<F, Fut>(state: TimelineState, fetch: F)
 where
-    F: FnOnce(Option<String>, Option<PostId>, Option<u32>) -> Fut + 'static,
+    F: FnOnce(Option<String>, Option<PostId>, Option<PageSize>) -> Fut + 'static,
     Fut: Future<Output = WebResult<TimelinePage>> + 'static,
 {
     if state.loading_more.get_untracked() || !state.has_more.get_untracked() {
@@ -88,7 +86,7 @@ where
     let created_at = state.next_cursor_created_at.get_untracked();
     let post_id = state.next_cursor_post_id.get_untracked();
     spawn_local(async move {
-        match fetch(created_at, post_id, Some(PAGE_SIZE)).await {
+        match fetch(created_at, post_id, Some(PageSize::default())).await {
             Ok(page) => {
                 state.rows.update(|rows| rows.extend(page.posts));
                 state

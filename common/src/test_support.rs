@@ -14,6 +14,7 @@ use crate::display_name::DisplayName;
 use crate::email::Email;
 use crate::feed::{FeedMinDays, FeedMinItems};
 use crate::media::{ContentHash, Filename, MaxFileSize, UserQuota};
+use crate::pagination::PageSize;
 use crate::password::Password;
 use crate::post_title::PostTitle;
 use crate::slug::Slug;
@@ -67,6 +68,18 @@ pub fn parse_display_name(name: &str) -> DisplayName {
 #[must_use]
 pub fn parse_retention_count(s: &str) -> RetentionCount {
     s.parse().expect("valid test retention count")
+}
+
+/// Parse `s` into a [`PageSize`] for tests — the single place a test page-size literal is
+/// parsed, so a malformed fixture (e.g. `"0"`/`"51"`) fails loudly and the parse isn't
+/// re-spelled at every pagination call site.
+///
+/// # Panics
+///
+/// Panics if `s` is not an integer in `1..=50`.
+#[must_use]
+pub fn parse_page_size(s: &str) -> PageSize {
+    s.parse().expect("valid test page size")
 }
 
 /// Parse `s` into a [`FeedMinItems`] for tests — the single place a test feed-min-items

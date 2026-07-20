@@ -21,6 +21,7 @@ pub use server::post_response;
 
 use common::{
     ids::{AudienceId, PostId},
+    pagination::PageSize,
     post_body::PostBody,
     post_title::PostTitle,
     render::RenderedHtml,
@@ -529,19 +530,19 @@ pub async fn post_audience_selection(post_id: PostId) -> WebResult<AudienceSelec
 pub async fn list_drafts(
     cursor_created_at: Option<String>,
     cursor_post_id: Option<PostId>,
-    limit: Option<u32>,
+    limit: Option<PageSize>,
 ) -> WebResult<Vec<DraftSummary>> {
     boundary!("list_drafts", {
         let auth = require_auth().await?;
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
         let parsed_cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
-        let page_size = limit.unwrap_or(50).clamp(1, 50);
+        let page_size = limit.unwrap_or_default();
         let drafts = posts
             .list_drafts_by_user(
                 auth.user_id,
                 parsed_cursor.as_ref(),
-                page_size,
+                page_size.value(),
                 chrono::Utc::now(),
             )
             .await?;

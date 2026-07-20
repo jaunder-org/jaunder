@@ -199,7 +199,7 @@ pub fn id_newtype_derive(item: TokenStream) -> TokenStream {
 /// with a declarative bound. Unlike `StrNewtype` (whose `FromStr` is hand-written) and
 /// `IdNewtype` (which enforces no value invariant), a numeric bound is declarative, so this
 /// derive *generates* the whole trailer from `#[num_newtype(...)]`: a self-contained error
-/// type, `get()`, a validating `FromStr`, `Display`, an optional compile-checked `Default`,
+/// type, `value()`, a validating `FromStr`, `Display`, an optional compile-checked `Default`,
 /// and a validating transparent-integer serde bridge (out-of-range rejected on the wire).
 /// The std `#[derive]`s (`Clone`/`Copy`/`Debug`/`PartialEq`/`Eq`/`Hash`/`Ord`) stay in the
 /// user's list.
@@ -207,8 +207,9 @@ pub fn id_newtype_derive(item: TokenStream) -> TokenStream {
 /// Options: `inner = <ty>` (**required**, the wrapped integer type; the tuple field must be
 /// exactly this type), `min` / `max` (inclusive bounds, each optional — the check is emitted
 /// only for a declared side), `default = <int>` (generates a `Default` guarded so an
-/// out-of-range default is a compile error), and `error = "…"` (overrides the generated
-/// `Display` message).
+/// out-of-range default is a compile error), `error = "…"` (overrides the generated
+/// `Display` message), and `clamp` (a bare flag, requires both `min` and `max`: emits
+/// `MIN`/`MAX` consts and an infallible `const fn clamped(inner) -> Self` coercing into range).
 ///
 /// ```
 /// use macros::NumNewtype;
@@ -634,5 +635,51 @@ mod tests {
         assert!(str_newtype::expand(&input)
             .to_string()
             .contains("compile_error"));
+    }
+
+    #[test]
+    fn num_newtype_clamp_emits_bounds_and_clamped_constructor() {
+        let input: DeriveInput = parse_quote! {
+            #[num_newtype(inner = u32, min = 1, max = 50, default = 50, clamp)]
+            struct X(u32);
+        };
+        let out = num_newtype::expand(&input).to_string();
+        assert!(!out.contains("compile_error"));
+        assert!(out.contains("const MIN"));
+        assert!(out.contains("const MAX"));
+        assert!(out.contains("fn clamped"));
+    }
+
+    #[test]
+    fn num_newtype_clamp_without_both_bounds_emits_compile_error() {
+        let input: DeriveInput = parse_quote! {
+            #[num_newtype(inner = u32, min = 1, clamp)]
+            struct X(u32);
+        };
+        assert!(num_newtype::expand(&input)
+            .to_string()
+            .contains("compile_error"));
+    }
+
+    #[test]
+    fn num_newtype_min_greater_than_max_emits_compile_error() {
+        let input: DeriveInput = parse_quote! {
+            #[num_newtype(inner = u32, min = 50, max = 1)]
+            struct X(u32);
+        };
+        assert!(num_newtype::expand(&input)
+            .to_string()
+            .contains("compile_error"));
+    }
+
+    #[test]
+    fn num_newtype_without_clamp_omits_clamped_constructor() {
+        let input: DeriveInput = parse_quote! {
+            #[num_newtype(inner = u32, min = 1, max = 50)]
+            struct X(u32);
+        };
+        let out = num_newtype::expand(&input).to_string();
+        assert!(!out.contains("fn clamped"));
+        assert!(!out.contains("const MAX"));
     }
 }

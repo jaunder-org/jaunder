@@ -2,10 +2,11 @@ use leptos::prelude::*;
 
 use crate::feed_discovery::FeedDiscovery;
 use crate::pages::signal_read::read_signal;
-use crate::pages::timeline::{TimelineRows, TimelineState, PAGE_SIZE};
+use crate::pages::timeline::{TimelineRows, TimelineState};
 use crate::pages::ui::Topbar;
 use crate::posts::list_local_timeline;
 use common::feed::FeedSurface;
+use common::pagination::PageSize;
 
 #[component]
 pub fn HomePage() -> impl IntoView {
@@ -32,7 +33,7 @@ pub fn HomePage() -> impl IntoView {
     // performed via the client-side action column, reflect immediately.
     let initial_page = crate::server_resource(
         move || refresh_version.get(),
-        |_| list_local_timeline(None, None, Some(PAGE_SIZE)),
+        |_| list_local_timeline(None, None, Some(PageSize::default())),
     );
 
     Effect::new(move |_| {

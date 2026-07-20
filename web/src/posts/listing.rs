@@ -8,8 +8,8 @@ use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use common::{
-    ids::PostId, post_title::PostTitle, render::RenderedHtml, slug::Slug, tag::Tag,
-    username::Username,
+    ids::PostId, pagination::PageSize, post_title::PostTitle, render::RenderedHtml, slug::Slug,
+    tag::Tag, username::Username,
 };
 
 use crate::error::WebResult;
@@ -96,20 +96,24 @@ pub async fn fetch_user_posts(
     username: &Username,
     cursor_created_at: Option<String>,
     cursor_post_id: Option<PostId>,
-    limit: Option<u32>,
+    limit: Option<PageSize>,
 ) -> InternalResult<TimelinePage> {
     let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
-    let page_size = limit.unwrap_or(50).clamp(1, 50);
+    let page_size = limit.unwrap_or_default();
     let rows = posts
         .list_published_by_user(
             username,
             cursor.as_ref(),
-            page_size.saturating_add(1),
+            page_size.value().saturating_add(1),
             viewer,
             chrono::Utc::now(),
         )
         .await?;
-    Ok(page_from_rows(rows, page_size, viewer_user_id(viewer)))
+    Ok(page_from_rows(
+        rows,
+        page_size.value(),
+        viewer_user_id(viewer),
+    ))
 }
 
 /// The shared site-wide timeline query, used by both the `list_local_timeline`
@@ -125,19 +129,23 @@ pub async fn fetch_local_timeline(
     viewer: &ViewerIdentity,
     cursor_created_at: Option<String>,
     cursor_post_id: Option<PostId>,
-    limit: Option<u32>,
+    limit: Option<PageSize>,
 ) -> InternalResult<TimelinePage> {
     let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
-    let page_size = limit.unwrap_or(50).clamp(1, 50);
+    let page_size = limit.unwrap_or_default();
     let rows = posts
         .list_published(
             cursor.as_ref(),
-            page_size.saturating_add(1),
+            page_size.value().saturating_add(1),
             viewer,
             chrono::Utc::now(),
         )
         .await?;
-    Ok(page_from_rows(rows, page_size, viewer_user_id(viewer)))
+    Ok(page_from_rows(
+        rows,
+        page_size.value(),
+        viewer_user_id(viewer),
+    ))
 }
 
 /// Lists published, non-deleted posts for a user using cursor pagination.
@@ -146,7 +154,7 @@ pub async fn list_user_posts(
     username: Username,
     cursor_created_at: Option<String>,
     cursor_post_id: Option<PostId>,
-    limit: Option<u32>,
+    limit: Option<PageSize>,
 ) -> WebResult<TimelinePage> {
     boundary!("list_user_posts", {
         let posts = expect_context::<Arc<dyn PostStorage>>();
@@ -168,7 +176,7 @@ pub async fn list_user_posts(
 pub async fn list_local_timeline(
     cursor_created_at: Option<String>,
     cursor_post_id: Option<PostId>,
-    limit: Option<u32>,
+    limit: Option<PageSize>,
 ) -> WebResult<TimelinePage> {
     boundary!("list_local_timeline", {
         let posts = expect_context::<Arc<dyn PostStorage>>();
@@ -189,7 +197,7 @@ pub async fn list_local_timeline(
 pub async fn list_home_feed(
     cursor_created_at: Option<String>,
     cursor_post_id: Option<PostId>,
-    limit: Option<u32>,
+    limit: Option<PageSize>,
 ) -> WebResult<TimelinePage> {
     boundary!("list_home_feed", {
         let auth = require_auth().await?;
@@ -197,8 +205,8 @@ pub async fn list_home_feed(
 
         let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
         let viewer = viewer_identity().await;
-        let page_size = limit.unwrap_or(50).clamp(1, 50);
-        let fetch_limit = page_size.saturating_add(1);
+        let page_size = limit.unwrap_or_default();
+        let fetch_limit = page_size.value().saturating_add(1);
 
         let mut rows = posts
             .list_published_by_user(
@@ -210,8 +218,8 @@ pub async fn list_home_feed(
             )
             .await?;
 
-        let has_more = rows.len() > page_size as usize;
-        rows.truncate(page_size as usize);
+        let has_more = rows.len() > page_size.value() as usize;
+        rows.truncate(page_size.value() as usize);
 
         let next_cursor = has_more.then(|| rows.last().map(to_post_cursor)).flatten();
         let posts = rows
@@ -242,22 +250,26 @@ pub async fn fetch_posts_by_tag(
     tag: &Tag,
     cursor_created_at: Option<String>,
     cursor_post_id: Option<PostId>,
-    limit: Option<u32>,
+    limit: Option<PageSize>,
 ) -> InternalResult<TimelinePage> {
     let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
-    let page_size = limit.unwrap_or(50).clamp(1, 50);
+    let page_size = limit.unwrap_or_default();
     let rows = list_by_tag_rows(
         posts
             .list_posts_by_tag(
                 tag,
                 cursor.as_ref(),
-                page_size.saturating_add(1),
+                page_size.value().saturating_add(1),
                 viewer,
                 chrono::Utc::now(),
             )
             .await,
     )?;
-    Ok(page_from_rows(rows, page_size, viewer_user_id(viewer)))
+    Ok(page_from_rows(
+        rows,
+        page_size.value(),
+        viewer_user_id(viewer),
+    ))
 }
 
 /// The shared "posts by a user carrying a tag" query, used by both the
@@ -275,26 +287,30 @@ pub async fn fetch_user_posts_by_tag(
     username: &Username,
     tag: &Tag,
     cursor: Option<PostCursor>,
-    limit: Option<u32>,
+    limit: Option<PageSize>,
 ) -> InternalResult<TimelinePage> {
     let author = users
         .get_user_by_username(username)
         .await?
         .ok_or_else(|| InternalError::not_found("user"))?;
-    let page_size = limit.unwrap_or(50).clamp(1, 50);
+    let page_size = limit.unwrap_or_default();
     let rows = list_by_tag_rows(
         posts
             .list_user_posts_by_tag(
                 author.user_id,
                 tag,
                 cursor.as_ref(),
-                page_size.saturating_add(1),
+                page_size.value().saturating_add(1),
                 viewer,
                 chrono::Utc::now(),
             )
             .await,
     )?;
-    Ok(page_from_rows(rows, page_size, viewer_user_id(viewer)))
+    Ok(page_from_rows(
+        rows,
+        page_size.value(),
+        viewer_user_id(viewer),
+    ))
 }
 
 /// Lists published, non-deleted posts site-wide carrying `tag`.
@@ -303,7 +319,7 @@ pub async fn list_posts_by_tag(
     tag: Tag,
     cursor_created_at: Option<String>,
     cursor_post_id: Option<PostId>,
-    limit: Option<u32>,
+    limit: Option<PageSize>,
 ) -> WebResult<TimelinePage> {
     boundary!("list_posts_by_tag", {
         let posts = expect_context::<Arc<dyn PostStorage>>();
@@ -327,7 +343,7 @@ pub async fn list_user_posts_by_tag(
     tag: Tag,
     cursor_created_at: Option<String>,
     cursor_post_id: Option<PostId>,
-    limit: Option<u32>,
+    limit: Option<PageSize>,
 ) -> WebResult<TimelinePage> {
     boundary!("list_user_posts_by_tag", {
         let posts = expect_context::<Arc<dyn PostStorage>>();

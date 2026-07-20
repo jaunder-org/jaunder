@@ -26,6 +26,7 @@ use axum::{
     routing::get,
     Router,
 };
+use common::pagination::PageSize;
 use common::tag::Tag;
 use common::username::Username;
 use common::visibility::ViewerIdentity;
@@ -187,7 +188,7 @@ async fn site_timeline(
         &ViewerIdentity::Anonymous,
         None,
         None,
-        Some(50),
+        Some(PageSize::default()),
     )
     .await;
     timeline_response(result, &headers, PageSeed::SiteTimeline)
@@ -242,7 +243,7 @@ async fn profile(
             &username,
             None,
             None,
-            Some(50),
+            Some(PageSize::default()),
         )
         .await
         .ok()
@@ -278,7 +279,7 @@ async fn site_tag(
         &tag,
         None,
         None,
-        Some(50),
+        Some(PageSize::default()),
     )
     .await;
     tag_response(result, &headers, &shell, |page| PageSeed::SiteTag {
@@ -312,7 +313,7 @@ async fn user_tag(
         &username,
         &tag,
         None,
-        Some(50),
+        Some(PageSize::default()),
     )
     .await;
     tag_response(result, &headers, &shell, |page| PageSeed::UserTag {

@@ -354,6 +354,75 @@ async fn collection_paging_emits_next_link(#[case] backend: Backend) {
     );
 }
 
+#[apply(backends)]
+#[tokio::test]
+async fn collection_clamps_out_of_range_limit(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
+    let (user_id, token) = seed_alice(&state).await;
+
+    // Seed 51 posts so the `1..=50` page-size cap is observable (50 < 51).
+    for i in 0..51 {
+        storage::perform_post_creation(
+            state.posts.as_ref(),
+            storage::PostCreation {
+                user_id,
+                body: format!("Body {i}").into(),
+                title: Some(&format!("Title {i}")),
+                format: storage::PostFormat::Markdown,
+                slug_override: None,
+                published_at: Some(chrono::Utc::now()),
+                max_attempts: 100,
+                summary: None,
+                audiences: vec![common::visibility::AudienceTarget::Public],
+                idempotency_key: None,
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    let app = make_app(state, &base);
+
+    // `?limit=999` clamps to PageSize::MAX (50), not 51.
+    let over = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/atompub/alice/posts?limit=999")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(over.status(), StatusCode::OK);
+    let over_body = body_string(over).await;
+    assert_eq!(
+        over_body.matches("<entry").count(),
+        50,
+        "?limit=999 should clamp to the 50-item max"
+    );
+
+    // `?limit=0` clamps to PageSize::MIN (1).
+    let under = app
+        .oneshot(
+            Request::builder()
+                .uri("/atompub/alice/posts?limit=0")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(under.status(), StatusCode::OK);
+    let under_body = body_string(under).await;
+    assert_eq!(
+        under_body.matches("<entry").count(),
+        1,
+        "?limit=0 should clamp to the 1-item min"
+    );
+}
+
 /// Seeds a user named `alice` and returns `(user_id, session_token)`.
 async fn seed_alice(state: &Arc<storage::AppState>) -> (UserId, RawToken) {
     let user_id = state
