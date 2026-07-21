@@ -3,6 +3,7 @@ use crate::error::WebResult;
 use common::bio::Bio;
 use common::display_name::DisplayName;
 use common::email::Email;
+use common::render::PostFormat;
 use common::username::Username;
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -15,7 +16,7 @@ use {
     std::sync::Arc,
     storage::{
         get_default_post_format as storage_get_default_post_format,
-        set_default_post_format as storage_set_default_post_format, PostFormat, ProfileUpdate,
+        set_default_post_format as storage_set_default_post_format, ProfileUpdate,
         UserConfigStorage, UserStorage,
     },
 };
@@ -76,23 +77,38 @@ pub async fn update_profile(display_name: Option<DisplayName>, bio: Option<Bio>)
 
 /// Retrieves the authenticated user's default post format preference.
 #[server(endpoint = "/get_default_post_format")]
-pub async fn get_default_post_format() -> WebResult<String> {
+pub async fn get_default_post_format() -> WebResult<PostFormat> {
     boundary!("get_default_post_format", {
         let auth = require_auth().await?;
         let config = expect_context::<Arc<dyn UserConfigStorage>>();
         let format = storage_get_default_post_format(config.as_ref(), auth.user_id).await?;
-        Ok(format.to_string())
+        Ok(format)
     })
 }
 
 /// Sets the authenticated user's default post format preference.
 #[server(endpoint = "/set_default_post_format")]
-pub async fn set_default_post_format(format: String) -> WebResult<()> {
+pub async fn set_default_post_format(format: PostFormat) -> WebResult<()> {
     boundary!("set_default_post_format", {
         let auth = require_auth().await?;
         let config = expect_context::<Arc<dyn UserConfigStorage>>();
-        let post_format = format.parse::<PostFormat>()?;
-        storage_set_default_post_format(config.as_ref(), auth.user_id, post_format).await?;
+        storage_set_default_post_format(config.as_ref(), auth.user_id, format).await?;
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SetDefaultPostFormat;
+    use common::render::PostFormat;
+
+    #[test]
+    fn set_default_post_format_wire_rejects_unknown_token() {
+        // The profile control submits `format=<token>` via an <ActionForm>, decoded
+        // through server_fn's default Url codec (serde_qs). A valid token decodes; a
+        // bogus one is rejected at the wire boundary once the arg is a typed PostFormat.
+        let ok: SetDefaultPostFormat = serde_qs::from_str("format=markdown").unwrap();
+        assert_eq!(ok.format, PostFormat::Markdown);
+        assert!(serde_qs::from_str::<SetDefaultPostFormat>("format=bogus").is_err());
+    }
 }

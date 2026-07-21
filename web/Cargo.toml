@@ -59,6 +59,10 @@ wasm-bindgen = { workspace = true }
 [dev-dependencies]
 common = { workspace = true, features = ["test-utils", "test-support"] }
 storage = { workspace = true, features = ["test-utils"] }
+# Decodes the profile default-format ActionForm's `format=<token>` body the same
+# way server_fn's default Url codec does, so the wire-reject test exercises the
+# real path. Version-matched to the leptos-transitive vendor to avoid a rebuild.
+serde_qs = "0.15"
 sqlx = { workspace = true }
 tokio = { workspace = true }
 tracing-subscriber = { workspace = true }

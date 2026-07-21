@@ -114,6 +114,35 @@ test("over-long bio shows an inline error and gates submit", async ({
   await expect(page.locator(UPDATE_BUTTON)).toBeDisabled();
 });
 
+// #498: the "Default post format" control is an <ActionForm> submitting a typed
+// PostFormat wire arg over server_fn's Url codec (serde_qs). Selecting a format,
+// saving, and reloading must round-trip the chosen value through
+// set_default_post_format/get_default_post_format — proving the typed arg encodes
+// and decodes over the form path. Two flips confirm it persists the *selected*
+// value, not a constant.
+const FORMAT_SELECT = 'select[name="format"]';
+const FORMAT_SAVE = 'button:has-text("Save")';
+
+test("default post format round-trips through the ActionForm", async ({
+  registeredPage: page,
+}) => {
+  await goto(page, "/profile");
+
+  const saveAndReload = async (value: string) => {
+    await page.selectOption(FORMAT_SELECT, value);
+    const saved = page.waitForResponse((response) =>
+      response.url().includes("set_default_post_format"),
+    );
+    await page.click(FORMAT_SAVE);
+    expect((await saved).ok()).toBe(true);
+    await goto(page, "/profile");
+    await expect(page.locator(FORMAT_SELECT)).toHaveValue(value);
+  };
+
+  await saveAndReload("org");
+  await saveAndReload("markdown");
+});
+
 // #545: clearing the box removes the bio end-to-end. Under the typed Option<Bio>
 // wire arg an empty value is *omitted* (dispatched as None), not sent as an empty
 // string that would fail to decode — so emptying the field and submitting must

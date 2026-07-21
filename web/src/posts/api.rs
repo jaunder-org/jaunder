@@ -16,9 +16,17 @@ mod listing;
 pub use listing::*;
 
 use common::{
-    ids::PostId, pagination::PageSize, post_body::PostBody, post_summary::PostSummary,
-    post_title::PostTitle, render::RenderedHtml, slug::Slug, tag::TagLabel, time::UtcInstant,
-    username::Username, visibility::AudienceSelection,
+    ids::PostId,
+    pagination::PageSize,
+    post_body::PostBody,
+    post_summary::PostSummary,
+    post_title::PostTitle,
+    render::{PostFormat, RenderedHtml},
+    slug::Slug,
+    tag::TagLabel,
+    time::UtcInstant,
+    username::Username,
+    visibility::AudienceSelection,
 };
 
 use crate::error::WebResult;
@@ -45,8 +53,7 @@ use {
     storage::{
         apply_post_tag_diff, fetch_post_record, find_draft_by_permalink_for_user,
         parse_post_cursor, perform_post_creation, perform_post_update, FeedEventStorage,
-        PostCreation, PostFormat, PostStorage, PostUpdate, PublishUpdate, SiteConfigStorage,
-        UpdatePostInput,
+        PostCreation, PostStorage, PostUpdate, PublishUpdate, SiteConfigStorage, UpdatePostInput,
     },
 };
 
@@ -118,7 +125,7 @@ pub struct PostResponse {
     pub title: Option<PostTitle>,
     pub slug: Slug,
     pub body: PostBody,
-    pub format: String,
+    pub format: PostFormat,
     #[serde(deserialize_with = "deserialize_rendered_html")]
     pub rendered_html: RenderedHtml,
     pub created_at: UtcInstant,
@@ -139,7 +146,7 @@ pub struct PostResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreatePostArgs {
     pub body: PostBody,
-    pub format: String,
+    pub format: PostFormat,
     pub slug_override: Option<Slug>,
     pub publish: bool,
     pub publish_at: Option<UtcInstant>,
@@ -154,7 +161,7 @@ pub struct CreatePostArgs {
 pub struct UpdatePostArgs {
     pub post_id: PostId,
     pub body: PostBody,
-    pub format: String,
+    pub format: PostFormat,
     pub slug_override: Option<Slug>,
     pub publish: bool,
     pub publish_at: Option<UtcInstant>,
@@ -191,7 +198,6 @@ pub async fn create_post(args: CreatePostArgs) -> WebResult<CreatePostResult> {
         // dedups and enforces the per-post cap.
         let validated_tags = common::tag::parse_and_validate_tags(tags.unwrap_or_default())?;
 
-        let format = format.parse::<PostFormat>()?;
         // Publish + a supplied time = scheduled (future) or backdated (past);
         // publish + no time = live now; not publishing = draft (NULL).
         let published_at = if publish {
@@ -354,7 +360,6 @@ pub async fn update_post(args: UpdatePostArgs) -> WebResult<UpdatePostResult> {
         // the existing tags untouched.
         let new_tags = tags.map(common::tag::parse_and_validate_tags).transpose()?;
 
-        let format = format.parse::<PostFormat>()?;
         // See `create_post`: the typed `PostSummary` arg is already validated at
         // decode, so no `non_empty_owned` normalization is applied here.
         let audiences = audience_targets_or_public(audience.as_ref());
@@ -666,6 +671,52 @@ mod tests {
         let base: Slug = "hello-world".parse().unwrap();
         assert_eq!(candidate_slug(&base, 1).unwrap().as_ref(), "hello-world-2");
         assert_eq!(candidate_slug(&base, 2).unwrap().as_ref(), "hello-world-3");
+    }
+
+    // #498: the create/update RPC input contracts carry `format` as a typed
+    // `PostFormat`, so an out-of-domain token is rejected at JSON wire-decode (the
+    // `input = Json` codec) — no in-body parse. Build a valid value, serialize, then
+    // corrupt only the format token so the test never hardcodes the full wire shape.
+    #[test]
+    fn create_post_args_rejects_unknown_format_token() {
+        use super::CreatePostArgs;
+        use common::render::PostFormat;
+        let args = CreatePostArgs {
+            body: "hi".into(),
+            format: PostFormat::Markdown,
+            slug_override: None,
+            publish: false,
+            publish_at: None,
+            tags: None,
+            summary: None,
+            audience: None,
+        };
+        let json = serde_json::to_string(&args).unwrap();
+        assert!(serde_json::from_str::<CreatePostArgs>(&json).is_ok());
+        let bad = json.replace("\"markdown\"", "\"bogus\"");
+        assert!(serde_json::from_str::<CreatePostArgs>(&bad).is_err());
+    }
+
+    #[test]
+    fn update_post_args_rejects_unknown_format_token() {
+        use super::UpdatePostArgs;
+        use common::ids::PostId;
+        use common::render::PostFormat;
+        let args = UpdatePostArgs {
+            post_id: PostId::from(1),
+            body: "hi".into(),
+            format: PostFormat::Markdown,
+            slug_override: None,
+            publish: false,
+            publish_at: None,
+            tags: None,
+            summary: None,
+            audience: None,
+        };
+        let json = serde_json::to_string(&args).unwrap();
+        assert!(serde_json::from_str::<UpdatePostArgs>(&json).is_ok());
+        let bad = json.replace("\"markdown\"", "\"bogus\"");
+        assert!(serde_json::from_str::<UpdatePostArgs>(&bad).is_err());
     }
 
     #[cfg(feature = "server")]

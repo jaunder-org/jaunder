@@ -5162,6 +5162,7 @@ dependencies = [
  "reactive_stores",
  "serde",
  "serde_json",
+ "serde_qs",
  "sqlx",
  "storage",
  "strum",
