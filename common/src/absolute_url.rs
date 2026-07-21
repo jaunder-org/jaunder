@@ -61,6 +61,20 @@ impl AbsoluteUrl {
         let joined = base.join(path).map_err(|_| InvalidAbsoluteUrl)?;
         joined.as_str().parse()
     }
+
+    /// Append query `pairs` to this URL, percent-encoding keys and values via `url`'s
+    /// [`query_pairs_mut`](url::Url::query_pairs_mut), and return the new URL. Use this to
+    /// build cursor URLs (e.g. a feed `next` link) instead of `format!`-ing a query
+    /// string, so reserved characters in values are encoded correctly.
+    #[must_use]
+    pub fn with_query_pairs(&self, pairs: &[(&str, &str)]) -> AbsoluteUrl {
+        let Ok(mut url) = url::Url::parse(&self.0) else {
+            // `self.0` is a valid URL by construction, so this never fires.
+            unreachable!("AbsoluteUrl holds a valid url");
+        };
+        url.query_pairs_mut().extend_pairs(pairs.iter().copied());
+        Self(url.to_string())
+    }
 }
 
 /// Compose `base` + a site-absolute `path` into an absolute URL string when a base is
@@ -196,6 +210,36 @@ mod tests {
             base.join("http://other.example/evil").unwrap(),
             *"http://other.example/evil"
         );
+    }
+
+    // -- with_query_pairs (#560, D5) --
+
+    #[test]
+    fn with_query_pairs_encodes_and_appends() {
+        let base: AbsoluteUrl = "https://ex.com/atompub/alice/posts".parse().unwrap();
+        let out = base.with_query_pairs(&[
+            ("updated_before", "2026-01-02T03:04:05Z"),
+            ("id_before", "5"),
+        ]);
+        let parsed = url::Url::parse(out.as_ref()).unwrap();
+        let got: Vec<(String, String)> = parsed
+            .query_pairs()
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    "updated_before".to_string(),
+                    "2026-01-02T03:04:05Z".to_string()
+                ),
+                ("id_before".to_string(), "5".to_string()),
+            ]
+        );
+        // A value with reserved chars round-trips *decoded*.
+        let out2 = base.with_query_pairs(&[("q", "a b&c=d")]);
+        let p2 = url::Url::parse(out2.as_ref()).unwrap();
+        assert_eq!(p2.query_pairs().next().unwrap().1.into_owned(), "a b&c=d");
     }
 
     // -- compose: relative fallback (D3, AC#5) --
