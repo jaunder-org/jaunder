@@ -111,7 +111,7 @@ any broader #91 boundary audit.
   generated wire struct `SetDefaultPostFormat { pub format: PostFormat }` is
   what the ActionForm submits.
 
-- [ ] **Step 1: Add the serde_qs dev-dep and write the failing wire-decode
+- [x] **Step 1: Add the serde_qs dev-dep and write the failing wire-decode
       reject test** (AC5, serde_qs prong — `set_default_post_format` uses
       server_fn's default `Url` codec = serde_qs).
 
@@ -139,7 +139,7 @@ any broader #91 boundary audit.
   }
   ```
 
-- [ ] **Step 2: Run it, verify it FAILS.**
+- [x] **Step 2: Run it, verify it FAILS.**
 
   Run:
   `cargo nextest run -p web --lib set_default_post_format_wire_rejects_unknown_token`
@@ -147,7 +147,7 @@ any broader #91 boundary audit.
   a plain string, so the `is_err()` assertion fails (this is the red that drives
   the retype).
 
-- [ ] **Step 3: Type the two profile server fns and drop the in-body parse.**
+- [x] **Step 3: Type the two profile server fns and drop the in-body parse.**
 
   In `web/src/profile/mod.rs`: **remove** `PostFormat` from the gated
   `use storage::{…}` block (line 18 — after the retype it is otherwise an unused
@@ -186,14 +186,14 @@ any broader #91 boundary audit.
   (Cf. `update_profile` at :59-74 — the existing ADR-0065 typed-wire-arg
   precedent in this same file.)
 
-- [ ] **Step 4: Run the wire-decode test, verify it PASSES.**
+- [x] **Step 4: Run the wire-decode test, verify it PASSES.**
 
   Run:
   `cargo nextest run -p web --lib set_default_post_format_wire_rejects_unknown_token`
   Expected: PASS — the typed `PostFormat` now rejects `format=bogus` at serde_qs
   decode.
 
-- [ ] **Step 5: Retype the profile control's compares + fallback.**
+- [x] **Step 5: Retype the profile control's compares + fallback.**
 
   In `web/src/pages/profile.rs` `DefaultPostFormatControl` (:126-154): `initial`
   now resolves to `PostFormat`. Change the fallback and the `<option selected>`
@@ -212,13 +212,13 @@ any broader #91 boundary audit.
   `<select name="format">` + `ServerAction::<SetDefaultPostFormat>` are
   unchanged.
 
-- [ ] **Step 6: Verify host build + wasm client stub compile.**
+- [x] **Step 6: Verify host build + wasm client stub compile.**
 
   Run: `cargo clippy -p web --all-targets` then
   `cargo clippy -p web --target wasm32-unknown-unknown` Expected: PASS (proves
   the ungated `PostFormat` import satisfies the wasm client stub).
 
-- [ ] **Step 7: Add the profile default-format save/reload e2e** (AC6, serde_qs
+- [x] **Step 7: Add the profile default-format save/reload e2e** (AC6, serde_qs
       happy path).
 
   `end2end/tests/profile.spec.ts` has no default-format coverage. Add a test
@@ -229,13 +229,13 @@ any broader #91 boundary audit.
   existing `profile.spec.ts` login/fixture setup and its `<select>`/submit
   selector idioms; use the `.j-field-val` select + the "Save" button.
 
-- [ ] **Step 8: Run the host gate** (locally the e2e VM is reaped — run the host
+- [x] **Step 8: Run the host gate** (locally the e2e VM is reaped — run the host
       gate and let CI's matrix gate e2e; if running a single spec locally,
       expect it may be killed, not failed).
 
   Run: `cargo xtask validate --no-e2e` Expected: PASS.
 
-- [ ] **Step 9: Commit.**
+- [x] **Step 9: Commit.**
 
   ```bash
   git add web/Cargo.toml web/src/profile/mod.rs web/src/pages/profile.rs end2end/tests/profile.spec.ts
@@ -270,7 +270,7 @@ any broader #91 boundary audit.
   compose/edit components and any DTO consumer now see a typed field; the wire
   token is unchanged).
 
-- [ ] **Step 1: Write the failing decode-reject tests** (AC5, serde_json path).
+- [x] **Step 1: Write the failing decode-reject tests** (AC5, serde_json path).
 
   Append to the `web/src/posts/api.rs` tests module. Build a valid value,
   serialize, then corrupt only the format token — so the test never hardcodes
@@ -327,14 +327,14 @@ any broader #91 boundary audit.
   imported per nested fn — so each new test brings its own via `use super::…` /
   `use common::ids::PostId;` as shown.)
 
-- [ ] **Step 2: Run them, verify they FAIL to compile.**
+- [x] **Step 2: Run them, verify they FAIL to compile.**
 
   Run:
   `cargo nextest run -p web --lib posts::api create_post_args_rejects update_post_args_rejects`
   Expected: FAIL — `CreatePostArgs.format`/`UpdatePostArgs.format` are still
   `String`, so `format: PostFormat::Markdown` doesn't type-check.
 
-- [ ] **Step 3: Retype the wire structs + drop the in-body parses.**
+- [x] **Step 3: Retype the wire structs + drop the in-body parses.**
 
   In `web/src/posts/api.rs`: add `use common::render::PostFormat;` **ungated**
   (it now appears in un-cfg'd wire structs + client stubs). **Remove**
@@ -354,7 +354,7 @@ any broader #91 boundary audit.
     `PostCreation`.
   - Delete the same parse in `update_post` (:357).
 
-- [ ] **Step 4: Fix the `PostResponse.format` producer + fixture.**
+- [x] **Step 4: Fix the `PostResponse.format` producer + fixture.**
   - `web/src/posts/server.rs:75` — `post_response` builds
     `format: format.to_string()` from a `PostRecord.format` (a `PostFormat`);
     change to `format: format` (drop `.to_string()`).
@@ -363,7 +363,7 @@ any broader #91 boundary audit.
     (StrEnum has no infallible `From<&str>`, so `.into()` no longer compiles).
     Add `use common::render::PostFormat;` if not in scope.
 
-- [ ] **Step 5: Retype the editor signal, the `ComposerFields` prop, and the
+- [x] **Step 5: Retype the editor signal, the `ComposerFields` prop, and the
       three toggles.**
 
   In `web/src/posts/component.rs` (add `use common::render::PostFormat;` if not
@@ -391,7 +391,7 @@ any broader #91 boundary audit.
     **no** edit — `format.get()` now yields a `PostFormat` that fits the retyped
     field directly.
 
-- [ ] **Step 6: Delete the vestigial hidden input + update the doc comment**
+- [x] **Step 6: Delete the vestigial hidden input + update the doc comment**
       (D2).
   - Delete
     `<input type="hidden" name="format" prop:value=move || format.get() />`
@@ -401,13 +401,13 @@ any broader #91 boundary audit.
   - Update the `ComposerFields` doc comment (:43-46) to drop the "and a
     `name="format"` hidden input" clause.
 
-- [ ] **Step 7: Run the decode tests, verify they PASS.**
+- [x] **Step 7: Run the decode tests, verify they PASS.**
 
   Run:
   `cargo nextest run -p web --lib posts::api create_post_args_rejects update_post_args_rejects`
   Expected: PASS.
 
-- [ ] **Step 8: Verify host + wasm client builds and the full host gate.**
+- [x] **Step 8: Verify host + wasm client builds and the full host gate.**
 
   Run: `cargo clippy -p web --target wasm32-unknown-unknown` (proves the ungated
   import satisfies the client stub), then `cargo xtask validate --no-e2e`.
@@ -415,13 +415,13 @@ any broader #91 boundary audit.
   toggle selection) exercises the compose path unchanged and gates in CI's e2e
   matrix.
 
-- [ ] **Step 9: Confirm the acceptance greps.**
+- [x] **Step 9: Confirm the acceptance greps.**
 
   Run: `rg 'parse::<PostFormat>\(\)' web/src` → expect **no** hits in
   `create_post`/ `update_post`/`set_default_post_format` bodies (AC1). Run:
   `rg '"markdown"|"org"' web/src/posts/component.rs` → expect **no** hits (AC2).
 
-- [ ] **Step 10: Commit.**
+- [x] **Step 10: Commit.**
 
   ```bash
   git add web/src/posts/api.rs web/src/posts/server.rs web/src/posts/render.rs web/src/posts/component.rs
