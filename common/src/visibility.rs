@@ -2,77 +2,43 @@
 //! the viewer identity, and the subscription-admission seam. See ADR-0020.
 
 use crate::ids::{AudienceId, ChannelId, UserId};
-use std::fmt;
+use macros::StrEnum;
 
-macro_rules! str_enum {
-    // Internal: the inherent `as_str`, `TryFrom<&str>`, and `Display` impls,
-    // shared by every public arm so the enum-definition and the impls stay in
-    // one place.
-    (@impls $name:ident { $($variant:ident => $s:literal),+ }) => {
-        impl $name {
-            pub fn as_str(&self) -> &'static str {
-                match self { $(Self::$variant => $s),+ }
-            }
-        }
-        impl TryFrom<&str> for $name {
-            type Error = ();
-            fn try_from(s: &str) -> Result<Self, ()> {
-                match s { $($s => Ok(Self::$variant),)+ _ => Err(()) }
-            }
-        }
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str(self.as_str()) }
-        }
-    };
-    // Internal: wire `Serialize`/`Deserialize` routed through `as_str`/`TryFrom`,
-    // so the invocation's string literals are the single source of truth for the
-    // wire form (no `rename_all` drift).
-    (@serde $name:ident { $($s:literal),+ }) => {
-        impl ::serde::Serialize for $name {
-            fn serialize<S: ::serde::Serializer>(&self, s: S) -> ::core::result::Result<S::Ok, S::Error> {
-                s.serialize_str(self.as_str())
-            }
-        }
-        impl<'de> ::serde::Deserialize<'de> for $name {
-            fn deserialize<D: ::serde::Deserializer<'de>>(d: D) -> ::core::result::Result<Self, D::Error> {
-                // Fully-qualify: the `Deserialize` trait is not `use`d in this
-                // module, so a bare `String::deserialize` method path would not
-                // resolve at the macro-expansion site.
-                let s = <::std::string::String as ::serde::Deserialize>::deserialize(d)?;
-                Self::try_from(s.as_str())
-                    .map_err(|()| <D::Error as ::serde::de::Error>::unknown_variant(&s, &[$($s),+]))
-            }
-        }
-    };
-    // Plain string enum: DB/lookup facing, no serde.
-    ($name:ident { $($variant:ident => $s:literal),+ $(,)? }) => {
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-        pub enum $name { $($variant),+ }
-        str_enum!(@impls $name { $($variant => $s),+ });
-    };
-    // Wire-facing string enum: adds serde. The variant tagged `default` becomes
-    // the derived `Default` (kept first so the `#[default]` attaches to it).
-    (serde $name:ident { default $dvar:ident => $ds:literal $(, $variant:ident => $s:literal)* $(,)? }) => {
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
-        pub enum $name {
-            #[default]
-            $dvar,
-            $($variant),*
-        }
-        str_enum!(@impls $name { $dvar => $ds $(, $variant => $s)* });
-        str_enum!(@serde $name { $ds $(, $s)* });
-    };
+// String-backed enums ride the `StrEnum` trailer: `as_str`/`Display`/`FromStr`/
+// `TryFrom<&str>` + a generated `Invalid<Name>` error, with the wire token defaulting to the
+// lowercased variant name. Wire-facing enums add `#[str_enum(serde)]`; std derives (incl.
+// `Default` via `#[default]`) stay in each enum's own list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, StrEnum)]
+pub enum Channel {
+    Local,
 }
 
-str_enum!(Channel { Local => "local" });
-str_enum!(SubscriptionStatus { Active => "active", Pending => "pending", Blocked => "blocked" });
-str_enum!(TargetKind { Public => "public", Subscribers => "subscribers", Named => "named" });
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, StrEnum)]
+pub enum SubscriptionStatus {
+    Active,
+    Pending,
+    Blocked,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, StrEnum)]
+pub enum TargetKind {
+    Public,
+    Subscribers,
+    Named,
+}
 
 // The mutually-exclusive built-in audience base chosen in the editor / API — the
 // typed form of the audience-picker's `base`. Composes with named audiences by
 // union except for `Private` (author-only), which is the safe, non-widening
 // `Default` (faithful to the prior empty-string -> author-only fall-through). #499.
-str_enum!(serde AudienceBase { default Private => "private", Public => "public", Subscribers => "subscribers" });
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, StrEnum)]
+#[str_enum(serde)]
+pub enum AudienceBase {
+    #[default]
+    Private,
+    Public,
+    Subscribers,
+}
 
 /// Who is reading. Wider than Layer A needs (only `Anonymous` and the local
 /// channel are constructed today) so non-local channels need no signature change

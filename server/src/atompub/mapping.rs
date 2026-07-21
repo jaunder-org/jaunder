@@ -38,7 +38,7 @@ pub struct PostFields {
 
 /// The wire `atom:content` `type` for a post format (ADR-0023). `Html` uses the
 /// `html` token (markup), NOT `text/html` (which would mean escaped text).
-fn format_to_wire(format: &PostFormat) -> &'static str {
+fn format_to_wire(format: PostFormat) -> &'static str {
     match format {
         PostFormat::Org => "text/org",
         PostFormat::Markdown => "text/markdown",
@@ -142,7 +142,7 @@ pub fn post_to_entry(post: &PostRecord, base_url: Option<&AbsoluteUrl>) -> Entry
     let edit_uri = compose(base_url, &edit_path);
 
     // Content: the post's format becomes the wire media `type` (native source form).
-    let content_type = format_to_wire(&post.format);
+    let content_type = format_to_wire(post.format);
 
     // Links: always an `edit` link; a public `alternate` only when published.
     let mut links = vec![Link {
@@ -212,7 +212,7 @@ mod tests {
     #[test]
     fn format_wire_round_trips_every_format() {
         for f in [PostFormat::Org, PostFormat::Markdown, PostFormat::Html] {
-            let wire = format_to_wire(&f);
+            let wire = format_to_wire(f);
             assert_eq!(
                 wire_to_format(Some(wire), PostFormat::Markdown),
                 f,
@@ -224,13 +224,13 @@ mod tests {
     #[test]
     fn wire_to_format_is_lenient() {
         let d = PostFormat::Html; // distinctive default
-        assert_eq!(wire_to_format(Some("text/org"), d.clone()), PostFormat::Org);
+        assert_eq!(wire_to_format(Some("text/org"), d), PostFormat::Org);
         assert_eq!(
-            wire_to_format(Some("text/markdown"), d.clone()),
+            wire_to_format(Some("text/markdown"), d),
             PostFormat::Markdown
         );
         assert_eq!(
-            wire_to_format(Some("text/markdown; variant=GFM"), d.clone()),
+            wire_to_format(Some("text/markdown; variant=GFM"), d),
             PostFormat::Markdown
         );
         assert_eq!(
@@ -245,9 +245,9 @@ mod tests {
             wire_to_format(Some("text/html"), PostFormat::Org),
             PostFormat::Html
         );
-        assert_eq!(wire_to_format(Some("text"), d.clone()), d.clone()); // bare text → default
-        assert_eq!(wire_to_format(None, d.clone()), d.clone()); // absent → default
-        assert_eq!(wire_to_format(Some("application/x-weird"), d.clone()), d); // unknown → default
+        assert_eq!(wire_to_format(Some("text"), d), d); // bare text → default
+        assert_eq!(wire_to_format(None, d), d); // absent → default
+        assert_eq!(wire_to_format(Some("application/x-weird"), d), d); // unknown → default
     }
 
     // -----------------------------------------------------------------------
