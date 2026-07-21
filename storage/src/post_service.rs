@@ -507,7 +507,7 @@ pub async fn perform_post_creation(
                 title: metadata.title.clone(),
                 slug,
                 body: body.clone(),
-                format: format.clone(),
+                format,
                 published_at,
                 summary: summary.clone(),
                 audiences: audiences.clone(),
