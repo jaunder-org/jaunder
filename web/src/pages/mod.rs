@@ -7,7 +7,6 @@ pub mod profile;
 pub mod sessions;
 pub(crate) mod signal_read;
 pub mod site;
-pub(crate) mod timeline;
 pub mod ui;
 pub use ui::{Avatar, Icon, Icons, Sidebar, Topbar};
 
