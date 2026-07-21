@@ -9,11 +9,13 @@ use crate::{
     InviteRecord, MediaRecord, MediaSource, PostFormat, PostRecord, PostTag, RenderedHtml,
     SessionRecord, UserRecord,
 };
+use common::bio::Bio;
 use common::display_name::DisplayName;
 use common::email::Email;
 use common::ids::{PostId, TagId, UserId};
-use common::media::{ContentHash, Filename};
+use common::media::{ContentHash, ContentType, Filename};
 use common::post_body::PostBody;
+use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
@@ -29,7 +31,7 @@ pub(crate) type UserRecordParts = (
     i64,
     Username,
     Option<DisplayName>,
-    Option<String>,
+    Option<Bio>,
     DateTime<Utc>,
     Option<DateTime<Utc>>,
     Option<Email>,
@@ -139,7 +141,7 @@ pub(crate) type PostRecordParts = (
     DateTime<Utc>,
     Option<DateTime<Utc>>,
     Option<DateTime<Utc>>,
-    Option<String>,
+    Option<PostSummary>,
     String,
 );
 
@@ -229,7 +231,7 @@ pub(crate) type UserRow = (
     i64,
     Username,
     Option<DisplayName>,
-    Option<String>,
+    Option<Bio>,
     DateTime<Utc>,
     Option<DateTime<Utc>>,
     Option<Email>,
@@ -291,7 +293,7 @@ pub(crate) type PostRow = (
     DateTime<Utc>,
     Option<DateTime<Utc>>,
     Option<DateTime<Utc>>,
-    Option<String>,
+    Option<PostSummary>,
     String,
 );
 
@@ -304,7 +306,7 @@ pub(crate) type MediaRow = (
     ContentHash,
     Filename,
     String,
-    String,
+    ContentType,
     i64,
     Option<String>,
     DateTime<Utc>,
@@ -433,8 +435,8 @@ mod tests {
     use crate::test_support::parse_invite_code;
     use chrono::Utc;
     use common::test_support::{
-        parse_content_hash, parse_display_name, parse_email, parse_filename, parse_password,
-        parse_slug, parse_token_hash, parse_username,
+        parse_bio, parse_content_hash, parse_content_type, parse_display_name, parse_email,
+        parse_filename, parse_password, parse_slug, parse_token_hash, parse_username,
     };
 
     #[test]
@@ -444,7 +446,7 @@ mod tests {
             1,
             parse_username("alice"),
             Some(parse_display_name("Alice")),
-            Some("Bio".to_string()),
+            Some(parse_bio("Bio")),
             now,
             Some(now),
             Some(parse_email("alice@example.com")),
@@ -672,7 +674,7 @@ mod tests {
             parse_content_hash(ROW_HASH),
             parse_filename("file.png"),
             "not-a-source".to_string(),
-            "image/png".to_string(),
+            parse_content_type("image/png"),
             42,
             None,
             Utc::now(),
@@ -694,7 +696,7 @@ mod tests {
             parse_content_hash(ROW_HASH),
             parse_filename("file.png"),
             "upload".to_string(),
-            "image/png".to_string(),
+            parse_content_type("image/png"),
             42,
             None,
             Utc::now(),
@@ -834,7 +836,7 @@ mod tests {
             1,
             parse_username("alice"),
             Some(parse_display_name("Alice")),
-            Some("Bio".to_string()),
+            Some(parse_bio("Bio")),
             now,
             Some(now),
             Some(parse_email("alice@example.com")),
@@ -845,7 +847,7 @@ mod tests {
         assert_eq!(record.user_id, UserId::from(1));
         assert_eq!(record.username, "alice");
         assert_eq!(record.display_name, Some(parse_display_name("Alice")));
-        assert_eq!(record.bio, Some("Bio".to_string()));
+        assert_eq!(record.bio, Some(parse_bio("Bio")));
         assert_eq!(record.created_at, now);
         assert_eq!(record.last_authenticated_at, Some(now));
         assert_eq!(record.email.unwrap(), "alice@example.com");

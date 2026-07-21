@@ -8,20 +8,35 @@
 // self-flags if the scaffolding ever stops using `expect`.
 #![expect(clippy::expect_used)]
 
+use crate::absolute_url::AbsoluteUrl;
 use crate::audience::AudienceName;
 use crate::backup::RetentionCount;
+use crate::bio::Bio;
 use crate::display_name::DisplayName;
 use crate::email::Email;
 use crate::feed::{FeedMinDays, FeedMinItems};
-use crate::media::{ContentHash, Filename, MaxFileSize, UserQuota};
+use crate::media::{ContentHash, ContentType, Filename, MaxFileSize, UserQuota};
 use crate::pagination::PageSize;
 use crate::password::Password;
+use crate::post_summary::PostSummary;
 use crate::post_title::PostTitle;
 use crate::slug::Slug;
 use crate::tag::{Tag, TagLabel};
 use crate::time::UtcInstant;
 use crate::token::{RawToken, TokenHash};
 use crate::username::Username;
+
+/// Parse `s` into a valid [`AbsoluteUrl`] for tests — the single place a test
+/// absolute-URL literal is parsed, so a malformed fixture fails loudly and the parse
+/// isn't re-spelled at every call site across the workspace.
+///
+/// # Panics
+///
+/// Panics if `s` is not a valid absolute `http(s)` URL.
+#[must_use]
+pub fn parse_absolute_url(s: &str) -> AbsoluteUrl {
+    s.parse().expect("valid test absolute URL")
+}
 
 /// Parse `addr` into a valid [`Email`] for tests — the single place a test email
 /// literal is parsed, so a malformed fixture fails loudly and the parse isn't
@@ -57,6 +72,18 @@ pub fn parse_audience_name(name: &str) -> AudienceName {
 #[must_use]
 pub fn parse_display_name(name: &str) -> DisplayName {
     name.parse().expect("valid test display name")
+}
+
+/// Parse `s` into a valid [`Bio`] for tests — the single place a test bio literal is
+/// parsed, so a malformed fixture (empty or over the length bound) fails loudly and the
+/// validating `FromStr` isn't re-spelled at every profile fixture across the workspace.
+///
+/// # Panics
+///
+/// Panics if `s` is empty/whitespace-only or longer than the length bound.
+#[must_use]
+pub fn parse_bio(s: &str) -> Bio {
+    s.parse().expect("valid test bio")
 }
 
 /// Parse `s` into a valid [`RetentionCount`] for tests — the single place a test
@@ -128,6 +155,19 @@ pub fn parse_post_title(title: &str) -> PostTitle {
     PostTitle::from(title.to_owned())
 }
 
+/// Parse `s` into a valid [`PostSummary`] for tests — the single place a test post-summary
+/// literal is parsed, so a malformed fixture (empty or over the length bound) fails loudly
+/// and the validating `FromStr` isn't re-spelled at every post/feed fixture across the
+/// workspace.
+///
+/// # Panics
+///
+/// Panics if `s` is empty/whitespace-only or longer than the length bound.
+#[must_use]
+pub fn parse_post_summary(s: &str) -> PostSummary {
+    s.parse().expect("valid test post summary")
+}
+
 /// Parse `s` into a valid [`ContentHash`] for tests — the single place a test
 /// media-content-hash literal is parsed, so a malformed fixture fails loudly and
 /// the parse isn't re-spelled at every media store-seeding call site.
@@ -150,6 +190,18 @@ pub fn parse_content_hash(s: &str) -> ContentHash {
 #[must_use]
 pub fn parse_filename(name: &str) -> Filename {
     name.parse().expect("valid test filename")
+}
+
+/// Parse `s` into a valid [`ContentType`] for tests — the single place a test content-type
+/// literal is parsed, so a malformed fixture fails loudly and the parse isn't re-spelled at
+/// every media store-seeding call site across the workspace.
+///
+/// # Panics
+///
+/// Panics if `s` is not a valid `type/subtype` media type.
+#[must_use]
+pub fn parse_content_type(s: &str) -> ContentType {
+    s.parse().expect("valid test content type")
 }
 
 /// Parse `s` into a [`MaxFileSize`] for tests — the single place a test media

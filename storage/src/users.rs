@@ -7,6 +7,7 @@ use thiserror::Error;
 use tracing::Instrument;
 
 use crate::backend::Backend;
+use common::bio::Bio;
 use common::display_name::DisplayName;
 use common::email::Email;
 use common::ids::UserId;
@@ -29,7 +30,7 @@ pub struct UserRecord {
     /// User's preferred display name.
     pub display_name: Option<DisplayName>,
     /// Optional short biography.
-    pub bio: Option<String>,
+    pub bio: Option<Bio>,
     /// When the account was created.
     pub created_at: DateTime<Utc>,
     /// When the user last successfully authenticated.
@@ -110,12 +111,13 @@ pub fn login_outcome(error: &UserAuthError) -> host::metrics::LoginOutcome {
 /// Fields to update on a user's profile.
 ///
 /// `None` clears the field, `Some(v)` sets it. `display_name` is a validated
-/// [`DisplayName`] (the invariant is held at the boundary); `bio` is free-form.
+/// [`DisplayName`] and `bio` a validated [`Bio`] (the invariants are held at the
+/// boundary).
 pub struct ProfileUpdate<'a> {
     /// New display name, or `None` to clear.
     pub display_name: Option<&'a DisplayName>,
-    /// New bio text, or `None` to clear.
-    pub bio: Option<&'a str>,
+    /// New bio, or `None` to clear.
+    pub bio: Option<&'a Bio>,
 }
 
 /// Async operations on the `users` table.
@@ -214,7 +216,7 @@ where
         i64,
         Username,
         Option<DisplayName>,
-        Option<String>,
+        Option<Bio>,
         DateTime<Utc>,
         Option<DateTime<Utc>>,
         String,
@@ -226,17 +228,16 @@ where
     usize: sqlx::ColumnIndex<DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    // `Username`/`DisplayName`/`Email` bind/decode as themselves via the sqlx
+    // `Username`/`DisplayName`/`Bio`/`Email` bind/decode as themselves via the sqlx
     // bridge (#438), which delegates to `String`; these bounds make that bridge
     // available on the generic backend (the `String` pair covers the by-value
-    // newtype impls; the `Option<&…>` pairs cover the nullable profile binds,
-    // mirroring the `Option<&str>` bound the old `&**`-deref binds required).
+    // newtype impls; the `Option<&…>` pairs cover the nullable profile binds).
     String: sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
     for<'q> Option<&'q DisplayName>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<&'q Bio>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<&'q Email>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> bool: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> Option<&'q str>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
@@ -305,7 +306,7 @@ where
                 i64,
                 Username,
                 Option<DisplayName>,
-                Option<String>,
+                Option<Bio>,
                 DateTime<Utc>,
                 Option<DateTime<Utc>>,
                 String,
@@ -460,7 +461,9 @@ where
 mod tests {
     use super::*;
     use crate::test_support::{backends, seed_user, Backend, CloseablePool};
-    use common::test_support::{parse_display_name, parse_email, parse_password, parse_username};
+    use common::test_support::{
+        parse_bio, parse_display_name, parse_email, parse_password, parse_username,
+    };
     use rstest::*;
     use rstest_reuse::*;
 
@@ -565,6 +568,68 @@ mod tests {
         // bridge, which validates through `FromStr`; the malformed value surfaces
         // as a column-decode error rather than being silently admitted (covers the
         // bridge's `Decode` error arm).
+        let err = env.state.users.get_user(user_id).await.unwrap_err();
+        assert!(
+            matches!(err, sqlx::Error::ColumnDecode { .. }),
+            "expected a column-decode error, got: {err:?}"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn update_profile_sets_and_then_clears_bio(#[case] backend: Backend) {
+        // `bio` binds as `Option<&Bio>` (a typed newtype bind via the ADR-0071 sqlx
+        // bridge) and decodes back into `Option<Bio>`; `None` clears it. Exercises
+        // both the set and the clear paths across both backends.
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+
+        let bio = parse_bio("hi");
+        env.state
+            .users
+            .update_profile(
+                user_id,
+                &ProfileUpdate {
+                    display_name: None,
+                    bio: Some(&bio),
+                },
+            )
+            .await
+            .unwrap();
+        let record = env.state.users.get_user(user_id).await.unwrap().unwrap();
+        assert_eq!(record.bio, Some(parse_bio("hi")));
+
+        env.state
+            .users
+            .update_profile(
+                user_id,
+                &ProfileUpdate {
+                    display_name: None,
+                    bio: None,
+                },
+            )
+            .await
+            .unwrap();
+        let cleared = env.state.users.get_user(user_id).await.unwrap().unwrap();
+        assert_eq!(cleared.bio, None);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn reading_user_with_overlong_bio_in_db_errors(#[case] backend: Backend) {
+        // A pre-existing row whose bio exceeds MAX_BIO_CHARS (the column is unbounded
+        // TEXT) must surface as a column-decode error at the strict read boundary —
+        // never a panic — because the validating sqlx `Decode` fails closed through
+        // `Bio`'s `FromStr`. The over-cap value is unconstructible via the newtype, so
+        // it is forced in with raw SQL. Mirrors the overlong-display-name case.
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let overlong = "a".repeat(common::bio::MAX_BIO_CHARS + 1);
+        let sql = format!(
+            "UPDATE users SET bio='{overlong}' WHERE user_id={}",
+            i64::from(user_id)
+        );
+        env.base.pool().execute(sql.as_str()).await.unwrap();
         let err = env.state.users.get_user(user_id).await.unwrap_err();
         assert!(
             matches!(err, sqlx::Error::ColumnDecode { .. }),

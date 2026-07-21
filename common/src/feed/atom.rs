@@ -18,7 +18,7 @@ pub fn render_atom(meta: &FeedMetadata, items: &[FeedItem]) -> String {
     ];
     if let Some(hub) = &meta.hub_url {
         links.push(Link {
-            href: hub.clone(),
+            href: hub.to_string(),
             rel: "hub".to_string(),
             ..Default::default()
         });
@@ -54,7 +54,9 @@ pub fn render_atom(meta: &FeedMetadata, items: &[FeedItem]) -> String {
                 ..Default::default()
             };
             if let Some(s) = &i.summary {
-                entry.summary = Some(Text::plain(s.clone()));
+                // ADR-0063 §5: read the summary out to a plain `String` at the
+                // atom_syndication boundary (mirrors the `title` handling above).
+                entry.summary = Some(Text::plain(s.to_string()));
             }
             entry
         })
@@ -81,7 +83,7 @@ mod tests {
     use crate::feed::metadata::{FeedItem, FeedMetadata};
     use crate::ids::PostId;
     use crate::render::RenderedHtml;
-    use crate::test_support::parse_post_title;
+    use crate::test_support::{parse_absolute_url, parse_post_summary, parse_post_title};
 
     fn meta(hub: Option<&str>) -> FeedMetadata {
         FeedMetadata {
@@ -89,7 +91,7 @@ mod tests {
             description: Some("A site".into()),
             canonical_url: "https://example.com/".into(),
             self_url: "https://example.com/feed.atom".into(),
-            hub_url: hub.map(str::to_string),
+            hub_url: hub.map(parse_absolute_url),
             updated_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
         }
     }
@@ -99,7 +101,7 @@ mod tests {
             id: PostId::from(1),
             title: Some(parse_post_title("Hello")),
             permalink: "https://example.com/~alice/posts/1".into(),
-            summary: Some("hi".into()),
+            summary: Some(parse_post_summary("hi")),
             content_html: RenderedHtml::from_trusted("<p>hi</p>"),
             published_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
             updated_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),

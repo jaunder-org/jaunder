@@ -3,7 +3,7 @@ use common::ids::{PostId, UserId};
 use common::password::Password;
 use common::tag::TagLabel;
 use common::test_support::{
-    parse_audience_name, parse_content_hash, parse_display_name, parse_filename,
+    parse_audience_name, parse_content_hash, parse_content_type, parse_display_name, parse_filename,
 };
 use common::username::Username;
 use common::visibility::{AudienceTarget, ViewerIdentity};
@@ -168,7 +168,7 @@ async fn seed_side_tables(state: &AppState, author: UserId) {
             sha256: parse_content_hash(FIXTURE_MEDIA_SHA256),
             filename: parse_filename("photo.jpg"),
             source: MediaSource::Upload,
-            content_type: "image/jpeg".to_owned(),
+            content_type: parse_content_type("image/jpeg"),
             size_bytes: 4,
             source_url: None,
             created_at: fixture_published_at(),

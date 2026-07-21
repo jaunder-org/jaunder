@@ -8,6 +8,7 @@ use thiserror::Error;
 use common::feed::FeedPath;
 use common::ids::{AudienceId, PostId, RevisionId, TagId, UserId};
 use common::post_body::PostBody;
+use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
@@ -68,7 +69,7 @@ pub struct PostRecord {
     /// When the post was soft-deleted (None if active).
     pub deleted_at: Option<DateTime<Utc>>,
     /// Optional summary/excerpt of the post.
-    pub summary: Option<String>,
+    pub summary: Option<PostSummary>,
     pub tags: Vec<PostTag>,
 }
 
@@ -89,16 +90,28 @@ impl PostRecord {
         )
     }
 
-    /// Generates a fallback plain-text summary from the post's body, title, or slug.
-    pub fn fallback_summary_label(&self) -> String {
-        self.body
+    /// Generates a fallback summary from the post's body, title, or slug. The
+    /// fallback chain always yields a non-empty label (first non-empty body line →
+    /// title → slug), which [`PostSummary::truncated`] length-caps into the newtype.
+    pub fn fallback_summary_label(&self) -> PostSummary {
+        let label = self
+            .body
             .lines()
             .map(str::trim)
             .find(|line| !line.is_empty())
             .map(|line| line.chars().take(100).collect::<String>())
             .filter(|line| !line.is_empty())
-            .or_else(|| self.title.clone().map(String::from))
-            .unwrap_or_else(|| self.slug.to_string())
+            // Guard the title branch too: `PostTitle` is infallible and may be
+            // empty-after-trim, so fall through to the always-non-empty slug rather
+            // than feed `truncated` an empty label (its one invariant gap).
+            .or_else(|| {
+                self.title
+                    .clone()
+                    .map(String::from)
+                    .filter(|t| !t.trim().is_empty())
+            })
+            .unwrap_or_else(|| self.slug.to_string());
+        PostSummary::truncated(&label)
     }
 }
 
@@ -203,7 +216,7 @@ pub struct CreatePostInput {
     /// If Some, the post is created in a published state.
     pub published_at: Option<DateTime<Utc>>,
     /// Optional summary/excerpt of the post.
-    pub summary: Option<String>,
+    pub summary: Option<PostSummary>,
     /// Audience targeting for the post. Each entry becomes a `post_audiences`
     /// row; `Private` and an empty vec produce no rows (the post is private).
     pub audiences: Vec<AudienceTarget>,
@@ -230,7 +243,7 @@ pub struct UpdatePostInput {
     /// previously-unpublished post. Ignored when `unpublish` is `true`.
     pub explicit_published_at: Option<DateTime<Utc>>,
     /// Optional summary/excerpt of the post.
-    pub summary: Option<String>,
+    pub summary: Option<PostSummary>,
     /// Audience targeting for the post. On update the existing
     /// `post_audiences` rows are replaced to match this vec; `Private` and an
     /// empty vec produce no rows (the post is private).
@@ -838,6 +851,10 @@ where
     String: sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
     for<'q> Option<&'q PostTitle>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    // `summary` binds as `Option<&PostSummary>` via the ADR-0071 sqlx bridge
+    // (delegates to `String`) on the create paths, mirroring the
+    // `Option<&PostTitle>` bound above.
+    for<'q> Option<&'q PostSummary>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<i64>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<DateTime<Utc>>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -1868,6 +1885,10 @@ where
     String: sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
     for<'q> Option<&'q PostTitle>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    // `summary` binds as `Option<&PostSummary>` via the ADR-0071 sqlx bridge
+    // (delegates to `String`) on the create paths, mirroring the
+    // `Option<&PostTitle>` bound above.
+    for<'q> Option<&'q PostSummary>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     (i64,): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
@@ -1891,7 +1912,10 @@ where
     .bind(now)
     .bind(now)
     .bind(input.published_at)
-    .bind(input.summary.as_deref())
+    // `Option::as_ref` → `Option<&PostSummary>` (a typed newtype bind via the
+    // ADR-0071 sqlx bridge, not an `AsRef<str>` strip); the `sqlx-newtype-bind`
+    // gate forbids stripping to `&str` here.
+    .bind(input.summary.as_ref())
     .fetch_one(&mut *conn)
     .await
     .map_err(|e| match e {
@@ -2224,7 +2248,8 @@ mod tests {
     use super::*;
     use crate::test_support::{backends, seed_user, Backend, CloseablePool};
     use common::test_support::{
-        parse_post_title, parse_slug, parse_tag, parse_tag_label, parse_username,
+        parse_post_summary, parse_post_title, parse_slug, parse_tag, parse_tag_label,
+        parse_username,
     };
     use rstest::*;
     use rstest_reuse::*;
@@ -2361,6 +2386,11 @@ mod tests {
         post.body = "".into();
         assert_eq!(post.fallback_summary_label(), "My Title");
 
+        // Case 2b: An empty-after-trim title (PostTitle is infallible) must not mint an
+        // empty PostSummary — it falls through to the always-non-empty slug.
+        post.title = Some("   ".into());
+        assert_eq!(post.fallback_summary_label(), "my-slug");
+
         // Case 3: Body and title are empty. It should use the slug.
         post.title = None;
         assert_eq!(post.fallback_summary_label(), "my-slug");
@@ -2403,7 +2433,7 @@ mod tests {
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Test body</p>"),
             published_at: None,
-            summary: Some("the summary".into()),
+            summary: Some(parse_post_summary("the summary")),
             audiences: vec![AudienceTarget::Public],
             idempotency_key: None,
         };
@@ -2415,7 +2445,103 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        assert_eq!(post.summary, Some("the summary".into()));
+        assert_eq!(post.summary, Some(parse_post_summary("the summary")));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn update_post_persists_and_clears_summary(#[case] backend: Backend) {
+        // `update_post` writes the `summary` column (previously omitted from the SET
+        // clause, so an edited summary was silently dropped). An edit replaces the
+        // value; `None` clears it. The returned record reflects the RETURNING row.
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let posts = &*env.state.posts;
+
+        let post_id = posts
+            .create_post(&CreatePostInput {
+                user_id,
+                title: Some("Test Title".into()),
+                slug: parse_slug("summary-edit"),
+                body: "Test body".into(),
+                format: PostFormat::Markdown,
+                rendered_html: RenderedHtml::from_trusted("<p>Test body</p>"),
+                published_at: None,
+                summary: Some(parse_post_summary("original summary")),
+                audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
+            })
+            .await
+            .unwrap();
+
+        let update = |summary| UpdatePostInput {
+            title: Some("Test Title".into()),
+            slug: parse_slug("summary-edit"),
+            body: "Test body".into(),
+            format: PostFormat::Markdown,
+            rendered_html: RenderedHtml::from_trusted("<p>Test body</p>"),
+            unpublish: false,
+            explicit_published_at: None,
+            summary,
+            audiences: vec![AudienceTarget::Public],
+        };
+
+        // An edit replaces the summary.
+        let changed = posts
+            .update_post(
+                post_id,
+                user_id,
+                &update(Some(parse_post_summary("edited summary"))),
+            )
+            .await
+            .unwrap();
+        assert_eq!(changed.summary, Some(parse_post_summary("edited summary")));
+
+        // `None` clears it.
+        let cleared = posts
+            .update_post(post_id, user_id, &update(None))
+            .await
+            .unwrap();
+        assert_eq!(cleared.summary, None);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn reading_post_with_overlong_summary_in_db_errors(#[case] backend: Backend) {
+        // A pre-existing row whose summary exceeds MAX_POST_SUMMARY_CHARS (the
+        // column is unbounded TEXT) must surface as an error at the strict read
+        // boundary — never a panic — because the validating sqlx `Decode` fails
+        // closed through `PostSummary`'s `FromStr`. The over-cap value is
+        // unconstructible via the newtype, so it is forced in with raw SQL.
+        // Mirrors `users.rs`'s overlong-display-name fail-closed test.
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let posts = &*env.state.posts;
+        let input = CreatePostInput {
+            user_id,
+            title: Some("Test Title".into()),
+            slug: parse_slug("overlong-summary"),
+            body: "Test body".into(),
+            format: PostFormat::Markdown,
+            rendered_html: RenderedHtml::from_trusted("<p>Test body</p>"),
+            published_at: None,
+            summary: Some(parse_post_summary("valid summary")),
+            audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
+        };
+        let post_id = posts.create_post(&input).await.unwrap();
+
+        let overlong = "a".repeat(common::post_summary::MAX_POST_SUMMARY_CHARS + 1);
+        let sql = format!(
+            "UPDATE posts SET summary='{overlong}' WHERE post_id={}",
+            i64::from(post_id)
+        );
+        env.base.pool().execute(sql.as_str()).await.unwrap();
+
+        let result = posts
+            .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
+            .await;
+        assert!(result.is_err());
     }
 
     #[apply(backends)]

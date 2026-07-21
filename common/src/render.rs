@@ -9,6 +9,7 @@ use std::str::FromStr;
 use thiserror::Error;
 
 use crate::post_body::PostBody;
+use crate::post_summary::PostSummary;
 use crate::post_title::PostTitle;
 
 /// The format/markup language used to author a post body.
@@ -207,7 +208,7 @@ pub fn render(body: &PostBody, format: &PostFormat) -> RenderedHtml {
 pub struct DerivedPostMetadata {
     pub title: Option<PostTitle>,
     pub slug_seed: String,
-    pub summary_label: String,
+    pub summary_label: PostSummary,
 }
 
 /// Derives the public title, slug seed, and fallback label for a post.
@@ -224,11 +225,11 @@ pub fn derive_post_metadata(
 
     if let Some(title) = explicit_title {
         let title = title.to_owned();
-        let summary_label = fallback_label(body).unwrap_or_else(|| title.clone());
+        let label = fallback_label(body).unwrap_or_else(|| title.clone());
         return Some(DerivedPostMetadata {
             title: Some(PostTitle::from(title.clone())),
             slug_seed: title,
-            summary_label,
+            summary_label: PostSummary::truncated(&label),
         });
     }
 
@@ -239,19 +240,19 @@ pub fn derive_post_metadata(
     };
 
     if let Some(title) = extracted_title {
-        let summary_label = fallback_label(body).unwrap_or_else(|| title.clone());
+        let label = fallback_label(body).unwrap_or_else(|| title.clone());
         return Some(DerivedPostMetadata {
             title: Some(PostTitle::from(title.clone())),
             slug_seed: title,
-            summary_label,
+            summary_label: PostSummary::truncated(&label),
         });
     }
 
-    let summary_label = fallback_label(body)?;
+    let label = fallback_label(body)?;
     Some(DerivedPostMetadata {
         title: None,
-        slug_seed: summary_label.clone(),
-        summary_label,
+        slug_seed: label.clone(),
+        summary_label: PostSummary::truncated(&label),
     })
 }
 

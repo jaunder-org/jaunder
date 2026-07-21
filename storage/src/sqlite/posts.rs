@@ -78,8 +78,9 @@ impl PostDialect for Sqlite {
                          WHEN $7 IS NOT NULL THEN $8
                          ELSE COALESCE(published_at, $9)
                      END,
-                     updated_at = $10
-                 WHERE post_id = $11
+                     updated_at = $10,
+                     summary = $11
+                 WHERE post_id = $12
                  RETURNING post_id, user_id,
                            (SELECT username FROM users WHERE user_id = posts.user_id) AS username,
                            title, slug, body, format, rendered_html,
@@ -94,12 +95,18 @@ impl PostDialect for Sqlite {
             .bind(input.format.to_string())
             .bind(&input.rendered_html)
             // $6 unpublish, $7/$8 explicit_published_at (bound twice: NULL-test
-            // then value), $9 now (COALESCE fallback), $10 now (updated_at).
+            // then value), $9 now (COALESCE fallback), $10 now (updated_at),
+            // $11 summary.
             .bind(input.unpublish)
             .bind(input.explicit_published_at)
             .bind(input.explicit_published_at)
             .bind(now)
             .bind(now)
+            // `Option::as_ref` → `Option<&PostSummary>` (a typed newtype bind via the
+            // ADR-0071 sqlx bridge, not an `AsRef<str>` strip). Persists a summary
+            // edit/clear — the column was previously omitted from the SET clause, so
+            // an edited summary was silently dropped (surfaced by #545's clear e2e).
+            .bind(input.summary.as_ref())
             .bind(i64::from(post_id))
             .fetch_one(&mut *conn)
             .await?;

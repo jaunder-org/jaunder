@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use crate::websub::WebSubClient;
 use chrono::{DateTime, Utc};
+use common::absolute_url::compose;
 use common::feed::{affected_feed_urls, FeedPath};
 use common::ids::FeedEventId;
 use storage::{
@@ -200,11 +201,9 @@ impl FeedWorker {
         identity: Option<&common::site::SiteIdentity>,
     ) {
         if let Some(hub) = hub_url {
-            let base = identity
-                .and_then(|i| i.base_url.as_deref())
-                .unwrap_or("")
-                .trim_end_matches('/');
-            let absolute = format!("{base}{feed_url}");
+            let base = identity.and_then(|i| i.base_url.as_ref());
+            // `compose` joins base + the feed path (or emits the relative path unset).
+            let absolute = compose(base, feed_url);
             tracing::info!(feed_url, hub, attempt, "feed.websub.ping.attempted");
 
             let result = self.websub.send_publish(hub, &absolute).await;

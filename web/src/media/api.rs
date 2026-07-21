@@ -4,7 +4,7 @@
 //! wiring only and re-exports these under the stable `crate::media::…` paths that
 //! external call sites and the server-fn registrar depend on.
 
-use common::media::{ContentHash, Filename, MaxFileSize, UserQuota};
+use common::media::{ContentHash, ContentType, Filename, MaxFileSize, UserQuota};
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -28,7 +28,7 @@ pub struct MediaItem {
     pub sha256: ContentHash,
     pub filename: Filename,
     pub source: String,
-    pub content_type: String,
+    pub content_type: ContentType,
     pub size_bytes: i64,
     pub url: String,
     pub created_at: UtcInstant,

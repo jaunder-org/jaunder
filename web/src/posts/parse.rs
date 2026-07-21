@@ -54,7 +54,7 @@ pub fn draft_row_display(draft: &DraftSummary) -> DraftRowDisplay {
     let label = draft
         .title
         .clone()
-        .map_or_else(|| draft.summary_label.clone(), String::from);
+        .map_or_else(|| draft.summary_label.to_string(), String::from);
     let scheduled_badge = draft
         .scheduled_at
         .map(|when| format!("Scheduled for {when}"));
@@ -68,7 +68,9 @@ pub fn draft_row_display(draft: &DraftSummary) -> DraftRowDisplay {
 mod tests {
     use super::*;
     use common::ids::PostId;
-    use common::test_support::{parse_post_title, parse_slug, parse_username, parse_utc_instant};
+    use common::test_support::{
+        parse_post_summary, parse_post_title, parse_slug, parse_username, parse_utc_instant,
+    };
 
     #[test]
     fn parses_valid_permalink_params() {
@@ -143,7 +145,7 @@ mod tests {
         DraftSummary {
             post_id: PostId::from(1),
             title: title.map(parse_post_title),
-            summary_label: "fallback label".to_string(),
+            summary_label: parse_post_summary("fallback label"),
             slug: parse_slug("my-post"),
             created_at: parse_utc_instant("2026-01-01T00:00:00Z"),
             updated_at: parse_utc_instant("2026-01-01T00:00:00Z"),

@@ -100,6 +100,7 @@ convention). See the Status column below for each ADR's current status.
 | [0070](adr/0070-web-vertical-wasm-only-component-files.md)         | web verticals split host/wasm at the file level — wasm-only `component.rs`                                   | accepted   |
 | [0071](adr/0071-sqlx-string-newtype-bridge.md)                     | Transparent sqlx bridge for string newtypes                                                                  | accepted   |
 | [0072](adr/0072-timestamps-cross-boundary-as-utcinstant.md)        | Timestamps cross the web boundary as a `UtcInstant` newtype (chrono is already in the wasm bundle)           | proposed   |
+| [0073](adr/0073-url-crate-for-absolute-url-normalization.md)       | The `url` crate is the sanctioned absolute-URL normalizer, and it enters the `common`/wasm graph             | proposed   |
 
 <!-- adr-table:end -->
 

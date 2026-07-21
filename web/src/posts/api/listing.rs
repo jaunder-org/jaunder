@@ -8,8 +8,8 @@ use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use common::{
-    ids::PostId, pagination::PageSize, post_title::PostTitle, render::RenderedHtml, slug::Slug,
-    tag::Tag, time::UtcInstant, username::Username,
+    ids::PostId, pagination::PageSize, post_summary::PostSummary, post_title::PostTitle,
+    render::RenderedHtml, slug::Slug, tag::Tag, time::UtcInstant, username::Username,
 };
 
 use crate::error::WebResult;
@@ -38,7 +38,7 @@ pub struct TimelinePostSummary {
     pub post_id: PostId,
     pub username: Username,
     pub title: Option<PostTitle>,
-    pub summary: Option<String>,
+    pub summary: Option<PostSummary>,
     pub slug: Slug,
     #[serde(deserialize_with = "deserialize_rendered_html")]
     pub rendered_html: RenderedHtml,

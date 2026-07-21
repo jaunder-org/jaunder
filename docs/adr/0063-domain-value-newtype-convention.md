@@ -191,6 +191,21 @@ than reject it on the wire (the AtomPub `?limit=` page size). First users:
 `RetentionCount` (#455), `FeedMinItems`/`FeedMinDays` (#535); `PageSize` (#537,
 the first `clamp` adopter).
 
+**String truncating door.** The string analog of `clamped` is a **hand-written**
+`truncated(&str) -> Self` on a length-bounded `str`-newtype: it trims and
+truncates to the cap, yielding an infallible **validated** door that cannot
+exceed the length bound (so it does not weaken that half of the invariant) for
+values **derived internally** rather than submitted — the way
+`RenderedHtml::from_trusted` is a trusted rebuild door. Unlike `clamped` it is
+per-type (not a macro flag) and not `const` (trim/char-boundary aren't const),
+and it is a **trust** door for the non-length half of the invariant: a
+`truncated` on a non-empty-plus-cap type guarantees only the cap, not
+non-emptiness, so its callers must supply non-empty input (pinned by a
+`debug_assert!`). Reach for it only when a value is minted from a known-valid
+internal source that should be coerced-to-fit rather than rejected. First user:
+`PostSummary` (#545), whose derived fallback summary label is built from a
+post's body line, title, or slug.
+
 ### 3. The trailer is generated, not hand-written
 
 The trailer is mechanical and identical across types, so it lives in a

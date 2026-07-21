@@ -110,7 +110,7 @@ pub fn render_head(seed: &PageSeed) -> String {
             post.title
                 .clone()
                 .map_or_else(|| format!("Post by {}", post.username), String::from),
-            post.summary.clone().unwrap_or_default(),
+            post.summary.as_deref().unwrap_or_default().to_owned(),
         ),
         PageSeed::Profile { username, .. } => (format!("Posts by {username}"), String::new()),
         PageSeed::SiteTimeline(_) => ("Jaunder".to_string(), String::new()),

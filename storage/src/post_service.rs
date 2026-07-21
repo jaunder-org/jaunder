@@ -13,6 +13,7 @@ use crate::{
 };
 use common::ids::{ChannelId, PostId, UserId};
 use common::post_body::PostBody;
+use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
 use common::render::{derive_post_metadata, render};
 use common::slug::{slugify_title, InvalidSlug, Slug};
@@ -39,7 +40,7 @@ pub struct RenderedPostContent {
     /// Publication timestamp, or `None` for a draft.
     pub published_at: Option<DateTime<Utc>>,
     /// Optional summary/excerpt.
-    pub summary: Option<String>,
+    pub summary: Option<PostSummary>,
     /// Audience targeting for the new post.
     pub audiences: Vec<AudienceTarget>,
     /// Owned idempotency key to register with the post, or `None`.
@@ -140,7 +141,7 @@ pub struct RenderedPostUpdate {
     /// What this update does to the post's publication state.
     pub publish: PublishUpdate,
     /// Optional summary/excerpt.
-    pub summary: Option<String>,
+    pub summary: Option<PostSummary>,
     /// Audience targeting for the post (replaces its existing rows).
     pub audiences: Vec<AudienceTarget>,
 }
@@ -276,7 +277,7 @@ pub struct PostUpdate<'a> {
     /// What this update does to the post's publication state.
     pub publish: PublishUpdate,
     /// Optional summary/excerpt.
-    pub summary: Option<String>,
+    pub summary: Option<PostSummary>,
     /// Audience targeting for the post (replaces its existing rows). An empty
     /// vec (or `[Private]`) makes the post author-only.
     pub audiences: Vec<AudienceTarget>,
@@ -440,7 +441,7 @@ pub struct PostCreation<'a> {
     /// Maximum slug-collision retries before giving up.
     pub max_attempts: usize,
     /// Optional summary/excerpt.
-    pub summary: Option<String>,
+    pub summary: Option<PostSummary>,
     /// Audience targeting for the new post. An empty vec (or `[Private]`) makes
     /// the post author-only.
     pub audiences: Vec<AudienceTarget>,

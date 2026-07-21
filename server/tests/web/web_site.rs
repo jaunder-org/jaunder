@@ -86,7 +86,7 @@ async fn update_site_identity_round_trips_via_get(#[case] backend: Backend) {
     assert_eq!(get_status, StatusCode::OK, "body: {get_body}");
     let identity: SiteIdentity = serde_json::from_str(&get_body).expect("json");
     assert_eq!(identity.title, "My Blog");
-    assert_eq!(identity.base_url, Some("https://example.com".to_string()));
+    assert_eq!(identity.base_url.as_deref(), Some("https://example.com/"));
 }
 
 #[apply(backends)]
@@ -110,6 +110,11 @@ async fn update_site_identity_rejects_empty_title(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn update_site_identity_rejects_non_http_base_url(#[case] backend: Backend) {
+    // A non-http(s) `base_url` fails at typed-arg decode — the validating serde
+    // bridge for `Option<AbsoluteUrl>` rejects it, a non-OK server-function error
+    // rather than a specific Validation message (ADR-0065). The client's
+    // disable-until-valid gate keeps a real browser from reaching this; a raw POST
+    // is the malformed-client path.
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_session_cookie(&state, "operator", true).await;
 
@@ -121,23 +126,49 @@ async fn update_site_identity_rejects_non_http_base_url(#[case] backend: Backend
     )
     .await;
 
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(
-        body.contains("base URL must be an absolute http or https URL"),
-        "body: {body}"
+    assert_ne!(
+        status,
+        StatusCode::OK,
+        "non-http base_url should fail: {body}"
     );
 }
 
 #[apply(backends)]
 #[tokio::test]
-async fn update_site_identity_accepts_empty_base_url_as_none(#[case] backend: Backend) {
+async fn update_site_identity_rejects_malformed_base_url(#[case] backend: Backend) {
+    // A syntactically malformed `base_url` (not a URL at all) also fails at
+    // typed-arg decode — same non-OK path as the non-http case (ADR-0065).
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = create_session_cookie(&state, "operator", true).await;
+
+    let (status, body) = post_form(
+        state,
+        "/api/update_site_identity",
+        "title=My+Blog&base_url=not-a-url",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_ne!(
+        status,
+        StatusCode::OK,
+        "malformed base_url should fail: {body}"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn update_site_identity_omits_base_url_as_none(#[case] backend: Backend) {
+    // Clearing the base URL is the dispatch-`None` path: the typed
+    // `Option<AbsoluteUrl>` wire arg is *omitted* (serde decodes a missing Option
+    // field to `None`); an empty `base_url=` would instead fail to parse.
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_session_cookie(&state, "operator", true).await;
 
     let (update_status, update_body) = post_form(
         Arc::clone(&state),
         "/api/update_site_identity",
-        "title=My+Blog&base_url=",
+        "title=My+Blog",
         Some(&cookie),
     )
     .await;

@@ -1,6 +1,8 @@
 use crate::error::WebError;
+use crate::forms::{Field, ValidatedInput};
 use crate::pages::Topbar;
 use crate::site::{get_site_identity, UpdateSiteIdentity};
+use common::absolute_url::AbsoluteUrl;
 use common::site::SiteIdentity;
 use leptos::prelude::*;
 
@@ -21,7 +23,7 @@ pub fn SiteSettingsPage() -> impl IntoView {
                 }>
                     {move || Suspend::new(async move {
                         match settings.await {
-                            Ok(identity) => site_settings_form(identity, update_action).into_any(),
+                            Ok(identity) => site_settings_form(&identity, update_action).into_any(),
                             Err(error) => {
                                 view! { <p class="error j-settings-error">{error.to_string()}</p> }
                                     .into_any()
@@ -54,12 +56,27 @@ pub fn SiteSettingsPage() -> impl IntoView {
 }
 
 // cov:ignore-start
+/// Renders the site-settings form, seeded from the persisted `identity`. The
+/// component-owned `title` buffer and the optional `base_url` `Field` are created
+/// **here** (inside the resolved-`identity` scope, like the backup form) so the
+/// inputs render already populated. The save button dispatches the typed
+/// `UpdateSiteIdentity` args directly (ADR-0065): an empty base URL is valid, so
+/// `parsed()` yields `None` and the field is omitted on the wire (clear-to-None).
 fn site_settings_form(
-    identity: SiteIdentity,
+    identity: &SiteIdentity,
     update_action: ServerAction<UpdateSiteIdentity>,
 ) -> impl IntoView {
+    let title = RwSignal::new(identity.title.clone());
+    let base_url_field =
+        Field::<AbsoluteUrl>::optional_prefilled(identity.base_url.as_deref().unwrap_or_default());
+    let submit = move |_| {
+        update_action.dispatch(UpdateSiteIdentity {
+            title: title.get(),
+            base_url: base_url_field.parsed(),
+        });
+    };
     view! {
-        <ActionForm action=update_action attr:class="j-card j-site-form">
+        <div class="j-card j-site-form">
             <div class="j-card-head">
                 <div>
                     <h2>"Site Settings"</h2>
@@ -74,29 +91,33 @@ fn site_settings_form(
                         type="text"
                         name="title"
                         placeholder="My Site"
-                        prop:value=identity.title
+                        prop:value=move || title.get()
+                        on:input=move |ev| title.set(event_target_value(&ev))
                     />
                 </label>
-                <label class="j-site-field j-site-field-wide">
-                    <span class="j-edit-form-label">"Base URL"</span>
-                    <input
-                        class="j-site-input"
-                        type="url"
-                        name="base_url"
-                        placeholder="https://example.com"
-                        prop:value=identity.base_url.unwrap_or_default()
-                    />
-                    <span class="j-site-help">
-                        "Leave blank to disable or enter a fully-qualified https URL."
-                    </span>
-                </label>
+                <ValidatedInput<
+                AbsoluteUrl,
+            >
+                    label="Base URL"
+                    name="base_url"
+                    input_type="url"
+                    field=base_url_field
+                    field_class="j-site-field j-site-field-wide"
+                    class="j-site-input"
+                    help="Leave blank to disable or enter a fully-qualified https URL."
+                />
             </div>
             <div class="j-site-form-actions">
-                <button type="submit" class="j-btn is-primary">
+                <button
+                    type="button"
+                    class="j-btn is-primary"
+                    prop:disabled=move || !base_url_field.is_valid()
+                    on:click=submit
+                >
                     "Save Site Settings"
                 </button>
             </div>
-        </ActionForm>
+        </div>
     }
 }
 // cov:ignore-stop

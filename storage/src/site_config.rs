@@ -3,6 +3,7 @@
 use crate::backend::Backend;
 use crate::media::{MEDIA_MAX_FILE_SIZE_BYTES_KEY, MEDIA_USER_QUOTA_BYTES_KEY};
 use async_trait::async_trait;
+use common::absolute_url::AbsoluteUrl;
 use common::backup::{BackupConfig, BackupMode, BackupSchedule, RetentionCount};
 use common::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
 use common::media::{MaxFileSize, UserQuota};
@@ -116,13 +117,26 @@ pub trait SiteConfigStorage: Send + Sync {
             .unwrap_or_default())
     }
 
-    /// Returns the configured `WebSub` hub URL, if any. An empty stored value
-    /// is treated as unset.
-    async fn get_feeds_websub_hub_url(&self) -> sqlx::Result<Option<String>> {
-        Ok(self
+    /// Returns the configured `WebSub` hub URL, if any. An empty stored value is
+    /// treated as unset; a non-empty value that no longer parses as an absolute
+    /// `http(s)` URL (corruption, or legacy data pre-dating this validation) is
+    /// **purged** and read as unset — mirroring the `feed_events` unparseable-`feed_url`
+    /// purge, so a bad stored value never hard-fails the read.
+    async fn get_feeds_websub_hub_url(&self) -> sqlx::Result<Option<AbsoluteUrl>> {
+        let Some(raw) = self
             .get(FEEDS_WEBSUB_HUB_URL_KEY)
             .await?
-            .and_then(common::text::non_empty_owned))
+            .and_then(common::text::non_empty_owned)
+        else {
+            return Ok(None);
+        };
+        if let Ok(url) = raw.parse::<AbsoluteUrl>() {
+            Ok(Some(url))
+        } else {
+            tracing::warn!("purging unparseable stored feeds.websub_hub_url");
+            self.delete(FEEDS_WEBSUB_HUB_URL_KEY).await?;
+            Ok(None)
+        }
     }
 
     /// Returns the feed-generation configuration as a single group, applying
@@ -144,26 +158,34 @@ pub trait SiteConfigStorage: Send + Sync {
             .await?
             .and_then(common::text::non_empty_owned)
             .unwrap_or_else(|| DEFAULT_SITE_TITLE.to_owned());
-        let base_url = self.get(SITE_BASE_URL_KEY).await?.and_then(|v| {
-            let trimmed = v.trim().trim_end_matches('/').to_owned();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed)
+        let base_url = match self
+            .get(SITE_BASE_URL_KEY)
+            .await?
+            .and_then(common::text::non_empty_owned)
+        {
+            None => None,
+            Some(raw) => {
+                if let Ok(url) = raw.parse::<AbsoluteUrl>() {
+                    Some(url)
+                } else {
+                    // Purge a corrupt/legacy unparseable value and read as unset (as
+                    // `get_feeds_websub_hub_url` does), so a bad `base_url` never bricks
+                    // feed regeneration or the settings page it would otherwise 500.
+                    tracing::warn!("purging unparseable stored site.base_url");
+                    self.delete(SITE_BASE_URL_KEY).await?;
+                    None
+                }
             }
-        });
+        };
         Ok(SiteIdentity { title, base_url })
     }
 
     /// Stores the site identity (title and base URL).
-    /// For `base_url`, an empty string is stored when `None` is provided.
-    /// Trailing slashes on the base URL are stripped on write.
+    /// For `base_url`, an empty string is stored when `None` is provided; a set
+    /// value is stored in its canonical form (the `AbsoluteUrl` normalized it).
     async fn set_identity(&self, config: &SiteIdentity) -> sqlx::Result<()> {
         self.set(SITE_TITLE_KEY, &config.title).await?;
-        let base_url_value = config
-            .base_url
-            .as_deref()
-            .map_or("", |v| v.trim_end_matches('/'));
+        let base_url_value = config.base_url.as_deref().unwrap_or("");
         self.set(SITE_BASE_URL_KEY, base_url_value).await?;
         Ok(())
     }
@@ -347,8 +369,8 @@ mod tests {
     use common::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
     use common::media::{MaxFileSize, UserQuota};
     use common::test_support::{
-        parse_feed_min_days, parse_feed_min_items, parse_max_file_size, parse_retention_count,
-        parse_user_quota,
+        parse_absolute_url, parse_feed_min_days, parse_feed_min_items, parse_max_file_size,
+        parse_retention_count, parse_user_quota,
     };
     use rstest::*;
     use rstest_reuse::*;
@@ -421,7 +443,7 @@ mod tests {
         let config = FeedsConfig {
             min_items: parse_feed_min_items("42"),
             min_days: parse_feed_min_days("7"),
-            websub_hub_url: Some("https://hub.example.com".to_owned()),
+            websub_hub_url: Some(parse_absolute_url("https://hub.example.com/")),
         };
         storage.set_feeds_config(&config).await.unwrap();
         let loaded = storage.get_feeds_config().await.unwrap();
@@ -666,6 +688,25 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
+    async fn feeds_websub_hub_url_purges_unparseable_stored_value(#[case] backend: Backend) {
+        // A non-empty stored value that no longer parses as an absolute http(s) URL is
+        // purged and read as unset (self-heal, mirroring the feed_events feed_url purge).
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
+        storage
+            .set(super::FEEDS_WEBSUB_HUB_URL_KEY, "not-a-url")
+            .await
+            .unwrap();
+        assert_eq!(storage.get_feeds_websub_hub_url().await.unwrap(), None);
+        // The corrupt value was deleted, not merely ignored.
+        assert_eq!(
+            storage.get(super::FEEDS_WEBSUB_HUB_URL_KEY).await.unwrap(),
+            None
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn identity_returns_defaults_when_unset(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
@@ -687,18 +728,34 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn identity_returns_some_base_url_when_set_with_trailing_slash_stripped(
-        #[case] backend: Backend,
-    ) {
+    async fn identity_normalizes_stored_base_url_to_canonical_form(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
+        // A value stored WITHOUT a trailing slash (e.g. from before the AbsoluteUrl
+        // typing) still parses; the type normalizes it to the canonical slashed form.
         storage
-            .set(super::SITE_BASE_URL_KEY, "https://example.com/")
+            .set(super::SITE_BASE_URL_KEY, "https://example.com")
             .await
             .unwrap();
         let identity = storage.get_identity().await.expect("get_identity");
         assert_eq!(identity.title, common::site::DEFAULT_SITE_TITLE);
-        assert_eq!(identity.base_url.as_deref(), Some("https://example.com"));
+        assert_eq!(identity.base_url.as_deref(), Some("https://example.com/"));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn identity_purges_unparseable_stored_base_url(#[case] backend: Backend) {
+        // A corrupt/legacy unparseable base_url is purged and read as unset, so it never
+        // bricks the identity read (which feeds and the settings page depend on).
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
+        storage
+            .set(super::SITE_BASE_URL_KEY, "not-a-url")
+            .await
+            .unwrap();
+        assert_eq!(storage.get_identity().await.unwrap().base_url, None);
+        // The corrupt value was deleted, not merely ignored.
+        assert_eq!(storage.get(super::SITE_BASE_URL_KEY).await.unwrap(), None);
     }
 
     #[apply(backends)]
@@ -728,7 +785,7 @@ mod tests {
         let storage = &*env.state.site_config;
         let original = common::site::SiteIdentity {
             title: "Test Site".to_string(),
-            base_url: Some("https://test.example.com".to_string()),
+            base_url: Some(parse_absolute_url("https://test.example.com/")),
         };
         storage.set_identity(&original).await.expect("set_identity");
         let retrieved = storage.get_identity().await.expect("get_identity");

@@ -16,9 +16,9 @@ mod listing;
 pub use listing::*;
 
 use common::{
-    ids::PostId, pagination::PageSize, post_body::PostBody, post_title::PostTitle,
-    render::RenderedHtml, slug::Slug, tag::TagLabel, time::UtcInstant, username::Username,
-    visibility::AudienceSelection,
+    ids::PostId, pagination::PageSize, post_body::PostBody, post_summary::PostSummary,
+    post_title::PostTitle, render::RenderedHtml, slug::Slug, tag::TagLabel, time::UtcInstant,
+    username::Username, visibility::AudienceSelection,
 };
 
 use crate::error::WebResult;
@@ -59,7 +59,7 @@ pub struct CreatePostResult {
     pub published_at: Option<UtcInstant>,
     pub preview_url: String,
     pub permalink: Option<String>,
-    pub summary: Option<String>,
+    pub summary: Option<PostSummary>,
 }
 
 /// Result returned by [`update_post`].
@@ -70,7 +70,7 @@ pub struct UpdatePostResult {
     pub published_at: Option<UtcInstant>,
     pub preview_url: String,
     pub permalink: Option<String>,
-    pub summary: Option<String>,
+    pub summary: Option<PostSummary>,
 }
 
 /// A draft row returned by [`list_drafts`].
@@ -78,7 +78,7 @@ pub struct UpdatePostResult {
 pub struct DraftSummary {
     pub post_id: PostId,
     pub title: Option<PostTitle>,
-    pub summary_label: String,
+    pub summary_label: PostSummary,
     pub slug: Slug,
     pub created_at: UtcInstant,
     pub updated_at: UtcInstant,
@@ -130,7 +130,7 @@ pub struct PostResponse {
     /// Tags applied to this post, ordered by canonical slug.
     pub tags: Vec<TagSummary>,
     /// Optional summary/excerpt of the post.
-    pub summary: Option<String>,
+    pub summary: Option<PostSummary>,
 }
 
 /// Bundled arguments for [`create_post`]. The eight fields are the RPC input
@@ -144,7 +144,7 @@ pub struct CreatePostArgs {
     pub publish: bool,
     pub publish_at: Option<UtcInstant>,
     pub tags: Option<Vec<TagLabel>>,
-    pub summary: Option<String>,
+    pub summary: Option<PostSummary>,
     pub audience: Option<AudienceSelection>,
 }
 
@@ -159,7 +159,7 @@ pub struct UpdatePostArgs {
     pub publish: bool,
     pub publish_at: Option<UtcInstant>,
     pub tags: Option<Vec<TagLabel>>,
-    pub summary: Option<String>,
+    pub summary: Option<PostSummary>,
     pub audience: Option<AudienceSelection>,
 }
 
@@ -199,7 +199,9 @@ pub async fn create_post(args: CreatePostArgs) -> WebResult<CreatePostResult> {
         } else {
             None
         };
-        let normalized_summary = summary.and_then(common::text::non_empty_owned);
+        // `PostSummary`'s `FromStr` already trims and rejects empty at arg-decode
+        // (ADR-0065), so the value is passed through typed — no `non_empty_owned`
+        // normalization needed.
         let audiences = audience_targets_or_public(audience.as_ref());
 
         let record = perform_post_creation(
@@ -212,7 +214,7 @@ pub async fn create_post(args: CreatePostArgs) -> WebResult<CreatePostResult> {
                 slug_override: slug_override.as_ref(),
                 published_at,
                 max_attempts: 100,
-                summary: normalized_summary,
+                summary,
                 audiences,
                 idempotency_key: None,
             },
@@ -353,7 +355,8 @@ pub async fn update_post(args: UpdatePostArgs) -> WebResult<UpdatePostResult> {
         let new_tags = tags.map(common::tag::parse_and_validate_tags).transpose()?;
 
         let format = format.parse::<PostFormat>()?;
-        let normalized_summary = summary.and_then(common::text::non_empty_owned);
+        // See `create_post`: the typed `PostSummary` arg is already validated at
+        // decode, so no `non_empty_owned` normalization is applied here.
         let audiences = audience_targets_or_public(audience.as_ref());
 
         // A supplied time schedules/backdates; `None` lets storage keep an
@@ -374,7 +377,7 @@ pub async fn update_post(args: UpdatePostArgs) -> WebResult<UpdatePostResult> {
                 } else {
                     PublishUpdate::Unpublish
                 },
-                summary: normalized_summary,
+                summary,
                 audiences,
             },
         )

@@ -11,7 +11,7 @@ use tokio::fs;
 use tokio_util::io::ReaderStream;
 
 use common::ids::UserId;
-use common::media::{detect_content_type, should_inline, ContentHash, Filename};
+use common::media::{detect_content_type, should_inline, ContentHash, ContentType, Filename};
 use storage::{MediaSource, MediaStorage, SiteConfigStorage};
 use web::auth::AuthUser;
 
@@ -41,7 +41,7 @@ where
 pub struct UploadResponse {
     pub sha256: ContentHash,
     pub filename: Filename,
-    pub content_type: String,
+    pub content_type: ContentType,
     pub size_bytes: i64,
     pub url: String,
 }
@@ -157,10 +157,7 @@ async fn serve_response(
         .find_by_hash(&hash, &source)
         .await
         .map_err(serve_internal_error)?
-        .map_or_else(
-            || detect_content_type(&params.filename).to_owned(),
-            |r| r.content_type,
-        );
+        .map_or_else(|| detect_content_type(&params.filename), |r| r.content_type);
 
     let disposition = content_disposition(&content_type, &params.filename);
 
@@ -175,8 +172,11 @@ async fn serve_response(
 
     headers.insert(
         axum::http::header::CONTENT_TYPE,
-        HeaderValue::from_str(&content_type)
-            .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+        // A `ContentType` is always a valid header value (its invariant), so — like the
+        // sibling etag/disposition inserts below — the `Err` arm is unreachable (#495,
+        // retiring the former octet-stream fallback).
+        HeaderValue::from_str(content_type.as_ref())
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
     );
     headers.insert(
         axum::http::header::CACHE_CONTROL,
@@ -598,7 +598,24 @@ mod tests {
             resp.headers()
                 .get(axum::http::header::CONTENT_TYPE)
                 .and_then(|v| v.to_str().ok()),
-            Some(expected)
+            Some(expected.as_ref())
         );
+    }
+
+    #[test]
+    fn every_accepted_content_type_is_header_constructible() {
+        // The D4 invariant the retired `:178` octet-stream fallback relied on, observed
+        // against the real `HeaderValue::from_str` oracle (#495).
+        for s in [
+            "image/png",
+            "text/html; charset=utf-8",
+            "application/octet-stream",
+        ] {
+            let ct: ContentType = s.parse().expect("valid media type");
+            assert!(
+                HeaderValue::from_str(ct.as_ref()).is_ok(),
+                "header value for {s:?}"
+            );
+        }
     }
 }

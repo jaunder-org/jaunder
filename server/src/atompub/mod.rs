@@ -5,6 +5,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
+use common::absolute_url::AbsoluteUrl;
 use common::username::Username;
 use storage::SiteConfigStorage;
 use web::auth::AuthUser;
@@ -114,15 +115,15 @@ pub(crate) fn require_user_match(
     }
 }
 
-/// Returns the site's public base URL (scheme + host, no trailing slash), or an
-/// empty string when unconfigured (callers then emit root-relative URLs).
-pub(crate) async fn base_url(site_config: &dyn SiteConfigStorage) -> String {
+/// Returns the site's public base URL (an absolute `http(s)` origin), or `None`
+/// when unconfigured (callers then emit root-relative URLs via
+/// [`common::absolute_url::compose`]).
+pub(crate) async fn base_url(site_config: &dyn SiteConfigStorage) -> Option<AbsoluteUrl> {
     site_config
         .get_identity()
         .await
         .ok()
         .and_then(|identity| identity.base_url)
-        .unwrap_or_default()
 }
 
 /// The error type for the raw `AtomPub` HTTP handlers.
