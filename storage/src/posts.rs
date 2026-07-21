@@ -1839,7 +1839,7 @@ fn audience_target_from_row(kind: &str, audience_id: Option<i64>) -> Option<Audi
         Ok(TargetKind::Public) => Some(AudienceTarget::Public),
         Ok(TargetKind::Subscribers) => Some(AudienceTarget::Subscribers),
         Ok(TargetKind::Named) => audience_id.map(|id| AudienceTarget::Named(AudienceId::from(id))),
-        Err(()) => None,
+        Err(_) => None,
     }
 }
 
