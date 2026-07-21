@@ -12,9 +12,9 @@ use leptos_router::components::Redirect;
 
 use crate::auth::current_user;
 use crate::pages::signal_read::read_signal;
-use crate::pages::timeline::{TimelineRows, TimelineState};
 use crate::pages::ui::Topbar;
 use crate::posts::{list_home_feed, InlineComposer};
+use crate::timeline::{TimelineRows, TimelineState};
 
 #[component]
 pub fn CockpitPage() -> impl IntoView {
@@ -63,10 +63,18 @@ pub fn CockpitPage() -> impl IntoView {
     });
 
     let on_load_more = Callback::new(move |()| {
-        crate::pages::timeline::spawn_load_more(state, list_home_feed);
+        crate::timeline::spawn_load_more(state, list_home_feed);
     });
 
-    let read_error = move || read_signal!(state.error);
+    // A `Memo`, not a bare closure: the outer view closure below reads this to
+    // decide whether to show the error banner, and it also hosts `InlineComposer`
+    // — so it must re-run ONLY when the failure message changes, not on every
+    // `status` write. `resolve()` sets `status = Idle` on every refresh (incl.
+    // after a publish), and load-more toggles `InFlight`; reading `status` raw
+    // would re-run the closure and REMOUNT InlineComposer, wiping its publish
+    // flash (the same hazard the `username` guard above avoids). The memo
+    // dedupes `None -> None`, so only a real `Failed` transition notifies.
+    let read_error = Memo::new(move |_| read_signal!(state.status).into_failure());
     let read_bounce = move || read_signal!(bounce);
     let read_username = move || read_signal!(username);
 
@@ -75,7 +83,7 @@ pub fn CockpitPage() -> impl IntoView {
             if read_bounce() {
                 return view! { <Redirect path="/login" /> }.into_any();
             }
-            if let Some(err) = read_error() {
+            if let Some(err) = read_error.get() {
                 return view! { <p class="error">{err}</p> }.into_any();
             }
             match read_username() {

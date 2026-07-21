@@ -178,6 +178,10 @@ web/src/feature/
 └── component.rs  # #[component] UI + browser-bound code (omit if no UI)
 ```
 
+A **server-less** vertical — one with no `#[server]` fns or wire types of its
+own (e.g. `timeline/`, which re-uses another vertical's DTOs) — omits `api.rs`
+too, keeping just `mod.rs` + its pure host-tested and/or wasm-only UI files.
+
 `mod.rs` declares and re-exports — nothing else:
 
 ```rust

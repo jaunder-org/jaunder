@@ -32,6 +32,17 @@ impl TimelineCursor {
             _ => None,
         }
     }
+
+    /// Split an optional cursor into the `(created_at, post_id)` optionals a
+    /// timeline list fn takes — `(None, None)` when there is no cursor. Keeps the
+    /// pairing logic host-tested and out of the wasm-only paginator.
+    #[must_use]
+    pub fn into_query(cursor: Option<Self>) -> (Option<UtcInstant>, Option<PostId>) {
+        match cursor {
+            Some(c) => (Some(c.created_at), Some(c.post_id)),
+            None => (None, None),
+        }
+    }
 }
 
 /// The load state of a timeline: idle, a load-more in flight, or a failed fetch
@@ -53,35 +64,15 @@ impl LoadStatus {
         matches!(self, Self::InFlight)
     }
 
-    /// The failure message to display, if the last load failed.
+    /// Consume the status into the failure message to display, if the last load
+    /// failed. Owned (`self`) so the reactive callers — which hold a cloned
+    /// `LoadStatus` from `read_signal!` — can return the `String` directly
+    /// instead of re-matching the `Failed` arm inline.
     #[must_use]
-    pub fn error_message(&self) -> Option<&str> {
+    pub fn into_failure(self) -> Option<String> {
         match self {
             Self::Failed(message) => Some(message),
-            _ => None,
-        }
-    }
-}
-
-/// Whether a fetched page replaces the current rows (a seed or re-fetch) or is
-/// appended to them (load-more).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PageMode {
-    Replace,
-    Append,
-}
-
-/// Fold a fetched page's rows into the rows already shown. `Replace` swaps them
-/// (first paint / re-fetch); `Append` extends them (load-more). Generic so the
-/// merge is host-testable without constructing `TimelinePostSummary` fixtures.
-#[must_use]
-pub fn apply_rows<T>(current: Vec<T>, incoming: Vec<T>, mode: PageMode) -> Vec<T> {
-    match mode {
-        PageMode::Replace => incoming,
-        PageMode::Append => {
-            let mut current = current;
-            current.extend(incoming);
-            current
+            Self::Idle | Self::InFlight => None,
         }
     }
 }
@@ -128,28 +119,29 @@ mod tests {
     }
 
     #[test]
+    fn cursor_into_query_splits_or_empties() {
+        let cursor = TimelineCursor {
+            created_at: instant(),
+            post_id: PostId::from(7),
+        };
+        assert_eq!(
+            TimelineCursor::into_query(Some(cursor)),
+            (Some(instant()), Some(PostId::from(7))),
+        );
+        assert_eq!(TimelineCursor::into_query(None), (None, None));
+    }
+
+    #[test]
     fn load_status_accessors_cover_each_arm() {
         assert!(!LoadStatus::Idle.is_in_flight());
         assert!(LoadStatus::InFlight.is_in_flight());
         assert!(!LoadStatus::Failed("boom".into()).is_in_flight());
 
-        assert_eq!(LoadStatus::Idle.error_message(), None);
-        assert_eq!(LoadStatus::InFlight.error_message(), None);
+        assert_eq!(LoadStatus::Idle.into_failure(), None);
+        assert_eq!(LoadStatus::InFlight.into_failure(), None);
         assert_eq!(
-            LoadStatus::Failed("boom".into()).error_message(),
-            Some("boom")
-        );
-    }
-
-    #[test]
-    fn apply_rows_replaces_or_appends() {
-        assert_eq!(
-            apply_rows(vec![1, 2], vec![3, 4], PageMode::Replace),
-            vec![3, 4]
-        );
-        assert_eq!(
-            apply_rows(vec![1, 2], vec![3, 4], PageMode::Append),
-            vec![1, 2, 3, 4]
+            LoadStatus::Failed("boom".into()).into_failure(),
+            Some("boom".to_owned())
         );
     }
 }

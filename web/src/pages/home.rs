@@ -2,9 +2,9 @@ use leptos::prelude::*;
 
 use crate::feed_discovery::FeedDiscovery;
 use crate::pages::signal_read::read_signal;
-use crate::pages::timeline::{TimelineRows, TimelineState};
 use crate::pages::ui::Topbar;
 use crate::posts::list_local_timeline;
+use crate::timeline::{TimelineRows, TimelineState};
 use common::feed::FeedSurface;
 use common::pagination::PageSize;
 
@@ -46,15 +46,19 @@ pub fn HomePage() -> impl IntoView {
     });
 
     let on_load_more = Callback::new(move |()| {
-        crate::pages::timeline::spawn_load_more(state, list_local_timeline);
+        crate::timeline::spawn_load_more(state, list_local_timeline);
     });
 
-    let read_error = move || read_signal!(state.error);
+    // A `Memo` (not a bare closure) so the outer view closure re-runs only when
+    // the failure message changes — not on every `status` write (`resolve()` sets
+    // `Idle` on each refresh; load-more toggles `InFlight`). Reading `status` raw
+    // would needlessly rebuild the whole page on every refresh/paginate.
+    let read_error = Memo::new(move |_| read_signal!(state.status).into_failure());
 
     view! {
         <FeedDiscovery surface=FeedSurface::Site />
         {move || {
-            if let Some(err) = read_error() {
+            if let Some(err) = read_error.get() {
                 return view! { <p class="error">{err}</p> }.into_any();
             }
             // Single-mode Local (#181, D10): `/` is always the enhanced public
