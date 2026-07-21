@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 
+use crate::absolute_url::AbsoluteUrl;
 use crate::ids::PostId;
 use crate::post_summary::PostSummary;
 use crate::post_title::PostTitle;
@@ -13,7 +14,7 @@ pub struct FeedMetadata {
     pub description: Option<String>,
     pub canonical_url: String,
     pub self_url: String,
-    pub hub_url: Option<String>,
+    pub hub_url: Option<AbsoluteUrl>,
     pub updated_at: DateTime<Utc>,
 }
 

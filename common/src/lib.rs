@@ -6,6 +6,7 @@
 #[cfg(all(target_arch = "wasm32", feature = "sqlx"))]
 compile_error!("common's `sqlx` feature must not be enabled for wasm32 targets (#438)");
 
+pub mod absolute_url;
 pub mod atompub;
 pub mod audience;
 pub mod auth;

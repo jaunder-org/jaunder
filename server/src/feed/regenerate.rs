@@ -1,4 +1,5 @@
 use chrono::Utc;
+use common::absolute_url::compose;
 use common::feed::{
     feed_etag, parse, FeedFormat, FeedItem, FeedMetadata, FeedPath, FeedSurface, HybridWindow,
 };
@@ -17,9 +18,10 @@ pub enum RegenerateError {
 /// rendering the feed in the requested format, then upserting the result
 /// into the feed cache.
 ///
-/// URLs in the returned feed body are relative (root-anchored paths) —
-/// matching the project's convention for outgoing links. A reverse proxy
-/// or feed reader is expected to resolve them against the public origin.
+/// URLs in the returned feed body are absolute when a `site.base_url` is
+/// configured (composed via [`common::absolute_url::compose`]); when it is unset
+/// they fall back to root-anchored relative paths, which a reverse proxy or feed
+/// reader resolves against the public origin.
 ///
 /// # Errors
 ///
@@ -61,22 +63,20 @@ pub async fn regenerate_feed(
 
     let items = build_feed_items(posts, &published).await?;
 
-    let base = identity.base_url.as_deref().unwrap_or("");
-    let self_url = format!("{base}{}", percent_encode_path(feed_path));
-    let canonical_url = match &surface {
-        FeedSurface::Site => format!("{base}/"),
-        FeedSurface::SiteTag { tag } => {
-            // urlencoding::encode (external) takes &str.
-            format!("{base}/tags/{}/", urlencoding::encode(tag.as_ref()))
-        }
-        FeedSurface::User { username } => format!("{base}/~{username}/"),
+    // `compose` joins `base` + a canonical path, or emits the relative path when no
+    // base is configured (both the self URL and each surface's canonical HTML URL).
+    let base = identity.base_url.as_ref();
+    let self_url = compose(base, feed_path);
+    let canonical_path = match &surface {
+        FeedSurface::Site => "/".to_owned(),
+        // urlencoding::encode (external) takes &str.
+        FeedSurface::SiteTag { tag } => format!("/tags/{}/", urlencoding::encode(tag.as_ref())),
+        FeedSurface::User { username } => format!("/~{username}/"),
         FeedSurface::UserTag { username, tag } => {
-            format!(
-                "{base}/~{username}/tags/{}/",
-                urlencoding::encode(tag.as_ref())
-            )
+            format!("/~{username}/tags/{}/", urlencoding::encode(tag.as_ref()))
         }
     };
+    let canonical_url = compose(base, &canonical_path);
 
     let updated_at = items.iter().map(|i| i.updated_at).max().unwrap_or(now);
     let title = compute_title(&identity.title, &surface);
@@ -113,19 +113,6 @@ pub async fn regenerate_feed(
 
 fn storage_err<E: std::error::Error + Send + Sync + 'static>(e: E) -> RegenerateError {
     RegenerateError::Storage(Box::new(e))
-}
-
-fn percent_encode_path(path: &str) -> String {
-    use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
-    const PATH_RESERVED: &AsciiSet = &CONTROLS
-        .add(b' ')
-        .add(b'"')
-        .add(b'<')
-        .add(b'>')
-        .add(b'`')
-        .add(b'#')
-        .add(b'?');
-    utf8_percent_encode(path, PATH_RESERVED).to_string()
 }
 
 async fn build_feed_items(
@@ -176,12 +163,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn percent_encode_path_encodes_query_marker() {
-        let encoded = percent_encode_path("/feed.rss?key=value");
-        assert!(encoded.contains("%3F"));
-    }
-
-    #[test]
     fn regenerate_error_storage_preserves_sqlx_source() {
         use std::error::Error;
         // §3.1a: storage_err boxes the originating error as a typed source
@@ -207,7 +188,9 @@ mod tests {
         site_config.expect_get_identity().returning(|| {
             Ok(SiteIdentity {
                 title: "Jaunder".to_owned(),
-                base_url: Some("https://example.com".to_owned()),
+                base_url: Some(common::test_support::parse_absolute_url(
+                    "https://example.com/",
+                )),
             })
         });
 
@@ -232,6 +215,57 @@ mod tests {
         assert!(
             row.body.contains("https://example.com/"),
             "canonical base-anchored URL missing: {}",
+            row.body
+        );
+    }
+
+    #[tokio::test]
+    async fn regenerate_site_feed_falls_back_to_relative_urls_without_base() {
+        use common::site::SiteIdentity;
+
+        let mut site_config = storage::MockSiteConfigStorage::new();
+        site_config.expect_get_feeds_config().returning(|| {
+            Ok(common::feed::FeedsConfig {
+                min_items: common::test_support::parse_feed_min_items("10"),
+                min_days: common::test_support::parse_feed_min_days("30"),
+                websub_hub_url: None,
+            })
+        });
+        // No base_url configured: composition must preserve the prior behavior of
+        // emitting root-relative URLs (AC#5 / #448).
+        site_config.expect_get_identity().returning(|| {
+            Ok(SiteIdentity {
+                title: "Jaunder".to_owned(),
+                base_url: None,
+            })
+        });
+
+        let mut posts = storage::MockPostStorage::new();
+        posts
+            .expect_list_published_in_window()
+            .returning(|_, _, _, _| Ok(vec![]));
+
+        let mut feed_cache = storage::MockFeedCacheStorage::new();
+        feed_cache.expect_upsert().returning(|_| Ok(()));
+
+        let row = regenerate_feed(
+            &site_config,
+            &posts,
+            &feed_cache,
+            &"/feed.rss".parse::<FeedPath>().expect("valid feed path"),
+        )
+        .await
+        .expect("site feed regenerates");
+
+        // Root-relative self link, and no scheme-qualified feed URL.
+        assert!(
+            row.body.contains("/feed.rss"),
+            "expected a root-relative self link: {}",
+            row.body
+        );
+        assert!(
+            !row.body.contains("://example"),
+            "unexpected absolute host in feed body: {}",
             row.body
         );
     }

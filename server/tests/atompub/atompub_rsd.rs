@@ -35,7 +35,9 @@ async fn rsd_document_advertises_service_url(#[case] backend: Backend) {
         .site_config
         .set_identity(&common::site::SiteIdentity {
             title: "Test".to_string(),
-            base_url: Some("https://example.test".to_string()),
+            base_url: Some(common::test_support::parse_absolute_url(
+                "https://example.test/",
+            )),
         })
         .await
         .unwrap();

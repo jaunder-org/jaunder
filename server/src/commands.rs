@@ -9,6 +9,7 @@ use sqlx::postgres::PgConnectOptions;
 use crate::cli::{Commands, SiteConfigAction, StorageArgs};
 use crate::mailer::LettreMailSender;
 use crate::runtime_file;
+use common::absolute_url::compose;
 use common::backup::BackupMode;
 use common::display_name::DisplayName;
 use common::email::Email;
@@ -304,7 +305,10 @@ pub async fn cmd_user_invite(storage: &StorageArgs, expires_in: Option<u64>) -> 
     // Deliberate operator-facing reveal via `AsRef` (InviteCode has no Display/serde). With a
     // configured base URL, print a ready-to-send invitation link; otherwise the bare code.
     match state.site_config.get_identity().await?.base_url {
-        Some(base_url) => println!("{base_url}/register?invite_code={}", code.as_ref()),
+        Some(base_url) => {
+            let register_url = compose(Some(&base_url), "/register");
+            println!("{register_url}?invite_code={}", code.as_ref());
+        }
         None => println!("{}", code.as_ref()),
     }
     Ok(())

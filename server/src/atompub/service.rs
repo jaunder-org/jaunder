@@ -6,6 +6,7 @@ use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
 
+use common::absolute_url::compose;
 use common::atompub::{render_service_document, CollectionDecl, ServiceDocument};
 use storage::{PostStorage, SiteConfigStorage};
 use web::auth::AuthUser;
@@ -36,16 +37,18 @@ pub async fn service_document(
         .map(|t| t.tag_slug)
         .collect();
 
+    let posts_path = format!("/atompub/{username}/posts");
+    let media_path = format!("/atompub/{username}/media");
     let doc = ServiceDocument {
         workspace_title: username.to_string(),
         posts_collection: CollectionDecl {
-            href: format!("{base}/atompub/{username}/posts"),
+            href: compose(base.as_ref(), &posts_path),
             title: "Posts".to_string(),
             accept: vec!["application/atom+xml;type=entry".to_string()],
             categories,
         },
         media_collection: CollectionDecl {
-            href: format!("{base}/atompub/{username}/media"),
+            href: compose(base.as_ref(), &media_path),
             title: "Media".to_string(),
             accept: MEDIA_ACCEPT.iter().map(|s| (*s).to_string()).collect(),
             categories: Vec::new(),

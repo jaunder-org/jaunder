@@ -3,6 +3,7 @@ use {
     crate::auth::require_auth,
     crate::error::InternalError,
     chrono::Utc,
+    common::absolute_url::compose,
     common::mailer::{EmailMessage, MailSender},
     std::sync::Arc,
     storage::{load_registration_policy, InviteStorage, RegistrationPolicy, SiteConfigStorage},
@@ -62,7 +63,10 @@ pub async fn create_invite(expires_in_hours: Option<u64>, recipient_email: Email
         host::metrics::invite(host::metrics::InviteEvent::Created);
 
         // Deliberate egress of the secret via `AsRef` (InviteCode has no Display/serde).
-        let link = format!("{base_url}/register?invite_code={}", code.as_ref());
+        // Compose base + `/register` (correct slash boundary) then append the code as a
+        // raw query param, preserving its exact spelling.
+        let register_url = compose(Some(&base_url), "/register");
+        let link = format!("{register_url}?invite_code={}", code.as_ref());
         let message = EmailMessage {
             from: None,
             to: vec![recipient_email],

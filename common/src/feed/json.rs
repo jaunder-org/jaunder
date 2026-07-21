@@ -40,7 +40,7 @@ pub fn render_json(meta: &FeedMetadata, items: &[FeedItem]) -> String {
         root["description"] = Value::String(d.clone());
     }
     if let Some(hub) = &meta.hub_url {
-        root["hubs"] = json!([{ "type": "WebSub", "url": hub }]);
+        root["hubs"] = json!([{ "type": "WebSub", "url": hub.as_ref() }]);
     }
     root.to_string()
 }
@@ -52,7 +52,7 @@ mod tests {
     use super::*;
     use crate::ids::PostId;
     use crate::render::RenderedHtml;
-    use crate::test_support::{parse_post_summary, parse_post_title};
+    use crate::test_support::{parse_absolute_url, parse_post_summary, parse_post_title};
 
     fn meta(hub: Option<&str>) -> FeedMetadata {
         FeedMetadata {
@@ -60,7 +60,7 @@ mod tests {
             description: Some("A site".into()),
             canonical_url: "https://example.com/".into(),
             self_url: "https://example.com/feed.json".into(),
-            hub_url: hub.map(str::to_string),
+            hub_url: hub.map(parse_absolute_url),
             updated_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
         }
     }
