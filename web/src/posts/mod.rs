@@ -35,15 +35,14 @@ pub use parse::{draft_row_display, parse_permalink_params, DraftRowDisplay};
 // The API surface — re-exported so external call sites and the server-fn
 // registrar keep the stable `crate::posts::…` paths despite living in `api.rs`.
 pub use api::{
-    audience_selection_to_targets, audience_targets_or_public, create_post,
-    default_audience_selection, delete_post, get_post, get_post_preview, list_drafts,
+    create_post, default_audience_selection, delete_post, get_post, get_post_preview, list_drafts,
     list_home_feed, list_local_timeline, list_posts_by_tag, list_user_posts,
-    list_user_posts_by_tag, post_audience_selection, publish_post, targets_to_audience_selection,
-    unpublish_post, update_post, AudienceSelection, CreatePost, CreatePostArgs, CreatePostResult,
-    DefaultAudienceSelection, DeletePost, DraftSummary, GetPost, GetPostPreview, ListDrafts,
-    ListHomeFeed, ListLocalTimeline, ListPostsByTag, ListUserPosts, ListUserPostsByTag,
-    PostAudienceSelection, PostResponse, PublishPost, PublishPostResult, TimelinePage,
-    TimelinePostSummary, UnpublishPost, UpdatePost, UpdatePostArgs, UpdatePostResult,
+    list_user_posts_by_tag, post_audience_selection, publish_post, unpublish_post, update_post,
+    CreatePost, CreatePostArgs, CreatePostResult, DefaultAudienceSelection, DeletePost,
+    DraftSummary, GetPost, GetPostPreview, ListDrafts, ListHomeFeed, ListLocalTimeline,
+    ListPostsByTag, ListUserPosts, ListUserPostsByTag, PostAudienceSelection, PostResponse,
+    PublishPost, PublishPostResult, TimelinePage, TimelinePostSummary, UnpublishPost, UpdatePost,
+    UpdatePostArgs, UpdatePostResult,
 };
 
 // Server-only shared fetch helpers, consumed by the `server` crate's public

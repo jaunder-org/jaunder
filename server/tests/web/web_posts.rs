@@ -6,11 +6,10 @@ use common::ids::{PostId, UserId};
 use common::tag::TagLabel;
 use common::test_support::parse_audience_name;
 use common::time::UtcInstant;
-use common::visibility::AudienceBase;
+use common::visibility::{AudienceBase, AudienceSelection};
 use storage::{PostFormat, RenderedHtml};
 use web::posts::{
-    AudienceSelection, CreatePostResult, DraftSummary, PublishPostResult, TimelinePage,
-    UpdatePostResult,
+    CreatePostResult, DraftSummary, PublishPostResult, TimelinePage, UpdatePostResult,
 };
 
 use rstest::*;

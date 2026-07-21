@@ -20,10 +20,10 @@ use crate::media::MediaUpload;
 use crate::posts::{
     default_audience_selection, draft_row_display, get_post, get_post_preview, list_drafts,
     list_posts_by_tag, list_user_posts, list_user_posts_by_tag, parse_permalink_params,
-    post_audience_selection, AudienceSelection, CreatePost, CreatePostArgs, CreatePostResult,
-    DeletePost, DraftRowDisplay, DraftSummary, ListPostsByTag, ListUserPosts, ListUserPostsByTag,
-    PostResponse, PublishPost, PublishPostResult, TimelinePostSummary, UnpublishPost, UpdatePost,
-    UpdatePostArgs, UpdatePostResult,
+    post_audience_selection, CreatePost, CreatePostArgs, CreatePostResult, DeletePost,
+    DraftRowDisplay, DraftSummary, ListPostsByTag, ListUserPosts, ListUserPostsByTag, PostResponse,
+    PublishPost, PublishPostResult, TimelinePostSummary, UnpublishPost, UpdatePost, UpdatePostArgs,
+    UpdatePostResult,
 };
 use crate::render::TagCtx as TagContext;
 use crate::subscriptions::{is_subscribed_to, SubscribeTo, UnsubscribeFrom};
@@ -37,7 +37,7 @@ use common::tag::{Tag, TagLabel};
 use common::time::utc_instant_from_local;
 use common::time::UtcInstant;
 use common::username::Username;
-use common::visibility::AudienceBase;
+use common::visibility::{AudienceBase, AudienceSelection};
 
 /// Shared body + format fields used by all post editors.
 ///
