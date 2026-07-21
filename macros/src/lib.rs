@@ -7,6 +7,7 @@ use syn::{parse_macro_input, Data, DeriveInput, Fields};
 
 mod id_newtype;
 mod num_newtype;
+mod str_enum;
 mod str_newtype;
 
 /// Marks a **client-only reactive helper**: code that runs only in the browser (a
@@ -238,6 +239,47 @@ pub fn id_newtype_derive(item: TokenStream) -> TokenStream {
 pub fn num_newtype_derive(item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as DeriveInput);
     num_newtype::expand(&input).into()
+}
+
+/// Derives the **string-enum trailer** for a unit-variant enum whose values are a fixed set
+/// of lowercase wire/DB tokens — the closed-set analogue of the newtype derives. It generates
+/// `as_str`, `Display`, `FromStr` **and** `TryFrom<&str>` (routed through a self-contained
+/// `Invalid<Name>` error, no `thiserror`), and — under `#[str_enum(serde)]` — a string serde
+/// bridge (serialize the token; deserialize an owned `String` via `FromStr`). Because the
+/// valid set is known to the macro, it *generates* `FromStr` and the named error (unlike
+/// `StrNewtype`, which routes through a hand-written `FromStr`). See the str-enum-trailer ADR.
+///
+/// Each variant's token defaults to its lowercased identifier; `#[str_enum(rename = "…")]`
+/// overrides it. `#[str_enum(error = "…")]` (type-level) overrides the generated
+/// `"must be one of: …"` message. `Default` (std `#[derive(Default)]` + `#[default]`),
+/// `Copy`/`Hash`/… stay in the user's `#[derive]` list.
+///
+/// ```
+/// use macros::StrEnum;
+/// use std::str::FromStr;
+/// #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, StrEnum)]
+/// #[str_enum(serde)]
+/// enum Fmt { #[default] Markdown, Org, Html }
+///
+/// assert_eq!(Fmt::Org.as_str(), "org");
+/// assert_eq!("html".parse::<Fmt>().unwrap(), Fmt::Html);
+/// assert!("xml".parse::<Fmt>().is_err());
+/// assert_eq!(Fmt::default(), Fmt::Markdown);
+/// assert_eq!(serde_json::to_string(&Fmt::Org).unwrap(), "\"org\"");
+/// let _back: Fmt = serde_json::from_str("\"org\"").unwrap();
+/// ```
+///
+/// Applying the derive to anything but a unit-variant enum is a compile error:
+///
+/// ```compile_fail
+/// use macros::StrEnum;
+/// #[derive(StrEnum)]
+/// struct NotAnEnum(String);
+/// ```
+#[proc_macro_derive(StrEnum, attributes(str_enum))]
+pub fn str_enum_derive(item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as DeriveInput);
+    str_enum::expand(&input).into()
 }
 
 /// Validates that `input` is a **non-generic** single-field tuple struct (`struct X(T)`) —
@@ -681,5 +723,145 @@ mod tests {
         let out = num_newtype::expand(&input).to_string();
         assert!(!out.contains("fn clamped"));
         assert!(!out.contains("const MAX"));
+    }
+
+    // StrEnum — positive branches (drive `expand`'s codegen at runtime; the `macros/tests`
+    // integration enums expand at *compile time*, invisible to coverage).
+
+    #[test]
+    fn str_enum_serde_emits_bridge_and_lowercase_wire() {
+        let input: DeriveInput = parse_quote! {
+            #[str_enum(serde)]
+            enum Fmt { Markdown, Org, Html }
+        };
+        let out = str_enum::expand(&input).to_string();
+        assert!(!out.contains("compile_error"));
+        assert!(out.contains("fn as_str"));
+        assert!(out.contains("FromStr"));
+        assert!(out.contains("TryFrom"));
+        assert!(out.contains("Serialize"));
+        assert!(out.contains("Deserialize"));
+        // Lowercased-identifier wire tokens.
+        assert!(out.contains("\"markdown\""));
+        assert!(out.contains("\"org\""));
+        assert!(out.contains("\"html\""));
+    }
+
+    #[test]
+    fn str_enum_without_serde_omits_bridge() {
+        let input: DeriveInput = parse_quote! {
+            enum Kind { Public, Subscribers, Named }
+        };
+        let out = str_enum::expand(&input).to_string();
+        assert!(!out.contains("compile_error"));
+        assert!(out.contains("FromStr"));
+        assert!(!out.contains("Serialize"));
+    }
+
+    #[test]
+    fn str_enum_rename_overrides_lowercase() {
+        let input: DeriveInput = parse_quote! {
+            enum X { Bar, #[str_enum(rename = "zee")] Z }
+        };
+        let out = str_enum::expand(&input).to_string();
+        assert!(!out.contains("compile_error"));
+        assert!(out.contains("\"bar\"")); // default lowercase
+        assert!(out.contains("\"zee\"")); // rename override
+    }
+
+    #[test]
+    fn str_enum_auto_message_lists_variants() {
+        let input: DeriveInput = parse_quote! {
+            #[str_enum(serde)]
+            enum Fmt { Markdown, Org, Html }
+        };
+        let out = str_enum::expand(&input).to_string();
+        assert!(out.contains("must be one of: markdown, org, html"));
+    }
+
+    #[test]
+    fn str_enum_error_override_replaces_auto_message() {
+        let input: DeriveInput = parse_quote! {
+            #[str_enum(error = "bad fmt")]
+            enum Fmt { Markdown, Org }
+        };
+        let out = str_enum::expand(&input).to_string();
+        assert!(out.contains("bad fmt"));
+        assert!(!out.contains("must be one of"));
+    }
+
+    // StrEnum — error branches (each returns a spanned `compile_error!`).
+
+    #[test]
+    fn str_enum_on_struct_emits_compile_error() {
+        let input: DeriveInput = parse_quote! { struct X(String); };
+        assert!(str_enum::expand(&input)
+            .to_string()
+            .contains("compile_error"));
+    }
+
+    #[test]
+    fn str_enum_generic_enum_emits_compile_error() {
+        let input: DeriveInput = parse_quote! { enum X<T> { A(T) } };
+        assert!(str_enum::expand(&input)
+            .to_string()
+            .contains("compile_error"));
+    }
+
+    #[test]
+    fn str_enum_empty_enum_emits_compile_error() {
+        let input: DeriveInput = parse_quote! { enum X {} };
+        assert!(str_enum::expand(&input)
+            .to_string()
+            .contains("compile_error"));
+    }
+
+    #[test]
+    fn str_enum_fielded_variant_emits_compile_error() {
+        let input: DeriveInput = parse_quote! { enum X { A, B(u32) } };
+        assert!(str_enum::expand(&input)
+            .to_string()
+            .contains("compile_error"));
+    }
+
+    #[test]
+    fn str_enum_duplicate_wire_emits_compile_error() {
+        let input: DeriveInput = parse_quote! {
+            enum X { A, #[str_enum(rename = "a")] B }
+        };
+        assert!(str_enum::expand(&input)
+            .to_string()
+            .contains("compile_error"));
+    }
+
+    #[test]
+    fn str_enum_unknown_type_option_emits_compile_error() {
+        let input: DeriveInput = parse_quote! {
+            #[str_enum(bogus)]
+            enum X { A }
+        };
+        assert!(str_enum::expand(&input)
+            .to_string()
+            .contains("compile_error"));
+    }
+
+    #[test]
+    fn str_enum_unknown_variant_option_emits_compile_error() {
+        let input: DeriveInput = parse_quote! {
+            enum X { #[str_enum(bogus = "x")] A }
+        };
+        assert!(str_enum::expand(&input)
+            .to_string()
+            .contains("compile_error"));
+    }
+
+    #[test]
+    fn str_enum_empty_wire_token_emits_compile_error() {
+        let input: DeriveInput = parse_quote! {
+            enum X { #[str_enum(rename = "")] A }
+        };
+        assert!(str_enum::expand(&input)
+            .to_string()
+            .contains("compile_error"));
     }
 }
