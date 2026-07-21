@@ -72,7 +72,7 @@ pub fn post_response(post: PostRecord, is_author: bool) -> super::PostResponse {
         title,
         slug,
         body,
-        format: format.to_string(),
+        format,
         rendered_html,
         created_at: UtcInstant::from(created_at),
         is_draft: published_at.is_none(),

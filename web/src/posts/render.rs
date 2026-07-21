@@ -262,6 +262,7 @@ pub(crate) mod test_fixtures {
     use super::*;
     use crate::posts::TimelinePage;
     use common::ids::PostId;
+    use common::render::PostFormat;
     use common::test_support::{parse_post_summary, parse_username, parse_utc_instant};
 
     pub(crate) fn sample_post() -> PostResponse {
@@ -271,7 +272,7 @@ pub(crate) mod test_fixtures {
             title: Some("Hello & <World>".into()),
             slug: "hello".parse().unwrap(),
             body: "raw".into(),
-            format: "markdown".into(),
+            format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Hi <em>there</em></p>"),
             created_at: parse_utc_instant("2026-01-02T03:04:05Z"),
             published_at: Some(parse_utc_instant("2026-01-02T03:04:05Z")),

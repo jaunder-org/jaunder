@@ -33,6 +33,7 @@ use common::feed::FeedSurface;
 use common::ids::{AudienceId, PostId};
 use common::pagination::PageSize;
 use common::post_summary::PostSummary;
+use common::render::PostFormat;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::time::utc_instant_from_local;
@@ -42,12 +43,12 @@ use common::visibility::{AudienceBase, AudienceSelection};
 
 /// Shared body + format fields used by all post editors.
 ///
-/// Renders a `name="body"` textarea and a `name="format"` hidden input.
-/// When `show_seg` is true (default), also renders the `.j-seg` format toggle.
+/// Renders a `name="body"` textarea. When `show_seg` is true (default), also
+/// renders the `.j-seg` format toggle.
 #[component]
 pub fn ComposerFields(
     body: RwSignal<String>,
-    format: RwSignal<String>,
+    format: RwSignal<PostFormat>,
     #[prop(default = "Write something\u{2026}")] placeholder: &'static str,
     #[prop(default = 16u32)] rows: u32,
     #[prop(default = "j-edit-form-textarea")] textarea_class: &'static str,
@@ -79,29 +80,32 @@ pub fn ComposerFields(
                         <button
                             type="button"
                             class=move || {
-                                if format.get() == "markdown" {
+                                if format.get() == PostFormat::Markdown {
                                     "j-btn is-selected"
                                 } else {
                                     "j-btn"
                                 }
                             }
-                            on:click=move |_| format.set("markdown".to_string())
+                            on:click=move |_| format.set(PostFormat::Markdown)
                         >
                             "Markdown"
                         </button>
                         <button
                             type="button"
                             class=move || {
-                                if format.get() == "org" { "j-btn is-selected" } else { "j-btn" }
+                                if format.get() == PostFormat::Org {
+                                    "j-btn is-selected"
+                                } else {
+                                    "j-btn"
+                                }
                             }
-                            on:click=move |_| format.set("org".to_string())
+                            on:click=move |_| format.set(PostFormat::Org)
                         >
                             "Org"
                         </button>
                     </div>
                 }
             })}
-        <input type="hidden" name="format" prop:value=move || format.get() />
     }
 }
 
@@ -400,7 +404,7 @@ pub fn PostCreateForm(
 ) -> impl IntoView {
     let create_action = ServerAction::<CreatePost>::new();
     let body = RwSignal::new(String::new());
-    let format = RwSignal::new("markdown".to_string());
+    let format = RwSignal::new(PostFormat::Markdown);
     // Optional summary: a parent-owned validated field (ADR-0065 direct-bind), so an
     // invalid excerpt disables submit and shows an error rather than erroring on POST.
     let summary_field = Field::<PostSummary>::optional();
@@ -510,26 +514,26 @@ pub fn PostCreateForm(
                             <button
                                 type="button"
                                 class=move || {
-                                    if format.get() == "markdown" {
+                                    if format.get() == PostFormat::Markdown {
                                         "j-btn is-selected"
                                     } else {
                                         "j-btn"
                                     }
                                 }
-                                on:click=move |_| format.set("markdown".to_string())
+                                on:click=move |_| format.set(PostFormat::Markdown)
                             >
                                 "Markdown"
                             </button>
                             <button
                                 type="button"
                                 class=move || {
-                                    if format.get() == "org" {
+                                    if format.get() == PostFormat::Org {
                                         "j-btn is-selected"
                                     } else {
                                         "j-btn"
                                     }
                                 }
-                                on:click=move |_| format.set("org".to_string())
+                                on:click=move |_| format.set(PostFormat::Org)
                             >
                                 "Org"
                             </button>
@@ -679,26 +683,26 @@ pub fn PostCreateForm(
                             <button
                                 type="button"
                                 class=move || {
-                                    if format.get() == "markdown" {
+                                    if format.get() == PostFormat::Markdown {
                                         "j-btn is-selected"
                                     } else {
                                         "j-btn"
                                     }
                                 }
-                                on:click=move |_| format.set("markdown".to_string())
+                                on:click=move |_| format.set(PostFormat::Markdown)
                             >
                                 "Markdown"
                             </button>
                             <button
                                 type="button"
                                 class=move || {
-                                    if format.get() == "org" {
+                                    if format.get() == PostFormat::Org {
                                         "j-btn is-selected"
                                     } else {
                                         "j-btn"
                                     }
                                 }
-                                on:click=move |_| format.set("org".to_string())
+                                on:click=move |_| format.set(PostFormat::Org)
                             >
                                 "Org"
                             </button>
@@ -1618,7 +1622,7 @@ pub fn EditPostPage() -> impl IntoView {
     let params = use_params_map();
     let update_post_action = ServerAction::<UpdatePost>::new();
     let body = RwSignal::new(String::new());
-    let format = RwSignal::new("markdown".to_string());
+    let format = RwSignal::new(PostFormat::Markdown);
     let slug_field = Field::<Slug>::optional();
     // Optional summary: parent-owned validated field (ADR-0065 direct-bind), so an
     // over-cap entry disables save and an empty field submits `None` (omit → clear).
@@ -1689,7 +1693,7 @@ pub fn EditPostPage() -> impl IntoView {
                 match post.await {
                     Ok(fetched) => {
                         body.set(String::from(fetched.body.clone()));
-                        format.set(fetched.format.clone());
+                        format.set(fetched.format);
                         slug_field.value.set(fetched.slug.to_string());
                         summary_field
                             .value
@@ -1815,26 +1819,26 @@ pub fn EditPostPage() -> impl IntoView {
                                             <button
                                                 type="button"
                                                 class=move || {
-                                                    if format.get() == "markdown" {
+                                                    if format.get() == PostFormat::Markdown {
                                                         "j-btn is-selected"
                                                     } else {
                                                         "j-btn"
                                                     }
                                                 }
-                                                on:click=move |_| { format.set("markdown".to_string()) }
+                                                on:click=move |_| { format.set(PostFormat::Markdown) }
                                             >
                                                 "Markdown"
                                             </button>
                                             <button
                                                 type="button"
                                                 class=move || {
-                                                    if format.get() == "org" {
+                                                    if format.get() == PostFormat::Org {
                                                         "j-btn is-selected"
                                                     } else {
                                                         "j-btn"
                                                     }
                                                 }
-                                                on:click=move |_| format.set("org".to_string())
+                                                on:click=move |_| format.set(PostFormat::Org)
                                             >
                                                 "Org"
                                             </button>
