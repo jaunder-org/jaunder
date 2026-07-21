@@ -11,6 +11,7 @@ use common::{tag::Tag, username::Username};
 use storage::{FeedCacheStorage, PostStorage, SiteConfigStorage};
 
 use super::regenerate::regenerate_feed;
+use crate::soft_path::SoftPath;
 
 fn parse_format(ext: &str) -> Option<FeedFormat> {
     match ext {
@@ -117,12 +118,12 @@ pub async fn feed_site_tag(
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     Extension(posts): Extension<Arc<dyn PostStorage>>,
     headers: HeaderMap,
-    Path((tag, ext)): Path<(String, String)>,
+    Path((tag, ext)): Path<(SoftPath<Tag>, String)>,
 ) -> Response {
     let Some(format) = parse_format(&ext) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let Ok(tag) = tag.parse::<Tag>() else {
+    let Some(tag) = tag.into() else {
         return StatusCode::NOT_FOUND.into_response();
     };
     serve(
@@ -141,12 +142,12 @@ pub async fn feed_user(
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     Extension(posts): Extension<Arc<dyn PostStorage>>,
     headers: HeaderMap,
-    Path((username, ext)): Path<(String, String)>,
+    Path((username, ext)): Path<(SoftPath<Username>, String)>,
 ) -> Response {
     let Some(format) = parse_format(&ext) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let Ok(username) = username.parse::<Username>() else {
+    let Some(username) = username.into() else {
         return StatusCode::NOT_FOUND.into_response();
     };
     serve(
@@ -165,12 +166,12 @@ pub async fn feed_user_tag(
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     Extension(posts): Extension<Arc<dyn PostStorage>>,
     headers: HeaderMap,
-    Path((username, tag, ext)): Path<(String, String, String)>,
+    Path((username, tag, ext)): Path<(SoftPath<Username>, SoftPath<Tag>, String)>,
 ) -> Response {
     let Some(format) = parse_format(&ext) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let (Ok(username), Ok(tag)) = (username.parse::<Username>(), tag.parse::<Tag>()) else {
+    let (Some(username), Some(tag)) = (username.into(), tag.into()) else {
         return StatusCode::NOT_FOUND.into_response();
     };
     serve(
@@ -405,7 +406,7 @@ mod tests {
             Extension(empty_site_config()),
             Extension(empty_posts()),
             HeaderMap::new(),
-            Path(("rust".to_owned(), "bogus".to_owned())),
+            Path((SoftPath::parse("rust"), "bogus".to_owned())),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
@@ -419,7 +420,11 @@ mod tests {
             Extension(empty_site_config()),
             Extension(empty_posts()),
             HeaderMap::new(),
-            Path(("alice".to_owned(), "rust".to_owned(), "bogus".to_owned())),
+            Path((
+                SoftPath::parse("alice"),
+                SoftPath::parse("rust"),
+                "bogus".to_owned(),
+            )),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
@@ -438,7 +443,11 @@ mod tests {
             Extension(empty_site_config()),
             Extension(empty_posts()),
             HeaderMap::new(),
-            Path(("alice".to_owned(), "rust".to_owned(), "rss".to_owned())),
+            Path((
+                SoftPath::parse("alice"),
+                SoftPath::parse("rust"),
+                "rss".to_owned(),
+            )),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);

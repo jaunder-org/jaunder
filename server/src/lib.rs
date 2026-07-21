@@ -17,6 +17,7 @@ pub mod observability;
 pub mod projector;
 pub mod runtime_file;
 pub mod site;
+mod soft_path;
 pub mod websub;
 
 #[cfg(test)]
