@@ -27,9 +27,12 @@ use axum::{
     Router,
 };
 use common::pagination::PageSize;
+use common::slug::Slug;
 use common::tag::Tag;
 use common::username::Username;
 use common::visibility::ViewerIdentity;
+
+use crate::soft_path::SoftPath;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use storage::{fetch_post_record, PostStorage, UserStorage};
@@ -131,19 +134,21 @@ fn shell_response(shell: &Shell) -> Response {
         .into_response()
 }
 
+/// The permalink route's five path segments: soft-parsed `username`/`slug` around the numeric
+/// `year`/`month`/`day`. A `type` alias to keep the `Path<…>` under clippy's type-complexity
+/// threshold. `SoftPath` gives a malformed `username`/`slug` the SPA shell (client-rendered
+/// 404) rather than axum's pre-handler 400 — the projector-vs-atompub boundary split (ADR-0063
+/// §4): atompub handlers are strictly typed (400-on-malformed API); the public projector
+/// serves the shell.
+type PermalinkPath = (SoftPath<Username>, i32, u32, u32, SoftPath<Slug>);
+
 async fn permalink(
     Extension(posts): Extension<Arc<dyn PostStorage>>,
     Extension(shell): Extension<Shell>,
     headers: HeaderMap,
-    // The username/slug segments stay `String` (not a typed `Path<(Username, ..,
-    // Slug)>` extractor) so a malformed segment is parsed *inside* the handler and
-    // falls back to the SPA shell (client-rendered 404) below — a typed extractor
-    // would reject it with a 400 *before* the handler runs. This is the deliberate
-    // projector-vs-atompub boundary split (ADR-0063 §4): atompub handlers are
-    // typed (400-on-malformed API); the public projector serves the shell.
-    Path((username, year, month, day, slug)): Path<(String, i32, u32, u32, String)>,
+    Path((username, year, month, day, slug)): Path<PermalinkPath>,
 ) -> Response {
-    let (Ok(username), Ok(slug)) = (username.parse(), slug.parse()) else {
+    let (Some(username), Some(slug)) = (username.into(), slug.into()) else {
         // An unparseable segment is never public content — let the client route
         // it (it may be a server URL the SPA reloads for).
         return shell_response(&shell);
@@ -231,13 +236,13 @@ async fn profile(
     Extension(posts): Extension<Arc<dyn PostStorage>>,
     Extension(shell): Extension<Shell>,
     headers: HeaderMap,
-    Path(username): Path<String>,
+    Path(username): Path<SoftPath<Username>>,
 ) -> Response {
     // An unparseable username or a storage error is never public content — serve the
     // shell and let the client route it. A valid username (even an unknown one, which
     // yields an empty profile) is cached like any other public page.
-    let seed = match username.parse::<Username>() {
-        Ok(username) => fetch_user_posts(
+    let seed = match username.into() {
+        Some(username) => fetch_user_posts(
             posts.as_ref(),
             &ViewerIdentity::Anonymous,
             &username,
@@ -248,7 +253,7 @@ async fn profile(
         .await
         .ok()
         .map(|page| PageSeed::Profile { username, page }),
-        Err(_) => None,
+        None => None,
     };
     match seed {
         Some(seed) => cacheable(&headers, &seed),
@@ -266,11 +271,11 @@ async fn site_tag(
     // 400 *before* the handler runs. This is the deliberate projector-vs-atompub
     // boundary split (ADR-0063 §4): atompub handlers are typed (400-on-malformed
     // API); the public projector serves the shell. Mirrors the `permalink` handler.
-    Path(tag): Path<String>,
+    Path(tag): Path<SoftPath<Tag>>,
 ) -> Response {
     // `Tag::from_str` lowercases, so the projected heading and the client render
     // coincide. An unparseable tag is never public content — let the client route it.
-    let Ok(tag) = tag.parse::<Tag>() else {
+    let Some(tag) = tag.into() else {
         return shell_response(&shell);
     };
     let result = fetch_posts_by_tag(
@@ -297,12 +302,12 @@ async fn user_tag(
     // segment is parsed *inside* the handler and falls back to the SPA shell below,
     // rather than a typed extractor's 400 before the handler runs — the deliberate
     // projector-vs-atompub boundary split (ADR-0063 §4). Mirrors `permalink`.
-    Path((username, tag)): Path<(String, String)>,
+    Path((username, tag)): Path<(SoftPath<Username>, SoftPath<Tag>)>,
 ) -> Response {
     // `Tag::from_str` lowercases, so the projected heading and the client render
     // coincide. An unparseable username/tag is never public content — serve the
     // shell and let the client route it.
-    let (Ok(username), Ok(tag)) = (username.parse::<Username>(), tag.parse::<Tag>()) else {
+    let (Some(username), Some(tag)) = (username.into(), tag.into()) else {
         return shell_response(&shell);
     };
     // An unknown user or a storage error is likewise never public content.
