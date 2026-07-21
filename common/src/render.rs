@@ -4,51 +4,31 @@
 //! titles, slug seeds, and summary labels. No storage or database concerns.
 
 use std::fmt;
-use std::str::FromStr;
 
-use thiserror::Error;
+use macros::StrEnum;
 
 use crate::post_body::PostBody;
 use crate::post_summary::PostSummary;
 use crate::post_title::PostTitle;
 
 /// The format/markup language used to author a post body.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// Rides the [`StrEnum`] trailer: `as_str`/`Display`/`FromStr`/`TryFrom<&str>`, the
+/// generated `InvalidPostFormat` error, and a string serde bridge. The `error =` override
+/// preserves the historical message. Wire tokens are the lowercased variant names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, StrEnum)]
+#[str_enum(
+    serde,
+    error = "post format must be \"markdown\", \"org\", or \"html\""
+)]
 pub enum PostFormat {
     /// CommonMark/GitHub-flavored Markdown.
+    #[default]
     Markdown,
     /// Emacs Org-mode format.
     Org,
     /// Pre-rendered HTML.
     Html,
-}
-
-/// Error returned when a string cannot be parsed as a [`PostFormat`].
-#[derive(Debug, Error)]
-#[error("post format must be \"markdown\", \"org\", or \"html\"")]
-pub struct InvalidPostFormat;
-
-impl fmt::Display for PostFormat {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            PostFormat::Markdown => f.write_str("markdown"),
-            PostFormat::Org => f.write_str("org"),
-            PostFormat::Html => f.write_str("html"),
-        }
-    }
-}
-
-impl FromStr for PostFormat {
-    type Err = InvalidPostFormat;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "markdown" => Ok(PostFormat::Markdown),
-            "org" => Ok(PostFormat::Org),
-            "html" => Ok(PostFormat::Html),
-            _ => Err(InvalidPostFormat),
-        }
-    }
 }
 
 /// HTML **produced by [`render`]**. This is a *provenance* marker, not a safety
