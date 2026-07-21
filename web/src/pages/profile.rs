@@ -4,6 +4,7 @@ use crate::pages::Topbar;
 use crate::profile::{get_default_post_format, get_profile, SetDefaultPostFormat, UpdateProfile};
 use common::bio::Bio;
 use common::display_name::DisplayName;
+use common::render::PostFormat;
 use leptos::prelude::*;
 
 /// Profile page — shows username, display name, bio; allows updating.
@@ -130,18 +131,18 @@ fn DefaultPostFormatControl() -> impl IntoView {
     view! {
         <Suspense fallback=|| ()>
             {move || Suspend::new(async move {
-                let current = initial.await.unwrap_or_else(|_| "html".to_string());
+                let current = initial.await.unwrap_or(PostFormat::Html);
                 view! {
                     <ActionForm action=action>
                         <label class="j-field-label">"Default post format"</label>
                         <select class="j-field-val" name="format">
-                            <option value="markdown" selected=current == "markdown">
+                            <option value="markdown" selected=current == PostFormat::Markdown>
                                 "Markdown"
                             </option>
-                            <option value="org" selected=current == "org">
+                            <option value="org" selected=current == PostFormat::Org>
                                 "Org"
                             </option>
-                            <option value="html" selected=current == "html">
+                            <option value="html" selected=current == PostFormat::Html>
                                 "HTML"
                             </option>
                         </select>
