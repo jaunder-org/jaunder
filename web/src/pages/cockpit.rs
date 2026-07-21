@@ -13,8 +13,8 @@ use leptos_router::components::Redirect;
 use crate::auth::current_user;
 use crate::pages::signal_read::read_signal;
 use crate::pages::timeline::{TimelineRows, TimelineState};
-use crate::pages::ui::{InlineComposer, Topbar};
-use crate::posts::list_home_feed;
+use crate::pages::ui::Topbar;
+use crate::posts::{list_home_feed, InlineComposer};
 
 #[component]
 pub fn CockpitPage() -> impl IntoView {

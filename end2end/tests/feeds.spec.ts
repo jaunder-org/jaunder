@@ -188,11 +188,13 @@ test("publishing and editing a post each trigger a WebSub hub ping", async ({
 
   const editRes = await page.request.post(`${BASE_URL}/api/update_post`, {
     data: {
-      post_id,
-      body: "# Ping On Publish\n\nEdited body",
-      format: "markdown",
-      slug_override: null,
-      publish: true,
+      args: {
+        post_id,
+        body: "# Ping On Publish\n\nEdited body",
+        format: "markdown",
+        slug_override: null,
+        publish: true,
+      },
     },
   });
   expect(editRes.ok(), "update_post").toBeTruthy();

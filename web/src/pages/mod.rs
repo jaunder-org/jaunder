@@ -3,14 +3,13 @@ pub mod email;
 pub mod home;
 pub mod invites;
 pub mod password_reset;
-pub mod posts;
 pub mod profile;
 pub mod sessions;
 pub(crate) mod signal_read;
 pub mod site;
 pub(crate) mod timeline;
 pub mod ui;
-pub use ui::{Avatar, Icon, Icons, InlineComposer, PostCard, PostDisplay, Sidebar, Topbar};
+pub use ui::{Avatar, Icon, Icons, Sidebar, Topbar};
 
 /// Default theme identifier (the CSS variable pack applied via `data-theme` on the
 /// root element). Defined in `crate::render` (the shell layer) so the projector's
@@ -30,13 +29,13 @@ use crate::pages::email::{EmailPage, VerifyEmailPage};
 use crate::pages::home::HomePage;
 use crate::pages::invites::InvitesPage;
 use crate::pages::password_reset::{ForgotPasswordPage, ResetPasswordPage};
-use crate::pages::posts::{
-    CreatePostPage, DraftPreviewPage, DraftsPage, EditPostPage, PostPage, SiteTagPage, UserTagPage,
-    UserTimelinePage,
-};
 use crate::pages::profile::ProfilePage;
 use crate::pages::sessions::SessionsPage;
 use crate::pages::site::SiteSettingsPage;
+use crate::posts::{
+    CreatePostPage, DraftPreviewPage, DraftsPage, EditPostPage, PostPage, SiteTagPage, UserTagPage,
+    UserTimelinePage,
+};
 use crate::registration::RegisterPage;
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, Title};

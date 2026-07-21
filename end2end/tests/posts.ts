@@ -16,7 +16,8 @@ import { SEL } from "./selectors";
  *  `withTimedAction` so it appears in the OTEL trace, asserts success with a
  *  contextful message, and returns the typed JSON. `publish` defaults to `true`;
  *  `slug` maps to the `slug_override` wire field; `tags` is sent only when
- *  provided (matching the current no-tag call sites). */
+ *  provided (matching the current no-tag call sites). The fields are nested under
+ *  an `args` wrapper (#299): the endpoint takes a single typed arg-struct. */
 export async function createPostViaApi(
   page: Page,
   opts: {
@@ -29,11 +30,13 @@ export async function createPostViaApi(
   const res = await withTimedAction(page, "api.create_post", () =>
     page.request.post(`${BASE_URL}/api/create_post`, {
       data: {
-        body: opts.body,
-        format: "markdown",
-        slug_override: opts.slug ?? null,
-        publish: opts.publish ?? true,
-        ...(opts.tags ? { tags: opts.tags } : {}),
+        args: {
+          body: opts.body,
+          format: "markdown",
+          slug_override: opts.slug ?? null,
+          publish: opts.publish ?? true,
+          ...(opts.tags ? { tags: opts.tags } : {}),
+        },
       },
     }),
   );
