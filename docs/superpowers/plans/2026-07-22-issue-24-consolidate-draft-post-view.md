@@ -417,14 +417,15 @@ Run `cargo xtask check` first (**jaunder-commit**).
       `WebError::not_found` or the test's helper). If all three cases already
       exist, record that in the commit body and skip to Step 4.
 
-- [x] **Step 3: Run the test, verify it passes.** (Passed under Task 4's full `cargo xtask check` instrumented run — both backends, `tests-ok`.)
+- [x] **Step 3: Run the test, verify it passes.** (Passed under Task 4's full
+      `cargo xtask check` instrumented run — both backends, `tests-ok`.)
 
 Run:
 `cargo nextest run -p jaunder --test integration get_post_returns_draft_to_author_only`
 Expected: PASS.
 
-- [x] **Step 4: Commit.** (No commit — AC8 was already covered, so this task made
-      no code change.)
+- [x] **Step 4: Commit.** (No commit — AC8 was already covered, so this task
+      made no code change.)
 
 ```bash
 git add server/tests/web/web_posts.rs
@@ -450,7 +451,7 @@ _Local heavy e2e is reaped here; do not run it locally — it is verified by CI'
 `{backend}×{browser}` matrix on the PR (Task-level "expected PASS" refers to
 CI)._
 
-- [ ] **Step 1: Rewire the preview-anchored assertions to the permalink.** In
+- [x] **Step 1: Rewire the preview-anchored assertions to the permalink.** In
       each of the tests below (line refs from current HEAD), replace
       `[data-test="preview-link"]` / `/\/draft\/(\d+)\/preview/` extraction and
       the "Preview draft" flash-label assertion with the `permalink-link` /
@@ -465,19 +466,19 @@ CI)._
     via the permalink/edit-url instead (the edit page still loads chips via the
     retained `get_post_preview`, so the chip-loading assertion is unchanged).
 
-- [ ] **Step 2: Update the draft-lifecycle test to assert publish-navigation.**
+- [x] **Step 2: Update the draft-lifecycle test to assert publish-navigation.**
       In "draft lifecycle: create, view, edit, and publish" (`L226-265`),
       navigate to the draft via its permalink, click **Publish**, confirm, and
       assert the browser lands on the returned **published** permalink and
       renders the now-published post (AC4). Assert the drafts listing links only
       the permalink — no "Preview" link / no `/draft/…/preview` href (AC5).
 
-- [ ] **Step 3: Assert no preview URL survives (AC6).** Ensure no spec still
+- [x] **Step 3: Assert no preview URL survives (AC6).** Ensure no spec still
       references `/draft/…/preview` or `preview-link`.
 
 Run: `rg -n 'preview-link|/draft/.*preview' end2end/tests` Expected: no hits.
 
-- [ ] **Step 4: Commit.**
+- [x] **Step 4: Commit.**
 
 ```bash
 git add end2end/tests/posts.spec.ts
