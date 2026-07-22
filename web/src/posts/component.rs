@@ -235,9 +235,7 @@ pub fn PostCard(
             // once published it becomes published_at-based), so navigate to the
             // server-returned canonical permalink rather than the now-stale current
             // URL. The unpublish path redirects to /drafts; this is its mirror.
-            if let Some(window) = web_sys::window() {
-                let _ = window.location().replace(&published.permalink);
-            }
+            client::navigation::replace(&published.permalink);
         }
     });
 
@@ -250,9 +248,7 @@ pub fn PostCard(
                 type="button"
                 class="j-btn"
                 on:click=move |_| {
-                    let confirmed = web_sys::window()
-                        .and_then(|w| { w.confirm_with_message("Publish this draft?").ok() })
-                        .unwrap_or(false);
+                    let confirmed = client::dialog::confirm("Publish this draft?");
                     if confirmed {
                         publish_action.dispatch(PublishPost { post_id });
                     }
@@ -292,9 +288,7 @@ pub fn PostCard(
                     type="button"
                     class="j-btn is-danger"
                     on:click=move |_| {
-                        let confirmed = web_sys::window()
-                            .and_then(|w| { w.confirm_with_message("Delete this post?").ok() })
-                            .unwrap_or(false);
+                        let confirmed = client::dialog::confirm("Delete this post?");
                         if confirmed {
                             delete_action.dispatch(DeletePost { post_id });
                         }
@@ -1209,11 +1203,7 @@ pub fn PostPage() -> impl IntoView {
                 // It may be a server-handled URL (e.g. /media/…) that the SPA
                 // router matched here because it has the same number of segments.
                 // Reload the page so the server can handle it properly.
-                if let Some(window) = web_sys::window() {
-                    if let Ok(href) = window.location().href() {
-                        let _ = window.location().replace(&href);
-                    }
-                }
+                client::navigation::reload();
                 return Err(WebError::validation("Invalid permalink"));
             };
             // A '~'-prefixed permalink with an unparseable slug is a malformed
@@ -1227,9 +1217,7 @@ pub fn PostPage() -> impl IntoView {
     );
 
     let on_unpublish = Callback::new(move |()| {
-        if let Some(window) = web_sys::window() {
-            let _ = window.location().replace("/drafts");
-        }
+        client::navigation::replace("/drafts");
     });
 
     view! {
@@ -1577,9 +1565,7 @@ pub fn EditPostPage() -> impl IntoView {
     Effect::new(move |_| {
         if let Some(Ok(ref updated)) = update_post_action.value().get() {
             if updated.published_at.is_some() {
-                if let Some(window) = web_sys::window() {
-                    let _ = window.location().replace(updated.permalink.as_ref());
-                }
+                client::navigation::replace(&updated.permalink);
             }
         }
     });

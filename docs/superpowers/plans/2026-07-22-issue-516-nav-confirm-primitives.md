@@ -168,7 +168,7 @@ git commit -m "feat(client): add navigation + dialog browser primitives (#516)"
 - Consumes: `client::navigation::{replace, reload}`, `client::dialog::confirm`
   (Task 1).
 
-- [ ] **Step 1: Rewrite the sites** (drop the `web_sys::window()` guards):
+- [x] **Step 1: Rewrite the sites** (drop the `web_sys::window()` guards):
   - `posts/component.rs:238-240` →
     `client::navigation::replace(&published.permalink);`
   - `posts/component.rs:253-255` →
@@ -184,14 +184,14 @@ git commit -m "feat(client): add navigation + dialog browser primitives (#516)"
   (`&published.permalink` / `&updated.permalink` are `RootRelativeUrl`, accepted
   via `impl AsRef<str>`.)
 
-- [ ] **Step 2: Drop now-unused imports.** These call sites are fully-qualified
+- [x] **Step 2: Drop now-unused imports.** These call sites are fully-qualified
       `web_sys::window()` (no `use web_sys` import in either file), so there is
       likely nothing to remove — just confirm `cargo xtask check`'s clippy stays
       clean (it flags any `unused_imports`). After the sweep,
       `rg 'web_sys' web/src/posts/component.rs web/src/pages/mod.rs` should
       return nothing.
 
-- [ ] **Step 3: Verify.**
+- [x] **Step 3: Verify.**
 
   Run: `rg '\.location\(\)|confirm_with_message' web/src` → Expected: **no
   matches** (AC#2). Use `\.location\(\)`, not `location\(\)` — the latter
@@ -201,7 +201,7 @@ git commit -m "feat(client): add navigation + dialog browser primitives (#516)"
   `cargo xtask validate --no-e2e` → Expected: **PASS** (AC#7). Posts
   publish/unpublish/delete redirect + confirm flows run in CI e2e.
 
-- [ ] **Step 4: Commit.**
+- [x] **Step 4: Commit.**
 
 ```bash
 git add web/src/posts/component.rs web/src/pages/mod.rs
