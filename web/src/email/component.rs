@@ -1,8 +1,11 @@
-use crate::email::{verify_email, RequestEmailVerification};
+//! Email vertical — wasm-only UI (ADR-0070): the email-settings page and the
+//! verify-email landing.
+
+use super::{email_status_line, parse_verification_token, verify_email, RequestEmailVerification};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
-use crate::pages::Topbar;
 use crate::profile::get_profile;
+use crate::topbar::Topbar;
 use common::email::Email;
 use leptos::prelude::*;
 
@@ -24,11 +27,10 @@ pub fn EmailPage() -> impl IntoView {
                     {move || Suspend::new(async move {
                         match profile.await {
                             Ok(data) => {
-                                let email_status = match (data.email.clone(), data.email_verified) {
-                                    (Some(ref e), true) => format!("{e} (verified)"),
-                                    (Some(ref e), false) => format!("{e} (unverified)"),
-                                    (None, _) => "No email set".to_string(),
-                                };
+                                let email_status = email_status_line(
+                                    data.email.as_ref(),
+                                    data.email_verified,
+                                );
                                 view! { <p>"Current email: " {email_status}</p> }.into_any()
                             }
                             Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
@@ -78,13 +80,11 @@ pub fn VerifyEmailPage() -> impl IntoView {
 
     let query = use_query_map();
     let token = move || query.with(|q| q.get("token").unwrap_or_default());
-    // `verify_email` now takes a typed `RawToken`. Parse the URL's token client-side
+    // `verify_email` takes a typed `RawToken`. Parse the URL's token client-side
     // (ADR-0065 pre-validation): a malformed token short-circuits to a validation error
     // with no server round-trip; a well-formed one is verified server-side as before.
     let result = Resource::new(token, |raw: String| async move {
-        let token: common::token::RawToken = raw
-            .parse()
-            .map_err(|_| crate::error::WebError::validation("invalid verification token"))?;
+        let token = parse_verification_token(&raw)?;
         verify_email(token).await
     });
 
