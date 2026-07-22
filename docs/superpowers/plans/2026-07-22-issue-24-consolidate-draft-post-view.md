@@ -190,7 +190,7 @@ _No host-level unit test exists for wasm component behavior; AC2/AC4 are covered
 by the Task 6 e2e. The verification here is the gate (compile + wasm clippy).
 The body is written out because no unit test can pin it._
 
-- [ ] **Step 1: Add draft state, a publish action, and a publish-navigate
+- [x] **Step 1: Add draft state, a publish action, and a publish-navigate
       effect.** Near the existing `let post_id = post.post_id;` (line 201) add
       `let is_draft = post.is_draft;`. Alongside the existing `unpublish_action`
       (line 204) add:
@@ -214,7 +214,7 @@ Effect::new_isomorphic(move |_| {
 });
 ```
 
-- [ ] **Step 2: Branch the primary action button on `is_draft`.** Replace the
+- [x] **Step 2: Branch the primary action button on `is_draft`.** Replace the
       fixed Unpublish `<button>` (lines 233-241) with a `primary_action` chosen
       by `is_draft`, built before `action_col` and moved into it:
 
@@ -256,12 +256,12 @@ let primary_action = if is_draft {
 In `action_col` (lines 227-258) place `{primary_action}` between the Edit `<a>`
 and the Delete `<button>` (Edit and Delete are unchanged in both arms).
 
-- [ ] **Step 3: Run the gate, verify it compiles clean (incl. wasm clippy).**
+- [x] **Step 3: Run the gate, verify it compiles clean (incl. wasm clippy).**
 
 Run: `cargo xtask check --no-test` Expected: PASS — no unused-import/variable
 warnings; `PublishPost`/`PublishPostResult` resolve.
 
-- [ ] **Step 4: Commit.**
+- [x] **Step 4: Commit.**
 
 ```bash
 git add web/src/posts/component.rs

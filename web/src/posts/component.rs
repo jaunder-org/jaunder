@@ -810,11 +810,7 @@ pub fn InlineComposer(username: Username, on_publish: WriteSignal<u32>) -> impl 
     let on_success = Callback::new(move |created: CreatePostResult| {
         use leptos_dom::helpers::set_timeout;
         use std::time::Duration;
-        let url = created
-            .permalink
-            .clone()
-            .unwrap_or_else(|| created.preview_url.clone())
-            .to_string();
+        let url = created.permalink.to_string();
         let msg = if created.published_at.is_some() {
             "Post published!".to_string()
         } else {
@@ -1129,21 +1125,11 @@ pub fn CreatePostPage() -> impl IntoView {
                                                     {slug_value}
                                                 </p>
                                                 <a
-                                                    data-test="preview-link"
-                                                    href=created.preview_url.to_string()
+                                                    data-test="permalink-link"
+                                                    href=created.permalink.to_string()
                                                 >
-                                                    "Preview draft"
+                                                    "View post"
                                                 </a>
-                                                {created
-                                                    .permalink
-                                                    .as_ref()
-                                                    .map(|href| {
-                                                        view! {
-                                                            <a data-test="permalink-link" href=href.to_string()>
-                                                                "View permalink"
-                                                            </a>
-                                                        }
-                                                    })}
                                             </div>
                                         }
                                     })
@@ -1591,10 +1577,8 @@ pub fn EditPostPage() -> impl IntoView {
     Effect::new(move |_| {
         if let Some(Ok(ref updated)) = update_post_action.value().get() {
             if updated.published_at.is_some() {
-                if let Some(ref permalink) = updated.permalink {
-                    if let Some(window) = web_sys::window() {
-                        let _ = window.location().replace(permalink.as_ref());
-                    }
+                if let Some(window) = web_sys::window() {
+                    let _ = window.location().replace(updated.permalink.as_ref());
                 }
             }
         }
@@ -1869,8 +1853,8 @@ pub fn EditPostPage() -> impl IntoView {
                                     "Slug: "
                                     {slug_value}
                                 </p>
-                                <a data-test="preview-link" href=updated.preview_url.to_string()>
-                                    "Preview draft"
+                                <a data-test="permalink-link" href=updated.permalink.to_string()>
+                                    "View post"
                                 </a>
                             </div>
                         }
@@ -1983,8 +1967,6 @@ fn render_draft_row(
                     {draft.slug.to_string()}
                     ") "
                     {scheduled_badge}
-                    " "
-                    <a href=String::from(draft.preview_url)>"Preview"</a>
                     " "
                     <a href=String::from(draft.permalink)>"Permalink"</a>
                 </div>

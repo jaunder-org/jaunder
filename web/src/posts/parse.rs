@@ -151,7 +151,6 @@ mod tests {
             created_at: parse_utc_instant("2026-01-01T00:00:00Z"),
             updated_at: parse_utc_instant("2026-01-01T00:00:00Z"),
             scheduled_at: scheduled.map(parse_utc_instant),
-            preview_url: parse_root_relative_url("/draft/1/preview"),
             edit_url: parse_root_relative_url("/posts/1/edit"),
             permalink: parse_root_relative_url("/~alice/2026/01/01/my-post"),
         }

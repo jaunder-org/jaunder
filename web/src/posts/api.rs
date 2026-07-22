@@ -77,8 +77,9 @@ pub struct CreatePostResult {
     pub slug: Slug,
     pub created_at: UtcInstant,
     pub published_at: Option<UtcInstant>,
-    pub preview_url: RootRelativeUrl,
-    pub permalink: Option<RootRelativeUrl>,
+    /// Canonical permalink, always present — for a draft it is the created_at-based
+    /// URL the permalink view renders for the author.
+    pub permalink: RootRelativeUrl,
     pub summary: Option<PostSummary>,
 }
 
@@ -88,8 +89,8 @@ pub struct UpdatePostResult {
     pub post_id: PostId,
     pub slug: Slug,
     pub published_at: Option<UtcInstant>,
-    pub preview_url: RootRelativeUrl,
-    pub permalink: Option<RootRelativeUrl>,
+    /// Canonical permalink, always present (created_at-based for a draft).
+    pub permalink: RootRelativeUrl,
     pub summary: Option<PostSummary>,
 }
 
@@ -106,7 +107,6 @@ pub struct DraftSummary {
     /// in the future); `None` for true drafts. Drives the "Scheduled for …"
     /// author marker.
     pub scheduled_at: Option<UtcInstant>,
-    pub preview_url: RootRelativeUrl,
     pub edit_url: RootRelativeUrl,
     pub permalink: RootRelativeUrl,
 }
@@ -242,16 +242,15 @@ pub async fn create_post(args: CreatePostArgs) -> WebResult<CreatePostResult> {
 
         let created_at = UtcInstant::from(record.created_at);
         let published_at = record.published_at.map(UtcInstant::from);
-        // Only published posts have a public permalink. For drafts, the permalink is None.
-        let permalink = record.published_at.is_some().then(|| record.permalink());
-        let preview_url = root_relative_path(format!("/draft/{}/preview", record.post_id));
+        // The canonical permalink is always available — for a draft it is the
+        // created_at-based URL the permalink view renders for the author.
+        let permalink = record.permalink();
 
         let created = CreatePostResult {
             post_id: record.post_id,
             slug: record.slug,
             created_at,
             published_at,
-            preview_url,
             permalink,
             summary: record.summary,
         };
@@ -418,15 +417,14 @@ pub async fn update_post(args: UpdatePostArgs) -> WebResult<UpdatePostResult> {
             .map_err(InternalError::storage)?;
 
         let published_at = record.published_at.map(UtcInstant::from);
-        // Only published posts have a public permalink. For drafts, the permalink is None.
-        let permalink = record.published_at.is_some().then(|| record.permalink());
+        // The canonical permalink is always available (created_at-based for a draft).
+        let permalink = record.permalink();
 
         host::metrics::post(host::metrics::PostEvent::Updated);
         Ok(UpdatePostResult {
             post_id,
             slug: record.slug,
             published_at,
-            preview_url: root_relative_path(format!("/draft/{post_id}/preview")),
             permalink,
             summary: record.summary,
         })
@@ -509,7 +507,6 @@ pub async fn list_drafts(
                     created_at: UtcInstant::from(draft.created_at),
                     updated_at: UtcInstant::from(draft.updated_at),
                     scheduled_at,
-                    preview_url: root_relative_path(format!("/draft/{}/preview", draft.post_id)),
                     edit_url: root_relative_path(format!("/posts/{}/edit", draft.post_id)),
                     permalink,
                 }
