@@ -7,6 +7,16 @@ license = "GPL-3.0-only"
 [dependencies]
 wasm-bindgen = { workspace = true }
 web-sys = { workspace = true, features = ["Window", "Storage"] }
+common.workspace = true
+serde.workspace = true
+# Optional + behind the `csr` feature so a normal (host / server) build never pulls leptos:
+# an unconditional dep would let workspace feature-unification light `leptos/csr` alongside
+# `web`'s server-build `leptos/ssr`, which leptos forbids. `web`'s `csr` feature forwards
+# `client/csr` (#515).
+leptos = { workspace = true, optional = true }
+
+[features]
+csr = ["dep:leptos", "leptos/csr"]
 
 [lints]
 workspace = true

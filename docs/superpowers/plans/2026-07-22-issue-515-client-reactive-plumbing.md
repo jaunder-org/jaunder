@@ -306,7 +306,7 @@ Bodies are the current `Invalidator::{resource,action,patched,sticky}` bodies
 `Resource::new(move || track(), move |_| fetch())`. No behavior change — the
 helpers are e2e-exercised (audiences flows in CI), not host-unit-tested.
 
-- [ ] **Step 1: Wire `client/Cargo.toml`.**
+- [x] **Step 1: Wire `client/Cargo.toml`.**
 
 ```toml
 [dependencies]
@@ -320,15 +320,15 @@ leptos = { workspace = true, optional = true }
 csr = ["dep:leptos", "leptos/csr"]
 ```
 
-- [ ] **Step 2: Forward `web`'s `csr` feature** to `client`: in
+- [x] **Step 2: Forward `web`'s `csr` feature** to `client`: in
       `web/Cargo.toml`, `csr = ["leptos/csr", "client/csr"]`.
 
-- [ ] **Step 3: Write `client/src/reactive.rs`** with the four functions to the
+- [x] **Step 3: Write `client/src/reactive.rs`** with the four functions to the
       exact signatures above (bodies ported from `web/src/reactive.rs`), and add
       `pub mod reactive;` to `client/src/lib.rs`. Import leptos +
       `common::list_state::ListState`.
 
-- [ ] **Step 4: Verify the wasm build compiles `client::reactive`** (host build
+- [x] **Step 4: Verify the wasm build compiles `client::reactive`** (host build
       leaves `client` empty, so it proves nothing here).
 
   Run: `cargo build -p csr --target wasm32-unknown-unknown` → Expected: **PASS**
@@ -337,7 +337,7 @@ csr = ["dep:leptos", "leptos/csr"]
   **PASS** (host build: `client` empty-on-host, no leptos pulled → no csr/ssr
   unification collision).
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add client/Cargo.toml client/src/lib.rs client/src/reactive.rs web/Cargo.toml Cargo.lock
