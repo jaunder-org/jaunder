@@ -52,7 +52,7 @@ state, then delete `DraftPreviewPage` and every "preview" URL.
    When the post is a draft it renders `[Edit, Publish, Delete]` (Publish
    dispatches `PublishPost`, guarded by a `confirm(...)`); when published it
    renders `[Edit, Unpublish, Delete]` (unchanged). `Edit` and `Delete` are
-   identical in both arms. This *is* the #23 fix. The action column is an
+   identical in both arms. This _is_ the #23 fix. The action column is an
    overlaid reactive `children` sibling, computed client-side from the post
    state — it is **never part of the SSR/projector render string** (which shares
    `render_post_inner`/`render_post_content` and has no author-action slot), so
@@ -61,8 +61,8 @@ state, then delete `DraftPreviewPage` and every "preview" URL.
 4. **`is_draft` is threaded through `TimelinePostSummary` as a `bool` field**,
    not passed as a separate `PostCard` prop. The card is self-describing, which
    structurally prevents a future caller from re-introducing #23.
-   `TimelinePostSummary` is a serialized wire type
-   (`api/listing.rs:37-52`), so every construction site sets the new field:
+   `TimelinePostSummary` is a serialized wire type (`api/listing.rs:37-52`), so
+   every construction site sets the new field:
    - `server.rs:27-39` `timeline_post_summary` → `false` (only ever built from a
      published post; it early-returns `None` unless `published_at` is `Some`).
    - `component.rs:1211-1225` `PostPage` → `fetched.is_draft`.
@@ -72,9 +72,9 @@ state, then delete `DraftPreviewPage` and every "preview" URL.
 
 5. **On successful publish, `PostCard` navigates to the new canonical
    permalink.** Unlike the existing unpublish path (a hard-coded `/drafts`
-   callback baked by `PostPage`), the publish destination is *dynamic* — it comes
-   from `PublishPostResult.permalink` (a non-optional `String`, always populated
-   server-side by `updated.permalink()`). So `PostCard` owns its own
+   callback baked by `PostPage`), the publish destination is _dynamic_ — it
+   comes from `PublishPostResult.permalink` (a non-optional `String`, always
+   populated server-side by `updated.permalink()`). So `PostCard` owns its own
    `publish_action` and a navigate effect that reads the result's permalink on
    success; it is not a pre-baked callback. This is required for correctness: a
    draft's permalink is `created_at`-based, and publishing can move it to a
@@ -82,21 +82,23 @@ state, then delete `DraftPreviewPage` and every "preview" URL.
    now-stale address.
 
 6. **Every former "preview" URL is replaced by the canonical permalink.** The
-   permalink view *is* the preview now. Concretely:
-   - `DraftSummary` drops `preview_url`; `DraftsPage`
-     (`render_draft_row`, `component.rs:2014-2067`) drops its "Preview" link and
-     keeps only the existing "Permalink" link. The `DraftSummary` fixture in the
+   permalink view _is_ the preview now. Concretely:
+   - `DraftSummary` drops `preview_url`; `DraftsPage` (`render_draft_row`,
+     `component.rs:2014-2067`) drops its "Preview" link and keeps only the
+     existing "Permalink" link. The `DraftSummary` fixture in the
      `draft_row_display` test (`parse.rs:153`) drops `preview_url` accordingly
      (the pure `DraftRowDisplay` struct itself has no such field).
-   - **`CreatePostResult`/`UpdatePostResult` already carry `permalink:
-     Option<String>` (`api.rs:68`, `api.rs:79`), but it is populated only for
-     published posts (`published_at.is_some().then(|| record.permalink())`,
+   - **`CreatePostResult`/`UpdatePostResult` already carry
+     `permalink: Option<String>` (`api.rs:68`, `api.rs:79`), but it is populated
+     only for published posts
+     (`published_at.is_some().then(|| record.permalink())`,
      `api.rs:233`/`api.rs:409`) — i.e. `None` for a draft, which is exactly why
-     the flash consumers fall back to `preview_url` today.** This population must
-     change so a draft also gets a permalink (always `Some(record.permalink())`,
-     the `created_at`-based URL). Then `preview_url` is dropped from both result
-     types and the flash consumers link to `permalink` instead.
-   - **The CreatePostPage draft flash currently renders *two* links** — a
+     the flash consumers fall back to `preview_url` today.** This population
+     must change so a draft also gets a permalink (always
+     `Some(record.permalink())`, the `created_at`-based URL). Then `preview_url`
+     is dropped from both result types and the flash consumers link to
+     `permalink` instead.
+   - **The CreatePostPage draft flash currently renders _two_ links** — a
      `preview-link` ("Preview draft") and a published-only `permalink-link`
      ("View permalink") (`component.rs:1081-1094`). With `permalink` now always
      populated, these collapse to a **single** permalink link. The
@@ -111,8 +113,8 @@ state, then delete `DraftPreviewPage` and every "preview" URL.
    (which requires `username/year/month/day/slug`). So the endpoint, its
    integration test (`get_post_preview_shows_draft_to_author_only`) and helper
    (`get_post_preview_form`), and the `xtask` `pascal_case` sample all stay put.
-   The draft-visibility guarantee at the *permalink* route (author sees; stranger
-   and anon denied) is independently held by `get_post`'s draft path
+   The draft-visibility guarantee at the _permalink_ route (author sees;
+   stranger and anon denied) is independently held by `get_post`'s draft path
    (`find_draft_by_permalink_for_user`, author-only), already covered by
    `get_post_returns_draft_to_author_only`.
 
@@ -121,7 +123,8 @@ state, then delete `DraftPreviewPage` and every "preview" URL.
 Observable, so ship-time conformance can tell delivered from not:
 
 - **AC1 (route gone).** There is no `/draft/:post_id/preview` route; requesting
-  such a URL does not render `DraftPreviewPage` (the component no longer exists).
+  such a URL does not render `DraftPreviewPage` (the component no longer
+  exists).
 - **AC2 (draft actions).** Visiting a draft at its permalink as the author shows
   action buttons `[Edit, Publish, Delete]` — a **Publish** button, **not**
   Unpublish. (Directly resolves #23.)
@@ -130,9 +133,9 @@ Observable, so ship-time conformance can tell delivered from not:
 - **AC4 (publish navigation).** Clicking Publish on a draft permalink (and
   confirming) publishes the post and navigates the browser to the returned
   canonical published permalink; the destination renders the now-published post.
-- **AC5 (drafts listing).** Each row in `DraftsPage` links to exactly one view of
-  the draft — its permalink. No "Preview" link and no `/draft/:id/preview` href
-  appears.
+- **AC5 (drafts listing).** Each row in `DraftsPage` links to exactly one view
+  of the draft — its permalink. No "Preview" link and no `/draft/:id/preview`
+  href appears.
 - **AC6 (flashes).** After creating or editing a draft, the resulting flash
   message's link opens the draft's canonical permalink view; no
   `/draft/:id/preview` URL is emitted anywhere in the app.
@@ -156,20 +159,20 @@ assertion to the permalink:
 
 - `L570` "inline composer: draft flash is a link to the draft preview URL" —
   retitled/rewired to assert the flash links to the permalink.
-- `L226-265` "draft lifecycle: create, view, edit, and publish" — navigate to the
-  draft via permalink; publish and assert landing on the published permalink
+- `L226-265` "draft lifecycle: create, view, edit, and publish" — navigate to
+  the draft via permalink; publish and assert landing on the published permalink
   (AC4).
 - `L81-94`, `L127-145`, `L160-189`, `L672-686` — replace `preview-link` /
-  `/draft/(\d+)/preview` extraction and the "Preview draft" flash-label assertion
-  with the permalink equivalent.
+  `/draft/(\d+)/preview` extraction and the "Preview draft" flash-label
+  assertion with the permalink equivalent.
 
 **Rust integration — `server/tests/web/web_posts.rs`:**
 
 - `get_post_preview_shows_draft_to_author_only` (`L670-731`) and the
   `get_post_preview_form` helper (`L88-94`) **stay** (endpoint retained for
-  `EditPostPage`). Ensure `get_post_returns_draft_to_author_only` (`L558`) covers
-  the stranger + anon denial cases (extend if it only asserts the author) —
-  satisfies AC8.
+  `EditPostPage`). Ensure `get_post_returns_draft_to_author_only` (`L558`)
+  covers the stranger + anon denial cases (extend if it only asserts the author)
+  — satisfies AC8.
 - `create_post_persists_rendered_published_post` (`L136`) and
   `create_post_accepts_slug_override_and_saves_draft` (`L321`) — replace
   `created.preview_url` assertions with `created.permalink` (now `Some` for
@@ -191,8 +194,8 @@ stays valid).
 
 - No change to `get_post`'s resolution logic, `PostDisplay`, the SSR projector,
   or the server-side HTML render path (the draft action branch is client-only).
-- No change to the timeline/listing surface beyond the mechanical `is_draft:
-  false` at its one construction site.
+- No change to the timeline/listing surface beyond the mechanical
+  `is_draft: false` at its one construction site.
 - No new draft/preview capability; this is a pure consolidation + the #23 fix.
 
 ## Decision record
