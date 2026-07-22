@@ -9,6 +9,7 @@ use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::topbar::Topbar;
 use common::password::Password;
+use common::registration::RegistrationPolicy;
 use common::username::Username;
 use leptos::prelude::*;
 
@@ -69,7 +70,7 @@ pub fn RegisterPage() -> impl IntoView {
                         let invite_code = invite_code.clone();
                         Suspend::new(async move {
                             let p = policy.await;
-                            let is_invite_only = p.as_deref() == Ok("invite_only");
+                            let is_invite_only = matches!(p, Ok(RegistrationPolicy::InviteOnly));
                             if is_invite_only && invite_code.is_empty() {
                                 return view! { <InviteLinkRequired /> }.into_any();
                             }

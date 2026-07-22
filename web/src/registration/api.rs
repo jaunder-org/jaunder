@@ -10,6 +10,9 @@ use crate::error::WebResult;
 // client and server builds.
 use common::invite::ProfferedInviteCode;
 use common::password::ProfferedPassword;
+// Ungated: `RegistrationPolicy` is the wire *return* type of `get_registration_policy`,
+// so the `#[server]`-generated signature references it on both the client and server builds.
+use common::registration::RegistrationPolicy;
 use common::username::Username;
 use leptos::prelude::*;
 
@@ -25,21 +28,21 @@ use {
     host::invite::InviteCode,
     std::sync::Arc,
     storage::{
-        load_registration_policy, AtomicOps, RegistrationPolicy, SessionStorage, SiteConfigStorage,
-        UserStorage,
+        load_registration_policy, AtomicOps, SessionStorage, SiteConfigStorage, UserStorage,
     },
     tracing::Instrument,
 };
 
-/// Returns the site's current registration policy as a string.
-/// Possible values: `"open"`, `"invite_only"`, `"closed"`.
+/// Returns the site's current registration policy — one of
+/// [`RegistrationPolicy::Open`], [`RegistrationPolicy::InviteOnly`], or
+/// [`RegistrationPolicy::Closed`].
 #[server(endpoint = "/get_registration_policy")]
 #[tracing::instrument(name = "web.registration.get_registration_policy")]
-pub async fn get_registration_policy() -> WebResult<String> {
+pub async fn get_registration_policy() -> WebResult<RegistrationPolicy> {
     boundary!("get_registration_policy", {
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
         let policy = load_registration_policy(&*site_config).await;
-        Ok(policy.to_string())
+        Ok(policy)
     })
 }
 

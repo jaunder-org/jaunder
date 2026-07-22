@@ -30,9 +30,13 @@ through it.
 - **Applies to** a unit-variant enum; any other shape (struct, fielded variant,
   or two variants that resolve to the same wire literal) is a spanned
   `compile_error!`.
-- **Wire string = the lowercased variant identifier by default**, overridable
-  per variant with `#[str_enum(rename = "…")]`. (All five current enums match
-  the lowercase default.)
+- **Wire string = the `snake_case` of the variant identifier by default**
+  (`InviteOnly` → `invite_only`), overridable per variant with
+  `#[str_enum(rename = "…")]`. (The five original enums are all single-word,
+  where `snake_case` == the lowercased identifier;
+  `RegistrationPolicy::InviteOnly` (#576) is the first multi-word variant and
+  relies on this default for its `invite_only` token. A consecutive-capital
+  acronym snake-cases one underscore per letter — override those with `rename`.)
 - **Always emitted:** `as_str(&self) -> &'static str`, `Display` (via `as_str`),
   `FromStr` **and** `TryFrom<&str>`, and a generated `pub struct Invalid<Name>;`
   error (`format_ident!("Invalid{}", Name)`; derives

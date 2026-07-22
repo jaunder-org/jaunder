@@ -4,6 +4,7 @@ use crate::invites::{list_invites, CreateInvite, InviteInfo};
 use crate::pages::Topbar;
 use crate::registration::get_registration_policy;
 use common::email::Email;
+use common::registration::RegistrationPolicy;
 use leptos::prelude::*;
 
 /// Invites page — lists invites (metadata only; raw codes are never sent to the client,
@@ -27,8 +28,7 @@ pub fn InvitesPage() -> impl IntoView {
                     view! { <p class="j-loading">"Loading\u{2026}"</p> }
                 }>
                     {move || Suspend::new(async move {
-                        let policy_str = policy.await.unwrap_or_default();
-                        if policy_str != "invite_only" {
+                        if policy.await != Ok(RegistrationPolicy::InviteOnly) {
                             #[cfg(feature = "server")]
                             {
                                 use leptos::context::use_context;

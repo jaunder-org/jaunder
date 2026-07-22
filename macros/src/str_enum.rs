@@ -4,7 +4,8 @@
 //! `TryFrom<&str>` routed through a self-contained `Invalid<Name>` error, and — under
 //! `#[str_enum(serde)]` — a string serde bridge (serialize `as_str`; deserialize an owned
 //! `String` via `FromStr`, so the `serde_qs` form transport works). The wire token defaults to
-//! the lowercased variant identifier, per-variant overridable with `#[str_enum(rename = "…")]`.
+//! the `snake_case` of the variant identifier, per-variant overridable with
+//! `#[str_enum(rename = "…")]`.
 //! `Default`/`Copy`/`Hash`/… stay in the user's `#[derive]` list. Modelled on `num_newtype`
 //! (self-contained error, no `thiserror`).
 
@@ -65,7 +66,7 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
 }
 
 /// Validates the non-generic unit-variant-enum shape and resolves each variant's wire literal
-/// (the `#[str_enum(rename = "…")]` override, else the lowercased identifier). Rejects a
+/// (the `#[str_enum(rename = "…")]` override, else the `snake_case` identifier). Rejects a
 /// non-enum, a generic enum, an empty enum, a fielded variant, an unknown variant-level
 /// `str_enum` key, or two variants that resolve to the same wire literal.
 fn collect_variants(input: &DeriveInput) -> syn::Result<Vec<WireVariant>> {
@@ -120,7 +121,7 @@ fn collect_variants(input: &DeriveInput) -> syn::Result<Vec<WireVariant>> {
     Ok(variants)
 }
 
-/// The variant's wire literal: `#[str_enum(rename = "…")]` if present, else the lowercased
+/// The variant's wire literal: `#[str_enum(rename = "…")]` if present, else the `snake_case`
 /// identifier. Non-`str_enum` attributes (e.g. std `#[default]`) are ignored; an unknown
 /// variant-level `str_enum` key is a spanned error.
 fn variant_wire(v: &syn::Variant) -> syn::Result<String> {
@@ -137,7 +138,23 @@ fn variant_wire(v: &syn::Variant) -> syn::Result<String> {
             })?;
         } // cov:ignore `?`-fall-through closing brace (mirrors num_newtype)
     }
-    Ok(rename.unwrap_or_else(|| v.ident.to_string().to_lowercase()))
+    Ok(rename.unwrap_or_else(|| to_snake_case(&v.ident.to_string())))
+}
+
+/// Converts a `CamelCase` variant identifier to its `snake_case` wire token: lowercase
+/// everything and insert `_` before each uppercase letter that isn't first (`InviteOnly` ->
+/// `invite_only`, `Open` -> `open`; a single-word identifier is just lowercased). Consecutive
+/// capitals snake-case one underscore per letter (`HTMLPage` -> `h_t_m_l_page`); override an
+/// acronym with `#[str_enum(rename = "…")]`.
+fn to_snake_case(ident: &str) -> String {
+    let mut out = String::with_capacity(ident.len() + 4);
+    for (i, ch) in ident.char_indices() {
+        if i != 0 && ch.is_uppercase() {
+            out.push('_');
+        }
+        out.extend(ch.to_lowercase());
+    }
+    out
 }
 
 /// The self-contained error type: a hand-written `Display` + `Error` (no `thiserror`), so any
