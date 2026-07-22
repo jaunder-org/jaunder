@@ -18,6 +18,14 @@
 /// call sites.
 pub mod storage;
 
+/// Raw browser navigation primitives (`window.location` replace/reload) relocated from
+/// `web` (#516). `web-sys` only, no domain types — unconditional (no `csr` gate).
+pub mod navigation;
+
+/// Raw browser confirm-dialog primitive (`window.confirm`) relocated from `web` (#516).
+/// `web-sys` only, no domain types — unconditional (no `csr` gate).
+pub mod dialog;
+
 /// Reactive revalidation helpers — the browser-bound `Effect`/`Resource` plumbing behind
 /// `web`'s `Invalidator` idiom, relocated here (#515). Behind the `csr` feature because they
 /// need `leptos`; a host/server build of `client` stays leptos-free.

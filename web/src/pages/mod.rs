@@ -76,9 +76,7 @@ pub fn App() -> impl IntoView {
     //   (including the auth header that reads from the `user` Resource), and
     // - Playwright's waitForURL() reliably detects the navigation in all browsers.
     let _ = leptos::server_fn::redirect::set_redirect_hook(|loc: &str| {
-        if let Some(window) = web_sys::window() {
-            let _ = window.location().replace(loc);
-        }
+        client::navigation::replace(loc);
     });
 
     let theme = RwSignal::new(DEFAULT_THEME.to_string());
