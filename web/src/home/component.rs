@@ -1,3 +1,8 @@
+//! The home vertical's wasm-only UI (ADR-0070): the routed `/` public
+//! Local-timeline landing page. Renders the shared `crate::render` masthead via
+//! `inner_html` (coincidence with the projector, ADR-0041) + the reactive
+//! `crate::timeline` rows. No cfgs of its own (wasm-only via its `mod` line).
+
 use leptos::prelude::*;
 
 use crate::feed_discovery::FeedDiscovery;

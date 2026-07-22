@@ -1,6 +1,5 @@
 pub mod cockpit;
 pub mod email;
-pub mod home;
 pub mod invites;
 pub mod password_reset;
 pub mod profile;
@@ -22,10 +21,10 @@ const THEME_KEY: &str = "jaunder_theme";
 use crate::audiences::AudiencesPage;
 use crate::auth::{LoginPage, LogoutPage};
 use crate::backup::{BackupBanner, BackupSettingsPage};
+use crate::home::HomePage;
 use crate::media::MediaPage;
 use crate::pages::cockpit::CockpitPage;
 use crate::pages::email::{EmailPage, VerifyEmailPage};
-use crate::pages::home::HomePage;
 use crate::pages::invites::InvitesPage;
 use crate::pages::password_reset::{ForgotPasswordPage, ResetPasswordPage};
 use crate::pages::profile::ProfilePage;
