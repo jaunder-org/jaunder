@@ -134,6 +134,13 @@ call in BODY has request context), and `auth-sources' (a temp netrc)."
                (jaunder-test--wait
                 (lambda () (jaunder-test--http-reachable-p (concat base-url "/")))
                 "server readiness")
+               ;; #560: feeds/AtomPub now require `site.base_url` to compose absolute
+               ;; URLs, else they 500. Point it at this server's own (dynamic) address
+               ;; so the atompub collection the auth-readiness poll below hits returns
+               ;; 200, and emitted URLs (Location/edit links) resolve back to it.
+               (jaunder-test--run-cli bin "site-config" "set"
+                                      "--db" db "--storage-path" storage
+                                      "site.base_url" base-url)
                ;; Auth readiness: an unauthed GET / can succeed before the
                ;; just-provisioned session is reliably usable by the serving
                ;; connection, so the first authed request can race to a 401.
