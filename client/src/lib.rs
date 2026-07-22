@@ -17,3 +17,9 @@
 /// domain types — the `web`/`csr` home for what were scattered `web_sys::Storage`
 /// call sites.
 pub mod storage;
+
+/// Reactive revalidation helpers — the browser-bound `Effect`/`Resource` plumbing behind
+/// `web`'s `Invalidator` idiom, relocated here (#515). Behind the `csr` feature because they
+/// need `leptos`; a host/server build of `client` stays leptos-free.
+#[cfg(feature = "csr")]
+pub mod reactive;

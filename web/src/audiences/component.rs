@@ -10,11 +10,12 @@ use crate::error::WebResult;
 // `crate::forms::Field` (the validated-input field) is aliased to avoid colliding with
 // `reactive_stores::Field` (the keyed-store field used by `AudienceRow`).
 use crate::forms::Field as ValidatedField;
-use crate::reactive::{invalidator_scope, Invalidator, ListState};
+use crate::reactive::{invalidator_scope, Invalidator};
 use crate::render::Icons;
 use crate::topbar::Topbar;
 use common::audience::AudienceName;
 use common::ids::AudienceId;
+use common::list_state::ListState;
 use leptos::prelude::*;
 use reactive_stores::{Field, Patch, Store};
 
@@ -51,7 +52,11 @@ pub fn AudiencesPage() -> impl IntoView {
     let list = AudienceList(Invalidator::new());
     provide_context(list);
     let store = Store::new(AudienceListData::default());
-    let state = list.patched(list_my_audiences, move |rows| store.audiences().patch(rows));
+    let state = client::reactive::patched(
+        move || list.track(),
+        list_my_audiences,
+        move |rows| store.audiences().patch(rows),
+    );
 
     // The subscriber roster: an `Invalidator`-driven `sticky` resource so the refresh
     // control (in the card head below) refetches it while retaining the current roster —
@@ -59,7 +64,8 @@ pub fn AudiencesPage() -> impl IntoView {
     // page-level error node below and each `MemberChecklist`. A fetch error is surfaced,
     // never swallowed into an empty roster (#346).
     let roster = Invalidator::new();
-    let subscribers: RosterSignal = roster.sticky(list_my_subscribers);
+    let subscribers: RosterSignal =
+        client::reactive::sticky(move || roster.track(), list_my_subscribers);
     provide_context(subscribers);
 
     view! {
@@ -141,7 +147,8 @@ pub fn AudiencesPage() -> impl IntoView {
 /// list on a successful create via the `AudienceList` invalidator.
 #[component]
 fn CreateAudienceForm() -> impl IntoView {
-    let create_action = expect_context::<AudienceList>().action::<CreateAudience>();
+    let list = expect_context::<AudienceList>();
+    let create_action = client::reactive::action::<CreateAudience>(move || list.notify());
     // Client-side pre-validation (ADR-0065) via direct-bind: the same `AudienceName::from_str`
     // the typed `#[server]` arg decodes through gates submit (disable-until-valid), so a valid
     // name is a precondition of dispatch and the empty-name rejection never round-trips for a
@@ -221,8 +228,8 @@ fn AudienceRow(row: Field<AudienceSummary>) -> impl IntoView {
 #[component]
 fn AudienceHeader(audience_id: AudienceId, name: String) -> impl IntoView {
     let list = expect_context::<AudienceList>();
-    let rename_action = list.action::<RenameAudience>();
-    let delete_action = list.action::<DeleteAudience>();
+    let rename_action = client::reactive::action::<RenameAudience>(move || list.notify());
+    let delete_action = client::reactive::action::<DeleteAudience>(move || list.notify());
     // Client-side pre-validation (ADR-0065), seeded from the existing name so a pristine
     // row is already valid (submit enabled); clearing it disables Rename and — once
     // touched — shows the newtype's own message inline.
@@ -277,9 +284,13 @@ fn MemberChecklist(audience_id: AudienceId) -> impl IntoView {
     // not every audience's (and never the list). `sticky` retains the last member list across
     // that refetch so a toggle never flashes "Loading members…" (`None` until first resolve).
     let members = Invalidator::new();
-    let add_action = members.action::<AddSubscriberToAudience>();
-    let remove_action = members.action::<RemoveSubscriberFromAudience>();
-    let member_ids = members.sticky(move || list_audience_members(audience_id));
+    let add_action = client::reactive::action::<AddSubscriberToAudience>(move || members.notify());
+    let remove_action =
+        client::reactive::action::<RemoveSubscriberFromAudience>(move || members.notify());
+    let member_ids = client::reactive::sticky(
+        move || members.track(),
+        move || list_audience_members(audience_id),
+    );
 
     view! {
         {move || {

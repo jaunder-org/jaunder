@@ -102,44 +102,6 @@ pub(crate) fn project(kind: ErrorKind, public_message: &str) -> WebError {
     }
 }
 
-/// Wraps a `Resource` fetcher's future so the reactive owner — captured here, while it
-/// is still current (the resource's own owner) — is held by a *strong* ref and
-/// re-applied on every poll. This keeps server-fn context (storage trait objects and
-/// request `Parts`) alive even when the future is later polled on a worker thread
-/// detached from the owner. The owner is live only at fetcher invocation; an
-/// `async fn` body has no synchronous prologue, so this cannot live in the handler.
-/// `new_untracked` so context reads don't create spurious reactive subscriptions.
-/// Extends #89's [`server_boundary`] mechanism to the `Resource` layer; see the
-/// ADR-0016 #124 addendum.
-fn scoped_fetcher_future<Fut>(fut: Fut) -> leptos::reactive::computed::ScopedFuture<Fut>
-where
-    Fut: std::future::Future,
-{
-    leptos::reactive::computed::ScopedFuture::new_untracked(fut)
-}
-
-/// The sanctioned way to create a `Resource` in `web`: identical to
-/// `leptos::prelude::Resource::new`, but wraps the fetcher's future via
-/// [`scoped_fetcher_future`] so server-fn context survives SSR polling on a worker
-/// thread detached from the owner (issue #124). Raw `Resource::new` is banned in
-/// `web` outside this definition (static guard).
-pub fn server_resource<T, S, Fut>(
-    source: impl Fn() -> S + Send + Sync + 'static,
-    fetcher: impl Fn(S) -> Fut + Send + Sync + 'static,
-) -> leptos::prelude::Resource<T>
-where
-    T: serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static,
-    S: PartialEq + Clone + Send + Sync + 'static,
-    Fut: std::future::Future<Output = T> + Send + 'static,
-{
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the one sanctioned Resource::new; all other call sites must go through \
-                  web::server_resource (#124)"
-    )]
-    leptos::prelude::Resource::new(source, move |s| scoped_fetcher_future(fetcher(s)))
-}
-
 /// Collects strong [`Owner`](leptos::reactive::owner::Owner) handles for every
 /// ancestor of `owner` (parent, grandparent, … up to the root). `Owner::parent()`
 /// upgrades the internally-*weak* parent link to a strong ref, so holding the
@@ -614,34 +576,6 @@ mod owner_lifetime {
         }
     }
 
-    /// Covers [`server_resource`](super::server_resource). With a current owner set
-    /// (mirroring the adjacent owner tests), calling the sanctioned wrapper exercises
-    /// its generic signature and the `Resource::new` line. `Resource::new` eagerly
-    /// spawns the fetcher through `any_spawner::Executor`, which panics unless an async
-    /// executor is initialized — and no executor is reachable host-side without adding a
-    /// dependency (leptos only initializes one inside its wasm `mount` or `leptos_axum`'s
-    /// private `init_executor`). So we call `server_resource` (its body runs down to the
-    /// `Resource::new` call, covering those lines) and catch the deep executor-spawn
-    /// panic; `catch_unwind` therefore returns `Err`. The panic hook is swapped for a
-    /// no-op so the expected panic does not print (nextest runs each test in its own
-    /// process, so the hook swap is isolated).
-    #[cfg(feature = "server")]
-    #[test]
-    fn server_resource_constructs_under_owner() {
-        let owner = Owner::new();
-        owner.set();
-        let prev = std::panic::take_hook();
-        std::panic::set_hook(Box::new(|_| {}));
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            super::server_resource::<i32, (), _>(|| (), |()| async { 0 })
-        }));
-        std::panic::set_hook(prev);
-        assert!(
-            result.is_err(),
-            "expected the executor-spawn panic reached via Resource::new"
-        );
-    }
-
     /// Reproduces #89: a future that reads context *after* an await loses it when
     /// the owner's strong ref is dropped during the suspension.
     #[test]
@@ -749,38 +683,6 @@ mod owner_lifetime {
         drop(owner);
     }
 
-    /// #124: a `Resource` fetcher's future wrapped by `scoped_fetcher_future` (what
-    /// `server_resource` applies) keeps its context across an owner drop — even when
-    /// the owner's strong ref is gone before the future is first polled, the
-    /// SSR-resource detachment that `server_boundary` could not cover.
-    #[test]
-    fn scoped_fetcher_future_keeps_context_across_owner_drop() {
-        let owner = Owner::new();
-        owner.set();
-        provide_context(Marker(7));
-
-        // Build the future exactly as `server_resource` does, then drop our owner
-        // ref *before the first poll* (the SSR-resource detachment).
-        let mut fut = Box::pin(crate::error::scoped_fetcher_future(async {
-            let pre = use_context::<Marker>();
-            YieldOnce(false).await;
-            let post = use_context::<Marker>();
-            (pre, post)
-        }));
-        drop(owner);
-
-        let mut cx = Context::from_waker(Waker::noop());
-        assert!(step(fut.as_mut().poll(&mut cx)).is_none());
-        let (pre, post) =
-            step(fut.as_mut().poll(&mut cx)).expect("future did not complete on second poll");
-        assert_eq!(
-            pre,
-            Some(Marker(7)),
-            "context present at first (detached) poll"
-        );
-        assert_eq!(post, Some(Marker(7)), "context survives the await");
-    }
-
     /// The actual fix: `server_boundary` must keep context alive across an await,
     /// even when the caller's owner ref is dropped mid-suspension.
     #[cfg(feature = "server")]
@@ -805,49 +707,6 @@ mod owner_lifetime {
             result,
             Ok(Some(Marker(7))),
             "server_boundary must keep context alive across the await"
-        );
-    }
-
-    /// #138: the storage contexts (`UserStorage`/`SiteConfigStorage`) are provided in
-    /// an *ancestor* owner (the root `provide_app_state_contexts`), while
-    /// `scoped_fetcher_future`/`server_boundary` hold a strong ref only to the
-    /// *captured child* owner (the resource's own owner). A post-await `use_context`
-    /// walks the ancestry; if the ancestor's strong ref is dropped during the SSR
-    /// await, the walk fails — reproducing the backup-fn panic. A pre-await read
-    /// resolves before the drop, which is why the ~75 pre-await sites do not panic.
-    #[test]
-    fn post_await_read_loses_ancestor_context_when_parent_owner_dropped() {
-        let parent = Owner::new();
-        parent.set();
-        provide_context(Marker(7)); // provided in the ANCESTOR (like the root provide)
-
-        let child = Owner::new(); // parent = current = `parent`
-        child.set(); // resource's own owner is the captured one
-
-        // Build the fetcher future exactly as `server_resource` does: it captures the
-        // currently-set owner (`child`) via `Owner::current().unwrap_or_default()`.
-        let mut fut = Box::pin(crate::error::scoped_fetcher_future(async {
-            let pre = use_context::<Marker>();
-            YieldOnce(false).await;
-            let post = use_context::<Marker>();
-            (pre, post)
-        }));
-
-        let mut cx = Context::from_waker(Waker::noop());
-        assert!(step(fut.as_mut().poll(&mut cx)).is_none()); // first poll: reads `pre`, suspends
-        drop(parent); // SSR drops the ancestor while the resource future is suspended
-        drop(child); // only `ScopedFuture`'s captured strong ref keeps the child alive
-
-        let (pre, post) =
-            step(fut.as_mut().poll(&mut cx)).expect("future did not complete on second poll");
-        assert_eq!(
-            pre,
-            Some(Marker(7)),
-            "ancestor context resolvable before the drop"
-        );
-        assert_eq!(
-            post, None,
-            "#138: post-await read loses ancestor context once the ancestor owner is dropped"
         );
     }
 

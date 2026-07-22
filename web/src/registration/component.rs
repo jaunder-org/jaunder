@@ -33,7 +33,7 @@ pub fn RegisterPage() -> impl IntoView {
     use leptos_router::hooks::use_query_map;
 
     let register_action = ServerAction::<Register>::new();
-    let policy = crate::server_resource(|| (), |()| get_registration_policy());
+    let policy = Resource::new(|| (), |()| get_registration_policy());
     let username = Field::<Username>::new();
     let password = Field::<Password>::new();
 

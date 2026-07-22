@@ -12,7 +12,7 @@ use leptos::prelude::*;
 pub fn EmailPage() -> impl IntoView {
     let request_action = ServerAction::<RequestEmailVerification>::new();
     let email = Field::<Email>::new();
-    let profile = crate::server_resource(move || request_action.version().get(), |_| get_profile());
+    let profile = Resource::new(move || request_action.version().get(), |_| get_profile());
 
     view! {
         <Topbar title="Email" sub="Verify your address" />
@@ -81,7 +81,7 @@ pub fn VerifyEmailPage() -> impl IntoView {
     // `verify_email` now takes a typed `RawToken`. Parse the URL's token client-side
     // (ADR-0065 pre-validation): a malformed token short-circuits to a validation error
     // with no server round-trip; a well-formed one is verified server-side as before.
-    let result = crate::server_resource(token, |raw: String| async move {
+    let result = Resource::new(token, |raw: String| async move {
         let token: common::token::RawToken = raw
             .parse()
             .map_err(|_| crate::error::WebError::validation("invalid verification token"))?;

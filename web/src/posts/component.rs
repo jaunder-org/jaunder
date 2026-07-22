@@ -332,7 +332,7 @@ pub fn AudiencePicker(selection: RwSignal<AudienceSelection>) -> impl IntoView {
     // multiselect would stay empty. So resolve it client-only: SSR renders no
     // checkboxes, and a wasm-only Effect seeds them after hydration
     // (web-style-guide.md §9, mirroring `home.rs`).
-    let named = crate::server_resource(|| (), |()| list_my_audiences());
+    let named = Resource::new(|| (), |()| list_my_audiences());
     let named_audiences = RwSignal::new(Vec::<AudienceSummary>::new());
     Effect::new(move |_| {
         if let Some(Ok(list)) = named.get() {
@@ -469,7 +469,7 @@ pub fn PostCreateForm(
         base: AudienceBase::Public,
         named: Vec::new(),
     });
-    let default_audience = crate::server_resource(|| (), |()| default_audience_selection());
+    let default_audience = Resource::new(|| (), |()| default_audience_selection());
     // Client-only: copying the resolved Resource into `audience` must not run
     // during SSR, where the future can resolve after the per-request reactive
     // owner is disposed (web-style-guide.md §9). SSR renders the Public
@@ -1086,7 +1086,7 @@ pub fn TagInput(
 
 #[component]
 pub fn CreatePostPage() -> impl IntoView {
-    let current_user = crate::server_resource(|| (), |()| current_user());
+    let current_user = Resource::new(|| (), |()| current_user());
     let last_result: RwSignal<Option<CreatePostResult>> = RwSignal::new(None);
 
     view! {
@@ -1201,7 +1201,7 @@ pub fn PostPage() -> impl IntoView {
         )
     };
 
-    let post = crate::server_resource(
+    let post = Resource::new(
         post_data,
         |(username, year, month, day, slug): (Option<Username>, i32, u32, u32, Option<Slug>)| async move {
             let Some(username) = username else {
@@ -1293,7 +1293,7 @@ fn SubscribeButton(username: Username) -> impl IntoView {
 
     // Re-query after either action mutates the subscription.
     let username_for_state = username.clone();
-    let state = crate::server_resource(
+    let state = Resource::new(
         move || (subscribe.version().get(), unsubscribe.version().get()),
         move |_| {
             let username = username_for_state.clone();
@@ -1377,7 +1377,7 @@ pub fn UserTimelinePage() -> impl IntoView {
     let mutate_version = RwSignal::new(0u32);
     let on_mutate = Callback::new(move |()| mutate_version.update(|v| *v += 1));
 
-    let initial_page = crate::server_resource(
+    let initial_page = Resource::new(
         move || (username.get(), mutate_version.get()),
         |(username, _)| async move {
             let username = username.ok_or_else(|| WebError::validation("Invalid username"))?;
@@ -1594,13 +1594,13 @@ pub fn EditPostPage() -> impl IntoView {
             .get("post_id")
             .and_then(|v| v.parse::<PostId>().ok())
     };
-    let post = crate::server_resource(post_id_param, |maybe_id| async move {
+    let post = Resource::new(post_id_param, |maybe_id| async move {
         match maybe_id {
             Some(id) => get_post_preview(id).await,
             None => Err(WebError::not_found("Post")),
         }
     });
-    let current_audience = crate::server_resource(post_id_param, |maybe_id| async move {
+    let current_audience = Resource::new(post_id_param, |maybe_id| async move {
         match maybe_id {
             Some(id) => post_audience_selection(id).await,
             None => Err(WebError::not_found("Post")),
@@ -1871,7 +1871,7 @@ pub fn EditPostPage() -> impl IntoView {
 pub fn DraftsPage() -> impl IntoView {
     let publish_action = ServerAction::<PublishPost>::new();
     let delete_action = ServerAction::<DeletePost>::new();
-    let drafts = crate::server_resource(
+    let drafts = Resource::new(
         move || {
             (
                 publish_action.version().get(),
@@ -2014,7 +2014,7 @@ pub fn SiteTagPage() -> impl IntoView {
     let mutate_version = RwSignal::new(0u32);
     let on_mutate = Callback::new(move |()| mutate_version.update(|v| *v += 1));
 
-    let initial_page = crate::server_resource(
+    let initial_page = Resource::new(
         move || (tag.get(), mutate_version.get()),
         |(tag, _)| async move {
             let Some(tag) = tag else {
@@ -2192,7 +2192,7 @@ pub fn UserTagPage() -> impl IntoView {
     let mutate_version = RwSignal::new(0u32);
     let on_mutate = Callback::new(move |()| mutate_version.update(|v| *v += 1));
 
-    let initial_page = crate::server_resource(
+    let initial_page = Resource::new(
         move || (username.get(), tag.get(), mutate_version.get()),
         |(username, tag, _)| async move {
             let username = username.ok_or_else(|| WebError::validation("Invalid username"))?;

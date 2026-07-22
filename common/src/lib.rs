@@ -17,6 +17,7 @@ pub mod email;
 pub mod feed;
 pub mod ids;
 pub mod invite;
+pub mod list_state;
 pub mod mailbox;
 pub mod mailer;
 pub mod media;

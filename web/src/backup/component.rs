@@ -9,7 +9,7 @@ use strum::VariantArray;
 #[component]
 pub fn BackupSettingsPage() -> impl IntoView {
     let update_action = ServerAction::<UpdateBackupSettings>::new();
-    let settings = crate::server_resource(
+    let settings = Resource::new(
         move || update_action.version().get(),
         |_| get_backup_settings(),
     );
@@ -131,7 +131,7 @@ fn backup_settings_form(
 
 #[component]
 pub fn BackupBanner() -> impl IntoView {
-    let visible = crate::server_resource(|| (), |()| backup_warning_visible());
+    let visible = Resource::new(|| (), |()| backup_warning_visible());
 
     view! {
         <Suspense fallback=|| ()>

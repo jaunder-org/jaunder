@@ -4,12 +4,3 @@
 # (including `--all-targets` runs) free to use them.
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
-
-# Issue #124: server functions invoked from an SSR `Resource` fetcher panic on
-# `expect_context` when the reactive owner is dropped before the future is first
-# polled. `web::server_resource` is the only sanctioned constructor — it captures the
-# owner at fetcher invocation. Ban raw `Resource::new` so the wrapper can't be
-# forgotten; the one sanctioned use (inside `server_resource`) carries an `#[allow]`.
-disallowed-methods = [
-    { path = "leptos::prelude::Resource::new", reason = "use web::server_resource (issue #124): raw Resource::new drops the SSR reactive owner across the fetcher's first poll" },
-]

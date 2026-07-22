@@ -16,8 +16,8 @@ use leptos::prelude::*;
 pub fn InvitesPage() -> impl IntoView {
     let create_action = ServerAction::<CreateInvite>::new();
     let recipient = Field::<Email>::new();
-    let policy = crate::server_resource(|| (), |()| get_registration_policy());
-    let invites = crate::server_resource(move || create_action.version().get(), |_| list_invites());
+    let policy = Resource::new(|| (), |()| get_registration_policy());
+    let invites = Resource::new(move || create_action.version().get(), |_| list_invites());
 
     view! {
         <Topbar title="Invites" sub="Manage codes" />
