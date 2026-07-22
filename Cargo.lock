@@ -5155,7 +5155,6 @@ dependencies = [
  "croner",
  "host",
  "http",
- "js-sys",
  "leptos",
  "leptos_axum",
  "leptos_dom",
@@ -5173,7 +5172,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
 ]
