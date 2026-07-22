@@ -14,7 +14,7 @@
 //! tests that protect the byte-identical output.
 
 use crate::posts::{PostResponse, TimelinePostSummary};
-use crate::render::{escape_html, render_hero, render_load_more, PageSeed, TagCtx};
+use crate::render::{escape_html, render_load_more, PageSeed, TagCtx};
 use crate::tags::TagSummary;
 use crate::{avatar, taglist, topbar};
 use common::render::RenderedHtml;
@@ -40,14 +40,8 @@ pub(crate) fn render_body(seed: &PageSeed) -> String {
             "<div class=\"j-scroll\"><div class=\"j-page\">{}</div></div>",
             permalink_article(post),
         ),
-        // Home (anonymous "Local" mode): Topbar + hero + a bare `j-scroll` of posts.
+        // Home (anonymous "Local" mode): the shared masthead + a bare `j-scroll`.
         PageSeed::SiteTimeline(page) => {
-            let topbar = topbar::render(
-                "jaunder.local",
-                Some("Read-only \u{00b7} posts originating on this instance"),
-                "<a href=\"/login\" class=\"j-btn\">Sign in</a>\
-                 <a href=\"/register\" class=\"j-btn is-primary\">Register</a>",
-            );
             let scroll = if page.posts.is_empty() {
                 "<p>No posts yet.</p>".to_string()
             } else {
@@ -58,8 +52,8 @@ pub(crate) fn render_body(seed: &PageSeed) -> String {
                 )
             };
             format!(
-                "{topbar}{hero}<div class=\"j-scroll\">{scroll}</div>",
-                hero = render_hero(),
+                "{masthead}<div class=\"j-scroll\">{scroll}</div>",
+                masthead = crate::render::render_home_masthead(),
             )
         }
         PageSeed::Profile { username, page } => render_timeline_page(
@@ -455,11 +449,13 @@ mod tests {
         let html = render_body(&PageSeed::SiteTimeline(one_post_page()));
         assert!(html.contains("<h1>jaunder.local</h1>"), "{html}");
         assert!(
-            html.contains("<a href=\"/login\" class=\"j-btn\">Sign in</a>"),
+            html.contains("<a href=\"/login\" class=\"j-btn j-anon-only\">Sign in</a>"),
             "{html}"
         );
         assert!(
-            html.contains("<a href=\"/register\" class=\"j-btn is-primary\">Register</a>"),
+            html.contains(
+                "<a href=\"/register\" class=\"j-btn is-primary j-anon-only\">Register</a>"
+            ),
             "{html}"
         );
         assert!(html.contains("<div class=\"j-hero\">"), "{html}");
