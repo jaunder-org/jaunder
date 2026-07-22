@@ -181,7 +181,7 @@ pub fn PostDisplay(
 /// rather than panicking; reads untracked to match the original non-reactive read.
 fn marker_matches(author: &Username) -> bool {
     use_context::<crate::auth::SessionContext>()
-        .and_then(|ctx| ctx.seed.get_untracked())
+        .and_then(|ctx| ctx.current.get_untracked())
         .as_ref()
         .map(|user| &user.username)
         == Some(author)
@@ -1296,7 +1296,10 @@ fn SubscribeButton(username: Username) -> impl IntoView {
             let username = username_for_state.clone();
             async move {
                 let subscribed = is_subscribed_to(username.clone()).await.unwrap_or(false);
-                (session.seed.get_untracked().map(|u| u.username), subscribed)
+                (
+                    session.current.get_untracked().map(|u| u.username),
+                    subscribed,
+                )
             }
         },
     );

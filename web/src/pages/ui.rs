@@ -69,14 +69,14 @@ fn SidebarSource(proto: &'static str, name: &'static str, sub: &'static str) -> 
 pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
     let active_key = active.unwrap_or_default();
 
-    // The shared session context (#591) is the single source: its seed signal is
-    // marker-seeded (flash-free for BOTH username and operator chrome, since
+    // The shared session context (#591) is the single source: its `current` signal
+    // is marker-seeded (flash-free for BOTH username and operator chrome, since
     // `is_operator` now rides in the marker) and the reconcile keeps it current. The
     // anonymous sidebar is the pure `render::render_sidebar` (the SAME code the
     // projector server-renders) injected via `inner_html`, so a seeded first paint
     // and the reactive re-render coincide (flash-free). `display:contents` keeps the
     // host wrapper out of the aside's layout.
-    let session = crate::auth::use_session().seed;
+    let session = crate::auth::use_session().current;
     let anon_html = crate::render::render_sidebar(&active_key);
     view! {
         <aside class="j-sidebar">
