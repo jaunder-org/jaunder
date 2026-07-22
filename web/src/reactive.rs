@@ -1,28 +1,22 @@
-//! Reactive plumbing shared across `web` verticals.
+//! Reactive revalidation core shared across `web` verticals.
 //!
 //! [`Invalidator`] is the canonical revalidation idiom (design record:
 //! `docs/adr/0060-web-invalidator-revalidation-idiom.md`): a committed mutation
-//! `notify()`s an invalidator, and every resource that `track()`s it refetches.
-//! [`Invalidator::patched`] extends it to a keyed `reactive_stores` list (design record:
-//! `docs/adr/0061-web-keyed-list-reactive-store.md`): a refetch `patch`es the store in
-//! place so unchanged rows keep their DOM, and [`ListState`] tracks the list's load status.
-//! [`Invalidator::sticky`] is its flat peer: it stickily retains a resolved `Result` across
-//! refetches (no keyed store), surfacing a fetch error to the caller rather than flashing to
-//! "Loading…" or swallowing it into a default.
+//! `notify()`s an invalidator, and every resource that `track()`s it refetches. This module
+//! owns the host-tested core — `new` / `notify` / `track` and the `invalidator_scope!`
+//! context-scope newtype. The browser-bound helpers built on it
+//! (`resource` / `action` / `patched` / `sticky`, the latter two driving ADR-0061's keyed
+//! list and its sticky peer) live in `client::reactive` (#515) — wasm-only and e2e-exercised.
 
-use common::list_state::ListState;
 use leptos::prelude::*;
-use leptos::server_fn::ServerFn;
-use macros::client_only;
 
 /// A revalidation handle. A committed mutation [`notify`](Self::notify)s it; the resources
 /// that [`track`](Self::track) it refetch.
 ///
 /// It wraps a counter because a leptos [`Resource`] refetches only when its source *value*
 /// changes — a notify-only `Trigger` returning `()` would never fire, so the counter is the
-/// mechanism (exactly as `ServerAction::version()` is). The counter is encapsulated: reach
-/// for [`resource`](Self::resource) / [`action`](Self::action), or the low-level
-/// `notify`/`track`, never a raw signal.
+/// mechanism (exactly as `ServerAction::version()` is). The counter is encapsulated: the
+/// browser-bound helpers in `client::reactive` build on `notify` / `track`, never a raw signal.
 #[derive(Clone, Copy, Debug)]
 pub struct Invalidator(RwSignal<u32>);
 
@@ -42,123 +36,6 @@ impl Invalidator {
     /// source; the returned value is an opaque revision, not meaningful on its own.
     pub fn track(&self) -> u32 {
         self.0.get()
-    }
-
-    /// A [`Resource`] that refetches whenever this invalidator fires. The fetcher is
-    /// nullary — the counter is an internal detail callers never see.
-    ///
-    /// Client-only: the `Resource::new` fetch runs only in the browser, so it is
-    /// exercised by the audiences e2e, not host tests.
-    #[must_use]
-    #[client_only]
-    pub fn resource<T, Fut>(&self, fetch: impl Fn() -> Fut + Send + Sync + 'static) -> Resource<T>
-    where
-        T: serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static,
-        Fut: std::future::Future<Output = T> + Send + 'static,
-    {
-        let this = *self;
-        Resource::new(move || this.track(), move |_| fetch())
-    }
-
-    /// A [`ServerAction`] that fires this invalidator on **success** — after the mutation
-    /// commits (`Some(Ok(_))`), never on dispatch or on failure. The gating `Effect` is
-    /// wired internally, so no caller writes it.
-    ///
-    /// Client-only: the success-gating `Effect` fires only in the browser, so it is
-    /// exercised by the audiences e2e, not host tests.
-    #[must_use]
-    #[client_only]
-    pub fn action<A>(&self) -> ServerAction<A>
-    where
-        A: ServerFn + Send + Sync + Clone + 'static,
-        A::Output: Send + Sync + 'static,
-        A::Error: Send + Sync + 'static,
-    {
-        let action = ServerAction::<A>::new();
-        let this = *self;
-        Effect::new(move |_| {
-            if action.value().with(|v| matches!(v, Some(Ok(_)))) {
-                this.notify();
-            }
-        });
-        action
-    }
-
-    /// Drives a keyed [`reactive_stores`](https://docs.rs/reactive_stores) list from a refetch
-    /// of `fetch` (revalidated by this invalidator). On each successful refetch it hands the
-    /// rows to `patch` — supplied as a closure so the caller's concrete keyed field runs its
-    /// **in-place** `patch` (a generic bound would instead resolve to the unkeyed, positional
-    /// patch and lose per-row identity). Returns the list's [`ListState`]; a pending or failed
-    /// refetch never patches, so the last-good rows are retained.
-    ///
-    /// Client-only: it drives a resource refetch through a browser-only `Effect`,
-    /// so it is exercised by the audiences e2e, not host tests.
-    #[must_use]
-    #[client_only]
-    pub fn patched<T, Fut, E>(
-        &self,
-        fetch: impl Fn() -> Fut + Send + Sync + 'static,
-        patch: impl Fn(Vec<T>) + 'static,
-    ) -> Signal<ListState>
-    where
-        T: Clone + serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static,
-        E: Clone
-            + std::fmt::Display
-            + serde::Serialize
-            + serde::de::DeserializeOwned
-            + Send
-            + Sync
-            + 'static,
-        Fut: std::future::Future<Output = Result<Vec<T>, E>> + Send + 'static,
-    {
-        let resource = self.resource(fetch);
-        let state = RwSignal::new(ListState::Loading);
-        Effect::new(move |_| match resource.get() {
-            None => {}
-            Some(Ok(rows)) => {
-                let empty = rows.is_empty();
-                patch(rows);
-                state.set(if empty {
-                    ListState::Empty
-                } else {
-                    ListState::Loaded
-                });
-            }
-            Some(Err(e)) => state.set(ListState::Error(e.to_string())),
-        });
-        state.into()
-    }
-
-    /// A [`Signal`] that stickily retains the latest resolved *result* of a refetch of `fetch`
-    /// (revalidated by this invalidator): `None` until the first resolve, then `Some(Ok(v))`
-    /// on success or `Some(Err(e))` on failure (the caller's error type `E`, preserved) — retained
-    /// across a pending refetch, so a
-    /// mutation-triggered refetch never blanks the view back to "Loading…". The fetch error is
-    /// **surfaced** (`Err`) for the caller to render, never swallowed into a default: a
-    /// swallowed error silently misrepresents state (#346). The flat peer of
-    /// [`patched`](Self::patched), which is for keyed stores.
-    ///
-    /// Client-only: it drives a resource refetch through a browser-only `Effect`,
-    /// so it is exercised by the audiences e2e, not host tests.
-    #[must_use]
-    #[client_only]
-    pub fn sticky<T, Fut, E>(
-        &self,
-        fetch: impl Fn() -> Fut + Send + Sync + 'static,
-    ) -> Signal<Option<Result<T, E>>>
-    where
-        T: Clone + serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static,
-        E: Clone + serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static,
-        Fut: std::future::Future<Output = Result<T, E>> + Send + 'static,
-    {
-        let resource = self.resource(fetch);
-        let signal = RwSignal::new(None::<Result<T, E>>);
-        Effect::new(move |_| {
-            if let Some(result) = resource.get() {
-                signal.set(Some(result));
-            }
-        });
-        signal.into()
     }
 }
 

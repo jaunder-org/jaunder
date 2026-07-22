@@ -365,7 +365,7 @@ git commit -m "feat(client): add client::reactive Invalidator helper free fns (#
   `Invalidator::{track, notify}` (unchanged core).
 - Produces: zero reactive `#[client_only]` in `web`.
 
-- [ ] **Step 1: Rewrite the audiences call sites.** Examples (exact per current
+- [x] **Step 1: Rewrite the audiences call sites.** Examples (exact per current
       code):
   - `:54`
     `let state = list.patched(list_my_audiences, move |rows| store.audiences().patch(rows));`
@@ -387,11 +387,11 @@ git commit -m "feat(client): add client::reactive Invalidator helper free fns (#
     `list`, `roster`, `members` — survives capture into several `move` closures;
     do not drop that `Copy`.)
 
-- [ ] **Step 2: Delete the four helper methods + markers** from `reactive.rs`;
+- [x] **Step 2: Delete the four helper methods + markers** from `reactive.rs`;
       remove `use macros::client_only;`. Confirm `Invalidator`'s core +
       `invalidator_scope!` + the two host tests remain.
 
-- [ ] **Step 3: Verify zero markers + green gate + e2e.**
+- [x] **Step 3: Verify zero markers + green gate + e2e.**
 
   Run: `rg '#\[client_only\]|macros::client_only' web/src` → Expected: **no
   matches** (the `forms/field.rs:200` prose comment is not an attribute; if `rg`
@@ -403,7 +403,7 @@ git commit -m "feat(client): add client::reactive Invalidator helper free fns (#
   conformance gate — verify-only). Audiences revalidation e2e runs in CI's
   matrix; local e2e is reaped here, so let CI gate it.
 
-- [ ] **Step 4: Commit.**
+- [x] **Step 4: Commit.**
 
 ```bash
 git add web/src/audiences/component.rs web/src/reactive.rs
