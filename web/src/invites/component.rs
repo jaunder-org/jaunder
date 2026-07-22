@@ -1,8 +1,10 @@
+//! Invites vertical — wasm-only UI (ADR-0070): the invite management page.
+
+use super::{list_invites, CreateInvite, InviteInfo};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
-use crate::invites::{list_invites, CreateInvite, InviteInfo};
-use crate::pages::Topbar;
 use crate::registration::get_registration_policy;
+use crate::topbar::Topbar;
 use common::email::Email;
 use common::registration::RegistrationPolicy;
 use leptos::prelude::*;
@@ -11,8 +13,8 @@ use leptos::prelude::*;
 /// #400) and creates new ones, **emailing the invitation link** to a recipient (#433).
 /// A code is never shown here — it reaches the invitee only as the link in the email
 /// (or the `jaunder user invite` CLI URL for manual sharing).
-/// Returns 404 (via SSR response options) when the registration policy is not
-/// `invite_only`.
+/// On a non-invite-only site it renders a client-side "Page not found." fallback —
+/// authed routes are static CSR shells, so there is no SSR 404 (ADR-0040/0041/#180).
 #[component]
 pub fn InvitesPage() -> impl IntoView {
     let create_action = ServerAction::<CreateInvite>::new();
@@ -29,17 +31,7 @@ pub fn InvitesPage() -> impl IntoView {
                 }>
                     {move || Suspend::new(async move {
                         if policy.await != Ok(RegistrationPolicy::InviteOnly) {
-                            #[cfg(feature = "server")]
-                            {
-                                use leptos::context::use_context;
-                                use leptos_axum::ResponseOptions;
-                                if let Some(opts) = use_context::<ResponseOptions>() {
-                                    opts.set_status(axum::http::StatusCode::NOT_FOUND);
-                                }
-                            }
-                            return // Set 404 status when rendered server-side.
-                            view! { <p>"Page not found."</p> }
-                                .into_any();
+                            return view! { <p>"Page not found."</p> }.into_any();
                         }
                         match invites.await {
                             Ok(list) => {

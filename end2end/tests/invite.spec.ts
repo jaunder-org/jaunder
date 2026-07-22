@@ -40,7 +40,8 @@ test("invite link registration completes end-to-end", async ({
   seedConfigViaTool("site.base_url", "https://example.com");
 
   // The operator sends an invite to this test's mailbox recipient via the
-  // /invites UI (404s unless invite_only, which we just set).
+  // /invites UI (shows a "Page not found." fallback unless invite_only, which
+  // we just set).
   await login(page, "testoperator", "testpassword123");
   await goto(page, "/invites");
   await page.fill('input[name="recipient_email"]', user.email);
@@ -106,4 +107,23 @@ test("invite-only /register with no code shows guidance and no submit button", a
   await expect(
     page.locator('.j-page-narrow button[type="submit"]'),
   ).toHaveCount(0);
+});
+
+// Test C — policy guard: on a non-invite-only site the authed /invites page
+// renders the "Page not found." fallback and no create form. Locks the
+// client-side policy-gating (#320 removed the dead SSR set_status 404). Self-sets
+// `open`, so placement is order-independent; the file's afterAll restores `open`.
+test("invites page shows not-found fallback when not invite-only", async ({
+  page,
+}) => {
+  seedConfigViaTool("site.registration_policy", "open");
+  const firstNav = slowBrowserFirstNavigationTimeoutMs(test.info(), 15_000);
+
+  await login(page, "testoperator", "testpassword123");
+  await goto(page, "/invites", { timeout: firstNav });
+
+  await expect(page.locator('p:has-text("Page not found.")')).toBeVisible({
+    timeout: 10_000,
+  });
+  await expect(page.locator('input[name="recipient_email"]')).toHaveCount(0);
 });

@@ -1,4 +1,3 @@
-pub mod invites;
 pub mod password_reset;
 pub mod profile;
 pub mod sessions;
@@ -22,8 +21,8 @@ use crate::backup::{BackupBanner, BackupSettingsPage};
 use crate::cockpit::CockpitPage;
 use crate::email::{EmailPage, VerifyEmailPage};
 use crate::home::HomePage;
+use crate::invites::InvitesPage;
 use crate::media::MediaPage;
-use crate::pages::invites::InvitesPage;
 use crate::pages::password_reset::{ForgotPasswordPage, ResetPasswordPage};
 use crate::pages::profile::ProfilePage;
 use crate::pages::sessions::SessionsPage;
