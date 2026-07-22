@@ -9,13 +9,13 @@ use tower::ServiceExt;
 use web::media::{DeleteMediaResult, MediaItem, MediaUsageData};
 
 use chrono::Utc;
-use storage::{CreateMediaError, MediaRecord, MediaSource};
+use storage::{CreateMediaError, MediaRecord};
 
 use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{post_form, session_cookie, test_options};
-use common::media::{MaxFileSize, UserQuota};
+use common::media::{MaxFileSize, MediaSource, UserQuota};
 use common::test_support::{parse_content_hash, parse_content_type, parse_filename};
 use storage::test_support::{backends, backends_matrix, noop_mailer, Backend, TestEnv};
 
@@ -246,7 +246,7 @@ async fn list_my_media_with_source_filter(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let items: Vec<MediaItem> = serde_json::from_str(&body).expect("response should be valid JSON");
     assert_eq!(items.len(), 1);
-    assert_eq!(items[0].source, "upload");
+    assert_eq!(items[0].source, MediaSource::Upload);
 }
 
 // ─── delete_media ─────────────────────────────────────────────

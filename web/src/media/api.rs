@@ -4,7 +4,7 @@
 //! wiring only and re-exports these under the stable `crate::media::…` paths that
 //! external call sites and the server-fn registrar depend on.
 
-use common::media::{ContentHash, ContentType, Filename, MaxFileSize, UserQuota};
+use common::media::{ContentHash, ContentType, Filename, MaxFileSize, MediaSource, UserQuota};
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -13,7 +13,7 @@ use {
     crate::auth::require_auth,
     crate::error::InternalError,
     std::sync::Arc,
-    storage::{MediaSource, MediaStorage, PostStorage, SiteConfigStorage},
+    storage::{MediaStorage, PostStorage, SiteConfigStorage},
 };
 
 use common::ids::PostId;
@@ -27,7 +27,7 @@ use crate::error::WebResult;
 pub struct MediaItem {
     pub sha256: ContentHash,
     pub filename: Filename,
-    pub source: String,
+    pub source: MediaSource,
     pub content_type: ContentType,
     pub size_bytes: i64,
     pub url: String,
@@ -78,7 +78,7 @@ pub fn extract_upload_url(body: &str) -> Result<String, String> {
 /// Lists media items owned by the authenticated user.
 #[server(endpoint = "/list_my_media")]
 pub async fn list_my_media(
-    source: Option<String>,
+    source: Option<MediaSource>,
     limit: Option<PageSize>,
     offset: Option<u32>,
 ) -> WebResult<Vec<MediaItem>> {
@@ -86,15 +86,10 @@ pub async fn list_my_media(
         let auth = require_auth().await?;
         let media = expect_context::<Arc<dyn MediaStorage>>();
 
-        let source_filter = source
-            .as_deref()
-            .map(str::parse::<MediaSource>)
-            .transpose()?;
-
         let records = media
             .list_media(
                 auth.user_id,
-                source_filter.as_ref(),
+                source.as_ref(),
                 limit.unwrap_or_default().value(),
                 offset.unwrap_or(0),
             )
@@ -107,7 +102,7 @@ pub async fn list_my_media(
                 MediaItem {
                     sha256: r.sha256,
                     filename: r.filename,
-                    source: r.source.to_string(),
+                    source: r.source,
                     content_type: r.content_type,
                     size_bytes: r.size_bytes,
                     url,
@@ -146,7 +141,7 @@ pub async fn media_usage() -> WebResult<MediaUsageData> {
 pub async fn delete_media(
     sha256: ContentHash,
     filename: Filename,
-    source: String,
+    source: MediaSource,
     force: Option<bool>,
 ) -> WebResult<DeleteMediaResult> {
     boundary!("delete_media", {
@@ -154,9 +149,7 @@ pub async fn delete_media(
         let media = expect_context::<Arc<dyn MediaStorage>>();
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
-        let source_enum = source.parse::<MediaSource>()?;
-
-        let url = common::media::media_url(source_enum.as_str(), &sha256, &filename);
+        let url = common::media::media_url(source.as_str(), &sha256, &filename);
 
         let published = posts
             .list_published_by_user(
@@ -187,7 +180,7 @@ pub async fn delete_media(
         }
 
         media
-            .delete_media(auth.user_id, &sha256, &filename, &source_enum)
+            .delete_media(auth.user_id, &sha256, &filename, &source)
             .await
             .map_err(InternalError::storage)?;
 

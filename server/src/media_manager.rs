@@ -9,9 +9,9 @@ use tokio::io::AsyncWriteExt;
 use common::ids::UserId;
 use common::media::{
     detect_content_type, media_path, media_url, ContentHash, ContentType, Filename, MaxFileSize,
-    UserQuota,
+    MediaSource, UserQuota,
 };
-use storage::{CreateMediaError, MediaRecord, MediaSource, MediaStorage, SiteConfigStorage};
+use storage::{CreateMediaError, MediaRecord, MediaStorage, SiteConfigStorage};
 use web::auth::AuthUser;
 
 use axum::http::StatusCode;

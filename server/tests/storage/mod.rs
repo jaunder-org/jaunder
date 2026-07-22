@@ -6849,7 +6849,8 @@ async fn update_rendered_post_not_found_returns_storage_error(#[case] backend: B
 
 // ── MediaStorage tests ────────────────────────────────────────────────────────
 
-use storage::{CreateMediaError, DeleteMediaError, MediaRecord, MediaSource};
+use common::media::MediaSource;
+use storage::{CreateMediaError, DeleteMediaError, MediaRecord};
 
 fn make_media_record(
     user_id: UserId,

@@ -341,7 +341,7 @@ fn render_media_row(item: &MediaItem, delete_action: ServerAction<DeleteMedia>) 
     let filename = item.filename.to_string();
     // The ActionForm hidden field needs an owned String; `ContentHash: Display`.
     let sha256 = item.sha256.to_string();
-    let source = item.source.clone();
+    let source = item.source.to_string();
     let size_label = format_bytes(item.size_bytes);
     let created_at = item.created_at.to_string();
 
