@@ -129,3 +129,27 @@ pub async fn logout() -> WebResult<()> {
         Ok(())
     })
 }
+
+/// The viewer's session identity — username + operator flag — or `None` when
+/// anonymous/expired. The single reconcile fetch behind the shared session context
+/// (#591), superseding `current_user` + the reactive `current_user_is_operator`.
+#[server(endpoint = "/session")]
+#[tracing::instrument(name = "web.auth.session")]
+pub async fn session() -> WebResult<Option<super::SessionUser>> {
+    boundary!("session", {
+        let auth = match require_auth().await {
+            Ok(auth) => auth,
+            Err(error) if error.kind() == crate::error::ErrorKind::Auth => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let users = expect_context::<Arc<dyn UserStorage>>();
+        let is_operator = users
+            .get_user(auth.user_id)
+            .await?
+            .is_some_and(|u| u.is_operator);
+        Ok(Some(super::SessionUser {
+            username: auth.username,
+            is_operator,
+        }))
+    })
+}

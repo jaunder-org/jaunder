@@ -454,3 +454,51 @@ async fn current_user_is_operator_propagates_storage_error_during_auth(#[case] b
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
+
+// #591: `session()` is the single reconcile fetch behind the shared session context
+// — it reports the viewer's username + operator flag, or `null` when anonymous.
+// Mirrors (and, once Task 5 removes them, replaces) the `current_user_is_operator_*`
+// coverage. Lives here because `create_session_cookie` (the operator setup) is local.
+#[apply(backends)]
+#[tokio::test]
+async fn session_reports_username_and_operator(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let operator_cookie = create_session_cookie(&state, "operator", true).await;
+    let member_cookie = create_session_cookie(&state, "member", false).await;
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/session",
+        "",
+        Some(&operator_cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert!(body.contains(r#""username":"operator""#), "body: {body}");
+    assert!(body.contains(r#""is_operator":true"#), "body: {body}");
+
+    let (status, body) =
+        post_form(Arc::clone(&state), "/api/session", "", Some(&member_cookie)).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert!(body.contains(r#""username":"member""#), "body: {body}");
+    assert!(body.contains(r#""is_operator":false"#), "body: {body}");
+
+    let (status, body) = post_form(state, "/api/session", "", None).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert_eq!(body.trim(), "null"); // Ok(None) serializes to JSON null
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn session_propagates_storage_error_during_auth(#[case] backend: Backend) {
+    // Covers the Err(non-Unauthorized) branch: close the pool after session
+    // creation so authenticate() returns Internal (not Unauthorized) → 500.
+    let TestEnv { state, base } = backend.setup().await;
+    let cookie = create_session_cookie(&state, "operator", true).await;
+
+    base.close_pool().await;
+
+    let (status, _body) = post_form(Arc::clone(&state), "/api/session", "", Some(&cookie)).await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
