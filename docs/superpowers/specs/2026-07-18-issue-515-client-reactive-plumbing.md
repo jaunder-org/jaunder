@@ -195,9 +195,10 @@ Each observable so ship's conformance review can tell delivered from not.
    no `client → web` edge. `web`/`csr` depend on `client`.
 10. **Gate green.** `cargo xtask validate --no-e2e` passes; e2e (audiences
     revalidation flows) is exercised by the existing suite in CI.
-11. **Follow-up filed.** A separate GitHub issue exists to **investigate**
-    whether `server_boundary`'s owner-pinning (#89/#138) is SSR-vestigial (the
-    plan's first task).
+11. **Follow-up filed.**
+    [#594](https://github.com/jaunder-org/jaunder/issues/594) exists to
+    **investigate** whether `server_boundary`'s owner-pinning (#89/#138) is
+    SSR-vestigial (the plan's first task).
 
 ## Out of scope
 

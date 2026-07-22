@@ -11,7 +11,7 @@ use leptos::prelude::*;
 #[component]
 pub fn ProfilePage() -> impl IntoView {
     let update_action = ServerAction::<UpdateProfile>::new();
-    let profile = crate::server_resource(move || update_action.version().get(), |_| get_profile());
+    let profile = Resource::new(move || update_action.version().get(), |_| get_profile());
     // Client-validated display name and bio (both optional: empty clears them),
     // owned by the component so the bespoke form can `.dispatch` the typed
     // `UpdateProfile` args — the ADR-0065 direct-bind pattern (mirrors the post
@@ -126,7 +126,7 @@ pub fn ProfilePage() -> impl IntoView {
 #[component]
 fn DefaultPostFormatControl() -> impl IntoView {
     let action = ServerAction::<SetDefaultPostFormat>::new();
-    let initial = crate::server_resource(|| (), |()| get_default_post_format());
+    let initial = Resource::new(|| (), |()| get_default_post_format());
 
     view! {
         <Suspense fallback=|| ()>

@@ -51,7 +51,6 @@ pub mod timeline;
 pub mod topbar;
 pub mod viewer;
 
-pub use error::server_resource;
 #[cfg(target_arch = "wasm32")]
 pub use pages::App;
 

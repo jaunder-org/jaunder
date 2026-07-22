@@ -98,9 +98,10 @@ verticals beyond the mechanical `server_resource` → `Resource::new` rename.
 
 **Interfaces:**
 
-- Produces: a GitHub issue number, referenced by spec AC #11.
+- Produces: [#594](https://github.com/jaunder-org/jaunder/issues/594) (filed),
+  referenced by spec AC #11.
 
-- [ ] **Step 1: File the issue** (**jaunder-issues**)
+- [x] **Step 1: File the issue** (**jaunder-issues**)
   - Title:
     `web: investigate whether server_boundary owner-pinning (#89/#138) is SSR-vestigial`
   - Milestone: `client crate: browser glue out of web` (M14).
@@ -117,10 +118,8 @@ verticals beyond the mechanical `server_resource` → `Resource::new` rename.
     `owner_lifetime` `server_boundary_*` tests; if not, document why it survives
     CSR-only.
 
-- [ ] **Step 2:** record the issue number in this plan (replace `#TBD`
-      references) and in spec AC #11. No commit (docs-only edits ride with Task
-      2's commit, or commit standalone as
-      `docs(plan): link #515 server_boundary follow-up`).
+- [x] **Step 2:** recorded #594 in this plan and spec AC #11. Docs edits ride
+      with Task 2's commit.
 
 ---
 
@@ -162,24 +161,28 @@ the 3 test deletions must land together or the crate won't compile.
   Task 5) now calls `Resource::new` directly. No `server_resource` symbol
   remains.
 
-- [ ] **Step 1: Rewrite the 30 call sites.** Mechanical:
+- [x] **Step 1: Rewrite the 30 call sites.** Mechanical:
       `crate::server_resource(a, b)` → `leptos::prelude::Resource::new(a, b)`.
       (Good jaunder-dispatch candidate — brief the subagent with the exact
       file:line list above and forbid `ctx_*`.) `action` is **not** a
       `server_resource` caller — do not touch it.
 
-- [ ] **Step 2: Delete the producers + ban + re-export.** Remove
+- [x] **Step 2: Delete the producers + ban + re-export.** Remove
       `server_resource` and `scoped_fetcher_future` from `error.rs`; remove the
       `pub use error::server_resource;` line from `lib.rs`; remove the
       `Resource::new` entry from `clippy.toml`.
 
-- [ ] **Step 3: Delete the 3 dead host tests** in `error.rs`'s `owner_lifetime`
+- [x] **Step 3: Delete the 3 dead host tests** in `error.rs`'s `owner_lifetime`
       module (named above). Leave
       `server_boundary_keeps_ancestor_context_alive_across_await` (:864) and
       every other `owner_lifetime` test untouched — they exercise
       `server_boundary` or leptos's own `ScopedFuture`, not the removed symbols.
 
-- [ ] **Step 4: Verify removal + green gate.**
+- [x] **Step 4: Verify removal + green gate.** (Deviation: all 30 sites
+      normalized to bare `Resource::new` — the glob import
+      `use leptos::prelude::*;` is present in all 13 files and the long path
+      tripped `too_many_lines` in `profile.rs`; bare matches the repo's import
+      discipline.)
 
   Run: `rg 'server_resource|scoped_fetcher_future' web/src` → Expected: **no
   matches**. Run: `cargo xtask check` → Expected: **PASS** (host clippy +
@@ -187,7 +190,7 @@ the 3 test deletions must land together or the crate won't compile.
   call-site rewrites). Spot-check: re-read 3–4 rewritten fetchers to confirm
   none reads leptos context post-`.await` (CSR-safety, spec Problem §).
 
-- [ ] **Step 5: Commit** (run the gate clean first — **jaunder-commit**).
+- [x] **Step 5: Commit** (run the gate clean first — **jaunder-commit**).
 
 ```bash
 git add web/src/error.rs web/src/lib.rs web/src/reactive.rs clippy.toml web/src/posts web/src/media web/src/backup web/src/home web/src/registration web/src/pages

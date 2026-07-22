@@ -28,7 +28,7 @@ pub fn CockpitPage() -> impl IntoView {
     // is authed-only and served from the SPA shell (no-store), so an async gate is
     // correct here — there is no cacheable-page flash constraint. `Ok(None)` means
     // anonymous / expired → bounce to `/login` (D6).
-    let initial_page = crate::server_resource(
+    let initial_page = Resource::new(
         move || refresh_version.get(),
         |_| async move {
             match current_user().await {

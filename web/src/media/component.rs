@@ -197,12 +197,12 @@ pub fn MediaPage() -> impl IntoView {
     let delete_action = ServerAction::<DeleteMedia>::new();
     let upload_version = RwSignal::new(0u32);
 
-    let usage = crate::server_resource(
+    let usage = Resource::new(
         move || (delete_action.version().get(), upload_version.get()),
         |_: (usize, u32)| media_usage(),
     );
 
-    let media_list = crate::server_resource(
+    let media_list = Resource::new(
         move || (delete_action.version().get(), upload_version.get()),
         |_: (usize, u32)| list_my_media(None, Some(PageSize::default()), Some(0)),
     );

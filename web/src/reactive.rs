@@ -46,7 +46,7 @@ impl Invalidator {
     /// A [`Resource`] that refetches whenever this invalidator fires. The fetcher is
     /// nullary — the counter is an internal detail callers never see.
     ///
-    /// Client-only: the `server_resource` fetch runs only in the browser, so it is
+    /// Client-only: the `Resource::new` fetch runs only in the browser, so it is
     /// exercised by the audiences e2e, not host tests.
     #[must_use]
     #[client_only]
@@ -56,7 +56,7 @@ impl Invalidator {
         Fut: std::future::Future<Output = T> + Send + 'static,
     {
         let this = *self;
-        crate::server_resource(move || this.track(), move |_| fetch())
+        Resource::new(move || this.track(), move |_| fetch())
     }
 
     /// A [`ServerAction`] that fires this invalidator on **success** — after the mutation
@@ -90,7 +90,7 @@ impl Invalidator {
     /// patch and lose per-row identity). Returns the list's [`ListState`]; a pending or failed
     /// refetch never patches, so the last-good rows are retained.
     ///
-    /// Client-only: it drives a `server_resource` refetch through a browser-only `Effect`,
+    /// Client-only: it drives a resource refetch through a browser-only `Effect`,
     /// so it is exercised by the audiences e2e, not host tests.
     #[must_use]
     #[client_only]
@@ -137,7 +137,7 @@ impl Invalidator {
     /// swallowed error silently misrepresents state (#346). The flat peer of
     /// [`patched`](Self::patched), which is for keyed stores.
     ///
-    /// Client-only: it drives a `server_resource` refetch through a browser-only `Effect`,
+    /// Client-only: it drives a resource refetch through a browser-only `Effect`,
     /// so it is exercised by the audiences e2e, not host tests.
     #[must_use]
     #[client_only]

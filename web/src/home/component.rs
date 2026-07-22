@@ -35,7 +35,7 @@ pub fn HomePage() -> impl IntoView {
     // viewer-independent — no `current_user()` gate and no mode swap (#181, D10).
     // Re-fetch on mutation (`refresh_version`) so the owner's own edits/deletes,
     // performed via the client-side action column, reflect immediately.
-    let initial_page = crate::server_resource(
+    let initial_page = Resource::new(
         move || refresh_version.get(),
         |_| list_local_timeline(None, None, Some(PageSize::default())),
     );

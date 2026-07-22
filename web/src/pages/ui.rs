@@ -75,7 +75,7 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
     let active_key = active.unwrap_or_default();
 
     let location = use_location();
-    let operator = crate::server_resource(
+    let operator = Resource::new(
         move || location.pathname.get(),
         |_| current_user_is_operator(),
     );
@@ -92,7 +92,7 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
     // the real session and correct a stale one without gating first paint — a dead
     // session clears the marker (toward anon, the safe direction); a live session
     // with a missing marker sets it. wasm-only: the marker lives in localStorage.
-    let reconcile = crate::server_resource(move || location.pathname.get(), |_| current_user());
+    let reconcile = Resource::new(move || location.pathname.get(), |_| current_user());
     Effect::new(move |_| {
         if let Some(res) = reconcile.get() {
             match res {
