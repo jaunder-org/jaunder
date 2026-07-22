@@ -31,6 +31,14 @@ test("owner: pre-paint auth marks html.authed and / stays the enhanced public ti
   // `/` stays the public Local timeline (D10) — NOT the personal "Your home feed".
   await expect(page.locator(SEL.topbarHeading)).toHaveText("jaunder.local");
 
+  // #319: the anon Sign-in/Register CTA is server-painted but `j-anon-only`, so
+  // the pre-paint `html.authed` hides it for the owner (no flash). Use CSS
+  // locators (which match hidden nodes) so this asserts present-but-hidden, not
+  // merely absent — `getByRole` skips `display:none` elements and would pass
+  // vacuously.
+  await expect(page.locator('main a[href="/login"]')).toBeHidden();
+  await expect(page.locator('main a[href="/register"]')).toBeHidden();
+
   // The owner's own post gains the client-side action column (D4) — its Edit
   // affordance is absent from the anonymous seed data (is_author = false).
   await expect(

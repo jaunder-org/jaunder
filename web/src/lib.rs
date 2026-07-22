@@ -27,6 +27,7 @@ pub mod error;
 pub mod feed_discovery;
 pub mod feed_events;
 pub mod forms;
+pub mod home;
 pub mod icon;
 pub mod invites;
 pub mod media;

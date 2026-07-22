@@ -1,8 +1,12 @@
+//! The home vertical's wasm-only UI (ADR-0070): the routed `/` public
+//! Local-timeline landing page. Renders the shared `crate::render` masthead via
+//! `inner_html` (coincidence with the projector, ADR-0041) + the reactive
+//! `crate::timeline` rows. No cfgs of its own (wasm-only via its `mod` line).
+
 use leptos::prelude::*;
 
 use crate::feed_discovery::FeedDiscovery;
 use crate::pages::signal_read::read_signal;
-use crate::pages::ui::Topbar;
 use crate::posts::list_local_timeline;
 use crate::timeline::{TimelineRows, TimelineState};
 use common::feed::FeedSurface;
@@ -55,37 +59,23 @@ pub fn HomePage() -> impl IntoView {
     // would needlessly rebuild the whole page on every refresh/paginate.
     let read_error = Memo::new(move |_| read_signal!(state.status).into_failure());
 
+    // The masthead (topbar + anon Sign-in/Register links + hero) is the shared
+    // pure fn the projector renders too, so both sides coincide by construction
+    // (ADR-0041 §2) — no `view!` twin to drift. The anon-only CTA lives inside it,
+    // hidden for the authed owner via `j-anon-only` + `html.authed` (ADR-0044),
+    // and shown for the anonymous visitor. Single-mode Local (#181, D10): `/` is
+    // always the enhanced public timeline; the owner's own posts gain the
+    // client-side action column reactively via `TimelineRows`/`PostCard`.
+    let masthead = crate::render::render_home_masthead();
+
     view! {
         <FeedDiscovery surface=FeedSurface::Site />
         {move || {
             if let Some(err) = read_error.get() {
                 return view! { <p class="error">{err}</p> }.into_any();
             }
-            // Single-mode Local (#181, D10): `/` is always the enhanced public
-            // timeline. The owner's own posts gain the client-side action column
-            // (see `PostCard`'s marker match); the anon-only Sign in / Register CTA
-            // is hidden for the owner via `html.authed` CSS (pre-paint, flash-free).
             view! {
-                <Topbar
-                    title="jaunder.local"
-                    sub="Read-only \u{00b7} posts originating on this instance"
-                >
-                    <a href="/login" class="j-btn j-anon-only">
-                        "Sign in"
-                    </a>
-                    <a href="/register" class="j-btn is-primary j-anon-only">
-                        "Register"
-                    </a>
-                </Topbar>
-                <div class="j-hero">
-                    <h1>"One timeline. Every protocol."</h1>
-                    <p>
-                        "Jaunder is a self-hosted social client that reads from "
-                        "ActivityPub, AT Protocol, RSS, Atom, and JSON Feed \u{2014} and "
-                        "publishes back out to the ones you choose. "
-                        "Below: what\u{2019}s been posted from this instance."
-                    </p>
-                </div>
+                <div style="display:contents" inner_html=masthead.clone()></div>
                 <TimelineRows state=state on_mutate=on_mutate on_load_more=on_load_more />
             }
                 .into_any()
