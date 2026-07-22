@@ -35,7 +35,7 @@
 use std::path::Path;
 use std::str::FromStr;
 
-use macros::{NumNewtype, StrNewtype};
+use macros::{NumNewtype, StrEnum, StrNewtype};
 use thiserror::Error;
 
 /// A validated media content hash: exactly 64 lowercase hex characters
@@ -209,6 +209,19 @@ pub fn is_valid_content_hash(hash: &str) -> bool {
         && hash
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// Source of a media record — the provenance segment of the storage layout
+/// (`upload` vs a remote `cached` file). Rides the [`StrEnum`] trailer (#562):
+/// `as_str`/`Display`/`FromStr`/`TryFrom` + the generated `InvalidMediaSource`
+/// error, with the `serde` bridge for the `#[server]` media DTO/wire args (#577).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, StrEnum)]
+#[str_enum(serde, error = "media source must be \"upload\" or \"cached\"")]
+pub enum MediaSource {
+    /// File uploaded directly by a local user.
+    Upload,
+    /// Remote file cached locally by the system.
+    Cached,
 }
 
 /// Returns `"<source>/<p1>/<p2>/<full-sha256>/<filename>"`, the content-
@@ -791,5 +804,40 @@ mod tests {
                 "sanitize({raw:?}) = {s:?} must re-parse as Filename"
             );
         }
+    }
+
+    #[test]
+    fn media_source_tokens_parse_and_round_trip() {
+        assert_eq!(
+            "upload".parse::<MediaSource>().unwrap(),
+            MediaSource::Upload
+        );
+        assert_eq!(
+            "cached".parse::<MediaSource>().unwrap(),
+            MediaSource::Cached
+        );
+        assert_eq!(MediaSource::Upload.as_str(), "upload");
+        assert_eq!(MediaSource::Cached.to_string(), "cached");
+    }
+
+    #[test]
+    fn media_source_unknown_token_is_rejected_with_message() {
+        let err = "bogus".parse::<MediaSource>().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "media source must be \"upload\" or \"cached\""
+        );
+    }
+
+    #[test]
+    fn media_source_serde_round_trips_the_token() {
+        assert_eq!(
+            serde_json::to_string(&MediaSource::Cached).unwrap(),
+            "\"cached\""
+        );
+        assert_eq!(
+            serde_json::from_str::<MediaSource>("\"upload\"").unwrap(),
+            MediaSource::Upload
+        );
     }
 }
