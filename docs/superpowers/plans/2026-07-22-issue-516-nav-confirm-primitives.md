@@ -83,7 +83,7 @@ pub fn reload();
 pub fn confirm(message: &str) -> bool;
 ```
 
-- [ ] **Step 1: `client/src/navigation.rs`** — the two fns to the exact bodies
+- [x] **Step 1: `client/src/navigation.rs`** — the two fns to the exact bodies
       in the spec (Decision §):
 
 ```rust
@@ -109,7 +109,7 @@ pub fn reload() {
 }
 ```
 
-- [ ] **Step 2: `client/src/dialog.rs`**:
+- [x] **Step 2: `client/src/dialog.rs`**:
 
 ```rust
 //! Raw browser dialog primitives (`window.confirm`). Wasm-only; no domain types.
@@ -123,7 +123,7 @@ pub fn confirm(message: &str) -> bool {
 }
 ```
 
-- [ ] **Step 3: Wire `lib.rs` + Cargo.** In `client/src/lib.rs` add, after
+- [x] **Step 3: Wire `lib.rs` + Cargo.** In `client/src/lib.rs` add, after
       `pub mod storage;`:
 
 ```rust
@@ -134,7 +134,7 @@ pub mod dialog;
 In `client/Cargo.toml`, extend the `web-sys` features to
 `["Window", "Storage", "Location"]`.
 
-- [ ] **Step 4: Verify the wasm build compiles the modules.**
+- [x] **Step 4: Verify the wasm build compiles the modules.**
 
   Run: `cargo check -p client --features csr --target wasm32-unknown-unknown`
   (or without `--features csr` — these modules are unconditional; the csr build
@@ -142,7 +142,7 @@ In `client/Cargo.toml`, extend the `web-sys` features to
   → Expected: **PASS** (host: `client` stays empty-on-host, so no leptos/domain
   dep is pulled; the csr wasm build compiles `navigation`/`dialog`).
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add client/src/navigation.rs client/src/dialog.rs client/src/lib.rs client/Cargo.toml Cargo.lock
