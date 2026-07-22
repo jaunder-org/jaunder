@@ -10,7 +10,6 @@ use common::username::Username;
 use leptos::prelude::*;
 use leptos_router::components::Redirect;
 
-use crate::auth::current_user;
 use crate::posts::{list_home_feed, InlineComposer};
 use crate::timeline::{TimelineRows, TimelineState};
 use crate::topbar::Topbar;
@@ -24,17 +23,21 @@ pub fn CockpitPage() -> impl IntoView {
     let refresh_version = RwSignal::new(0u32);
     let on_mutate = Callback::new(move |()| refresh_version.update(|v| *v += 1));
 
-    // Gate on `current_user`, then fetch the personalized feed. Unlike `/`, `/app`
-    // is authed-only and served from the SPA shell (no-store), so an async gate is
-    // correct here — there is no cacheable-page flash constraint. `Ok(None)` means
-    // anonymous / expired → bounce to `/login` (D6).
+    // Gate on the shared session's server-confirmed reconcile, then fetch the
+    // personalized feed. Unlike `/`, `/app` is authed-only and served from the SPA
+    // shell (no-store), so an async gate is correct here — there is no cacheable-page
+    // flash constraint. `Ok(None)` means anonymous / expired → bounce to `/login`
+    // (D6). Keyed on `refresh_version` (publish/draft), which refetches the feed; the
+    // reconcile itself is keyed on pathname, so this reuses it rather than re-hitting
+    // the server for identity on every publish (#591).
+    let session = crate::auth::use_session();
     let initial_page = Resource::new(
         move || refresh_version.get(),
-        |_| async move {
-            match current_user().await {
+        move |_| async move {
+            match session.reconcile.await {
                 Ok(Some(user)) => list_home_feed(None, None, Some(PageSize::default()))
                     .await
-                    .map(|page| Some((user, page))),
+                    .map(|page| Some((user.username, page))),
                 Ok(None) => Ok(None),
                 Err(e) => Err(e),
             }
