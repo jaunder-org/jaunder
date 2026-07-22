@@ -31,6 +31,11 @@ mod api;
 mod component;
 #[cfg(feature = "server")]
 mod server;
+/// The wasm-only shared session context (#591): the marker-seeded `SessionUser`
+/// signal + per-navigation `session()` reconcile. Calls the wasm-only
+/// `marker_storage`, and every consumer is itself wasm-only.
+#[cfg(target_arch = "wasm32")]
+mod session;
 
 // The API surface — re-exported so external call sites and the server-fn
 // registrar keep the stable `crate::auth::…` paths despite living in `api.rs`.
@@ -40,6 +45,10 @@ pub use api::{
 #[cfg(target_arch = "wasm32")]
 pub use component::{LoginPage, LogoutPage};
 pub use marker::SessionUser;
+#[cfg(target_arch = "wasm32")]
+pub use session::{
+    clear_session, provide_session_context, set_session, use_session, SessionContext,
+};
 
 // Public re-exports — must remain accessible as crate::auth::* for other modules.
 #[cfg(feature = "server")]

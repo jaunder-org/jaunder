@@ -1,10 +1,5 @@
-// `current_user` is the sidebar's background reconcile (#181), used only in the
-// wasm-only correction Effect.
-use crate::auth::current_user;
-use crate::backup::current_user_is_operator;
 use common::username::Username;
 use leptos::prelude::*;
-use leptos_router::hooks::use_location;
 
 /// Linking context for a post's footer tag chips — re-exported from the pure
 /// `render` layer (`SiteWide` / `ForUser`) so the reactive components and the
@@ -74,64 +69,24 @@ fn SidebarSource(proto: &'static str, name: &'static str, sub: &'static str) -> 
 pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
     let active_key = active.unwrap_or_default();
 
-    let location = use_location();
-    let operator = Resource::new(
-        move || location.pathname.get(),
-        |_| current_user_is_operator(),
-    );
-
-    // Synchronous boot source (#181, ADR-0044): the auth marker decides authed vs.
-    // anon at mount, so there is NO async <Suspense> swap on first paint. The
+    // The shared session context (#591) is the single source: its seed signal is
+    // marker-seeded (flash-free for BOTH username and operator chrome, since
+    // `is_operator` now rides in the marker) and the reconcile keeps it current. The
     // anonymous sidebar is the pure `render::render_sidebar` (the SAME code the
     // projector server-renders) injected via `inner_html`, so a seeded first paint
-    // and the reactive re-render coincide (flash-free). `display:contents` keeps
-    // the host wrapper out of the aside's layout.
-    // TRANSITIONAL (#591 Task 1): seed the username out of the richer marker; Task 3
-    // replaces this whole boot/reconcile block with the shared session context.
-    let owner = RwSignal::new(crate::auth::marker_storage::get().map(|s| s.username));
-
-    // Background reconcile / correctness backstop (D3): confirm the marker against
-    // the real session and correct a stale one without gating first paint — a dead
-    // session clears the marker (toward anon, the safe direction); a live session
-    // with a missing marker sets it. wasm-only: the marker lives in localStorage.
-    let reconcile = Resource::new(move || location.pathname.get(), |_| current_user());
-    Effect::new(move |_| {
-        if let Some(res) = reconcile.get() {
-            match res {
-                Ok(Some(u)) => {
-                    // TRANSITIONAL (#591 Task 1): marker `is_operator` is unread until
-                    // the shared session context seeds from it (Task 3, which deletes
-                    // this Effect). `false` is harmless here.
-                    crate::auth::marker_storage::set(&crate::auth::SessionUser {
-                        username: u.clone(),
-                        is_operator: false,
-                    });
-                    if owner.get_untracked().as_ref() != Some(&u) {
-                        owner.set(Some(u));
-                    }
-                }
-                Ok(None) => {
-                    crate::auth::marker_storage::remove();
-                    if owner.get_untracked().is_some() {
-                        owner.set(None);
-                    }
-                }
-                Err(_) => {}
-            }
-        }
-    });
-
+    // and the reactive re-render coincide (flash-free). `display:contents` keeps the
+    // host wrapper out of the aside's layout.
+    let session = crate::auth::use_session().seed;
     let anon_html = crate::render::render_sidebar(&active_key);
     view! {
         <aside class="j-sidebar">
-            {move || match owner.get() {
+            {move || match session.get() {
                 None => {
                     view! { <div style="display:contents" inner_html=anon_html.clone()></div> }
                         .into_any()
                 }
-                Some(username) => {
-                    authed_sidebar(&active_key, &username, matches!(operator.get(), Some(Ok(true))))
-                        .into_any()
+                Some(user) => {
+                    authed_sidebar(&active_key, &user.username, user.is_operator).into_any()
                 }
             }}
         </aside>

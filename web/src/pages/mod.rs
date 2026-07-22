@@ -40,6 +40,11 @@ use leptos_router::{
 
 #[component]
 fn AppShell() -> impl IntoView {
+    // The shared session context lives here, not in `App`: it reads `use_location`
+    // (per-navigation reconcile), which requires the `<Router>` context, and every
+    // consumer renders under this shell (#591).
+    crate::auth::provide_session_context();
+
     let theme = use_context::<RwSignal<String>>()
         .unwrap_or_else(|| RwSignal::new(DEFAULT_THEME.to_string()));
     // `data-theme` must be a plain dynamic attribute, NOT `attr:data-theme`: the
