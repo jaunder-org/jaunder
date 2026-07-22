@@ -89,11 +89,18 @@ test("clearing a post summary on edit persists as empty", async ({
   await waitForSelector(page, SEL.saveSummary);
 
   const summary = page.locator(SEL.saveSummary);
-  const postIdMatch = (await summary
-    .locator('[data-test="preview-link"]')
-    .getAttribute("href"))!.match(/\/draft\/(\d+)\/preview/);
-  expect(postIdMatch).toBeTruthy();
-  const postId = postIdMatch![1];
+  // Preview is gone (#24): reach the post at its canonical permalink, then read
+  // the post_id off the PostCard's Edit affordance.
+  const permalinkHref = (await summary
+    .locator('[data-test="permalink-link"]')
+    .getAttribute("href"))!;
+  expect(permalinkHref).toBeTruthy();
+  await goto(page, permalinkHref);
+  const editLink = page.locator('.j-post-acts a:has-text("Edit")');
+  await editLink.waitFor();
+  const postId = (await editLink.getAttribute("href"))!.match(
+    /\/posts\/(\d+)\/edit/,
+  )![1];
 
   // Edit: the summary prefills; clear it and save.
   await goto(page, `/posts/${postId}/edit`);
@@ -139,11 +146,6 @@ test("published post renders at permalink", async ({
     .getAttribute("data-slug");
   expect(slugAttr).toBeTruthy();
 
-  const previewLink = summary.locator('[data-test="preview-link"]');
-  await expect(previewLink).toBeVisible();
-  const previewHref = await previewLink.getAttribute("href");
-  expect(previewHref).toBeTruthy();
-
   const permalinkLink = summary.locator('[data-test="permalink-link"]');
   await expect(permalinkLink).toBeVisible();
   const permalinkHref = await permalinkLink.getAttribute("href");
@@ -168,11 +170,18 @@ test("authenticated user can edit a draft post", async ({
   await waitForSelector(page, SEL.saveSummary);
 
   const summary = page.locator(SEL.saveSummary);
-  const postIdMatch = (await summary
-    .locator('[data-test="preview-link"]')
-    .getAttribute("href"))!.match(/\/draft\/(\d+)\/preview/);
-  expect(postIdMatch).toBeTruthy();
-  const postId = postIdMatch![1];
+  // Preview is gone (#24): reach the draft at its canonical permalink, then read
+  // the post_id off the PostCard's Edit affordance.
+  const permalinkHref = (await summary
+    .locator('[data-test="permalink-link"]')
+    .getAttribute("href"))!;
+  expect(permalinkHref).toBeTruthy();
+  await goto(page, permalinkHref);
+  const editLink = page.locator('.j-post-acts a:has-text("Edit")');
+  await editLink.waitFor();
+  const postId = (await editLink.getAttribute("href"))!.match(
+    /\/posts\/(\d+)\/edit/,
+  )![1];
 
   // Navigate to edit page
   await goto(page, `/posts/${postId}/edit`);
@@ -186,7 +195,7 @@ test("authenticated user can edit a draft post", async ({
 
   await expect(page.locator(SEL.saveSummary)).toContainText("Draft saved.");
   await expect(page.locator(SEL.saveSummary)).toContainText(
-    "Draft saved.Slug: original-draftPreview draft",
+    "Draft saved.Slug: original-draftView post",
   );
 });
 
@@ -222,11 +231,18 @@ test("editing a published post freezes the slug", async ({
     .getAttribute("data-slug");
   expect(originalSlug).toBeTruthy();
 
-  const postIdMatch = (await summary
-    .locator('[data-test="preview-link"]')
-    .getAttribute("href"))!.match(/\/draft\/(\d+)\/preview/);
-  expect(postIdMatch).toBeTruthy();
-  const postId = postIdMatch![1];
+  // Preview is gone (#24): reach the published post at its permalink, then read
+  // the post_id off the PostCard's Edit affordance.
+  const permalinkHref = (await summary
+    .locator('[data-test="permalink-link"]')
+    .getAttribute("href"))!;
+  expect(permalinkHref).toBeTruthy();
+  await goto(page, permalinkHref);
+  const editLink = page.locator('.j-post-acts a:has-text("Edit")');
+  await editLink.waitFor();
+  const postId = (await editLink.getAttribute("href"))!.match(
+    /\/posts\/(\d+)\/edit/,
+  )![1];
 
   // Navigate to edit page
   await goto(page, `/posts/${postId}/edit`);
@@ -256,26 +272,23 @@ test("draft lifecycle: create, view, edit, and publish", async ({
   await click(page, SEL.publishButton("false"));
   await waitForSelector(page, SEL.saveSummary);
 
-  const summary = page.locator(SEL.saveSummary);
-  const previewHref = await summary
-    .locator('[data-test="preview-link"]')
-    .getAttribute("href");
-  expect(previewHref).toBeTruthy();
-
-  const postIdMatch = previewHref!.match(/\/draft\/(\d+)\/preview/);
-  expect(postIdMatch).toBeTruthy();
-  const postId = postIdMatch![1];
-
+  // Preview is gone (#24): the drafts listing links only the canonical permalink
+  // and carries the Edit affordance — derive both from the row (AC5).
   await goto(page, "/drafts");
   const initialDraftRow = page.locator("li", { hasText: "Lifecycle Draft" });
   await expect(initialDraftRow).toBeVisible();
+  await expect(initialDraftRow.locator('a:has-text("Preview")')).toHaveCount(0);
   const permalinkHref = await initialDraftRow
     .locator('a:has-text("Permalink")')
     .getAttribute("href");
   expect(permalinkHref).toBeTruthy();
   const permalinkUrl = permalinkHref!;
+  const editHref = await initialDraftRow
+    .locator('a:has-text("Edit")')
+    .getAttribute("href");
+  expect(editHref).toBeTruthy();
 
-  await goto(page, `/posts/${postId}/edit`);
+  await goto(page, editHref!);
   await page.fill(SEL.postBody, "# Lifecycle Draft\n\nedited draft body");
   await click(page, SEL.publishButton("false"));
   await waitForSelector(page, SEL.saveSummary);
@@ -296,6 +309,12 @@ test("draft lifecycle: create, view, edit, and publish", async ({
     "Draft - visible only to you",
     { timeout: bodyRenderTimeoutMs },
   );
+  // #23/#24: the draft's PostCard offers Publish, never Unpublish (AC2).
+  const draftActs = page.locator(".j-post-acts");
+  await expect(draftActs.locator('button:has-text("Publish")')).toBeVisible();
+  await expect(draftActs.locator('button:has-text("Unpublish")')).toHaveCount(
+    0,
+  );
 
   const guestContext = await context.browser()!.newContext();
   const guestPage = await guestContext.newPage();
@@ -305,15 +324,18 @@ test("draft lifecycle: create, view, edit, and publish", async ({
   );
   await guestContext.close();
 
-  await goto(page, "/drafts");
-  const draftRow = page.locator("li", { hasText: "Lifecycle Draft" });
-  await expect(draftRow).toBeVisible();
-  await draftRow.locator('button:has-text("Publish")').click();
-  await waitForSelector(page, ".success");
-  await expect(page.locator(".success")).toContainText("Post published.");
-
+  // Publish from the post's own permalink via the draft-aware PostCard (#23/#24):
+  // Publish sits behind a confirm and, on success, navigates to the canonical
+  // published permalink — where the post renders without the draft banner (AC4).
   await goto(page, permalinkUrl);
-  await expect(page.locator(".j-post-body")).toContainText("edited draft body");
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.locator('.j-post-acts button:has-text("Publish")').click();
+  await expect(page.locator(".j-post-body")).toContainText(
+    "edited draft body",
+    {
+      timeout: bodyRenderTimeoutMs,
+    },
+  );
   await expect(page.locator(".draft-banner")).toHaveCount(0);
 });
 
@@ -567,7 +589,7 @@ test("inline composer: publish flash is a link to the post permalink", async ({
   expect(href).toMatch(/^\/~[^/]+\//);
 });
 
-test("inline composer: draft flash is a link to the draft preview URL", async ({
+test("inline composer: draft flash links to the draft's canonical permalink", async ({
   registeredPage: page,
 }) => {
   await goto(page, "/app");
@@ -581,6 +603,9 @@ test("inline composer: draft flash is a link to the draft preview URL", async ({
   await expect(link).toContainText("Draft saved!");
   const href = await link.getAttribute("href");
   expect(href).toBeTruthy();
+  // #24: the flash links to the canonical permalink, never a /draft/…/preview URL.
+  expect(href).toMatch(/^\/~/);
+  expect(href).not.toContain("/preview");
 });
 
 test("inline composer: flash clears when user starts typing", async ({

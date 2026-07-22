@@ -132,11 +132,6 @@ async fn create_post_persists_rendered_published_post(#[case] backend: Backend) 
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
     assert_eq!(created.slug, "hello-world");
     assert!(created.published_at.is_some());
-    assert_eq!(
-        created.preview_url,
-        *format!("/draft/{}/preview", created.post_id)
-    );
-    assert!(created.permalink.is_some());
 
     let record = state
         .posts
@@ -167,10 +162,7 @@ async fn create_post_persists_rendered_published_post(#[case] backend: Backend) 
         published_at.day(),
         record.slug.as_ref()
     );
-    assert_eq!(
-        created.permalink.as_deref(),
-        Some(expected_permalink.as_str())
-    );
+    assert_eq!(created.permalink, *expected_permalink);
 }
 
 #[apply(backends)]
@@ -317,11 +309,13 @@ async fn create_post_accepts_slug_override_and_saves_draft(#[case] backend: Back
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
     assert_eq!(created.slug, "custom-slug");
     assert!(created.published_at.is_none());
-    assert_eq!(
-        created.preview_url,
-        *format!("/draft/{}/preview", created.post_id)
+    // A draft now carries its canonical (created_at-based) permalink; the permalink
+    // view renders the draft for the author (#24).
+    assert!(
+        created.permalink.as_ref().starts_with("/~author/"),
+        "draft should carry a canonical permalink: {}",
+        created.permalink
     );
-    assert!(created.permalink.is_none());
 
     let record = state
         .posts
@@ -1088,7 +1082,7 @@ async fn update_post_publishes_draft(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::OK, "update body: {body}");
     let updated: UpdatePostResult = serde_json::from_str(&body).unwrap();
     assert!(updated.published_at.is_some());
-    assert!(updated.permalink.is_some());
+    assert!(!updated.permalink.as_ref().is_empty());
 }
 
 #[apply(backends)]
@@ -2471,7 +2465,7 @@ body",
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
-    let permalink = created.permalink.unwrap();
+    let permalink = String::from(created.permalink);
 
     // Verify post appears in user timeline before deletion
     let (status, body) =

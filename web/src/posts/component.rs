@@ -199,9 +199,14 @@ pub fn PostCard(
     // the actual edit/delete by session — the marker only gates visibility.
     let is_author = post.is_author || marker_matches(&post.username);
     let post_id = post.post_id;
+    // A draft rendered at its permalink gets a Publish affordance instead of
+    // Unpublish (#23): the fixed Unpublish column was a no-op on an already-
+    // unpublished post.
+    let is_draft = post.is_draft;
     let edit_url = format!("/posts/{post_id}/edit");
     let delete_action = ServerAction::<DeletePost>::new();
     let unpublish_action = ServerAction::<UnpublishPost>::new();
+    let publish_action = ServerAction::<PublishPost>::new();
     let deleted = RwSignal::new(false);
 
     Effect::new_isomorphic(move |_| {
@@ -220,25 +225,69 @@ pub fn PostCard(
             }
         }
     });
+    // Client-only navigation side-effect (web-style-guide §9): the publish action
+    // only ever dispatches on the client, so `Effect::new` (not `_isomorphic`)
+    // avoids needlessly scheduling on the server — matching EditPostPage's
+    // publish redirect.
+    Effect::new(move |_| {
+        if let Some(Ok(published)) = publish_action.value().get() {
+            // Publishing can move the permalink (a draft's URL is created_at-based;
+            // once published it becomes published_at-based), so navigate to the
+            // server-returned canonical permalink rather than the now-stale current
+            // URL. The unpublish path redirects to /drafts; this is its mirror.
+            if let Some(window) = web_sys::window() {
+                let _ = window.location().replace(&published.permalink);
+            }
+        }
+    });
 
-    // Additive action column (#181, ADR-0044 D4): edit/unpublish/delete only. The
-    // timestamp deliberately stays in the (coincident) content-column header rather
-    // than moving here, so the owner's own post doesn't diverge from the anon paint.
+    // The primary lifecycle action adapts to draft state (#23): a draft gets
+    // Publish (dispatching PublishPost behind a confirm), a published post keeps
+    // Unpublish. Edit and Delete are identical either way.
+    let primary_action = if is_draft {
+        view! {
+            <button
+                type="button"
+                class="j-btn"
+                on:click=move |_| {
+                    let confirmed = web_sys::window()
+                        .and_then(|w| { w.confirm_with_message("Publish this draft?").ok() })
+                        .unwrap_or(false);
+                    if confirmed {
+                        publish_action.dispatch(PublishPost { post_id });
+                    }
+                }
+            >
+                "Publish"
+            </button>
+        }
+        .into_any()
+    } else {
+        view! {
+            <button
+                type="button"
+                class="j-btn"
+                on:click=move |_| {
+                    unpublish_action.dispatch(UnpublishPost { post_id });
+                }
+            >
+                "Unpublish"
+            </button>
+        }
+        .into_any()
+    };
+
+    // Additive action column (#181, ADR-0044 D4): edit / publish-or-unpublish /
+    // delete. The timestamp deliberately stays in the (coincident) content-column
+    // header rather than moving here, so the owner's own post doesn't diverge from
+    // the anon paint.
     let action_col = is_author.then(move || {
         view! {
             <div class="j-post-acts">
                 <a class="j-btn" href=edit_url>
                     "Edit"
                 </a>
-                <button
-                    type="button"
-                    class="j-btn"
-                    on:click=move |_| {
-                        unpublish_action.dispatch(UnpublishPost { post_id });
-                    }
-                >
-                    "Unpublish"
-                </button>
+                {primary_action}
                 <button
                     type="button"
                     class="j-btn is-danger"
@@ -761,11 +810,7 @@ pub fn InlineComposer(username: Username, on_publish: WriteSignal<u32>) -> impl 
     let on_success = Callback::new(move |created: CreatePostResult| {
         use leptos_dom::helpers::set_timeout;
         use std::time::Duration;
-        let url = created
-            .permalink
-            .clone()
-            .unwrap_or_else(|| created.preview_url.clone())
-            .to_string();
+        let url = created.permalink.to_string();
         let msg = if created.published_at.is_some() {
             "Post published!".to_string()
         } else {
@@ -1080,21 +1125,11 @@ pub fn CreatePostPage() -> impl IntoView {
                                                     {slug_value}
                                                 </p>
                                                 <a
-                                                    data-test="preview-link"
-                                                    href=created.preview_url.to_string()
+                                                    data-test="permalink-link"
+                                                    href=created.permalink.to_string()
                                                 >
-                                                    "Preview draft"
+                                                    "View post"
                                                 </a>
-                                                {created
-                                                    .permalink
-                                                    .as_ref()
-                                                    .map(|href| {
-                                                        view! {
-                                                            <a data-test="permalink-link" href=href.to_string()>
-                                                                "View permalink"
-                                                            </a>
-                                                        }
-                                                    })}
                                             </div>
                                         }
                                     })
@@ -1222,6 +1257,7 @@ pub fn PostPage() -> impl IntoView {
                                         .unwrap_or(fetched.created_at),
                                     permalink: fetched.permalink.clone(),
                                     is_author: fetched.is_author,
+                                    is_draft: fetched.is_draft,
                                     tags: fetched.tags.clone(),
                                 };
                                 let username_for_tags = fetched.username.clone();
@@ -1510,109 +1546,6 @@ pub fn UserTimelinePage() -> impl IntoView {
     }
 }
 
-#[component]
-pub fn DraftPreviewPage() -> impl IntoView {
-    let delete_action = ServerAction::<DeletePost>::new();
-    let publish_action = ServerAction::<PublishPost>::new();
-    let params = use_params_map();
-
-    let preview = crate::server_resource(
-        move || params.get(),
-        |params| async move {
-            let post_id = params
-                .get("post_id")
-                .and_then(|v| v.parse::<PostId>().ok())
-                .ok_or_else(|| WebError::validation("Invalid preview"))?;
-            get_post_preview(post_id).await
-        },
-    );
-
-    view! {
-        <div class="j-scroll">
-            <div class="j-page">
-                <Suspense fallback=|| {
-                    view! { <p class="j-loading">"Loading\u{2026}"</p> }
-                }>
-                    {move || Suspend::new(async move {
-                        match preview.await {
-                            Ok(fetched) => {
-                                let post_id = fetched.post_id;
-                                let summary = TimelinePostSummary {
-                                    post_id: fetched.post_id,
-                                    username: fetched.username.clone(),
-                                    title: fetched.title.clone(),
-                                    summary: fetched.summary.clone(),
-                                    slug: fetched.slug.clone(),
-                                    rendered_html: fetched.rendered_html.clone(),
-                                    created_at: fetched.created_at,
-                                    published_at: fetched
-                                        .published_at
-                                        .unwrap_or(fetched.created_at),
-                                    permalink: fetched.permalink.clone(),
-                                    is_author: true,
-                                    tags: fetched.tags.clone(),
-                                };
-                                let username_for_tags = fetched.username.clone();
-                                view! {
-                                    <PostDisplay
-                                        post=summary
-                                        banner=Some(
-                                            "Draft preview – visible only to you".to_string(),
-                                        )
-                                        tag_context=TagContext::ForUser(username_for_tags)
-                                    >
-                                        <div class="j-post-acts">
-                                            <ActionForm action=publish_action>
-                                                <input
-                                                    type="hidden"
-                                                    name="post_id"
-                                                    value=i64::from(post_id)
-                                                />
-                                                <button
-                                                    type="submit"
-                                                    class="j-btn is-primary"
-                                                    onclick="return confirm('Publish this draft?')"
-                                                >
-                                                    "Publish \u{2192}"
-                                                </button>
-                                            </ActionForm>
-                                            {render_delete_form(
-                                                delete_action,
-                                                post_id,
-                                                "Delete this draft?",
-                                            )}
-                                        </div>
-                                    </PostDisplay>
-                                }
-                                    .into_any()
-                            }
-                            Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
-                        }
-                    })}
-                </Suspense>
-                {move || {
-                    publish_action
-                        .value()
-                        .get()
-                        .map(|result: Result<PublishPostResult, WebError>| match result {
-                            Ok(published) => {
-                                view! {
-                                    <p class="success">
-                                        "Post published. "
-                                        <a href=published.permalink.to_string()>"View post"</a>
-                                    </p>
-                                }
-                                    .into_any()
-                            }
-                            Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
-                        })
-                }}
-                {render_delete_result(delete_action, "Draft deleted.", "/drafts", "Go to drafts")}
-            </div>
-        </div>
-    }
-}
-
 #[expect(
     clippy::too_many_lines,
     reason = "Leptos view fn; length is inherent to the view! markup — splitting into \
@@ -1644,10 +1577,8 @@ pub fn EditPostPage() -> impl IntoView {
     Effect::new(move |_| {
         if let Some(Ok(ref updated)) = update_post_action.value().get() {
             if updated.published_at.is_some() {
-                if let Some(ref permalink) = updated.permalink {
-                    if let Some(window) = web_sys::window() {
-                        let _ = window.location().replace(permalink.as_ref());
-                    }
+                if let Some(window) = web_sys::window() {
+                    let _ = window.location().replace(updated.permalink.as_ref());
                 }
             }
         }
@@ -1922,8 +1853,8 @@ pub fn EditPostPage() -> impl IntoView {
                                     "Slug: "
                                     {slug_value}
                                 </p>
-                                <a data-test="preview-link" href=updated.preview_url.to_string()>
-                                    "Preview draft"
+                                <a data-test="permalink-link" href=updated.permalink.to_string()>
+                                    "View post"
                                 </a>
                             </div>
                         }
@@ -2037,8 +1968,6 @@ fn render_draft_row(
                     ") "
                     {scheduled_badge}
                     " "
-                    <a href=String::from(draft.preview_url)>"Preview"</a>
-                    " "
                     <a href=String::from(draft.permalink)>"Permalink"</a>
                 </div>
                 <div class="j-draft-actions">
@@ -2064,41 +1993,6 @@ fn render_draft_row(
                 </div>
             </div>
         </li>
-    }
-}
-
-fn render_delete_form(
-    delete_action: ServerAction<DeletePost>,
-    post_id: PostId,
-    confirm_msg: &'static str,
-) -> impl IntoView {
-    let post_id = i64::from(post_id);
-    view! {
-        <ActionForm action=delete_action>
-            <input type="hidden" name="post_id" value=post_id />
-            <button
-                type="submit"
-                class="j-btn is-danger"
-                onclick=format!("return confirm('{confirm_msg}')")
-            >
-                "Delete"
-            </button>
-        </ActionForm>
-    }
-}
-
-fn render_delete_result(
-    delete_action: ServerAction<DeletePost>,
-    success_msg: &'static str,
-    success_href: &'static str,
-    success_link_text: &'static str,
-) -> impl IntoView {
-    move || {
-        delete_action.value().get().map(|result| match result {
-            Ok(()) => view! { <p class="success">{success_msg} " " <a href=success_href>{success_link_text}</a></p> }
-            .into_any(),
-            Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
-        })
     }
 }
 
