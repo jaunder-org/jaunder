@@ -6,8 +6,10 @@
 use crate::error::WebResult;
 // `Username` / `ProfferedPassword` are ungated: they are wire-arg types of `login`,
 // so the `#[server]`-generated arg struct references them on both the client and
-// server builds.
+// server builds. `RawToken` is ungated for the same reason — it is `login`'s wire
+// *return* type, named in the `#[server]` signature on both builds.
 use common::password::ProfferedPassword;
+use common::token::RawToken;
 use common::username::Username;
 use leptos::prelude::*;
 
@@ -33,15 +35,15 @@ pub async fn current_user() -> WebResult<Option<Username>> {
     })
 }
 
-/// Authenticates a user.  Returns the raw session token on success and sets
-/// the `session` cookie.
+/// Authenticates a user.  Returns the freshly minted session [`RawToken`] on
+/// success and sets the `session` cookie.
 #[server(endpoint = "/login")]
 #[tracing::instrument(name = "web.auth.login", skip(password, label))]
 pub async fn login(
     username: Username,
     password: ProfferedPassword,
     label: Option<String>,
-) -> WebResult<String> {
+) -> WebResult<RawToken> {
     boundary!("login", {
         let users = expect_context::<Arc<dyn UserStorage>>();
         let sessions = expect_context::<Arc<dyn SessionStorage>>();
@@ -93,7 +95,7 @@ pub async fn login(
 
         set_session_cookie(&raw_token);
         leptos_axum::redirect("/");
-        Ok(raw_token.to_string())
+        Ok(raw_token)
     })
 }
 
