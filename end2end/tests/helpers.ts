@@ -17,9 +17,8 @@
  *   `waitForHydration(page)` only after action-triggered navigations (e.g.
  *   redirects from form submits, server-side 302s) where `goto` was not used.
  *
- * - Never use `page.waitForLoadState("networkidle")` — it fires before
- *   Firefox's `location.replace()` navigation and before ActionForm AJAX
- *   responses arrive under load.  Wait for a specific element instead.
+ * - Never use `page.waitForLoadState("networkidle")` — it fires before ActionForm
+ *   AJAX responses arrive under load.  Wait for a specific element instead.
  *
  * - Whole-test timeout scaling is ambient (see `fixtures.ts`): every test gets a
  *   scaled `DEFAULT_TEST_BUDGET_MS` automatically, so tests no longer hand-roll
@@ -132,11 +131,11 @@ export async function fillLoginForm(
 
 /**
  * Log in as `username` / `password` and wait until the sidebar logout link is
- * visible (confirming the authenticated Suspense has resolved).
+ * visible (confirming the shared session context has flipped to authenticated).
  *
- * Do NOT use `waitForURL` here — it is unreliable in Firefox for
- * `location.replace()` navigations.  Waiting for `SEL.logoutLink` is the
- * correct signal because it is only rendered once auth state is confirmed.
+ * Login redirects via client-side pushState now (#591), so `waitForURL` would be
+ * reliable — but `SEL.logoutLink` is the better signal because it confirms auth
+ * state (content readiness), not merely the URL.
  */
 export async function login(
   page: Page,
