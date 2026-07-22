@@ -7,13 +7,13 @@ use rstest::*;
 use rstest_reuse::*;
 use tower::ServiceExt;
 
-use crate::helpers::{basic_header, body_string, make_app};
+use crate::helpers::{basic_header, body_string, make_app, setup_with_base_url};
 use storage::test_support::{backends, Backend, TestEnv};
 
 #[apply(backends)]
 #[tokio::test]
 async fn service_document_returns_200_with_app_password(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let user_id = state
         .users
         .create_user(
@@ -79,8 +79,8 @@ async fn service_document_returns_200_with_app_password(#[case] backend: Backend
     );
     let body = body_string(response).await;
     assert!(body.contains("app:service"));
-    assert!(body.contains("/atompub/alice/posts"));
-    assert!(body.contains("/atompub/alice/media"));
+    assert!(body.contains("https://example.com/atompub/alice/posts"));
+    assert!(body.contains("https://example.com/atompub/alice/media"));
     assert!(body.contains("image/webp"));
     // The tagged post surfaces as an inline category in the posts collection.
     assert!(body.contains("term=\"rust\""), "categories missing: {body}");

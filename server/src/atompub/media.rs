@@ -17,14 +17,14 @@ use common::username::Username;
 use storage::{MediaRecord, MediaSource, MediaStorage, SiteConfigStorage};
 use web::auth::AuthUser;
 
-use super::{base_url, HandlerError};
+use super::{required_base_url, HandlerError};
 
 const ENTRY_CONTENT_TYPE: &str = "application/atom+xml;type=entry;charset=utf-8";
 
 /// Builds the media-link entry for a stored media record.
 fn media_link_entry(
     record: &MediaRecord,
-    base: Option<&AbsoluteUrl>,
+    base: &AbsoluteUrl,
     username: &Username,
 ) -> MediaLinkEntry {
     let binary_path = media_url("upload", &record.sha256, &record.filename);
@@ -101,8 +101,8 @@ pub async fn collection_post(
         .await?
         .ok_or(HandlerError::Internal)?;
 
-    let base = base_url(site_config.as_ref()).await;
-    let entry = media_link_entry(&record, base.as_ref(), &username);
+    let base = required_base_url(site_config.as_ref()).await?;
+    let entry = media_link_entry(&record, &base, &username);
     let xml = render_media_link_entry(&entry);
     let status = if existed {
         StatusCode::OK
@@ -114,7 +114,7 @@ pub async fn collection_post(
         status,
         [
             (header::CONTENT_TYPE, ENTRY_CONTENT_TYPE.to_string()),
-            (header::LOCATION, entry.edit_uri),
+            (header::LOCATION, entry.edit_uri.to_string()),
         ],
         xml,
     )
@@ -141,8 +141,8 @@ pub async fn member_get(
         .await?
         .ok_or(HandlerError::NotFound)?;
 
-    let base = base_url(site_config.as_ref()).await;
-    let entry = media_link_entry(&record, base.as_ref(), &username);
+    let base = required_base_url(site_config.as_ref()).await?;
+    let entry = media_link_entry(&record, &base, &username);
     let xml = render_media_link_entry(&entry);
     Ok(([(header::CONTENT_TYPE, ENTRY_CONTENT_TYPE)], xml).into_response())
 }

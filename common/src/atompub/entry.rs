@@ -21,6 +21,7 @@ use quick_xml::{Reader, Writer};
 
 use super::xml::{write_empty_element, write_link, write_text_element};
 use super::{AtomPubError, APP_NS, ATOM_NS, J_NS};
+use crate::absolute_url::AbsoluteUrl;
 use crate::media::{ContentType, Filename};
 
 // ---------------------------------------------------------------------------
@@ -523,20 +524,20 @@ fn write_entry(writer: &mut Writer<Vec<u8>>, entry: &Entry, declare_namespaces: 
 /// Used to wrap multiple entries in a `<feed>` with RFC 5005 paging links.
 #[derive(Debug, Clone)]
 pub struct FeedMeta {
-    /// Stable feed id (an IRI).
-    pub id: String,
+    /// Stable feed id — the absolute collection IRI (#560, require-base).
+    pub id: AbsoluteUrl,
     /// Human-readable collection title.
     pub title: String,
     /// Feed `updated` timestamp, RFC 3339.
     pub updated_rfc3339: String,
-    /// `rel="self"` href (the collection URL for this page).
-    pub self_url: String,
+    /// `rel="self"` href (the absolute collection URL for this page).
+    pub self_url: AbsoluteUrl,
     /// `rel="first"` href, when paging.
-    pub first: Option<String>,
+    pub first: Option<AbsoluteUrl>,
     /// `rel="next"` href, when a next page exists.
-    pub next: Option<String>,
+    pub next: Option<AbsoluteUrl>,
     /// `rel="previous"` href, when a previous page exists.
-    pub previous: Option<String>,
+    pub previous: Option<AbsoluteUrl>,
 }
 
 /// Serializes a collection `<feed>` wrapping the given entries, with RFC 5005
@@ -587,16 +588,16 @@ pub fn render_feed(meta: &FeedMeta, entries: &[Entry]) -> String {
 /// and an `edit-media` link (the binary).
 #[derive(Debug, Clone)]
 pub struct MediaLinkEntry {
-    /// Stable entry id (an IRI).
-    pub id: String,
+    /// Stable entry id — the absolute member IRI (#560, require-base).
+    pub id: AbsoluteUrl,
     /// The uploaded media's filename (rendered as the entry's human-readable title).
     pub title: Filename,
     /// `rel="edit"` href — the media-link member resource.
-    pub edit_uri: String,
+    pub edit_uri: AbsoluteUrl,
     /// `rel="edit-media"` href — the binary media resource.
-    pub edit_media_uri: String,
+    pub edit_media_uri: AbsoluteUrl,
     /// `<content src=...>` — the absolute URL of the binary.
-    pub content_src: String,
+    pub content_src: AbsoluteUrl,
     /// MIME type of the binary.
     pub content_type: ContentType,
     /// Publication timestamp, RFC 3339.
@@ -624,7 +625,7 @@ pub fn render_media_link_entry(entry: &MediaLinkEntry) -> String {
 
     let content_attrs = [
         ("type", entry.content_type.as_ref()),
-        ("src", entry.content_src.as_str()),
+        ("src", entry.content_src.as_ref()),
     ];
     write_empty_element(&mut writer, "content", &content_attrs);
 
@@ -638,7 +639,7 @@ pub fn render_media_link_entry(entry: &MediaLinkEntry) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{parse_content_type, parse_filename};
+    use crate::test_support::{parse_absolute_url, parse_content_type, parse_filename};
 
     fn content_parts(entry: &Entry) -> (Option<&str>, Option<&str>) {
         match entry.content() {
@@ -951,13 +952,19 @@ mod tests {
         entry2.title = Text::plain("Second");
 
         let meta = FeedMeta {
-            id: "tag:example.com,2026:collection/user/alice".to_string(),
+            id: parse_absolute_url("https://example.com/atompub/alice/posts"),
             title: "Alice's Posts".to_string(),
             updated_rfc3339: "2026-05-31T12:00:00Z".to_string(),
-            self_url: "https://example.com/atompub/alice/posts".to_string(),
-            first: Some("https://example.com/atompub/alice/posts?page=1".to_string()),
-            next: Some("https://example.com/atompub/alice/posts?page=2".to_string()),
-            previous: Some("https://example.com/atompub/alice/posts?page=0".to_string()),
+            self_url: parse_absolute_url("https://example.com/atompub/alice/posts"),
+            first: Some(parse_absolute_url(
+                "https://example.com/atompub/alice/posts?page=1",
+            )),
+            next: Some(parse_absolute_url(
+                "https://example.com/atompub/alice/posts?page=2",
+            )),
+            previous: Some(parse_absolute_url(
+                "https://example.com/atompub/alice/posts?page=0",
+            )),
         };
 
         let out = render_feed(&meta, &[entry1, entry2]);
@@ -1001,10 +1008,10 @@ mod tests {
         entry.title = Text::plain("Single");
 
         let meta = FeedMeta {
-            id: "tag:example.com,2026:collection/user/bob".to_string(),
+            id: parse_absolute_url("https://example.com/atompub/bob/posts"),
             title: "Bob's Posts".to_string(),
             updated_rfc3339: "2026-05-31T13:00:00Z".to_string(),
-            self_url: "https://example.com/atompub/bob/posts".to_string(),
+            self_url: parse_absolute_url("https://example.com/atompub/bob/posts"),
             first: None,
             next: None,
             previous: None,
@@ -1029,11 +1036,11 @@ mod tests {
     #[test]
     fn render_media_link_entry_references_binary_by_src() {
         let out = render_media_link_entry(&MediaLinkEntry {
-            id: "https://h/atompub/alice/media/abc/pic.png".to_string(),
+            id: parse_absolute_url("https://h/atompub/alice/media/abc/pic.png"),
             title: parse_filename("pic.png"),
-            edit_uri: "https://h/atompub/alice/media/abc/pic.png".to_string(),
-            edit_media_uri: "https://h/media/upload/ab/c0/abc/pic.png".to_string(),
-            content_src: "https://h/media/upload/ab/c0/abc/pic.png".to_string(),
+            edit_uri: parse_absolute_url("https://h/atompub/alice/media/abc/pic.png"),
+            edit_media_uri: parse_absolute_url("https://h/media/upload/ab/c0/abc/pic.png"),
+            content_src: parse_absolute_url("https://h/media/upload/ab/c0/abc/pic.png"),
             content_type: parse_content_type("image/png"),
             published_rfc3339: "2026-06-01T00:00:00Z".to_string(),
             updated_rfc3339: "2026-06-01T00:00:00Z".to_string(),

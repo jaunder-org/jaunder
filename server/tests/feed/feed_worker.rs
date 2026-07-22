@@ -1,7 +1,7 @@
 use common::visibility::AudienceTarget;
 use std::sync::Arc;
 
-use crate::helpers::CapturingWebSubClient;
+use crate::helpers::{setup_with_base_url, CapturingWebSubClient};
 use chrono::Utc;
 use common::feed::FeedPath;
 use common::ids::FeedEventId;
@@ -48,7 +48,7 @@ fn make_worker(
 #[apply(backends)]
 #[tokio::test]
 async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let capture = Arc::new(CapturingWebSubClient::default());
 
     let username: Username = "alice".parse().expect("valid username");
@@ -105,7 +105,7 @@ async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub(#[case] bac
 #[apply(backends)]
 #[tokio::test]
 async fn worker_pings_hub_when_configured(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let capture = Arc::new(CapturingWebSubClient::default());
 
     let username: Username = "alice".parse().expect("valid username");
@@ -162,7 +162,7 @@ async fn worker_pings_hub_when_configured(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn worker_groups_duplicate_events_into_single_regen(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let capture = Arc::new(CapturingWebSubClient::default());
 
     let username: Username = "alice".parse().expect("valid username");
@@ -232,7 +232,7 @@ async fn worker_applies_backoff_on_ping_failure(#[case] backend: Backend) {
     // WebSub ping-failure backoff is backend-agnostic: run it on both backends
     // via the shared setup instead of the hand-built SQLite-only AppState this
     // test used to construct (which left Postgres uncovered).
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
 
     let username: Username = "alice".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");
@@ -307,7 +307,7 @@ async fn worker_applies_backoff_on_ping_failure(#[case] backend: Backend) {
 #[tokio::test]
 async fn startup_catchup_regenerates_feed_for_go_live_while_down(#[case] backend: Backend) {
     use chrono::{Duration, TimeZone};
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let worker = make_worker(&state, Arc::new(CapturingWebSubClient::default()));
 
     let username: Username = "alice".parse().expect("valid username");
@@ -374,7 +374,7 @@ async fn startup_catchup_regenerates_feed_for_go_live_while_down(#[case] backend
 #[tokio::test]
 async fn steady_state_window_enqueues_newly_live_posts(#[case] backend: Backend) {
     use chrono::{Duration, TimeZone};
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let worker = make_worker(&state, Arc::new(CapturingWebSubClient::default()));
 
     let username: Username = "alice".parse().expect("valid username");
@@ -430,7 +430,7 @@ async fn steady_state_window_enqueues_newly_live_posts(#[case] backend: Backend)
 #[apply(backends)]
 #[tokio::test]
 async fn worker_marks_exhausted_after_backoff_attempts_are_used_up(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
 
     // A published post so regeneration succeeds: the exhausted branch lives in
     // the ping sub-path, reached only after a successful regen.

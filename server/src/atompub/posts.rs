@@ -25,7 +25,7 @@ use storage::{
 use web::auth::AuthUser;
 
 use super::mapping::{entry_to_post_fields, post_to_entry};
-use super::{base_url, HandlerError};
+use super::{required_base_url, HandlerError};
 
 const FEED_CONTENT_TYPE: &str = "application/atom+xml;type=feed;charset=utf-8";
 const ENTRY_CONTENT_TYPE: &str = "application/atom+xml;type=entry;charset=utf-8";
@@ -162,26 +162,25 @@ pub async fn collection_get(
         records.truncate(usize::try_from(limit.value()).unwrap_or(usize::MAX));
     }
 
-    let base = base_url(site_config.as_ref()).await;
+    let base = required_base_url(site_config.as_ref()).await?;
     let collection_path = format!("/atompub/{username}/posts");
-    let collection_url = compose(base.as_ref(), &collection_path);
+    let collection_url = compose(&base, &collection_path);
 
     let next = if has_more {
         records.last().map(|last| {
-            let ts = utf8_encode(&last.updated_at.to_rfc3339());
-            format!(
-                "{collection_url}?updated_before={ts}&id_before={}",
-                last.post_id
-            )
+            // Build the cursor query via `url`'s encoder (#560, D5), not `format!`.
+            let updated_before = last.updated_at.to_rfc3339();
+            let id_before = last.post_id.to_string();
+            collection_url.with_query_pairs(&[
+                ("updated_before", updated_before.as_str()),
+                ("id_before", id_before.as_str()),
+            ])
         })
     } else {
         None
     };
 
-    let entries: Vec<_> = records
-        .iter()
-        .map(|p| post_to_entry(p, base.as_ref()))
-        .collect();
+    let entries: Vec<_> = records.iter().map(|p| post_to_entry(p, &base)).collect();
 
     let updated_rfc3339 = records.first().map_or_else(
         || chrono::Utc::now().to_rfc3339(),
@@ -200,11 +199,6 @@ pub async fn collection_get(
 
     let xml = render_feed(&meta, &entries);
     Ok(([(header::CONTENT_TYPE, FEED_CONTENT_TYPE)], xml).into_response())
-}
-
-fn utf8_encode(s: &str) -> String {
-    use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
-    utf8_percent_encode(s, NON_ALPHANUMERIC).to_string()
 }
 
 /// Builds the `ViewerIdentity` for the authenticated `AtomPub` user.
@@ -268,8 +262,8 @@ pub async fn member_get(
         post_id,
     )
     .await?;
-    let base = base_url(site_config.as_ref()).await;
-    let entry = post_to_entry(&post, base.as_ref());
+    let base = required_base_url(site_config.as_ref()).await?;
+    let entry = post_to_entry(&post, &base);
     let xml = entry_to_xml(&entry);
     Ok((
         [
@@ -398,7 +392,7 @@ pub async fn collection_post(
     )
     .await;
 
-    let base = base_url(site_config.as_ref()).await;
+    let base = required_base_url(site_config.as_ref()).await?;
     // Re-fetch as the authenticated owner so a non-Public default audience is not
     // hidden, and so the response entry carries the post's tags.
     let viewer = owner_viewer(subscriptions.as_ref(), &auth_user).await?;
@@ -417,12 +411,7 @@ pub async fn collection_post(
             .get_post_by_id(post_id, &viewer)
             .await?
             .ok_or(HandlerError::NotFound)?;
-        return Ok(post_entry_response(
-            StatusCode::OK,
-            &post,
-            base.as_ref(),
-            &username,
-        ));
+        return Ok(post_entry_response(StatusCode::OK, &post, &base, &username));
     }
 
     // Fresh create: a non-conflict error propagates via `?`.
@@ -435,7 +424,7 @@ pub async fn collection_post(
     Ok(post_entry_response(
         StatusCode::CREATED,
         &post,
-        base.as_ref(),
+        &base,
         &username,
     ))
 }
@@ -445,7 +434,7 @@ pub async fn collection_post(
 fn post_entry_response(
     status: StatusCode,
     post: &PostRecord,
-    base: Option<&AbsoluteUrl>,
+    base: &AbsoluteUrl,
     username: &Username,
 ) -> Response {
     let location_path = format!("/atompub/{username}/posts/{}", post.post_id);
@@ -455,7 +444,7 @@ fn post_entry_response(
         status,
         [
             (header::CONTENT_TYPE, ENTRY_CONTENT_TYPE.to_string()),
-            (header::LOCATION, location),
+            (header::LOCATION, location.to_string()),
             (header::ETAG, etag_for(post)),
         ],
         xml,
@@ -543,8 +532,8 @@ pub async fn member_put(
         .await?
         .ok_or(HandlerError::Internal)?;
 
-    let base = base_url(site_config.as_ref()).await;
-    let entry_out = post_to_entry(&post, base.as_ref());
+    let base = required_base_url(site_config.as_ref()).await?;
+    let entry_out = post_to_entry(&post, &base);
     let xml = entry_to_xml(&entry_out);
 
     Ok((

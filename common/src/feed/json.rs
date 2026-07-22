@@ -8,8 +8,8 @@ pub fn render_json(meta: &FeedMetadata, items: &[FeedItem]) -> String {
         .iter()
         .map(|i| {
             let mut o = json!({
-                "id": i.permalink,
-                "url": i.permalink,
+                "id": &*i.permalink,
+                "url": &*i.permalink,
                 "content_html": &*i.content_html,
                 "date_published": i.published_at.to_rfc3339(),
                 "date_modified": i.updated_at.to_rfc3339(),
@@ -32,8 +32,8 @@ pub fn render_json(meta: &FeedMetadata, items: &[FeedItem]) -> String {
     let mut root = json!({
         "version": "https://jsonfeed.org/version/1.1",
         "title": meta.title,
-        "home_page_url": meta.canonical_url,
-        "feed_url": meta.self_url,
+        "home_page_url": &*meta.canonical_url,
+        "feed_url": &*meta.self_url,
         "items": json_items,
     });
     if let Some(d) = &meta.description {
@@ -58,8 +58,8 @@ mod tests {
         FeedMetadata {
             title: "Site".into(),
             description: Some("A site".into()),
-            canonical_url: "https://example.com/".into(),
-            self_url: "https://example.com/feed.json".into(),
+            canonical_url: parse_absolute_url("https://example.com/"),
+            self_url: parse_absolute_url("https://example.com/feed.json"),
             hub_url: hub.map(parse_absolute_url),
             updated_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
         }
@@ -73,7 +73,7 @@ mod tests {
         FeedItem {
             id: PostId::from(1),
             title: title.map(parse_post_title),
-            permalink: "https://example.com/~alice/posts/1".into(),
+            permalink: parse_absolute_url("https://example.com/~alice/posts/1"),
             summary: summary.map(parse_post_summary),
             content_html: RenderedHtml::from_trusted("<p>hi</p>"),
             published_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),

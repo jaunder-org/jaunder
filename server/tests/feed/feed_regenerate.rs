@@ -11,10 +11,12 @@ use rstest_reuse::*;
 
 use storage::test_support::{backends, fp, Backend, TestEnv};
 
+use crate::helpers::setup_with_base_url;
+
 #[apply(backends)]
 #[tokio::test]
 async fn regenerate_writes_cache_row_for_user_feed(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
 
     let username: Username = "alice".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");
@@ -93,7 +95,7 @@ async fn regenerate_writes_cache_row_for_user_feed(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn regenerate_writes_empty_feed_for_user_with_no_posts(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
 
     // Create a user but no posts
     let username: Username = "bob".parse().expect("valid username");
@@ -130,7 +132,7 @@ async fn regenerate_writes_empty_feed_for_user_with_no_posts(#[case] backend: Ba
 #[apply(backends)]
 #[tokio::test]
 async fn regenerate_writes_cache_rows_for_tag_surfaces(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
 
     // Create a user (posts are not required: the tag-window queries and the
     // SiteTag/UserTag canonical_url arms execute regardless of matches).
@@ -194,7 +196,7 @@ async fn regenerate_writes_cache_rows_for_tag_surfaces(#[case] backend: Backend)
 #[apply(backends)]
 #[tokio::test]
 async fn regenerate_writes_each_format(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
 
     // Create a user with one post
     let username: Username = "charlie".parse().expect("valid username");
@@ -255,7 +257,7 @@ async fn regenerate_writes_each_format(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn feed_contains_only_public_posts(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
 
     let username: Username = "alice".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");

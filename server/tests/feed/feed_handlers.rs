@@ -14,7 +14,7 @@ use tower::ServiceExt;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::make_app;
+use crate::helpers::{make_app, setup_with_base_url};
 use storage::test_support::{backends, backends_matrix, fp, Backend, TestEnv};
 use storage::CreatePostInput;
 use storage::PostFormat;
@@ -25,7 +25,7 @@ use storage::RenderedHtml;
 async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_type(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let app = make_app(state.clone(), &base);
 
     let username: Username = "alice".parse().expect("valid username");
@@ -106,7 +106,7 @@ async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_typ
 #[apply(backends)]
 #[tokio::test]
 async fn handler_serves_site_tag_feed_with_200(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let app = make_app(state.clone(), &base);
 
     // A tagged, published post so the site-tag surface has content.
@@ -303,7 +303,7 @@ async fn handler_rejects_invalid_request_with_404(backend: Backend, #[case] uri:
 #[apply(backends)]
 #[tokio::test]
 async fn handler_returns_correct_content_type_per_format(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
 
     let username: Username = "eve".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");

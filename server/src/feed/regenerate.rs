@@ -1,5 +1,5 @@
 use chrono::Utc;
-use common::absolute_url::compose;
+use common::absolute_url::{compose, AbsoluteUrl};
 use common::feed::{
     feed_etag, parse, FeedFormat, FeedItem, FeedMetadata, FeedPath, FeedSurface, HybridWindow,
 };
@@ -10,6 +10,8 @@ use thiserror::Error;
 pub enum RegenerateError {
     #[error("unparseable feed_url: {0}")]
     BadUrl(String),
+    #[error("site.base_url must be configured to regenerate feeds")]
+    BaseUrlRequired,
     #[error("storage error: {0}")]
     Storage(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
@@ -18,14 +20,16 @@ pub enum RegenerateError {
 /// rendering the feed in the requested format, then upserting the result
 /// into the feed cache.
 ///
-/// URLs in the returned feed body are absolute when a `site.base_url` is
-/// configured (composed via [`common::absolute_url::compose`]); when it is unset
-/// they fall back to root-anchored relative paths, which a reverse proxy or feed
-/// reader resolves against the public origin.
+/// Every URL in the returned feed body is absolute, composed from the required
+/// `site.base_url` via [`common::absolute_url::compose`] (#560): the feed self/canonical
+/// URLs and each per-item permalink. `site.base_url` is a precondition — regeneration
+/// errors with `RegenerateError::BaseUrlRequired` when it is unset, so no relative
+/// `atom:id` is ever emitted.
 ///
 /// # Errors
 ///
-/// Returns `RegenerateError::Storage` if any database operation fails.
+/// Returns `RegenerateError::BaseUrlRequired` if `site.base_url` is unset,
+/// `RegenerateError::Storage` if any database operation fails.
 /// (`RegenerateError::BadUrl` is retained as a defensive, never-hit guard: a
 /// `FeedPath` argument is always parseable, so that arm cannot fire.)
 pub async fn regenerate_feed(
@@ -61,11 +65,15 @@ pub async fn regenerate_feed(
         .await
         .map_err(storage_err)?;
 
-    let items = build_feed_items(posts, &published).await?;
+    // `site.base_url` is required to compose absolute feed URLs (#560); this is the
+    // single narrowing guard, so every downstream `compose` is infallible.
+    let base = identity
+        .base_url
+        .as_ref()
+        .ok_or(RegenerateError::BaseUrlRequired)?;
 
-    // `compose` joins `base` + a canonical path, or emits the relative path when no
-    // base is configured (both the self URL and each surface's canonical HTML URL).
-    let base = identity.base_url.as_ref();
+    let items = build_feed_items(base, posts, &published).await?;
+
     let self_url = compose(base, feed_path);
     let canonical_path = match &surface {
         FeedSurface::Site => "/".to_owned(),
@@ -116,6 +124,7 @@ fn storage_err<E: std::error::Error + Send + Sync + 'static>(e: E) -> Regenerate
 }
 
 async fn build_feed_items(
+    base: &AbsoluteUrl,
     posts: &dyn PostStorage,
     records: &[PostRecord],
 ) -> Result<Vec<FeedItem>, RegenerateError> {
@@ -134,7 +143,10 @@ async fn build_feed_items(
             // FeedItem carries the post's PostTitle unflattened (#470); renderers
             // read it out via Deref/Display at the external-crate boundary.
             title: p.title.clone(),
-            permalink: p.permalink(),
+            // Compose the root-relative permalink to an absolute per-item feed URL
+            // (atom Entry.id/link, RSS link/guid, JSON item url) — no relative atom:id
+            // (#560, D1). `base` is the required site origin.
+            permalink: compose(base, &p.permalink()),
             summary: p.summary.clone(),
             // FeedItem carries the post's RenderedHtml unflattened (#470); the value
             // is already rendered — no from_trusted rebuild, just propagate it.
@@ -220,7 +232,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn regenerate_site_feed_falls_back_to_relative_urls_without_base() {
+    async fn regenerate_without_base_url_errors() {
         use common::site::SiteIdentity;
 
         let mut site_config = storage::MockSiteConfigStorage::new();
@@ -231,8 +243,8 @@ mod tests {
                 websub_hub_url: None,
             })
         });
-        // No base_url configured: composition must preserve the prior behavior of
-        // emitting root-relative URLs (AC#5 / #448).
+        // No base_url configured: regeneration cannot emit spec-valid absolute URLs, so it
+        // errors rather than emitting relative ones (#560, D1 — no relative atom:id).
         site_config.expect_get_identity().returning(|| {
             Ok(SiteIdentity {
                 title: "Jaunder".to_owned(),
@@ -245,29 +257,18 @@ mod tests {
             .expect_list_published_in_window()
             .returning(|_, _, _, _| Ok(vec![]));
 
-        let mut feed_cache = storage::MockFeedCacheStorage::new();
-        feed_cache.expect_upsert().returning(|_| Ok(()));
+        let feed_cache = storage::MockFeedCacheStorage::new();
 
-        let row = regenerate_feed(
+        let err = regenerate_feed(
             &site_config,
             &posts,
             &feed_cache,
             &"/feed.rss".parse::<FeedPath>().expect("valid feed path"),
         )
         .await
-        .expect("site feed regenerates");
+        .expect_err("regeneration without base_url must error");
 
-        // Root-relative self link, and no scheme-qualified feed URL.
-        assert!(
-            row.body.contains("/feed.rss"),
-            "expected a root-relative self link: {}",
-            row.body
-        );
-        assert!(
-            !row.body.contains("://example"),
-            "unexpected absolute host in feed body: {}",
-            row.body
-        );
+        assert!(matches!(err, RegenerateError::BaseUrlRequired));
     }
 
     #[test]

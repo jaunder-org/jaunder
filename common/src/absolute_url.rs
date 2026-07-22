@@ -77,25 +77,23 @@ impl AbsoluteUrl {
     }
 }
 
-/// Compose `base` + a site-absolute `path` into an absolute URL string when a base is
-/// configured, else the relative `path` unchanged — preserving the caller's behavior
-/// when `SiteIdentity.base_url` is unset. The base-set branch goes through
-/// [`AbsoluteUrl::join`] (correct slash boundary + encoding).
+/// Compose a **required** `base` with a site-absolute `path` into an [`AbsoluteUrl`], via
+/// [`AbsoluteUrl::join`] (correct slash boundary + encoding). A configured base is a *type*
+/// precondition: callers narrow `SiteIdentity.base_url` once at the request/regeneration
+/// boundary before composing (the server maps the missing-base case to its own error —
+/// `HandlerError::BaseUrlRequired` / `RegenerateError::BaseUrlRequired`), so this function
+/// neither takes an `Option` nor fails at runtime — feeds/atompub cannot emit a relative
+/// `atom:id` (#560).
 ///
-/// Infallible by design: [`AbsoluteUrl::join`] only rejects a non-`http(s)`/unparseable
-/// `path`, and every call site passes a server-built canonical `/…` path, so the error
-/// is unreachable — it falls back to the relative `path` rather than surfacing a
-/// `Result` no caller would branch on. Use [`AbsoluteUrl::join`] directly when the
-/// error matters.
+/// Infallible: every call site passes a server-built canonical `/…` path onto a valid
+/// base, so [`AbsoluteUrl::join`] cannot fail.
 #[must_use]
-pub fn compose(base: Option<&AbsoluteUrl>, path: &str) -> String {
-    let Some(b) = base else {
-        return path.to_owned();
+pub fn compose(base: &AbsoluteUrl, path: &str) -> AbsoluteUrl {
+    let Ok(url) = base.join(path) else {
+        // Callers pass server-built canonical `/…` paths onto a valid base.
+        unreachable!("compose: valid base joined with a server-built path");
     };
-    match b.join(path) {
-        Ok(url) => url.into(),
-        Err(_) => path.to_owned(), // cov:ignore unreachable: callers pass canonical paths
-    }
+    url
 }
 
 #[cfg(test)]
@@ -242,20 +240,15 @@ mod tests {
         assert_eq!(p2.query_pairs().next().unwrap().1.into_owned(), "a b&c=d");
     }
 
-    // -- compose: relative fallback (D3, AC#5) --
+    // -- compose: required base (#560, D1) --
 
     #[test]
-    fn compose_uses_base_when_present() {
+    fn compose_joins_against_required_base() {
         let base = "https://example.com/".parse::<AbsoluteUrl>().unwrap();
+        assert_eq!(compose(&base, "/feed.rss"), *"https://example.com/feed.rss");
         assert_eq!(
-            compose(Some(&base), "/feed.rss"),
-            "https://example.com/feed.rss"
+            compose(&base, "/~a/2026/01/02/x"),
+            *"https://example.com/~a/2026/01/02/x"
         );
-    }
-
-    #[test]
-    fn compose_falls_back_to_relative_when_no_base() {
-        assert_eq!(compose(None, "/feed.rss"), "/feed.rss");
-        assert_eq!(compose(None, "/"), "/");
     }
 }

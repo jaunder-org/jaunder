@@ -135,6 +135,27 @@ pub fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Route
     jaunder::create_router(test_options(), state, noop_mailer(), false, storage_path)
 }
 
+/// Seeds the required `site.base_url` precondition (#560): the `AtomPub` handlers
+/// compose absolute URLs from it, so any handler that emits a URL 500s when it is
+/// unset. `AbsoluteUrl` canonicalizes this to `https://example.com/` (trailing
+/// slash), so composed URLs are prefixed with `https://example.com`.
+pub async fn seed_base_url(state: &Arc<storage::AppState>) {
+    state
+        .site_config
+        .set(storage::SITE_BASE_URL_KEY, "https://example.com/")
+        .await
+        .unwrap();
+}
+
+/// `backend.setup()` + the required `site.base_url` seed (#560): the standard setup for a
+/// test that exercises the feed/AtomPub surface, so require-base is a fixture default
+/// rather than a per-test opt-in. Returns the `TestEnv` unchanged.
+pub async fn setup_with_base_url(backend: Backend) -> TestEnv {
+    let env = backend.setup().await;
+    seed_base_url(&env.state).await;
+    env
+}
+
 /// How a `post_form` request authenticates. Cookie and bearer are mutually
 /// exclusive — no caller sends both — so they are one argument, not two.
 enum Auth<'a> {
