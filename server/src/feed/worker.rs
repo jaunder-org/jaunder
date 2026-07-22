@@ -201,8 +201,16 @@ impl FeedWorker {
         identity: Option<&common::site::SiteIdentity>,
     ) {
         if let Some(hub) = hub_url {
-            let base = identity.and_then(|i| i.base_url.as_ref());
-            // `compose` joins base + the feed path (or emits the relative path unset).
+            // Feeds require site.base_url (#560), and regeneration fails closed without it,
+            // so a reached ping always has a base. Guard defensively; the skip is
+            // unreachable in practice.
+            let Some(base) = identity.and_then(|i| i.base_url.as_ref()) else {
+                // cov:ignore-start
+                tracing::warn!("feed.websub.ping skipped: site.base_url is unset");
+                return;
+                // cov:ignore-stop
+            };
+            // `compose` joins the required base + the feed path into an absolute URL.
             let absolute = compose(base, feed_url);
             tracing::info!(feed_url, hub, attempt, "feed.websub.ping.attempted");
 
@@ -425,7 +433,9 @@ mod tests {
         site_config.expect_get_identity().times(0..).returning(|| {
             Ok(SiteIdentity {
                 title: "Jaunder".to_owned(),
-                base_url: None,
+                base_url: Some(common::test_support::parse_absolute_url(
+                    "https://example.com/",
+                )),
             })
         });
         site_config
@@ -483,7 +493,9 @@ mod tests {
         site_config.expect_get_identity().times(0..).returning(|| {
             Ok(SiteIdentity {
                 title: "Jaunder".to_owned(),
-                base_url: None,
+                base_url: Some(common::test_support::parse_absolute_url(
+                    "https://example.com/",
+                )),
             })
         });
         let mut posts = storage::MockPostStorage::new();
@@ -529,7 +541,9 @@ mod tests {
         site_config.expect_get_identity().times(0..).returning(|| {
             Ok(SiteIdentity {
                 title: "Jaunder".to_owned(),
-                base_url: None,
+                base_url: Some(common::test_support::parse_absolute_url(
+                    "https://example.com/",
+                )),
             })
         });
         let mut posts = storage::MockPostStorage::new();

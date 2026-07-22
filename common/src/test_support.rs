@@ -20,6 +20,7 @@ use crate::pagination::PageSize;
 use crate::password::Password;
 use crate::post_summary::PostSummary;
 use crate::post_title::PostTitle;
+use crate::root_relative_url::RootRelativeUrl;
 use crate::slug::Slug;
 use crate::tag::{Tag, TagLabel};
 use crate::time::UtcInstant;
@@ -36,6 +37,18 @@ use crate::username::Username;
 #[must_use]
 pub fn parse_absolute_url(s: &str) -> AbsoluteUrl {
     s.parse().expect("valid test absolute URL")
+}
+
+/// Parse `s` into a valid [`RootRelativeUrl`] for tests — the single place a test
+/// root-relative-URL literal is parsed, so a malformed fixture fails loudly and the
+/// parse isn't re-spelled at every post-DTO fixture across the workspace.
+///
+/// # Panics
+///
+/// Panics if `s` is not a valid root-relative (`/…`, host-less) URL.
+#[must_use]
+pub fn parse_root_relative_url(s: &str) -> RootRelativeUrl {
+    s.parse().expect("valid test root-relative URL")
 }
 
 /// Parse `addr` into a valid [`Email`] for tests — the single place a test email

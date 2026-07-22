@@ -13,7 +13,7 @@ use rstest_reuse::*;
 
 use storage::test_support::{backends, backends_matrix, Backend, TestEnv};
 
-use crate::helpers::{basic_header, body_string, make_app};
+use crate::helpers::{basic_header, body_string, make_app, setup_with_base_url};
 
 const PNG: &[u8] = &[
     0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
@@ -26,7 +26,7 @@ const PNG: &[u8] = &[
 #[apply(backends)]
 #[tokio::test]
 async fn upload_returns_201_and_media_link_entry(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let token = seed_alice(&state).await;
 
     let storage = TempDir::new().unwrap();
@@ -56,18 +56,21 @@ async fn upload_returns_201_and_media_link_entry(#[case] backend: Backend) {
         .unwrap()
         .to_string();
 
-    assert!(loc.starts_with("/atompub/alice/media/"));
+    assert!(loc.starts_with("https://example.com/atompub/alice/media/"));
 
     let body = body_string(response).await;
     assert!(body.contains("rel=\"edit-media\""), "body: {body}");
     assert!(body.contains("type=\"image/png\""), "body: {body}");
-    assert!(body.contains("/media/upload/"), "body: {body}");
+    assert!(
+        body.contains("https://example.com/media/upload/"),
+        "body: {body}"
+    );
 }
 
 #[apply(backends)]
 #[tokio::test]
 async fn reupload_identical_returns_200(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let token = seed_alice(&state).await;
 
     let storage = TempDir::new().unwrap();
@@ -109,7 +112,7 @@ async fn reupload_identical_returns_200(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn get_media_member_returns_entry(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let token = seed_alice(&state).await;
 
     let storage = TempDir::new().unwrap();
@@ -185,7 +188,7 @@ async fn get_unknown_media_returns_404(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn delete_media_member_returns_204_then_404(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let token = seed_alice(&state).await;
 
     let storage = TempDir::new().unwrap();

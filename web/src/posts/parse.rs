@@ -69,7 +69,8 @@ mod tests {
     use super::*;
     use common::ids::PostId;
     use common::test_support::{
-        parse_post_summary, parse_post_title, parse_slug, parse_username, parse_utc_instant,
+        parse_post_summary, parse_post_title, parse_root_relative_url, parse_slug, parse_username,
+        parse_utc_instant,
     };
 
     #[test]
@@ -150,9 +151,9 @@ mod tests {
             created_at: parse_utc_instant("2026-01-01T00:00:00Z"),
             updated_at: parse_utc_instant("2026-01-01T00:00:00Z"),
             scheduled_at: scheduled.map(parse_utc_instant),
-            preview_url: "/draft/1/preview".to_string(),
-            edit_url: "/posts/1/edit".to_string(),
-            permalink: "/~alice/2026/01/01/my-post".to_string(),
+            preview_url: parse_root_relative_url("/draft/1/preview"),
+            edit_url: parse_root_relative_url("/posts/1/edit"),
+            permalink: parse_root_relative_url("/~alice/2026/01/01/my-post"),
         }
     }
 

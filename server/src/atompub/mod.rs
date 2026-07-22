@@ -126,6 +126,18 @@ pub(crate) async fn base_url(site_config: &dyn SiteConfigStorage) -> Option<Abso
         .and_then(|identity| identity.base_url)
 }
 
+/// [`base_url`] as a **required** precondition (#560): maps the unset case to
+/// [`HandlerError::BaseUrlRequired`] (logged as a `500` at the response boundary), so a
+/// composed-URL handler narrows `SiteIdentity.base_url` to an [`AbsoluteUrl`] in one `?`
+/// and every downstream `compose` is infallible.
+pub(crate) async fn required_base_url(
+    site_config: &dyn SiteConfigStorage,
+) -> Result<AbsoluteUrl, HandlerError> {
+    base_url(site_config)
+        .await
+        .ok_or(HandlerError::BaseUrlRequired)
+}
+
 /// The error type for the raw `AtomPub` HTTP handlers.
 ///
 /// Handlers and their helpers (`require_user_match`, `owned_post`,
@@ -149,6 +161,9 @@ pub enum HandlerError {
     /// A status already decided by a subsystem that maps its own errors (e.g. the
     /// media upload pipeline via `MediaManager::map_error`), passed through unchanged.
     Status(StatusCode),
+    /// A composed `AtomPub` URL was requested but `site.base_url` is unset, so no
+    /// spec-valid absolute `atom:id` can be emitted (#560). Logged on response. `500`.
+    BaseUrlRequired,
     /// A genuine internal failure (storage/IO). Logged on construction. `500`.
     Internal,
 }
@@ -161,6 +176,10 @@ impl IntoResponse for HandlerError {
             HandlerError::NotFound => StatusCode::NOT_FOUND,
             HandlerError::PreconditionFailed => StatusCode::PRECONDITION_FAILED,
             HandlerError::Status(code) => code,
+            HandlerError::BaseUrlRequired => {
+                tracing::error!("AtomPub requires site.base_url to be configured");
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
             HandlerError::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         };
         status.into_response()

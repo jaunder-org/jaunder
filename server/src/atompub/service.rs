@@ -11,7 +11,7 @@ use common::atompub::{render_service_document, CollectionDecl, ServiceDocument};
 use storage::{PostStorage, SiteConfigStorage};
 use web::auth::AuthUser;
 
-use super::{base_url, HandlerError};
+use super::{required_base_url, HandlerError};
 
 /// Media types the media collection accepts.
 const MEDIA_ACCEPT: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
@@ -27,7 +27,7 @@ pub async fn service_document(
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     auth_user: AuthUser,
 ) -> Result<Response, HandlerError> {
-    let base = base_url(site_config.as_ref()).await;
+    let base = required_base_url(site_config.as_ref()).await?;
     let username = &*auth_user.username;
 
     let categories = posts
@@ -42,13 +42,13 @@ pub async fn service_document(
     let doc = ServiceDocument {
         workspace_title: username.to_string(),
         posts_collection: CollectionDecl {
-            href: compose(base.as_ref(), &posts_path),
+            href: compose(&base, &posts_path),
             title: "Posts".to_string(),
             accept: vec!["application/atom+xml;type=entry".to_string()],
             categories,
         },
         media_collection: CollectionDecl {
-            href: compose(base.as_ref(), &media_path),
+            href: compose(&base, &media_path),
             title: "Media".to_string(),
             accept: MEDIA_ACCEPT.iter().map(|s| (*s).to_string()).collect(),
             categories: Vec::new(),

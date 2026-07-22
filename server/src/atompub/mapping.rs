@@ -127,15 +127,15 @@ pub fn entry_to_post_fields(entry: &Entry, default_format: PostFormat) -> PostFi
 
 /// Builds the `AtomPub` member `Entry` for a post.
 ///
-/// `base_url` is the site's absolute origin (an `AbsoluteUrl`), or `None` when
-/// unconfigured — in which case the emitted URIs fall back to root-relative paths
-/// (via [`compose`]). Per ADR-0023 the content is emitted in *native source* form,
-/// with the post's format carried in the `atom:content` `type` as a media type via
+/// `base_url` is the site's **required** absolute origin (#560): every emitted URI (the
+/// member edit URI, the stable id, the public alternate link) is composed absolute via
+/// [`compose`]. Per ADR-0023 the content is emitted in *native source* form, with the
+/// post's format carried in the `atom:content` `type` as a media type via
 /// [`format_to_wire`]: Org→`text/org`, Markdown→`text/markdown`, Html→`html`. The
 /// stable id and the `rel="edit"` link both point at the member edit URI; a public
 /// `rel="alternate"` link is added only for published posts.
 #[must_use]
-pub fn post_to_entry(post: &PostRecord, base_url: Option<&AbsoluteUrl>) -> Entry {
+pub fn post_to_entry(post: &PostRecord, base_url: &AbsoluteUrl) -> Entry {
     let username = &*post.author_username;
     let edit_path = format!("/atompub/{username}/posts/{}", post.post_id);
     // `compose` joins base + the edit path (or emits the relative path when unset).
@@ -147,20 +147,20 @@ pub fn post_to_entry(post: &PostRecord, base_url: Option<&AbsoluteUrl>) -> Entry
     // Links: always an `edit` link; a public `alternate` only when published.
     let mut links = vec![Link {
         rel: "edit".into(),
-        href: edit_uri.clone(),
+        href: edit_uri.to_string(),
         ..Default::default()
     }];
     if post.published_at.is_some() {
         let alt_path = post.permalink();
         links.push(Link {
             rel: "alternate".into(),
-            href: compose(base_url, &alt_path),
+            href: compose(base_url, &alt_path).to_string(),
             ..Default::default()
         });
     }
 
     let mut entry = Entry {
-        id: edit_uri,
+        id: edit_uri.to_string(),
         title: Text::plain(
             post.title
                 .clone()
@@ -594,7 +594,7 @@ mod tests {
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, Some(&parse_absolute_url("https://example.com/")));
+        let entry = post_to_entry(&post, &parse_absolute_url("https://example.com/"));
 
         assert_eq!(
             entry.content().unwrap().content_type(),
@@ -616,7 +616,7 @@ mod tests {
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, Some(&parse_absolute_url("https://example.com/")));
+        let entry = post_to_entry(&post, &parse_absolute_url("https://example.com/"));
 
         assert_eq!(entry.content().unwrap().content_type(), Some("text/org"));
         assert_eq!(entry.content().unwrap().value(), Some("* Org Body"));
@@ -635,7 +635,7 @@ mod tests {
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, Some(&parse_absolute_url("https://example.com/")));
+        let entry = post_to_entry(&post, &parse_absolute_url("https://example.com/"));
 
         assert_eq!(entry.content().unwrap().content_type(), Some("html"));
         assert_eq!(entry.content().unwrap().value(), Some("<p>HTML</p>"));
@@ -654,7 +654,7 @@ mod tests {
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, Some(&parse_absolute_url("https://example.com/")));
+        let entry = post_to_entry(&post, &parse_absolute_url("https://example.com/"));
 
         assert_eq!(entry.id, "https://example.com/atompub/alice/posts/7");
     }
@@ -672,7 +672,7 @@ mod tests {
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, Some(&parse_absolute_url("https://example.com/")));
+        let entry = post_to_entry(&post, &parse_absolute_url("https://example.com/"));
 
         let edit_links: Vec<_> = entry.links().iter().filter(|l| l.rel() == "edit").collect();
         assert_eq!(edit_links.len(), 1);
@@ -696,7 +696,7 @@ mod tests {
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, Some(&parse_absolute_url("https://example.com/")));
+        let entry = post_to_entry(&post, &parse_absolute_url("https://example.com/"));
 
         let alternate_links: Vec<_> = entry
             .links()
@@ -723,7 +723,7 @@ mod tests {
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, Some(&parse_absolute_url("https://example.com/")));
+        let entry = post_to_entry(&post, &parse_absolute_url("https://example.com/"));
 
         let alternate_links: Vec<_> = entry
             .links()
@@ -746,7 +746,7 @@ mod tests {
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, Some(&parse_absolute_url("https://example.com/")));
+        let entry = post_to_entry(&post, &parse_absolute_url("https://example.com/"));
 
         assert_eq!(entry.title().as_str(), "My Title");
     }
@@ -764,7 +764,7 @@ mod tests {
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, Some(&parse_absolute_url("https://example.com/")));
+        let entry = post_to_entry(&post, &parse_absolute_url("https://example.com/"));
 
         assert_eq!(entry.title().as_str(), "my-slug");
     }
@@ -782,7 +782,7 @@ mod tests {
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, Some(&parse_absolute_url("https://example.com/")));
+        let entry = post_to_entry(&post, &parse_absolute_url("https://example.com/"));
 
         assert_eq!(entry.summary().unwrap().as_str(), "This is a summary");
     }
@@ -800,7 +800,7 @@ mod tests {
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, Some(&parse_absolute_url("https://example.com/")));
+        let entry = post_to_entry(&post, &parse_absolute_url("https://example.com/"));
 
         assert_eq!(entry.summary(), None);
     }
@@ -821,7 +821,7 @@ mod tests {
             ],
         });
 
-        let entry = post_to_entry(&post, Some(&parse_absolute_url("https://example.com/")));
+        let entry = post_to_entry(&post, &parse_absolute_url("https://example.com/"));
 
         let terms: Vec<_> = entry.categories().iter().map(Category::term).collect();
         assert_eq!(terms, vec!["Rust", "Programming"]);
@@ -840,7 +840,7 @@ mod tests {
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, Some(&parse_absolute_url("https://example.com/")));
+        let entry = post_to_entry(&post, &parse_absolute_url("https://example.com/"));
 
         assert_eq!(entry.categories().len(), 0);
     }
@@ -858,7 +858,7 @@ mod tests {
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, Some(&parse_absolute_url("https://example.com/")));
+        let entry = post_to_entry(&post, &parse_absolute_url("https://example.com/"));
 
         assert!(!is_draft(&entry));
     }
@@ -876,7 +876,7 @@ mod tests {
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, Some(&parse_absolute_url("https://example.com/")));
+        let entry = post_to_entry(&post, &parse_absolute_url("https://example.com/"));
 
         assert!(is_draft(&entry));
     }
@@ -895,7 +895,7 @@ mod tests {
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, Some(&parse_absolute_url("https://example.com/")));
+        let entry = post_to_entry(&post, &parse_absolute_url("https://example.com/"));
 
         assert_eq!(
             entry.published().map(DateTime::timestamp),

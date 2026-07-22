@@ -10,6 +10,7 @@ use common::ids::{AudienceId, PostId, RevisionId, TagId, UserId};
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
+use common::root_relative_url::RootRelativeUrl;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::username::Username;
@@ -74,13 +75,13 @@ pub struct PostRecord {
 }
 
 impl PostRecord {
-    /// Returns the canonical permalink for this post.
+    /// Returns the canonical permalink for this post as a [`RootRelativeUrl`].
     /// Uses the publication timestamp if published; otherwise falls back to the creation timestamp.
     #[must_use]
-    pub fn permalink(&self) -> String {
+    pub fn permalink(&self) -> RootRelativeUrl {
         use chrono::Datelike;
         let timestamp = self.published_at.unwrap_or(self.created_at);
-        format!(
+        let Ok(url) = format!(
             "/~{}/{:04}/{:02}/{:02}/{}",
             self.author_username,
             timestamp.year(),
@@ -88,6 +89,10 @@ impl PostRecord {
             timestamp.day(),
             self.slug.as_ref()
         )
+        .parse::<RootRelativeUrl>() else {
+            unreachable!("permalink() builds a valid root-relative path");
+        };
+        url
     }
 
     /// Generates a fallback summary from the post's body, title, or slug. The
@@ -2416,7 +2421,7 @@ mod tests {
             tags: vec![],
         };
 
-        assert_eq!(post.permalink(), "/~author/2026/04/12/hello-world");
+        assert_eq!(post.permalink().as_ref(), "/~author/2026/04/12/hello-world");
     }
 
     #[apply(backends)]

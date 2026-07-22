@@ -36,6 +36,11 @@ fn seed_invocations() -> Vec<(SeedBin, Vec<String>, bool)> {
     let jaunder = |xs: &[&str]| step(SeedBin::Jaunder, xs);
     vec![
         jaunder(&["site-config", "set", "site.registration_policy", "open"]),
+        // #560: feeds/AtomPub require a base URL to emit absolute atom:ids, so the e2e
+        // fixture configures one. It is deliberately NOT the address the test server
+        // listens on — atompub.spec's `onServer` helper re-bases absolute URLs onto the
+        // live server when it needs to fetch them.
+        jaunder(&["site-config", "set", "site.base_url", "https://example.com"]),
         jaunder(&[
             "site-config",
             "set",
@@ -112,6 +117,10 @@ mod tests {
                 (
                     SeedBin::Jaunder,
                     vec!["site-config", "set", "site.registration_policy", "open"],
+                ),
+                (
+                    SeedBin::Jaunder,
+                    vec!["site-config", "set", "site.base_url", "https://example.com"],
                 ),
                 (
                     SeedBin::Jaunder,

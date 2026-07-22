@@ -12,8 +12,8 @@ use crate::tag::TagLabel;
 pub struct FeedMetadata {
     pub title: String,
     pub description: Option<String>,
-    pub canonical_url: String,
-    pub self_url: String,
+    pub canonical_url: AbsoluteUrl,
+    pub self_url: AbsoluteUrl,
     pub hub_url: Option<AbsoluteUrl>,
     pub updated_at: DateTime<Utc>,
 }
@@ -22,7 +22,7 @@ pub struct FeedMetadata {
 pub struct FeedItem {
     pub id: PostId, // last_post_id input to ETag
     pub title: Option<PostTitle>,
-    pub permalink: String,
+    pub permalink: AbsoluteUrl,
     pub summary: Option<PostSummary>,
     pub content_html: RenderedHtml,
     pub published_at: DateTime<Utc>,
@@ -63,14 +63,14 @@ pub fn feed_etag(items: &[FeedItem], generated_at: DateTime<Utc>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::parse_post_title;
+    use crate::test_support::{parse_absolute_url, parse_post_title};
     use chrono::TimeZone;
 
     fn item(id: PostId, ts: DateTime<Utc>) -> FeedItem {
         FeedItem {
             id,
             title: Some(parse_post_title("t")),
-            permalink: "/p".into(),
+            permalink: parse_absolute_url("https://ex.com/p"),
             summary: None,
             content_html: RenderedHtml::from_trusted("<p>c</p>"),
             published_at: ts,

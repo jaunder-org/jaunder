@@ -26,6 +26,7 @@ pub mod post_body;
 pub mod post_summary;
 pub mod post_title;
 pub mod render;
+pub mod root_relative_url;
 pub mod site;
 pub mod slug;
 pub mod tag;

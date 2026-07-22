@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use axum::extract::Path;
-use axum::http::{header, StatusCode};
+use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
 
@@ -15,7 +15,7 @@ use common::atompub::render_rsd_document;
 use common::username::Username;
 use storage::SiteConfigStorage;
 
-use super::base_url;
+use super::{required_base_url, HandlerError};
 
 /// `GET /~{username}/rsd.xml` — the public `RSD` discovery document.
 ///
@@ -24,17 +24,18 @@ use super::base_url;
 ///
 /// # Errors
 ///
-/// Infallible in practice; returns `Result` for handler-signature uniformity.
+/// Returns `500` ([`HandlerError::BaseUrlRequired`], logged) when `site.base_url` is
+/// unset — the discovery URLs cannot be composed absolute without it (#560).
 #[tracing::instrument(name = "atompub.rsd_document", skip_all)]
 pub async fn rsd_document(
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     Path(username): Path<Username>,
-) -> Result<Response, StatusCode> {
-    let base = base_url(site_config.as_ref()).await;
+) -> Result<Response, HandlerError> {
+    let base = required_base_url(site_config.as_ref()).await?;
     let service_path = "/atompub/service".to_owned();
-    let service_url = compose(base.as_ref(), &service_path);
+    let service_url = compose(&base, &service_path);
     let homepage_path = format!("/~{username}");
-    let homepage_url = compose(base.as_ref(), &homepage_path);
+    let homepage_url = compose(&base, &homepage_path);
     let xml = render_rsd_document(&service_url, &homepage_url);
 
     Ok((

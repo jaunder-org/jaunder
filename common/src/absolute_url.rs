@@ -61,27 +61,39 @@ impl AbsoluteUrl {
         let joined = base.join(path).map_err(|_| InvalidAbsoluteUrl)?;
         joined.as_str().parse()
     }
+
+    /// Append query `pairs` to this URL, percent-encoding keys and values via `url`'s
+    /// [`query_pairs_mut`](url::Url::query_pairs_mut), and return the new URL. Use this to
+    /// build cursor URLs (e.g. a feed `next` link) instead of `format!`-ing a query
+    /// string, so reserved characters in values are encoded correctly.
+    #[must_use]
+    pub fn with_query_pairs(&self, pairs: &[(&str, &str)]) -> AbsoluteUrl {
+        let Ok(mut url) = url::Url::parse(&self.0) else {
+            // `self.0` is a valid URL by construction, so this never fires.
+            unreachable!("AbsoluteUrl holds a valid url");
+        };
+        url.query_pairs_mut().extend_pairs(pairs.iter().copied());
+        Self(url.to_string())
+    }
 }
 
-/// Compose `base` + a site-absolute `path` into an absolute URL string when a base is
-/// configured, else the relative `path` unchanged — preserving the caller's behavior
-/// when `SiteIdentity.base_url` is unset. The base-set branch goes through
-/// [`AbsoluteUrl::join`] (correct slash boundary + encoding).
+/// Compose a **required** `base` with a site-absolute `path` into an [`AbsoluteUrl`], via
+/// [`AbsoluteUrl::join`] (correct slash boundary + encoding). A configured base is a *type*
+/// precondition: callers narrow `SiteIdentity.base_url` once at the request/regeneration
+/// boundary before composing (the server maps the missing-base case to its own error —
+/// `HandlerError::BaseUrlRequired` / `RegenerateError::BaseUrlRequired`), so this function
+/// neither takes an `Option` nor fails at runtime — feeds/atompub cannot emit a relative
+/// `atom:id` (#560).
 ///
-/// Infallible by design: [`AbsoluteUrl::join`] only rejects a non-`http(s)`/unparseable
-/// `path`, and every call site passes a server-built canonical `/…` path, so the error
-/// is unreachable — it falls back to the relative `path` rather than surfacing a
-/// `Result` no caller would branch on. Use [`AbsoluteUrl::join`] directly when the
-/// error matters.
+/// Infallible: every call site passes a server-built canonical `/…` path onto a valid
+/// base, so [`AbsoluteUrl::join`] cannot fail.
 #[must_use]
-pub fn compose(base: Option<&AbsoluteUrl>, path: &str) -> String {
-    let Some(b) = base else {
-        return path.to_owned();
+pub fn compose(base: &AbsoluteUrl, path: &str) -> AbsoluteUrl {
+    let Ok(url) = base.join(path) else {
+        // Callers pass server-built canonical `/…` paths onto a valid base.
+        unreachable!("compose: valid base joined with a server-built path");
     };
-    match b.join(path) {
-        Ok(url) => url.into(),
-        Err(_) => path.to_owned(), // cov:ignore unreachable: callers pass canonical paths
-    }
+    url
 }
 
 #[cfg(test)]
@@ -198,20 +210,45 @@ mod tests {
         );
     }
 
-    // -- compose: relative fallback (D3, AC#5) --
+    // -- with_query_pairs (#560, D5) --
 
     #[test]
-    fn compose_uses_base_when_present() {
-        let base = "https://example.com/".parse::<AbsoluteUrl>().unwrap();
+    fn with_query_pairs_encodes_and_appends() {
+        let base: AbsoluteUrl = "https://ex.com/atompub/alice/posts".parse().unwrap();
+        let out = base.with_query_pairs(&[
+            ("updated_before", "2026-01-02T03:04:05Z"),
+            ("id_before", "5"),
+        ]);
+        let parsed = url::Url::parse(out.as_ref()).unwrap();
+        let got: Vec<(String, String)> = parsed
+            .query_pairs()
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
         assert_eq!(
-            compose(Some(&base), "/feed.rss"),
-            "https://example.com/feed.rss"
+            got,
+            vec![
+                (
+                    "updated_before".to_string(),
+                    "2026-01-02T03:04:05Z".to_string()
+                ),
+                ("id_before".to_string(), "5".to_string()),
+            ]
         );
+        // A value with reserved chars round-trips *decoded*.
+        let out2 = base.with_query_pairs(&[("q", "a b&c=d")]);
+        let p2 = url::Url::parse(out2.as_ref()).unwrap();
+        assert_eq!(p2.query_pairs().next().unwrap().1.into_owned(), "a b&c=d");
     }
 
+    // -- compose: required base (#560, D1) --
+
     #[test]
-    fn compose_falls_back_to_relative_when_no_base() {
-        assert_eq!(compose(None, "/feed.rss"), "/feed.rss");
-        assert_eq!(compose(None, "/"), "/");
+    fn compose_joins_against_required_base() {
+        let base = "https://example.com/".parse::<AbsoluteUrl>().unwrap();
+        assert_eq!(compose(&base, "/feed.rss"), *"https://example.com/feed.rss");
+        assert_eq!(
+            compose(&base, "/~a/2026/01/02/x"),
+            *"https://example.com/~a/2026/01/02/x"
+        );
     }
 }

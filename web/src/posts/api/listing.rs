@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use common::{
     ids::PostId, pagination::PageSize, post_summary::PostSummary, post_title::PostTitle,
-    render::RenderedHtml, slug::Slug, tag::Tag, time::UtcInstant, username::Username,
+    render::RenderedHtml, root_relative_url::RootRelativeUrl, slug::Slug, tag::Tag,
+    time::UtcInstant, username::Username,
 };
 
 use crate::error::WebResult;
@@ -44,7 +45,10 @@ pub struct TimelinePostSummary {
     pub rendered_html: RenderedHtml,
     pub created_at: UtcInstant,
     pub published_at: UtcInstant,
-    pub permalink: String,
+    /// Root-relative permalink of a published post; `None` when the summary is
+    /// rebuilt from a draft `PostResponse` (no public permalink), so the title
+    /// renders without a link — coinciding with the projector's draft paint.
+    pub permalink: Option<RootRelativeUrl>,
     /// True when the viewing user is the post author.
     pub is_author: bool,
     /// Tags applied to this post, ordered by canonical slug.

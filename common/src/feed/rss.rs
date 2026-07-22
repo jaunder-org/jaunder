@@ -19,12 +19,12 @@ pub fn render_rss(meta: &FeedMetadata, items: &[FeedItem]) -> String {
         .map(|i| {
             ItemBuilder::default()
                 .title(i.title.clone().map(String::from))
-                .link(Some(i.permalink.clone()))
+                .link(Some(i.permalink.to_string()))
                 .description(Some(i.content_html.to_string()))
                 .pub_date(Some(i.published_at.to_rfc2822()))
                 .guid(Some(
                     GuidBuilder::default()
-                        .value(i.permalink.clone())
+                        .value(i.permalink.to_string())
                         .permalink(true)
                         .build(),
                 ))
@@ -33,7 +33,7 @@ pub fn render_rss(meta: &FeedMetadata, items: &[FeedItem]) -> String {
         .collect();
 
     let mut atom_links = vec![AtomLink {
-        href: meta.self_url.clone(),
+        href: meta.self_url.to_string(),
         rel: "self".into(),
         mime_type: Some("application/rss+xml".into()),
         ..Default::default()
@@ -49,7 +49,7 @@ pub fn render_rss(meta: &FeedMetadata, items: &[FeedItem]) -> String {
     let mut builder = ChannelBuilder::default();
     builder
         .title(meta.title.clone())
-        .link(meta.canonical_url.clone())
+        .link(meta.canonical_url.to_string())
         .description(meta.description.clone().unwrap_or_default())
         .last_build_date(Some(meta.updated_at.to_rfc2822()))
         .atom_ext(Some(AtomExtension { links: atom_links }))
@@ -71,8 +71,8 @@ mod tests {
         FeedMetadata {
             title: "Site".into(),
             description: Some("A site".into()),
-            canonical_url: "https://example.com/".into(),
-            self_url: "https://example.com/feed.rss".into(),
+            canonical_url: parse_absolute_url("https://example.com/"),
+            self_url: parse_absolute_url("https://example.com/feed.rss"),
             hub_url: hub.map(parse_absolute_url),
             updated_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
         }
@@ -82,7 +82,7 @@ mod tests {
         FeedItem {
             id: PostId::from(1),
             title: title.map(parse_post_title),
-            permalink: "https://example.com/~alice/posts/1".into(),
+            permalink: parse_absolute_url("https://example.com/~alice/posts/1"),
             summary: None,
             content_html: RenderedHtml::from_trusted("<p>hi</p>"),
             published_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),

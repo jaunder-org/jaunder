@@ -12,13 +12,53 @@ use tower::ServiceExt;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{basic_header, body_string, make_app};
+use crate::helpers::{basic_header, body_string, make_app, setup_with_base_url};
 use storage::test_support::{backends, backends_matrix, Backend, TestEnv};
+
+// #560: the AtomPub surface composes absolute URLs, so it *requires* `site.base_url`.
+// With base UNSET the handler returns `500` (`HandlerError::BaseUrlRequired`) rather than
+// emitting a relative `atom:id` — the negative case for the require-base guard.
+#[apply(backends)]
+#[tokio::test]
+async fn collection_get_without_base_url_returns_500(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
+    // Deliberately do NOT seed_base_url.
+    let user_id = state
+        .users
+        .create_user(
+            &"alice".parse().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let token = state
+        .sessions
+        .create_session(user_id, "MarsEdit")
+        .await
+        .unwrap();
+    let app = make_app(state, &base);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/atompub/alice/posts")
+                .header(header::AUTHORIZATION, basic_header("alice", &token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
 
 #[apply(backends)]
 #[tokio::test]
 async fn collection_lists_user_posts(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let user_id = state
         .users
         .create_user(
@@ -114,7 +154,7 @@ async fn collection_lists_user_posts(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn member_returns_native_source_with_etag(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let user_id = state
         .users
         .create_user(
@@ -182,7 +222,7 @@ async fn member_returns_native_source_with_etag(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn member_get_unknown_returns_404(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let user_id = state
         .users
         .create_user(
@@ -218,7 +258,7 @@ async fn member_get_unknown_returns_404(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn delete_then_get_is_404(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let user_id = state
         .users
         .create_user(
@@ -289,7 +329,7 @@ async fn delete_then_get_is_404(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn collection_paging_emits_next_link(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let user_id = state
         .users
         .create_user(
@@ -357,7 +397,7 @@ async fn collection_paging_emits_next_link(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn collection_clamps_out_of_range_limit(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (user_id, token) = seed_alice(&state).await;
 
     // Seed 51 posts so the `1..=50` page-size cap is observable (50 < 51).
@@ -465,7 +505,7 @@ async fn collection_cursor_validation(
     #[case] query: &str,
     #[case] expected: StatusCode,
 ) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (user_id, token) = seed_alice(&state).await;
     if seed_post {
         storage::perform_post_creation(
@@ -505,7 +545,7 @@ async fn collection_cursor_validation(
 #[apply(backends)]
 #[tokio::test]
 async fn collection_empty_returns_feed_without_entries(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state, &base);
 
@@ -606,7 +646,7 @@ impl ForbiddenRequest {
 #[case::update(ForbiddenRequest::Update)]
 #[tokio::test]
 async fn forbids_other_user(backend: Backend, #[case] request: ForbiddenRequest) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state, &base);
 
@@ -622,7 +662,7 @@ async fn forbids_other_user(backend: Backend, #[case] request: ForbiddenRequest)
 #[apply(backends)]
 #[tokio::test]
 async fn malformed_username_path_returns_400(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state, &base);
 
@@ -643,7 +683,7 @@ async fn malformed_username_path_returns_400(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_post_returns_201_and_is_retrievable(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (user_id, token) = seed_alice(&state).await;
     // Set default format to Markdown so text entries round-trip properly
     storage::set_default_post_format(
@@ -709,7 +749,7 @@ async fn create_post_returns_201_and_is_retrievable(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_post_applies_categories(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (_, token) = seed_alice(&state).await;
     let app = make_app(state, &base);
 
@@ -738,7 +778,7 @@ async fn create_post_applies_categories(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_html_entry_is_stored_as_html(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (_, token) = seed_alice(&state).await;
     let app = make_app(state, &base);
 
@@ -777,7 +817,7 @@ async fn create_format_media_type_round_trips(
     #[case] content_type: &str,
     #[case] content: &str,
 ) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state.clone(), &base);
 
@@ -828,7 +868,7 @@ async fn create_format_media_type_round_trips(
 #[apply(backends)]
 #[tokio::test]
 async fn update_replaces_post_body(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (user_id, token) = seed_alice(&state).await;
 
     let post = storage::perform_post_creation(
@@ -876,7 +916,7 @@ async fn update_replaces_post_body(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn update_with_stale_if_match_returns_412(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (user_id, token) = seed_alice(&state).await;
 
     let post = storage::perform_post_creation(
@@ -920,7 +960,7 @@ async fn update_with_stale_if_match_returns_412(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_rejects_malformed_entry(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state, &base);
 
@@ -943,7 +983,7 @@ async fn create_rejects_malformed_entry(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn update_removes_categories_not_in_new_entry(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (user_id, token) = seed_alice(&state).await;
 
     let post = storage::perform_post_creation(
@@ -996,7 +1036,7 @@ async fn update_removes_categories_not_in_new_entry(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn update_with_put_returns_200_and_etag(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (user_id, token) = seed_alice(&state).await;
 
     let post = storage::perform_post_creation(
@@ -1063,7 +1103,7 @@ enum EmptyEntryOp {
 #[case::update(EmptyEntryOp::Update)]
 #[tokio::test]
 async fn empty_entry_returns_400(backend: Backend, #[case] op: EmptyEntryOp) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (user_id, token) = seed_alice(&state).await;
 
     let request = match op {
@@ -1113,7 +1153,7 @@ async fn empty_entry_returns_400(backend: Backend, #[case] op: EmptyEntryOp) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_draft_entry_is_unpublished(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state, &base);
 
@@ -1174,7 +1214,7 @@ async fn create_draft_entry_is_unpublished(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn member_carries_read_only_j_slug(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (user_id, token) = seed_alice(&state).await;
 
     let post = storage::perform_post_creation(
@@ -1223,7 +1263,7 @@ async fn member_carries_read_only_j_slug(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn incoming_j_slug_is_ignored(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state.clone(), &base);
 
@@ -1269,7 +1309,7 @@ async fn incoming_j_slug_is_ignored(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_skips_invalid_category(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state, &base);
 
@@ -1305,7 +1345,7 @@ async fn create_skips_invalid_category(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn update_keeps_unchanged_category(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state, &base);
 
@@ -1359,7 +1399,7 @@ async fn update_keeps_unchanged_category(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn update_with_matching_if_match_succeeds(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state, &base);
 
@@ -1475,7 +1515,7 @@ async fn get_status(app: axum::Router, token: &RawToken, location: &str) -> Stat
 #[tokio::test]
 async fn delete_with_stale_if_match_returns_412(#[case] backend: Backend) {
     // AC7: a stale If-Match blocks the DELETE (412) and the post survives.
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state, &base);
     let (location, _etag) = create_location_etag(app.clone(), &token).await;
@@ -1501,7 +1541,7 @@ async fn delete_with_stale_if_match_returns_412(#[case] backend: Backend) {
 #[tokio::test]
 async fn delete_with_matching_if_match_succeeds(#[case] backend: Backend) {
     // AC7: a matching If-Match deletes the post.
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state, &base);
     let (location, etag) = create_location_etag(app.clone(), &token).await;
@@ -1530,7 +1570,7 @@ async fn delete_with_matching_if_match_succeeds(#[case] backend: Backend) {
 #[tokio::test]
 async fn delete_without_if_match_succeeds(#[case] backend: Backend) {
     // AC7: absent If-Match deletes unconditionally (unchanged default).
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state, &base);
     let (location, _etag) = create_location_etag(app.clone(), &token).await;
@@ -1553,7 +1593,7 @@ async fn delete_without_if_match_succeeds(#[case] backend: Backend) {
 #[tokio::test]
 async fn delete_with_wildcard_if_match_succeeds(#[case] backend: Backend) {
     // AC7: `If-Match: *` deletes unconditionally (wildcard matches any current ETag).
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state, &base);
     let (location, _etag) = create_location_etag(app.clone(), &token).await;
@@ -1582,7 +1622,7 @@ async fn delete_with_wildcard_if_match_succeeds(#[case] backend: Backend) {
 #[tokio::test]
 async fn editing_content_via_put_changes_etag(#[case] backend: Backend) {
     // AC4 (HTTP): a PUT that changes the body changes the ETag end-to-end.
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state, &base);
     let (location, e1) = create_location_etag(app.clone(), &token).await;
@@ -1621,7 +1661,7 @@ async fn editing_content_via_put_changes_etag(#[case] backend: Backend) {
 #[tokio::test]
 async fn etag_is_content_hash_format(#[case] backend: Backend) {
     // AC1: the emitted ETag is a strong, quoted "sha256-<64 lowercase hex>" token.
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state, &base);
 
@@ -1641,7 +1681,7 @@ async fn etag_is_content_hash_format(#[case] backend: Backend) {
 async fn identical_posts_share_etag(#[case] backend: Backend) {
     // AC2: two distinct posts with identical content get the same ETag — the
     // per-post id / tag ids / slug are excluded from the hash.
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state, &base);
 
@@ -1655,7 +1695,7 @@ async fn identical_posts_share_etag(#[case] backend: Backend) {
 async fn idempotent_reput_keeps_etag(#[case] backend: Backend) {
     // AC3 + AC5: re-PUT byte-identical content → the ETag is unchanged (a
     // timestamp ETag would have bumped on the write).
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state, &base);
 
@@ -1714,7 +1754,7 @@ async fn idempotent_reput_keeps_etag(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn update_preserves_non_public_targeting(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (user_id, token) = seed_alice(&state).await;
 
     // A Subscribers-targeted post is hidden from an anonymous viewer. Editing it
@@ -1773,7 +1813,7 @@ async fn update_preserves_non_public_targeting(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn member_get_serves_owner_non_public_post(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (user_id, token) = seed_alice(&state).await;
 
     // A Subscribers-targeted post is hidden from Anonymous; the owner must still
@@ -1821,7 +1861,7 @@ async fn member_get_serves_owner_non_public_post(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_adopts_default_audience(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (_user_id, token) = seed_alice(&state).await;
 
     // The instance default audience is Subscribers; an AtomPub POST (which has no
@@ -1883,7 +1923,7 @@ fn location_post_id(response: &axum::response::Response) -> i64 {
 #[apply(backends)]
 #[tokio::test]
 async fn create_with_future_published_is_scheduled(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state.clone(), &base);
 
@@ -1944,7 +1984,7 @@ async fn create_with_future_published_is_scheduled(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_with_past_published_is_live_backdated(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state.clone(), &base);
 
@@ -1982,7 +2022,7 @@ async fn create_with_past_published_is_live_backdated(#[case] backend: Backend) 
 #[apply(backends)]
 #[tokio::test]
 async fn update_with_future_published_schedules_post(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (user_id, token) = seed_alice(&state).await;
 
     // Start from a live post, then PUT a non-draft entry with a future
@@ -2070,7 +2110,7 @@ fn location_of(response: &axum::response::Response) -> String {
 #[tokio::test]
 async fn create_with_same_idempotency_key_dedups(#[case] backend: Backend) {
     // AC-S1: the same key creates one post; the retry returns it as 200.
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state, &base);
     let xml = entry_xml("Hello", "text", "the body");
@@ -2109,7 +2149,7 @@ fn etag_of(response: &axum::response::Response) -> String {
 #[tokio::test]
 async fn create_with_fresh_idempotency_key_is_201(#[case] backend: Backend) {
     // AC-S2: distinct keys create distinct posts.
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state, &base);
     let xml = entry_xml("Hello", "text", "the body");
@@ -2125,7 +2165,7 @@ async fn create_with_fresh_idempotency_key_is_201(#[case] backend: Backend) {
 #[tokio::test]
 async fn create_without_idempotency_key_is_201(#[case] backend: Backend) {
     // AC-S3: no header → create as today.
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
     let (_user_id, token) = seed_alice(&state).await;
     let app = make_app(state, &base);
     let xml = entry_xml("Hello", "text", "the body");

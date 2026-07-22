@@ -6,12 +6,12 @@ use crate::feed::metadata::{FeedItem, FeedMetadata};
 pub fn render_atom(meta: &FeedMetadata, items: &[FeedItem]) -> String {
     let mut links = vec![
         Link {
-            href: meta.canonical_url.clone(),
+            href: meta.canonical_url.to_string(),
             rel: "alternate".to_string(),
             ..Default::default()
         },
         Link {
-            href: meta.self_url.clone(),
+            href: meta.self_url.to_string(),
             rel: "self".to_string(),
             ..Default::default()
         },
@@ -28,12 +28,12 @@ pub fn render_atom(meta: &FeedMetadata, items: &[FeedItem]) -> String {
         .iter()
         .map(|i| {
             let mut entry = Entry {
-                id: i.permalink.clone(),
+                id: i.permalink.to_string(),
                 title: Text::plain(i.title.clone().map(String::from).unwrap_or_default()),
                 updated: i.updated_at.fixed_offset(),
                 published: Some(i.published_at.fixed_offset()),
                 links: vec![Link {
-                    href: i.permalink.clone(),
+                    href: i.permalink.to_string(),
                     rel: "alternate".to_string(),
                     ..Default::default()
                 }],
@@ -64,7 +64,7 @@ pub fn render_atom(meta: &FeedMetadata, items: &[FeedItem]) -> String {
 
     let feed = Feed {
         title: Text::plain(meta.title.clone()),
-        id: meta.self_url.clone(),
+        id: meta.self_url.to_string(),
         updated: meta.updated_at.fixed_offset(),
         subtitle: meta.description.clone().map(Text::plain),
         links,
@@ -89,8 +89,8 @@ mod tests {
         FeedMetadata {
             title: "Site".into(),
             description: Some("A site".into()),
-            canonical_url: "https://example.com/".into(),
-            self_url: "https://example.com/feed.atom".into(),
+            canonical_url: parse_absolute_url("https://example.com/"),
+            self_url: parse_absolute_url("https://example.com/feed.atom"),
             hub_url: hub.map(parse_absolute_url),
             updated_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
         }
@@ -100,7 +100,7 @@ mod tests {
         FeedItem {
             id: PostId::from(1),
             title: Some(parse_post_title("Hello")),
-            permalink: "https://example.com/~alice/posts/1".into(),
+            permalink: parse_absolute_url("https://example.com/~alice/posts/1"),
             summary: Some(parse_post_summary("hi")),
             content_html: RenderedHtml::from_trusted("<p>hi</p>"),
             published_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
@@ -140,5 +140,21 @@ mod tests {
     fn includes_tags_as_categories() {
         let out = render_atom(&meta(None), &[item()]);
         assert!(out.contains("term=\"rust\""));
+    }
+
+    #[test]
+    fn per_item_urls_are_absolute() {
+        // #560 / AC5: the entry `atom:id` and alternate `<link>` render the composed
+        // *absolute* permalink — never a relative `/…` atom:id (RFC-4287 requires an
+        // absolute IRI).
+        let out = render_atom(&meta(None), &[item()]);
+        assert!(
+            out.contains("https://example.com/~alice/posts/1"),
+            "entry permalink should be absolute: {out}"
+        );
+        assert!(
+            !out.contains("<id>/"),
+            "no entry/feed id should be root-relative: {out}"
+        );
     }
 }

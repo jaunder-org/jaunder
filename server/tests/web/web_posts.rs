@@ -134,7 +134,7 @@ async fn create_post_persists_rendered_published_post(#[case] backend: Backend) 
     assert!(created.published_at.is_some());
     assert_eq!(
         created.preview_url,
-        format!("/draft/{}/preview", created.post_id)
+        *format!("/draft/{}/preview", created.post_id)
     );
     assert!(created.permalink.is_some());
 
@@ -319,7 +319,7 @@ async fn create_post_accepts_slug_override_and_saves_draft(#[case] backend: Back
     assert!(created.published_at.is_none());
     assert_eq!(
         created.preview_url,
-        format!("/draft/{}/preview", created.post_id)
+        *format!("/draft/{}/preview", created.post_id)
     );
     assert!(created.permalink.is_none());
 
@@ -1983,10 +1983,10 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination(#[case] 
     assert!(first_page.next_cursor_created_at.is_some(), "body: {body}");
     assert!(first_page.next_cursor_post_id.is_some(), "body: {body}");
     assert!(
-        first_page
-            .posts
-            .iter()
-            .all(|post| post.permalink.starts_with("/~author/")),
+        first_page.posts.iter().all(|post| post
+            .permalink
+            .as_ref()
+            .is_some_and(|p| p.starts_with("/~author/"))),
         "body: {body}"
     );
     assert!(
@@ -2104,7 +2104,7 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
         first_page
             .posts
             .iter()
-            .all(|post| post.permalink.starts_with("/~")),
+            .all(|post| post.permalink.as_ref().is_some_and(|p| p.starts_with("/~"))),
         "body: {body}"
     );
     assert!(
