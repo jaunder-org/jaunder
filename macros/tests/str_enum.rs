@@ -30,6 +30,15 @@ enum WithMsg {
     Zed,
 }
 
+// A multi-word variant: the default token is the `snake_case` of the identifier, not the
+// concatenated lowercase (`InviteOnly` -> `invite_only`, not `inviteonly`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, StrEnum)]
+enum Policy {
+    Open,
+    InviteOnly,
+    Closed,
+}
+
 #[test]
 fn as_str_and_display_use_lowercase_tokens() {
     assert_eq!(Fmt::Markdown.as_str(), "markdown");
@@ -83,4 +92,12 @@ fn serde_round_trips_the_token_and_rejects_unknown() {
 #[test]
 fn std_default_is_the_marked_variant() {
     assert_eq!(Fmt::default(), Fmt::Markdown);
+}
+
+#[test]
+fn multiword_variants_snake_case_their_tokens() {
+    assert_eq!(Policy::Open.as_str(), "open");
+    assert_eq!(Policy::InviteOnly.as_str(), "invite_only");
+    assert_eq!("invite_only".parse::<Policy>(), Ok(Policy::InviteOnly));
+    assert!("inviteonly".parse::<Policy>().is_err()); // not the concatenated form
 }

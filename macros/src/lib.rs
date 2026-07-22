@@ -249,8 +249,9 @@ pub fn num_newtype_derive(item: TokenStream) -> TokenStream {
 /// valid set is known to the macro, it *generates* `FromStr` and the named error (unlike
 /// `StrNewtype`, which routes through a hand-written `FromStr`). See the str-enum-trailer ADR.
 ///
-/// Each variant's token defaults to its lowercased identifier; `#[str_enum(rename = "…")]`
-/// overrides it. `#[str_enum(error = "…")]` (type-level) overrides the generated
+/// Each variant's token defaults to the `snake_case` of its identifier (`InviteOnly` ->
+/// `invite_only`); `#[str_enum(rename = "…")]` overrides it. `#[str_enum(error = "…")]`
+/// (type-level) overrides the generated
 /// `"must be one of: …"` message. `Default` (std `#[derive(Default)]` + `#[default]`),
 /// `Copy`/`Hash`/… stay in the user's `#[derive]` list.
 ///
@@ -767,6 +768,19 @@ mod tests {
         assert!(!out.contains("compile_error"));
         assert!(out.contains("\"bar\"")); // default lowercase
         assert!(out.contains("\"zee\"")); // rename override
+    }
+
+    #[test]
+    fn str_enum_multiword_variant_uses_snake_case() {
+        let input: DeriveInput = parse_quote! {
+            enum Policy { Open, InviteOnly, Closed }
+        };
+        let out = str_enum::expand(&input).to_string();
+        assert!(!out.contains("compile_error"));
+        // CamelCase -> snake_case, not the concatenated-lowercase "inviteonly".
+        assert!(out.contains("\"invite_only\""));
+        assert!(!out.contains("\"inviteonly\""));
+        assert!(out.contains("\"open\""));
     }
 
     #[test]
