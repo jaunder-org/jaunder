@@ -665,11 +665,14 @@ mod tests {
             published_at: parse_utc_instant("2026-01-01T00:00:00Z"),
             permalink: Some(parse_root_relative_url("/~alice/2026/01/01/hello")),
             is_author: false,
+            is_draft: true,
             tags: vec![],
         };
         let json = serde_json::to_string(&original).unwrap();
         let round_tripped: TimelinePostSummary = serde_json::from_str(&json).unwrap();
         assert_eq!(round_tripped.rendered_html.as_ref(), "<p>hi</p>");
+        // `is_draft` is a plain bool with no custom serde — pin that it survives.
+        assert!(round_tripped.is_draft);
         assert_eq!(round_tripped, original);
     }
 

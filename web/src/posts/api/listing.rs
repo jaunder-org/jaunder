@@ -51,6 +51,10 @@ pub struct TimelinePostSummary {
     pub permalink: Option<RootRelativeUrl>,
     /// True when the viewing user is the post author.
     pub is_author: bool,
+    /// True when this post is the author's own unpublished draft. Timeline
+    /// listings only ever carry published rows, so this is `false` there; it is
+    /// `true` only when `PostPage` renders a draft at its permalink.
+    pub is_draft: bool,
     /// Tags applied to this post, ordered by canonical slug.
     pub tags: Vec<TagSummary>,
 }

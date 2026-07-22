@@ -1222,6 +1222,7 @@ pub fn PostPage() -> impl IntoView {
                                         .unwrap_or(fetched.created_at),
                                     permalink: fetched.permalink.clone(),
                                     is_author: fetched.is_author,
+                                    is_draft: fetched.is_draft,
                                     tags: fetched.tags.clone(),
                                 };
                                 let username_for_tags = fetched.username.clone();

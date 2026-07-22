@@ -35,6 +35,8 @@ pub fn timeline_post_summary(
         published_at: UtcInstant::from(published_at),
         permalink: Some(permalink),
         is_author: viewer_user_id == Some(user_id),
+        // Only ever built from a published post (the `?` above bails on a draft).
+        is_draft: false,
         tags: post_tags_to_summaries(tags),
     })
 }
