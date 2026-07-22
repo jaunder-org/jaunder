@@ -10,11 +10,12 @@ use crate::error::WebResult;
 // `crate::forms::Field` (the validated-input field) is aliased to avoid colliding with
 // `reactive_stores::Field` (the keyed-store field used by `AudienceRow`).
 use crate::forms::Field as ValidatedField;
-use crate::reactive::{invalidator_scope, Invalidator, ListState};
+use crate::reactive::{invalidator_scope, Invalidator};
 use crate::render::Icons;
 use crate::topbar::Topbar;
 use common::audience::AudienceName;
 use common::ids::AudienceId;
+use common::list_state::ListState;
 use leptos::prelude::*;
 use reactive_stores::{Field, Patch, Store};
 

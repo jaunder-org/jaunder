@@ -219,15 +219,15 @@ git commit -m "refactor(web): delete SSR-vestigial server_resource; call Resourc
   `#[derive(Clone, Debug)] pub enum ListState { Loading, Empty, Loaded, Error(String) }`
   with its existing doc comment. No leptos, no serde required.
 
-- [ ] **Step 1: Create `common/src/list_state.rs`** with the enum + doc comment,
+- [x] **Step 1: Create `common/src/list_state.rs`** with the enum + doc comment,
       and add the `pub mod list_state;` line to `common/src/lib.rs`.
 
-- [ ] **Step 2: Repoint `web`.** Delete the enum from `reactive.rs`; update
+- [x] **Step 2: Repoint `web`.** Delete the enum from `reactive.rs`; update
       `patched`'s signature and body reference to
       `common::list_state::ListState`; update the `audiences/component.rs`
       import.
 
-- [ ] **Step 3: Verify green.**
+- [x] **Step 3: Verify green.**
 
   `ListState` is a derive-only enum — no unit test to add; the
   `reactive`/`audiences` recompiles are the behavioral check. Run:
@@ -235,7 +235,7 @@ git commit -m "refactor(web): delete SSR-vestigial server_resource; call Resourc
   dep — a `leptos` import in `common` would fail the wasm dep guards and
   clippy).
 
-- [ ] **Step 4: Commit.**
+- [x] **Step 4: Commit.**
 
 ```bash
 git add common/src/list_state.rs common/src/lib.rs web/src/reactive.rs web/src/audiences/component.rs

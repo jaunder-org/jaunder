@@ -10,6 +10,7 @@
 //! refetches (no keyed store), surfacing a fetch error to the caller rather than flashing to
 //! "Loading…" or swallowing it into a default.
 
+use common::list_state::ListState;
 use leptos::prelude::*;
 use leptos::server_fn::ServerFn;
 use macros::client_only;
@@ -165,22 +166,6 @@ impl Default for Invalidator {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// The load status of a store-backed list, returned by [`Invalidator::patched`]: `Loading`
-/// until the first resolve, then `Empty` / `Loaded` per the row count, or `Error` on a failed
-/// fetch. Rendered as a sibling to the (unconditionally mounted) list, so the list itself is
-/// never inside a branch that could tear it down on a refetch. Derive-only.
-#[derive(Clone, Debug)]
-pub enum ListState {
-    /// The first fetch has not resolved yet.
-    Loading,
-    /// Resolved with no rows.
-    Empty,
-    /// Resolved with at least one row.
-    Loaded,
-    /// The fetch failed; the payload is the error's `Display`.
-    Error(String),
 }
 
 /// Declares a distinct context-scope newtype over an [`Invalidator`], with `Deref` so the
