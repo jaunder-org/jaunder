@@ -4,7 +4,7 @@
 //! gates inside this file.
 
 use super::{get_registration_policy, Register};
-use crate::auth::{marker_storage, SessionUser};
+use crate::auth::{set_session, SessionUser};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::topbar::Topbar;
@@ -47,15 +47,16 @@ pub fn RegisterPage() -> impl IntoView {
         .get("invite_code")
         .unwrap_or_default();
 
-    // Mirror the new session into the advisory auth marker (#181, ADR-0044): on a
-    // successful register the client knows the submitted username, so pre-paint
-    // auth works on the very next navigation. Read the *submitted* username from
-    // the action input, not the live `username` field, which the user could have
-    // edited between submit and response. The server still owns the real cookie.
+    // On a successful register, set the shared session (#591): a new user is never
+    // an operator (`is_operator: false`); this updates the reactive signal (chrome
+    // flips without a reload) and the advisory marker (#181, ADR-0044) for the next
+    // pre-paint boot. Read the *submitted* username from the action input, not the
+    // live `username` field, which the user could have edited between submit and
+    // response. The server still owns the real cookie.
     Effect::new(move |_| {
         if let Some(Ok(_)) = register_action.value().get() {
             if let Some(input) = register_action.input().get() {
-                marker_storage::set(&SessionUser {
+                set_session(SessionUser {
                     username: input.username,
                     is_operator: false,
                 });

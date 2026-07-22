@@ -3,7 +3,7 @@
 //! [`marker_storage`](super::marker_storage) binding) directly, no `cfg` gates
 //! inside this file.
 
-use super::{marker_storage, Login, LoginResponse, Logout, SessionUser};
+use super::{clear_session, set_session, Login, LoginResponse, Logout, SessionUser};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::topbar::Topbar;
@@ -18,14 +18,16 @@ pub fn LoginPage() -> impl IntoView {
     let username = Field::<Username>::new();
     let password = Field::<Password>::new();
 
-    // Mirror the session into the advisory auth marker on a successful login
-    // (#181, ADR-0044) — the client's synchronous pre-paint boot source. Read the
+    // On a successful login, set the shared session (#591): updates the reactive
+    // signal so the chrome flips without a document reload, and mirrors it into the
+    // advisory marker (#181, ADR-0044) for the next pre-paint boot. Read the
     // *submitted* username from the action input, not the live `username` field,
-    // which the user could have edited between submit and response.
+    // which the user could have edited between submit and response. `is_operator`
+    // comes from the login response, so operator chrome is flash-free on first login.
     Effect::new(move |_| {
         if let Some(Ok(resp)) = login_action.value().get() {
             if let Some(input) = login_action.input().get() {
-                marker_storage::set(&SessionUser {
+                set_session(SessionUser {
                     username: input.username,
                     is_operator: resp.is_operator,
                 });
@@ -96,11 +98,12 @@ pub fn LogoutPage() -> impl IntoView {
         logout_action.dispatch(Logout {});
     });
 
-    // Clear the advisory auth marker once logout succeeds (#181, ADR-0044) so the
-    // next paint is anonymous. The server clears the real cookie.
+    // On logout, clear the shared session (#591): resets the reactive signal (chrome
+    // goes anonymous without a reload) and removes the advisory marker (#181,
+    // ADR-0044). The server clears the real cookie.
     Effect::new(move |_| {
         if let Some(Ok(())) = logout_action.value().get() {
-            marker_storage::remove();
+            clear_session();
         }
     });
 
