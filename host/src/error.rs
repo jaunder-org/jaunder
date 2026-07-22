@@ -384,6 +384,7 @@ validation_from!(
     common::tag::TagValidationError,
     common::password::PasswordError,
     common::render::InvalidPostFormat,
+    common::media::InvalidMediaSource,
 );
 
 #[cfg(test)]
@@ -667,6 +668,7 @@ mod tests {
         check!(common::tag::TagValidationError::TooMany { count: 99, max: 25 });
         check!(common::password::PasswordError::PasswordTooShort);
         check!(common::render::InvalidPostFormat);
+        check!(common::media::InvalidMediaSource);
     }
 
     #[test]

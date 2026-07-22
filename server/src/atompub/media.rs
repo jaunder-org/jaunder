@@ -12,9 +12,9 @@ use sha2::{Digest, Sha256};
 
 use common::absolute_url::{compose, AbsoluteUrl};
 use common::atompub::{render_media_link_entry, MediaLinkEntry};
-use common::media::{media_url, ContentHash, Filename};
+use common::media::{media_url, ContentHash, Filename, MediaSource};
 use common::username::Username;
-use storage::{MediaRecord, MediaSource, MediaStorage, SiteConfigStorage};
+use storage::{MediaRecord, MediaStorage, SiteConfigStorage};
 use web::auth::AuthUser;
 
 use super::{required_base_url, HandlerError};

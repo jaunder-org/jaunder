@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use common::ids::{PostId, UserId};
+use common::media::MediaSource;
 use common::password::Password;
 use common::tag::TagLabel;
 use common::test_support::{
@@ -10,8 +11,7 @@ use common::visibility::{AudienceTarget, ViewerIdentity};
 use jaunder::cli::StorageArgs;
 use storage::test_support::fp;
 use storage::{
-    open_existing_database, AppState, CreatePostInput, MediaRecord, MediaSource, PostFormat,
-    RenderedHtml,
+    open_existing_database, AppState, CreatePostInput, MediaRecord, PostFormat, RenderedHtml,
 };
 
 /// SHA-256 the media-table fixture row is keyed by; any stable value works, since

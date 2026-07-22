@@ -6,14 +6,14 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use crate::{
-    InviteRecord, MediaRecord, MediaSource, PostFormat, PostRecord, PostTag, RenderedHtml,
-    SessionRecord, UserRecord,
+    InviteRecord, MediaRecord, PostFormat, PostRecord, PostTag, RenderedHtml, SessionRecord,
+    UserRecord,
 };
 use common::bio::Bio;
 use common::display_name::DisplayName;
 use common::email::Email;
 use common::ids::{PostId, TagId, UserId};
-use common::media::{ContentHash, ContentType, Filename};
+use common::media::{ContentHash, ContentType, Filename, MediaSource};
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;

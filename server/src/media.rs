@@ -11,8 +11,10 @@ use tokio::fs;
 use tokio_util::io::ReaderStream;
 
 use common::ids::UserId;
-use common::media::{detect_content_type, should_inline, ContentHash, ContentType, Filename};
-use storage::{MediaSource, MediaStorage, SiteConfigStorage};
+use common::media::{
+    detect_content_type, should_inline, ContentHash, ContentType, Filename, MediaSource,
+};
+use storage::{MediaStorage, SiteConfigStorage};
 use web::auth::AuthUser;
 
 use crate::soft_path::SoftPath;
@@ -260,7 +262,7 @@ fn validate_serve_params(
         return Err(StatusCode::NOT_FOUND);
     };
 
-    Ok((source.clone(), hash.clone(), filename.clone()))
+    Ok((*source, hash.clone(), filename.clone()))
 }
 
 /// Validates the serve route's path parameters and resolves the on-disk file

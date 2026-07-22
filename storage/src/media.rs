@@ -2,64 +2,12 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use common::media::{ContentHash, ContentType, Filename};
+use common::media::{ContentHash, ContentType, Filename, MediaSource};
 use sqlx::{Database, FromRow, Pool};
 use thiserror::Error;
 
 use crate::backend::Backend;
 use common::ids::UserId;
-
-/// Source of a media record.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum MediaSource {
-    /// File uploaded directly by a local user.
-    Upload,
-    /// Remote file cached locally by the system.
-    Cached,
-}
-
-impl MediaSource {
-    /// Returns the string representation used in the database.
-    #[must_use]
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Upload => "upload",
-            Self::Cached => "cached",
-        }
-    }
-}
-
-impl std::fmt::Display for MediaSource {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl std::str::FromStr for MediaSource {
-    type Err = InvalidMediaSource;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "upload" => Ok(Self::Upload),
-            "cached" => Ok(Self::Cached),
-            _ => Err(InvalidMediaSource),
-        }
-    }
-}
-
-/// Error returned when a string cannot be parsed as a [`MediaSource`].
-#[derive(Debug, Error)]
-#[error("media source must be \"upload\" or \"cached\"")]
-pub struct InvalidMediaSource;
-
-impl From<InvalidMediaSource> for host::error::InternalError {
-    /// Reproduces the former `web::media` lift `(kind, class, public_message)`:
-    /// a client validation error whose wire message is the error's `Display`,
-    /// carrying the typed source instead of flattening it to a string (A19).
-    fn from(error: InvalidMediaSource) -> Self {
-        host::error::InternalError::validation_source(error.to_string(), error)
-    }
-}
 
 /// A media metadata record returned by [`MediaStorage`] queries.
 #[derive(Clone, Debug)]
@@ -187,7 +135,7 @@ pub trait MediaDialect: Backend {
         user_id: UserId,
         sha256: &ContentHash,
         filename: &Filename,
-        source: &str,
+        source: &MediaSource,
     ) -> Result<(), DeleteMediaError>;
 }
 
@@ -363,7 +311,7 @@ where
         filename: &Filename,
         source: &MediaSource,
     ) -> Result<(), DeleteMediaError> {
-        DB::delete_media_row(&self.pool, user_id, sha256, filename, source.as_str()).await
+        DB::delete_media_row(&self.pool, user_id, sha256, filename, source).await
     }
 
     #[tracing::instrument(
@@ -613,40 +561,5 @@ mod tests {
             .find_by_hash(&parse_content_hash(HASH), &MediaSource::Upload)
             .await;
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn media_source_as_str_returns_correct_value_for_each_variant() {
-        assert_eq!(MediaSource::Upload.as_str(), "upload");
-        assert_eq!(MediaSource::Cached.as_str(), "cached");
-    }
-
-    #[test]
-    fn media_source_display_produces_correct_string_for_each_variant() {
-        assert_eq!(MediaSource::Upload.to_string(), "upload");
-        assert_eq!(MediaSource::Cached.to_string(), "cached");
-    }
-
-    #[test]
-    fn media_source_from_str_parses_cached_variant() {
-        assert_eq!(
-            "cached".parse::<MediaSource>().unwrap(),
-            MediaSource::Cached
-        );
-    }
-
-    // Behavior-preserving translation of the former `web::media` lift: a client
-    // validation error whose wire message is the error's `Display`, with the
-    // typed source preserved on the operator side.
-    #[test]
-    fn from_invalid_media_source_maps_to_validation() {
-        use host::error::{ErrorKind, InternalError};
-
-        let error: InternalError = InvalidMediaSource.into();
-        assert_eq!(error.kind(), ErrorKind::Validation);
-        assert_eq!(error.public_message(), InvalidMediaSource.to_string());
-        assert!(error
-            .operator_message()
-            .contains(&InvalidMediaSource.to_string()));
     }
 }
