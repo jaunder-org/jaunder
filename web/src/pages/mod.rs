@@ -31,8 +31,7 @@ use crate::pages::profile::ProfilePage;
 use crate::pages::sessions::SessionsPage;
 use crate::pages::site::SiteSettingsPage;
 use crate::posts::{
-    CreatePostPage, DraftPreviewPage, DraftsPage, EditPostPage, PostPage, SiteTagPage, UserTagPage,
-    UserTimelinePage,
+    CreatePostPage, DraftsPage, EditPostPage, PostPage, SiteTagPage, UserTagPage, UserTimelinePage,
 };
 use crate::registration::RegisterPage;
 use leptos::prelude::*;
@@ -146,14 +145,6 @@ pub fn App() -> impl IntoView {
                     <Route path=StaticSegment("verify-email") view=VerifyEmailPage />
                     <Route path=StaticSegment("forgot-password") view=ForgotPasswordPage />
                     <Route path=StaticSegment("reset-password") view=ResetPasswordPage />
-                    <Route
-                        path=(
-                            StaticSegment("draft"),
-                            ParamSegment("post_id"),
-                            StaticSegment("preview"),
-                        )
-                        view=DraftPreviewPage
-                    />
                     <Route path=(StaticSegment("tags"), ParamSegment("tag")) view=SiteTagPage />
                     <Route
                         path=(ParamSegment("username"), StaticSegment("tags"), ParamSegment("tag"))

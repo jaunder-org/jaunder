@@ -63,11 +63,11 @@ pub use server::post_response;
 // The wasm-only reactive UI (ADR-0070): the post widgets and the routed page
 // components (moved from `pages/`, #323). Re-exported so the `pages/` router keeps
 // the stable `crate::posts::…` paths; the private helpers (`marker_matches`,
-// `audience_checkbox`, `SubscribeButton`, `permalink_first_paint`, the `render_*`
-// row/form/result builders) stay unexported.
+// `audience_checkbox`, `SubscribeButton`, `permalink_first_paint`, the
+// `render_draft_row` builder) stay unexported.
 #[cfg(target_arch = "wasm32")]
 pub use component::{
-    AudiencePicker, ComposerFields, CreatePostPage, DraftPreviewPage, DraftsPage, EditPostPage,
-    InlineComposer, PostCard, PostCreateForm, PostDisplay, PostPage, SiteTagPage, TagInput,
-    UserTagPage, UserTimelinePage,
+    AudiencePicker, ComposerFields, CreatePostPage, DraftsPage, EditPostPage, InlineComposer,
+    PostCard, PostCreateForm, PostDisplay, PostPage, SiteTagPage, TagInput, UserTagPage,
+    UserTimelinePage,
 };
