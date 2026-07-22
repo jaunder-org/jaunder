@@ -11,8 +11,10 @@ use crate::error::WebResult;
 use common::invite::ProfferedInviteCode;
 use common::password::ProfferedPassword;
 // Ungated: `RegistrationPolicy` is the wire *return* type of `get_registration_policy`,
-// so the `#[server]`-generated signature references it on both the client and server builds.
+// and `RawToken` the wire *return* type of `register`, so the `#[server]`-generated
+// signatures reference them on both the client and server builds.
 use common::registration::RegistrationPolicy;
+use common::token::RawToken;
 use common::username::Username;
 use leptos::prelude::*;
 
@@ -46,15 +48,15 @@ pub async fn get_registration_policy() -> WebResult<RegistrationPolicy> {
     })
 }
 
-/// Registers a new user.  Returns the raw session token on success and sets
-/// the `session` cookie.
+/// Registers a new user.  Returns the freshly minted session [`RawToken`] on
+/// success and sets the `session` cookie.
 #[server(endpoint = "/register")]
 #[tracing::instrument(name = "web.registration.register", skip(password, invite_code))]
 pub async fn register(
     username: Username,
     password: ProfferedPassword,
     invite_code: Option<ProfferedInviteCode>,
-) -> WebResult<String> {
+) -> WebResult<RawToken> {
     boundary!("register", {
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
         let users = expect_context::<Arc<dyn UserStorage>>();
@@ -130,6 +132,6 @@ pub async fn register(
 
         set_session_cookie(&raw_token);
         leptos_axum::redirect("/");
-        Ok(raw_token.to_string())
+        Ok(raw_token)
     })
 }

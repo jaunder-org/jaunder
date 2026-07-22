@@ -8,6 +8,7 @@ use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::topbar::Topbar;
 use common::password::Password;
+use common::token::RawToken;
 use common::username::Username;
 use leptos::prelude::*;
 
@@ -72,7 +73,7 @@ pub fn LoginPage() -> impl IntoView {
                     login_action
                         .value()
                         .get()
-                        .map(|r: Result<String, WebError>| match r {
+                        .map(|r: Result<RawToken, WebError>| match r {
                             Ok(_) => {
                                 view! { <p class="j-loading">"Logging in\u{2026}"</p> }.into_any()
                             }
