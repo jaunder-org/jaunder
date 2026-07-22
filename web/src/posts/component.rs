@@ -199,9 +199,14 @@ pub fn PostCard(
     // the actual edit/delete by session — the marker only gates visibility.
     let is_author = post.is_author || marker_matches(&post.username);
     let post_id = post.post_id;
+    // A draft rendered at its permalink gets a Publish affordance instead of
+    // Unpublish (#23): the fixed Unpublish column was a no-op on an already-
+    // unpublished post.
+    let is_draft = post.is_draft;
     let edit_url = format!("/posts/{post_id}/edit");
     let delete_action = ServerAction::<DeletePost>::new();
     let unpublish_action = ServerAction::<UnpublishPost>::new();
+    let publish_action = ServerAction::<PublishPost>::new();
     let deleted = RwSignal::new(false);
 
     Effect::new_isomorphic(move |_| {
@@ -220,25 +225,69 @@ pub fn PostCard(
             }
         }
     });
+    // Client-only navigation side-effect (web-style-guide §9): the publish action
+    // only ever dispatches on the client, so `Effect::new` (not `_isomorphic`)
+    // avoids needlessly scheduling on the server — matching EditPostPage's
+    // publish redirect.
+    Effect::new(move |_| {
+        if let Some(Ok(published)) = publish_action.value().get() {
+            // Publishing can move the permalink (a draft's URL is created_at-based;
+            // once published it becomes published_at-based), so navigate to the
+            // server-returned canonical permalink rather than the now-stale current
+            // URL. The unpublish path redirects to /drafts; this is its mirror.
+            if let Some(window) = web_sys::window() {
+                let _ = window.location().replace(&published.permalink);
+            }
+        }
+    });
 
-    // Additive action column (#181, ADR-0044 D4): edit/unpublish/delete only. The
-    // timestamp deliberately stays in the (coincident) content-column header rather
-    // than moving here, so the owner's own post doesn't diverge from the anon paint.
+    // The primary lifecycle action adapts to draft state (#23): a draft gets
+    // Publish (dispatching PublishPost behind a confirm), a published post keeps
+    // Unpublish. Edit and Delete are identical either way.
+    let primary_action = if is_draft {
+        view! {
+            <button
+                type="button"
+                class="j-btn"
+                on:click=move |_| {
+                    let confirmed = web_sys::window()
+                        .and_then(|w| { w.confirm_with_message("Publish this draft?").ok() })
+                        .unwrap_or(false);
+                    if confirmed {
+                        publish_action.dispatch(PublishPost { post_id });
+                    }
+                }
+            >
+                "Publish"
+            </button>
+        }
+        .into_any()
+    } else {
+        view! {
+            <button
+                type="button"
+                class="j-btn"
+                on:click=move |_| {
+                    unpublish_action.dispatch(UnpublishPost { post_id });
+                }
+            >
+                "Unpublish"
+            </button>
+        }
+        .into_any()
+    };
+
+    // Additive action column (#181, ADR-0044 D4): edit / publish-or-unpublish /
+    // delete. The timestamp deliberately stays in the (coincident) content-column
+    // header rather than moving here, so the owner's own post doesn't diverge from
+    // the anon paint.
     let action_col = is_author.then(move || {
         view! {
             <div class="j-post-acts">
                 <a class="j-btn" href=edit_url>
                     "Edit"
                 </a>
-                <button
-                    type="button"
-                    class="j-btn"
-                    on:click=move |_| {
-                        unpublish_action.dispatch(UnpublishPost { post_id });
-                    }
-                >
-                    "Unpublish"
-                </button>
+                {primary_action}
                 <button
                     type="button"
                     class="j-btn is-danger"

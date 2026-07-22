@@ -135,31 +135,31 @@ Run `cargo xtask check` first so the pre-commit gate passes clean
   reads `post.is_draft`. Value is `fetched.is_draft` at `PostPage`, `false`
   everywhere a published-only row is built.
 
-- [ ] **Step 1: Add the field and pin it in the round-trip test.** Add
+- [x] **Step 1: Add the field and pin it in the round-trip test.** Add
       `pub is_draft: bool,` after `pub is_author: bool,` in the struct. In the
       round-trip test, set `is_draft: true` in the constructed value and assert
       the round-tripped value's `is_draft == true` (the test already serializes
       → deserializes via the trusted-rebuild path; `is_draft` is a plain `bool`,
       no custom `serde`).
 
-- [ ] **Step 2: Run the test, verify it fails.**
+- [x] **Step 2: Run the test, verify it fails.**
 
 Run: `cargo nextest run -p web timeline_summary_round_trips` Expected: FAIL to
 **compile** — the four other `TimelinePostSummary` literals (`server.rs`,
 `component.rs` PostPage, `render.rs` sample) are missing the new field.
 
-- [ ] **Step 3: Populate every construction site.**
+- [x] **Step 3: Populate every construction site.**
   - `server.rs:27-39` `timeline_post_summary` → `is_draft: false` (it
     early-returns `None` unless `published_at.is_some()`, so it only ever builds
     a published row).
   - `component.rs:1211-1225` `PostPage` → `is_draft: fetched.is_draft`.
   - `render.rs:284-298` `sample_summary` → `is_draft: false`.
 
-- [ ] **Step 4: Run the test, verify it passes.**
+- [x] **Step 4: Run the test, verify it passes.**
 
 Run: `cargo nextest run -p web timeline_summary_round_trips` Expected: PASS.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add web/src/posts/api/listing.rs web/src/posts/api.rs web/src/posts/server.rs web/src/posts/component.rs web/src/posts/render.rs
