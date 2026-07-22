@@ -119,7 +119,7 @@ fn render_posts(posts: &[TimelinePostSummary], tag_ctx: &TagCtx) -> String {
             summary: post.summary.as_deref(),
             rendered_html: &post.rendered_html,
             time: &format_post_time(post.published_at),
-            permalink: &post.permalink,
+            permalink: post.permalink.as_deref().unwrap_or_default(),
             tags: &post.tags,
             tag_ctx,
         }));
@@ -257,7 +257,9 @@ pub(crate) mod test_fixtures {
     use crate::posts::TimelinePage;
     use common::ids::PostId;
     use common::render::PostFormat;
-    use common::test_support::{parse_post_summary, parse_username, parse_utc_instant};
+    use common::test_support::{
+        parse_post_summary, parse_root_relative_url, parse_username, parse_utc_instant,
+    };
 
     pub(crate) fn sample_post() -> PostResponse {
         PostResponse {
@@ -272,7 +274,7 @@ pub(crate) mod test_fixtures {
             published_at: Some(parse_utc_instant("2026-01-02T03:04:05Z")),
             is_draft: false,
             is_author: false,
-            permalink: Some("/~alice/2026/01/02/hello".into()),
+            permalink: Some(parse_root_relative_url("/~alice/2026/01/02/hello")),
             tags: vec![TagSummary {
                 slug: "rust".parse().unwrap(),
                 display: "Rust".parse().unwrap(),
@@ -291,7 +293,7 @@ pub(crate) mod test_fixtures {
             rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
             created_at: parse_utc_instant("2026-01-01T00:00:00Z"),
             published_at: parse_utc_instant("2026-01-01T00:00:00Z"),
-            permalink: "/~bob/2026/01/01/first".into(),
+            permalink: Some(parse_root_relative_url("/~bob/2026/01/01/first")),
             is_author: false,
             tags: vec![],
         }

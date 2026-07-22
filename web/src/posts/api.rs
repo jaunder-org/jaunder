@@ -22,6 +22,7 @@ use common::{
     post_summary::PostSummary,
     post_title::PostTitle,
     render::{PostFormat, RenderedHtml},
+    root_relative_url::RootRelativeUrl,
     slug::Slug,
     tag::TagLabel,
     time::UtcInstant,
@@ -57,6 +58,18 @@ use {
     },
 };
 
+/// Wraps a server-composed `/…` path (draft-preview / edit routes) as a
+/// [`RootRelativeUrl`]. The path is built from a known-valid literal template, so
+/// the parse cannot fail; the `unreachable!` arm keeps a genuine panic branch
+/// (never an uncovered `expect`).
+#[cfg(feature = "server")]
+fn root_relative_path(path: String) -> RootRelativeUrl {
+    let Ok(url) = RootRelativeUrl::try_from(path) else {
+        unreachable!("server composes a valid root-relative path");
+    };
+    url
+}
+
 /// Result returned by [`create_post`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CreatePostResult {
@@ -64,8 +77,8 @@ pub struct CreatePostResult {
     pub slug: Slug,
     pub created_at: UtcInstant,
     pub published_at: Option<UtcInstant>,
-    pub preview_url: String,
-    pub permalink: Option<String>,
+    pub preview_url: RootRelativeUrl,
+    pub permalink: Option<RootRelativeUrl>,
     pub summary: Option<PostSummary>,
 }
 
@@ -75,8 +88,8 @@ pub struct UpdatePostResult {
     pub post_id: PostId,
     pub slug: Slug,
     pub published_at: Option<UtcInstant>,
-    pub preview_url: String,
-    pub permalink: Option<String>,
+    pub preview_url: RootRelativeUrl,
+    pub permalink: Option<RootRelativeUrl>,
     pub summary: Option<PostSummary>,
 }
 
@@ -93,9 +106,9 @@ pub struct DraftSummary {
     /// in the future); `None` for true drafts. Drives the "Scheduled for …"
     /// author marker.
     pub scheduled_at: Option<UtcInstant>,
-    pub preview_url: String,
-    pub edit_url: String,
-    pub permalink: String,
+    pub preview_url: RootRelativeUrl,
+    pub edit_url: RootRelativeUrl,
+    pub permalink: RootRelativeUrl,
 }
 
 /// Result returned by [`publish_post`].
@@ -104,7 +117,7 @@ pub struct PublishPostResult {
     pub post_id: PostId,
     pub slug: Slug,
     pub published_at: UtcInstant,
-    pub permalink: String,
+    pub permalink: RootRelativeUrl,
 }
 
 /// Trusted-rebuild `deserialize_with` for a wire `RenderedHtml` field: the value
@@ -133,7 +146,7 @@ pub struct PostResponse {
     pub is_draft: bool,
     pub is_author: bool,
     /// Permalink URL for published posts; `None` for drafts.
-    pub permalink: Option<String>,
+    pub permalink: Option<RootRelativeUrl>,
     /// Tags applied to this post, ordered by canonical slug.
     pub tags: Vec<TagSummary>,
     /// Optional summary/excerpt of the post.
@@ -231,7 +244,7 @@ pub async fn create_post(args: CreatePostArgs) -> WebResult<CreatePostResult> {
         let published_at = record.published_at.map(UtcInstant::from);
         // Only published posts have a public permalink. For drafts, the permalink is None.
         let permalink = record.published_at.is_some().then(|| record.permalink());
-        let preview_url = format!("/draft/{}/preview", record.post_id);
+        let preview_url = root_relative_path(format!("/draft/{}/preview", record.post_id));
 
         let created = CreatePostResult {
             post_id: record.post_id,
@@ -413,7 +426,7 @@ pub async fn update_post(args: UpdatePostArgs) -> WebResult<UpdatePostResult> {
             post_id,
             slug: record.slug,
             published_at,
-            preview_url: format!("/draft/{post_id}/preview"),
+            preview_url: root_relative_path(format!("/draft/{post_id}/preview")),
             permalink,
             summary: record.summary,
         })
@@ -496,8 +509,8 @@ pub async fn list_drafts(
                     created_at: UtcInstant::from(draft.created_at),
                     updated_at: UtcInstant::from(draft.updated_at),
                     scheduled_at,
-                    preview_url: format!("/draft/{}/preview", draft.post_id),
-                    edit_url: format!("/posts/{}/edit", draft.post_id),
+                    preview_url: root_relative_path(format!("/draft/{}/preview", draft.post_id)),
+                    edit_url: root_relative_path(format!("/posts/{}/edit", draft.post_id)),
                     permalink,
                 }
             })
@@ -639,7 +652,7 @@ mod tests {
         use super::TimelinePostSummary;
         use common::ids::PostId;
         use common::render::RenderedHtml;
-        use common::test_support::parse_utc_instant;
+        use common::test_support::{parse_root_relative_url, parse_utc_instant};
 
         let original = TimelinePostSummary {
             post_id: PostId::from(1),
@@ -650,7 +663,7 @@ mod tests {
             rendered_html: RenderedHtml::from_trusted("<p>hi</p>"),
             created_at: parse_utc_instant("2026-01-01T00:00:00Z"),
             published_at: parse_utc_instant("2026-01-01T00:00:00Z"),
-            permalink: "/~alice/2026/01/01/hello".into(),
+            permalink: Some(parse_root_relative_url("/~alice/2026/01/01/hello")),
             is_author: false,
             tags: vec![],
         };
@@ -658,6 +671,32 @@ mod tests {
         let round_tripped: TimelinePostSummary = serde_json::from_str(&json).unwrap();
         assert_eq!(round_tripped.rendered_html.as_ref(), "<p>hi</p>");
         assert_eq!(round_tripped, original);
+    }
+
+    // The typed `RootRelativeUrl` permalink field pins the wire grammar: a
+    // root-relative value round-trips, and an absolute URL is rejected at
+    // JSON decode by the newtype's validating serde bridge (no in-body parse).
+    #[test]
+    fn publish_result_permalink_wire_is_root_relative() {
+        use super::PublishPostResult;
+        use common::ids::PostId;
+        use common::test_support::{parse_root_relative_url, parse_utc_instant};
+
+        let original = PublishPostResult {
+            post_id: PostId::from(1),
+            slug: "hello".parse::<Slug>().unwrap(),
+            published_at: parse_utc_instant("2026-01-01T00:00:00Z"),
+            permalink: parse_root_relative_url("/~alice/2026/01/01/hello"),
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        // A root-relative permalink round-trips over the wire.
+        assert_eq!(
+            serde_json::from_str::<PublishPostResult>(&json).unwrap(),
+            original
+        );
+        // Swapping the field to an absolute URL is rejected at decode.
+        let absolute = json.replace("/~alice/2026/01/01/hello", "https://evil.example/x");
+        assert!(serde_json::from_str::<PublishPostResult>(&absolute).is_err());
     }
 
     #[test]
@@ -756,7 +795,10 @@ mod tests {
 
         assert_eq!(summary.title, None);
         assert_eq!(summary.username, "author");
-        assert_eq!(summary.permalink, "/~author/2026/04/16/titleless-note");
+        assert_eq!(
+            summary.permalink.as_deref(),
+            Some("/~author/2026/04/16/titleless-note")
+        );
     }
 
     #[cfg(feature = "server")]

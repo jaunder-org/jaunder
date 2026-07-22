@@ -136,7 +136,7 @@ pub fn PostDisplay(
         summary: post.summary.as_deref(),
         rendered_html: &post.rendered_html,
         time: &time_label,
-        permalink: &post.permalink,
+        permalink: post.permalink.as_deref().unwrap_or_default(),
         tags: &post.tags,
         tag_ctx: &tag_context,
     };
@@ -764,7 +764,8 @@ pub fn InlineComposer(username: Username, on_publish: WriteSignal<u32>) -> impl 
         let url = created
             .permalink
             .clone()
-            .unwrap_or_else(|| created.preview_url.clone());
+            .unwrap_or_else(|| created.preview_url.clone())
+            .to_string();
         let msg = if created.published_at.is_some() {
             "Post published!".to_string()
         } else {
@@ -1080,7 +1081,7 @@ pub fn CreatePostPage() -> impl IntoView {
                                                 </p>
                                                 <a
                                                     data-test="preview-link"
-                                                    href=created.preview_url.clone()
+                                                    href=created.preview_url.to_string()
                                                 >
                                                     "Preview draft"
                                                 </a>
@@ -1089,7 +1090,7 @@ pub fn CreatePostPage() -> impl IntoView {
                                                     .as_ref()
                                                     .map(|href| {
                                                         view! {
-                                                            <a data-test="permalink-link" href=href.clone()>
+                                                            <a data-test="permalink-link" href=href.to_string()>
                                                                 "View permalink"
                                                             </a>
                                                         }
@@ -1219,7 +1220,7 @@ pub fn PostPage() -> impl IntoView {
                                     published_at: fetched
                                         .published_at
                                         .unwrap_or(fetched.created_at),
-                                    permalink: fetched.permalink.clone().unwrap_or_default(),
+                                    permalink: fetched.permalink.clone(),
                                     is_author: fetched.is_author,
                                     tags: fetched.tags.clone(),
                                 };
@@ -1547,7 +1548,7 @@ pub fn DraftPreviewPage() -> impl IntoView {
                                     published_at: fetched
                                         .published_at
                                         .unwrap_or(fetched.created_at),
-                                    permalink: fetched.permalink.clone().unwrap_or_default(),
+                                    permalink: fetched.permalink.clone(),
                                     is_author: true,
                                     tags: fetched.tags.clone(),
                                 };
@@ -1598,7 +1599,7 @@ pub fn DraftPreviewPage() -> impl IntoView {
                                 view! {
                                     <p class="success">
                                         "Post published. "
-                                        <a href=published.permalink>"View post"</a>
+                                        <a href=published.permalink.to_string()>"View post"</a>
                                     </p>
                                 }
                                     .into_any()
@@ -1645,7 +1646,7 @@ pub fn EditPostPage() -> impl IntoView {
             if updated.published_at.is_some() {
                 if let Some(ref permalink) = updated.permalink {
                     if let Some(window) = web_sys::window() {
-                        let _ = window.location().replace(permalink);
+                        let _ = window.location().replace(permalink.as_ref());
                     }
                 }
             }
@@ -1921,7 +1922,7 @@ pub fn EditPostPage() -> impl IntoView {
                                     "Slug: "
                                     {slug_value}
                                 </p>
-                                <a data-test="preview-link" href=updated.preview_url.clone()>
+                                <a data-test="preview-link" href=updated.preview_url.to_string()>
                                     "Preview draft"
                                 </a>
                             </div>
@@ -1989,7 +1990,7 @@ pub fn DraftsPage() -> impl IntoView {
                                 view! {
                                     <p class="success">
                                         "Post published. "
-                                        <a href=published.permalink>"View permalink"</a>
+                                        <a href=published.permalink.to_string()>"View permalink"</a>
                                     </p>
                                 }
                                     .into_any()
@@ -2036,12 +2037,12 @@ fn render_draft_row(
                     ") "
                     {scheduled_badge}
                     " "
-                    <a href=draft.preview_url>"Preview"</a>
+                    <a href=String::from(draft.preview_url)>"Preview"</a>
                     " "
-                    <a href=draft.permalink>"Permalink"</a>
+                    <a href=String::from(draft.permalink)>"Permalink"</a>
                 </div>
                 <div class="j-draft-actions">
-                    <a class="j-btn" href=draft.edit_url>
+                    <a class="j-btn" href=String::from(draft.edit_url)>
                         "Edit"
                     </a>
                     <ActionForm action=publish_action>

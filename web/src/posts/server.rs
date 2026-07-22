@@ -33,7 +33,7 @@ pub fn timeline_post_summary(
         rendered_html,
         created_at: UtcInstant::from(created_at),
         published_at: UtcInstant::from(published_at),
-        permalink,
+        permalink: Some(permalink),
         is_author: viewer_user_id == Some(user_id),
         tags: post_tags_to_summaries(tags),
     })
