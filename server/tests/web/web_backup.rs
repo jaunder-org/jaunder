@@ -31,39 +31,6 @@ async fn operator_gets_default_backup_settings(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
-async fn current_user_is_operator_reports_operator_status(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let operator_cookie = create_session_cookie(&state, "operator", true).await;
-    let member_cookie = create_session_cookie(&state, "member", false).await;
-
-    let (operator_status, operator_body) = post_form(
-        Arc::clone(&state),
-        "/api/current_user_is_operator",
-        "",
-        Some(&operator_cookie),
-    )
-    .await;
-    assert_eq!(operator_status, StatusCode::OK, "body: {operator_body}");
-    assert_eq!(operator_body, "true");
-
-    let (member_status, member_body) = post_form(
-        Arc::clone(&state),
-        "/api/current_user_is_operator",
-        "",
-        Some(&member_cookie),
-    )
-    .await;
-    assert_eq!(member_status, StatusCode::OK, "body: {member_body}");
-    assert_eq!(member_body, "false");
-
-    let (anonymous_status, anonymous_body) =
-        post_form(state, "/api/current_user_is_operator", "", None).await;
-    assert_eq!(anonymous_status, StatusCode::OK, "body: {anonymous_body}");
-    assert_eq!(anonymous_body, "false");
-}
-
-#[apply(backends)]
-#[tokio::test]
 async fn operator_gets_configured_backup_settings(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_session_cookie(&state, "operator", true).await;
@@ -434,31 +401,10 @@ async fn backup_warning_visible_propagates_storage_error_during_auth(#[case] bac
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
 
-#[apply(backends)]
-#[tokio::test]
-async fn current_user_is_operator_propagates_storage_error_during_auth(#[case] backend: Backend) {
-    // Covers the Err(non-Unauthorized) branch: close the pool after session
-    // creation so authenticate() returns Internal (not Unauthorized) → 500.
-    let TestEnv { state, base } = backend.setup().await;
-    let cookie = create_session_cookie(&state, "operator", true).await;
-
-    base.close_pool().await;
-
-    let (status, _body) = post_form(
-        Arc::clone(&state),
-        "/api/current_user_is_operator",
-        "",
-        Some(&cookie),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-}
-
 // #591: `session()` is the single reconcile fetch behind the shared session context
-// — it reports the viewer's username + operator flag, or `null` when anonymous.
-// Mirrors (and, once Task 5 removes them, replaces) the `current_user_is_operator_*`
-// coverage. Lives here because `create_session_cookie` (the operator setup) is local.
+// — it reports the viewer's username + operator flag, or `null` when anonymous. This
+// replaces the retired `current_user` / `current_user_is_operator` endpoint coverage.
+// Lives here because `create_session_cookie` (the operator setup) is local.
 #[apply(backends)]
 #[tokio::test]
 async fn session_reports_username_and_operator(#[case] backend: Backend) {

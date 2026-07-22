@@ -1,4 +1,4 @@
-//! The **auth** vertical: the `#[server]` session endpoints (`current_user`,
+//! The **auth** vertical: the `#[server]` session endpoints (`session`,
 //! `login`, `logout`) in [`api`] and the co-located reactive UI (`LoginPage`,
 //! `LogoutPage`) in [`component`], plus the advisory client auth marker. Account
 //! creation lives in the sibling `registration` vertical, which establishes the
@@ -39,9 +39,7 @@ mod session;
 
 // The API surface — re-exported so external call sites and the server-fn
 // registrar keep the stable `crate::auth::…` paths despite living in `api.rs`.
-pub use api::{
-    current_user, login, logout, session, CurrentUser, Login, LoginResponse, Logout, Session,
-};
+pub use api::{login, logout, session, Login, LoginResponse, Logout, Session};
 #[cfg(target_arch = "wasm32")]
 pub use component::{LoginPage, LogoutPage};
 pub use marker::SessionUser;

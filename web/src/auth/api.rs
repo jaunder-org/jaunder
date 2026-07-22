@@ -1,5 +1,5 @@
 //! The **auth** vertical's API surface (ADR-0070, amended #530): the `#[server]`
-//! session endpoints (`current_user`, `login`, `logout`) and their wire types,
+//! session endpoints (`session`, `login`, `logout`) and their wire types,
 //! dual-compiled. `mod.rs` re-exports these so external call sites and the
 //! server-fn registrar keep the stable `crate::auth::…` paths.
 
@@ -17,9 +17,7 @@ use leptos::prelude::*;
 // sibling `server` module's helpers plus the crate-level SSR dependencies.
 #[cfg(feature = "server")]
 use {
-    super::server::{
-        classify_current_user, clear_session_cookie, require_auth, set_session_cookie,
-    },
+    super::server::{clear_session_cookie, require_auth, set_session_cookie},
     common::password::Password,
     std::sync::Arc,
     storage::{SessionStorage, UserStorage},
@@ -36,17 +34,8 @@ pub struct LoginResponse {
     pub is_operator: bool,
 }
 
-/// Returns the current logged-in username, if any.
-#[server(endpoint = "/current_user")]
-#[tracing::instrument(name = "web.auth.current_user")]
-pub async fn current_user() -> WebResult<Option<Username>> {
-    boundary!("current_user", {
-        classify_current_user(require_auth().await)
-    })
-}
-
-/// Authenticates a user.  Returns the freshly minted session [`RawToken`] on
-/// success and sets the `session` cookie.
+/// Authenticates a user.  Returns a [`LoginResponse`] (the freshly minted session
+/// [`RawToken`] + the viewer's operator flag) and sets the `session` cookie.
 #[server(endpoint = "/login")]
 #[tracing::instrument(name = "web.auth.login", skip(password, label))]
 pub async fn login(

@@ -815,51 +815,8 @@ async fn logout_clears_cookie_without_secure_attribute_when_disabled(#[case] bac
     assert!(!clear_cookie.contains("Secure"));
 }
 
-#[apply(backends)]
-#[tokio::test]
-async fn current_user_returns_username_when_authenticated(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let user_id = state
-        .users
-        .create_user(
-            &"alice".parse::<Username>().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let raw_token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
-
-    let cookie_header = session_cookie(&raw_token);
-    let (status, _, body) = post_form_with_secure_flag(
-        Arc::clone(&state),
-        "/api/current_user",
-        "",
-        Some(&cookie_header),
-        true,
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body.trim(), "\"alice\"");
-}
-
-#[apply(backends)]
-#[tokio::test]
-async fn current_user_returns_null_when_unauthenticated(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-
-    let (status, _, body) =
-        post_form_with_secure_flag(Arc::clone(&state), "/api/current_user", "", None, true).await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body.trim(), "null");
-}
+// (`current_user` endpoint retired in #591 — session identity, authed + anonymous,
+// is now covered by `web_backup::session_reports_username_and_operator`.)
 
 #[apply(backends)]
 #[tokio::test]

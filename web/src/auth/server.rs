@@ -191,20 +191,6 @@ pub fn clear_session_cookie() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Server function helpers
-// ---------------------------------------------------------------------------
-
-/// Maps a `require_auth` result to the `current_user` response shape:
-/// `Ok` → username, `Unauthorized` error → `None`, other errors propagate.
-pub fn classify_current_user(result: InternalResult<AuthUser>) -> InternalResult<Option<Username>> {
-    match result {
-        Ok(auth) => Ok(Some(auth.username)),
-        Err(error) if error.kind() == crate::error::ErrorKind::Auth => Ok(None),
-        Err(error) => Err(error),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,24 +311,6 @@ mod tests {
             crate::error::project(e.kind(), e.public_message()),
             crate::error::WebError::Server { .. }
         ));
-    }
-
-    #[test]
-    fn classify_current_user_returns_none_for_unauthorized_error() {
-        let err = InternalError::unauthorized("test");
-        let result = classify_current_user(Err(err));
-        assert!(matches!(result, Ok(None)));
-    }
-
-    #[test]
-    fn classify_current_user_propagates_non_unauthorized_errors() {
-        let err = InternalError::storage(sqlx::Error::PoolClosed);
-        let result = classify_current_user(Err(err));
-        // Non-Auth errors propagate unchanged; assert on the carried `kind` (the wire
-        // projection is covered by `project`'s own test). A nested `matches!` guard
-        // here would leave its no-match arm uncovered.
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().kind(), crate::error::ErrorKind::Storage);
     }
 
     // Pure extractor unit test: with a session cookie but no SessionStorage in the
