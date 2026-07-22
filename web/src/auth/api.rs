@@ -26,6 +26,16 @@ use {
     tracing::Instrument,
 };
 
+/// `login`'s success payload: the raw session token (unchanged) plus the viewer's
+/// operator flag, so the client writes a complete marker immediately (flash-free
+/// first login, #591). Web-only wire type — the elisp frontend uses HTTP Basic auth,
+/// not this endpoint.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct LoginResponse {
+    pub token: RawToken,
+    pub is_operator: bool,
+}
+
 /// Returns the current logged-in username, if any.
 #[server(endpoint = "/current_user")]
 #[tracing::instrument(name = "web.auth.current_user")]
@@ -43,7 +53,7 @@ pub async fn login(
     username: Username,
     password: ProfferedPassword,
     label: Option<String>,
-) -> WebResult<RawToken> {
+) -> WebResult<LoginResponse> {
     boundary!("login", {
         let users = expect_context::<Arc<dyn UserStorage>>();
         let sessions = expect_context::<Arc<dyn SessionStorage>>();
@@ -95,7 +105,13 @@ pub async fn login(
 
         set_session_cookie(&raw_token);
         leptos_axum::redirect("/");
-        Ok(raw_token)
+        // `record` is the authenticated `UserRecord`, which already carries
+        // `is_operator` (storage `UserRecord`) — no extra query. `raw_token` is the
+        // typed `RawToken` (#578); `LoginResponse` carries it plus the marker seed.
+        Ok(LoginResponse {
+            token: raw_token,
+            is_operator: record.is_operator,
+        })
     })
 }
 

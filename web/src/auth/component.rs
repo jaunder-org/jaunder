@@ -3,12 +3,11 @@
 //! [`marker_storage`](super::marker_storage) binding) directly, no `cfg` gates
 //! inside this file.
 
-use super::{marker_storage, Login, Logout};
+use super::{marker_storage, Login, LoginResponse, Logout, SessionUser};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::topbar::Topbar;
 use common::password::Password;
-use common::token::RawToken;
 use common::username::Username;
 use leptos::prelude::*;
 
@@ -24,9 +23,12 @@ pub fn LoginPage() -> impl IntoView {
     // *submitted* username from the action input, not the live `username` field,
     // which the user could have edited between submit and response.
     Effect::new(move |_| {
-        if let Some(Ok(_)) = login_action.value().get() {
+        if let Some(Ok(resp)) = login_action.value().get() {
             if let Some(input) = login_action.input().get() {
-                marker_storage::set(&input.username);
+                marker_storage::set(&SessionUser {
+                    username: input.username,
+                    is_operator: resp.is_operator,
+                });
             }
         }
     });
@@ -73,7 +75,7 @@ pub fn LoginPage() -> impl IntoView {
                     login_action
                         .value()
                         .get()
-                        .map(|r: Result<RawToken, WebError>| match r {
+                        .map(|r: Result<LoginResponse, WebError>| match r {
                             Ok(_) => {
                                 view! { <p class="j-loading">"Logging in\u{2026}"</p> }.into_any()
                             }

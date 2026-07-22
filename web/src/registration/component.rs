@@ -4,7 +4,7 @@
 //! gates inside this file.
 
 use super::{get_registration_policy, Register};
-use crate::auth::marker_storage;
+use crate::auth::{marker_storage, SessionUser};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::topbar::Topbar;
@@ -55,7 +55,10 @@ pub fn RegisterPage() -> impl IntoView {
     Effect::new(move |_| {
         if let Some(Ok(_)) = register_action.value().get() {
             if let Some(input) = register_action.input().get() {
-                marker_storage::set(&input.username);
+                marker_storage::set(&SessionUser {
+                    username: input.username,
+                    is_operator: false,
+                });
             }
         }
     });

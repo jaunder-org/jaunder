@@ -179,7 +179,12 @@ pub fn PostDisplay(
 /// even though the anonymous seed data has `is_author = false`. `false` on the
 /// host build (no marker) — the affordance is wasm-only chrome.
 fn marker_matches(author: &Username) -> bool {
-    crate::auth::marker_storage::get().as_ref() == Some(author)
+    // TRANSITIONAL (#591 Task 1): read the marker's username; Task 4 migrates this
+    // to the shared session context.
+    crate::auth::marker_storage::get()
+        .map(|s| s.username)
+        .as_ref()
+        == Some(author)
 }
 
 #[component]

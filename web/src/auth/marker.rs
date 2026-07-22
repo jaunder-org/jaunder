@@ -14,61 +14,86 @@ use serde::{Deserialize, Serialize};
 /// The localStorage key holding the marker. Kept in sync with the pre-paint script.
 pub const MARKER_KEY: &str = "jaunder_auth";
 
-#[derive(Serialize)]
-struct Marker<'a> {
-    username: &'a str,
+/// The whole client-visible session identity (#181, #591, ADR-0044): who is logged
+/// in and whether they are an operator. Persisted in the advisory marker and
+/// returned by `session()`. `is_operator` is advisory chrome only —
+/// `require_operator()` is the real privilege guard, so a hand-edited marker grants
+/// nothing. Named `SessionUser` to stay distinct from the device-listing
+/// `sessions::SessionInfo` and the visibility `ViewerIdentity`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionUser {
+    pub username: Username,
+    /// Absent in pre-#591 markers → `false`, so an existing session decodes as a
+    /// (non-operator) logged-in user rather than `None`/anonymous.
+    #[serde(default)]
+    pub is_operator: bool,
 }
 
-/// The localStorage value for `username` (JSON `{"username":"…"}`).
+/// The localStorage value (JSON `{"username":"…","is_operator":<bool>}`). `username`
+/// stays the top-level key the pre-paint script reads.
 #[must_use]
-pub fn encode_marker(username: &Username) -> String {
-    serde_json::to_string(&Marker {
-        username: username.as_ref(),
-    })
-    .unwrap_or_default()
+pub fn encode_marker(user: &SessionUser) -> String {
+    serde_json::to_string(user).unwrap_or_default()
 }
 
-/// Parse a marker value back to its [`Username`], `None` when the JSON is
+/// Parse a marker value back to its [`SessionUser`], `None` when the JSON is
 /// malformed or the stored username is invalid. The single malformed→`None`
-/// chokepoint: routing through `Username`'s validating `FromStr` subsumes the
-/// old emptiness check (a `Username` cannot be empty).
+/// chokepoint: `Username`'s own `Deserialize` routes through its validating
+/// `FromStr` (a `Username` cannot be empty), and a missing `is_operator` defaults
+/// to `false` for backward compatibility.
 #[must_use]
-pub fn decode_marker(raw: &str) -> Option<Username> {
-    #[derive(Deserialize)]
-    struct Owned {
-        username: String,
-    }
-    let m: Owned = serde_json::from_str(raw).ok()?;
-    m.username.parse().ok()
+pub fn decode_marker(raw: &str) -> Option<SessionUser> {
+    serde_json::from_str(raw).ok()
 }
 
 #[cfg(test)]
 mod tests {
     use common::test_support::parse_username;
 
-    use super::{decode_marker, encode_marker};
+    use super::{decode_marker, encode_marker, SessionUser};
 
     #[test]
-    fn round_trips_username() {
-        let u = parse_username("alice");
-        let raw = encode_marker(&u);
-        // The exact JSON the pre-paint `<head>` script parses — must not drift.
-        assert_eq!(raw, r#"{"username":"alice"}"#);
-        assert_eq!(decode_marker(&raw), Some(u));
+    fn round_trips_session_info() {
+        let info = SessionUser {
+            username: parse_username("alice"),
+            is_operator: true,
+        };
+        let raw = encode_marker(&info);
+        // The exact JSON the pre-paint `<head>` script parses: `username` stays the
+        // top-level key (the script reads only `.username`); `is_operator` is additive.
+        assert_eq!(raw, r#"{"username":"alice","is_operator":true}"#);
+        assert_eq!(decode_marker(&raw), Some(info));
+    }
+
+    #[test]
+    fn decode_defaults_is_operator_when_absent() {
+        // Backward compat: markers written before #591 lack `is_operator`. They MUST
+        // decode as a non-operator session, not `None` — else an existing session
+        // flashes anonymous on the first post-deploy boot (spec §1).
+        assert_eq!(
+            decode_marker(r#"{"username":"alice"}"#),
+            Some(SessionUser {
+                username: parse_username("alice"),
+                is_operator: false,
+            }),
+        );
     }
 
     #[test]
     fn round_trips_all_valid_username_chars() {
         // Hyphen/underscore/digit are valid username chars; confirm they survive
         // the JSON round-trip (none need escaping — the charset excludes `"`/`\`).
-        let u = parse_username("a_b-9");
-        assert_eq!(decode_marker(&encode_marker(&u)), Some(u));
+        let info = SessionUser {
+            username: parse_username("a_b-9"),
+            is_operator: false,
+        };
+        assert_eq!(decode_marker(&encode_marker(&info)), Some(info));
     }
 
     #[test]
     fn decode_rejects_malformed_json() {
         assert_eq!(decode_marker("not json"), None);
-        assert_eq!(decode_marker("{}"), None);
+        assert_eq!(decode_marker("{}"), None); // missing required `username`
     }
 
     #[test]

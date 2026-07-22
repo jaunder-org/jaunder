@@ -86,7 +86,9 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
     // projector server-renders) injected via `inner_html`, so a seeded first paint
     // and the reactive re-render coincide (flash-free). `display:contents` keeps
     // the host wrapper out of the aside's layout.
-    let owner = RwSignal::new(marker_username_on_boot());
+    // TRANSITIONAL (#591 Task 1): seed the username out of the richer marker; Task 3
+    // replaces this whole boot/reconcile block with the shared session context.
+    let owner = RwSignal::new(crate::auth::marker_storage::get().map(|s| s.username));
 
     // Background reconcile / correctness backstop (D3): confirm the marker against
     // the real session and correct a stale one without gating first paint — a dead
@@ -97,7 +99,13 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
         if let Some(res) = reconcile.get() {
             match res {
                 Ok(Some(u)) => {
-                    crate::auth::marker_storage::set(&u);
+                    // TRANSITIONAL (#591 Task 1): marker `is_operator` is unread until
+                    // the shared session context seeds from it (Task 3, which deletes
+                    // this Effect). `false` is harmless here.
+                    crate::auth::marker_storage::set(&crate::auth::SessionUser {
+                        username: u.clone(),
+                        is_operator: false,
+                    });
                     if owner.get_untracked().as_ref() != Some(&u) {
                         owner.set(Some(u));
                     }
@@ -128,13 +136,6 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
             }}
         </aside>
     }
-}
-
-/// Boot-time marker read: `Some(username)` in the browser when the auth marker is
-/// set, `None` on the host build (the sidebar only ever renders in wasm). Lets the
-/// sidebar pick authed vs. anon synchronously at mount (#181), no async gate.
-fn marker_username_on_boot() -> Option<Username> {
-    crate::auth::marker_storage::get()
 }
 
 /// The authenticated sidebar chrome (brand, search, nav + operator admin links,
