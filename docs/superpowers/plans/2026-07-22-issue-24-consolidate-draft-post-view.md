@@ -302,7 +302,7 @@ Run `cargo xtask check` first (**jaunder-commit**).
   `preview_url`. `DraftSummary` carries `permalink: String` and **no**
   `preview_url`. No code emits `/draft/:id/preview`.
 
-- [ ] **Step 1: Update the integration assertions (the contract).** In
+- [x] **Step 1: Update the integration assertions (the contract).** In
       `server/tests/web/web_posts.rs`, adapt every reader of the two DTOs'
       now-`String` `permalink` and drop the `preview_url` assertions:
   - `create_post_persists_rendered_published_post`: remove the
@@ -324,14 +324,14 @@ Run `cargo xtask check` first (**jaunder-commit**).
   - delete-flow test: change `let permalink = created.permalink.unwrap();`
     (`:2474`) to `let permalink = created.permalink;`.
 
-- [ ] **Step 2: Run those tests, verify they fail.**
+- [x] **Step 2: Run those tests, verify they fail.**
 
 Run: `cargo nextest run -p jaunder --test integration create_post` Expected:
 FAIL to compile — `preview_url` no longer referenced but the field still exists
 / `permalink` type still `Option`. (Proves the assertions bind to the new
 field.)
 
-- [ ] **Step 3: Change the DTOs and builders.**
+- [x] **Step 3: Change the DTOs and builders.**
   - `CreatePostResult`: remove `pub preview_url: String,`; change
     `pub permalink: Option<String>,` → `pub permalink: String,`.
   - `UpdatePostResult`: same two edits.
@@ -346,7 +346,7 @@ field.)
   - `list_drafts` builder (`486-501`): remove the `preview_url` line (keep
     `permalink`).
 
-- [ ] **Step 4: Update the flash/link consumers.**
+- [x] **Step 4: Update the flash/link consumers.**
   - `InlineComposer` (`764-767`): `let url = created.permalink.clone();` (drop
     the `.unwrap_or_else(|| created.preview_url…)` fallback).
   - `CreatePostPage` (`1081-1096`): collapse the two links (`preview-link` +
@@ -365,7 +365,7 @@ field.)
     leaving only the `"Permalink"` link.
   - `parse.rs:153`: remove `preview_url: …` from the `DraftSummary` fixture.
 
-- [ ] **Step 5: Run the tests and gate, verify green.** Run the full `web_posts`
+- [x] **Step 5: Run the tests and gate, verify green.** Run the full `web_posts`
       suite (the changed assertions span `create_post`, `update_post`, and the
       delete-flow tests):
 
@@ -374,12 +374,12 @@ Run: `cargo xtask check` — Expected: PASS (fmt/clippy/coverage + full
 instrumented tests; no new markers). A missed `permalink` type site (if any)
 surfaces here as a compile error.
 
-- [ ] **Step 6: Confirm no preview URL is emitted anywhere.**
+- [x] **Step 6: Confirm no preview URL is emitted anywhere.**
 
 Run: `rg -n 'preview_url|/draft/.*preview' web/src server/tests` Expected: no
 hits (AC6).
 
-- [ ] **Step 7: Commit.**
+- [x] **Step 7: Commit.**
 
 ```bash
 git add web/src/posts/api.rs web/src/posts/component.rs web/src/posts/parse.rs server/tests/web/web_posts.rs
@@ -403,24 +403,28 @@ Run `cargo xtask check` first (**jaunder-commit**).
   the draft at its permalink, and a different signed-in user and an anonymous
   visitor are denied.
 
-- [ ] **Step 1: Read the test and identify missing cases.** AC8 requires all
+- [x] **Step 1: Read the test and identify missing cases.** AC8 requires all
       three: author sees; a _different_ authenticated user is denied; an
       anonymous request is denied. If any case is absent, add it.
 
-- [ ] **Step 2: Add the missing assertion(s).** For the denial cases, call
+- [x] **Step 2: Add the missing assertion(s).** (No change needed — all three
+      cases already present: anon→NOT_FOUND, stranger→NOT_FOUND, author→OK with
+      `is_draft:true`, in `get_post_returns_draft_to_author_only`; reinforced by
+      `get_post_hides_drafts_from_guests`.) For the denial cases, call
       `get_post` with the draft's permalink params as (a) a second authenticated
       user and (b) no auth, asserting each returns not-found / is denied the
       draft (match the crate's existing denial assertion style —
       `WebError::not_found` or the test's helper). If all three cases already
       exist, record that in the commit body and skip to Step 4.
 
-- [ ] **Step 3: Run the test, verify it passes.**
+- [x] **Step 3: Run the test, verify it passes.** (Passed under Task 4's full `cargo xtask check` instrumented run — both backends, `tests-ok`.)
 
 Run:
 `cargo nextest run -p jaunder --test integration get_post_returns_draft_to_author_only`
 Expected: PASS.
 
-- [ ] **Step 4: Commit.**
+- [x] **Step 4: Commit.** (No commit — AC8 was already covered, so this task made
+      no code change.)
 
 ```bash
 git add server/tests/web/web_posts.rs
