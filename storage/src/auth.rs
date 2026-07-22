@@ -1,51 +1,10 @@
-use std::{fmt, str::FromStr};
-
-use thiserror::Error;
-
 use crate::SiteConfigStorage;
 
-// ---------------------------------------------------------------------------
-// RegistrationPolicy
-// ---------------------------------------------------------------------------
-
-/// The site's user-registration access policy.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RegistrationPolicy {
-    /// Anyone may register without a code.
-    Open,
-    /// New accounts require a valid, unused invite code.
-    InviteOnly,
-    /// Registration is disabled; no new accounts can be created.
-    Closed,
-}
-
-impl fmt::Display for RegistrationPolicy {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            RegistrationPolicy::Open => write!(f, "open"),
-            RegistrationPolicy::InviteOnly => write!(f, "invite_only"),
-            RegistrationPolicy::Closed => write!(f, "closed"),
-        }
-    }
-}
-
-/// Error returned when a string does not name a valid [`RegistrationPolicy`].
-#[derive(Debug, Error)]
-#[error("invalid registration policy: {0:?}")]
-pub struct InvalidRegistrationPolicy(String);
-
-impl FromStr for RegistrationPolicy {
-    type Err = InvalidRegistrationPolicy;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "open" => Ok(RegistrationPolicy::Open),
-            "invite_only" => Ok(RegistrationPolicy::InviteOnly),
-            "closed" => Ok(RegistrationPolicy::Closed),
-            other => Err(InvalidRegistrationPolicy(other.to_owned())),
-        }
-    }
-}
+// `RegistrationPolicy` now lives in `common` (importable ungated from the wasm
+// client, per ADR-0065); storage re-exports it so `storage::RegistrationPolicy`
+// call sites keep resolving. `load_registration_policy` stays here — it needs
+// `SiteConfigStorage`.
+pub use common::registration::RegistrationPolicy;
 
 // ---------------------------------------------------------------------------
 // load_registration_policy
@@ -73,52 +32,9 @@ mod tests {
     use rstest::*;
     use rstest_reuse::*;
 
-    // --- FromStr / Display ---
-
-    #[test]
-    fn open_parses() {
-        assert_eq!(
-            "open".parse::<RegistrationPolicy>().unwrap(),
-            RegistrationPolicy::Open
-        );
-    }
-
-    #[test]
-    fn invite_only_parses() {
-        assert_eq!(
-            "invite_only".parse::<RegistrationPolicy>().unwrap(),
-            RegistrationPolicy::InviteOnly
-        );
-    }
-
-    #[test]
-    fn closed_parses() {
-        assert_eq!(
-            "closed".parse::<RegistrationPolicy>().unwrap(),
-            RegistrationPolicy::Closed
-        );
-    }
-
-    #[test]
-    fn unknown_string_returns_error() {
-        assert!("unknown".parse::<RegistrationPolicy>().is_err());
-    }
-
-    #[test]
-    fn display_round_trips() {
-        for policy in [
-            RegistrationPolicy::Open,
-            RegistrationPolicy::InviteOnly,
-            RegistrationPolicy::Closed,
-        ] {
-            assert_eq!(
-                policy.to_string().parse::<RegistrationPolicy>().unwrap(),
-                policy
-            );
-        }
-    }
-
     // --- load_registration_policy ---
+    // (type-behavior tests — FromStr / Display / serde — live with the type in
+    // `common::registration`.)
 
     #[apply(backends)]
     #[tokio::test]
