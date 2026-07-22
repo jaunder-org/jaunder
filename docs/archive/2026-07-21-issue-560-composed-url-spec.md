@@ -19,7 +19,7 @@ against the current origin.
   produced by the `compose` seam becomes `AbsoluteUrl`; the feed and atompub
   endpoints **and the feed-regeneration worker** **error when `base_url` is
   unset** rather than silently emitting root-relative URLs. This makes every
-  *composed* URL absolute — the feed/collection `<id>`, `self`, `first`, `next`,
+  _composed_ URL absolute — the feed/collection `<id>`, `self`, `first`, `next`,
   the atompub `edit`/media URLs, **and the per-item feed URLs** (atom
   `Entry.id`/`<link>`, RSS `<link>`/`guid`, JSON item `url`). The last are now
   composed from `base` during feed regeneration (`FeedItem.permalink` →
@@ -29,23 +29,26 @@ against the current origin.
   migration burden.)
 - **D2 — no sum type.** Because every composed URL is now absolute, the
   `ComposedUrl`/absolute-or-relative enum is **not built**. This is a deliberate
-  divergence from the issue's original "sum type" direction, made possible by D1.
+  divergence from the issue's original "sum type" direction, made possible by
+  D1.
 - **D3 — `RootRelativeUrl` newtype** for the always-root-relative fields — the
   **web** post `permalink`/`preview_url`/`edit_url` on the WASM-wire post DTOs,
   which the browser resolves against the current origin and are never composed.
-  (The *feed* `FeedItem.permalink` is **not** one of these — under D1 it is
+  (The _feed_ `FeedItem.permalink` is **not** one of these — under D1 it is
   composed to `AbsoluteUrl`.) Per ADR-0063 this is a distinct grammar from both
-  `AbsoluteUrl` and `FeedPath`; **do not fold onto `FeedPath`** (that is a closed
-  feed-endpoint identity newtype and an *input* to `compose`, not a URL output).
+  `AbsoluteUrl` and `FeedPath`; **do not fold onto `FeedPath`** (that is a
+  closed feed-endpoint identity newtype and an _input_ to `compose`, not a URL
+  output).
 - **D4 — include the web post fields.** The always-relative post
   `permalink`/`preview_url`/`edit_url` on the WASM-wire post DTOs are typed
   `RootRelativeUrl` in this issue (not split to a follow-up), with the serde +
-  `Deref<str>`/`Display` surface their Leptos `href=`/`window.location` consumers
-  need.
+  `Deref<str>`/`Display` surface their Leptos `href=`/`window.location`
+  consumers need.
 - **D5 — query params via `url`, not `format!`.** The `FeedMeta.next` cursor URL
   is built with a new `AbsoluteUrl::with_query_pairs` method backed by
-  `url::Url::query_pairs_mut()` (correct percent-encoding), replacing the current
-  `format!("{collection_url}?updated_before=…&id_before=…")` string concatenation.
+  `url::Url::query_pairs_mut()` (correct percent-encoding), replacing the
+  current `format!("{collection_url}?updated_before=…&id_before=…")` string
+  concatenation.
 
 ## Context / as-built (see #560 recon)
 
@@ -74,8 +77,8 @@ against the current origin.
     `PostSummary` (`web/src/posts/api.rs`, `api/listing.rs`); produced by
     `PostRecord::permalink()` (`storage/src/posts.rs:80`) and
     `format!("/draft/{id}/preview")`.
-  - `FeedItem.permalink` (`metadata.rs:26`), produced by `p.permalink()`
-    (always relative).
+  - `FeedItem.permalink` (`metadata.rs:26`), produced by `p.permalink()` (always
+    relative).
 
 ## Design
 
@@ -84,10 +87,14 @@ against the current origin.
 A `StrNewtype`-derived newtype (mirroring `AbsoluteUrl`/`FeedPath`) over a
 validated host-less root-relative reference.
 
-- **Invariant:** starts with `/`, no scheme/authority, optional query; parses as
-  a relative reference against a dummy base (via the `url` crate) and re-emits
-  canonical form. Rejects absolute URLs (has scheme/host), protocol-relative
-  `//host`, and anything not `/`-rooted.
+- **Invariant (structural):** a single leading `/` (host-less), not
+  protocol-relative `//host`, not an absolute `scheme://`, and no
+  whitespace/control characters; the stored value is the trimmed input.
+  (Implemented structurally rather than via a `url`-crate resolve — the fields
+  it types carry no query today, so no canonical query-normalization is needed,
+  and the structural form keeps every validation branch reachable for the
+  coverage gate.) Rejects absolute URLs, protocol-relative `//host`, and
+  anything not `/`-rooted.
 - **Trailer (via `#[derive(StrNewtype)]`):** `Display`, `Deref<str>`/`AsRef`/
   `Borrow`, `TryFrom<String>`, `From<Self> for String`, `PartialEq<str>`,
   validating serde bridge — everything the feed renderers (`&str` out) and the
@@ -97,8 +104,9 @@ validated host-less root-relative reference.
 ### `AbsoluteUrl` additions
 
 - `with_query_pairs(&self, pairs: &[(&str, &str)]) -> AbsoluteUrl` — parses self
-  (always a valid `url` by construction), `query_pairs_mut().extend_pairs(pairs)`,
-  re-emits canonical. Used for the `next` cursor (D5).
+  (always a valid `url` by construction),
+  `query_pairs_mut().extend_pairs(pairs)`, re-emits canonical. Used for the
+  `next` cursor (D5).
 
 ### `compose` requires a base — the type, not a runtime check
 
@@ -118,7 +126,7 @@ pub fn compose(base: &AbsoluteUrl, path: &str) -> AbsoluteUrl;
   `&FeedPath`, or a `format!` result — never a `RootRelativeUrl`).
 
 The `Option<AbsoluteUrl> → &AbsoluteUrl` narrowing happens **once**, at each
-feed/atompub handler and the regeneration worker's entry, *before* any
+feed/atompub handler and the regeneration worker's entry, _before_ any
 composition:
 
 ```rust
@@ -132,8 +140,8 @@ boundary — **not** threaded as a `Result` through the ~12 compose call sites
 (`regenerate.rs:69,79`, `atompub/posts.rs:167,452`, `atompub/media.rs:31,36`,
 `atompub/mapping.rs:142,157`, `atompub/service.rs:45,51`, `rsd.rs:35,37`,
 `worker.rs:206`, `invites/mod.rs:68`, `commands.rs:309`). The invite/CLI sites
-already hold a non-optional `base_url`, so they pass `&base_url` directly with no
-guard.
+already hold a non-optional `base_url`, so they pass `&base_url` directly with
+no guard.
 
 ### Error surface when `base_url` is unset (the single guard)
 
@@ -150,8 +158,8 @@ The guard (`ok_or(BaseUrlRequired)`) fires at two kinds of entry:
 
 The existing unit test
 `regenerate_site_feed_falls_back_to_relative_urls_without_base`
-(`regenerate.rs:222-271`) asserts the *old* relative-fallback and is **inverted**
-to assert the new `BaseUrlRequired` error.
+(`regenerate.rs:222-271`) asserts the _old_ relative-fallback and is
+**inverted** to assert the new `BaseUrlRequired` error.
 
 ### Test & e2e migration (required by D1)
 
@@ -166,30 +174,30 @@ they would fail. This issue must:
   server/integration tests that build feeds/atompub without base for the same
   migration.
 
-*(Open for spec-approval: whether a more specific status/user-facing config error
-is warranted — see below.)*
+_(Open for spec-approval: whether a more specific status/user-facing config
+error is warranted — see below.)_
 
 ## Retype summary
 
-| Field(s) | New type |
-| --- | --- |
-| `FeedMetadata.self_url`, `canonical_url` | `AbsoluteUrl` |
-| `FeedMeta.id`, `self_url`, `first`, `next`, `previous` | `AbsoluteUrl` (`next` via `with_query_pairs`) |
-| `MediaLinkEntry.id`, `edit_uri`, `edit_media_uri`, `content_src` | `AbsoluteUrl` |
-| post `permalink`, `preview_url`, `edit_url` (web DTOs) | `RootRelativeUrl` |
-| `FeedItem.permalink` (feed DTO) | `AbsoluteUrl` — composed from `base` in `regenerate.rs` (`compose(base, &record.permalink())?`); the atom `Entry.id`/`<link>`, RSS `<link>`/`guid`, JSON item `url` all render this absolute value |
+| Field(s)                                                         | New type                                                                                                                                                                                           |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FeedMetadata.self_url`, `canonical_url`                         | `AbsoluteUrl`                                                                                                                                                                                      |
+| `FeedMeta.id`, `self_url`, `first`, `next`, `previous`           | `AbsoluteUrl` (`next` via `with_query_pairs`)                                                                                                                                                      |
+| `MediaLinkEntry.id`, `edit_uri`, `edit_media_uri`, `content_src` | `AbsoluteUrl`                                                                                                                                                                                      |
+| post `permalink`, `preview_url`, `edit_url` (web DTOs)           | `RootRelativeUrl`                                                                                                                                                                                  |
+| `FeedItem.permalink` (feed DTO)                                  | `AbsoluteUrl` — composed from `base` in `regenerate.rs` (`compose(base, &record.permalink())?`); the atom `Entry.id`/`<link>`, RSS `<link>`/`guid`, JSON item `url` all render this absolute value |
 
-External-crate boundaries (`atom_syndication::Feed/Entry/Link`, `rss`) still take
-`String` — convert with `.into()`/`.to_string()` at the boundary (recon §7). The
-pure feed renderers (`atom.rs`/`rss.rs`/`json.rs`) stay pure — they receive the
-already-composed `AbsoluteUrl` values on `FeedMetadata`/`FeedItem`, so no `base`
-threads into the renderer.
+External-crate boundaries (`atom_syndication::Feed/Entry/Link`, `rss`) still
+take `String` — convert with `.into()`/`.to_string()` at the boundary (recon
+§7). The pure feed renderers (`atom.rs`/`rss.rs`/`json.rs`) stay pure — they
+receive the already-composed `AbsoluteUrl` values on `FeedMetadata`/`FeedItem`,
+so no `base` threads into the renderer.
 
 ## Acceptance criteria (observable)
 
 1. `common::RootRelativeUrl` exists with the `StrNewtype` trailer; rejects
-   absolute/`//host`/non-`/`-rooted strings (unit tests), accepts `/~a/b` (and an
-   optional query, though the fields it types don't currently carry one).
+   absolute/`//host`/non-`/`-rooted strings (unit tests), accepts `/~a/b` (and
+   an optional query, though the fields it types don't currently carry one).
 2. `AbsoluteUrl::with_query_pairs` produces a correctly percent-encoded query
    (unit test: a value containing `&`/space/`=` round-trips encoded).
 3. `compose(base: &AbsoluteUrl, path: &str) -> AbsoluteUrl` takes a **required**
@@ -207,17 +215,17 @@ threads into the renderer.
    `<link>`/`guid`, JSON item `url`** — is absolute (test asserts no emitted URL
    begins with `/`).
 6. The `next` cursor carries the same cursor values: **decode** `updated_before`
-   and `id_before` from both the old and the new URL and assert equal values with
-   pair order preserved (the *encodings* differ — `query_pairs_mut` uses
+   and `id_before` from both the old and the new URL and assert equal values
+   with pair order preserved (the _encodings_ differ — `query_pairs_mut` uses
    form-urlencoding vs. today's `NON_ALPHANUMERIC` percent-encoding — so assert
    decoded equivalence, not byte-identity). No `format!` query concat remains in
    `atompub/posts.rs`.
 7. Post `permalink`/`preview_url` round-trip over the server↔WASM wire as
    `RootRelativeUrl` (existing posts e2e green; Leptos `href=`/redirect
    consumers unchanged).
-8. The feed/atompub e2e (`feeds.spec.ts`, `atompub.spec.ts`) seed `site.base_url`
-   and stay green; the inverted `regenerate` unit test and any base-less
-   integration tests are migrated.
+8. The feed/atompub e2e (`feeds.spec.ts`, `atompub.spec.ts`) seed
+   `site.base_url` and stay green; the inverted `regenerate` unit test and any
+   base-less integration tests are migrated.
 9. `cargo xtask validate --no-e2e` green; CI e2e matrix green.
 
 ## Open for spec-approval (flagged judgment calls)
@@ -228,14 +236,14 @@ threads into the renderer.
   collection/edit URL as the id, so typing `id` as `AbsoluteUrl` matches actual
   usage but **forecloses non-http ids** and invalidates that test literal.
   **Proposed:** type `id` as `AbsoluteUrl` and update the test to an http id
-  (matching production). *Accept, or keep `id` a broader IRI type?*
+  (matching production). _Accept, or keep `id` a broader IRI type?_
 - **Error surface/status** when `base_url` unset (500 vs. a specific status/
   config error) — confirm the proposed 500 + message.
 
 ## Related follow-ups
 
-- **#575** — a "site.base_url not configured" admin warning banner (mirroring the
-  backup-not-configured banner), the friendly surface for the require-base
+- **#575** — a "site.base_url not configured" admin warning banner (mirroring
+  the backup-not-configured banner), the friendly surface for the require-base
   behavior this issue introduces. Ships independently.
 
 ## Out of scope
