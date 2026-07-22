@@ -11,10 +11,9 @@ use leptos::prelude::*;
 use leptos_router::components::Redirect;
 
 use crate::auth::current_user;
-use crate::pages::signal_read::read_signal;
-use crate::pages::ui::Topbar;
 use crate::posts::{list_home_feed, InlineComposer};
 use crate::timeline::{TimelineRows, TimelineState};
+use crate::topbar::Topbar;
 
 #[component]
 pub fn CockpitPage() -> impl IntoView {
@@ -74,9 +73,9 @@ pub fn CockpitPage() -> impl IntoView {
     // would re-run the closure and REMOUNT InlineComposer, wiping its publish
     // flash (the same hazard the `username` guard above avoids). The memo
     // dedupes `None -> None`, so only a real `Failed` transition notifies.
-    let read_error = Memo::new(move |_| read_signal!(state.status).into_failure());
-    let read_bounce = move || read_signal!(bounce);
-    let read_username = move || read_signal!(username);
+    let read_error = Memo::new(move |_| state.status.get().into_failure());
+    let read_bounce = move || bounce.get();
+    let read_username = move || username.get();
 
     view! {
         {move || {
