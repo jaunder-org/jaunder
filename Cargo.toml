@@ -35,6 +35,9 @@ leptos_meta = { version = "0.8.2" }
 leptos_router = { version = "0.8.2" }
 leptos_axum = { version = "0.8.2" }
 reactive_stores = { version = "0.4.3" }
+# Version-matched to leptos 0.8.2's transitive `server_fn` (Cargo.lock) so the
+# `multipart` codec reuses the existing vendor rather than pulling a second copy.
+server_fn = { version = "0.8.12" }
 
 async-trait = "0.1"
 axum = "0.8.4"

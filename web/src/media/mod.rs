@@ -12,8 +12,8 @@ mod api;
 mod component;
 
 pub use api::{
-    delete_media, list_my_media, media_usage, DeleteMedia, DeleteMediaResult, ListMyMedia,
-    MediaItem, MediaUsage, MediaUsageData,
+    delete_media, list_my_media, media_usage, upload_media, DeleteMedia, DeleteMediaResult,
+    ListMyMedia, MediaItem, MediaUsage, MediaUsageData, UploadMedia,
 };
 
 // `extract_upload_url` is a pure host-tested helper consumed only by the wasm-only

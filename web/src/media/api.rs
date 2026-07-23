@@ -8,14 +8,24 @@ use common::media::{
     ByteSize, ContentHash, ContentType, Filename, MaxFileSize, MediaSource, UserQuota,
 };
 use leptos::prelude::*;
+// `MultipartData`/`MultipartFormData` are named in the `upload_media` signature,
+// which compiles for both the wasm client stub and the server build, so this import
+// is ungated. (#517)
+use leptos::server_fn::codec::{MultipartData, MultipartFormData};
 use serde::{Deserialize, Serialize};
+
+// `upload_media`'s return type; ungated so it is nameable on the wasm client stub
+// (where `storage` is not compiled). (#517)
+use common::media::UploadResponse;
 
 #[cfg(feature = "server")]
 use {
     crate::auth::require_auth,
     crate::error::InternalError,
+    leptos_axum::extract,
+    std::path::PathBuf,
     std::sync::Arc,
-    storage::{MediaStorage, PostStorage, SiteConfigStorage},
+    storage::{MediaManager, MediaStorage, PostStorage, SiteConfigStorage},
 };
 
 use common::ids::PostId;
@@ -190,6 +200,75 @@ pub async fn delete_media(
             deleted: true,
             referenced_in_posts,
         })
+    })
+}
+
+/// Maps a media upload `anyhow::Error` (carrying a `storage::MediaError`) to an
+/// `InternalError`, so `boundary!` projects it to the right `WebError`: a bad
+/// request / too-large / over-quota is client validation (`WebError::Validation`),
+/// an internal or unknown failure masks as a server error (`WebError::Server`). The
+/// upload metric is already emitted inside `storage::MediaManager`, so this is a
+/// pure classification.
+#[cfg(feature = "server")]
+fn map_media_error(err: &anyhow::Error) -> InternalError {
+    match err.downcast_ref::<storage::MediaError>() {
+        Some(storage::MediaError::BadRequest(message)) => {
+            InternalError::validation(message.clone())
+        }
+        Some(storage::MediaError::PayloadTooLarge) => {
+            InternalError::validation("payload too large")
+        }
+        Some(storage::MediaError::InsufficientStorage) => {
+            InternalError::validation("insufficient storage")
+        }
+        // cov:ignore-start — defensive server-error fallback, reached only by a
+        // non-`MediaError` upload failure (e.g. a mid-request DB/IO fault). `require_auth`
+        // would trip such a fault first, so it is unreachable from an integration test.
+        Some(storage::MediaError::Internal(_)) | None => {
+            InternalError::server_message(err.to_string())
+        } // cov:ignore-stop
+    }
+}
+
+/// Streams a multipart file upload to storage and returns its stored URL/metadata.
+/// The multipart `#[server]` fn replacing the old `POST /media/upload` glue (#517).
+#[server(input = MultipartFormData, endpoint = "/upload_media")]
+pub async fn upload_media(data: MultipartData) -> WebResult<UploadResponse> {
+    boundary!("upload_media", {
+        let auth = require_auth().await?;
+        let media = expect_context::<Arc<dyn MediaStorage>>();
+        let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
+
+        // `storage_path` is an axum `Extension` (server/src/lib.rs), not a leptos
+        // context value, so pull it via the request extractor rather than expect_context.
+        let axum::Extension(storage_path) = extract::<axum::Extension<Arc<PathBuf>>>()
+            .await
+            .map_err(|e| InternalError::server_message(format!("storage_path extract: {e}")))?;
+
+        // `into_inner()` is `Some` on the server (the parsed multipart body).
+        let mut multipart = data
+            .into_inner()
+            .ok_or_else(|| InternalError::validation("missing multipart body"))?;
+
+        let field = multipart
+            .next_field()
+            .await
+            .map_err(|e| InternalError::validation(format!("bad multipart: {e}")))?
+            .ok_or_else(|| InternalError::validation("no file field"))?;
+
+        // The `file_name()`/`content_type()` borrows must end before `field` is moved
+        // into `upload` as the byte stream.
+        let filename =
+            MediaManager::validate_filename(field.file_name()).map_err(|e| map_media_error(&e))?;
+        // `multer::Field::content_type()` yields `Option<&mime::Mime>`; render it to a
+        // `String` so it outlives the field being moved into `upload` as the stream.
+        let content_type = field.content_type().map(ToString::to_string);
+
+        let manager = MediaManager::new(media, site_config, storage_path);
+        manager
+            .upload(auth.user_id, &filename, content_type.as_deref(), field)
+            .await
+            .map_err(|e| map_media_error(&e))
     })
 }
 
