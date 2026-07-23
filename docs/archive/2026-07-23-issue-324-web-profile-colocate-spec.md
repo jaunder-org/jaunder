@@ -10,6 +10,19 @@ format-control modernization. Layout template: the already-shipped
 new ADR** — this vertical applies existing decisions, it does not make novel
 ones.
 
+> **Amendment (ship-time, depends on #572 / PR #614 → ADR-0075).** #572 landed
+> mid-ship, migrating `PostFormat` off the bespoke `StrEnum` to `strum`
+> (`VariantArray` + `EnumMessage`) and establishing the shared editor
+> `FormatToggle`, which offers only the variants carrying a `strum` editor
+> message — `Html` is renderer-internal (#445) and excluded. Reconciled onto that
+> base, criterion 8 below is revised: the picker's options are **derived from
+> `PostFormat::VARIANTS` filtered by `get_message`** (not the hard-coded three),
+> so it offers **Markdown/Org only** — `Html` is dropped for parity with the
+> editors — and the storage-side default (`get_default_post_format`) is flipped
+> from `Html` to **`Markdown`** to match. `value=<PostFormat>.as_str()` in
+> criterion 8 becomes `value=<PostFormat>.to_string()` (`strum` provides
+> `Display`/`AsRefStr`, not `as_str`).
+
 ## Problem
 
 The `profile` vertical is split across files by _technology_, not feature, and

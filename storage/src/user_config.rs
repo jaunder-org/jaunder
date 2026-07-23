@@ -28,8 +28,12 @@ pub const USER_MEDIA_CACHE_POLICY_KEY: &str = "media.cache_policy";
 /// Key for a user's default post format preference.
 pub const DEFAULT_POST_FORMAT_KEY: &str = "posts.default_format";
 
-/// Reads a user's default post format preference, falling back to `Html` when
-/// unset or unparseable.
+/// Reads a user's default post format preference, falling back to `Markdown`
+/// when unset or unparseable.
+///
+/// The fallback is a *user-authoring* format: `Html` is renderer-internal (#445)
+/// — it carries no editor message and is not offered by any format picker — so an
+/// unset/garbage preference resolves to `Markdown`, the first offered format.
 ///
 /// # Errors
 ///
@@ -42,7 +46,7 @@ pub async fn get_default_post_format(
     Ok(raw
         .as_deref()
         .and_then(|s| s.parse::<PostFormat>().ok())
-        .unwrap_or(PostFormat::Html))
+        .unwrap_or(PostFormat::Markdown))
 }
 
 /// Sets a user's default post format preference.
@@ -147,12 +151,12 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn get_default_post_format_unset_returns_html(#[case] backend: Backend) {
+    async fn get_default_post_format_unset_returns_markdown(#[case] backend: Backend) {
         let env = backend.setup().await;
         let user_id = seed_user(&env.state).await;
         let config = &*env.state.user_config;
         let result = get_default_post_format(config, user_id).await.unwrap();
-        assert_eq!(result, PostFormat::Html);
+        assert_eq!(result, PostFormat::Markdown);
     }
 
     #[apply(backends)]
@@ -183,7 +187,7 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn get_default_post_format_invalid_string_returns_html(#[case] backend: Backend) {
+    async fn get_default_post_format_invalid_string_returns_markdown(#[case] backend: Backend) {
         let env = backend.setup().await;
         let user_id = seed_user(&env.state).await;
         let config = &*env.state.user_config;
@@ -195,6 +199,6 @@ mod tests {
             .unwrap();
 
         let result = get_default_post_format(config, user_id).await.unwrap();
-        assert_eq!(result, PostFormat::Html);
+        assert_eq!(result, PostFormat::Markdown);
     }
 }

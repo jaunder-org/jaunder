@@ -3130,7 +3130,7 @@ async fn update_post_with_tags_unset_leaves_existing_tags_alone(#[case] backend:
 
 #[apply(backends)]
 #[tokio::test]
-async fn get_default_post_format_returns_html_by_default(#[case] backend: Backend) {
+async fn get_default_post_format_returns_markdown_by_default(#[case] backend: Backend) {
     let (_base, state, cookie) = login_and_state(backend).await;
 
     let (status, body) = post_form(
@@ -3141,7 +3141,10 @@ async fn get_default_post_format_returns_html_by_default(#[case] backend: Backen
     )
     .await;
     assert_eq!(status, StatusCode::OK, "get body: {body}");
-    assert_eq!(body, "\"html\"", "expected default format to be html");
+    assert_eq!(
+        body, "\"markdown\"",
+        "expected default format to be markdown"
+    );
 }
 
 #[apply(backends)]
