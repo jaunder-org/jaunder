@@ -378,10 +378,15 @@ pub fn render_sidebar(active_key: &str) -> String {
     reason = "byte counts < 2^52 convert to f64 exactly; larger values only affect a \
               human-readable one-decimal display, so any loss is immaterial"
 )]
-pub fn format_bytes(bytes: i64) -> String {
+pub fn format_bytes(bytes: impl Into<i64>) -> String {
     const KB: i64 = 1_024;
     const MB: i64 = 1_024 * KB;
     const GB: i64 = 1_024 * MB;
+
+    // Generic over the byte-ish newtypes (`ByteSize`, `MaxFileSize`, `UserQuota` — each
+    // `Into<i64>` via `NumNewtype`) as well as a bare `i64`, so call sites pass the typed
+    // value without spelling `.value()`.
+    let bytes: i64 = bytes.into();
 
     if bytes >= GB {
         format!("{:.1} GB", bytes as f64 / GB as f64)
