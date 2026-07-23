@@ -10,7 +10,7 @@
 
 use crate::absolute_url::AbsoluteUrl;
 use crate::audience::AudienceName;
-use crate::backup::RetentionCount;
+use crate::backup::{DestinationPath, RetentionCount};
 use crate::bio::Bio;
 use crate::display_name::DisplayName;
 use crate::email::Email;
@@ -110,6 +110,18 @@ pub fn parse_bio(s: &str) -> Bio {
 #[must_use]
 pub fn parse_retention_count(s: &str) -> RetentionCount {
     s.parse().expect("valid test retention count")
+}
+
+/// Parse `s` into a valid [`DestinationPath`] for tests — the single place a test backup
+/// destination literal is parsed, so a malformed fixture (empty/whitespace) fails loudly
+/// and the parse isn't re-spelled at every `BackupConfig` construction site.
+///
+/// # Panics
+///
+/// Panics if `s` is empty or whitespace-only.
+#[must_use]
+pub fn parse_destination_path(s: &str) -> DestinationPath {
+    s.parse().expect("valid test destination path")
 }
 
 /// Parse `s` into a [`PageSize`] for tests — the single place a test page-size literal is
