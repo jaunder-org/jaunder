@@ -1,11 +1,12 @@
 use crate::error::WebError;
 use crate::forms::Field;
-use crate::pages::Topbar;
-use crate::profile::{get_default_post_format, get_profile, SetDefaultPostFormat, UpdateProfile};
+use crate::topbar::Topbar;
 use common::bio::Bio;
 use common::display_name::DisplayName;
 use common::render::PostFormat;
 use leptos::prelude::*;
+
+use super::api::{get_default_post_format, get_profile, SetDefaultPostFormat, UpdateProfile};
 
 /// Profile page — shows username, display name, bio; allows updating.
 #[component]
