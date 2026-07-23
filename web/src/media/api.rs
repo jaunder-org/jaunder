@@ -61,32 +61,6 @@ pub struct DeleteMediaResult {
     pub referenced_in_posts: Vec<PostId>,
 }
 
-/// Extracts the `url` field from the `/media/upload` JSON response body.
-///
-/// The upload endpoint (`server/src/media.rs`) returns `{"url": "/media/…", …}`;
-/// the wasm-only upload glue in [`super::component`] calls this to pull the media
-/// URL out of the response text. It lives here — ungated, host-compiled, and
-/// coverage-measured — so the parse is unit-tested off the browser (ADR-0055: pure
-/// logic is extracted before the surrounding code is wasm-gated).
-///
-/// # Errors
-///
-/// Returns `Err` with a human-readable message when the body is not valid JSON or
-/// has no string `url` field.
-///
-/// `pub` (and re-exported from `mod.rs`) so it is an *exported* item: its only
-/// callers are the wasm-only `component` leaf and the `#[cfg(test)]` tests below,
-/// so a `pub(crate)` fn would be `dead_code` on the host non-test build. This
-/// mirrors `auth::marker`'s public host-tested codec.
-pub fn extract_upload_url(body: &str) -> Result<String, String> {
-    let parsed: serde_json::Value =
-        serde_json::from_str(body).map_err(|_| "invalid JSON in response".to_string())?;
-    parsed["url"]
-        .as_str()
-        .map(ToString::to_string)
-        .ok_or_else(|| "response JSON missing 'url' field".to_string())
-}
-
 /// Lists media items owned by the authenticated user.
 #[server(endpoint = "/list_my_media")]
 pub async fn list_my_media(
@@ -270,49 +244,4 @@ pub async fn upload_media(data: MultipartData) -> WebResult<UploadResponse> {
             .await
             .map_err(|e| map_media_error(&e))
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::extract_upload_url;
-
-    #[test]
-    fn extracts_url_field() {
-        assert_eq!(
-            extract_upload_url(r#"{"url":"/media/upload/ab/cd/hash/pic.png"}"#),
-            Ok("/media/upload/ab/cd/hash/pic.png".to_string())
-        );
-    }
-
-    #[test]
-    fn extracts_url_ignoring_other_fields() {
-        assert_eq!(
-            extract_upload_url(r#"{"size_bytes":11,"url":"/media/x","content_type":"image/png"}"#),
-            Ok("/media/x".to_string())
-        );
-    }
-
-    #[test]
-    fn rejects_missing_url_field() {
-        assert_eq!(
-            extract_upload_url(r#"{"size_bytes":11}"#),
-            Err("response JSON missing 'url' field".to_string())
-        );
-    }
-
-    #[test]
-    fn rejects_non_string_url_field() {
-        assert_eq!(
-            extract_upload_url(r#"{"url":42}"#),
-            Err("response JSON missing 'url' field".to_string())
-        );
-    }
-
-    #[test]
-    fn rejects_invalid_json() {
-        assert_eq!(
-            extract_upload_url("not json"),
-            Err("invalid JSON in response".to_string())
-        );
-    }
 }

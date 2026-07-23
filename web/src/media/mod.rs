@@ -16,10 +16,5 @@ pub use api::{
     ListMyMedia, MediaItem, MediaUsage, MediaUsageData, UploadMedia,
 };
 
-// `extract_upload_url` is a pure host-tested helper consumed only by the wasm-only
-// `component` leaf; this re-export makes it an exported item so it is not
-// `dead_code` on the host build (see its doc comment).
-pub use api::extract_upload_url;
-
 #[cfg(target_arch = "wasm32")]
 pub use component::{MediaPage, MediaUpload};

@@ -1,20 +1,21 @@
 //! The media vertical's wasm-only UI (ADR-0070): the upload control and its
-//! browser `fetch` glue. Declared `#[cfg(target_arch = "wasm32")] mod component;`
+//! browser file-picker glue. Declared `#[cfg(target_arch = "wasm32")] mod component;`
 //! in `media/mod.rs`, so this file is wasm-only by its `mod` declaration and
-//! carries no cfg gates of its own; it calls browser APIs directly. The pure
-//! response-parse is factored to the host-tested [`super::api::extract_upload_url`].
+//! carries no cfg gates of its own; it calls browser APIs directly. The upload
+//! itself goes through the [`super::upload_media`] multipart `#[server]` fn.
 
 use leptos::prelude::*;
 
 use common::pagination::{PageOffset, PageSize};
 
-use super::{list_my_media, media_usage, DeleteMedia, DeleteMediaResult, MediaItem};
+use super::{list_my_media, media_usage, upload_media, DeleteMedia, DeleteMediaResult, MediaItem};
 use crate::error::WebError;
 use crate::render::format_bytes;
 use crate::topbar::Topbar;
 
 /// A media upload control: a button that opens the file picker and immediately
-/// uploads the chosen file to `/media/upload` via a JS `fetch` (no navigation).
+/// uploads the chosen file via the [`super::upload_media`] multipart `#[server]`
+/// fn (no navigation).
 ///
 /// `on_uploaded` / `on_error`, when provided, fire with the media URL or a
 /// human-readable error. When `show_result` is set the widget also renders the
@@ -71,10 +72,12 @@ pub fn MediaUpload(
         uploading.set(true);
 
         spawn_local(async move {
-            let result = upload_file(form_data).await;
+            // `MultipartData: From<web_sys::FormData>` on the client.
+            let result = upload_media(form_data.into()).await;
             uploading.set(false);
             match result {
-                Ok(url) => {
+                Ok(resp) => {
+                    let url = resp.url;
                     if let Some(cb) = on_uploaded {
                         cb.run(url.clone());
                     }
@@ -83,7 +86,8 @@ pub fn MediaUpload(
                         upload_error.set(None);
                     }
                 }
-                Err(msg) => {
+                Err(e) => {
+                    let msg = e.to_string();
                     if let Some(cb) = on_error {
                         cb.run(msg.clone());
                     }
@@ -139,52 +143,6 @@ fn uploaded_url_view(url: String) -> impl IntoView {
             />
         </div>
     }
-}
-
-async fn upload_file(form_data: web_sys::FormData) -> Result<String, String> {
-    // crap:allow: wasm-only browser glue — a `fetch` POST to /media/upload. Not
-    // host-instrumentable (`web_sys::window` / `fetch`), so it is uncovered and
-    // CRAP source-parses it (a plain async fn, not a CRAP-exempt `#[component]`);
-    // its verification is the media-upload e2e. The pure response parse is factored
-    // out to the host-tested `super::api::extract_upload_url`.
-    use leptos::wasm_bindgen::JsCast;
-    use leptos::wasm_bindgen::JsValue;
-    use wasm_bindgen_futures::JsFuture;
-
-    let window = web_sys::window().ok_or("no window")?;
-
-    let opts = web_sys::RequestInit::new();
-    opts.set_method("POST");
-    let body_val: JsValue = form_data.into();
-    opts.set_body(&body_val);
-
-    let request = web_sys::Request::new_with_str_and_init("/media/upload", &opts).map_err(|e| {
-        e.as_string()
-            .unwrap_or_else(|| "failed to build request".to_string())
-    })?;
-
-    let resp_value = JsFuture::from(window.fetch_with_request(&request))
-        .await
-        .map_err(|e| e.as_string().unwrap_or_else(|| "network error".to_string()))?;
-
-    let resp: web_sys::Response = resp_value
-        .dyn_into()
-        .map_err(|_| "unexpected response type".to_string())?;
-
-    if !resp.ok() {
-        return Err(format!("upload failed (HTTP {})", resp.status()));
-    }
-
-    let text_promise = resp.text().map_err(|_| "failed to read response body")?;
-    let text_value: JsValue = JsFuture::from(text_promise)
-        .await
-        .map_err(|_| "failed to await response text")?;
-
-    let body: String = text_value
-        .as_string()
-        .ok_or_else(|| "response body is not a string".to_string())?;
-
-    super::api::extract_upload_url(&body)
 }
 
 #[expect(

@@ -33,7 +33,6 @@ croner.workspace = true
 serde.workspace = true
 serde_json = { workspace = true }
 strum.workspace = true
-wasm-bindgen-futures = { workspace = true }
 web-sys = { workspace = true, features = [
     "Window",
     "Document",
@@ -43,10 +42,6 @@ web-sys = { workspace = true, features = [
     "FileList",
     "FormData",
     "HtmlInputElement",
-    "Request",
-    "RequestInit",
-    "RequestMode",
-    "Response",
 ] }
 thiserror.workspace = true
 tracing = { workspace = true }
