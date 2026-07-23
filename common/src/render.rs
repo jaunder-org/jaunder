@@ -79,6 +79,10 @@ impl TryFrom<String> for PostFormat {
     }
 }
 
+// Typed `sqlx` bind/decode (feature = "sqlx"): stores/loads the TEXT token as a
+// `PostFormat` value, like the newtypes (#438) — not a stringly `.to_string()` strip.
+crate::db_enum::impl_text_column_enum!(PostFormat);
+
 /// HTML **produced by [`render`]**. This is a *provenance* marker, not a safety
 /// guarantee: `render` does **no** sanitization (see #445), so this type means
 /// "came out of our renderer", NOT "safe / XSS-free". Its value is structural — the
