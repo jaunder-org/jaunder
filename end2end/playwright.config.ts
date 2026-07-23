@@ -8,6 +8,14 @@ const traceParent = process.env.JAUNDER_E2E_TRACEPARENT;
 // wasm build. Measured in docs/observability.md #155.
 const workers = parseInt(process.env.JAUNDER_E2E_WORKERS || "2", 10);
 
+// Automatic retry of a failed test, env-driven, default 0 (fail-fast — right for
+// local `cargo xtask e2e-local` debugging). The CI/`validate` warm gate sets
+// JAUNDER_E2E_RETRIES=1 (flake.nix), so a test that fails then passes is reported
+// `flaky` (exit 0) instead of failing the check: it contains the timeout
+// flakiness that otherwise reds an unrelated PR, while the JSON report still
+// records the flake for surfacing. Mirrors the JAUNDER_E2E_WORKERS pattern (#155).
+const retries = parseInt(process.env.JAUNDER_E2E_RETRIES || "0", 10);
+
 // Firefox in a headless VM defaults to Fission + a content-process pool; each
 // Playwright worker is a separate instance, so RSS multiplies. These prefs
 // collapse each instance to one content process and trim caches — transparent to
@@ -35,6 +43,7 @@ export default defineConfig({
   fullyParallel: workers > 1,
   forbidOnly: !!process.env.CI,
   workers,
+  retries,
   // CI default reporter: streamed line output for the build log + a machine-readable
   // report at the conventional name, inside the default outputDir. The host driver
   // (cargo xtask e2e-local) overrides this with --reporter=html,line for interactive

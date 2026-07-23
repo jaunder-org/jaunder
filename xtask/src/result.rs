@@ -60,6 +60,11 @@ pub struct CommandResult {
     pub coverage: Option<crate::coverage::CoverageReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audit: Option<crate::audit_wasm::AuditReport>,
+    /// Playwright flaky tests (retried-then-passed) surfaced by `steps::flaky`
+    /// from an `e2e` combo report. Empty for every other command; skipped in the
+    /// sidecar when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub flaky: Vec<crate::steps::flaky::FlakySpec>,
     /// Pre-rendered `traces analyze` report text. Human-facing only — `traces
     /// analyze` rejects `--json`, so this is never serialized (skipped when None,
     /// and never Some on a `--json` run).
@@ -77,6 +82,7 @@ impl CommandResult {
             steps: Vec::new(),
             coverage: None,
             audit: None,
+            flaky: Vec::new(),
             traces: None,
         }
     }
@@ -182,6 +188,28 @@ mod tests {
         let v: serde_json::Value = serde_json::to_value(&r).unwrap();
         assert_eq!(v["audit"]["site_path"], "/nix/store/x-jaunder-site");
         assert_eq!(v["audit"]["artifacts"][0]["raw_bytes"], 2 * 1024 * 1024);
+    }
+
+    #[test]
+    fn flaky_specs_serialize_in_envelope() {
+        let mut r = CommandResult::new("e2e-sqlite-firefox");
+        r.push(StepResult::ok("flaky-scan").detail("1 flaky test(s)"));
+        r.flaky = vec![crate::steps::flaky::FlakySpec {
+            file: "tests/visibility.spec.ts".into(),
+            line: 150,
+            title: "Subscriber sees the post".into(),
+        }];
+        let v: serde_json::Value = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["flaky"][0]["file"], "tests/visibility.spec.ts");
+        assert_eq!(v["flaky"][0]["line"], 150);
+        assert_eq!(v["flaky"][0]["title"], "Subscriber sees the post");
+    }
+
+    #[test]
+    fn empty_flaky_is_omitted_from_json() {
+        let r = CommandResult::new("check");
+        let v: serde_json::Value = serde_json::to_value(&r).unwrap();
+        assert!(v.get("flaky").is_none(), "empty flaky is skipped, not `[]`");
     }
 
     #[test]

@@ -984,7 +984,12 @@
             value = mkE2eCombo (
               c
               // {
-                warmupEnv = " JAUNDER_E2E_WARMUP=1";
+                # RETRIES=1: the gate reports a fail-then-pass as `flaky` (exit 0)
+                # rather than failing the combo check, containing timeout flakiness
+                # (Firefox 5s `expect` races) while results.json records it.
+                # (warmupEnv is the combo's generic extra-env string — cold reuses
+                # it for WORKERS=1 — so retries ride it rather than a new param.)
+                warmupEnv = " JAUNDER_E2E_WARMUP=1 JAUNDER_E2E_RETRIES=1";
                 vmMemory = 3072;
                 vmCores = 2;
               }
