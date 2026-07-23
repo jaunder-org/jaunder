@@ -10,7 +10,7 @@ use crate::absolute_url::AbsoluteUrl;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SiteIdentity {
     /// Human-facing title for the site, used in feed metadata and similar contexts.
-    pub title: String,
+    pub title: SiteTitle,
     /// Public-facing base URL (an absolute `http(s)` origin, normalized to its
     /// canonical form with a trailing slash), if set. When absent, callers emit
     /// root-relative URLs.

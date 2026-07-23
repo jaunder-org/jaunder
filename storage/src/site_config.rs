@@ -7,7 +7,7 @@ use common::absolute_url::AbsoluteUrl;
 use common::backup::{BackupConfig, BackupMode, BackupSchedule, RetentionCount};
 use common::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
 use common::media::{MaxFileSize, UserQuota};
-use common::site::{SiteIdentity, DEFAULT_SITE_TITLE};
+use common::site::{SiteIdentity, SiteTitle};
 use common::visibility::AudienceTarget;
 use sqlx::{Database, Pool};
 
@@ -156,8 +156,8 @@ pub trait SiteConfigStorage: Send + Sync {
         let title = self
             .get(SITE_TITLE_KEY)
             .await?
-            .and_then(common::text::non_empty_owned)
-            .unwrap_or_else(|| DEFAULT_SITE_TITLE.to_owned());
+            .and_then(|v| v.parse::<SiteTitle>().ok())
+            .unwrap_or_default();
         let base_url = match self
             .get(SITE_BASE_URL_KEY)
             .await?
@@ -370,7 +370,7 @@ mod tests {
     use common::media::{MaxFileSize, UserQuota};
     use common::test_support::{
         parse_absolute_url, parse_feed_min_days, parse_feed_min_items, parse_max_file_size,
-        parse_retention_count, parse_user_quota,
+        parse_retention_count, parse_site_title, parse_user_quota,
     };
     use rstest::*;
     use rstest_reuse::*;
@@ -381,9 +381,9 @@ mod tests {
         use crate::test_support::InMemorySiteConfig;
         use crate::SiteConfigStorage;
         let store =
-            InMemorySiteConfig::from_pairs([("site.title", "T"), ("backup.mode", "archive")]);
+            InMemorySiteConfig::from_pairs([("example.setting", "T"), ("backup.mode", "archive")]);
         assert_eq!(
-            store.get("site.title").await.unwrap(),
+            store.get("example.setting").await.unwrap(),
             Some("T".to_string())
         );
         store.set("feeds.min_items", "9").await.unwrap();
@@ -391,13 +391,13 @@ mod tests {
             store.list().await.unwrap(),
             vec![
                 ("backup.mode".to_string(), "archive".to_string()),
+                ("example.setting".to_string(), "T".to_string()),
                 ("feeds.min_items".to_string(), "9".to_string()),
-                ("site.title".to_string(), "T".to_string()),
             ],
         );
-        assert!(store.delete("site.title").await.unwrap());
-        assert!(!store.delete("site.title").await.unwrap());
-        assert_eq!(store.get("site.title").await.unwrap(), None);
+        assert!(store.delete("example.setting").await.unwrap());
+        assert!(!store.delete("example.setting").await.unwrap());
+        assert_eq!(store.get("example.setting").await.unwrap(), None);
     }
 
     #[apply(backends)]
@@ -486,7 +486,7 @@ mod tests {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
         // Insert out of key order to prove the ORDER BY, not insertion order.
-        storage.set("site.title", "T").await.unwrap();
+        storage.set("example.setting", "T").await.unwrap();
         storage
             .set("feeds.websub_hub_url", "https://h/")
             .await
@@ -497,8 +497,8 @@ mod tests {
             storage.list().await.unwrap(),
             vec![
                 ("backup.mode".to_string(), "archive".to_string()),
+                ("example.setting".to_string(), "T".to_string()),
                 ("feeds.websub_hub_url".to_string(), "https://h/".to_string()),
-                ("site.title".to_string(), "T".to_string()),
             ],
             "list() enumerates every entry ordered by key, both backends",
         );
@@ -509,22 +509,22 @@ mod tests {
     async fn delete_removes_a_key_and_reports_whether_present(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        storage.set("site.title", "T").await.unwrap();
+        storage.set("example.setting", "T").await.unwrap();
 
         // Deleting a present key reports true and the row is gone.
         assert!(
-            storage.delete("site.title").await.unwrap(),
+            storage.delete("example.setting").await.unwrap(),
             "deleting a present key reports true",
         );
         assert_eq!(
-            storage.get("site.title").await.unwrap(),
+            storage.get("example.setting").await.unwrap(),
             None,
             "the row is removed",
         );
 
         // Deleting an absent key is an idempotent no-op reporting false.
         assert!(
-            !storage.delete("site.title").await.unwrap(),
+            !storage.delete("example.setting").await.unwrap(),
             "deleting an absent key reports false (no-op)",
         );
     }
@@ -784,7 +784,7 @@ mod tests {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
         let original = common::site::SiteIdentity {
-            title: "Test Site".to_string(),
+            title: parse_site_title("Test Site"),
             base_url: Some(parse_absolute_url("https://test.example.com/")),
         };
         storage.set_identity(&original).await.expect("set_identity");

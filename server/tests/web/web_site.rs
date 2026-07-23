@@ -92,6 +92,11 @@ async fn update_site_identity_round_trips_via_get(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn update_site_identity_rejects_empty_title(#[case] backend: Backend) {
+    // A whitespace-only `title` fails at typed-arg decode — the validating serde
+    // bridge for `SiteTitle` rejects an empty/whitespace-only value, a non-OK server
+    // -function error rather than a specific in-body Validation message (ADR-0065).
+    // The client's disable-until-valid gate keeps a real browser from reaching this;
+    // a raw POST is the malformed-client path.
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_session_cookie(&state, "operator", true).await;
 
@@ -103,8 +108,7 @@ async fn update_site_identity_rejects_empty_title(#[case] backend: Backend) {
     )
     .await;
 
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("site title cannot be empty"), "body: {body}");
+    assert_ne!(status, StatusCode::OK, "empty title should fail: {body}");
 }
 
 #[apply(backends)]

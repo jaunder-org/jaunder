@@ -1,6 +1,6 @@
 use crate::error::WebResult;
 use common::absolute_url::AbsoluteUrl;
-use common::site::SiteIdentity;
+use common::site::{SiteIdentity, SiteTitle};
 use leptos::prelude::*;
 
 #[cfg(feature = "server")]
@@ -24,14 +24,12 @@ pub async fn get_site_identity() -> WebResult<SiteIdentity> {
 
 #[server(endpoint = "/update_site_identity")]
 #[tracing::instrument(name = "web.site.update_identity", skip(title, base_url))]
-pub async fn update_site_identity(title: String, base_url: Option<AbsoluteUrl>) -> WebResult<()> {
+pub async fn update_site_identity(
+    title: SiteTitle,
+    base_url: Option<AbsoluteUrl>,
+) -> WebResult<()> {
     boundary!("update_site_identity", {
         require_operator().await?;
-
-        let title = title.trim().to_string();
-        if title.is_empty() {
-            return Err(InternalError::validation("site title cannot be empty"));
-        }
 
         // `base_url` is a typed `Option<AbsoluteUrl>` wire arg (ADR-0065): the
         // validating serde bridge already rejected a malformed/non-http(s) value at

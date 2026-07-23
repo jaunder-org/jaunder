@@ -199,7 +199,7 @@ mod tests {
         });
         site_config.expect_get_identity().returning(|| {
             Ok(SiteIdentity {
-                title: "Jaunder".to_owned(),
+                title: common::test_support::parse_site_title("Jaunder"),
                 base_url: Some(common::test_support::parse_absolute_url(
                     "https://example.com/",
                 )),
@@ -247,7 +247,7 @@ mod tests {
         // errors rather than emitting relative ones (#560, D1 — no relative atom:id).
         site_config.expect_get_identity().returning(|| {
             Ok(SiteIdentity {
-                title: "Jaunder".to_owned(),
+                title: common::test_support::parse_site_title("Jaunder"),
                 base_url: None,
             })
         });

@@ -34,7 +34,7 @@ async fn rsd_document_advertises_service_url(#[case] backend: Backend) {
     state
         .site_config
         .set_identity(&common::site::SiteIdentity {
-            title: "Test".to_string(),
+            title: common::test_support::parse_site_title("Test"),
             base_url: Some(common::test_support::parse_absolute_url(
                 "https://example.test/",
             )),
