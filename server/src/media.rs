@@ -12,7 +12,7 @@ use tokio_util::io::ReaderStream;
 
 use common::ids::UserId;
 use common::media::{
-    detect_content_type, should_inline, ContentHash, ContentType, Filename, MediaSource,
+    detect_content_type, should_inline, ByteSize, ContentHash, ContentType, Filename, MediaSource,
 };
 use storage::{MediaStorage, SiteConfigStorage};
 use web::auth::AuthUser;
@@ -46,7 +46,7 @@ pub struct UploadResponse {
     pub sha256: ContentHash,
     pub filename: Filename,
     pub content_type: ContentType,
-    pub size_bytes: i64,
+    pub size_bytes: ByteSize,
     pub url: String,
 }
 

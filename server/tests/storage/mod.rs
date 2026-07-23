@@ -4,8 +4,8 @@ use common::password::Password;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::test_support::{
-    parse_audience_name, parse_bio, parse_content_hash, parse_content_type, parse_display_name,
-    parse_email, parse_filename, parse_raw_token,
+    parse_audience_name, parse_bio, parse_byte_size, parse_content_hash, parse_content_type,
+    parse_display_name, parse_email, parse_filename, parse_raw_token,
 };
 use common::username::Username;
 use common::visibility::{
@@ -6864,7 +6864,7 @@ fn make_media_record(
         filename: parse_filename(filename),
         source,
         content_type: parse_content_type("image/jpeg"),
-        size_bytes: 12345,
+        size_bytes: parse_byte_size("12345"),
         source_url: None,
         created_at: chrono::Utc::now(),
     }
@@ -6907,7 +6907,7 @@ async fn create_and_get_media(#[case] backend: Backend) {
     assert_eq!(fetched.filename, "test.jpg");
     assert_eq!(fetched.source, MediaSource::Upload);
     assert_eq!(fetched.content_type, "image/jpeg");
-    assert_eq!(fetched.size_bytes, 12345);
+    assert_eq!(fetched.size_bytes, parse_byte_size("12345"));
 }
 
 #[apply(backends)]
@@ -7215,7 +7215,7 @@ async fn get_user_upload_usage_returns_zero_initially(#[case] backend: Backend) 
         .unwrap();
 
     let usage = state.media.get_user_upload_usage(user_id).await.unwrap();
-    assert_eq!(usage, 0);
+    assert_eq!(usage, parse_byte_size("0"));
 }
 
 #[apply(backends)]
@@ -7238,15 +7238,19 @@ async fn get_user_upload_usage_sums_uploads_only(#[case] backend: Backend) {
     let sha_ca = "5555123455551234555512345555123455551234555512345555123455551234".to_string();
 
     let mut upload = make_media_record(user_id, &sha_up, "upload.jpg", MediaSource::Upload);
-    upload.size_bytes = 1000;
+    upload.size_bytes = parse_byte_size("1000");
     state.media.create_media(&upload).await.unwrap();
 
     let mut cached = make_media_record(user_id, &sha_ca, "cached.jpg", MediaSource::Cached);
-    cached.size_bytes = 9999;
+    cached.size_bytes = parse_byte_size("9999");
     state.media.create_media(&cached).await.unwrap();
 
     let usage = state.media.get_user_upload_usage(user_id).await.unwrap();
-    assert_eq!(usage, 1000, "only upload bytes should count toward usage");
+    assert_eq!(
+        usage,
+        parse_byte_size("1000"),
+        "only upload bytes should count toward usage"
+    );
 }
 
 #[apply(backends)]

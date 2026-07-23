@@ -4,7 +4,8 @@ use common::media::MediaSource;
 use common::password::Password;
 use common::tag::TagLabel;
 use common::test_support::{
-    parse_audience_name, parse_content_hash, parse_content_type, parse_display_name, parse_filename,
+    parse_audience_name, parse_byte_size, parse_content_hash, parse_content_type,
+    parse_display_name, parse_filename,
 };
 use common::username::Username;
 use common::visibility::{AudienceTarget, ViewerIdentity};
@@ -169,7 +170,7 @@ async fn seed_side_tables(state: &AppState, author: UserId) {
             filename: parse_filename("photo.jpg"),
             source: MediaSource::Upload,
             content_type: parse_content_type("image/jpeg"),
-            size_bytes: 4,
+            size_bytes: parse_byte_size("4"),
             source_url: None,
             created_at: fixture_published_at(),
         })

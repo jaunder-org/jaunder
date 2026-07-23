@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use common::media::{ContentHash, ContentType, Filename, MediaSource};
+use common::media::{ByteSize, ContentHash, ContentType, Filename, MediaSource};
 use sqlx::{Database, FromRow, Pool};
 use thiserror::Error;
 
@@ -23,7 +23,7 @@ pub struct MediaRecord {
     /// MIME type (e.g., "image/jpeg").
     pub content_type: ContentType,
     /// Size of the file in bytes.
-    pub size_bytes: i64,
+    pub size_bytes: ByteSize,
     /// For cached media, the original remote URL.
     pub source_url: Option<String>,
     /// When the record was created.
@@ -101,7 +101,7 @@ pub trait MediaStorage: Send + Sync {
     ) -> Result<(), DeleteMediaError>;
 
     /// Calculates the total storage used by a user's uploads (in bytes).
-    async fn get_user_upload_usage(&self, user_id: UserId) -> sqlx::Result<i64>;
+    async fn get_user_upload_usage(&self, user_id: UserId) -> sqlx::Result<ByteSize>;
 
     /// Finds a media record by its content hash and source across all users.
     ///
@@ -187,7 +187,7 @@ where
         .bind(&record.filename)
         .bind(record.source.as_str())
         .bind(&record.content_type)
-        .bind(record.size_bytes)
+        .bind(i64::from(record.size_bytes))
         .bind(record.source_url.clone())
         .bind(record.created_at)
         .execute(&self.pool)
@@ -319,8 +319,11 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn get_user_upload_usage(&self, user_id: UserId) -> sqlx::Result<i64> {
-        DB::get_user_upload_usage(&self.pool, user_id).await
+    async fn get_user_upload_usage(&self, user_id: UserId) -> sqlx::Result<ByteSize> {
+        // The dialect twin returns the raw `COALESCE(SUM(…), 0)` as `i64` (always ≥ 0),
+        // so route it through the checked door to land a typed `ByteSize`.
+        let sum = DB::get_user_upload_usage(&self.pool, user_id).await?;
+        ByteSize::try_from(sum).map_err(|e| sqlx::Error::Decode(Box::new(e)))
     }
 
     #[tracing::instrument(
@@ -362,7 +365,9 @@ pub const MEDIA_CACHE_POLICY_DEFAULT_KEY: &str = "media.cache_policy_default";
 mod tests {
     use super::*;
     use crate::test_support::{backends, seed_user, Backend, TestEnv};
-    use common::test_support::{parse_content_hash, parse_content_type, parse_filename};
+    use common::test_support::{
+        parse_byte_size, parse_content_hash, parse_content_type, parse_filename,
+    };
     use rstest::*;
     use rstest_reuse::*;
 
@@ -380,7 +385,7 @@ mod tests {
             filename: parse_filename("photo.jpg"),
             source: MediaSource::Upload,
             content_type: parse_content_type("image/jpeg"),
-            size_bytes: 2048,
+            size_bytes: parse_byte_size("2048"),
             source_url: None,
             created_at: chrono::Utc::now(),
         };
@@ -436,6 +441,68 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
+    async fn find_by_hash_surfaces_a_column_decode_error_for_a_negative_size(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        // A negative `size_bytes` bypasses `ByteSize` validation — only reachable via DB
+        // tampering. On read, `media_record_from_row` wraps the column through the validating
+        // `ByteSize::try_from`, which rejects it as a column-decode error.
+        env.base
+            .pool()
+            .execute(&format!(
+                "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
+                 VALUES ({}, '{HASH}', 'photo.jpg', 'upload', 'image/jpeg', -1)",
+                i64::from(user_id)
+            ))
+            .await
+            .unwrap();
+        let err = env
+            .state
+            .media
+            .find_by_hash(&parse_content_hash(HASH), &MediaSource::Upload)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, sqlx::Error::ColumnDecode { .. }),
+            "expected a column-decode error, got: {err:?}"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn get_user_upload_usage_surfaces_a_decode_error_for_a_negative_sum(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        // A negative `size_bytes` upload row (DB tampering) makes `SUM(size_bytes)` negative;
+        // `get_user_upload_usage` routes the sum through the validating `ByteSize::try_from`,
+        // which rejects the negative total as a decode error.
+        env.base
+            .pool()
+            .execute(&format!(
+                "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
+                 VALUES ({}, '{HASH}', 'photo.jpg', 'upload', 'image/jpeg', -5)",
+                i64::from(user_id)
+            ))
+            .await
+            .unwrap();
+        let err = env
+            .state
+            .media
+            .get_user_upload_usage(user_id)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, sqlx::Error::Decode(_)),
+            "expected a decode error, got: {err:?}"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn list_media_skips_a_row_with_a_malformed_sha256_column(#[case] backend: Backend) {
         let env = backend.setup().await;
         let user_id = seed_user(&env.state).await;
@@ -446,7 +513,7 @@ mod tests {
             filename: parse_filename("good.jpg"),
             source: MediaSource::Upload,
             content_type: parse_content_type("image/jpeg"),
-            size_bytes: 1,
+            size_bytes: parse_byte_size("1"),
             source_url: None,
             created_at: chrono::Utc::now(),
         };
@@ -491,7 +558,7 @@ mod tests {
             filename: parse_filename("test.jpg"),
             source: MediaSource::Upload,
             content_type: parse_content_type("image/jpeg"),
-            size_bytes: 1024,
+            size_bytes: parse_byte_size("1024"),
             source_url: None,
             created_at: chrono::Utc::now(),
         };

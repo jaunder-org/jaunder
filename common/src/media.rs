@@ -385,6 +385,20 @@ pub struct MaxFileSize(i64);
 )]
 pub struct UserQuota(i64);
 
+/// A non-negative count of bytes — a *measured/stored* size (a media file's byte length,
+/// a user's total upload usage), the actual-value counterpart to the [`MaxFileSize`] /
+/// [`UserQuota`] *limits*. `min = 0` (an empty object is 0 bytes) and no `default` (it is
+/// measured, never a config fallback). Unlike the limits — which are only ever built from
+/// config strings — a `ByteSize` is built from a runtime `i64` (a DB column, a `SUM`), so it
+/// relies on the `NumNewtype` validating `TryFrom<i64>` door.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, NumNewtype)]
+#[num_newtype(
+    inner = i64,
+    min = 0,
+    error = "byte size must be a non-negative number of bytes"
+)]
+pub struct ByteSize(i64);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -445,6 +459,42 @@ mod tests {
     #[test]
     fn user_quota_surface() {
         assert_positive_byte_newtype::<UserQuota>(1_073_741_824, "media user quota");
+    }
+
+    #[test]
+    fn byte_size_surface() {
+        // `ByteSize` has its own test — it is min-0 (accepts `0`) and has no `default`, so it
+        // cannot use `assert_positive_byte_newtype` (min-1, `Default`-requiring). Drives every
+        // generated branch for coverage.
+        // parse accept 0 + positive, trim; reject negative/non-integer with the domain message
+        assert_eq!("0".parse::<ByteSize>().map(i64::from).ok(), Some(0));
+        assert_eq!(
+            "  2048  ".parse::<ByteSize>().map(i64::from).ok(),
+            Some(2048)
+        );
+        for bad in ["-1", "abc", "1.5"] {
+            assert!(bad.parse::<ByteSize>().is_err(), "{bad} should reject");
+        }
+        assert!("-1"
+            .parse::<ByteSize>()
+            .err()
+            .is_some_and(|e| e.to_string().starts_with("byte size")));
+        // Display round-trips through FromStr
+        let b = "4096".parse::<ByteSize>().unwrap();
+        assert_eq!(b.to_string().parse::<ByteSize>().ok(), Some(b));
+        // From<Self> for i64
+        assert_eq!(i64::from(b), 4096);
+        // serde: transparent integer, round-trip, and wire-rejection of a *negative* (the
+        // deserialize min-guard arm — `0` is accepted, so a negative is what reaches it)
+        assert_eq!(serde_json::to_string(&b).ok(), Some("4096".to_string()));
+        assert_eq!(
+            serde_json::from_str::<ByteSize>("11").map(i64::from).ok(),
+            Some(11)
+        );
+        assert!(serde_json::from_str::<ByteSize>("-1").is_err());
+        // the new validating `TryFrom<i64>` door — accept 0, reject negative
+        assert_eq!(ByteSize::try_from(0i64).map(i64::from).ok(), Some(0));
+        assert!(ByteSize::try_from(-1i64).is_err());
     }
 
     #[test]
