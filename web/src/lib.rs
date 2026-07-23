@@ -42,6 +42,10 @@ pub mod profile;
 pub mod reactive;
 pub mod registration;
 pub mod render;
+/// The `~`-only permalink route segment (#592). Pure `leptos_router` matching logic
+/// (no `web_sys`), so it lives at the crate root — host-compiled and host-tested —
+/// rather than under the wasm-only `pages` module that consumes it.
+pub mod route_segments;
 pub mod sessions;
 pub mod site;
 pub mod subscriptions;

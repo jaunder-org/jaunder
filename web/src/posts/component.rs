@@ -8,7 +8,8 @@
 //! is the host-tested [`common::time::utc_instant_from_local`].
 
 use leptos::prelude::*;
-use leptos_router::hooks::use_params_map;
+use leptos_router::hooks::{use_navigate, use_params_map};
+use leptos_router::NavigateOptions;
 
 use crate::audiences::{list_my_audiences, AudienceSummary};
 use crate::avatar::Avatar;
@@ -200,6 +201,12 @@ pub fn PostCard(
     tag_context: TagContext,
     #[prop(optional)] on_mutate: Option<Callback<()>>,
     #[prop(optional)] on_unpublish: Option<Callback<()>>,
+    /// Fired only after a successful *publish* (distinct from `on_mutate`, which delete
+    /// and unpublish share). The permalink page uses it to refetch itself in place when a
+    /// same-URL publish leaves navigation a no-op, without delete/unpublish also
+    /// refetching into a not-found (#592).
+    #[prop(optional)]
+    on_publish: Option<Callback<()>>,
 ) -> impl IntoView {
     // The seed/anonymous data has `is_author = false` (the projector paints
     // anonymous-only), so on the Local timeline the owner's own posts would show no
@@ -238,13 +245,20 @@ pub fn PostCard(
     // only ever dispatches on the client, so `Effect::new` (not `_isomorphic`)
     // avoids needlessly scheduling on the server — matching EditPostPage's
     // publish redirect.
+    let navigate = use_navigate();
     Effect::new(move |_| {
         if let Some(Ok(published)) = publish_action.value().get() {
             // Publishing can move the permalink (a draft's URL is created_at-based;
-            // once published it becomes published_at-based), so navigate to the
-            // server-returned canonical permalink rather than the now-stale current
-            // URL. The unpublish path redirects to /drafts; this is its mirror.
-            client::navigation::replace(&published.permalink);
+            // once published it becomes published_at-based), so navigate client-side to
+            // the server-returned canonical permalink rather than the now-stale current
+            // URL. When it does NOT move (a same-UTC-day publish → identical URL), the
+            // navigate is a no-op, so also fire `on_publish` to refetch the current page's
+            // resource — otherwise a permalink page would keep showing the draft state
+            // (#592). The unpublish path navigates to /drafts; this is its mirror.
+            navigate(&published.permalink, NavigateOptions::default());
+            if let Some(cb) = on_publish {
+                cb.run(());
+            }
         }
     });
 
@@ -1124,6 +1138,12 @@ fn permalink_first_paint(seed_post: Option<PostResponse>) -> AnyView {
     }
 }
 
+/// `PostPage`'s resource key: the decoded permalink params plus a refetch tick. The tick
+/// is folded into the key (not merely tracked) so an in-place publish — same URL, so the
+/// params are unchanged — still changes the key and forces a re-fetch (#592). Named to
+/// keep the fetcher signature clear of `clippy::type_complexity`.
+type PermalinkFetchKey = (Option<Username>, i32, u32, u32, Option<Slug>, u32);
+
 #[component]
 pub fn PostPage() -> impl IntoView {
     // Public projector seed (#178/#179): the content the server painted for this
@@ -1152,15 +1172,22 @@ pub fn PostPage() -> impl IntoView {
         )
     };
 
+    // Bump to force a refetch when the post mutates in place (a same-URL publish, where
+    // navigation is a no-op — see the publish effect in `PostCard`). Folded into the
+    // resource key alongside the route params (#592).
+    let refetch = RwSignal::new(0u32);
     let post = Resource::new(
-        post_data,
-        |(username, year, month, day, slug): (Option<Username>, i32, u32, u32, Option<Slug>)| async move {
+        move || {
+            let (username, year, month, day, slug) = post_data();
+            (username, year, month, day, slug, refetch.get())
+        },
+        |(username, year, month, day, slug, _): PermalinkFetchKey| async move {
             let Some(username) = username else {
-                // This is not a post permalink segment (it didn't start with '~').
-                // It may be a server-handled URL (e.g. /media/…) that the SPA
-                // router matched here because it has the same number of segments.
-                // Reload the page so the server can handle it properly.
-                client::navigation::reload();
+                // A `~`-prefixed but unparseable username is a malformed permalink, so
+                // 404 client-side without a round-trip — matching the invalid-slug arm
+                // below. The route's `TildeUsername` segment guarantees the `~`, so a
+                // non-`~` server URL (e.g. /media/…) never reaches this page at all; the
+                // old reload escape hatch is gone (#592).
                 return Err(WebError::validation("Invalid permalink"));
             };
             // A '~'-prefixed permalink with an unparseable slug is a malformed
@@ -1173,9 +1200,16 @@ pub fn PostPage() -> impl IntoView {
         },
     );
 
+    // Unpublish navigates client-side to /drafts (a fresh mount that refetches its own
+    // list — its resource keys on the publish/delete action versions); publish refetches
+    // this page in place via `on_publish` (#592).
+    let navigate = use_navigate();
     let on_unpublish = Callback::new(move |()| {
-        client::navigation::replace("/drafts");
+        navigate("/drafts", NavigateOptions::default());
     });
+    // Publish-only: refetch this page in place (delete/unpublish must NOT — delete shows
+    // its own success and a refetch would 404; unpublish navigates away) (#592).
+    let on_publish = Callback::new(move |()| refetch.update(|v| *v += 1));
 
     view! {
         <div class="j-scroll">
@@ -1212,6 +1246,7 @@ pub fn PostPage() -> impl IntoView {
                                         banner=banner
                                         tag_context=TagContext::ForUser(username_for_tags)
                                         on_unpublish=on_unpublish
+                                        on_publish=on_publish
                                     />
                                 }
                                     .into_any()
@@ -1522,11 +1557,13 @@ pub fn EditPostPage() -> impl IntoView {
     });
     // ServerAction dispatches happen only on the client; this redirect-on-publish
     // effect only ever fires there. `Effect::new_isomorphic` would needlessly
-    // schedule on the server.
+    // schedule on the server. Editor → permalink is always a route change, so a fresh
+    // `PostPage` mount refetches — no explicit invalidation needed here (#592).
+    let navigate = use_navigate();
     Effect::new(move |_| {
         if let Some(Ok(ref updated)) = update_post_action.value().get() {
             if updated.published_at.is_some() {
-                client::navigation::replace(&updated.permalink);
+                navigate(&updated.permalink, NavigateOptions::default());
             }
         }
     });

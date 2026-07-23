@@ -30,6 +30,7 @@ use crate::posts::{
     CreatePostPage, DraftsPage, EditPostPage, PostPage, SiteTagPage, UserTagPage, UserTimelinePage,
 };
 use crate::registration::RegisterPage;
+use crate::route_segments::TildeUsername;
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, Title};
 use leptos_router::{
@@ -148,7 +149,7 @@ pub fn App() -> impl IntoView {
                     <Route path=ParamSegment("username") view=UserTimelinePage />
                     <Route
                         path=(
-                            ParamSegment("username"),
+                            TildeUsername("username"),
                             ParamSegment("year"),
                             ParamSegment("month"),
                             ParamSegment("day"),

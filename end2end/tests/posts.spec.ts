@@ -326,8 +326,16 @@ test("draft lifecycle: create, view, edit, and publish", async ({
 
   // Publish from the post's own permalink via the draft-aware PostCard (#23/#24):
   // Publish sits behind a confirm and, on success, navigates to the canonical
-  // published permalink — where the post renders without the draft banner (AC4).
+  // published permalink — where the post renders without the draft banner.
   await goto(page, permalinkUrl);
+  // Same-day create+publish → the permalink does not move, so `use_navigate` is a
+  // router no-op and the draft→published flip comes from the in-place resource
+  // refetch (#592, spec AC2). A stashed sentinel proves it happens WITHOUT a full
+  // document reload (a reload would wipe it — mirrors auth.spec's login/logout).
+  await page.evaluate(() => {
+    (window as Window & { __jaunderNoReload?: boolean }).__jaunderNoReload =
+      true;
+  });
   page.once("dialog", (dialog) => dialog.accept());
   await page.locator('.j-post-acts button:has-text("Publish")').click();
   await expect(page.locator(".j-post-body")).toContainText(
@@ -337,6 +345,12 @@ test("draft lifecycle: create, view, edit, and publish", async ({
     },
   );
   await expect(page.locator(".draft-banner")).toHaveCount(0);
+  const publishNoReload = await page.evaluate(
+    () =>
+      (window as Window & { __jaunderNoReload?: boolean }).__jaunderNoReload ===
+      true,
+  );
+  expect(publishNoReload).toBe(true);
 });
 
 test("per-user timeline lists published posts with pagination", async ({
@@ -516,6 +530,40 @@ test("authenticated user can delete a published post", async ({
   expect(username).toBeTruthy();
   await goto(page, `/~${username}`);
   await expect(page.locator("body")).not.toContainText("Post To Delete");
+});
+
+test("unpublishing from a permalink navigates to /drafts without a full reload", async ({
+  registeredPage: page,
+}) => {
+  test.slow();
+  // Create a published post and open its permalink.
+  await goto(page, "/posts/new");
+  await page.fill(SEL.postBody, "# Unpublish Me\n\nsoon a draft again");
+  await click(page, SEL.publishButton("true"));
+  await waitForSelector(page, SEL.saveSummary);
+  const permalinkHref = await page
+    .locator('[data-test="permalink-link"]')
+    .getAttribute("href");
+  expect(permalinkHref).toBeTruthy();
+  await goto(page, permalinkHref!);
+  await expect(page.locator('button:has-text("Unpublish")')).toBeVisible();
+
+  // Unpublish dispatches directly (no confirm) and navigates client-side to /drafts
+  // (#592, spec AC3). A stashed sentinel proves there is no full document reload.
+  await page.evaluate(() => {
+    (window as Window & { __jaunderNoReload?: boolean }).__jaunderNoReload =
+      true;
+  });
+  await click(page, 'button:has-text("Unpublish")');
+  await page.waitForURL(/\/drafts$/);
+  // The just-unpublished post lists on /drafts (fresh fetch on mount).
+  await expect(page.locator("li", { hasText: "Unpublish Me" })).toBeVisible();
+  const unpublishNoReload = await page.evaluate(
+    () =>
+      (window as Window & { __jaunderNoReload?: boolean }).__jaunderNoReload ===
+      true,
+  );
+  expect(unpublishNoReload).toBe(true);
 });
 
 test("inline composer: published post appears in timeline without page reload", async ({
@@ -726,15 +774,25 @@ test("editing a post updates tag chips and tag listing pages", async ({
   await page.keyboard.press("Enter");
   await waitForSelector(page, '.j-tag-chip-label:has-text("#xeditd")');
 
-  // Save (post is already published, so the button reads "Save").
-  // EditPostPage redirects via location.replace() to the permalink on success.
+  // Save (post is already published, so the button reads "Save"). On success
+  // EditPostPage navigates client-side to the permalink (#592) — no document
+  // reload — so a stashed sentinel survives the transition (spec AC4).
+  await page.evaluate(() => {
+    (window as Window & { __jaunderNoReload?: boolean }).__jaunderNoReload =
+      true;
+  });
   await click(page, SEL.publishButton("true"));
 
-  // Wait for something that only exists on the destination permalink page.
-  // waitForHydration() would race in Firefox: body[data-hydrated] is already
-  // set on the (hydrated) edit page, so page.evaluate() runs while Firefox is
-  // mid-navigation and the execution context gets destroyed.
+  // Wait for something that only exists on the destination permalink page. This is
+  // a client-side router navigation (same document), so `.j-tag-list` appears via a
+  // DOM swap and page.evaluate() below reads the same context — no reload race.
   await waitForSelector(page, ".j-tag-list");
+  const editNoReload = await page.evaluate(
+    () =>
+      (window as Window & { __jaunderNoReload?: boolean }).__jaunderNoReload ===
+      true,
+  );
+  expect(editNoReload).toBe(true);
 
   // Now on the permalink — verify the footer reflects the updated tag set
   const tagList = page.locator(".j-tag-list");
