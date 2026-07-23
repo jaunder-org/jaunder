@@ -1899,7 +1899,6 @@ where
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     let now = Utc::now();
-    let format = input.format.to_string();
 
     let post_id = sqlx::query_scalar::<_, i64>(
         "INSERT INTO posts (user_id, title, slug, body, format, rendered_html, created_at, updated_at, published_at, summary)
@@ -1912,7 +1911,7 @@ where
     .bind(input.title.as_ref())
     .bind(&input.slug)
     .bind(&input.body)
-    .bind(format.as_str())
+    .bind(input.format)
     .bind(&input.rendered_html)
     .bind(now)
     .bind(now)
@@ -3082,6 +3081,95 @@ mod tests {
         // validates through `FromStr`; the malformed value surfaces as a
         // column-decode error rather than being silently admitted (covers the
         // bridge's `Decode` error arm).
+        let err = posts
+            .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, sqlx::Error::ColumnDecode { .. }),
+            "expected a column-decode error, got: {err:?}"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn post_format_column_round_trips_all_variants(#[case] backend: Backend) {
+        // Keep the whole `TestEnv` bound (ADR-0053 TempDir hazard).
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let posts = &*env.state.posts;
+
+        // Org and Html exercise the `PostFormat` bridge Encode (write) + Decode (read)
+        // for the non-default variants; Markdown is covered by the round-trip tests.
+        for (i, fmt) in [PostFormat::Org, PostFormat::Html].into_iter().enumerate() {
+            let post_id = posts
+                .create_post(&CreatePostInput {
+                    user_id,
+                    title: None,
+                    slug: parse_slug(&format!("fmt-{i}")),
+                    body: "body".into(),
+                    format: fmt,
+                    rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
+                    published_at: None,
+                    summary: None,
+                    audiences: vec![AudienceTarget::Public],
+                    idempotency_key: None,
+                })
+                .await
+                .unwrap();
+            let record = posts
+                .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(record.format, fmt);
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn get_post_rejects_a_malformed_format_column(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let posts = &*env.state.posts;
+        let post_id = posts
+            .create_post(&CreatePostInput {
+                user_id,
+                title: None,
+                slug: parse_slug("good"),
+                body: "body".into(),
+                format: PostFormat::Markdown,
+                rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
+                published_at: None,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
+            })
+            .await
+            .unwrap();
+
+        // Land a bogus token in `format` via a raw bind (the typed bind could not
+        // produce it), then assert the read fails at column-decode — the bridge's
+        // `Decode` error arm (`parse()` → `InvalidPostFormat`).
+        let sql = "UPDATE posts SET format = $1 WHERE post_id = $2";
+        match env.base.pool() {
+            CloseablePool::Sqlite(pool) => {
+                sqlx::query(sql)
+                    .bind("bogus")
+                    .bind(i64::from(post_id))
+                    .execute(pool)
+                    .await
+                    .unwrap();
+            }
+            CloseablePool::Postgres(pool) => {
+                sqlx::query(sql)
+                    .bind("bogus")
+                    .bind(i64::from(post_id))
+                    .execute(pool)
+                    .await
+                    .unwrap();
+            }
+        }
         let err = posts
             .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
             .await

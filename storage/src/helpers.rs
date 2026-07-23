@@ -122,12 +122,12 @@ pub(crate) fn build_invite_record(
 // PostRecord helpers
 // ---------------------------------------------------------------------------
 
-// `author_username`/`title`/`slug`/`body` decode straight into their domain
-// newtypes via the sqlx bridge (#438). `format` (a `PostFormat` enum) stays a
-// `String` that parses in `build_post_record`. `rendered_html` (`RenderedHtml`) has
-// a deliberately *write-only* sqlx bridge (#502: `Type`/`Encode`, no `Decode` — a
-// `Decode` would bless any text column as trusted HTML), so its column decodes as a
-// `String` here and is rebuilt via the gated `from_trusted` in `build_post_record`.
+// `author_username`/`title`/`slug`/`body`/`format` decode straight into their domain
+// types via the sqlx bridge (the newtypes via #438, `PostFormat` via its text-enum
+// bridge, #572). `rendered_html` (`RenderedHtml`) has a deliberately *write-only* sqlx
+// bridge (#502: `Type`/`Encode`, no `Decode` — a `Decode` would bless any text column
+// as trusted HTML), so its column decodes as a `String` here and is rebuilt via the
+// gated `from_trusted` in `build_post_record`.
 pub(crate) type PostRecordParts = (
     i64,
     i64,
@@ -135,7 +135,7 @@ pub(crate) type PostRecordParts = (
     Option<PostTitle>,
     Slug,
     PostBody,
-    String,
+    PostFormat,
     String,
     DateTime<Utc>,
     DateTime<Utc>,
@@ -192,15 +192,11 @@ pub(crate) fn build_post_record(
         tags_json,
     ): PostRecordParts,
 ) -> sqlx::Result<PostRecord> {
-    // `author_username`, `title`, `slug`, and `body` already arrived as their
-    // domain newtypes — the sqlx bridge (#438) decoded each column (and, for the
-    // infallible `PostTitle`/`PostBody`, `From`-wrapped it, which also trims the
-    // title), so a corrupt/migrated `username`/`slug` value is rejected as a
-    // column-decode error before we get here. `format` (a `PostFormat` enum) and
-    // the JSON `tags` still parse here, so this step stays fallible.
-    let format = format
-        .parse::<PostFormat>()
-        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    // `author_username`, `title`, `slug`, `body`, and `format` already arrived as
+    // their domain types — the sqlx bridge decoded each column (the newtypes via #438,
+    // `format` via its `PostFormat` text-enum bridge, #572), so a corrupt/migrated
+    // value is rejected as a column-decode error before we get here. The JSON `tags`
+    // still parse here, so this step stays fallible.
     let post_id = PostId::from(post_id);
     let tags = parse_post_tags_json(&tags_json, post_id)?;
 
@@ -287,7 +283,7 @@ pub(crate) type PostRow = (
     Option<PostTitle>,
     Slug,
     PostBody,
-    String,
+    PostFormat,
     String,
     DateTime<Utc>,
     DateTime<Utc>,
@@ -511,7 +507,7 @@ mod tests {
             Some("Hello".into()),
             parse_slug("hello-world"),
             "Body".into(),
-            "markdown".to_string(),
+            PostFormat::Markdown,
             "<p>Body</p>".to_string(),
             now,
             now,
@@ -532,35 +528,12 @@ mod tests {
         assert!(record.tags.is_empty());
     }
 
-    // `build_post_record` no longer parses `username`/`slug`: they decode straight
-    // into `Username`/`Slug` via the sqlx bridge (#438), so a malformed stored
+    // `build_post_record` no longer parses `username`/`slug`/`format`: they decode
+    // straight into `Username`/`Slug`/`PostFormat` via the sqlx bridge (the newtypes
+    // via #438, `PostFormat` via its text-enum bridge #572), so a malformed stored
     // value is rejected as a `ColumnDecode` error at the query boundary (covered by
-    // `posts.rs`'s decode-error test), not here. `format` and the JSON `tags` still
-    // parse in `build_post_record`, so those rejections stay below.
-
-    #[test]
-    fn test_build_post_record_rejects_invalid_format() {
-        let now = Utc::now();
-        let err = build_post_record((
-            10,
-            20,
-            parse_username("alice"),
-            Some("Hello".into()),
-            parse_slug("hello-world"),
-            "Body".into(),
-            "invalid_format".to_string(),
-            "<p>Body</p>".to_string(),
-            now,
-            now,
-            None,
-            None,
-            None,
-            "[]".to_string(),
-        ))
-        .unwrap_err();
-
-        assert!(matches!(err, sqlx::Error::Decode(_)));
-    }
+    // `posts.rs`'s decode-error tests), not here. Only the JSON `tags` still parse in
+    // `build_post_record`, so those rejections stay below.
 
     // guard:no-backend — password hashing/verification; no database
     #[tokio::test]
@@ -607,7 +580,7 @@ mod tests {
             None,
             parse_slug("hello-world"),
             "Body".into(),
-            "markdown".to_string(),
+            PostFormat::Markdown,
             "<p>Body</p>".to_string(),
             now,
             now,
@@ -633,7 +606,7 @@ mod tests {
             None,
             parse_slug("hello-world"),
             "Body".into(),
-            "markdown".to_string(),
+            PostFormat::Markdown,
             "<p>Body</p>".to_string(),
             now,
             now,
@@ -658,7 +631,7 @@ mod tests {
             None,
             parse_slug("hello-world"),
             "Body".into(),
-            "markdown".to_string(),
+            PostFormat::Markdown,
             "<p>Body</p>".to_string(),
             now,
             now,
@@ -762,7 +735,7 @@ mod tests {
             None,
             parse_slug("hello-world"),
             "Body".into(),
-            "markdown".to_string(),
+            PostFormat::Markdown,
             "<p>Body</p>".to_string(),
             now,
             now,

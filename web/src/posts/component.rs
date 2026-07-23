@@ -40,6 +40,42 @@ use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::{AudienceBase, AudienceSelection};
 
+/// The `.j-seg` Markdown/Org format toggle, shared by every post editor. Renders one
+/// button per user-selectable `PostFormat` — those carrying a `strum` editor message;
+/// `Html` has none (renderer-internal, #445), so it is filtered out. Adding a format is
+/// a one-attribute change on `PostFormat`, not new markup here.
+#[component]
+pub fn FormatToggle(
+    format: RwSignal<PostFormat>,
+    /// Extra inline style for the `.j-seg` wrapper (e.g. spacing). Omitted when unset.
+    #[prop(optional, into)]
+    style: Option<&'static str>,
+) -> impl IntoView {
+    use strum::{EnumMessage, VariantArray};
+    view! {
+        <div class="j-seg" style=style>
+            {PostFormat::VARIANTS
+                .iter()
+                .copied()
+                .filter_map(|f| f.get_message().map(|label| (f, label)))
+                .map(|(f, label)| {
+                    view! {
+                        <button
+                            type="button"
+                            class=move || {
+                                if format.get() == f { "j-btn is-selected" } else { "j-btn" }
+                            }
+                            on:click=move |_| format.set(f)
+                        >
+                            {label}
+                        </button>
+                    }
+                })
+                .collect_view()}
+        </div>
+    }
+}
+
 /// Shared body + format fields used by all post editors.
 ///
 /// Renders a `name="body"` textarea. When `show_seg` is true (default), also
@@ -72,39 +108,7 @@ pub fn ComposerFields(
                 }
             }
         ></textarea>
-        {show_seg
-            .then(move || {
-                view! {
-                    <div class="j-seg">
-                        <button
-                            type="button"
-                            class=move || {
-                                if format.get() == PostFormat::Markdown {
-                                    "j-btn is-selected"
-                                } else {
-                                    "j-btn"
-                                }
-                            }
-                            on:click=move |_| format.set(PostFormat::Markdown)
-                        >
-                            "Markdown"
-                        </button>
-                        <button
-                            type="button"
-                            class=move || {
-                                if format.get() == PostFormat::Org {
-                                    "j-btn is-selected"
-                                } else {
-                                    "j-btn"
-                                }
-                            }
-                            on:click=move |_| format.set(PostFormat::Org)
-                        >
-                            "Org"
-                        </button>
-                    </div>
-                }
-            })}
+        {show_seg.then(move || view! { <FormatToggle format=format /> })}
     }
 }
 
@@ -558,34 +562,7 @@ pub fn PostCreateForm(
                     </div>
                     <TagInput tags=tags />
                     <div class="j-composer-toolbar">
-                        <div class="j-seg">
-                            <button
-                                type="button"
-                                class=move || {
-                                    if format.get() == PostFormat::Markdown {
-                                        "j-btn is-selected"
-                                    } else {
-                                        "j-btn"
-                                    }
-                                }
-                                on:click=move |_| format.set(PostFormat::Markdown)
-                            >
-                                "Markdown"
-                            </button>
-                            <button
-                                type="button"
-                                class=move || {
-                                    if format.get() == PostFormat::Org {
-                                        "j-btn is-selected"
-                                    } else {
-                                        "j-btn"
-                                    }
-                                }
-                                on:click=move |_| format.set(PostFormat::Org)
-                            >
-                                "Org"
-                            </button>
-                        </div>
+                        <FormatToggle format=format />
                         <span class="j-spacer"></span>
                         <button
                             class="j-btn"
@@ -727,34 +704,7 @@ pub fn PostCreateForm(
                                 on:input=move |ev| publish_at.set(event_target_value(&ev))
                             />
                         </div>
-                        <div class="j-seg" style="margin-top:10px">
-                            <button
-                                type="button"
-                                class=move || {
-                                    if format.get() == PostFormat::Markdown {
-                                        "j-btn is-selected"
-                                    } else {
-                                        "j-btn"
-                                    }
-                                }
-                                on:click=move |_| format.set(PostFormat::Markdown)
-                            >
-                                "Markdown"
-                            </button>
-                            <button
-                                type="button"
-                                class=move || {
-                                    if format.get() == PostFormat::Org {
-                                        "j-btn is-selected"
-                                    } else {
-                                        "j-btn"
-                                    }
-                                }
-                                on:click=move |_| format.set(PostFormat::Org)
-                            >
-                                "Org"
-                            </button>
-                        </div>
+                        <FormatToggle format=format style="margin-top:10px" />
                     </div>
                     <div style="margin-top:16px">
                         <div class="j-sb-head" style="padding:0 0 10px">
@@ -1744,34 +1694,7 @@ pub fn EditPostPage() -> impl IntoView {
                                         <div style="margin-top:10px">
                                             <AudiencePicker selection=audience />
                                         </div>
-                                        <div class="j-seg" style="margin-top:10px">
-                                            <button
-                                                type="button"
-                                                class=move || {
-                                                    if format.get() == PostFormat::Markdown {
-                                                        "j-btn is-selected"
-                                                    } else {
-                                                        "j-btn"
-                                                    }
-                                                }
-                                                on:click=move |_| { format.set(PostFormat::Markdown) }
-                                            >
-                                                "Markdown"
-                                            </button>
-                                            <button
-                                                type="button"
-                                                class=move || {
-                                                    if format.get() == PostFormat::Org {
-                                                        "j-btn is-selected"
-                                                    } else {
-                                                        "j-btn"
-                                                    }
-                                                }
-                                                on:click=move |_| format.set(PostFormat::Org)
-                                            >
-                                                "Org"
-                                            </button>
-                                        </div>
+                                        <FormatToggle format=format style="margin-top:10px" />
                                     </div>
                                     <div style="margin-top:16px">
                                         <div class="j-sb-head" style="padding:0 0 10px">

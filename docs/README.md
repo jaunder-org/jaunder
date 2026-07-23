@@ -101,7 +101,8 @@ convention). See the Status column below for each ADR's current status.
 | [0071](adr/0071-sqlx-string-newtype-bridge.md)                     | Transparent sqlx bridge for string newtypes                                                                  | accepted   |
 | [0072](adr/0072-timestamps-cross-boundary-as-utcinstant.md)        | Timestamps cross the web boundary as a `UtcInstant` newtype (chrono is already in the wasm bundle)           | proposed   |
 | [0073](adr/0073-url-crate-for-absolute-url-normalization.md)       | The `url` crate is the sanctioned absolute-URL normalizer, and it enters the `common`/wasm graph             | proposed   |
-| [0074](adr/0074-str-enum-trailer.md)                               | `StrEnum` derive — the standard string-enum trailer                                                          | proposed   |
+| [0074](adr/0074-str-enum-trailer.md)                               | `StrEnum` derive — the standard string-enum trailer                                                          | superseded |
+| [0075](adr/0075-adopt-strum-retire-str-enum.md)                    | Adopt `strum` for closed string enums; retire the bespoke `StrEnum` derive                                   | accepted   |
 
 <!-- adr-table:end -->
 
