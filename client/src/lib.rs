@@ -18,10 +18,6 @@
 /// call sites.
 pub mod storage;
 
-/// Raw browser navigation primitives (`window.location` replace/reload) relocated from
-/// `web` (#516). `web-sys` only, no domain types — unconditional (no `csr` gate).
-pub mod navigation;
-
 /// Raw browser confirm-dialog primitive (`window.confirm`) relocated from `web` (#516).
 /// `web-sys` only, no domain types — unconditional (no `csr` gate).
 pub mod dialog;
