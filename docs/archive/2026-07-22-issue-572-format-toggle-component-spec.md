@@ -4,7 +4,7 @@
 Worktree: `.claude/worktrees/issue-572-format-toggle-component` / Related: #607
 (retire `StrEnum` — migrate the remaining enums + delete the / macro; this issue
 does `PostFormat` first and does not wait on it). / ADR:
-`docs/adr/drafts/adopt-strum-retire-str-enum.md` (supersedes the still-proposed
+`docs/adr/0075-adopt-strum-retire-str-enum.md` (supersedes the still-proposed
 / ADR-0074), promoted at ship.
 
 ## Problem
@@ -304,6 +304,6 @@ active button", plus the `.j-seg button:has-text("Org")` click at line 125): a
 ## Decision record
 
 The strum-over-`StrEnum` decision is recorded in the ADR draft
-`docs/adr/drafts/adopt-strum-retire-str-enum.md`, which **supersedes the
+`docs/adr/0075-adopt-strum-retire-str-enum.md`, which **supersedes the
 still-proposed ADR-0074** and is promoted at ship. This spec's `PostFormat`
 migration is that ADR's first implementation; #607 completes it.

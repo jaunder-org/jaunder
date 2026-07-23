@@ -11,7 +11,7 @@ use crate::post_title::PostTitle;
 
 /// The format/markup language used to author a post body.
 ///
-/// A `strum` string enum (ADR: `docs/adr/drafts/adopt-strum-retire-str-enum.md`):
+/// A `strum` string enum (ADR: `docs/adr/0075-adopt-strum-retire-str-enum.md`):
 /// `serialize_all = "snake_case"` gives the wire/DB token, `VariantArray` the
 /// enumeration, `EnumMessage` the editor label (absent = not user-authored), and
 /// `parse_err_ty` the named `InvalidPostFormat`.

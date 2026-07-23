@@ -145,7 +145,7 @@ Replace `common/src/render.rs:14-32` with:
 ```rust
 /// The format/markup language used to author a post body.
 ///
-/// A `strum` string enum (ADR: `docs/adr/drafts/adopt-strum-retire-str-enum.md`):
+/// A `strum` string enum (ADR: `docs/adr/0075-adopt-strum-retire-str-enum.md`):
 /// `serialize_all = "snake_case"` gives the wire/DB token, `VariantArray` the
 /// enumeration, `EnumMessage` the editor label (absent = not user-authored), and
 /// `parse_err_ty` the named `InvalidPostFormat`. serde routes through an owned
@@ -584,7 +584,7 @@ Run `cargo xtask check` first. No `Co-Authored-By`.
 
 ## Notes for the implementer
 
-- The ADR draft `docs/adr/drafts/adopt-strum-retire-str-enum.md` and the
+- The ADR draft `docs/adr/0075-adopt-strum-retire-str-enum.md` and the
   ADR-0074 supersede note are already written; they are **promoted at ship**
   (`cargo xtask adr promote`), not in a task here.
 - If Task 1's `parse_err_ty`/`parse_err_fn` or `EnumMessage` fails to compile
