@@ -110,8 +110,9 @@ mod tests {
 
     #[test]
     fn set_default_post_format_wire_rejects_unknown_token() {
-        // The profile control submits `format=<token>` via an <ActionForm>, decoded
-        // through server_fn's default Url codec (serde_qs). A valid token decodes; a
+        // The typed `SetDefaultPostFormat` dispatch encodes `format=<token>` over
+        // server_fn's default Url codec (serde_qs); this test pins the endpoint's
+        // decode contract independent of the client widget. A valid token decodes; a
         // bogus one is rejected at the wire boundary once the arg is a typed PostFormat.
         let ok: SetDefaultPostFormat = serde_qs::from_str("format=markdown").unwrap();
         assert_eq!(ok.format, PostFormat::Markdown);

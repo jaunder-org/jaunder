@@ -124,31 +124,69 @@ pub fn ProfilePage() -> impl IntoView {
 }
 
 /// Control for setting the user's default post format preference.
+///
+/// ADR-0065 direct-bind: a `RwSignal<PostFormat>` owned by the component, seeded
+/// from the persisted preference, bound to a `<select>` whose `on:change` parses
+/// the token, and a plain `type="button"` "Save" that `.dispatch`es the typed
+/// `SetDefaultPostFormat` action — no `<ActionForm>` / string-submit path.
+///
+/// The offered formats are **derived from the `PostFormat` type**, not hard-coded:
+/// `PostFormat::VARIANTS` filtered to those carrying a `strum` editor message
+/// (`get_message`) — the same source of truth as the editor `FormatToggle`
+/// (`posts::FormatToggle`). `Html` is renderer-internal (#445), carries no message,
+/// and so is excluded here too; the default falls back to `Markdown` to match.
 #[component]
 fn DefaultPostFormatControl() -> impl IntoView {
+    use strum::{EnumMessage, VariantArray};
     let action = ServerAction::<SetDefaultPostFormat>::new();
     let initial = Resource::new(|| (), |()| get_default_post_format());
+    // Signal created OUTSIDE Suspense and seeded inside — the same shape as
+    // ProfilePage's dn_field/bio_field, so the control's owner is the component,
+    // not the transient Suspend scope.
+    let format = RwSignal::new(PostFormat::Markdown);
 
     view! {
         <Suspense fallback=|| ()>
             {move || Suspend::new(async move {
-                let current = initial.await.unwrap_or(PostFormat::Html);
+                format.set(initial.await.unwrap_or(PostFormat::Markdown));
                 view! {
-                    <ActionForm action=action>
-                        <label class="j-field-label">"Default post format"</label>
-                        <select class="j-field-val" name="format">
-                            <option value="markdown" selected=current == PostFormat::Markdown>
-                                "Markdown"
-                            </option>
-                            <option value="org" selected=current == PostFormat::Org>
-                                "Org"
-                            </option>
-                            <option value="html" selected=current == PostFormat::Html>
-                                "HTML"
-                            </option>
-                        </select>
-                        <button type="submit">"Save"</button>
-                    </ActionForm>
+                    <label class="j-field-label" for="default-post-format">
+                        "Default post format"
+                    </label>
+                    <select
+                        id="default-post-format"
+                        class="j-field-val"
+                        on:change=move |ev| {
+                            if let Ok(f) = event_target_value(&ev).parse::<PostFormat>() {
+                                format.set(f);
+                            }
+                        }
+                    >
+                        {PostFormat::VARIANTS
+                            .iter()
+                            .copied()
+                            .filter_map(|f| f.get_message().map(|label| (f, label)))
+                            .map(|(f, label)| {
+                                view! {
+                                    <option value=f.to_string() selected=move || format.get() == f>
+                                        {label}
+                                    </option>
+                                }
+                            })
+                            .collect_view()}
+                    </select>
+                    <button
+                        type="button"
+                        class="j-btn"
+                        on:click=move |_| {
+                            action
+                                .dispatch(SetDefaultPostFormat {
+                                    format: format.get(),
+                                });
+                        }
+                    >
+                        "Save"
+                    </button>
                 }
             })}
         </Suspense>
