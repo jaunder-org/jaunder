@@ -6,14 +6,12 @@ use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tokio::fs;
 use tokio_util::io::ReaderStream;
 
 use common::ids::UserId;
-use common::media::{
-    detect_content_type, should_inline, ByteSize, ContentHash, ContentType, Filename, MediaSource,
-};
+use common::media::{detect_content_type, should_inline, ContentHash, Filename, MediaSource};
 use storage::{MediaStorage, SiteConfigStorage};
 use web::auth::AuthUser;
 
@@ -37,17 +35,19 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// Response types
+// Error mapping
 // ---------------------------------------------------------------------------
 
-/// JSON body returned on a successful upload.
-#[derive(Debug, Serialize)]
-pub struct UploadResponse {
-    pub sha256: ContentHash,
-    pub filename: Filename,
-    pub content_type: ContentType,
-    pub size_bytes: ByteSize,
-    pub url: String,
+/// Maps a media upload `anyhow::Error` to the client-facing HTTP status. The
+/// upload metric is emitted inside `storage::MediaManager`, so this is a pure map.
+#[must_use]
+pub fn map_error(err: &anyhow::Error) -> StatusCode {
+    match err.downcast_ref::<storage::MediaError>() {
+        Some(storage::MediaError::BadRequest(_)) => StatusCode::BAD_REQUEST,
+        Some(storage::MediaError::PayloadTooLarge) => StatusCode::PAYLOAD_TOO_LARGE,
+        Some(storage::MediaError::InsufficientStorage) => StatusCode::INSUFFICIENT_STORAGE,
+        Some(storage::MediaError::Internal(_)) | None => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -77,11 +77,24 @@ pub async fn upload_handler(
         return Err(StatusCode::BAD_REQUEST);
     };
 
-    let manager = crate::media_manager::MediaManager::new(media, site_config, storage_path);
-    let response = manager.upload(&auth_user, field).await.map_err(|e| {
-        tracing::error!(error = %e, "upload failed");
-        crate::media_manager::MediaManager::map_error(&e)
-    })?;
+    // Extract the field metadata before the field is consumed as the byte stream
+    // (`Field` borrows `file_name()`/`content_type()` from itself, so those borrows
+    // must end before it is moved into `upload`).
+    // cov:ignore-start — e2e-only browser upload handler; exercised by media.spec.ts,
+    // not host-covered, and deleted in #517 Task 4 (superseded by the upload_media server fn).
+    let filename =
+        storage::MediaManager::validate_filename(field.file_name()).map_err(|e| map_error(&e))?;
+    // cov:ignore-stop
+    let content_type = field.content_type().map(ToOwned::to_owned);
+
+    let manager = storage::MediaManager::new(media, site_config, storage_path);
+    let response = manager
+        .upload(auth_user.user_id, &filename, content_type.as_deref(), field)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "upload failed");
+            map_error(&e)
+        })?;
 
     Ok((StatusCode::CREATED, Json(response)).into_response())
 }
@@ -357,6 +370,34 @@ mod tests {
     fn serve_internal_error_maps_to_500() {
         assert_eq!(
             serve_internal_error(sqlx::Error::PoolClosed),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[test]
+    fn map_error_maps_each_media_error() {
+        assert_eq!(
+            map_error(&anyhow::anyhow!(storage::MediaError::BadRequest(
+                "bad".to_owned()
+            ))),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            map_error(&anyhow::anyhow!(storage::MediaError::PayloadTooLarge)),
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+        assert_eq!(
+            map_error(&anyhow::anyhow!(storage::MediaError::InsufficientStorage)),
+            StatusCode::INSUFFICIENT_STORAGE
+        );
+        assert_eq!(
+            map_error(&anyhow::anyhow!(storage::MediaError::Internal(
+                "error".to_owned()
+            ))),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(
+            map_error(&anyhow::anyhow!("unknown")),
             StatusCode::INTERNAL_SERVER_ERROR
         );
     }

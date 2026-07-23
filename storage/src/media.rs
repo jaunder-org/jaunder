@@ -57,7 +57,7 @@ pub enum DeleteMediaError {
 ///
 /// This trait manages the metadata for media files, supporting both user
 /// uploads and cached remote content.
-#[cfg_attr(feature = "test-utils", mockall::automock)]
+#[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
 #[async_trait]
 pub trait MediaStorage: Send + Sync {
     /// Inserts a new media record.

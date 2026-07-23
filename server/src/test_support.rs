@@ -12,10 +12,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use storage::{
-    DbConnectOptions, MediaStorage, SiteConfigStorage, SqliteMediaStorage, SqliteSiteConfigStorage,
-    SqliteUserStorage, UserStorage,
-};
+use storage::{DbConnectOptions, SiteConfigStorage, SqliteSiteConfigStorage};
 
 /// Opens a `SQLite` pool at `db_path` and runs migrations, returning the pool.
 pub(crate) async fn migrated_sqlite_pool(db_path: &Path) -> sqlx::SqlitePool {
@@ -49,14 +46,4 @@ pub(crate) async fn migrated_sqlite_db(dir: &Path) -> (DbConnectOptions, sqlx::S
 /// The site-config store on `pool`.
 pub(crate) fn site_config(pool: &sqlx::SqlitePool) -> Arc<dyn SiteConfigStorage> {
     Arc::new(SqliteSiteConfigStorage::new(pool.clone()))
-}
-
-/// The media store on `pool`.
-pub(crate) fn media(pool: &sqlx::SqlitePool) -> Arc<dyn MediaStorage> {
-    Arc::new(SqliteMediaStorage::new(pool.clone()))
-}
-
-/// The user store on `pool`.
-pub(crate) fn users(pool: &sqlx::SqlitePool) -> Arc<dyn UserStorage> {
-    Arc::new(SqliteUserStorage::new(pool.clone()))
 }

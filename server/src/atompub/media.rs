@@ -85,10 +85,9 @@ pub async fn collection_post(
         .await?
         .is_some();
 
-    let manager =
-        crate::media_manager::MediaManager::new(media.clone(), site_config.clone(), storage_path);
+    let manager = storage::MediaManager::new(media.clone(), site_config.clone(), storage_path);
     let upload = manager
-        .upload_bytes(&auth_user, &filename, &content_type, &body)
+        .upload_bytes(auth_user.user_id, &filename, &content_type, &body)
         .await?;
 
     let record = media

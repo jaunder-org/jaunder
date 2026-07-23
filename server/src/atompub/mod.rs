@@ -159,7 +159,7 @@ pub enum HandlerError {
     /// A conditional request (`If-Match`) did not match the current `ETag`. `412`.
     PreconditionFailed,
     /// A status already decided by a subsystem that maps its own errors (e.g. the
-    /// media upload pipeline via `MediaManager::map_error`), passed through unchanged.
+    /// media upload pipeline via `media::map_error`), passed through unchanged.
     Status(StatusCode),
     /// A composed `AtomPub` URL was requested but `site.base_url` is unset, so no
     /// spec-valid absolute `atom:id` can be emitted (#560). Logged on response. `500`.
@@ -264,12 +264,12 @@ impl From<storage::DeleteMediaError> for HandlerError {
 
 impl From<anyhow::Error> for HandlerError {
     /// The media upload pipeline (`MediaManager::upload_bytes`) reports failures as
-    /// `anyhow::Error`; `MediaManager::map_error` decides the client-facing status
+    /// `anyhow::Error`; `media::map_error` decides the client-facing status
     /// (e.g. `413` for an oversized payload). Log the underlying error — it is
     /// infrastructure detail, not user content — then pass the mapped status through.
     fn from(err: anyhow::Error) -> Self {
         tracing::error!(error = %err, "AtomPub media upload failed");
-        HandlerError::Status(crate::media_manager::MediaManager::map_error(&err))
+        HandlerError::Status(crate::media::map_error(&err))
     }
 }
 
@@ -360,7 +360,7 @@ mod tests {
     #[test]
     fn anyhow_error_maps_through_media_map_error() {
         // Media-upload failures arrive as anyhow::Error and flow through
-        // MediaManager::map_error; a generic error yields a non-success status.
+        // media::map_error; a generic error yields a non-success status.
         let code = status(anyhow::anyhow!("upload boom").into());
         assert!(code.is_client_error() || code.is_server_error());
     }
