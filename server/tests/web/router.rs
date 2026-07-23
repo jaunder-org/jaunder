@@ -120,7 +120,7 @@ async fn home_response_contains_app_content(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
-async fn current_user_api_route_returns_ok(#[case] backend: Backend) {
+async fn session_api_route_returns_ok(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let local = tokio::task::LocalSet::new();
     local
@@ -137,7 +137,7 @@ async fn current_user_api_route_returns_ok(#[case] backend: Backend) {
                 .oneshot(
                     Request::builder()
                         .method("POST")
-                        .uri("/api/current_user")
+                        .uri("/api/session")
                         .header("content-type", "application/x-www-form-urlencoded")
                         .header(
                             "traceparent",

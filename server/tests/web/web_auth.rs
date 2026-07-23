@@ -26,6 +26,21 @@ fn extract_token(body: &str) -> RawToken {
         .expect("valid token in body")
 }
 
+/// Login now returns `{"token":"…","is_operator":<bool>}` (#591); register still
+/// returns a bare token string (use `extract_token` for those).
+fn extract_login(body: &str) -> (RawToken, bool) {
+    #[derive(serde::Deserialize)]
+    struct Resp {
+        token: String,
+        is_operator: bool,
+    }
+    let r: Resp = serde_json::from_str(body.trim()).expect("valid login JSON body");
+    (
+        r.token.parse().expect("valid token in login body"),
+        r.is_operator,
+    )
+}
+
 // M2.9.8: `register` with Open policy creates user, sets cookie, returns non-empty token.
 #[apply(backends)]
 #[tokio::test]
@@ -285,10 +300,45 @@ async fn login_correct_password_sets_cookie_and_returns_token(#[case] backend: B
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    let token = extract_token(&body);
+    let token = extract_login(&body).0;
     assert!(!token.is_empty());
     let cookie = set_cookie.expect("Set-Cookie header should be present on login");
     assert!(cookie.starts_with("session="), "cookie: {cookie}");
+}
+
+// #591: login's response carries `is_operator` so the client writes a complete
+// marker (flash-free first login). A freshly registered user is a non-operator.
+#[apply(backends)]
+#[tokio::test]
+async fn login_returns_is_operator_flag(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    state
+        .site_config
+        .set("site.registration_policy", "open")
+        .await
+        .unwrap();
+    post_form_with_secure_flag(
+        Arc::clone(&state),
+        "/api/register",
+        "username=alice&password=password123",
+        None,
+        true,
+    )
+    .await;
+
+    let (status, _cookie, body) = post_form_with_secure_flag(
+        Arc::clone(&state),
+        "/api/login",
+        "username=alice&password=password123",
+        None,
+        true,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let (token, is_operator) = extract_login(&body);
+    assert!(!token.is_empty());
+    assert!(!is_operator, "a freshly registered user is not an operator");
 }
 
 // (Removed `authenticated_home_page_shows_logged_in_indicator`: under #180 the
@@ -341,7 +391,7 @@ async fn login_with_label_creates_session_with_label(#[case] backend: Backend) {
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    let raw_token = extract_token(&body);
+    let raw_token = extract_login(&body).0;
     let record = state.sessions.authenticate(&raw_token).await.unwrap();
     assert_eq!(record.label, "my-device");
 }
@@ -374,7 +424,7 @@ async fn login_with_empty_label_creates_session_without_label(#[case] backend: B
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    let raw_token = extract_token(&body);
+    let raw_token = extract_login(&body).0;
     let record = state.sessions.authenticate(&raw_token).await.unwrap();
     // When no label provided, should default to "Unknown device"
     assert_eq!(record.label, "Unknown device");
@@ -413,7 +463,7 @@ async fn login_truncates_long_user_agent(#[case] backend: Backend) {
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    let raw_token = extract_token(&body);
+    let raw_token = extract_login(&body).0;
     let record = state.sessions.authenticate(&raw_token).await.unwrap();
     // Label should be truncated to 200 chars
     assert_eq!(record.label.len(), 200);
@@ -765,51 +815,8 @@ async fn logout_clears_cookie_without_secure_attribute_when_disabled(#[case] bac
     assert!(!clear_cookie.contains("Secure"));
 }
 
-#[apply(backends)]
-#[tokio::test]
-async fn current_user_returns_username_when_authenticated(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let user_id = state
-        .users
-        .create_user(
-            &"alice".parse::<Username>().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let raw_token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
-
-    let cookie_header = session_cookie(&raw_token);
-    let (status, _, body) = post_form_with_secure_flag(
-        Arc::clone(&state),
-        "/api/current_user",
-        "",
-        Some(&cookie_header),
-        true,
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body.trim(), "\"alice\"");
-}
-
-#[apply(backends)]
-#[tokio::test]
-async fn current_user_returns_null_when_unauthenticated(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-
-    let (status, _, body) =
-        post_form_with_secure_flag(Arc::clone(&state), "/api/current_user", "", None, true).await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body.trim(), "null");
-}
+// (`current_user` endpoint retired in #591 — session identity, authed + anonymous,
+// is now covered by `web_backup::session_reports_username_and_operator`.)
 
 #[apply(backends)]
 #[tokio::test]

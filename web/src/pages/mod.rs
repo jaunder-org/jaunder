@@ -40,6 +40,11 @@ use leptos_router::{
 
 #[component]
 fn AppShell() -> impl IntoView {
+    // The shared session context lives here, not in `App`: it reads `use_location`
+    // (per-navigation reconcile), which requires the `<Router>` context, and every
+    // consumer renders under this shell (#591).
+    crate::auth::provide_session_context();
+
     let theme = use_context::<RwSignal<String>>()
         .unwrap_or_else(|| RwSignal::new(DEFAULT_THEME.to_string()));
     // `data-theme` must be a plain dynamic attribute, NOT `attr:data-theme`: the
@@ -66,16 +71,12 @@ pub fn App() -> impl IntoView {
     // Provides context that manages stylesheets, titles, meta tags, etc.
     provide_meta_context();
 
-    // Override the router's SPA-navigation redirect hook with a full-page reload.
-    // The Router component installs a hook via the same OnceLock (first caller wins),
-    // so we must register ours here — before the view! tree renders and instantiates
-    // Router.  Using window.location.replace() instead of use_navigate() ensures:
-    // - the browser performs a real page load, refreshing all server-rendered state
-    //   (including the auth header that reads from the `user` Resource), and
-    // - Playwright's waitForURL() reliably detects the navigation in all browsers.
-    let _ = leptos::server_fn::redirect::set_redirect_hook(|loc: &str| {
-        client::navigation::replace(loc);
-    });
+    // No server-fn redirect-hook override (#591): `<Router>` installs a same-origin
+    // `use_navigate` hook into the first-caller-wins `OnceLock`, and it mounts before
+    // any `ActionForm`, so login/logout/register redirects are client-side pushState
+    // (no full document reload — the SSR-era rationale for the reload is gone). Chrome
+    // updates reactively via the shared session context, which the login/logout/
+    // register components set/clear on success.
 
     let theme = RwSignal::new(DEFAULT_THEME.to_string());
 

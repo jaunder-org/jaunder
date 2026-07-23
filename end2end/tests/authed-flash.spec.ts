@@ -10,7 +10,7 @@
  */
 
 import { test, expect, slowBrowserTimeoutMs } from "./fixtures";
-import { BASE_URL, goto, register } from "./helpers";
+import { BASE_URL, goto, register, login, failServerFn } from "./helpers";
 import { SEL } from "./selectors";
 import { createPostViaApi } from "./posts";
 
@@ -81,8 +81,8 @@ test("owner: jaunder_home_redirect='app' makes the pre-paint script redirect / �
 });
 
 test("anonymous: /app bounces to /login", async ({ page, firstNav }) => {
-  // No session and no marker → CockpitPage's current_user() gate resolves anon and
-  // redirects to /login (D6).
+  // No session and no marker → CockpitPage's session-reconcile gate resolves anon
+  // and redirects to /login (D6).
   await page.goto(`${BASE_URL}/app`, { waitUntil: "domcontentloaded" });
   await page.waitForURL(/\/login$/, {
     timeout: firstNav,
@@ -95,4 +95,23 @@ test("anonymous: / has no authed sidebar chrome", async ({ page }) => {
   await expect(page.locator("html")).not.toHaveClass(/\bauthed\b/);
   await expect(page.locator(SEL.logoutLink)).toHaveCount(0);
   await expect(page.locator(".j-sidebar a[href='/drafts']")).toHaveCount(0);
+});
+
+// #591: operator status now rides in the auth marker, so operator chrome is seeded
+// flash-free on boot (not awaited from a server fetch). Proof: fail the `session()`
+// reconcile so no server confirmation can arrive — the operator admin nav must still
+// paint, sourced from the marker seed alone.
+test("operator: admin chrome is seeded flash-free from the marker", async ({
+  page,
+}) => {
+  // Log in as the seeded operator; this writes the marker with is_operator:true.
+  await login(page, "testoperator", "testpassword123");
+
+  // With session() failing, the operator admin nav can only come from the marker.
+  await failServerFn(page, "session");
+  await goto(page, "/");
+
+  await expect(
+    page.locator(".j-sidebar a[href='/admin/backups']"),
+  ).toBeVisible();
 });

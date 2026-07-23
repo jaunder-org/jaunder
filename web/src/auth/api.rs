@@ -1,5 +1,5 @@
 //! The **auth** vertical's API surface (ADR-0070, amended #530): the `#[server]`
-//! session endpoints (`current_user`, `login`, `logout`) and their wire types,
+//! session endpoints (`session`, `login`, `logout`) and their wire types,
 //! dual-compiled. `mod.rs` re-exports these so external call sites and the
 //! server-fn registrar keep the stable `crate::auth::…` paths.
 
@@ -17,33 +17,32 @@ use leptos::prelude::*;
 // sibling `server` module's helpers plus the crate-level SSR dependencies.
 #[cfg(feature = "server")]
 use {
-    super::server::{
-        classify_current_user, clear_session_cookie, require_auth, set_session_cookie,
-    },
+    super::server::{clear_session_cookie, require_auth, set_session_cookie},
     common::password::Password,
     std::sync::Arc,
     storage::{SessionStorage, UserStorage},
     tracing::Instrument,
 };
 
-/// Returns the current logged-in username, if any.
-#[server(endpoint = "/current_user")]
-#[tracing::instrument(name = "web.auth.current_user")]
-pub async fn current_user() -> WebResult<Option<Username>> {
-    boundary!("current_user", {
-        classify_current_user(require_auth().await)
-    })
+/// `login`'s success payload: the raw session token (unchanged) plus the viewer's
+/// operator flag, so the client writes a complete marker immediately (flash-free
+/// first login, #591). Web-only wire type — the elisp frontend uses HTTP Basic auth,
+/// not this endpoint.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct LoginResponse {
+    pub token: RawToken,
+    pub is_operator: bool,
 }
 
-/// Authenticates a user.  Returns the freshly minted session [`RawToken`] on
-/// success and sets the `session` cookie.
+/// Authenticates a user.  Returns a [`LoginResponse`] (the freshly minted session
+/// [`RawToken`] + the viewer's operator flag) and sets the `session` cookie.
 #[server(endpoint = "/login")]
 #[tracing::instrument(name = "web.auth.login", skip(password, label))]
 pub async fn login(
     username: Username,
     password: ProfferedPassword,
     label: Option<String>,
-) -> WebResult<RawToken> {
+) -> WebResult<LoginResponse> {
     boundary!("login", {
         let users = expect_context::<Arc<dyn UserStorage>>();
         let sessions = expect_context::<Arc<dyn SessionStorage>>();
@@ -95,7 +94,13 @@ pub async fn login(
 
         set_session_cookie(&raw_token);
         leptos_axum::redirect("/");
-        Ok(raw_token)
+        // `record` is the authenticated `UserRecord`, which already carries
+        // `is_operator` (storage `UserRecord`) — no extra query. `raw_token` is the
+        // typed `RawToken` (#578); `LoginResponse` carries it plus the marker seed.
+        Ok(LoginResponse {
+            token: raw_token,
+            is_operator: record.is_operator,
+        })
     })
 }
 
@@ -111,5 +116,29 @@ pub async fn logout() -> WebResult<()> {
         clear_session_cookie();
         leptos_axum::redirect("/");
         Ok(())
+    })
+}
+
+/// The viewer's session identity — username + operator flag — or `None` when
+/// anonymous/expired. The single reconcile fetch behind the shared session context
+/// (#591), superseding `current_user` + the reactive `current_user_is_operator`.
+#[server(endpoint = "/session")]
+#[tracing::instrument(name = "web.auth.session")]
+pub async fn session() -> WebResult<Option<super::SessionUser>> {
+    boundary!("session", {
+        let auth = match require_auth().await {
+            Ok(auth) => auth,
+            Err(error) if error.kind() == crate::error::ErrorKind::Auth => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let users = expect_context::<Arc<dyn UserStorage>>();
+        let is_operator = users
+            .get_user(auth.user_id)
+            .await?
+            .is_some_and(|u| u.is_operator);
+        Ok(Some(super::SessionUser {
+            username: auth.username,
+            is_operator,
+        }))
     })
 }

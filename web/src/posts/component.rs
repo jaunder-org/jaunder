@@ -11,7 +11,6 @@ use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 
 use crate::audiences::{list_my_audiences, AudienceSummary};
-use crate::auth::current_user;
 use crate::avatar::Avatar;
 use crate::error::WebError;
 use crate::feed_discovery::{FeedDiscovery, RsdDiscovery};
@@ -174,12 +173,18 @@ pub fn PostDisplay(
     }
 }
 
-/// `true` when the auth marker's username equals `author` (#181, ADR-0044): the
+/// `true` when the shared session's username equals `author` (#181/#591): the
 /// client-side signal that the viewer owns this post, so its action column shows
-/// even though the anonymous seed data has `is_author = false`. `false` on the
-/// host build (no marker) — the affordance is wasm-only chrome.
+/// even though the anonymous seed data has `is_author = false`. `false` on the host
+/// build / outside the provider (no context) — the affordance is wasm-only chrome.
+/// Uses `use_context` (not `use_session`) so the host build yields `None`→`false`
+/// rather than panicking; reads untracked to match the original non-reactive read.
 fn marker_matches(author: &Username) -> bool {
-    crate::auth::marker_storage::get().as_ref() == Some(author)
+    use_context::<crate::auth::SessionContext>()
+        .and_then(|ctx| ctx.current.get_untracked())
+        .as_ref()
+        .map(|user| &user.username)
+        == Some(author)
 }
 
 #[component]
@@ -1080,7 +1085,9 @@ pub fn TagInput(
 
 #[component]
 pub fn CreatePostPage() -> impl IntoView {
-    let current_user = Resource::new(|| (), |()| current_user());
+    // Server-confirmed gate: await the shared session reconcile (an expired cookie
+    // must not show the create form) (#591).
+    let session = crate::auth::use_session();
     let last_result: RwSignal<Option<CreatePostResult>> = RwSignal::new(None);
 
     view! {
@@ -1089,7 +1096,7 @@ pub fn CreatePostPage() -> impl IntoView {
             view! { <p class="j-loading">"Loading\u{2026}"</p> }
         }>
             {move || Suspend::new(async move {
-                match current_user.await {
+                match session.reconcile.await {
                     Ok(Some(_)) => {
                         view! {
                             <PostCreateForm
@@ -1279,16 +1286,20 @@ fn SubscribeButton(username: Username) -> impl IntoView {
     let subscribe = ServerAction::<SubscribeTo>::new();
     let unsubscribe = ServerAction::<UnsubscribeFrom>::new();
 
-    // Re-query after either action mutates the subscription.
+    // Re-query the subscription after either action mutates it; the viewer identity
+    // comes from the shared session (stable, so it needs no per-action re-query) (#591).
+    let session = crate::auth::use_session();
     let username_for_state = username.clone();
     let state = Resource::new(
         move || (subscribe.version().get(), unsubscribe.version().get()),
         move |_| {
             let username = username_for_state.clone();
             async move {
-                let viewer = current_user().await.ok().flatten();
                 let subscribed = is_subscribed_to(username.clone()).await.unwrap_or(false);
-                (viewer, subscribed)
+                (
+                    session.current.get_untracked().map(|u| u.username),
+                    subscribed,
+                )
             }
         },
     );

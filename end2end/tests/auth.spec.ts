@@ -5,7 +5,6 @@ import {
   goto,
   click,
   waitForSelector,
-  waitForHydration,
   login,
   fillLoginForm,
 } from "./helpers";
@@ -67,17 +66,68 @@ test("login with valid credentials succeeds", async ({
   perf.mark("credentials_filled");
   await click(page, SEL.submit);
   perf.mark("submit_clicked");
-  // waitForURL is unreliable in Firefox for location.replace() navigations; wait
-  // for the sidebar logout link, which only appears after the Suspense resolves
-  // with the authenticated state — by that point the navigation is fully settled.
+  // Login now redirects via client-side pushState (#591 dropped the full-reload
+  // hook), so waitForURL is reliable — but we wait for the sidebar logout link,
+  // which appears once the shared session context flips to authenticated, as the
+  // content-readiness signal.
   await waitForSelector(page, SEL.logoutLink);
   perf.mark("logout_link_visible");
-  await waitForHydration(page);
 
+  // No waitForHydration: login is a client-side pushState now, so `data-hydrated`
+  // (per-document) is already set — assert on content readiness instead (#591).
   await expect(page.locator(".j-sb-foot")).toContainText(user.username);
   await expect(page.locator(".j-sidebar")).toBeVisible();
   perf.mark("assertions_complete");
   await perf.log();
+});
+
+// #591: login/logout redirect via client-side pushState now (the SSR-era full-reload
+// hook is gone), so the wasm app is not re-booted. Proof: a value stashed on `window`
+// before the action survives across it — a full document load would wipe it.
+test("login navigates client-side without a full document reload", async ({
+  page,
+  user,
+}) => {
+  await goto(page, "/login");
+  await page.evaluate(() => {
+    (window as Window & { __jaunderNoReload?: boolean }).__jaunderNoReload =
+      true;
+  });
+
+  await page.fill(SEL.username, user.username);
+  await page.fill(SEL.password, user.password);
+  await click(page, SEL.submit);
+  await waitForSelector(page, SEL.logoutLink);
+
+  const survived = await page.evaluate(
+    () =>
+      (window as Window & { __jaunderNoReload?: boolean }).__jaunderNoReload ===
+      true,
+  );
+  expect(survived).toBe(true);
+  await expect(page).toHaveURL(`${BASE_URL}/`);
+});
+
+test("logout navigates client-side without a full document reload", async ({
+  page,
+  user,
+}) => {
+  await login(page, user.username, user.password);
+  await page.evaluate(() => {
+    (window as Window & { __jaunderNoReload?: boolean }).__jaunderNoReload =
+      true;
+  });
+
+  await click(page, SEL.logoutLink);
+  await page.waitForURL(`${BASE_URL}/`, { timeout: 10_000 });
+  await expect(page.locator(".j-sb-foot")).not.toContainText(user.username);
+
+  const survived = await page.evaluate(
+    () =>
+      (window as Window & { __jaunderNoReload?: boolean }).__jaunderNoReload ===
+      true,
+  );
+  expect(survived).toBe(true);
 });
 
 test("login with wrong password shows error", async ({ page }) => {
@@ -95,10 +145,9 @@ test("logout page logs out", async ({ page, user }) => {
   // Use the rendered logout link to avoid Firefox navigation abort races.
   await click(page, SEL.logoutLink);
 
-  // Logout clears the session and redirects to "/"; waitForURL is reliable here
-  // because logout is a server-side 302 redirect (not location.replace).
+  // Logout clears the session and redirects to "/" via client-side pushState
+  // (#591); waitForURL is reliable for pushState navigations.
   await page.waitForURL(`${BASE_URL}/`, { timeout: 10_000 });
-  await waitForHydration(page);
   // Footer shows neither username nor sign-in link after logout.
   await expect(page.locator(".j-sb-foot")).not.toContainText(user.username);
   await expect(page.locator(".j-sb-foot a[href='/login']")).toHaveCount(0);
@@ -115,9 +164,8 @@ test("sidebar reverts to signed-out state after logout", async ({
 
   // Click the sidebar "Sign out" link and confirm the sidebar switches back.
   await click(page, SEL.logoutLink);
-  // Logout is a server-side 302 redirect (not location.replace), so waitForURL is reliable.
+  // Logout redirects to "/" via client-side pushState (#591); waitForURL is reliable.
   await page.waitForURL(`${BASE_URL}/`, { timeout: 10_000 });
-  await waitForHydration(page);
   await expect(page.locator(".j-sb-foot")).not.toContainText(user.username);
   // Footer no longer shows a Sign-in link — it renders nothing when unauthenticated.
   await expect(page.locator(".j-sb-foot a[href='/login']")).toHaveCount(0);

@@ -43,24 +43,6 @@ pub async fn backup_warning_visible() -> WebResult<bool> {
     })
 }
 
-#[server(endpoint = "/current_user_is_operator")]
-#[tracing::instrument(name = "web.backup.current_user_is_operator")]
-pub async fn current_user_is_operator() -> WebResult<bool> {
-    boundary!("current_user_is_operator", {
-        let auth = match require_auth().await {
-            Ok(auth) => auth,
-            Err(error) if error.kind() == ErrorKind::Auth => return Ok(false),
-            Err(error) => return Err(error),
-        };
-
-        let users = expect_context::<Arc<dyn UserStorage>>();
-        Ok(users
-            .get_user(auth.user_id)
-            .await?
-            .is_some_and(|u| u.is_operator))
-    })
-}
-
 #[server(endpoint = "/get_backup_settings")]
 #[tracing::instrument(name = "web.backup.get_settings")]
 pub async fn get_backup_settings() -> WebResult<BackupConfig> {
