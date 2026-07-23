@@ -9,7 +9,7 @@ use common::token::RawToken;
 use common::username::Username;
 use storage::AppState;
 
-use crate::helpers::post_form_with_mailer;
+use crate::helpers::{post_form_with_mailer, setup_with_base_url};
 use storage::test_support::{backends, Backend, TestEnv};
 
 use rstest::*;
@@ -49,7 +49,9 @@ async fn create_user_with_verified_email(
 #[apply(backends)]
 #[tokio::test]
 async fn request_password_reset_sends_email_for_verified_user(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    // The reset email now composes an absolute link, so the flow requires a seeded
+    // `site.base_url` (canonicalized to `https://example.com/`).
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let mailer = Arc::new(CapturingMailSender::new());
 
     create_user_with_verified_email(&state, "alice", "alice@example.com").await;
@@ -70,9 +72,39 @@ async fn request_password_reset_sends_email_for_verified_user(#[case] backend: B
     assert_eq!(sent[0].to.len(), 1);
     assert_eq!(sent[0].to[0], "alice@example.com");
     assert!(
-        sent[0].body_text.contains("/reset-password?token="),
-        "email body should contain reset link, got: {}",
+        sent[0]
+            .body_text
+            .contains("https://example.com/reset-password?token="),
+        "email body should contain an ABSOLUTE reset link, got: {}",
         sent[0].body_text
+    );
+}
+
+// The reset email now composes an absolute link, so an eligible request still
+// fails (after confirming the user) without a seeded `site.base_url`, rather than
+// emailing a dead relative link.
+#[apply(backends)]
+#[tokio::test]
+async fn request_password_reset_without_base_url_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await; // no base_url seeded
+    let mailer = Arc::new(CapturingMailSender::new());
+
+    create_user_with_verified_email(&state, "alice", "alice@example.com").await;
+
+    let (status, _body) = post_form_with_mailer(
+        Arc::clone(&state),
+        mailer.clone() as Arc<dyn common::mailer::MailSender>,
+        "/api/request_password_reset",
+        "username=alice",
+        None,
+    )
+    .await;
+
+    assert_ne!(status, StatusCode::OK, "should fail without a base URL");
+    assert_eq!(
+        mailer.sent().len(),
+        0,
+        "no reset email should be sent without a base URL"
     );
 }
 

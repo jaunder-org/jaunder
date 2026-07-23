@@ -6,7 +6,7 @@ use common::mailer::test_utils::CapturingMailSender;
 use common::test_support::parse_email;
 use common::username::Username;
 
-use crate::helpers::{post_form_with_mailer, session_cookie};
+use crate::helpers::{post_form_with_mailer, session_cookie, setup_with_base_url};
 use storage::test_support::{backends, Backend, TestEnv};
 
 use rstest::*;
@@ -16,7 +16,9 @@ use rstest_reuse::*;
 #[apply(backends)]
 #[tokio::test]
 async fn request_email_verification_creates_row_and_sends_email(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    // The verification email now composes an absolute link, so the flow requires a
+    // seeded `site.base_url` (canonicalized to `https://example.com/`).
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let mailer = Arc::new(CapturingMailSender::new());
 
     let user_id = state
@@ -52,9 +54,53 @@ async fn request_email_verification_creates_row_and_sends_email(#[case] backend:
     assert_eq!(sent[0].to.len(), 1);
     assert_eq!(sent[0].to[0], "alice@example.com");
     assert!(
-        sent[0].body_text.contains("/verify-email?token="),
-        "email body should contain verification link, got: {}",
+        sent[0]
+            .body_text
+            .contains("https://example.com/verify-email?token="),
+        "email body should contain an ABSOLUTE verification link, got: {}",
         sent[0].body_text
+    );
+}
+
+// The verification email now composes an absolute link, so without a seeded
+// `site.base_url` the request fails rather than emailing a dead relative link.
+#[apply(backends)]
+#[tokio::test]
+async fn request_email_verification_without_base_url_returns_error(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await; // no base_url seeded
+    let mailer = Arc::new(CapturingMailSender::new());
+
+    let user_id = state
+        .users
+        .create_user(
+            &"alice".parse::<Username>().unwrap(),
+            &"password123".parse().unwrap(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let raw_token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .unwrap();
+    let cookie = session_cookie(&raw_token);
+
+    let (status, _body) = post_form_with_mailer(
+        Arc::clone(&state),
+        mailer.clone() as Arc<dyn common::mailer::MailSender>,
+        "/api/request_email_verification",
+        "email=alice%40example.com",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_ne!(status, StatusCode::OK, "should fail without a base URL");
+    assert_eq!(
+        mailer.sent().len(),
+        0,
+        "no verification email should be sent without a base URL"
     );
 }
 

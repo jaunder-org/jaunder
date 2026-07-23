@@ -1,7 +1,7 @@
 import { test, expect } from "./fixtures";
 import { goto, login, click, expectFlash } from "./helpers";
 import { SEL } from "./selectors";
-import { extractToken } from "./mail";
+import { extractLink } from "./mail";
 
 // M3.10.11: Full email verification flow.
 test("email verification flow completes successfully", async ({
@@ -20,10 +20,17 @@ test("email verification flow completes successfully", async ({
 
   // Read this recipient's verification mail (recipient-scoped, parallel-safe).
   const email = await mailbox.waitForNewEmail();
-  const token = extractToken(email);
+  const link = extractLink(email);
 
-  // Visit the verification link
-  await goto(page, `/verify-email?token=${token}`);
+  // The verification link MUST be absolute — a relative "/verify-email?..." is
+  // unusable in a real mail client. Assert that, then actually follow the emitted
+  // link (re-based onto the live server, since the seeded base_url is the
+  // deliberately-bogus https://example.com).
+  expect(link).toMatch(/^https:\/\/example\.com\/verify-email\?token=/);
+  // Follow the emitted link's own path on the live server (its host is the
+  // deliberately-bogus seeded base_url, not the test server).
+  const verify = new URL(link);
+  await goto(page, `${verify.pathname}${verify.search}`);
   await expectFlash(page, "verified");
 
   // Confirm email is shown as verified on the profile page

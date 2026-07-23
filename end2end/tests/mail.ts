@@ -95,3 +95,15 @@ export function extractInviteCode(email: CapturedEmail): string {
   if (!match) throw new Error("no invite_code in captured email");
   return match[1];
 }
+
+/**
+ * Extract the full token-bearing link from a captured email body — whatever the
+ * email actually contains: an absolute `https://…/path?token=…` (correct) or a
+ * bare relative `/path?token=…` (the bug a caller can then assert against).
+ * Throws if absent, so a missing link fails clearly rather than downstream.
+ */
+export function extractLink(email: CapturedEmail): string {
+  const match = email.body_text.match(/(\S+token=\S+)/);
+  if (!match) throw new Error("no token-bearing link in captured email");
+  return match[1];
+}

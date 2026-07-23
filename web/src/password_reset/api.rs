@@ -5,10 +5,11 @@
 use {
     crate::error::InternalError,
     chrono::Duration,
+    common::absolute_url::compose,
     common::mailer::{EmailMessage, MailSender},
     common::password::Password,
     std::sync::Arc,
-    storage::{AtomicOps, PasswordResetStorage, UserStorage},
+    storage::{AtomicOps, PasswordResetStorage, SiteConfigStorage, UserStorage},
 };
 
 use crate::error::WebResult;
@@ -25,6 +26,7 @@ pub async fn request_password_reset(username: Username) -> WebResult<()> {
     boundary!("request_password_reset", {
         let users = expect_context::<Arc<dyn UserStorage>>();
         let password_resets = expect_context::<Arc<dyn PasswordResetStorage>>();
+        let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
         let mailer = expect_context::<Arc<dyn MailSender>>();
 
         // `username` arrives already validated + lowercased (typed wire arg,
@@ -48,12 +50,21 @@ pub async fn request_password_reset(username: Username) -> WebResult<()> {
                 )
             })?;
 
+        // A followable reset link needs the site's absolute base URL (mirrors
+        // `create_invite`): an email client can't resolve a relative path. Fetch it
+        // once we know we'll send — before minting the token, so a misconfigured
+        // site fails without leaving an orphan reset token behind.
+        let base_url = site_config.get_identity().await?.base_url.ok_or_else(|| {
+            InternalError::validation("set the site base URL before emailing password resets")
+        })?;
+
         let expires_at = chrono::Utc::now() + Duration::hours(1);
         let raw_token = password_resets
             .create_password_reset(user_id, expires_at)
             .await?;
 
-        let link = format!("/reset-password?token={raw_token}");
+        let reset_url = compose(&base_url, "/reset-password");
+        let link = format!("{reset_url}?token={raw_token}");
         let message = EmailMessage {
             from: None,
             to: vec![verified_email],

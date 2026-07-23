@@ -5,9 +5,10 @@
 use {
     crate::auth::require_auth,
     crate::error::InternalError,
+    common::absolute_url::compose,
     common::mailer::{EmailMessage, MailSender},
     std::sync::Arc,
-    storage::{EmailVerificationStorage, UserStorage},
+    storage::{EmailVerificationStorage, SiteConfigStorage, UserStorage},
 };
 
 use crate::error::WebResult;
@@ -20,8 +21,8 @@ use leptos::prelude::*;
 
 /// Sends a verification email to `email`. Requires authentication.
 ///
-/// Creates a 24-hour verification token, sends a link to `/verify-email?token=…`
-/// via the configured mailer.
+/// Creates a 24-hour verification token, sends an absolute
+/// `{base_url}/verify-email?token=…` link via the configured mailer.
 #[server(endpoint = "/request_email_verification")]
 pub async fn request_email_verification(email: Email) -> WebResult<()> {
     boundary!("request_email_verification", {
@@ -30,14 +31,23 @@ pub async fn request_email_verification(email: Email) -> WebResult<()> {
         // field (ADR-0065), so an invalid value only reaches here from a non-browser caller.
         let auth = require_auth().await?;
         let email_verifications = expect_context::<Arc<dyn EmailVerificationStorage>>();
+        let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
         let mailer = expect_context::<Arc<dyn MailSender>>();
+
+        // A followable verification link needs the site's absolute base URL (mirrors
+        // `create_invite`); fetch it before minting a token so a misconfigured site
+        // fails rather than mailing a dead relative link.
+        let base_url = site_config.get_identity().await?.base_url.ok_or_else(|| {
+            InternalError::validation("set the site base URL before emailing verification links")
+        })?;
 
         let expires_at = chrono::Utc::now() + chrono::Duration::hours(24);
         let raw_token = email_verifications
             .create_email_verification(auth.user_id, &email, expires_at)
             .await?;
 
-        let link = format!("/verify-email?token={raw_token}");
+        let verify_url = compose(&base_url, "/verify-email");
+        let link = format!("{verify_url}?token={raw_token}");
         let message = EmailMessage {
             from: None,
             to: vec![email],
