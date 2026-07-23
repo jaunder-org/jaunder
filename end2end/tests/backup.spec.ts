@@ -16,7 +16,9 @@ test("backup schedule field gates submit until a valid cron is entered", async (
   const scheduleInput = page.locator('input[name="schedule"]');
 
   // Prefilled with the valid default ("0 0 0 * * *"): submit starts enabled, no error shown.
-  await expect(page.locator(SEL.submit)).toBeEnabled();
+  await expect(
+    page.locator('button:has-text("Save Backup Settings")'),
+  ).toBeEnabled();
   await expect(page.locator(SEL.error)).not.toBeVisible();
 
   // A malformed cron, once the field is touched (blur), shows the inline client-local error
@@ -24,12 +26,16 @@ test("backup schedule field gates submit until a valid cron is entered", async (
   await scheduleInput.fill("not a cron");
   await scheduleInput.blur();
   await expect(page.locator(SEL.error)).toBeVisible();
-  await expect(page.locator(SEL.submit)).toBeDisabled();
+  await expect(
+    page.locator('button:has-text("Save Backup Settings")'),
+  ).toBeDisabled();
 
   // A valid six-field cron clears the error and re-enables submit.
   await scheduleInput.fill("0 30 2 * * *");
   await expect(page.locator(SEL.error)).not.toBeVisible();
-  await expect(page.locator(SEL.submit)).toBeEnabled();
+  await expect(
+    page.locator('button:has-text("Save Backup Settings")'),
+  ).toBeEnabled();
 });
 
 // #454: the mode <select> is generated from `BackupMode::VARIANTS` (option text = label,
@@ -68,7 +74,9 @@ test("backup retention field gates submit until a count of at least 1 is entered
   const retentionInput = page.locator('input[name="retention_count"]');
 
   // Prefilled with the valid default (7): submit starts enabled, no error shown.
-  await expect(page.locator(SEL.submit)).toBeEnabled();
+  await expect(
+    page.locator('button:has-text("Save Backup Settings")'),
+  ).toBeEnabled();
   await expect(page.locator(SEL.error)).not.toBeVisible();
 
   // 0 is not a valid retention count (min 1); once touched (blur) it shows the inline error
@@ -76,10 +84,14 @@ test("backup retention field gates submit until a count of at least 1 is entered
   await retentionInput.fill("0");
   await retentionInput.blur();
   await expect(page.locator(SEL.error)).toBeVisible();
-  await expect(page.locator(SEL.submit)).toBeDisabled();
+  await expect(
+    page.locator('button:has-text("Save Backup Settings")'),
+  ).toBeDisabled();
 
   // A valid count clears the error and re-enables submit.
   await retentionInput.fill("3");
   await expect(page.locator(SEL.error)).not.toBeVisible();
-  await expect(page.locator(SEL.submit)).toBeEnabled();
+  await expect(
+    page.locator('button:has-text("Save Backup Settings")'),
+  ).toBeEnabled();
 });
