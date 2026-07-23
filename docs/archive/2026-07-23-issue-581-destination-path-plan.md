@@ -335,11 +335,19 @@ git commit -m "refactor(web): backup form to ADR-0065 dispatch (no ActionForm) (
 
 ---
 
-### Task 3: Flip to `Option<DestinationPath>` — the type migration + omit/reject contract
+### Task 3: Flip to `Option<DestinationPath>` — the type migration + clear contract
 
 The atomic type flip. Spec §"`BackupConfig`", §"storage",
 §"`web/src/backup/api.rs`", §"Test support & sweep", decision 6. Everything here
 compiles as one unit.
+
+> **Correction (applied during implementation):** the steps below (and the header
+> "key risks") were written assuming an empty `destination_path=` would be **rejected**.
+> The gate falsified that — the form decoder maps an empty `Option<DestinationPath>`
+> field to `None`, so empty-present **clears** exactly like omit. As delivered: no
+> reject case for the destination; Step 1(c)'s reject-matrix case was replaced by a
+> second positive test, `operator_can_update_backup_settings_clears_via_empty_destination`,
+> alongside `..._omits_destination_as_none`. See the corrected spec decision 6.
 
 **Files:**
 
