@@ -103,6 +103,7 @@ convention). See the Status column below for each ADR's current status.
 | [0073](adr/0073-url-crate-for-absolute-url-normalization.md)       | The `url` crate is the sanctioned absolute-URL normalizer, and it enters the `common`/wasm graph             | proposed   |
 | [0074](adr/0074-str-enum-trailer.md)                               | `StrEnum` derive — the standard string-enum trailer                                                          | superseded |
 | [0075](adr/0075-adopt-strum-retire-str-enum.md)                    | Adopt `strum` for closed string enums; retire the bespoke `StrEnum` derive                                   | accepted   |
+| [0076](adr/0076-no-full-load-spa-navigation.md)                    | No in-app full document loads; `~`-prefixed SPA user namespace                                               | accepted   |
 
 <!-- adr-table:end -->
 
