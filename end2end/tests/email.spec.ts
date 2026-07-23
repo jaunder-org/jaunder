@@ -1,7 +1,6 @@
 import { test, expect } from "./fixtures";
-import { goto, login, click, expectFlash } from "./helpers";
+import { goto, login, click, expectFlash, followEmailLink } from "./helpers";
 import { SEL } from "./selectors";
-import { extractLink } from "./mail";
 
 // M3.10.11: Full email verification flow.
 test("email verification flow completes successfully", async ({
@@ -18,19 +17,11 @@ test("email verification flow completes successfully", async ({
 
   await expectFlash(page, "Check your email", 10_000);
 
-  // Read this recipient's verification mail (recipient-scoped, parallel-safe).
+  // Read this recipient's verification mail (recipient-scoped, parallel-safe) and
+  // follow the emitted link — asserting it is absolute, so a relative-link
+  // regression fails.
   const email = await mailbox.waitForNewEmail();
-  const link = extractLink(email);
-
-  // The verification link MUST be absolute — a relative "/verify-email?..." is
-  // unusable in a real mail client. Assert that, then actually follow the emitted
-  // link (re-based onto the live server, since the seeded base_url is the
-  // deliberately-bogus https://example.com).
-  expect(link).toMatch(/^https:\/\/example\.com\/verify-email\?token=/);
-  // Follow the emitted link's own path on the live server (its host is the
-  // deliberately-bogus seeded base_url, not the test server).
-  const verify = new URL(link);
-  await goto(page, `${verify.pathname}${verify.search}`);
+  await followEmailLink(page, email, "/verify-email");
   await expectFlash(page, "verified");
 
   // Confirm email is shown as verified on the profile page

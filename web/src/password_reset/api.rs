@@ -50,13 +50,10 @@ pub async fn request_password_reset(username: Username) -> WebResult<()> {
                 )
             })?;
 
-        // A followable reset link needs the site's absolute base URL (mirrors
-        // `create_invite`): an email client can't resolve a relative path. Fetch it
-        // once we know we'll send — before minting the token, so a misconfigured
-        // site fails without leaving an orphan reset token behind.
-        let base_url = site_config.get_identity().await?.base_url.ok_or_else(|| {
-            InternalError::validation("set the site base URL before emailing password resets")
-        })?;
+        // Fetch the site's absolute base URL once we know we'll send — before
+        // minting the token, so a misconfigured site fails without leaving an
+        // orphan reset token behind.
+        let base_url = crate::mail::require_base_url(&*site_config).await?;
 
         let expires_at = chrono::Utc::now() + Duration::hours(1);
         let raw_token = password_resets
@@ -74,12 +71,12 @@ pub async fn request_password_reset(username: Username) -> WebResult<()> {
             ),
         };
 
-        let started = std::time::Instant::now();
-        let send_result = mailer.send_email(&message).await;
-        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        host::metrics::email_send_duration_ms(elapsed_ms);
-        host::metrics::email_send_result(host::metrics::EmailKind::PasswordReset, &send_result);
-        send_result?;
+        crate::mail::send_recording_metrics(
+            &*mailer,
+            &message,
+            host::metrics::EmailKind::PasswordReset,
+        )
+        .await?;
 
         host::metrics::password_reset(host::metrics::PasswordResetEvent::Requested);
         Ok(())

@@ -48,9 +48,7 @@ pub async fn create_invite(expires_in_hours: Option<u64>, recipient_email: Email
         // must not leave an undelivered invite behind (no orphan). The recipient is
         // already a validated `Email` — the typed `#[server]` arg rejects a malformed
         // address at decode time (ADR-0065), so no in-handler parse is needed.
-        let base_url = site_config.get_identity().await?.base_url.ok_or_else(|| {
-            InternalError::validation("set the site base URL before emailing invites")
-        })?;
+        let base_url = crate::mail::require_base_url(&*site_config).await?;
 
         let hours = expires_in_hours.unwrap_or(168);
         let duration = i64::try_from(hours)
@@ -78,12 +76,8 @@ pub async fn create_invite(expires_in_hours: Option<u64>, recipient_email: Email
                 "You've been invited to create an account. Click the link below to register:\n\n{link}\n\nThis invitation expires in {hours} hours."
             ),
         };
-        let started = std::time::Instant::now();
-        let send_result = mailer.send_email(&message).await;
-        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        host::metrics::email_send_duration_ms(elapsed_ms);
-        host::metrics::email_send_result(host::metrics::EmailKind::Invite, &send_result);
-        send_result?;
+        crate::mail::send_recording_metrics(&*mailer, &message, host::metrics::EmailKind::Invite)
+            .await?;
         Ok(())
     })
 }

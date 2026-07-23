@@ -6,7 +6,10 @@ use common::mailer::test_utils::CapturingMailSender;
 use common::test_support::parse_email;
 use common::username::Username;
 
-use crate::helpers::{post_form_with_mailer, session_cookie, setup_with_base_url};
+use crate::helpers::{
+    assert_no_email, assert_one_absolute_link_email, post_form_with_mailer, session_cookie,
+    setup_with_base_url,
+};
 use storage::test_support::{backends, Backend, TestEnv};
 
 use rstest::*;
@@ -48,18 +51,7 @@ async fn request_email_verification_creates_row_and_sends_email(#[case] backend:
     .await;
 
     assert_eq!(status, StatusCode::OK);
-
-    let sent = mailer.sent();
-    assert_eq!(sent.len(), 1, "expected one email to be sent");
-    assert_eq!(sent[0].to.len(), 1);
-    assert_eq!(sent[0].to[0], "alice@example.com");
-    assert!(
-        sent[0]
-            .body_text
-            .contains("https://example.com/verify-email?token="),
-        "email body should contain an ABSOLUTE verification link, got: {}",
-        sent[0].body_text
-    );
+    assert_one_absolute_link_email(&mailer, "alice@example.com", "/verify-email");
 }
 
 // The verification email now composes an absolute link, so without a seeded
@@ -97,11 +89,7 @@ async fn request_email_verification_without_base_url_returns_error(#[case] backe
     .await;
 
     assert_ne!(status, StatusCode::OK, "should fail without a base URL");
-    assert_eq!(
-        mailer.sent().len(),
-        0,
-        "no verification email should be sent without a base URL"
-    );
+    assert_no_email(&mailer);
 }
 
 // M3.10.8: verify_email with a valid token sets the email as verified.

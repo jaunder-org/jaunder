@@ -5,9 +5,9 @@ import {
   waitForSelector,
   waitForHydration,
   fillLoginForm,
+  followEmailLink,
 } from "./helpers";
 import { SEL } from "./selectors";
-import { extractLink } from "./mail";
 
 // M3.11.13: Full password reset flow.
 test("password reset flow completes successfully", async ({
@@ -25,19 +25,10 @@ test("password reset flow completes successfully", async ({
     timeout: 10_000,
   });
 
-  // Read this recipient's reset mail (recipient-scoped, parallel-safe).
+  // Read this recipient's reset mail (recipient-scoped, parallel-safe) and follow
+  // the emitted link — asserting it is absolute, so a relative-link regression fails.
   const email = await mailbox.waitForNewEmail();
-  const link = extractLink(email);
-
-  // The reset link MUST be absolute — a relative "/reset-password?..." is unusable
-  // in a real mail client. Assert that, then actually follow the emitted link
-  // (re-based onto the live server, since the seeded base_url is the deliberately-
-  // bogus https://example.com).
-  expect(link).toMatch(/^https:\/\/example\.com\/reset-password\?token=/);
-  // Follow the emitted link's own path on the live server (its host is the
-  // deliberately-bogus seeded base_url, not the test server).
-  const reset = new URL(link);
-  await goto(page, `${reset.pathname}${reset.search}`);
+  await followEmailLink(page, email, "/reset-password");
   await page.fill('input[name="new_password"]', "resetpassword789");
   await click(page, SEL.submit);
   // Wait for the router redirect to /login — ensures the password change has

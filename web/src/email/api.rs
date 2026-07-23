@@ -34,12 +34,9 @@ pub async fn request_email_verification(email: Email) -> WebResult<()> {
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
         let mailer = expect_context::<Arc<dyn MailSender>>();
 
-        // A followable verification link needs the site's absolute base URL (mirrors
-        // `create_invite`); fetch it before minting a token so a misconfigured site
-        // fails rather than mailing a dead relative link.
-        let base_url = site_config.get_identity().await?.base_url.ok_or_else(|| {
-            InternalError::validation("set the site base URL before emailing verification links")
-        })?;
+        // Fetch the site's absolute base URL before minting a token so a
+        // misconfigured site fails rather than mailing a dead relative link.
+        let base_url = crate::mail::require_base_url(&*site_config).await?;
 
         let expires_at = chrono::Utc::now() + chrono::Duration::hours(24);
         let raw_token = email_verifications
@@ -57,12 +54,12 @@ pub async fn request_email_verification(email: Email) -> WebResult<()> {
             ),
         };
 
-        let started = std::time::Instant::now();
-        let send_result = mailer.send_email(&message).await;
-        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        host::metrics::email_send_duration_ms(elapsed_ms);
-        host::metrics::email_send_result(host::metrics::EmailKind::Verification, &send_result);
-        send_result?;
+        crate::mail::send_recording_metrics(
+            &*mailer,
+            &message,
+            host::metrics::EmailKind::Verification,
+        )
+        .await?;
 
         Ok(())
     })

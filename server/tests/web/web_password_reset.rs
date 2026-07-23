@@ -9,7 +9,9 @@ use common::token::RawToken;
 use common::username::Username;
 use storage::AppState;
 
-use crate::helpers::{post_form_with_mailer, setup_with_base_url};
+use crate::helpers::{
+    assert_no_email, assert_one_absolute_link_email, post_form_with_mailer, setup_with_base_url,
+};
 use storage::test_support::{backends, Backend, TestEnv};
 
 use rstest::*;
@@ -66,18 +68,7 @@ async fn request_password_reset_sends_email_for_verified_user(#[case] backend: B
     .await;
 
     assert_eq!(status, StatusCode::OK);
-
-    let sent = mailer.sent();
-    assert_eq!(sent.len(), 1, "expected one reset email to be sent");
-    assert_eq!(sent[0].to.len(), 1);
-    assert_eq!(sent[0].to[0], "alice@example.com");
-    assert!(
-        sent[0]
-            .body_text
-            .contains("https://example.com/reset-password?token="),
-        "email body should contain an ABSOLUTE reset link, got: {}",
-        sent[0].body_text
-    );
+    assert_one_absolute_link_email(&mailer, "alice@example.com", "/reset-password");
 }
 
 // The reset email now composes an absolute link, so an eligible request still
@@ -101,11 +92,7 @@ async fn request_password_reset_without_base_url_returns_error(#[case] backend: 
     .await;
 
     assert_ne!(status, StatusCode::OK, "should fail without a base URL");
-    assert_eq!(
-        mailer.sent().len(),
-        0,
-        "no reset email should be sent without a base URL"
-    );
+    assert_no_email(&mailer);
 }
 
 // M3.11.8: request_password_reset for a user without a verified email returns an error.
