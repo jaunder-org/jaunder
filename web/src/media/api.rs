@@ -19,7 +19,7 @@ use {
 };
 
 use common::ids::PostId;
-use common::pagination::PageSize;
+use common::pagination::{PageOffset, PageSize};
 use common::time::UtcInstant;
 
 use crate::error::WebResult;
@@ -82,7 +82,7 @@ pub fn extract_upload_url(body: &str) -> Result<String, String> {
 pub async fn list_my_media(
     source: Option<MediaSource>,
     limit: Option<PageSize>,
-    offset: Option<u32>,
+    offset: Option<PageOffset>,
 ) -> WebResult<Vec<MediaItem>> {
     boundary!("list_my_media", {
         let auth = require_auth().await?;
@@ -93,7 +93,7 @@ pub async fn list_my_media(
                 auth.user_id,
                 source.as_ref(),
                 limit.unwrap_or_default().value(),
-                offset.unwrap_or(0),
+                offset.unwrap_or_default(),
             )
             .await?;
 

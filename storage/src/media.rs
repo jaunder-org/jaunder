@@ -8,6 +8,7 @@ use thiserror::Error;
 
 use crate::backend::Backend;
 use common::ids::UserId;
+use common::pagination::PageOffset;
 
 /// A media metadata record returned by [`MediaStorage`] queries.
 #[derive(Clone, Debug)]
@@ -84,7 +85,7 @@ pub trait MediaStorage: Send + Sync {
         user_id: UserId,
         source: Option<&'a MediaSource>,
         limit: u32,
-        offset: u32,
+        offset: PageOffset,
     ) -> sqlx::Result<Vec<MediaRecord>>;
 
     /// Deletes a media record from the database.
@@ -242,7 +243,7 @@ where
         user_id: UserId,
         source: Option<&'a MediaSource>,
         limit: u32,
-        offset: u32,
+        offset: PageOffset,
     ) -> sqlx::Result<Vec<MediaRecord>> {
         // Fetch raw rows (not `query_as::<MediaRow>`) so each row decodes
         // independently: with the sqlx bridge (#438) the `sha256`/`filename` columns
@@ -260,7 +261,7 @@ where
             .bind(i64::from(user_id))
             .bind(src.as_str())
             .bind(i64::from(limit))
-            .bind(i64::from(offset))
+            .bind(i64::from(offset.value()))
             .fetch_all(&self.pool)
             .await?
         } else {
@@ -273,7 +274,7 @@ where
             )
             .bind(i64::from(user_id))
             .bind(i64::from(limit))
-            .bind(i64::from(offset))
+            .bind(i64::from(offset.value()))
             .fetch_all(&self.pool)
             .await?
         };
@@ -366,7 +367,7 @@ mod tests {
     use super::*;
     use crate::test_support::{backends, seed_user, Backend, TestEnv};
     use common::test_support::{
-        parse_byte_size, parse_content_hash, parse_content_type, parse_filename,
+        parse_byte_size, parse_content_hash, parse_content_type, parse_filename, parse_page_offset,
     };
     use rstest::*;
     use rstest_reuse::*;
@@ -536,7 +537,7 @@ mod tests {
         let listed = env
             .state
             .media
-            .list_media(user_id, None, 10, 0)
+            .list_media(user_id, None, 10, parse_page_offset("0"))
             .await
             .unwrap();
         assert_eq!(
@@ -588,7 +589,10 @@ mod tests {
     async fn list_media_with_closed_pool_returns_error(#[case] backend: Backend) {
         let TestEnv { state, base } = backend.setup().await;
         base.close_pool().await;
-        let result = state.media.list_media(UserId::from(1), None, 10, 0).await;
+        let result = state
+            .media
+            .list_media(UserId::from(1), None, 10, parse_page_offset("0"))
+            .await;
         assert!(result.is_err());
     }
 

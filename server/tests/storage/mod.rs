@@ -5,7 +5,7 @@ use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::test_support::{
     parse_audience_name, parse_bio, parse_byte_size, parse_content_hash, parse_content_type,
-    parse_display_name, parse_email, parse_filename, parse_raw_token,
+    parse_display_name, parse_email, parse_filename, parse_page_offset, parse_raw_token,
 };
 use common::username::Username;
 use common::visibility::{
@@ -6948,7 +6948,11 @@ async fn list_media_skips_rows_that_fail_to_decode(#[case] backend: Backend) {
 
     // list_media returns the decodable row and silently skips the corrupt one, rather
     // than failing the whole query (which would hide the user's valid media too).
-    let listed = state.media.list_media(user_id, None, 10, 0).await.unwrap();
+    let listed = state
+        .media
+        .list_media(user_id, None, 10, parse_page_offset("0"))
+        .await
+        .unwrap();
     assert_eq!(
         listed.len(),
         1,
@@ -7136,7 +7140,11 @@ async fn list_media_returns_records_for_user(#[case] backend: Backend) {
         .await
         .unwrap();
 
-    let results = state.media.list_media(user_a, None, 10, 0).await.unwrap();
+    let results = state
+        .media
+        .list_media(user_a, None, 10, parse_page_offset("0"))
+        .await
+        .unwrap();
     assert_eq!(results.len(), 2, "user_a should have 2 records");
     assert!(results.iter().all(|r| r.user_id == user_a));
 }
@@ -7183,7 +7191,12 @@ async fn list_media_filtered_by_source(#[case] backend: Backend) {
 
     let uploads = state
         .media
-        .list_media(user_id, Some(&MediaSource::Upload), 10, 0)
+        .list_media(
+            user_id,
+            Some(&MediaSource::Upload),
+            10,
+            parse_page_offset("0"),
+        )
         .await
         .unwrap();
     assert_eq!(uploads.len(), 1);
@@ -7191,7 +7204,12 @@ async fn list_media_filtered_by_source(#[case] backend: Backend) {
 
     let cached = state
         .media
-        .list_media(user_id, Some(&MediaSource::Cached), 10, 0)
+        .list_media(
+            user_id,
+            Some(&MediaSource::Cached),
+            10,
+            parse_page_offset("0"),
+        )
         .await
         .unwrap();
     assert_eq!(cached.len(), 1);
