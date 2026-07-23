@@ -6,7 +6,7 @@
 
 use leptos::prelude::*;
 
-use common::pagination::PageSize;
+use common::pagination::{PageOffset, PageSize};
 
 use super::{list_my_media, media_usage, DeleteMedia, DeleteMediaResult, MediaItem};
 use crate::error::WebError;
@@ -204,7 +204,9 @@ pub fn MediaPage() -> impl IntoView {
 
     let media_list = Resource::new(
         move || (delete_action.version().get(), upload_version.get()),
-        |_: (usize, u32)| list_my_media(None, Some(PageSize::default()), Some(0)),
+        |_: (usize, u32)| {
+            list_my_media(None, Some(PageSize::default()), Some(PageOffset::default()))
+        },
     );
 
     view! {
