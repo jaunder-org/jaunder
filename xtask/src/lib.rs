@@ -16,6 +16,7 @@ mod steps {
     pub mod adr_check;
     pub mod build_csr;
     pub mod e2e_local;
+    pub mod flaky;
     pub mod host_tests;
     pub mod nix;
     pub mod no_full_reload_check;
@@ -361,6 +362,10 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let label = format!("e2e-{}-{}", backend.as_str(), browser.as_str());
             let mut result = CommandResult::new(&label);
             steps::nix::e2e_combo(&mut result, backend.as_str(), browser.as_str());
+            // Surface retried-but-passed tests from the report `e2e_combo` just
+            // lifted out of the VM (see steps::flaky). Informational — never fails
+            // the combo.
+            steps::flaky::collect(&mut result, backend.as_str(), browser.as_str());
             finalize(&mut result, start);
             Ok(result)
         }

@@ -95,6 +95,10 @@ jobs:
           restore-keys: |
             xtask-${{ runner.os }}-
       - name: e2e (${{ matrix.backend }}/${{ matrix.browser }}, via xtask)
+        # xtask surfaces retried-but-passed tests itself: it reads the report it
+        # lifts out of the VM, appends a table to $GITHUB_STEP_SUMMARY (inherited
+        # env), records them in the sidecar, and prints a `flaky:` sentinel. See
+        # xtask/src/steps/flaky.rs.
         run: nix develop .#ci --accept-flake-config -c cargo xtask e2e ${{ matrix.backend }} ${{ matrix.browser }}
       - name: Upload e2e diagnostics
         if: always()
