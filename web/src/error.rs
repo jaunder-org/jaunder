@@ -6,9 +6,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 // The server-side error carrier lives in `host` (ADR-0058); `web` keeps only the
-// wire type, the `kind → WebError` projection, and the leptos owner-pinning
-// boundary. Re-exported so every vertical's `InternalError::storage(…)`/`?` call
-// site names it unchanged through `web::error`.
+// wire type and the `kind → WebError` projection. Re-exported so every vertical's
+// `InternalError::storage(…)`/`?` call site names it unchanged through `web::error`.
 #[cfg(feature = "server")]
 pub use host::error::{ErrorClass, ErrorKind, InternalError, InternalResult};
 
@@ -102,61 +101,22 @@ pub(crate) fn project(kind: ErrorKind, public_message: &str) -> WebError {
     }
 }
 
-/// Collects strong [`Owner`](leptos::reactive::owner::Owner) handles for every
-/// ancestor of `owner` (parent, grandparent, … up to the root). `Owner::parent()`
-/// upgrades the internally-*weak* parent link to a strong ref, so holding the
-/// returned vec keeps each ancestor's context map alive. Used by
-/// [`server_boundary`] to preserve contexts provided in an ancestor owner across
-/// an SSR await (#138).
-#[cfg(feature = "server")]
-fn owner_ancestry_strong(
-    owner: &leptos::reactive::owner::Owner,
-) -> Vec<leptos::reactive::owner::Owner> {
-    let mut ancestry = Vec::new();
-    let mut next = owner.parent();
-    while let Some(parent) = next {
-        next = parent.parent();
-        ancestry.push(parent);
-    }
-    ancestry
-}
-
-/// Awaits the given future, converting any `InternalError` to its public `WebError` form.
+/// Awaits the given future, converting any `InternalError` to its public
+/// `WebError` form. This is a thin error-projection boundary: it owns no leptos
+/// reactive-owner lifetime concerns. (Owner-pinning against context loss across an
+/// `.await` was removed in #594 — see the ADR-0016 retirement addendum; the sole
+/// server-fn invocation path, `leptos_axum`'s `/api` handler, holds the owner strong
+/// for the whole future itself.)
 ///
 /// # Errors
 ///
-/// Returns `Err(ServerFnError)` if the wrapped future returns an `InternalError`.
+/// Returns `Err(WebError)` if the wrapped future returns an `InternalError`.
 #[cfg(feature = "server")]
 pub async fn server_boundary<T>(
     server_fn: &'static str,
     future: impl std::future::Future<Output = InternalResult<T>>,
 ) -> WebResult<T> {
-    // #89: a server-fn body that reads Leptos context after an `.await` can panic
-    // during SSR. The reactive "current owner" is a *weak* thread-local; if its last
-    // strong ref is dropped while the future is suspended at an await, the owner's
-    // context map is freed and the post-await `expect_context` finds nothing.
-    // `ScopedFuture` captures a *strong* owner ref and re-applies it on every poll,
-    // keeping context alive across awaits. Guard on a current owner:
-    // `ScopedFuture::new_untracked` captures `Owner::current().unwrap_or_default()`, so
-    // wrapping with no owner would capture an empty owner and lose context
-    // deterministically; the guard instead falls back to a plain await (today's behavior).
-    // See ADR-0016 addendum.
-    // #138: `ScopedFuture` re-applies and holds a strong ref to the *current*
-    // (leaf) owner only. But the storage contexts are provided in an *ancestor*
-    // owner — the SSR root (`provide_app_state_contexts`) — which the SSR runtime
-    // can drop while this future is suspended. `expect_context` walks the owner
-    // ancestry, so once an ancestor's last strong ref is gone its context map is
-    // freed and a post-await read panics. Hold the full ancestry strong for the
-    // future's lifetime so post-await reactive-context reads always resolve,
-    // regardless of read-before/after-await ordering. See the `owner_lifetime`
-    // tests and the ADR-0016 #138 addendum.
-    let outcome = if let Some(owner) = leptos::reactive::owner::Owner::current() {
-        let _ancestry = owner_ancestry_strong(&owner);
-        leptos::reactive::computed::ScopedFuture::new_untracked(future).await
-    } else {
-        future.await
-    };
-    match outcome {
+    match future.await {
         Ok(value) => Ok(value),
         Err(error) => {
             // The carrier owns its own observability (structured log + metric);
@@ -522,228 +482,6 @@ mod tests {
             Err(WebError::Server {
                 message: "server operation failed".to_string()
             })
-        );
-    }
-}
-
-/// Deterministic validation of the SSR server-fn context-loss mechanism (#89)
-/// and the candidate fixes, without the flaky e2e.
-///
-/// Root cause: the thread-local "current owner" in `reactive_graph` is a *weak*
-/// reference. `expect_context`/`use_context` resolve a value by upgrading it and
-/// walking the owner ancestry. If the owner's last *strong* ref is dropped while a
-/// server-fn future is suspended at an `.await`, its `OwnerInner` (and its context
-/// map) is freed, so the post-await lookup upgrades the weak ref to `None` and the
-/// context is gone (`expect_context` then panics). These tests reproduce that drop
-/// deterministically by hand-polling and dropping the owner between polls — no SSR
-/// runtime, no race.
-#[cfg(test)]
-mod owner_lifetime {
-    use leptos::prelude::{provide_context, use_context};
-    use leptos::reactive::computed::ScopedFuture;
-    use leptos::reactive::owner::Owner;
-    use std::future::Future;
-    use std::pin::Pin;
-    use std::task::{Context, Poll, Waker};
-
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    struct Marker(u32);
-
-    /// Yields `Pending` exactly once, then `Ready` — a single suspension point.
-    struct YieldOnce(bool);
-
-    impl Future for YieldOnce {
-        type Output = ();
-        fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<()> {
-            let this = self.get_mut();
-            if this.0 {
-                Poll::Ready(())
-            } else {
-                this.0 = true;
-                Poll::Pending
-            }
-        }
-    }
-
-    /// Maps a `Poll` to an `Option`. Routing both the first poll (which yields
-    /// `Pending`) and the final poll (`Ready`) through this exercises both arms across
-    /// the suite, so there is no uncovered match arm — and it pairs with `Waker::noop()`
-    /// to avoid a hand-rolled waker whose vtable closures would never be called.
-    fn step<T>(poll: Poll<T>) -> Option<T> {
-        match poll {
-            Poll::Ready(value) => Some(value),
-            Poll::Pending => None,
-        }
-    }
-
-    /// Reproduces #89: a future that reads context *after* an await loses it when
-    /// the owner's strong ref is dropped during the suspension.
-    #[test]
-    fn context_lost_when_owner_dropped_across_await() {
-        let owner = Owner::new();
-        owner.set();
-        provide_context(Marker(7));
-
-        let mut fut = Box::pin(async {
-            let pre = use_context::<Marker>();
-            YieldOnce(false).await;
-            let post = use_context::<Marker>();
-            (pre, post)
-        });
-
-        let mut cx = Context::from_waker(Waker::noop());
-        assert!(step(fut.as_mut().poll(&mut cx)).is_none());
-        drop(owner); // last strong ref gone -> OwnerInner freed -> context map dropped
-        let (pre, post) =
-            step(fut.as_mut().poll(&mut cx)).expect("future did not complete on second poll");
-        assert_eq!(pre, Some(Marker(7)));
-        assert_eq!(
-            post, None,
-            "context must vanish once the owner is dropped mid-await"
-        );
-    }
-
-    /// Central fix: `ScopedFuture` holds a *strong* owner and re-applies it on every
-    /// poll, so context survives the await even after our own strong ref is dropped.
-    #[test]
-    fn scoped_future_keeps_context_alive_across_await() {
-        let owner = Owner::new();
-        owner.set();
-        provide_context(Marker(7));
-
-        let mut fut = Box::pin(ScopedFuture::new_untracked(async {
-            let pre = use_context::<Marker>();
-            YieldOnce(false).await;
-            let post = use_context::<Marker>();
-            (pre, post)
-        }));
-
-        let mut cx = Context::from_waker(Waker::noop());
-        assert!(step(fut.as_mut().poll(&mut cx)).is_none());
-        drop(owner); // ScopedFuture retains its own strong owner ref
-        let (pre, post) =
-            step(fut.as_mut().poll(&mut cx)).expect("future did not complete on second poll");
-        assert_eq!(pre, Some(Marker(7)));
-        assert_eq!(
-            post,
-            Some(Marker(7)),
-            "ScopedFuture must keep context alive across the await"
-        );
-    }
-
-    /// Per-fn convention: a value read *before* the await survives the owner drop,
-    /// because it no longer depends on the owner once copied out.
-    #[test]
-    fn context_read_before_await_survives_owner_drop() {
-        let owner = Owner::new();
-        owner.set();
-        provide_context(Marker(7));
-
-        let mut fut = Box::pin(async {
-            let captured = use_context::<Marker>(); // read before the await
-            YieldOnce(false).await;
-            captured
-        });
-
-        let mut cx = Context::from_waker(Waker::noop());
-        assert!(step(fut.as_mut().poll(&mut cx)).is_none());
-        drop(owner);
-        let captured =
-            step(fut.as_mut().poll(&mut cx)).expect("future did not complete on second poll");
-        assert_eq!(
-            captured,
-            Some(Marker(7)),
-            "a value read before the await survives the owner drop"
-        );
-    }
-
-    /// Falsifies the central fix's failure mode: `ScopedFuture::new` captures
-    /// `Owner::current().unwrap_or_default()`, so wrapping a body when *no* owner is
-    /// current captures a fresh empty owner and every lookup returns `None` — a
-    /// deterministic regression worse than the race. A central fix must therefore
-    /// wrap only when an owner is actually current.
-    #[test]
-    fn scoped_future_with_no_current_owner_sees_empty_context() {
-        let owner = Owner::new();
-        owner.with(|| provide_context(Marker(7))); // provide, but do NOT set current
-        assert!(
-            Owner::current().is_none(),
-            "precondition: no current owner at wrap time"
-        );
-
-        let mut fut = Box::pin(ScopedFuture::new_untracked(async {
-            use_context::<Marker>()
-        }));
-        let mut cx = Context::from_waker(Waker::noop());
-        let result = step(fut.as_mut().poll(&mut cx)).expect("future did not complete");
-        assert_eq!(
-            result, None,
-            "ScopedFuture wrapped with no current owner captures an empty owner"
-        );
-        drop(owner);
-    }
-
-    /// The actual fix: `server_boundary` must keep context alive across an await,
-    /// even when the caller's owner ref is dropped mid-suspension.
-    #[cfg(feature = "server")]
-    #[test]
-    fn server_boundary_keeps_context_alive_across_await() {
-        let owner = Owner::new();
-        owner.set();
-        provide_context(Marker(7));
-
-        let mut fut = Box::pin(crate::error::server_boundary("spike_test", async {
-            let _pre = use_context::<Marker>();
-            YieldOnce(false).await;
-            Ok::<Option<Marker>, crate::error::InternalError>(use_context::<Marker>())
-        }));
-
-        let mut cx = Context::from_waker(Waker::noop());
-        assert!(step(fut.as_mut().poll(&mut cx)).is_none());
-        drop(owner);
-        let result =
-            step(fut.as_mut().poll(&mut cx)).expect("server_boundary future did not complete");
-        assert_eq!(
-            result,
-            Ok(Some(Marker(7))),
-            "server_boundary must keep context alive across the await"
-        );
-    }
-
-    /// #138 fix: `server_boundary` must keep context that lives in an *ancestor*
-    /// owner alive across the await — not just the current (leaf) owner. The
-    /// storage contexts are provided at the SSR root (`provide_app_state_contexts`),
-    /// an ancestor of each resource's own owner; the SSR runtime can drop that
-    /// ancestor while a server fn is suspended. Holding the full ancestry strong
-    /// (via `Owner::parent()`) for the future's lifetime makes any post-await
-    /// reactive-context read safe, so no per-fn read-before-await discipline is
-    /// required. Red before the fix (only the leaf is held), green after.
-    #[cfg(feature = "server")]
-    #[test]
-    fn server_boundary_keeps_ancestor_context_alive_across_await() {
-        let root = Owner::new();
-        root.set();
-        provide_context(Marker(7)); // provided in the ANCESTOR (the SSR root)
-
-        let leaf = Owner::new(); // resource's own owner; parent = root
-        leaf.set();
-
-        let mut fut = Box::pin(crate::error::server_boundary("spike_test", async {
-            let _pre = use_context::<Marker>();
-            YieldOnce(false).await;
-            Ok::<Option<Marker>, crate::error::InternalError>(use_context::<Marker>())
-        }));
-
-        let mut cx = Context::from_waker(Waker::noop());
-        assert!(step(fut.as_mut().poll(&mut cx)).is_none());
-        drop(root); // SSR drops the ancestor while the future is suspended
-        drop(leaf);
-        let result =
-            step(fut.as_mut().poll(&mut cx)).expect("server_boundary future did not complete");
-        assert_eq!(
-            result,
-            Ok(Some(Marker(7))),
-            "server_boundary must keep ancestor context alive across the await"
         );
     }
 }

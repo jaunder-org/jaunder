@@ -258,3 +258,33 @@ the fix, green after;
 `post_await_read_loses_ancestor_context_when_parent_owner_dropped` characterizes
 the underlying leaf-only loss) and by the #93 e2e zero-panic gate (ADR-0032) on
 authenticated `/` and `/posts/new`.
+
+## Addendum (2026-07-22): owner-pinning retired — CSR-only makes it vestigial (#594)
+
+The #89 → #124 → #138 addenda hardened `server_boundary` against a leptos
+reactive owner being dropped while a `#[server]`-fn future was suspended at an
+`.await`. Every load-bearing scenario was **SSR-specific**: #89's base concern
+is _already_ covered on the `/api` path (leptos_axum establishes and holds the
+owner), while #124 (SSR `Resource` fetcher) and #138 (page-render SSR root) only
+arose under component SSR.
+
+With no component SSR (#487) and `server_resource` removed (#515), the **sole**
+server-fn invocation path is a browser `POST /api/{fn}` dispatched by
+`leptos_axum::handle_server_fns_with_context`. There, leptos_axum creates one
+**parentless root** `Owner`, runs `additional_context`
+(`provide_app_state_contexts`) and the server-fn body inside it, and holds that
+owner strong for the entire `.await` — a stack local plus leptos_axum's own
+`ScopedFuture`, re-applied on every poll. So `server_boundary`'s
+`owner_ancestry_strong` walked a root to an **empty** ancestry, and its inner
+`ScopedFuture` merely duplicated leptos_axum's — dead weight on the only path
+that exists.
+
+**Resolution.** `server_boundary` no longer touches reactive-owner lifetime: it
+awaits the body once and projects `InternalError → WebError` (the
+error-projection half is unrelated to SSR and is retained, along with
+`emit_boundary_failure`). `owner_ancestry_strong` and the deterministic
+`owner_lifetime` tests are removed. **The #89, #124, and #138 addenda above are
+superseded and retained for history only** — their described owner-pinning no
+longer exists, and their test citations (including #138's
+`post_await_read_loses_ancestor_context_when_parent_owner_dropped`, already
+stale) should not be treated as live.

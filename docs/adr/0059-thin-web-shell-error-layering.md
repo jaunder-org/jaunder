@@ -124,6 +124,11 @@ The `#[server]` boundary (`boundary!`) splits: the leptos owner-pinning half
 the log + metric half becomes a `host` carrier method. `web` keeps only
 `WebError`, the projection, and the owner-pinning.
 
+> **Update (#594):** the owner-pinning half was later retired. With no component
+> SSR, the owner-pinning was vestigial, so `server_boundary` no longer holds any
+> owner — `web` now keeps only `WebError` and the projection. See the ADR-0016
+> #594 addendum.
+
 ### `host` floor invariant (extends ADR-0058)
 
 This cycle promotes `host` from a near-leaf utility crate to the host **floor**:
