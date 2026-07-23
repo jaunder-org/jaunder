@@ -56,7 +56,7 @@ pub async fn set_default_post_format(
     format: PostFormat,
 ) -> sqlx::Result<()> {
     config
-        .set(user_id, DEFAULT_POST_FORMAT_KEY, &format.to_string())
+        .set(user_id, DEFAULT_POST_FORMAT_KEY, format.as_ref())
         .await
 }
 

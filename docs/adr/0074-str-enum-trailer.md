@@ -1,8 +1,14 @@
 # ADR-0074: `StrEnum` derive — the standard string-enum trailer
 
-- Status: proposed
+- Status: superseded
 - Date: 2026-07-20
 - Issue: [#562](https://github.com/jaunder-org/jaunder/issues/562)
+
+> **Superseded.** `strum` 0.28's `#[strum(parse_err_ty = …, parse_err_fn = …)]`
+> provides the named, host-registrable parse error this ADR treated as
+> `StrEnum`-only, so the bespoke macro no longer earns its keep. New closed
+> string enums use `strum`; `StrEnum` is being retired (`PostFormat` first in
+> #572, the rest in #607). See `docs/adr/drafts/adopt-strum-retire-str-enum.md`.
 
 ## Context
 

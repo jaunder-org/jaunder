@@ -5,30 +5,78 @@
 
 use std::fmt;
 
-use macros::StrEnum;
-
 use crate::post_body::PostBody;
 use crate::post_summary::PostSummary;
 use crate::post_title::PostTitle;
 
 /// The format/markup language used to author a post body.
 ///
-/// Rides the [`StrEnum`] trailer: `as_str`/`Display`/`FromStr`/`TryFrom<&str>`, the
-/// generated `InvalidPostFormat` error, and a string serde bridge. The `error =` override
-/// preserves the historical message. Wire tokens are the lowercased variant names.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, StrEnum)]
-#[str_enum(
-    serde,
-    error = "post format must be \"markdown\", \"org\", or \"html\""
+/// A `strum` string enum (ADR: `docs/adr/drafts/adopt-strum-retire-str-enum.md`):
+/// `serialize_all = "snake_case"` gives the wire/DB token, `VariantArray` the
+/// enumeration, `EnumMessage` the editor label (absent = not user-authored), and
+/// `parse_err_ty` the named `InvalidPostFormat`.
+///
+/// serde routes through an owned-`String` proxy (`into`/`try_from`), NOT the derived
+/// enum (de)serializer: deserialize goes `String` → `FromStr`, so an invalid token
+/// surfaces the domain `InvalidPostFormat` message (asserted at the web boundary,
+/// `server/tests/web/web_posts.rs`) rather than serde's generic "unknown variant", and
+/// so `serde_qs` form transport decodes a bare form value. It also single-sources the
+/// wire token in `as_str`/`serialize_all` (no `rename_all`).
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    strum::VariantArray,
+    strum::AsRefStr,
+    strum::Display,
+    strum::EnumString,
+    strum::EnumMessage,
 )]
+#[serde(into = "String", try_from = "String")]
+#[strum(serialize_all = "snake_case")]
+#[strum(parse_err_ty = InvalidPostFormat, parse_err_fn = post_format_parse_err)]
 pub enum PostFormat {
     /// CommonMark/GitHub-flavored Markdown.
     #[default]
+    #[strum(message = "Markdown")]
     Markdown,
     /// Emacs Org-mode format.
+    #[strum(message = "Org")]
     Org,
-    /// Pre-rendered HTML.
+    /// Pre-rendered HTML. Renderer-internal provenance (#445); never user-authored,
+    /// so it carries no editor `message` and is filtered out of format toggles.
     Html,
+}
+
+/// Error returned when a string matches no `PostFormat` variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("post format must be \"markdown\", \"org\", or \"html\"")]
+pub struct InvalidPostFormat;
+
+fn post_format_parse_err(_: &str) -> InvalidPostFormat {
+    InvalidPostFormat
+}
+
+// serde `into`/`try_from` proxy: serialize the wire token, deserialize an owned
+// `String` through `FromStr` so the domain `InvalidPostFormat` message is preserved.
+impl From<PostFormat> for String {
+    fn from(format: PostFormat) -> Self {
+        format.as_ref().to_owned()
+    }
+}
+
+impl TryFrom<String> for PostFormat {
+    type Error = InvalidPostFormat;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
+    }
 }
 
 /// HTML **produced by [`render`]**. This is a *provenance* marker, not a safety
@@ -485,6 +533,40 @@ mod tests {
     fn post_format_html_roundtrips_via_display_and_from_str() {
         assert_eq!("html".parse::<PostFormat>().unwrap(), PostFormat::Html);
         assert_eq!(PostFormat::Html.to_string(), "html");
+    }
+
+    #[test]
+    fn post_format_serde_json_round_trips() {
+        assert_eq!(
+            serde_json::to_string(&PostFormat::Markdown).unwrap(),
+            "\"markdown\""
+        );
+        assert_eq!(serde_json::to_string(&PostFormat::Org).unwrap(), "\"org\"");
+        assert_eq!(
+            serde_json::to_string(&PostFormat::Html).unwrap(),
+            "\"html\""
+        );
+        assert_eq!(
+            serde_json::from_str::<PostFormat>("\"markdown\"").unwrap(),
+            PostFormat::Markdown
+        );
+        assert_eq!(
+            serde_json::from_str::<PostFormat>("\"html\"").unwrap(),
+            PostFormat::Html
+        );
+        assert!(serde_json::from_str::<PostFormat>("\"bogus\"").is_err());
+    }
+
+    #[test]
+    fn post_format_variants_and_editor_labels() {
+        use strum::{EnumMessage, VariantArray};
+        assert_eq!(
+            PostFormat::VARIANTS,
+            &[PostFormat::Markdown, PostFormat::Org, PostFormat::Html]
+        );
+        assert_eq!(PostFormat::Markdown.get_message(), Some("Markdown"));
+        assert_eq!(PostFormat::Org.get_message(), Some("Org"));
+        assert_eq!(PostFormat::Html.get_message(), None); // renderer-internal → not offered
     }
 
     // -- Markdown tests --
