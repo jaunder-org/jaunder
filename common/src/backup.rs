@@ -157,7 +157,7 @@ pub struct RetentionCount(usize);
 pub struct BackupConfig {
     /// Filesystem path backups are written under. `None` means no destination is
     /// configured and scheduled backups are disabled.
-    pub destination_path: Option<String>,
+    pub destination_path: Option<DestinationPath>,
     /// When scheduled backups run, as a validated six-field cron expression.
     pub schedule: BackupSchedule,
     /// How many of the most recent backups to keep (>= 1); older ones are pruned.

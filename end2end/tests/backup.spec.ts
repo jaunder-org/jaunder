@@ -95,3 +95,46 @@ test("backup retention field gates submit until a count of at least 1 is entered
     page.locator('button:has-text("Save Backup Settings")'),
   ).toBeEnabled();
 });
+
+// #581: the destination is a typed `Option<DestinationPath>` wire arg — a valid path
+// round-trips, and clearing it dispatches `None` (the empty optional field, omitted on the
+// wire, decoded to `None`), the clear-to-None path (mirrors admin-site #448). Awaits the POST
+// response before reloading, since the backup page has no explicit "saved" indicator.
+test("backup destination round-trips and clears via omission", async ({
+  page,
+}) => {
+  await login(page, "testoperator", "testpassword123");
+  await goto(page, "/admin/backups");
+  await waitForSelector(page, 'input[name="destination_path"]');
+
+  const saveButton = page.locator('button:has-text("Save Backup Settings")');
+
+  // Set a destination and save; await the POST so the reload sees the committed value.
+  await page.fill('input[name="destination_path"]', "/srv/jaunder/backups");
+  await Promise.all([
+    page.waitForResponse((r) =>
+      r.url().includes("/api/update_backup_settings"),
+    ),
+    saveButton.click(),
+  ]);
+
+  // Reload and confirm it round-trips.
+  await goto(page, "/admin/backups");
+  await expect(page.locator('input[name="destination_path"]')).toHaveValue(
+    "/srv/jaunder/backups",
+  );
+
+  // Clear the destination and save: the empty optional field dispatches `None`, omitted on
+  // the wire and decoded to `None`.
+  await page.fill('input[name="destination_path"]', "");
+  await Promise.all([
+    page.waitForResponse((r) =>
+      r.url().includes("/api/update_backup_settings"),
+    ),
+    page.locator('button:has-text("Save Backup Settings")').click(),
+  ]);
+
+  // Reload and confirm the destination is now empty.
+  await goto(page, "/admin/backups");
+  await expect(page.locator('input[name="destination_path"]')).toHaveValue("");
+});

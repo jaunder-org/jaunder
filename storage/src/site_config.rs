@@ -4,7 +4,7 @@ use crate::backend::Backend;
 use crate::media::{MEDIA_MAX_FILE_SIZE_BYTES_KEY, MEDIA_USER_QUOTA_BYTES_KEY};
 use async_trait::async_trait;
 use common::absolute_url::AbsoluteUrl;
-use common::backup::{BackupConfig, BackupMode, BackupSchedule, RetentionCount};
+use common::backup::{BackupConfig, BackupMode, BackupSchedule, DestinationPath, RetentionCount};
 use common::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
 use common::media::{MaxFileSize, UserQuota};
 use common::site::{SiteIdentity, SiteTitle};
@@ -66,7 +66,8 @@ pub trait SiteConfigStorage: Send + Sync {
         let destination_path = self
             .get(BACKUP_DESTINATION_PATH_KEY)
             .await?
-            .and_then(common::text::non_empty_owned);
+            .as_deref()
+            .and_then(|v| v.parse::<DestinationPath>().ok());
         let schedule = self
             .get(BACKUP_SCHEDULE_KEY)
             .await?
@@ -369,8 +370,8 @@ mod tests {
     use common::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
     use common::media::{MaxFileSize, UserQuota};
     use common::test_support::{
-        parse_absolute_url, parse_feed_min_days, parse_feed_min_items, parse_max_file_size,
-        parse_retention_count, parse_site_title, parse_user_quota,
+        parse_absolute_url, parse_destination_path, parse_feed_min_days, parse_feed_min_items,
+        parse_max_file_size, parse_retention_count, parse_site_title, parse_user_quota,
     };
     use rstest::*;
     use rstest_reuse::*;
@@ -415,7 +416,7 @@ mod tests {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
         let config = BackupConfig {
-            destination_path: Some("/srv/backups".to_owned()),
+            destination_path: Some(parse_destination_path("/srv/backups")),
             schedule: "0 30 2 * * *".parse().unwrap(),
             retention_count: parse_retention_count("14"),
             mode: BackupMode::Archive,

@@ -161,7 +161,7 @@ fn backup_path_for_mode(destination_root: &Path, mode: BackupMode) -> PathBuf {
 mod tests {
     use super::*;
     use crate::test_support::{migrated_sqlite_db, site_config};
-    use common::test_support::parse_retention_count;
+    use common::test_support::{parse_destination_path, parse_retention_count};
     use storage::{BACKUP_DESTINATION_PATH_KEY, BACKUP_SCHEDULE_KEY};
     use tempfile::TempDir;
 
@@ -278,7 +278,7 @@ mod tests {
         }
 
         let config = BackupConfig {
-            destination_path: Some(destination_root.to_string_lossy().into_owned()),
+            destination_path: Some(parse_destination_path(&destination_root.to_string_lossy())),
             schedule: "0 0 0 1 1 *".parse().expect("valid schedule"),
             retention_count: parse_retention_count("1"),
             mode: BackupMode::Directory,
@@ -303,7 +303,7 @@ mod tests {
         // Success: a writable destination produces a backup directory.
         let ok_root = temp.path().join("ok-backups");
         let ok_config = BackupConfig {
-            destination_path: Some(ok_root.to_string_lossy().into_owned()),
+            destination_path: Some(parse_destination_path(&ok_root.to_string_lossy())),
             schedule: "0 0 0 1 1 *".parse().expect("valid schedule"),
             retention_count: parse_retention_count("1"),
             mode: BackupMode::Directory,
@@ -320,7 +320,7 @@ mod tests {
         std::fs::write(&blocker, "x").expect("write blocker");
         let bad_root = blocker.join("backups");
         let bad_config = BackupConfig {
-            destination_path: Some(bad_root.to_string_lossy().into_owned()),
+            destination_path: Some(parse_destination_path(&bad_root.to_string_lossy())),
             ..ok_config
         };
         run_scheduled_backup_logged(&db, &media, &bad_root, &bad_config).await;

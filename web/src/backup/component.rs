@@ -98,9 +98,9 @@ fn backup_settings_form(
         // The disabled button gates the two required fields valid, so `parsed()` is `Some`.
         if let (Some(schedule), Some(retention_count)) = (schedule.parsed(), retention.parsed()) {
             update_action.dispatch(UpdateBackupSettings {
-                // Behavior-preserving: the wire arg is still `String`, so the in-body
-                // `non_empty` maps "" -> None. #581 Task 3 flips this to `destination.parsed()`.
-                destination_path: destination.value.get(),
+                // Empty (optional) field → `None`, omitted on the wire → clears the destination;
+                // a non-empty value → `Some(DestinationPath)`.
+                destination_path: destination.parsed(),
                 schedule,
                 retention_count,
                 mode: mode.get(),
