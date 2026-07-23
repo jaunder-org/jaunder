@@ -1,6 +1,6 @@
 # ADR-0075: Adopt `strum` for closed string enums; retire the bespoke `StrEnum` derive
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-22
 - Issue: [#607](https://github.com/jaunder-org/jaunder/issues/607)
 
