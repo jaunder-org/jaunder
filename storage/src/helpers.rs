@@ -13,7 +13,7 @@ use common::bio::Bio;
 use common::display_name::DisplayName;
 use common::email::Email;
 use common::ids::{PostId, TagId, UserId};
-use common::media::{ContentHash, ContentType, Filename, MediaSource};
+use common::media::{ByteSize, ContentHash, ContentType, Filename, MediaSource};
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
@@ -322,6 +322,13 @@ pub(crate) fn media_record_from_row(row: MediaRow) -> sqlx::Result<MediaRecord> 
     let source: MediaSource = source
         .parse()
         .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    // `size_bytes` arrives as the raw `i64` column; route it through the checked
+    // door so a negative stored value is rejected as a column-decode error (mirrors
+    // the `source` parse above).
+    let size_bytes = ByteSize::try_from(size_bytes).map_err(|e| sqlx::Error::ColumnDecode {
+        index: "size_bytes".into(),
+        source: Box::new(e),
+    })?;
     Ok(MediaRecord {
         user_id: UserId::from(user_id),
         sha256,

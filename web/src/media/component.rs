@@ -236,7 +236,7 @@ pub fn MediaPage() -> impl IntoView {
                                           is clamped to 100"
                             )]
                             let pct = if u.quota_bytes.value() > 0 {
-                                (u.used_bytes as f64 / u.quota_bytes.value() as f64 * 100.0)
+                                (u.used_bytes.value() as f64 / u.quota_bytes.value() as f64 * 100.0)
                                     .min(100.0)
                             } else {
                                 0.0
@@ -249,8 +249,8 @@ pub fn MediaPage() -> impl IntoView {
                                     {format!(
                                         "{} used of {} quota (max file size: {})",
                                         format_bytes(u.used_bytes),
-                                        format_bytes(u.quota_bytes.value()),
-                                        format_bytes(u.max_file_size_bytes.value()),
+                                        format_bytes(u.quota_bytes),
+                                        format_bytes(u.max_file_size_bytes),
                                     )}
                                 </p>
                                 <div style="background:#eee;border-radius:4px;height:8px;width:300px;margin:8px 0 16px">

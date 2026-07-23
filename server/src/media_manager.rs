@@ -8,8 +8,8 @@ use tokio::io::AsyncWriteExt;
 
 use common::ids::UserId;
 use common::media::{
-    detect_content_type, media_path, media_url, ContentHash, ContentType, Filename, MaxFileSize,
-    MediaSource, UserQuota,
+    detect_content_type, media_path, media_url, ByteSize, ContentHash, ContentType, Filename,
+    MaxFileSize, MediaSource, UserQuota,
 };
 use storage::{CreateMediaError, MediaRecord, MediaStorage, SiteConfigStorage};
 use web::auth::AuthUser;
@@ -175,7 +175,7 @@ impl MediaManager {
     ) -> anyhow::Result<()> {
         let current_usage = self.media.get_user_upload_usage(user_id).await?;
 
-        if current_usage + size_bytes > user_quota.value() {
+        if current_usage.value() + size_bytes > user_quota.value() {
             anyhow::bail!(MediaError::InsufficientStorage);
         }
         Ok(())
@@ -224,7 +224,7 @@ impl MediaManager {
             filename: filename.clone(),
             source: MediaSource::Upload,
             content_type: content_type.clone(),
-            size_bytes,
+            size_bytes: ByteSize::try_from(size_bytes)?,
             source_url: None,
             created_at: Utc::now(),
         };
@@ -291,7 +291,7 @@ impl MediaManager {
             sha256: metadata.sha256_hex,
             filename: metadata.filename,
             content_type: metadata.content_type,
-            size_bytes: metadata.size_bytes,
+            size_bytes: ByteSize::try_from(metadata.size_bytes)?,
             url,
         })
     }
@@ -622,7 +622,10 @@ mod tests {
         assert_eq!(first.sha256.as_ref(), expected_sha.as_str());
         assert_eq!(first.filename, "pic.png");
         assert_eq!(first.content_type, "image/png");
-        assert_eq!(first.size_bytes, i64::try_from(bytes.len()).unwrap());
+        assert_eq!(
+            first.size_bytes,
+            ByteSize::try_from(i64::try_from(bytes.len()).unwrap()).unwrap()
+        );
 
         // Identical re-upload must succeed and dedup to the same record.
         let second = manager

@@ -16,7 +16,9 @@ use rstest_reuse::*;
 
 use crate::helpers::{post_form, session_cookie, test_options};
 use common::media::{MaxFileSize, MediaSource, UserQuota};
-use common::test_support::{parse_content_hash, parse_content_type, parse_filename};
+use common::test_support::{
+    parse_byte_size, parse_content_hash, parse_content_type, parse_filename,
+};
 use storage::test_support::{backends, backends_matrix, noop_mailer, Backend, TestEnv};
 
 // ─── media_usage ──────────────────────────────────────────────
@@ -46,7 +48,7 @@ async fn media_usage_returns_defaults_for_authenticated_user(#[case] backend: Ba
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let usage: MediaUsageData = serde_json::from_str(&body).expect("response should be valid JSON");
-    assert_eq!(usage.used_bytes, 0);
+    assert_eq!(usage.used_bytes, parse_byte_size("0"));
     // No media config is set, so the getters return the type defaults (1 GiB / 50 MiB),
     // carried unchanged across the wire by the transparent-i64 serde bridge.
     assert_eq!(usage.quota_bytes, UserQuota::default());
@@ -166,7 +168,7 @@ async fn list_my_media_returns_inserted_item(#[case] backend: Backend) {
         filename: parse_filename("photo.jpg"),
         source: MediaSource::Upload,
         content_type: parse_content_type("image/jpeg"),
-        size_bytes: 1024,
+        size_bytes: parse_byte_size("1024"),
         source_url: None,
         created_at: Utc::now(),
     };
@@ -219,7 +221,7 @@ async fn list_my_media_with_source_filter(#[case] backend: Backend) {
         filename: parse_filename("clip.mp4"),
         source: MediaSource::Upload,
         content_type: parse_content_type("video/mp4"),
-        size_bytes: 512,
+        size_bytes: parse_byte_size("512"),
         source_url: None,
         created_at: Utc::now(),
     };
@@ -275,7 +277,7 @@ async fn delete_media_succeeds_for_existing_item(#[case] backend: Backend) {
         filename: parse_filename("test.png"),
         source: MediaSource::Upload,
         content_type: parse_content_type("image/png"),
-        size_bytes: 42,
+        size_bytes: parse_byte_size("42"),
         source_url: None,
         created_at: Utc::now(),
     };
@@ -339,7 +341,7 @@ async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend:
         filename: parse_filename("inline.png"),
         source: MediaSource::Upload,
         content_type: parse_content_type("image/png"),
-        size_bytes: 42,
+        size_bytes: parse_byte_size("42"),
         source_url: None,
         created_at: Utc::now(),
     };

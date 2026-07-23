@@ -15,7 +15,7 @@ use crate::bio::Bio;
 use crate::display_name::DisplayName;
 use crate::email::Email;
 use crate::feed::{FeedMinDays, FeedMinItems};
-use crate::media::{ContentHash, ContentType, Filename, MaxFileSize, UserQuota};
+use crate::media::{ByteSize, ContentHash, ContentType, Filename, MaxFileSize, UserQuota};
 use crate::pagination::PageSize;
 use crate::password::Password;
 use crate::post_summary::PostSummary;
@@ -239,6 +239,16 @@ pub fn parse_max_file_size(s: &str) -> MaxFileSize {
 #[must_use]
 pub fn parse_user_quota(s: &str) -> UserQuota {
     s.parse().expect("valid test media user quota")
+}
+
+/// Parse `s` into a [`ByteSize`] for tests — the single place a test byte-count literal is
+/// parsed, so a malformed fixture fails loudly and the parse isn't re-spelled at every site.
+///
+/// # Panics
+/// Panics if `s` is not a non-negative number of bytes.
+#[must_use]
+pub fn parse_byte_size(s: &str) -> ByteSize {
+    s.parse().expect("valid test byte size")
 }
 
 /// Parse `name` into a valid [`Username`] for tests — the single place a test
