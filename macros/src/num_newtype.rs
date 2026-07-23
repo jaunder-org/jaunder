@@ -68,6 +68,7 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
     let error_ty = error_type(&err_name, &opts.message(name));
     let accessor = accessor(name, &opts.inner);
     let from_str = from_str_impl(name, &err_name, &opts);
+    let try_from = try_from_inner_impl(name, &err_name, &opts);
     let display = display_impl(name);
     let default_impl = default_impl(name, &opts);
     let serde = serde_impl(name, &err_name, &opts);
@@ -77,6 +78,7 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
         #error_ty
         #accessor
         #from_str
+        #try_from
         #display
         #default_impl
         #serde
@@ -144,6 +146,34 @@ fn from_str_impl(name: &Ident, err_name: &Ident, opts: &Opts) -> TokenStream {
             type Err = #err_name;
             fn from_str(s: &str) -> ::core::result::Result<Self, Self::Err> {
                 let v: #inner = s.trim().parse::<#inner>().map_err(|_| #err_name)?;
+                #min
+                #max
+                ::core::result::Result::Ok(#name(v))
+            }
+        }
+    }
+}
+
+/// `TryFrom<inner>` — the checked integer-construction door. Applies the same declared
+/// bound(s) as [`from_str_impl`], returning the generated `Invalid<Name>` on an
+/// out-of-range value, `Ok` otherwise. This is the *only* safe way to build the newtype
+/// from a runtime integer: an unchecked `From<inner>` is deliberately not emitted (see
+/// [`accessor`]) — and because `From<inner>` is absent, std's blanket
+/// `impl<T, U: Into<T>> TryFrom<U> for T` does not apply, so this generated impl is
+/// conflict-free.
+fn try_from_inner_impl(name: &Ident, err_name: &Ident, opts: &Opts) -> TokenStream {
+    let inner = &opts.inner;
+    let min = opts.min.as_ref().map(|m| {
+        quote! { if v < #m { return ::core::result::Result::Err(#err_name); } }
+    });
+    let max = opts.max.as_ref().map(|m| {
+        quote! { if v > #m { return ::core::result::Result::Err(#err_name); } }
+    });
+    quote! {
+        #[automatically_derived]
+        impl ::core::convert::TryFrom<#inner> for #name {
+            type Error = #err_name;
+            fn try_from(v: #inner) -> ::core::result::Result<Self, Self::Error> {
                 #min
                 #max
                 ::core::result::Result::Ok(#name(v))

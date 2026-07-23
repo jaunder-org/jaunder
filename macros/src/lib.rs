@@ -502,6 +502,9 @@ mod tests {
         let out = num_newtype::expand(&input).to_string();
         assert!(!out.contains("compile_error"));
         assert!(out.contains("FromStr"));
+        // The validating `TryFrom<inner>` door (the checked integer constructor) is emitted,
+        // reusing the same bound guards as `FromStr`.
+        assert!(out.contains("TryFrom"));
         assert!(out.contains("Default"));
         assert!(out.contains("Serialize"));
         assert!(out.contains("Deserialize"));
