@@ -1,7 +1,6 @@
 import { test, expect } from "./fixtures";
-import { goto, login, click, expectFlash } from "./helpers";
+import { goto, login, click, expectFlash, followEmailLink } from "./helpers";
 import { SEL } from "./selectors";
-import { extractToken } from "./mail";
 
 // M3.10.11: Full email verification flow.
 test("email verification flow completes successfully", async ({
@@ -18,12 +17,11 @@ test("email verification flow completes successfully", async ({
 
   await expectFlash(page, "Check your email", 10_000);
 
-  // Read this recipient's verification mail (recipient-scoped, parallel-safe).
+  // Read this recipient's verification mail (recipient-scoped, parallel-safe) and
+  // follow the emitted link — asserting it is absolute, so a relative-link
+  // regression fails.
   const email = await mailbox.waitForNewEmail();
-  const token = extractToken(email);
-
-  // Visit the verification link
-  await goto(page, `/verify-email?token=${token}`);
+  await followEmailLink(page, email, "/verify-email");
   await expectFlash(page, "verified");
 
   // Confirm email is shown as verified on the profile page

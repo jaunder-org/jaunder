@@ -31,6 +31,8 @@ pub mod forms;
 pub mod home;
 pub mod icon;
 pub mod invites;
+#[cfg(feature = "server")]
+mod mail;
 pub mod media;
 #[cfg(target_arch = "wasm32")]
 pub mod pages;

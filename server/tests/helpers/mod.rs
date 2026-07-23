@@ -5,6 +5,7 @@ use axum::{
     body::Body,
     http::{header, Request, StatusCode},
 };
+use common::mailer::test_utils::CapturingMailSender;
 use common::mailer::MailSender;
 use common::token::RawToken;
 use leptos::prelude::LeptosOptions;
@@ -153,6 +154,27 @@ pub async fn setup_with_base_url(backend: Backend) -> TestEnv {
     let env = backend.setup().await;
     seed_base_url(&env.state).await;
     env
+}
+
+/// Assert exactly one email was captured, sent to `recipient`, carrying an
+/// **absolute** `https://example.com{path}?token=…` link (not a relative path) —
+/// the shape produced when `site.base_url` is seeded (`seed_base_url`).
+pub fn assert_one_absolute_link_email(mailer: &CapturingMailSender, recipient: &str, path: &str) {
+    let sent = mailer.sent();
+    assert_eq!(sent.len(), 1, "expected exactly one email");
+    assert_eq!(sent[0].to.len(), 1);
+    assert_eq!(sent[0].to[0], recipient);
+    let expected = format!("https://example.com{path}?token=");
+    assert!(
+        sent[0].body_text.contains(&expected),
+        "email body should contain an ABSOLUTE link {expected}, got: {}",
+        sent[0].body_text
+    );
+}
+
+/// Assert no email was captured — a blocked or failed send.
+pub fn assert_no_email(mailer: &CapturingMailSender) {
+    assert_eq!(mailer.sent().len(), 0, "expected no email to be sent");
 }
 
 /// How a `post_form` request authenticates. Cookie and bearer are mutually

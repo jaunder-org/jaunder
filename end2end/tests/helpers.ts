@@ -38,6 +38,7 @@
 import { expect, type Page } from "@playwright/test";
 import { withTimedAction } from "./actions";
 import { waitForHydration } from "./hydration";
+import { extractLink, type CapturedEmail } from "./mail";
 import { SEL } from "./selectors";
 
 export { waitForHydration } from "./hydration";
@@ -245,4 +246,27 @@ export async function expectFlash(
 ): Promise<void> {
   const options = timeout === undefined ? {} : { timeout };
   await expect(page.locator(`p:has-text("${text}")`)).toBeVisible(options);
+}
+
+/**
+ * Follow a token-bearing link from a captured email on the live test server.
+ *
+ * Asserts the emitted link is **absolute** (composed from the seeded
+ * `site.base_url` `https://example.com`) — a relative `/…?token=` is unusable in
+ * a real mail client, so this catches a relative-link regression — then re-bases
+ * the link's own path onto the running server (the seeded base URL is
+ * deliberately not the test server's address) and navigates via `goto`.
+ * `pathPrefix` is the expected URL path, e.g. `"/reset-password"`.
+ */
+export async function followEmailLink(
+  page: Page,
+  email: CapturedEmail,
+  pathPrefix: string,
+): Promise<void> {
+  const link = extractLink(email);
+  expect(link).toMatch(
+    new RegExp(`^https://example\\.com${pathPrefix}\\?token=`),
+  );
+  const { pathname, search } = new URL(link);
+  await goto(page, `${pathname}${search}`);
 }

@@ -1,7 +1,10 @@
+//! Password-reset vertical — wasm-only UI (ADR-0070): the forgot-password and
+//! reset-password pages.
+
+use super::{ConfirmPasswordReset, RequestPasswordReset};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
-use crate::pages::Topbar;
-use crate::password_reset::{ConfirmPasswordReset, RequestPasswordReset};
+use crate::topbar::Topbar;
 use common::password::Password;
 use common::username::Username;
 use leptos::prelude::*;
