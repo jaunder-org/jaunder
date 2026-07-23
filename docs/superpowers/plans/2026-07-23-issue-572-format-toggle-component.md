@@ -2,7 +2,7 @@
 
 > **For agentic workers:** Execute this plan task-by-task with jaunder-iterate
 > (delegating individual tasks to a subagent via jaunder-dispatch when useful).
-> Steps use checkbox (`- [ ]`) syntax for tracking.
+> Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Migrate `PostFormat` off the bespoke `StrEnum` derive to `strum` (the
 first pass of `StrEnum` retirement, #607), give it a reusable `sqlx` bridge so
@@ -99,7 +99,7 @@ that dedupes the four `.j-seg` toggle blocks.
     `EnumMessage`) — `Some("Markdown")`, `Some("Org")`, `None` for `Html`.
   - `pub struct InvalidPostFormat` (`thiserror`) — name/path/message preserved.
 
-- [ ] **Step 1: Write the new failing tests** (added to the existing
+- [x] **Step 1: Write the new failing tests** (added to the existing
       `#[cfg(test)]` mod; the five existing `PostFormat` tests at `:442-488` are
       left unchanged and must stay green)
 
@@ -127,14 +127,14 @@ fn post_format_variants_and_editor_labels() {
 }
 ```
 
-- [ ] **Step 2: Run the new tests, verify they fail**
+- [x] **Step 2: Run the new tests, verify they fail**
 
 Run:
 `cargo nextest run -p common render::tests::post_format_variants_and_editor_labels render::tests::post_format_serde_json_round_trips`
 Expected: FAIL — `VARIANTS` / `get_message` not found; (serde still works today,
 but `VARIANTS`/`get_message` won't compile).
 
-- [ ] **Step 3: Migrate the enum** to the contract in Interfaces. The tests
+- [x] **Step 3: Migrate the enum** to the contract in Interfaces. The tests
       above + the five existing tests pin every observable branch (Display
       token, FromStr Ok/Err, the error message, VARIANTS order, each label), so
       the body is the derive/attr list below — no hand-written logic beyond the
@@ -205,13 +205,13 @@ Then fix imports at the top of `render.rs`: remove `use macros::StrEnum;`
 `thiserror::Error` are referenced by path). Leave `RenderedHtml` and everything
 else untouched.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Run: `cargo nextest run -p common render` Expected: PASS — all `PostFormat`
 tests (5 existing + 2 new) green. The five existing tests are unchanged:
 `Display`/`Debug`/`FromStr`/message are all preserved.
 
-- [ ] **Step 5: Confirm dependents still compile** (the enum's public API is
+- [x] **Step 5: Confirm dependents still compile** (the enum's public API is
       unchanged; `Display` still backs the storage `.to_string()` binds, so
       storage is untouched this task)
 
@@ -219,7 +219,7 @@ Run: `cargo xtask check --no-test` Expected: PASS (fmt + clippy + workspace
 build). If clippy flags `must_use` on any strum-generated item, it is generated
 code — not applicable here; investigate only a real warning.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add common/src/render.rs
@@ -260,7 +260,7 @@ Run `cargo xtask check` first (jaunder-commit); it must pass clean. No
   - `PostRecordParts` element 7 becomes `PostFormat` (was `String`);
     `build_post_record` receives a typed `format`.
 
-- [ ] **Step 1: Write the reusable macro** `common/src/db_enum.rs`
+- [x] **Step 1: Write the reusable macro** `common/src/db_enum.rs`
 
 ```rust
 //! Reusable `sqlx` bridge for `strum` string enums stored as a TEXT token.
@@ -331,7 +331,7 @@ In `common/src/render.rs`, below `InvalidPostFormat`, add:
 crate::db_enum::impl_text_column_enum!(PostFormat);
 ```
 
-- [ ] **Step 2: Write the failing tests** in `storage/src/posts.rs`
+- [x] **Step 2: Write the failing tests** in `storage/src/posts.rs`
       `#[cfg(test)]`, mirroring the existing dual-backend tests
       `post_round_trips_slug_title_body_username_and_tag` (`:2962`) and
       `get_post_rejects_a_malformed_slug_column` (`:3036`) verbatim in structure
@@ -424,7 +424,7 @@ async fn get_post_rejects_a_malformed_format_column(#[case] backend: Backend) {
 }
 ```
 
-- [ ] **Step 3: Run the new tests, verify they fail**
+- [x] **Step 3: Run the new tests, verify they fail**
 
 Run:
 `cargo nextest run -p storage post_format_column_round_trips_all_variants get_post_rejects_a_malformed_format_column`
@@ -432,7 +432,7 @@ Expected: FAIL — before the bridge, `record.format` decodes from a `String`
 tuple slot / the typed `Decode` isn't wired, so it won't compile or won't
 reject.
 
-- [ ] **Step 4: Migrate the storage write + read to typed `PostFormat`**
+- [x] **Step 4: Migrate the storage write + read to typed `PostFormat`**
 
 Write binds (drop the stringly conversions — the bridge binds the value
 directly):
@@ -454,7 +454,7 @@ Read tuple:
   its `impl_text_column_enum!` bridge (#572), like the newtypes — no longer a
   `String` that parses here.
 
-- [ ] **Step 5: Update the `build_post_record` unit tests**
+- [x] **Step 5: Update the `build_post_record` unit tests**
       (`storage/src/helpers.rs:498-647`)
 
 Each `build_post_record((...))` call currently passes a `String` for the format
@@ -466,7 +466,7 @@ rejection is now covered by Task 2 Step 2's decode-rejection test. Also update
 the now-stale test-module comment at `helpers.rs:528-532` ("`format` … still
 parse in `build_post_record`"), which this task falsifies.
 
-- [ ] **Step 6: Run the storage tests + the bind gate, verify pass**
+- [x] **Step 6: Run the storage tests + the bind gate, verify pass**
 
 Run: `cargo nextest run -p storage posts helpers` Expected: PASS — round-trip
 (Org, Html) green, decode-rejection green, existing post CRUD green,
@@ -475,7 +475,7 @@ Run: `cargo nextest run -p storage posts helpers` Expected: PASS — round-trip
 flagged (binds are now typed values); the bridge `Encode`/`Decode` are covered
 by the round-trip + rejection tests.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add common/src/db_enum.rs common/src/lib.rs common/src/render.rs storage/src/posts.rs storage/src/sqlite/posts.rs storage/src/postgres/posts.rs storage/src/helpers.rs
@@ -503,7 +503,7 @@ Run `cargo xtask check` first. No `Co-Authored-By`.
 - Produces:
   `#[component] pub fn FormatToggle(format: RwSignal<PostFormat>, #[prop(optional, into)] style: Option<&'static str>) -> impl IntoView`.
 
-- [ ] **Step 1: Add the `FormatToggle` component** to
+- [x] **Step 1: Add the `FormatToggle` component** to
       `web/src/posts/component.rs` (near `ComposerFields`). The DOM contract
       (spec "DOM preservation") is pinned by the existing e2e; the body follows
       from it:
@@ -545,7 +545,7 @@ pub fn FormatToggle(
 }
 ```
 
-- [ ] **Step 2: Replace the four inline `.j-seg` blocks** with
+- [x] **Step 2: Replace the four inline `.j-seg` blocks** with
       `<FormatToggle .../>`:
   - `component.rs:79-106` (in `ComposerFields`' `show_seg` branch) →
     `<FormatToggle format=format />`.
@@ -558,20 +558,20 @@ pub fn FormatToggle(
   After: `rg -n 'class="j-seg"' web/src/posts/component.rs` must show exactly
   ONE occurrence (inside `FormatToggle`).
 
-- [ ] **Step 3: Wasm clippy + host build**
+- [x] **Step 3: Wasm clippy + host build**
 
 Run: `cargo clippy -p web --target wasm32-unknown-unknown -- -D warnings`
 Expected: PASS (catches `must_use_candidate` etc. that `check`/`build` skip).
 Run: `cargo nextest run -p web` (keeps `profile/mod.rs:106`'s `serde_qs` test
 green — the derived-enum form transport) Expected: PASS.
 
-- [ ] **Step 4: Drive the toggle e2e** (behavior unchanged is the acceptance)
+- [x] **Step 4: Drive the toggle e2e** (behavior unchanged is the acceptance)
 
 Run: `cargo xtask e2e-local posts` (host runner, auto-seeds; ~3 min) Expected:
 PASS — including `posts.spec.ts:626` "inline composer: format toggle switches
 active button" and the `:125` Org-toggle click.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/src/posts/component.rs
