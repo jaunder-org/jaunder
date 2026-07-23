@@ -26,6 +26,11 @@ pub mod navigation;
 /// `web-sys` only, no domain types — unconditional (no `csr` gate).
 pub mod dialog;
 
+/// Generic browser DOM primitives (`text_content_by_id`, `remove_element_by_id`) —
+/// raw `web_sys`, no domain types. The CSR boot reads the projector seed blob and
+/// drops the server-painted `#app` through these (#519).
+pub mod dom;
+
 /// Reactive revalidation helpers — the browser-bound `Effect`/`Resource` plumbing behind
 /// `web`'s `Invalidator` idiom, relocated here (#515). Behind the `csr` feature because they
 /// need `leptos`; a host/server build of `client` stays leptos-free.

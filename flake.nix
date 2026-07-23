@@ -1105,8 +1105,9 @@
               }
             );
             # wasm-clippy — `web::pages` compiles wasm-only (#300), so the host `clippy`
-            # above never sees it. Lint it on the wasm target (mirrors the host xtask
-            # `wasm-clippy` step). The two `-A` flags are TEMPORARY and must stay in sync
+            # above never sees it; likewise the wasm-only `client` and `csr` entry crates
+            # (#519). Lint them on the wasm target (mirrors the host xtask `wasm-clippy`
+            # step). The two `-A` flags are TEMPORARY and must stay in sync
             # with xtask/src/steps/static_checks.rs — remove `too_many_arguments` when
             # #299 restructures the #[server] args, and `unfulfilled_lint_expectations`
             # when #301 decomposes the oversized components.
@@ -1117,13 +1118,13 @@
                   commonArgs
                   // {
                     CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
-                    cargoExtraArgs = "-p web -p client --features csr";
+                    cargoExtraArgs = "-p web -p client -p csr --features csr";
                     doCheck = false;
                   }
                 );
                 CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
                 cargoClippyExtraArgs =
-                  "-p web -p client --features csr -- -D warnings "
+                  "-p web -p client -p csr --features csr -- -D warnings "
                   + "-A clippy::too_many_arguments -A unfulfilled_lint_expectations";
               }
             );

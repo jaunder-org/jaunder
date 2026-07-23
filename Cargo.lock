@@ -779,10 +779,12 @@ dependencies = [
 name = "csr"
 version = "0.1.0"
 dependencies = [
+ "client",
  "console_error_panic_hook",
  "console_log",
  "leptos",
  "log",
+ "serde_json",
  "wasm-bindgen",
  "web",
 ]
