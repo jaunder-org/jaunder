@@ -114,16 +114,17 @@ test("over-long bio shows an inline error and gates submit", async ({
   await expect(page.locator(UPDATE_BUTTON)).toBeDisabled();
 });
 
-// #498: the "Default post format" control is an <ActionForm> submitting a typed
-// PostFormat wire arg over server_fn's Url codec (serde_qs). Selecting a format,
-// saving, and reloading must round-trip the chosen value through
-// set_default_post_format/get_default_post_format — proving the typed arg encodes
-// and decodes over the form path. Two flips confirm it persists the *selected*
-// value, not a constant.
-const FORMAT_SELECT = 'select[name="format"]';
+// #498/#324: the "Default post format" control is an ADR-0065 direct-bind — a
+// plain <select> bound to a signal whose value a "Save" button dispatches as the
+// typed PostFormat wire arg over server_fn's Url codec (serde_qs), not an
+// <ActionForm> submit. Selecting a format, saving, and reloading must round-trip
+// the chosen value through set_default_post_format/get_default_post_format —
+// proving the typed arg encodes and decodes. Two flips confirm it persists the
+// *selected* value, not a constant.
+const FORMAT_SELECT = "select#default-post-format";
 const FORMAT_SAVE = 'button:has-text("Save")';
 
-test("default post format round-trips through the ActionForm", async ({
+test("default post format round-trips through the typed dispatch", async ({
   registeredPage: page,
 }) => {
   await goto(page, "/profile");

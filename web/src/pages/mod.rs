@@ -1,4 +1,3 @@
-pub mod profile;
 pub mod sessions;
 pub(crate) mod signal_read;
 pub mod site;
@@ -22,13 +21,13 @@ use crate::email::{EmailPage, VerifyEmailPage};
 use crate::home::HomePage;
 use crate::invites::InvitesPage;
 use crate::media::MediaPage;
-use crate::pages::profile::ProfilePage;
 use crate::pages::sessions::SessionsPage;
 use crate::pages::site::SiteSettingsPage;
 use crate::password_reset::{ForgotPasswordPage, ResetPasswordPage};
 use crate::posts::{
     CreatePostPage, DraftsPage, EditPostPage, PostPage, SiteTagPage, UserTagPage, UserTimelinePage,
 };
+use crate::profile::ProfilePage;
 use crate::registration::RegisterPage;
 use crate::route_segments::TildeUsername;
 use leptos::prelude::*;
