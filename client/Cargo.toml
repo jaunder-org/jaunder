@@ -6,7 +6,14 @@ license = "GPL-3.0-only"
 
 [dependencies]
 wasm-bindgen = { workspace = true }
-web-sys = { workspace = true, features = ["Window", "Storage", "Location"] }
+web-sys = { workspace = true, features = [
+  "Window",
+  "Storage",
+  "Location",
+  "Document",
+  "Element",
+  "Node",
+] }
 common.workspace = true
 serde.workspace = true
 # Optional + behind the `csr` feature so a normal (host / server) build never pulls leptos:
