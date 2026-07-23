@@ -403,8 +403,9 @@ pub struct ByteSize(i64);
 /// The metadata returned on a successful media upload — the server-fn wire response
 /// (#517), moved here from `server` so it is nameable on the wasm client. `storage`'s
 /// `MediaManager` returns it directly; `web`'s `upload_media` fn returns it; `AtomPub`
-/// serializes it. Every field is a `common` media type, so the wire round-trip validates
-/// each one on deserialize.
+/// serializes it. The typed fields (`sha256`/`filename`/`content_type`/`size_bytes`) are
+/// validated `common` newtypes, so each re-validates on deserialize; `url` is a plain
+/// derived string (the serve path), carried verbatim.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UploadResponse {
     pub sha256: ContentHash,

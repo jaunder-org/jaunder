@@ -12,7 +12,7 @@ use tokio_util::io::ReaderStream;
 
 use common::ids::UserId;
 use common::media::{detect_content_type, should_inline, ContentHash, Filename, MediaSource};
-use storage::MediaStorage;
+use storage::{MediaError, MediaStorage};
 use web::auth::AuthUser;
 
 use crate::soft_path::SoftPath;
@@ -42,11 +42,11 @@ where
 /// upload metric is emitted inside `storage::MediaManager`, so this is a pure map.
 #[must_use]
 pub fn map_error(err: &anyhow::Error) -> StatusCode {
-    match err.downcast_ref::<storage::MediaError>() {
-        Some(storage::MediaError::BadRequest(_)) => StatusCode::BAD_REQUEST,
-        Some(storage::MediaError::PayloadTooLarge) => StatusCode::PAYLOAD_TOO_LARGE,
-        Some(storage::MediaError::InsufficientStorage) => StatusCode::INSUFFICIENT_STORAGE,
-        Some(storage::MediaError::Internal(_)) | None => StatusCode::INTERNAL_SERVER_ERROR,
+    match err.downcast_ref::<MediaError>() {
+        Some(MediaError::BadRequest(_)) => StatusCode::BAD_REQUEST,
+        Some(MediaError::PayloadTooLarge) => StatusCode::PAYLOAD_TOO_LARGE,
+        Some(MediaError::InsufficientStorage) => StatusCode::INSUFFICIENT_STORAGE,
+        Some(MediaError::Internal(_)) | None => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
 
@@ -328,23 +328,19 @@ mod tests {
     #[test]
     fn map_error_maps_each_media_error() {
         assert_eq!(
-            map_error(&anyhow::anyhow!(storage::MediaError::BadRequest(
-                "bad".to_owned()
-            ))),
+            map_error(&anyhow::anyhow!(MediaError::BadRequest("bad".to_owned()))),
             StatusCode::BAD_REQUEST
         );
         assert_eq!(
-            map_error(&anyhow::anyhow!(storage::MediaError::PayloadTooLarge)),
+            map_error(&anyhow::anyhow!(MediaError::PayloadTooLarge)),
             StatusCode::PAYLOAD_TOO_LARGE
         );
         assert_eq!(
-            map_error(&anyhow::anyhow!(storage::MediaError::InsufficientStorage)),
+            map_error(&anyhow::anyhow!(MediaError::InsufficientStorage)),
             StatusCode::INSUFFICIENT_STORAGE
         );
         assert_eq!(
-            map_error(&anyhow::anyhow!(storage::MediaError::Internal(
-                "error".to_owned()
-            ))),
+            map_error(&anyhow::anyhow!(MediaError::Internal("error".to_owned()))),
             StatusCode::INTERNAL_SERVER_ERROR
         );
         assert_eq!(

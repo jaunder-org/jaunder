@@ -25,7 +25,7 @@ use {
     leptos_axum::extract,
     std::path::PathBuf,
     std::sync::Arc,
-    storage::{MediaManager, MediaStorage, PostStorage, SiteConfigStorage},
+    storage::{MediaError, MediaManager, MediaStorage, PostStorage, SiteConfigStorage},
 };
 
 use common::ids::PostId;
@@ -185,22 +185,13 @@ pub async fn delete_media(
 /// pure classification.
 #[cfg(feature = "server")]
 fn map_media_error(err: &anyhow::Error) -> InternalError {
-    match err.downcast_ref::<storage::MediaError>() {
-        Some(storage::MediaError::BadRequest(message)) => {
-            InternalError::validation(message.clone())
-        }
-        Some(storage::MediaError::PayloadTooLarge) => {
-            InternalError::validation("payload too large")
-        }
-        Some(storage::MediaError::InsufficientStorage) => {
-            InternalError::validation("insufficient storage")
-        }
-        // cov:ignore-start — defensive server-error fallback, reached only by a
-        // non-`MediaError` upload failure (e.g. a mid-request DB/IO fault). `require_auth`
-        // would trip such a fault first, so it is unreachable from an integration test.
-        Some(storage::MediaError::Internal(_)) | None => {
-            InternalError::server_message(err.to_string())
-        } // cov:ignore-stop
+    match err.downcast_ref::<MediaError>() {
+        Some(MediaError::BadRequest(message)) => InternalError::validation(message.clone()),
+        Some(MediaError::PayloadTooLarge) => InternalError::validation("payload too large"),
+        Some(MediaError::InsufficientStorage) => InternalError::validation("insufficient storage"),
+        // A `MediaError::Internal` or a non-`MediaError` upload failure (e.g. a mid-stream
+        // IO fault, which downcasts to `None`) masks as a generic server error.
+        Some(MediaError::Internal(_)) | None => InternalError::server_message(err.to_string()),
     }
 }
 
@@ -244,4 +235,38 @@ pub async fn upload_media(data: MultipartData) -> WebResult<UploadResponse> {
             .await
             .map_err(|e| map_media_error(&e))
     })
+}
+
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use super::{map_media_error, MediaError};
+    use crate::error::ErrorKind;
+
+    #[test]
+    fn map_media_error_classifies_each_arm() {
+        // A bad request / too-large / over-quota is client validation.
+        assert_eq!(
+            map_media_error(&anyhow::anyhow!(MediaError::BadRequest("bad".to_owned()))).kind(),
+            ErrorKind::Validation
+        );
+        assert_eq!(
+            map_media_error(&anyhow::anyhow!(MediaError::PayloadTooLarge)).kind(),
+            ErrorKind::Validation
+        );
+        assert_eq!(
+            map_media_error(&anyhow::anyhow!(MediaError::InsufficientStorage)).kind(),
+            ErrorKind::Validation
+        );
+        // An internal storage fault masks as a generic server error.
+        assert_eq!(
+            map_media_error(&anyhow::anyhow!(MediaError::Internal("boom".to_owned()))).kind(),
+            ErrorKind::Internal
+        );
+        // A non-`MediaError` failure (e.g. a mid-stream IO fault) downcasts to `None`
+        // and also masks as a server error — the previously-uncovered fallback arm.
+        assert_eq!(
+            map_media_error(&anyhow::anyhow!("io boom")).kind(),
+            ErrorKind::Internal
+        );
+    }
 }
