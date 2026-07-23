@@ -13,6 +13,7 @@ web-sys = { workspace = true, features = [
   "Document",
   "Element",
   "Node",
+  "NodeList",
 ] }
 common.workspace = true
 serde.workspace = true

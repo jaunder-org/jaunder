@@ -34,6 +34,13 @@ fn mount() {
     // server-painted copy avoids a duplicate paint without a visible flash (the
     // removal and remount happen in one synchronous task).
     client::dom::remove_element_by_id("app");
+    // Drop the projector-painted discovery <link>s so the reactive FeedDiscovery/
+    // RsdDiscovery mounted below produce the ONLY set (no invisible duplicate). Crawlers/
+    // no-JS never run this, so their head is unchanged (#198).
+    client::dom::remove_elements_by_selector(&format!(
+        "link[{}]",
+        web::render::DISCOVERY_MARKER_ATTR
+    ));
     leptos::mount::mount_to_body(move || {
         provide_context(seed.clone());
         view! { <App /> }

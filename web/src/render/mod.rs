@@ -137,6 +137,12 @@ pub fn render_head(seed: &PageSeed) -> String {
     head
 }
 
+/// Marker attribute on each projector-painted autodiscovery `<link>`. The CSR boot
+/// (`csr::mount`) removes `link[data-jaunder-discovery]` before mounting so the reactive
+/// `FeedDiscovery`/`RsdDiscovery` own the single post-boot set (#198). Shared here so the
+/// emitter below and the boot-time remover cannot drift.
+pub const DISCOVERY_MARKER_ATTR: &str = "data-jaunder-discovery";
+
 /// Feed + RSD autodiscovery `<link>`s for the seed's surface, the pure mirror of
 /// the reactive `FeedDiscovery`/`RsdDiscovery` components (`web::feed_discovery`)
 /// so the projector's `<head>` carries the same discovery metadata the reactive
@@ -173,7 +179,8 @@ fn render_discovery(seed: &PageSeed) -> String {
         ] {
             let _ = write!(
                 out,
-                "<link rel=\"alternate\" type=\"{mime}\" title=\"{title}\" href=\"{href}\" />",
+                "<link {marker} rel=\"alternate\" type=\"{mime}\" title=\"{title}\" href=\"{href}\" />",
+                marker = DISCOVERY_MARKER_ATTR,
                 title = escape_html(format!("{label} ({suffix})")),
                 href = escape_html(canonicalize(&surface, format)),
             );
@@ -185,7 +192,8 @@ fn render_discovery(seed: &PageSeed) -> String {
     if let PageSeed::Profile { username, .. } = seed {
         let _ = write!(
             out,
-            "<link rel=\"EditURI\" type=\"application/rsd+xml\" title=\"AtomPub (RSD)\" href=\"{href}\" />",
+            "<link {marker} rel=\"EditURI\" type=\"application/rsd+xml\" title=\"AtomPub (RSD)\" href=\"{href}\" />",
+            marker = DISCOVERY_MARKER_ATTR,
             href = escape_html(format!("/~{username}/rsd.xml")),
         );
     }
@@ -406,6 +414,29 @@ mod tests {
     // projector↔reactive coincidence against the same fixture, not a divergent copy.
     use crate::posts::render::test_fixtures::{one_post_page, sample_post};
     use common::test_support::parse_username;
+
+    #[test]
+    fn discovery_links_carry_the_marker_per_surface() {
+        // Site: three feed links, all marked, no RSD (#198 — the boot-time remover keys
+        // on the marker, so every projector discovery <link> must carry it).
+        let site = render_discovery(&PageSeed::SiteTimeline(one_post_page()));
+        assert_eq!(site.matches(DISCOVERY_MARKER_ATTR).count(), 3, "{site}");
+        assert_eq!(site.matches("rel=\"alternate\"").count(), 3, "{site}");
+        assert!(!site.contains("EditURI"), "{site}");
+        // Profile: three feed links + one RSD, all four marked.
+        let profile = render_discovery(&PageSeed::Profile {
+            username: parse_username("bob"),
+            page: one_post_page(),
+        });
+        assert_eq!(
+            profile.matches(DISCOVERY_MARKER_ATTR).count(),
+            4,
+            "{profile}"
+        );
+        assert!(profile.contains("rel=\"EditURI\""), "{profile}");
+        // Permalink: none.
+        assert_eq!(render_discovery(&PageSeed::Permalink(sample_post())), "");
+    }
 
     #[test]
     fn format_bytes_displays_bytes_below_kb() {

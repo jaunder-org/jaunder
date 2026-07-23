@@ -61,6 +61,15 @@ test("auto-discovery links are present on site home and user timeline, and resol
     })),
   );
 
+  // #198: exactly one set post-boot (three feed links, not the pre-dedupe six), and the
+  // two projector stylesheet <link>s survive the marker-scoped removal (AC4).
+  expect(homeLinks.length).toBe(3);
+  const homeStyles = await page.$$eval(
+    'head link[rel="stylesheet"]',
+    (els) => els.length,
+  );
+  expect(homeStyles).toBe(2);
+
   // Verify all three formats exist on home
   for (const fmt of FORMATS) {
     const link = homeLinks.find((l) => l.type === fmt.mime);
@@ -79,6 +88,14 @@ test("auto-discovery links are present on site home and user timeline, and resol
     })),
   );
 
+  // #198: one set on the user timeline too, plus exactly one RSD EditURI link.
+  expect(userLinks.length).toBe(3);
+  const rsd = await page.$$eval(
+    'head link[rel="EditURI"]',
+    (els) => els.length,
+  );
+  expect(rsd).toBe(1);
+
   // Verify all three formats exist on user timeline
   for (const fmt of FORMATS) {
     const link = userLinks.find((l) => l.type === fmt.mime);
@@ -87,6 +104,63 @@ test("auto-discovery links are present on site home and user timeline, and resol
     expect(res.status()).toBe(200);
     expect(res.headers()["content-type"]).toContain(fmt.mime);
   }
+});
+
+test("head discovery links update across a client-side nav, staying a single set", async ({
+  page,
+}, info) => {
+  setTestBudget(60_000);
+  await register(page, slowBrowserFirstNavigationTimeoutMs(info, 30_000));
+  // Seed a public post carrying a tag so its footer renders a clickable tag chip.
+  await createPostViaApi(page, {
+    body: "# Tagged\n\nbody",
+    tags: ["disco198"],
+  });
+
+  await goto(page, "/");
+  await waitForHydration(page);
+  const siteHrefs = await page.$$eval('head link[rel="alternate"]', (els) =>
+    els.map((e) => (e as HTMLLinkElement).href),
+  );
+  expect(siteHrefs.length).toBe(3); // one set on the Site feed
+
+  // Client-side nav: click the post's tag chip → /tags/disco198 (leptos_router
+  // intercepts the same-origin <a>, no full document load).
+  await click(page, 'a.j-tag[href="/tags/disco198"]');
+  await page.waitForURL(`${BASE_URL}/tags/disco198`);
+
+  // The reactive head rewrite (old FeedDiscovery unmounts, SiteTag one mounts) lands in
+  // the batch after the route change — poll until it settles rather than read once and
+  // race: exactly three alternate links, all now the SiteTag feed.
+  await expect
+    .poll(async () =>
+      page.$$eval(
+        'head link[rel="alternate"]',
+        (els) =>
+          (els as HTMLLinkElement[]).filter((e) => e.href.includes("disco198"))
+            .length,
+      ),
+    )
+    .toBe(3);
+  const tagHrefs = await page.$$eval('head link[rel="alternate"]', (els) =>
+    els.map((e) => (e as HTMLLinkElement).href),
+  );
+  expect(tagHrefs.length).toBe(3); // exactly one set (no leftover Site links)
+  expect(tagHrefs).not.toEqual(siteHrefs); // the SiteTag feed, not the Site feed
+});
+
+test("crawler path keeps the projector discovery links (no wasm)", async ({
+  page,
+}, info) => {
+  // Public content so `/` renders the projector site-timeline head (an empty site falls
+  // back to the link-less SPA shell). register() establishes the session for the post.
+  await register(page, slowBrowserFirstNavigationTimeoutMs(info, 30_000));
+  await createPostViaApi(page, { body: "# Crawlable\n\nbody" });
+  // A raw HTTP fetch never boots wasm — the projector head is served intact.
+  const res = await page.request.get(`${BASE_URL}/`);
+  const html = await res.text();
+  expect(html).toContain("data-jaunder-discovery");
+  expect((html.match(/rel="alternate"/g) ?? []).length).toBe(3);
 });
 
 // M8.8.1: Two users each have their own per-user feed, in all three formats,
