@@ -21,6 +21,7 @@ use crate::password::Password;
 use crate::post_summary::PostSummary;
 use crate::post_title::PostTitle;
 use crate::root_relative_url::RootRelativeUrl;
+use crate::site::SiteTitle;
 use crate::slug::Slug;
 use crate::tag::{Tag, TagLabel};
 use crate::time::UtcInstant;
@@ -166,6 +167,19 @@ pub fn parse_raw_token(s: &str) -> RawToken {
 #[must_use]
 pub fn parse_post_title(title: &str) -> PostTitle {
     PostTitle::from(title.to_owned())
+}
+
+/// Parse `s` into a valid [`SiteTitle`] for tests — the single place a test site-title
+/// literal is parsed, so a malformed fixture (empty or whitespace-only) fails loudly and
+/// the validating `FromStr` isn't re-spelled at every `SiteIdentity` construction site
+/// across the workspace.
+///
+/// # Panics
+///
+/// Panics if `s` is empty or whitespace-only.
+#[must_use]
+pub fn parse_site_title(s: &str) -> SiteTitle {
+    s.parse().expect("valid test site title")
 }
 
 /// Parse `s` into a valid [`PostSummary`] for tests — the single place a test post-summary

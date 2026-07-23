@@ -3,7 +3,7 @@ use crate::forms::{Field, ValidatedInput};
 use crate::pages::Topbar;
 use crate::site::{get_site_identity, UpdateSiteIdentity};
 use common::absolute_url::AbsoluteUrl;
-use common::site::SiteIdentity;
+use common::site::{SiteIdentity, SiteTitle};
 use leptos::prelude::*;
 
 #[component]
@@ -66,14 +66,16 @@ fn site_settings_form(
     identity: &SiteIdentity,
     update_action: ServerAction<UpdateSiteIdentity>,
 ) -> impl IntoView {
-    let title = RwSignal::new(identity.title.clone());
+    let title_field = Field::<SiteTitle>::prefilled(&identity.title);
     let base_url_field =
         Field::<AbsoluteUrl>::optional_prefilled(identity.base_url.as_deref().unwrap_or_default());
     let submit = move |_| {
-        update_action.dispatch(UpdateSiteIdentity {
-            title: title.get(),
-            base_url: base_url_field.parsed(),
-        });
+        if let Some(title) = title_field.parsed() {
+            update_action.dispatch(UpdateSiteIdentity {
+                title,
+                base_url: base_url_field.parsed(),
+            });
+        }
     };
     view! {
         <div class="j-card j-site-form">
@@ -84,17 +86,15 @@ fn site_settings_form(
                 </div>
             </div>
             <div class="j-site-form-body">
-                <label class="j-site-field j-site-field-wide">
-                    <span class="j-edit-form-label">"Site Title"</span>
-                    <input
-                        class="j-site-input"
-                        type="text"
-                        name="title"
-                        placeholder="My Site"
-                        prop:value=move || title.get()
-                        on:input=move |ev| title.set(event_target_value(&ev))
-                    />
-                </label>
+                <ValidatedInput<
+                SiteTitle,
+            >
+                    label="Site Title"
+                    name="title"
+                    field=title_field
+                    class="j-site-input"
+                    field_class="j-site-field j-site-field-wide"
+                />
                 <ValidatedInput<
                 AbsoluteUrl,
             >
@@ -111,7 +111,7 @@ fn site_settings_form(
                 <button
                     type="button"
                     class="j-btn is-primary"
-                    prop:disabled=move || !base_url_field.is_valid()
+                    prop:disabled=move || !title_field.is_valid() || !base_url_field.is_valid()
                     on:click=submit
                 >
                     "Save Site Settings"

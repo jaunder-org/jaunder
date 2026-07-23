@@ -432,7 +432,7 @@ mod tests {
             .returning(|| Ok(None));
         site_config.expect_get_identity().times(0..).returning(|| {
             Ok(SiteIdentity {
-                title: "Jaunder".to_owned(),
+                title: common::test_support::parse_site_title("Jaunder"),
                 base_url: Some(common::test_support::parse_absolute_url(
                     "https://example.com/",
                 )),
@@ -492,7 +492,7 @@ mod tests {
             .returning(|| Ok(None));
         site_config.expect_get_identity().times(0..).returning(|| {
             Ok(SiteIdentity {
-                title: "Jaunder".to_owned(),
+                title: common::test_support::parse_site_title("Jaunder"),
                 base_url: Some(common::test_support::parse_absolute_url(
                     "https://example.com/",
                 )),
@@ -540,7 +540,7 @@ mod tests {
             .returning(|| Ok(None));
         site_config.expect_get_identity().times(0..).returning(|| {
             Ok(SiteIdentity {
-                title: "Jaunder".to_owned(),
+                title: common::test_support::parse_site_title("Jaunder"),
                 base_url: Some(common::test_support::parse_absolute_url(
                     "https://example.com/",
                 )),
