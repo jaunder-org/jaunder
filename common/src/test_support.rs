@@ -16,7 +16,7 @@ use crate::display_name::DisplayName;
 use crate::email::Email;
 use crate::feed::{FeedMinDays, FeedMinItems};
 use crate::media::{ByteSize, ContentHash, ContentType, Filename, MaxFileSize, UserQuota};
-use crate::pagination::PageSize;
+use crate::pagination::{PageOffset, PageSize};
 use crate::password::Password;
 use crate::post_summary::PostSummary;
 use crate::post_title::PostTitle;
@@ -134,6 +134,18 @@ pub fn parse_destination_path(s: &str) -> DestinationPath {
 #[must_use]
 pub fn parse_page_size(s: &str) -> PageSize {
     s.parse().expect("valid test page size")
+}
+
+/// Parse `s` into a [`PageOffset`] for tests — the single place a test offset literal is
+/// parsed, so a malformed fixture fails loudly and the parse isn't re-spelled at every
+/// media-listing call site.
+///
+/// # Panics
+///
+/// Panics if `s` is not a `u32` (non-integer or negative).
+#[must_use]
+pub fn parse_page_offset(s: &str) -> PageOffset {
+    s.parse().expect("valid test page offset")
 }
 
 /// Parse `s` into a [`FeedMinItems`] for tests — the single place a test feed-min-items

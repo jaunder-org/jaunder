@@ -20,6 +20,18 @@ use macros::NumNewtype;
 )]
 pub struct PageSize(u32);
 
+/// A pagination offset — the 0-based row offset into a listing.
+///
+/// Unlike [`PageSize`], there is **no range bound**: the full `u32` domain is valid, so this
+/// carries no `min`/`max`/`clamp`. The type exists to **de-transpose** the `(limit, offset)`
+/// pair on the media-listing path (#588) — two adjacent bare `u32`s can be swapped silently;
+/// one typed argument makes that a compile error — not to validate a range. The `NumNewtype`
+/// trailer still rejects a non-integer or negative value on parse/deserialize (the only error
+/// path); `default()` is `0` (the first page).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, NumNewtype)]
+#[num_newtype(inner = u32, default = 0, error = "page offset must be a whole number")]
+pub struct PageOffset(u32);
+
 #[cfg(test)]
 mod tests {
     use super::PageSize;
@@ -61,5 +73,43 @@ mod tests {
         assert_eq!(PageSize::clamped(25).value(), 25);
         // The shared test-support fixture builds a valid PageSize (its single door).
         assert_eq!(crate::test_support::parse_page_size("30").value(), 30);
+    }
+
+    #[test]
+    fn page_offset_surface() {
+        use super::PageOffset;
+        // value()/From<Self>, trim, and the full u32 domain is valid (no upper bound).
+        assert_eq!("0".parse::<PageOffset>().map(u32::from).ok(), Some(0));
+        assert_eq!(
+            "  4294967295  "
+                .parse::<PageOffset>()
+                .map(PageOffset::value)
+                .ok(),
+            Some(u32::MAX)
+        );
+        // FromStr rejects non-integers / negatives (the only error path)...
+        for bad in ["abc", "-1", "1.5"] {
+            assert!(bad.parse::<PageOffset>().is_err(), "{bad} should reject");
+        }
+        // ...with the domain message.
+        assert!("abc"
+            .parse::<PageOffset>()
+            .err()
+            .is_some_and(|e| e.to_string().starts_with("page offset")));
+        // Default is 0 and Display round-trips.
+        let d = PageOffset::default();
+        assert_eq!(d.value(), 0);
+        assert_eq!(d.to_string().parse::<PageOffset>().ok(), Some(d));
+        // serde: bare integer, round-trip, wire-rejection of a non-integer.
+        assert_eq!(serde_json::to_string(&d).ok(), Some("0".to_owned()));
+        assert_eq!(
+            serde_json::from_str::<PageOffset>("42").map(u32::from).ok(),
+            Some(42)
+        );
+        assert!(serde_json::from_str::<PageOffset>("\"x\"").is_err());
+        // The generated TryFrom<u32> (always-Ok for the unbounded type) — exercise the region.
+        assert_eq!(PageOffset::try_from(7u32).map(u32::from), Ok(7));
+        // The shared test-support fixture builds a valid PageOffset (its single door).
+        assert_eq!(crate::test_support::parse_page_offset("5").value(), 5);
     }
 }
