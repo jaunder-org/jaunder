@@ -1156,11 +1156,11 @@ pub fn PostPage() -> impl IntoView {
         post_data,
         |(username, year, month, day, slug): (Option<Username>, i32, u32, u32, Option<Slug>)| async move {
             let Some(username) = username else {
-                // This is not a post permalink segment (it didn't start with '~').
-                // It may be a server-handled URL (e.g. /media/…) that the SPA
-                // router matched here because it has the same number of segments.
-                // Reload the page so the server can handle it properly.
-                client::navigation::reload();
+                // A `~`-prefixed but unparseable username is a malformed permalink, so
+                // 404 client-side without a round-trip — matching the invalid-slug arm
+                // below. The route's `TildeUsername` segment guarantees the `~`, so a
+                // non-`~` server URL (e.g. /media/…) never reaches this page at all; the
+                // old reload escape hatch is gone (#592).
                 return Err(WebError::validation("Invalid permalink"));
             };
             // A '~'-prefixed permalink with an unparseable slug is a malformed
