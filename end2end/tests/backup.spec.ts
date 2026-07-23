@@ -14,9 +14,10 @@ test("backup schedule field gates submit until a valid cron is entered", async (
 
   await waitForSelector(page, 'input[name="schedule"]');
   const scheduleInput = page.locator('input[name="schedule"]');
+  const saveButton = page.locator('button:has-text("Save Backup Settings")');
 
   // Prefilled with the valid default ("0 0 0 * * *"): submit starts enabled, no error shown.
-  await expect(page.locator(SEL.submit)).toBeEnabled();
+  await expect(saveButton).toBeEnabled();
   await expect(page.locator(SEL.error)).not.toBeVisible();
 
   // A malformed cron, once the field is touched (blur), shows the inline client-local error
@@ -24,12 +25,12 @@ test("backup schedule field gates submit until a valid cron is entered", async (
   await scheduleInput.fill("not a cron");
   await scheduleInput.blur();
   await expect(page.locator(SEL.error)).toBeVisible();
-  await expect(page.locator(SEL.submit)).toBeDisabled();
+  await expect(saveButton).toBeDisabled();
 
   // A valid six-field cron clears the error and re-enables submit.
   await scheduleInput.fill("0 30 2 * * *");
   await expect(page.locator(SEL.error)).not.toBeVisible();
-  await expect(page.locator(SEL.submit)).toBeEnabled();
+  await expect(saveButton).toBeEnabled();
 });
 
 // #454: the mode <select> is generated from `BackupMode::VARIANTS` (option text = label,
@@ -66,9 +67,10 @@ test("backup retention field gates submit until a count of at least 1 is entered
 
   await waitForSelector(page, 'input[name="retention_count"]');
   const retentionInput = page.locator('input[name="retention_count"]');
+  const saveButton = page.locator('button:has-text("Save Backup Settings")');
 
   // Prefilled with the valid default (7): submit starts enabled, no error shown.
-  await expect(page.locator(SEL.submit)).toBeEnabled();
+  await expect(saveButton).toBeEnabled();
   await expect(page.locator(SEL.error)).not.toBeVisible();
 
   // 0 is not a valid retention count (min 1); once touched (blur) it shows the inline error
@@ -76,10 +78,53 @@ test("backup retention field gates submit until a count of at least 1 is entered
   await retentionInput.fill("0");
   await retentionInput.blur();
   await expect(page.locator(SEL.error)).toBeVisible();
-  await expect(page.locator(SEL.submit)).toBeDisabled();
+  await expect(saveButton).toBeDisabled();
 
   // A valid count clears the error and re-enables submit.
   await retentionInput.fill("3");
   await expect(page.locator(SEL.error)).not.toBeVisible();
-  await expect(page.locator(SEL.submit)).toBeEnabled();
+  await expect(saveButton).toBeEnabled();
+});
+
+// #581: the destination is a typed `Option<DestinationPath>` wire arg — a valid path
+// round-trips, and clearing it dispatches `None` (the empty optional field, omitted on the
+// wire, decoded to `None`), the clear-to-None path (mirrors admin-site #448). Awaits the POST
+// response before reloading, since the backup page has no explicit "saved" indicator.
+test("backup destination round-trips and clears via omission", async ({
+  page,
+}) => {
+  await login(page, "testoperator", "testpassword123");
+  await goto(page, "/admin/backups");
+  await waitForSelector(page, 'input[name="destination_path"]');
+
+  const saveButton = page.locator('button:has-text("Save Backup Settings")');
+
+  // Set a destination and save; await the POST so the reload sees the committed value.
+  await page.fill('input[name="destination_path"]', "/srv/jaunder/backups");
+  await Promise.all([
+    page.waitForResponse((r) =>
+      r.url().includes("/api/update_backup_settings"),
+    ),
+    saveButton.click(),
+  ]);
+
+  // Reload and confirm it round-trips.
+  await goto(page, "/admin/backups");
+  await expect(page.locator('input[name="destination_path"]')).toHaveValue(
+    "/srv/jaunder/backups",
+  );
+
+  // Clear the destination and save: the empty optional field dispatches `None`, omitted on
+  // the wire and decoded to `None`.
+  await page.fill('input[name="destination_path"]', "");
+  await Promise.all([
+    page.waitForResponse((r) =>
+      r.url().includes("/api/update_backup_settings"),
+    ),
+    saveButton.click(),
+  ]);
+
+  // Reload and confirm the destination is now empty.
+  await goto(page, "/admin/backups");
+  await expect(page.locator('input[name="destination_path"]')).toHaveValue("");
 });

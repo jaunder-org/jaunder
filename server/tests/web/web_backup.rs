@@ -59,7 +59,7 @@ async fn operator_gets_configured_backup_settings(#[case] backend: Backend) {
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let settings: BackupConfig = serde_json::from_str(&body).unwrap();
-    assert_eq!(settings.destination_path, Some("/srv/backups".to_string()));
+    assert_eq!(settings.destination_path.as_deref(), Some("/srv/backups"));
     assert_eq!(settings.schedule, "0 30 2 * * *");
     assert_eq!(settings.retention_count.value(), 4);
     assert_eq!(settings.mode, BackupMode::Archive);
@@ -95,7 +95,7 @@ async fn operator_gets_defaults_for_invalid_backup_settings(#[case] backend: Bac
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let settings: BackupConfig = serde_json::from_str(&body).unwrap();
-    assert_eq!(settings.destination_path, Some("/srv/backups".to_string()));
+    assert_eq!(settings.destination_path.as_deref(), Some("/srv/backups"));
     assert_eq!(settings.schedule, "0 0 0 * * *");
     assert_eq!(settings.retention_count.value(), 7);
     assert_eq!(settings.mode, BackupMode::Directory);
@@ -186,6 +186,8 @@ async fn operator_can_update_backup_settings_to_archive_mode(#[case] backend: Ba
 // in-body validation string. Assert the request is refused (non-OK), not a specific message,
 // since the message is now the framework's, not ours. `retention_count=0` is rejected because
 // `RetentionCount`'s min-1 invariant makes the prune-everything footgun unrepresentable.
+// (`destination_path` is *not* here: it is optional, and an empty value decodes to `None` — a
+// clear, not a rejection — covered by the two clear tests below.)
 #[apply(backends_matrix)]
 #[case::empty_schedule(
     "destination_path=%2Fsrv%2Fbackups&schedule=+++&retention_count=5&mode=directory"
@@ -353,16 +355,21 @@ async fn backup_warning_hidden_without_authentication(#[case] backend: Backend) 
     assert_eq!(body, "false");
 }
 
+// Clearing the destination has two equivalent wire forms, both decoding the optional
+// `Option<DestinationPath>` arg to `None`: *omitting* `destination_path` (the dispatch-`None`
+// path the browser client sends — this test) and an empty `destination_path=` value (the
+// `clears_via_empty_destination` test below). Neither reaches a parse error. Mirrors
+// `web_site.rs::update_site_identity_omits_base_url_as_none`.
 #[apply(backends)]
 #[tokio::test]
-async fn operator_can_update_backup_settings_with_empty_destination(#[case] backend: Backend) {
+async fn operator_can_update_backup_settings_omits_destination_as_none(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_session_cookie(&state, "operator", true).await;
 
     let (status, body) = post_form(
         Arc::clone(&state),
         "/api/update_backup_settings",
-        "destination_path=&schedule=0+0+0+*+*+*&retention_count=5&mode=directory",
+        "schedule=0+0+0+*+*+*&retention_count=5&mode=directory",
         Some(&cookie),
     )
     .await;
@@ -377,6 +384,38 @@ async fn operator_can_update_backup_settings_with_empty_destination(#[case] back
     .await;
     assert_eq!(settings.0, StatusCode::OK);
     let config: BackupConfig = serde_json::from_str(&settings.1).unwrap();
+    assert_eq!(config.destination_path, None);
+}
+
+// The other clear form: an empty `destination_path=` value (present, not omitted) also decodes
+// the optional arg to `None` — so submitting the form with a blanked-out destination clears it
+// rather than erroring, preserving the pre-typing behavior for non-omitting callers.
+#[apply(backends)]
+#[tokio::test]
+async fn operator_can_update_backup_settings_clears_via_empty_destination(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = create_session_cookie(&state, "operator", true).await;
+
+    let (status, body) = post_form(
+        Arc::clone(&state),
+        "/api/update_backup_settings",
+        "destination_path=&schedule=0+0+0+*+*+*&retention_count=5&mode=directory",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let (get_status, get_body) = post_form(
+        Arc::clone(&state),
+        "/api/get_backup_settings",
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(get_status, StatusCode::OK);
+    let config: BackupConfig = serde_json::from_str(&get_body).unwrap();
     assert_eq!(config.destination_path, None);
 }
 

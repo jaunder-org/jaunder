@@ -2,7 +2,7 @@ use crate::error::WebResult;
 // `BackupSchedule`/`BackupMode`/`RetentionCount` are unconditional: they're the typed
 // `#[server]` arguments, so the generated request struct must carry them on both the client
 // (serialize) and server (deserialize) sides.
-use common::backup::{BackupConfig, BackupMode, BackupSchedule, RetentionCount};
+use common::backup::{BackupConfig, BackupMode, BackupSchedule, DestinationPath, RetentionCount};
 use leptos::prelude::*;
 
 #[cfg(feature = "server")]
@@ -62,7 +62,7 @@ pub async fn get_backup_settings() -> WebResult<BackupConfig> {
     skip(destination_path, schedule, retention_count, mode)
 )]
 pub async fn update_backup_settings(
-    destination_path: String,
+    destination_path: Option<DestinationPath>,
     schedule: BackupSchedule,
     retention_count: RetentionCount,
     mode: BackupMode,
@@ -70,14 +70,11 @@ pub async fn update_backup_settings(
     boundary!("update_backup_settings", {
         require_operator().await?;
 
-        // `schedule`, `retention_count`, and `mode` are already validated: they arrive typed
-        // (`BackupSchedule` / `RetentionCount` / `BackupMode`), so the arg `Deserialize` ran
-        // their `FromStr`/min-1-bound/enum parse. Legitimate clients only submit valid values
-        // (the cron and retention fields pre-validate per ADR-0065, and the mode `<select>` can
-        // only emit a real variant), so an invalid value reaches here only from a non-browser
-        // caller.
-        let destination_path = common::text::non_empty(&destination_path).map(str::to_owned);
-
+        // All four fields arrive already validated by the typed arg `Deserialize`: the required
+        // `schedule`/`retention_count`/`mode` ran their `FromStr`/min-1-bound/enum parse, and
+        // `destination_path` is an `Option<DestinationPath>` — `None` when omitted or blank (both
+        // clear the destination), else a non-empty validated path. Legitimate clients pre-validate
+        // per ADR-0065, so an invalid value reaches here only from a non-browser caller.
         let config = BackupConfig {
             destination_path,
             schedule,
