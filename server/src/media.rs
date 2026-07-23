@@ -1,23 +1,24 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::{Multipart, Path, Query};
+use axum::extract::{Path, Query};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
-use axum::routing::{get, post};
-use axum::{Extension, Json, Router};
+use axum::routing::get;
+use axum::{Extension, Router};
 use serde::Deserialize;
 use tokio::fs;
 use tokio_util::io::ReaderStream;
 
 use common::ids::UserId;
 use common::media::{detect_content_type, should_inline, ContentHash, Filename, MediaSource};
-use storage::{MediaStorage, SiteConfigStorage};
+use storage::MediaStorage;
 use web::auth::AuthUser;
 
 use crate::soft_path::SoftPath;
 
-/// Builds the media routes (upload, content-addressed serve, remote proxy).
+/// Builds the media routes (content-addressed serve, remote proxy). Upload moved to
+/// the `web::media::upload_media` `#[server]` fn (#517).
 ///
 /// The handlers read shared state via `Extension`, so the routes are generic
 /// over the application's router state type.
@@ -26,7 +27,6 @@ where
     S: Clone + Send + Sync + 'static,
 {
     Router::new()
-        .route("/media/upload", post(upload_handler))
         .route(
             "/media/{source}/{p1}/{p2}/{hash}/{filename}",
             get(serve_handler),
@@ -48,55 +48,6 @@ pub fn map_error(err: &anyhow::Error) -> StatusCode {
         Some(storage::MediaError::InsufficientStorage) => StatusCode::INSUFFICIENT_STORAGE,
         Some(storage::MediaError::Internal(_)) | None => StatusCode::INTERNAL_SERVER_ERROR,
     }
-}
-
-// ---------------------------------------------------------------------------
-// Upload handler  POST /media/upload
-// ---------------------------------------------------------------------------
-
-/// Accepts a multipart upload, stores the file content-addressed under
-/// `<storage_path>/media/upload/`, deduplicates via hard-links, inserts a DB
-/// record, and returns 201 JSON.
-///
-/// # Errors
-///
-/// Returns `4xx`/`5xx` status codes on validation failures or I/O errors.
-#[tracing::instrument(name = "media.upload", skip_all)]
-pub async fn upload_handler(
-    Extension(media): Extension<Arc<dyn MediaStorage>>,
-    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
-    Extension(storage_path): Extension<Arc<PathBuf>>,
-    auth_user: AuthUser,
-    mut multipart: Multipart,
-) -> Result<Response, StatusCode> {
-    let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|_| StatusCode::BAD_REQUEST)?
-    else {
-        return Err(StatusCode::BAD_REQUEST);
-    };
-
-    // Extract the field metadata before the field is consumed as the byte stream
-    // (`Field` borrows `file_name()`/`content_type()` from itself, so those borrows
-    // must end before it is moved into `upload`).
-    // cov:ignore-start — e2e-only browser upload handler; exercised by media.spec.ts,
-    // not host-covered, and deleted in #517 Task 4 (superseded by the upload_media server fn).
-    let filename =
-        storage::MediaManager::validate_filename(field.file_name()).map_err(|e| map_error(&e))?;
-    // cov:ignore-stop
-    let content_type = field.content_type().map(ToOwned::to_owned);
-
-    let manager = storage::MediaManager::new(media, site_config, storage_path);
-    let response = manager
-        .upload(auth_user.user_id, &filename, content_type.as_deref(), field)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "upload failed");
-            map_error(&e)
-        })?;
-
-    Ok((StatusCode::CREATED, Json(response)).into_response())
 }
 
 // ---------------------------------------------------------------------------
