@@ -36,6 +36,17 @@ change.
 3. Full gate + conformance check.
 4. Issue hygiene: fix #322's stale "Blocked by #312" text.
 
+**Amendment tasks (2026-07-22 — see spec "Scope amendment").**
+
+5. `password_reset/api.rs`: compose an **absolute** reset link from
+   `site.base_url` (add `SiteConfigStorage` + `compose`, error if unset).
+6. `email/api.rs`: the same absolute-link fix for `request_email_verification`.
+7. Real e2e: `mail.ts` `extractLink`; `password_reset.spec.ts` +
+   `email.spec.ts` assert the link is absolute, then follow its path
+   (`new URL(link)` origin-strip + `goto`). `atompub.spec`/`helpers.ts` unchanged.
+8. Re-gate + re-review + file the username→email forgot-password enhancement as
+   its own issue.
+
 **Key risks / decisions.**
 
 - The cutover (task 2) is atomic — component move + `pages/password_reset.rs`

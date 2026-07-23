@@ -7,6 +7,48 @@ as amended by #530 (`api.rs` split) and #527 (shared leaves as top-level
 established pattern (`auth` #315 is the template; `email` #318, `invites` #320,
 `media`, `posts`, `timeline`, `home` already landed under it).
 
+## Scope amendment (2026-07-22) — email-link correctness
+
+Maintainer-directed during ship review: the convergence surfaced a
+**pre-existing bug** the verbatim move would have preserved.
+`request_password_reset` builds a **relative** email link —
+`format!("/reset-password?token={raw_token}")` — which is unusable in a real
+mail client (no scheme/host). `invites` does it right
+(`compose(&base_url, "/register")`); password_reset (and, identically, the
+already-shipped `email` verification vertical) does not. The e2e never caught it
+because it scrapes the `token` out of the email and rebuilds its own URL rather
+than asserting the emitted link.
+
+This amendment folds the fix into #322 (the issue explicitly invites
+maintainer-directed API tightening within the vertical), **plus** the identical
+fix in the `email` vertical (maintainer opted to fix the whole bug class here):
+
+A. **`password_reset/api.rs` — absolute reset link.** Mirror `invites`: add
+`SiteConfigStorage` to the server context, fetch `get_identity().base_url` **up
+front** (error `"set the site base URL…"` if unset — so a misconfigured site
+fails loudly rather than minting an orphan token + mailing a dead link), and
+build `compose(&base_url, "/reset-password")` + `?token={raw_token}`. New
+behavior: the flow now **requires** `site.base_url` (invites-consistent). B.
+**`email/api.rs` — absolute verify link.** The same fix for
+`request_email_verification` (`compose(&base_url, "/verify-email")`). C. **Real
+e2e — follow the link, don't rebuild it.** `https://example.com` is a
+_deliberately bogus_ base\*url (`seed_e2e.rs:39-42` — NOT the server's real
+address; `atompub.spec`'s `onServer` re-bases such URLs onto the live server).
+So the test must (1) `extractLink` (new `mail.ts` helper), (2) **assert the link
+is absolute** (`^https://example.com/<path>?token=`) — the check that catches a
+relative-link regression — and (3) **follow that link's own path** by stripping
+the bogus origin (`new URL(link)`) and navigating its `pathname+search` via the
+standard `goto` wrapper, rather than a URL rebuilt from the extracted token. (A
+full-URL re-base helper does not fit `goto`, which prepends `BASE_URL`, so the
+strip is inline; `atompub.spec` keeps its own `onServer`.) No serial-`-admin`
+move: the canonical seed (`tools/devtool/src/seed_e2e.rs:43`) sets
+`site.base_url = https://example.com` globally, so the flows work with no
+per-test mutation and no global-singleton race.
+
+The username-only limitation on the forgot-password form (should also accept an
+email address) is a **separate feature** — filed as its own issue, out of scope
+here.
+
 ## Problem
 
 The `password_reset` vertical is split across files by _technology_, not
@@ -121,6 +163,22 @@ from not:
       input, submit, `.error`, the neutral confirmation `<p>` (the e2e matches
       `/check|sent|email/i`), and the `/login` redirect.
 12. #322's stale "Blocked by #312" line is corrected on GitHub.
+13. **(Amendment A)** `request_password_reset` composes an **absolute** reset
+    link from `site.base_url` (`compose(&base_url, "/reset-password")` +
+    `?token=…`), fetched up front via `SiteConfigStorage` and erroring if unset.
+    No relative `format!("/reset-password?…")` remains.
+14. **(Amendment B)** `request_email_verification` (`email/api.rs`) composes an
+    **absolute** verify link the same way
+    (`compose(&base_url, "/verify-email")`). No relative
+    `format!("/verify-email?…")` remains.
+15. **(Amendment C)** `mail.ts` gains `extractLink`. Both
+    `password_reset.spec.ts` (happy path) and `email.spec.ts` (verification
+    flow) **assert the emitted link is absolute**
+    (`^https://example.com/<path>?token=`) and then **follow that link's own
+    path** — strip the bogus origin with `new URL(link)` and navigate its
+    `pathname+search` via the `goto` wrapper — not a token-rebuilt URL. Both
+    specs stay in the parallel project (base_url is pre-seeded — no `-admin`
+    move, no race). The full e2e matrix stays green in CI.
 
 ## Shape of the work
 
