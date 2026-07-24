@@ -10,7 +10,9 @@ use tower::ServiceExt;
 use rstest::*;
 use rstest_reuse::*;
 
+use common::etag::ETag;
 use common::ids::UserId;
+use common::test_support::parse_content_hash;
 use storage::test_support::{backends, backends_matrix, Backend, TestEnv};
 
 use crate::helpers::{create_user_and_session, make_app, post_multipart, MultipartFile};
@@ -128,7 +130,9 @@ async fn serve_returns_304_on_if_none_match(#[case] backend: Backend) {
     let upload_json: serde_json::Value = serde_json::from_str(&body).unwrap();
     let url = upload_json["url"].as_str().unwrap().to_owned();
     let sha256 = upload_json["sha256"].as_str().unwrap().to_owned();
-    let etag = format!("\"{sha256}\"");
+    // The ETag the serve handler now emits (sha256-prefixed) — built via the door so the
+    // expectation tracks the producer.
+    let etag = ETag::from_content_hash(&parse_content_hash(&sha256));
 
     let app = make_app(Arc::clone(&state), &storage);
     let resp = app
@@ -136,7 +140,7 @@ async fn serve_returns_304_on_if_none_match(#[case] backend: Backend) {
             Request::builder()
                 .method("GET")
                 .uri(&url)
-                .header(header::IF_NONE_MATCH, &etag)
+                .header(header::IF_NONE_MATCH, etag.as_ref())
                 .body(Body::empty())
                 .unwrap(),
         )
