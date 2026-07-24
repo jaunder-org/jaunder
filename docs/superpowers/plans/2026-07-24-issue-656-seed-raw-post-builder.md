@@ -37,7 +37,7 @@ read-back), then adopt it everywhere post setup is hand-rolled at the
       `create_rendered_post`/`update_rendered_post` setup sites.
 - [x] **T4** — `feed/{feed_handlers,feed_worker,feed_regenerate}`.
 - [x] **T5** — `projector/mod.rs` + `web/{web_tags,web_media,web_posts}`.
-- [ ] **T6** — `misc/backup_fixture.rs` (+ extend `BackupFixtureIds`); verify
+- [x] **T6** — `misc/backup_fixture.rs` (+ extend `BackupFixtureIds`); verify
       via `misc::backup_interop`.
 - [ ] **T7** — full `cargo xtask validate`.
 
