@@ -3148,7 +3148,7 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
         feed_path: fp(feed_url),
         body: "cached".to_string(),
         etag: "etag".to_string(),
-        content_type: "application/atom+xml; charset=utf-8".to_string(),
+        content_type: parse_content_type("application/atom+xml; charset=utf-8"),
         updated_at: generated_at,
         generated_at,
     };

@@ -4,7 +4,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use common::feed::FeedPath;
+use common::{feed::FeedPath, media::ContentType};
 use sqlx::{Database, Pool};
 use thiserror::Error;
 
@@ -15,8 +15,12 @@ use crate::backend::Backend;
 pub struct FeedCacheRow {
     pub feed_path: FeedPath,
     pub body: String,
+    /// The stored `ETag`. Stays `String`: the `"…"`-quoted-format invariant is upheld
+    /// by construction at every producer and only this copy is ever stored, so a
+    /// stored-only newtype would enforce nothing across the untyped producers. A
+    /// repo-wide `ETag` newtype threading all producers is tracked in #634.
     pub etag: String,
-    pub content_type: String,
+    pub content_type: ContentType,
     pub updated_at: DateTime<Utc>,
     pub generated_at: DateTime<Utc>,
 }
@@ -39,15 +43,16 @@ type CacheTuple = (
     FeedPath,
     String,
     String,
-    String,
+    ContentType,
     DateTime<Utc>,
     DateTime<Utc>,
 );
 
-// Infallible: the `feed_url` column decodes straight into `FeedPath` via the sqlx
-// bridge (#438), which validates through `FromStr` at the query boundary — so a
-// corrupt/migrated value is already rejected as a `ColumnDecode` error before this
-// mapper runs (was a hand `FeedPath::try_from` re-parse with a `cov:ignore`).
+// Infallible: the `feed_url` and `content_type` columns decode straight into
+// `FeedPath` / `ContentType` via the sqlx bridge (#438), which validates through
+// `FromStr` at the query boundary — so a corrupt/migrated value is already rejected
+// as a `ColumnDecode` error before this mapper runs (was a hand `FeedPath::try_from`
+// re-parse with a `cov:ignore`).
 fn row_from_tuple(t: CacheTuple) -> FeedCacheRow {
     FeedCacheRow {
         feed_path: t.0,
@@ -125,7 +130,7 @@ where
         .bind(&row.feed_path)
         .bind(row.body.as_str())
         .bind(row.etag.as_str())
-        .bind(row.content_type.as_str())
+        .bind(&row.content_type)
         .bind(row.updated_at)
         .bind(row.generated_at)
         .execute(&self.pool)
@@ -151,6 +156,7 @@ where
 mod tests {
     use super::*;
     use crate::test_support::{backends, fp, Backend};
+    use common::test_support::parse_content_type;
     use rstest::*;
     use rstest_reuse::*;
 
@@ -159,7 +165,7 @@ mod tests {
             feed_path: fp(url),
             body: "<rss/>".into(),
             etag: "\"sha256-deadbeef\"".into(),
-            content_type: "application/rss+xml".into(),
+            content_type: parse_content_type("application/rss+xml"),
             updated_at: Utc::now(),
             generated_at: Utc::now(),
         }
@@ -201,6 +207,40 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(got.body, "<rss>updated</rss>");
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn get_surfaces_a_column_decode_error_for_a_malformed_content_type(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        env.state
+            .feed_cache
+            .upsert(sample("/feed.rss"))
+            .await
+            .unwrap();
+        // A non-media-type value bypasses `ContentType` validation — only reachable via
+        // DB tampering. The key stays valid so the row is found; the validating bridge
+        // `Decode` (#438) then rejects the `content_type` column on read.
+        env.base
+            .pool()
+            .execute(
+                "UPDATE feed_cache SET content_type = 'not-a-content-type' \
+                 WHERE feed_url = '/feed.rss'",
+            )
+            .await
+            .unwrap();
+        let err = env
+            .state
+            .feed_cache
+            .get(&fp("/feed.rss"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, FeedCacheError::Db(sqlx::Error::ColumnDecode { .. })),
+            "expected a column-decode error, got: {err:?}"
+        );
     }
 
     #[apply(backends)]

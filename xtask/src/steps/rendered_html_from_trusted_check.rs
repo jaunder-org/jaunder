@@ -27,8 +27,10 @@
 //! not descend into **macro bodies**, so a `from_trusted` inside a `view! { … }`
 //! (or any macro) invocation is invisible to this scan — the most plausible
 //! residual gap, since the unescaped sink lives in `web`; none exists today. (2) A
-//! `use … as` rename or a same-named `from_trusted` on an unrelated type
-//! evades/false-positives. All are as visible in review as editing the allowlist. A
+//! `use … as` rename evades, and a same-named `from_trusted` on an unrelated type
+//! false-positives — except the [`EXEMPT_QUALIFIERS`] types (e.g.
+//! `ContentType::from_trusted`, #584), recognised by qualifier as distinct non-HTML
+//! doors. All are as visible in review as editing the allowlist. A
 //! `syn` parse failure is a **hard error** (a file we cannot walk could hide a
 //! spurious door — a false pass), matching
 //! [`crate::steps::server_fn_registrar_check`].
@@ -53,6 +55,15 @@ const POLICED_ROOTS: &[&str] = &[
 
 /// The associated-fn leaf name this guard pins.
 const DOOR: &str = "from_trusted";
+
+/// Type qualifiers whose `from_trusted` is a **different, non-HTML door** and is
+/// exempt from this XSS guard. Only `RenderedHtml::from_trusted` reaches the
+/// unescaped `inner_html` sink; a same-named door on another newtype is unrelated.
+/// `ContentType::from_trusted` (#584) mints a validated media type — never HTML — so
+/// its qualifier is recognised and skipped. Matched on the qualifier segment
+/// immediately left of the leaf, so a bare or `use … as`-aliased `from_trusted`
+/// (no matching qualifier) stays guarded.
+const EXEMPT_QUALIFIERS: &[&str] = &["ContentType"];
 
 /// The functions permitted to call `from_trusted` in production code — the two
 /// trusted round-trip doors. A new site must be added here (visible in review,
@@ -116,9 +127,18 @@ fn has_test_attr(attrs: &[syn::Attribute]) -> bool {
     })
 }
 
-/// Whether a path's leaf segment is the `from_trusted` door.
+/// Whether a path is the guarded `RenderedHtml::from_trusted` door: leaf segment
+/// `from_trusted` with a qualifier that is not in [`EXEMPT_QUALIFIERS`]. A bare or
+/// aliased `from_trusted` (no exempt qualifier) stays guarded; a recognised
+/// other-type door (e.g. `ContentType::from_trusted`) is skipped.
 fn is_door(path: &syn::Path) -> bool {
-    path.segments.last().is_some_and(|s| s.ident == DOOR)
+    let mut rev = path.segments.iter().rev();
+    if rev.next().is_none_or(|leaf| leaf.ident != DOOR) {
+        return false;
+    }
+    // The qualifier is the segment immediately left of the leaf, if any.
+    !rev.next()
+        .is_some_and(|qualifier| EXEMPT_QUALIFIERS.iter().any(|q| qualifier.ident == q))
 }
 
 impl<'ast> syn::visit::Visit<'ast> for Scanner {
@@ -296,6 +316,40 @@ fn sneaky(raw: String) -> RenderedHtml {
         let src = "\
 fn sneaky(raw: String) -> RenderedHtml {
     Some(raw).map(RenderedHtml::from_trusted).unwrap()
+}
+";
+        assert_eq!(violations(src).unwrap(), vec![(2, "sneaky".to_string())]);
+    }
+
+    #[test]
+    fn content_type_door_is_exempt_in_a_non_allowlisted_fn() {
+        // `ContentType::from_trusted` (#584) is a different, non-HTML door — its
+        // qualifier is exempt, so it is not flagged even outside ALLOWED_FNS.
+        let src = "\
+fn detect(name: &str) -> ContentType {
+    ContentType::from_trusted(name)
+}
+";
+        assert!(violations(src).unwrap().is_empty());
+    }
+
+    #[test]
+    fn content_type_map_reference_is_exempt() {
+        let src = "\
+fn pick(name: Option<&str>) -> Option<ContentType> {
+    name.map(ContentType::from_trusted)
+}
+";
+        assert!(violations(src).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_from_trusted_on_an_unrelated_type_is_still_flagged() {
+        // The exemption is keyed to the qualifier: only listed types are skipped.
+        // Any other `Type::from_trusted` (or a bare/aliased one) stays guarded.
+        let src = "\
+fn sneaky(raw: String) -> Widget {
+    Widget::from_trusted(raw)
 }
 ";
         assert_eq!(violations(src).unwrap(), vec![(2, "sneaky".to_string())]);

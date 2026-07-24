@@ -109,7 +109,7 @@ pub async fn regenerate_feed(
         feed_path: feed_path.clone(),
         body,
         etag,
-        content_type: format.content_type().to_string(),
+        content_type: format.content_type(),
         updated_at,
         generated_at: now,
     };

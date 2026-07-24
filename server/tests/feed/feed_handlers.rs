@@ -7,6 +7,7 @@ use axum::{
 use chrono::{Timelike, Utc};
 use common::slug::Slug;
 use common::tag::TagLabel;
+use common::test_support::parse_content_type;
 use tower::ServiceExt;
 
 use rstest::*;
@@ -160,7 +161,7 @@ async fn handler_cache_hit_serves_stored_body_without_regeneration(#[case] backe
         feed_path: fp("/~bob/feed.rss"),
         body: known_body.to_string(),
         etag: "known-etag".to_string(),
-        content_type: "application/rss+xml; charset=utf-8".to_string(),
+        content_type: parse_content_type("application/rss+xml; charset=utf-8"),
         updated_at: Utc::now(),
         generated_at: Utc::now(),
     };
@@ -198,7 +199,7 @@ async fn handler_if_none_match_returns_304(#[case] backend: Backend) {
         feed_path: fp("/~charlie/feed.rss"),
         body: "feed body".to_string(),
         etag: etag.to_string(),
-        content_type: "application/rss+xml; charset=utf-8".to_string(),
+        content_type: parse_content_type("application/rss+xml; charset=utf-8"),
         updated_at: Utc::now(),
         generated_at: Utc::now(),
     };
@@ -234,7 +235,7 @@ async fn handler_if_modified_since_returns_304_when_unchanged(#[case] backend: B
         feed_path: fp("/~dave/feed.rss"),
         body: "feed body".to_string(),
         etag: "test-etag".to_string(),
-        content_type: "application/rss+xml; charset=utf-8".to_string(),
+        content_type: parse_content_type("application/rss+xml; charset=utf-8"),
         updated_at: update_time,
         generated_at: Utc::now(),
     };
