@@ -15,19 +15,19 @@
 //! SPA shell, exactly as `ServeDir(...).fallback(spa_shell)` did.
 //!
 //! The header/status logic lives in **pure functions** ([`choose_encoding`],
-//! [`content_type_for`], [`etag_for`], [`not_modified`], [`build_response`]) that
+//! [`content_type_for`], [`not_modified`], [`build_response`]) that
 //! are unit-tested without a live embed. The `Site` lookup itself is exercised
 //! end-to-end by [`serve_site`]'s integration tests: the Nix coverage build
 //! stages the real bundle (`flake.nix` sets `JAUNDER_CSR_BUNDLE_DIR`), so a
 //! populated [`Site`] is measured under instrumentation.
 
 use std::borrow::Cow;
-use std::fmt::Write as _;
 
 use axum::body::Bytes;
 use axum::extract::Request;
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
+use common::etag::ETag;
 use rust_embed::RustEmbed;
 
 #[derive(RustEmbed)] // cov:ignore
@@ -105,24 +105,10 @@ fn content_type_for(logical_path: &str) -> String {
         .to_owned()
 }
 
-/// A strong, quoted-hex `ETag` derived from a rust-embed file's SHA-256 hash.
-/// Stable for identical bytes and distinct for different bytes, so each
-/// representation (identity / `.br` / `.gz`) gets its own tag.
-fn etag_for(sha256: &[u8]) -> String {
-    let mut etag = String::with_capacity(2 + sha256.len() * 2);
-    etag.push('"');
-    for byte in sha256 {
-        // Writing to a String is infallible.
-        let _ = write!(etag, "{byte:02x}");
-    }
-    etag.push('"');
-    etag
-}
-
 /// Whether an `If-None-Match` header matches `etag` (a validator in the list is
 /// enough → the representation is unchanged, serve `304`).
-fn not_modified(if_none_match: Option<&str>, etag: &str) -> bool {
-    if_none_match.is_some_and(|inm| inm.split(',').any(|tag| tag.trim() == etag))
+fn not_modified(if_none_match: Option<&str>, etag: &ETag) -> bool {
+    if_none_match.is_some_and(|inm| inm.split(',').any(|tag| *etag == tag.trim()))
 }
 
 /// The embedded key for a logical path under a chosen coding: `<path>.br`,
@@ -158,14 +144,14 @@ fn insert_etag(headers: &mut HeaderMap, etag: &str) {
 fn build_response(
     logical_path: &str,
     body: Bytes,
-    sha256: &[u8],
+    sha256: [u8; 32],
     encoding: Encoding,
     if_none_match: Option<&str>,
 ) -> Response {
-    let etag = etag_for(sha256);
+    let etag = ETag::from_sha256(sha256);
     let mut headers = HeaderMap::new();
     headers.insert(header::VARY, HeaderValue::from_static("Accept-Encoding"));
-    insert_etag(&mut headers, &etag);
+    insert_etag(&mut headers, etag.as_ref());
 
     if not_modified(if_none_match, &etag) {
         return (StatusCode::NOT_MODIFIED, headers).into_response();
@@ -217,7 +203,7 @@ pub async fn serve_site(req: Request) -> Response {
                 // cov:ignore-stop
                 Cow::Owned(bytes) => Bytes::from(bytes),
             };
-            build_response(&logical, body, hash.as_ref(), encoding, if_none_match)
+            build_response(&logical, body, hash, encoding, if_none_match)
         }
         None => spa_shell(),
     }
@@ -306,34 +292,27 @@ mod tests {
         );
     }
 
-    #[test]
-    fn etag_is_quoted_hex_and_stable() {
-        let bytes = [0x00u8, 0x0f, 0xa1, 0xff];
-        let etag = etag_for(&bytes);
-        assert_eq!(etag, "\"000fa1ff\"");
-        // Stable for identical input.
-        assert_eq!(etag_for(&bytes), etag);
-    }
-
-    #[test]
-    fn etag_differs_for_different_bytes() {
-        assert_ne!(etag_for(&[1, 2, 3]), etag_for(&[3, 2, 1]));
-    }
+    // `etag_for`'s old hex+quote unit tests moved to the `ETag::from_sha256` door tests
+    // in `common::etag` (#634) — the format now lives there, not here.
 
     #[test]
     fn not_modified_true_on_exact_match() {
-        assert!(not_modified(Some("\"abc\""), "\"abc\""));
+        assert!(not_modified(Some("\"abc\""), &"\"abc\"".parse().unwrap()));
     }
 
     #[test]
     fn not_modified_true_when_present_in_list() {
-        assert!(not_modified(Some("\"other\", \"abc\""), "\"abc\""));
+        assert!(not_modified(
+            Some("\"other\", \"abc\""),
+            &"\"abc\"".parse().unwrap()
+        ));
     }
 
     #[test]
     fn not_modified_false_on_mismatch_or_absent() {
-        assert!(!not_modified(Some("\"xyz\""), "\"abc\""));
-        assert!(!not_modified(None, "\"abc\""));
+        let etag: ETag = "\"abc\"".parse().unwrap();
+        assert!(!not_modified(Some("\"xyz\""), &etag));
+        assert!(!not_modified(None, &etag));
     }
 
     #[test]
@@ -359,7 +338,7 @@ mod tests {
         let resp = build_response(
             "pkg/jaunder.wasm",
             Bytes::from_static(b"WASM"),
-            &[1, 2, 3],
+            [1u8; 32],
             Encoding::Identity,
             None,
         );
@@ -381,7 +360,7 @@ mod tests {
         let resp = build_response(
             "pkg/jaunder.js",
             Bytes::from_static(b"code"),
-            &[9],
+            [9u8; 32],
             Encoding::Br,
             None,
         );
@@ -395,17 +374,17 @@ mod tests {
 
     #[tokio::test]
     async fn build_response_304_empty_body_when_if_none_match_matches() {
-        let sha = [0xabu8, 0xcd];
-        let etag = etag_for(&sha);
+        let sha = [0xabu8; 32];
+        let etag = ETag::from_sha256(sha);
         let resp = build_response(
             "pkg/jaunder.wasm",
             Bytes::from_static(b"ignored"),
-            &sha,
+            sha,
             Encoding::Br,
-            Some(&etag),
+            Some(etag.as_ref()),
         );
         assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
-        assert_eq!(resp.headers().get(header::ETAG).unwrap(), etag.as_str());
+        assert_eq!(resp.headers().get(header::ETAG).unwrap(), etag.as_ref());
         assert_eq!(resp.headers().get(header::VARY).unwrap(), "Accept-Encoding");
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         assert!(body.is_empty());

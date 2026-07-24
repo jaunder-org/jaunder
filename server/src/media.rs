@@ -10,6 +10,7 @@ use serde::Deserialize;
 use tokio::fs;
 use tokio_util::io::ReaderStream;
 
+use common::etag::ETag;
 use common::ids::UserId;
 use common::media::{detect_content_type, should_inline, ContentHash, Filename, MediaSource};
 use storage::{MediaError, MediaStorage};
@@ -113,9 +114,10 @@ async fn serve_response(
     }
 
     // ETag / If-None-Match check.
-    let etag_value = format!("\"{hash}\"");
+    let etag = ETag::from_content_hash(&hash);
     if let Some(if_none_match) = req_headers.get(axum::http::header::IF_NONE_MATCH) {
-        if if_none_match.to_str().unwrap_or("") == etag_value {
+        // `ETag: PartialEq<&str>` (the reverse `str: PartialEq<ETag>` isn't derived).
+        if etag == if_none_match.to_str().unwrap_or("") {
             return Ok(StatusCode::NOT_MODIFIED.into_response());
         }
     }
@@ -152,7 +154,7 @@ async fn serve_response(
     );
     headers.insert(
         axum::http::header::ETAG,
-        HeaderValue::from_str(&etag_value).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+        HeaderValue::from_str(etag.as_ref()).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
     );
     headers.insert(
         axum::http::header::CONTENT_DISPOSITION,
@@ -294,7 +296,7 @@ fn serve_internal_error<E: std::error::Error>(err: E) -> StatusCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::test_support::parse_content_type;
+    use common::test_support::{parse_content_hash, parse_content_type};
     use std::path::Path;
 
     #[test]
@@ -512,10 +514,13 @@ mod tests {
         // No DB lookup happens: the ETag match short-circuits before find_by_hash.
         let media = storage::MockMediaStorage::new();
 
+        // The ETag the producer now emits (sha256-prefixed) — derived from the door so the
+        // test can't drift from `serve_response`'s value.
+        let etag = ETag::from_content_hash(&parse_content_hash(SAMPLE_HASH));
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(
             axum::http::header::IF_NONE_MATCH,
-            HeaderValue::from_str(&format!("\"{SAMPLE_HASH}\"")).unwrap(),
+            HeaderValue::from_str(etag.as_ref()).unwrap(),
         );
 
         let resp = serve_response(

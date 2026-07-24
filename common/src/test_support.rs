@@ -14,6 +14,7 @@ use crate::backup::{DestinationPath, RetentionCount};
 use crate::bio::Bio;
 use crate::display_name::DisplayName;
 use crate::email::Email;
+use crate::etag::ETag;
 use crate::feed::{FeedMinDays, FeedMinItems};
 use crate::invite::InviteTtlHours;
 use crate::media::{ByteSize, ContentHash, ContentType, Filename, MaxFileSize, UserQuota};
@@ -66,6 +67,18 @@ pub fn parse_root_relative_url(s: &str) -> RootRelativeUrl {
 #[must_use]
 pub fn parse_email(addr: &str) -> Email {
     addr.parse().expect("valid test email address")
+}
+
+/// Parse `s` into a valid [`ETag`] for tests — the single place a test `ETag` literal is
+/// parsed, so a malformed fixture fails loudly and the quoted form isn't re-spelled at
+/// every feed-cache fixture across the workspace.
+///
+/// # Panics
+///
+/// Panics if `s` is not a valid double-quoted strong `ETag`.
+#[must_use]
+pub fn parse_etag(s: &str) -> ETag {
+    s.parse().expect("valid test ETag")
 }
 
 /// Parse `name` into a valid [`AudienceName`] for tests — the single place a test
