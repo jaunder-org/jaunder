@@ -207,10 +207,26 @@ diff:
   `atompub_at(&session, …)` against the captured absolute URI. The measurable
   core: after the refactor, `session.username` appears at most once per request
   and `session.token` never travels beside a re-typed username.
-- **AC5 — parameterization.** The genuinely-uniform CRUD-variant families (at
-  minimum the three named above) are parameterized with
-  `#[apply(backends_matrix)]` + `#[case]`; any uniform-looking family left
-  unrolled carries a one-line comment justifying it.
+- **AC5 — parameterization.** Every genuinely-uniform copy-paste CRUD-variant
+  family in the **atompub** files is collapsed with
+  `#[apply(backends_matrix)]` + `#[case]`. Outcome of the aggressive sweep (the
+  "documented decision" the axis allows):
+  - **Collapsed:** the DELETE `If-Match` family
+    (`delete_with_{stale,matching, without,wildcard}_if_match_*` → one
+    `delete_if_match_precondition`, 4 cases).
+  - **Already de-duplicated, nothing to collapse:** most of the suite was
+    parameterized by #635 (cursor-validation, forbidden-ops, format-media-type,
+    empty-entry, the media cross-user family). The survey's "feed-format
+    `{rss,atom,json}` triple" is **not** a copy-paste family — it is a single
+    test looping an in-body `(ext, content_type)` table
+    (`feed_handlers.rs::handler_returns_correct_content_type_per_format`); a
+    loop→`#[case]` rewrite would be cosmetic, and that file is a
+    `create_post`-layer file owned by **#656**, so it is left as-is.
+  - **Left unrolled (structurally non-uniform):** the idempotency family
+    (`create_with_{same,fresh,without}_idempotency_key_*`) differs by request
+    count and assertion shape (dedup vs distinct-loc vs plain-201), so `#[case]`
+    would obscure rather than clarify — each keeps its `AC-S{1,2,3}` intent
+    comment.
 - **AC6 — setters only where load-bearing.** A `SeedPost` chained setter appears
   **only** where the test asserts on (or otherwise requires) that varied field;
   every other post-seeding site is the bare `SeedPost::new(uid).seed(&state)` /
