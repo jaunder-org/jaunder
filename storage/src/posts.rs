@@ -2964,7 +2964,7 @@ mod tests {
         // Keep the whole `TestEnv` bound: dropping `base` unlinks the SQLite file
         // (ADR-0053 TempDir hazard).
         let env = backend.setup().await;
-        let user_id = SeedUser::new("testuser").seed(&env.state).await; // username "testuser"
+        let user_id = SeedUser::new("testuser").seed(&env.state).await;
         let posts = &*env.state.posts;
 
         // `create_post` binds a typed `Slug`, `Option<&PostTitle>`, and `&PostBody`;

@@ -8,7 +8,7 @@ use common::username::Username;
 use storage::AppState;
 
 use crate::helpers::{
-    assert_no_email, assert_one_absolute_link_email, create_user_and_session,
+    assert_no_email, assert_one_absolute_link_email, create_session_for, create_user_and_session,
     post_form_with_mailer, setup_with_base_url, SeededSession,
 };
 use storage::test_support::{backends, Backend, SeedUser, TestEnv};
@@ -148,11 +148,7 @@ async fn confirm_password_reset_sets_password_and_revokes_sessions(#[case] backe
     let session = create_user_with_verified_email(&state, "carol", "carol@example.com").await;
     let user_id = session.user_id;
     // Create a second session to ensure all are revoked
-    state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
+    create_session_for(&state, user_id).await;
 
     let expires_at = Utc::now() + chrono::Duration::hours(1);
     let raw_token = state

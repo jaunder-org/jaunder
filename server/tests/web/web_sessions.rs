@@ -5,7 +5,7 @@ use axum::http::StatusCode;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{create_user_and_session, post_form};
+use crate::helpers::{create_session_for, create_user_and_session, post_form};
 use storage::test_support::{backends, Backend, TestEnv};
 
 #[apply(backends)]
@@ -68,11 +68,7 @@ async fn revoke_session_removes_session_for_authenticated_user(#[case] backend: 
     let session = create_user_and_session(&state, "alice").await;
     let cookie1 = session.cookie();
     // Create a second session to revoke.
-    let raw_token2 = state
-        .sessions
-        .create_session(session.user_id, "test session")
-        .await
-        .unwrap();
+    let raw_token2 = create_session_for(&state, session.user_id).await.token;
     let token_hash2 = state
         .sessions
         .authenticate(&raw_token2)

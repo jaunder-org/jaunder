@@ -134,11 +134,7 @@ async fn revoke_session_removes_session_and_reauth_fails(#[case] backend: Backen
     let session = create_user_and_session(&state, "eve").await;
 
     // Create a second session: use `session` to authenticate, revoke token_b's hash.
-    let token_b = state
-        .sessions
-        .create_session(session.user_id, "test session")
-        .await
-        .unwrap();
+    let token_b = create_session_for(&state, session.user_id).await.token;
 
     // Authenticate token_b to get its hash from the session record.
     let record_b = state.sessions.authenticate(&token_b).await.unwrap();
