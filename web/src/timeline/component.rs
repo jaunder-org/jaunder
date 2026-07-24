@@ -16,7 +16,6 @@ use common::time::UtcInstant;
 
 use super::state::{LoadStatus, TimelineCursor};
 use crate::error::WebResult;
-use crate::pages::signal_read::read_signal;
 use crate::posts::PostCard;
 
 /// The reactive state of a cursor-paginated timeline, shared by the public Local
@@ -101,9 +100,9 @@ pub fn TimelineRows(
     on_mutate: Callback<()>,
     on_load_more: Callback<()>,
 ) -> impl IntoView {
-    let read_rows = move || read_signal!(state.rows);
-    let read_has_more = move || read_signal!(state.has_more);
-    let read_in_flight = move || read_signal!(state.status).is_in_flight();
+    let read_rows = move || state.rows.get();
+    let read_has_more = move || state.has_more.get();
+    let read_in_flight = move || state.status.get().is_in_flight();
     view! {
         <div class="j-scroll">
             {move || {
