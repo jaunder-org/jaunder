@@ -98,9 +98,14 @@ Out of scope (split to their own issues, filed by the plan's first task):
     cites "§9" by number, so the anchor must stay). Grounded in
     #487/ADR-0041/0044.
 - **D6 — stale-doc sweep.** Correct the pre-#323 `crate::pages::ui` module-doc
-  refs at `web/src/posts/render.rs:5` **and** the sibling
-  `web/src/render/mod.rs:50,281,315` to the current `crate::posts::component`
-  location (docs-track-code).
+  ref at `web/src/posts/render.rs:5` (where `PostDisplay` now lives —
+  `crate::posts::component`). **Corrected during execution:** the sibling
+  `web/src/render/mod.rs:50,281,315` refs were _not_ swept, because they are
+  **valid current paths**, not stale — `pages/ui.rs` genuinely defines `Sidebar`
+  (`:69`) and re-exports `TagContext` (`:10`,
+  `pub use crate::render::TagCtx as TagContext`), so `pages::ui::Sidebar` /
+  `pages::ui::TagContext` resolve today. Only `PostDisplay`'s path had actually
+  moved.
 - **D7 — close the two e2e seed gaps.** The seed behaviors of sites 2 & 4 have
   no e2e assertion today (all audience tests explicitly `selectOption`, never
   asserting a _pre-selected_ state). Add assertions so a silently-broken seed
@@ -142,8 +147,10 @@ not.
    client-only-Effect, `ADR-0061` ×2, `docs/README.md`) still resolves to
    correct, present guidance.
 7. **Stale doc refs fixed.** No `pages::ui` module-doc reference remains in
-   `web/src/posts/render.rs` or `web/src/render/mod.rs`
-   (`rg 'pages::ui' web/src` returns nothing).
+   `web/src/posts/render.rs` (`rg 'pages::ui' web/src/posts/render.rs` returns
+   nothing). The `web/src/render/mod.rs` refs remain by design — they point at
+   real current items (`pages::ui::Sidebar`, `pages::ui::TagContext`), so they
+   are not stale (see D6).
 8. **Behavior identical, verified in a browser.**
    - `cargo xtask validate --no-e2e` green; `web` wasm clippy clean
      (`cargo clippy -p web --target wasm32 -- -D warnings`).

@@ -239,12 +239,20 @@ hydration). So a plain client-only `Effect::new` that copies a resolved
    build — never add an `Effect::new` to host-compiled code, and never re-gate
    it per-call inside a file.
 
-   Reach for the `Effect` **only** where genuinely-local mutable state is
-   layered on the fetched value (a seed-then-edit signal the user then mutates).
-   Where the signals exist _only_ to receive the copy, skip the `Effect` and
-   consume the `Resource` directly in the view (under `Suspense`/`.get()`, or a
-   derived signal) — one fewer intermediate signal that can drift from its
-   source.
+   Three cases, narrowest first:
+   - Where the signals exist _only_ to receive the copy, **skip the seed
+     entirely** and consume the `Resource` directly in the view (under
+     `Suspense`/`.get()`, or a derived signal) — one fewer intermediate signal
+     that can drift from its source (`AudiencePicker`'s named-audience list).
+   - For a **seed-then-edit** signal (the user mutates it after the fetched
+     value seeds it) on a component that **already awaits** the value under
+     `Suspense`, seed it inside the `Suspend` block, not a standalone `Effect`
+     (the editor's current-audience seed).
+   - Reach for a standalone client-only `Effect` **only** for a seed-then-edit
+     signal on a component that **renders immediately**, with no `Suspense` to
+     await under — the composer seeds its site-default audience after first
+     paint this way, because the compose box must appear without waiting on the
+     fetch.
 
 2. **Server-fn storage handles: take a specific `Arc<dyn FooStorage>`, not the
    whole `AppState` (ADR-0016), and fail gracefully.** Prefer

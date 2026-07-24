@@ -1431,6 +1431,12 @@ pub fn EditPostPage() -> impl IntoView {
             None => Err(WebError::not_found("Post")),
         }
     });
+    // Seeded into the editable `audience` picker inside the `Suspense` block below
+    // (awaited alongside `post`, not via a standalone Effect, since the page
+    // already suspends on `post`). On a fetch error the Public default survives
+    // (the `Ok`-only guard mirrors the dissolved post-resolve Effect). The intent
+    // comment lives here, outside `view!`, because leptosfmt relocates comments
+    // inside the macro.
     let current_audience = Resource::new(post_id_param, |maybe_id| async move {
         match maybe_id {
             Some(id) => post_audience_selection(id).await,
@@ -1476,10 +1482,6 @@ pub fn EditPostPage() -> impl IntoView {
                                     },
                                 });
                         };
-                        // Seed the audience picker with the post's stored
-                        // targeting; on a fetch error leave the Public default
-                        // (matching the removed Effect's Ok-only guard). Awaited
-                        // alongside `post` so it resolves under the same Suspense.
                         view! {
                             <div class="j-edit-form-grid">
                                 <div class="j-edit-form-body">

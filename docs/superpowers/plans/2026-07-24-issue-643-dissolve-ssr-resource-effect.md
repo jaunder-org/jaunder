@@ -56,8 +56,8 @@ _Every task's requirements implicitly include these._
 - The four sites in `web/src/posts/component.rs` (D1–D3).
 - Additive widening of `web/src/timeline/component.rs` `TimelineRows` (D4).
 - Narrow rewrite of `docs/web-style-guide.md` §9 (D5).
-- Stale `pages::ui` module-doc sweep in `web/src/posts/render.rs` +
-  `web/src/render/mod.rs` (D6).
+- Stale `pages::ui` module-doc fix in `web/src/posts/render.rs` (D6; the
+  `render/mod.rs` refs turned out valid — see D6/Task 8).
 - One new characterization e2e for the edit-page audience seed (D7, revised —
   see Key risks).
 
@@ -603,8 +603,11 @@ git commit -m "refactor(web/posts): converge UserTimelinePage onto shared Timeli
 - Modify: `docs/web-style-guide.md:225–264` (anti-pattern #1 rationale + #2's
   SSR framing; **preserve** `:266–279` sticky-copy subsection verbatim and the
   section number `9`).
-- Modify: `web/src/posts/render.rs:5`, `web/src/render/mod.rs:50,281,315`
-  (`pages::ui` → `posts::component`).
+- Modify: `web/src/posts/render.rs:5` (`pages::ui` → `posts::component`).
+  **Corrected during execution:** `web/src/render/mod.rs:50,281,315` were _not_
+  touched — those `pages::ui::Sidebar` / `pages::ui::TagContext` refs are valid
+  current paths (`pages/ui.rs` defines `Sidebar` and re-exports `TagContext`),
+  not stale. Only `PostDisplay`'s path had moved.
 
 **Interfaces:** none (docs).
 
@@ -626,14 +629,17 @@ git commit -m "refactor(web/posts): converge UserTimelinePage onto shared Timeli
       **Do not touch** `:266–279` (sticky-copy / `Invalidator::     sticky` /
       `MemberChecklist`).
 
-- [ ] **Step 2: Sweep the stale doc refs.** Replace `pages::ui` with
-      `posts::component` (the current home of `PostDisplay`/`TagCtx`/`Sidebar`
-      re-exports; verify the exact path per each ref's subject) at
-      `web/src/posts/render.rs:5`, `web/src/render/mod.rs:50,281,315`.
+- [ ] **Step 2: Sweep the stale doc ref.** Replace `pages::ui` with
+      `posts::component` at `web/src/posts/render.rs:5` (`PostDisplay`'s current
+      home). **Verify first** that the `web/src/render/mod.rs:50,281,315` refs
+      are _not_ stale — `pages/ui.rs` really defines `Sidebar` and re-exports
+      `TagContext`, so `pages::ui::Sidebar` / `pages::ui::TagContext` resolve;
+      leave them.
 
 - [ ] **Step 3: Verify AC6 + AC7.**
 
-Run: `rg -n "pages::ui" web/src` Expected: nothing. Run:
+Run: `rg -n "pages::ui" web/src/posts/render.rs` Expected: nothing (the valid
+`render/mod.rs` refs remain). Run:
 `rg -n "web-style-guide|§9" web/src docs/adr/0061-web-keyed-list-reactive-store.md docs/README.md`
 Expected: every surviving citation still resolves — `component.rs` (sticky at
 :334; client-only-Effect at the EditPostPage redirect ~:1557 after Task 6's line
@@ -650,8 +656,8 @@ reflow the Markdown; re-stage if so).
 - [ ] **Step 5: Commit.**
 
 ```bash
-git add docs/web-style-guide.md web/src/posts/render.rs web/src/render/mod.rs
-git commit -m "docs(web): retire SSR-era §9 rationale; fix stale pages::ui refs"
+git add docs/web-style-guide.md web/src/posts/render.rs
+git commit -m "docs(web): retire SSR-era §9 rationale; fix stale pages::ui ref in posts/render"
 ```
 
 ---
