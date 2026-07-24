@@ -32,7 +32,7 @@ password the ADR-0063 §2 secret newtype (`SmtpPassword`), thread it through
      `load_smtp_config` empty→`InvalidPassword`, the `Credentials::new` expose,
      the `parse_smtp_password` test helper (first used here), and all
      `SmtpConfig` test fixtures/asserts (redaction regression, load cases).
-- [ ] 3. Full gate: `cargo xtask validate --no-e2e` clean (incl.
+- [x] 3. Full gate: `cargo xtask validate --no-e2e` clean (incl.
      `proffered-secret`).
 
 **Key risks / decisions.**
