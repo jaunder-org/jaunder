@@ -762,16 +762,11 @@
 
             testScript = ''
               def seed_db():
-                # Wipe the SQLite data dir wholesale and let jaunder's auto-init
-                # recreate the schema. Avoids hardcoding a table list (which
-                # would silently drift as the schema grows). The host driver
-                # (`cargo xtask e2e-local`) gets the same fresh-state guarantee a
-                # different way: a per-run temp storage dir + DB (#249).
-                machine.succeed("systemctl stop jaunder.service")
-                machine.succeed("rm -rf /var/lib/jaunder/data")
-                machine.succeed("systemctl start jaunder.service")
-                machine.wait_for_unit("jaunder.service", timeout=60)
-                machine.wait_for_open_port(3000, timeout=30)
+                # Seed the fresh VM's already-migrated DB. This VM is single-use and
+                # jaunder.service's boot preStart (`jaunder init`) has already created
+                # and migrated an empty DB (incl. migration 0018 reference data);
+                # nothing writes user data before this point, so no wipe is needed
+                # (#271). Seeding runs against the running boot service.
                 machine.succeed(
                   "JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture devtool seed-e2e"
                   + " --db sqlite:/var/lib/jaunder/data/jaunder.db"
