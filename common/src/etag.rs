@@ -29,6 +29,16 @@ use crate::media::ContentHash;
 /// `#[derive(StrNewtype)]`, so `ETag` serializes as a plain string, rejects invalid input
 /// on the wire, and decodes as a first-class TEXT column that re-validates the quoted
 /// invariant on read-back.
+///
+/// The wrapped `String` is private, so an arbitrary `String` cannot masquerade as an
+/// `ETag` (mirroring the `ContentHash`/`ContentType` doctests):
+/// ```compile_fail
+/// let _ = common::etag::ETag("\"abc\"".to_string()); // private field
+/// ```
+/// ```compile_fail
+/// fn takes_etag(_: common::etag::ETag) {}
+/// takes_etag("\"abc\"".to_string()); // a String is not an ETag
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash, StrNewtype)]
 pub struct ETag(String);
 

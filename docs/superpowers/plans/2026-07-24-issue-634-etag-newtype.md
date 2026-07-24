@@ -610,7 +610,7 @@ Run `cargo xtask check` first.
 
 ---
 
-## Task 6 — ✅ DONE (commit pending): Feed ETag vertical — `common` + `storage` + `server` (atomic)
+## Task 6 — ✅ DONE (commit ce16241d): Feed ETag vertical — `common` + `storage` + `server` (atomic)
 
 > Also fixed the inline `server/src/feed/handlers.rs` test helper `sample_row`
 > (not in the file list): `etag: etag.to_owned()` (a `String`) →
