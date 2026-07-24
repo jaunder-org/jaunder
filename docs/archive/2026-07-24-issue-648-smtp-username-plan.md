@@ -31,7 +31,7 @@ generalize the load error to a shared valueless `InvalidCredential`.
      bridge; `InvalidPassword` → `InvalidCredential`; `InMemorySiteConfig`
      double; the mailer expose; `parse_smtp_username` helper; all test updates +
      empty-username test.
-- [ ] 3. Full gate: `cargo xtask validate --no-e2e` clean.
+- [x] 3. Full gate: `cargo xtask validate --no-e2e` clean.
 
 **Key risks / decisions.**
 
