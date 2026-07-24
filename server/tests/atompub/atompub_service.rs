@@ -8,7 +8,7 @@ use rstest_reuse::*;
 use tower::ServiceExt;
 
 use crate::helpers::{
-    atompub_xml, body_string, create_user_and_session, make_app, setup_with_base_url,
+    atompub_at, atompub_xml, body_string, create_user_and_session, make_app, setup_with_base_url,
 };
 use storage::test_support::{backends, Backend, TestEnv};
 
@@ -45,13 +45,11 @@ async fn service_document_returns_200_with_app_password(#[case] backend: Backend
     let app = make_app(state, &base);
 
     let response = app
-        .oneshot(atompub_xml(
-            "GET",
-            "/atompub/service",
-            name,
-            &session.token,
-            None,
-        ))
+        .oneshot(
+            atompub_at(&session, "GET", "/atompub/service")
+                .body(Body::empty())
+                .expect("failed to build atompub GET request"),
+        )
         .await
         .unwrap();
 

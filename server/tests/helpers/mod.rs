@@ -240,6 +240,76 @@ pub fn atompub_xml(
     .expect("failed to build atompub request")
 }
 
+/// The full `AtomPub` URI `/atompub/{username}/{suffix}` for `session`'s user — the
+/// one place the per-user prefix is written, so a call site passes only the suffix
+/// after it (e.g. `"posts"`, `"posts/{id}"`, `"media"`).
+fn atompub_uri(session: &SeededSession, suffix: &str) -> String {
+    format!("/atompub/{}/{suffix}", session.username)
+}
+
+/// A chainable Basic-authed `Request::builder()` against `session`'s own
+/// `/atompub/{username}/{suffix}` resource — the base every session-keyed `AtomPub`
+/// request shares, and the composition point for the extra-header cases (`If-Match`,
+/// `Idempotency-Key`, a media `slug`/content type). Username + token come from the
+/// `SeededSession`, so neither is ever re-typed. Callers add headers and finish with
+/// `.body(...)`.
+pub fn atompub(
+    session: &SeededSession,
+    method: &str,
+    suffix: &str,
+) -> axum::http::request::Builder {
+    atompub_authed(
+        method,
+        &atompub_uri(session, suffix),
+        &session.username,
+        &session.token,
+    )
+}
+
+/// Like [`atompub`] but against a **verbatim** `uri` rather than a per-user suffix —
+/// for a follow-up request to a URI captured from a prior response's `Location`
+/// header (an absolute path). Auth still comes from the `session`, so the username is
+/// not doubled; only the URI is passed through unchanged.
+pub fn atompub_at(
+    session: &SeededSession,
+    method: &str,
+    uri: &str,
+) -> axum::http::request::Builder {
+    atompub_authed(method, uri, &session.username, &session.token)
+}
+
+/// `GET session`'s `suffix` resource with an empty body — the dominant read request.
+pub fn atompub_get(session: &SeededSession, suffix: &str) -> Request<Body> {
+    atompub(session, "GET", suffix)
+        .body(Body::empty())
+        .expect("failed to build atompub GET request")
+}
+
+/// Send an `application/atom+xml` `xml` body with `method` to `session`'s `suffix`
+/// resource — the `AtomPub` create/update entry request. See [`atompub_post_xml`] /
+/// [`atompub_put_xml`] for the two common verbs.
+pub fn atompub_send_xml(
+    session: &SeededSession,
+    method: &str,
+    suffix: &str,
+    xml: &str,
+) -> Request<Body> {
+    atompub(session, method, suffix)
+        .header(header::CONTENT_TYPE, "application/atom+xml")
+        .body(Body::from(xml.to_owned()))
+        .expect("failed to build atompub xml request")
+}
+
+/// `POST` an `application/atom+xml` entry to `session`'s `suffix` (create).
+pub fn atompub_post_xml(session: &SeededSession, suffix: &str, xml: &str) -> Request<Body> {
+    atompub_send_xml(session, "POST", suffix, xml)
+}
+
+/// `PUT` an `application/atom+xml` entry to `session`'s `suffix` (replace).
+pub fn atompub_put_xml(session: &SeededSession, suffix: &str, xml: &str) -> Request<Body> {
+    atompub_send_xml(session, "PUT", suffix, xml)
+}
+
 /// Read a response body fully and decode it as UTF-8.
 pub async fn body_string(response: axum::response::Response) -> String {
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
