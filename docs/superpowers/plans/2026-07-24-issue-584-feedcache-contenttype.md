@@ -25,12 +25,14 @@ repo-wide `ETag` newtype deferred to a filed follow-up).
 - [x] 1. File the repo-wide `ETag`-newtype follow-up issue (separable concern) —
      yields the number AC4's comment must cite. → **#634** (blocked-by #584).
 - [x] 2. `common`: `FeedFormat::content_type()` returns `ContentType` via a
-     `pub(crate) ContentType::from_trusted` door (+ `detect_content_type` onto it),
-     a pinning test, and the `#398` gate extended to exempt `ContentType::`.
-- [ ] 3. `storage` + `server`: `FeedCacheRow.content_type: ContentType` —
+     `pub(crate) ContentType::from_trusted` door (+ `detect_content_type` onto
+     it), a pinning test, and the `#398` gate extended to exempt
+     `ContentType::`.
+- [x] 3. `storage` + `server`: `FeedCacheRow.content_type: ContentType` —
      struct, `CacheTuple`, bind, tests, the AC6 decode-error test, and the
-     coupled `regenerate.rs` / `handlers.rs`-test updates + the ETag deferral
-     comment.
+     coupled `regenerate.rs` / `handlers.rs`-test updates + the `ETag` deferral
+     comment. (Sweep also fixed 5 `FeedCacheRow` construction sites in
+     `server/tests/` the plan-review grep missed — `src/`-only.)
 - [ ] 4. Full gate: `cargo xtask validate --no-e2e` clean.
 
 **Key risks / decisions.**
@@ -116,12 +118,12 @@ fn format_content_types() {
 `cargo nextest run -p common format_content_types` → **FAIL** (returns
 `&'static str`; won't compile against `ContentType`).
 
-**Implement.** Three coupled edits (a `FromStr` `.parse().expect(...)` is **not**
-usable — the repo denies `clippy::expect_used`/`missing_panics_doc`, so it fails
-the gate; mint through a trusted door instead):
+**Implement.** Three coupled edits (a `FromStr` `.parse().expect(...)` is
+**not** usable — the repo denies `clippy::expect_used`/`missing_panics_doc`, so
+it fails the gate; mint through a trusted door instead):
 
-1. **`common/src/media.rs` — the door.** Add a `pub(crate)` trusted constructor on
-   `ContentType` (mirrors `RenderedHtml::from_trusted`), and refactor
+1. **`common/src/media.rs` — the door.** Add a `pub(crate)` trusted constructor
+   on `ContentType` (mirrors `RenderedHtml::from_trusted`), and refactor
    `detect_content_type`'s two `ContentType(x.to_owned())` mints onto it (single
    trusted mint site):
 
@@ -154,21 +156,21 @@ the gate; mint through a trusted door instead):
 
 3. **`xtask/src/steps/rendered_html_from_trusted_check.rs` — extend the gate.**
    The `#398` gate leaf-matches the `from_trusted` name for `RenderedHtml`'s XSS
-   door, so `ContentType::from_trusted` trips it. Add an `EXEMPT_QUALIFIERS =
-   ["ContentType"]` carve-out in `is_door` (skip when the qualifier segment left of
-   the leaf is exempt) + module-doc update + tests: `ContentType::from_trusted`
-   (direct + `.map()` reference) is exempt, an unrelated `Widget::from_trusted`
-   still flagged.
+   door, so `ContentType::from_trusted` trips it. Add an
+   `EXEMPT_QUALIFIERS = ["ContentType"]` carve-out in `is_door` (skip when the
+   qualifier segment left of the leaf is exempt) + module-doc update + tests:
+   `ContentType::from_trusted` (direct + `.map()` reference) is exempt, an
+   unrelated `Widget::from_trusted` still flagged.
 
 **Verify.** `cargo nextest run -p common format_content_types` → **PASS**.
-`cargo nextest run --manifest-path xtask/Cargo.toml rendered_html_from_trusted` →
-**PASS** (incl. the 3 new cases). `cargo xtask check --no-test` → all steps `ok`
-(clippy + `rendered-html-from-trusted` + `xtask-tests`). `regenerate.rs:112`'s
-`.to_string()` still compiles via `ContentType: Display`.
+`cargo nextest run --manifest-path xtask/Cargo.toml rendered_html_from_trusted`
+→ **PASS** (incl. the 3 new cases). `cargo xtask check --no-test` → all steps
+`ok` (clippy + `rendered-html-from-trusted` + `xtask-tests`).
+`regenerate.rs:112`'s `.to_string()` still compiles via `ContentType: Display`.
 
-**Commit** (jaunder-commit): `refactor(common): FeedFormat::content_type returns
-ContentType via a trusted door (#584)` — includes the media door, producer, and
-gate extension.
+**Commit** (jaunder-commit):
+`refactor(common): FeedFormat::content_type returns ContentType via a trusted door (#584)`
+— includes the media door, producer, and gate extension.
 
 ---
 

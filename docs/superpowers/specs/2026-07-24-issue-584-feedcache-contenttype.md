@@ -36,15 +36,16 @@ unenforced `"…"`-quoted-format invariant.
    is a valid media type → an invalid edit fails the build).
 
    A `FromStr` round-trip (`literal.parse().expect(...)`) — the first-cut idea —
-   is **not viable**: the repo denies `clippy::expect_used`/`missing_panics_doc`,
-   so it fails the static gate. `pub(crate)` keeps the bypass in-crate: outside
-   `common` the only door stays the validating `FromStr`.
+   is **not viable**: the repo denies
+   `clippy::expect_used`/`missing_panics_doc`, so it fails the static gate.
+   `pub(crate)` keeps the bypass in-crate: outside `common` the only door stays
+   the validating `FromStr`.
 
    The `#398` `rendered-html-from-trusted` static gate reserves the
-   `from_trusted` **name** (leaf-matched) for `RenderedHtml`'s XSS-sensitive door,
-   so it is **extended** to exempt the `ContentType::` qualifier — a distinct,
-   non-HTML door — with tests proving it still bites `RenderedHtml::from_trusted`,
-   bare/aliased forms, and any other type.
+   `from_trusted` **name** (leaf-matched) for `RenderedHtml`'s XSS-sensitive
+   door, so it is **extended** to exempt the `ContentType::` qualifier — a
+   distinct, non-HTML door — with tests proving it still bites
+   `RenderedHtml::from_trusted`, bare/aliased forms, and any other type.
 
 3. **`etag` stays `String` (documented); repo-wide `ETag` newtype deferred.**
    The quoted-format invariant is upheld by construction at each of the ~5

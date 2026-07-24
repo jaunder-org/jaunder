@@ -189,6 +189,7 @@ pub async fn feed_user_tag(
 mod tests {
     use super::*;
     use chrono::{Duration, Utc};
+    use common::test_support::parse_content_type;
     use storage::{FeedCacheError, FeedCacheRow};
 
     fn sample_row(etag: &str, updated_at: chrono::DateTime<chrono::Utc>) -> FeedCacheRow {
@@ -196,7 +197,7 @@ mod tests {
             feed_path: "/feed.rss".parse().expect("valid feed path"),
             body: "<rss/>".to_owned(),
             etag: etag.to_owned(),
-            content_type: "application/rss+xml; charset=utf-8".to_owned(),
+            content_type: parse_content_type("application/rss+xml; charset=utf-8"),
             updated_at,
             generated_at: updated_at,
         }
