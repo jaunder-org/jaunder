@@ -1,6 +1,3 @@
-pub mod ui;
-pub use ui::{Avatar, Icon, Icons, Sidebar, Topbar};
-
 /// Default theme identifier (the CSS variable pack applied via `data-theme` on the
 /// root element). Defined in `crate::render` (the shell layer) so the projector's
 /// server-painted shell and this reactive `AppShell` share one value.
@@ -26,6 +23,7 @@ use crate::profile::ProfilePage;
 use crate::registration::RegisterPage;
 use crate::route_segments::TildeUsername;
 use crate::sessions::SessionsPage;
+use crate::sidebar::Sidebar;
 use crate::site::{SiteBaseUrlBanner, SiteSettingsPage};
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, Title};
