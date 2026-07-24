@@ -67,6 +67,5 @@ pub use server::post_response;
 #[cfg(target_arch = "wasm32")]
 pub use component::{
     AudiencePicker, ComposerFields, CreatePostPage, DraftsPage, EditPostPage, InlineComposer,
-    PostCard, PostCreateForm, PostDisplay, PostPage, SiteTagPage, TagInput, UserTagPage,
-    UserTimelinePage,
+    PostCard, PostCreateForm, PostDisplay, PostPage, SiteTagPage, UserTagPage, UserTimelinePage,
 };
