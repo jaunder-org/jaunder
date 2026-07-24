@@ -68,7 +68,7 @@ issue-filing first task**.
 
 **Files:**
 
-- Create `docs/adr/drafts/adopt-github-merge-queue.md` from
+- Create `docs/adr/0077-adopt-github-merge-queue.md` from
   `docs/adr/template.md`.
 
 **Content (fill the template):**

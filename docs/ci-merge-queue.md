@@ -1,7 +1,7 @@
 # CI: GitHub merge queue — enable / rollback runbook
 
 This is the operational runbook for the merge queue adopted in
-`docs/adr/drafts/adopt-github-merge-queue.md` (ADR, numbered at ship) for issue
+`docs/adr/0077-adopt-github-merge-queue.md` (ADR, numbered at ship) for issue
 [#627](https://github.com/jaunder-org/jaunder/issues/627). It gives the
 **exact** GitHub-API calls to enable the queue on `main` and to roll it back,
 plus the post-flip validation checklist.
