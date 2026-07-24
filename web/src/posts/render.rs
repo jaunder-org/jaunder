@@ -2,7 +2,7 @@
 //!
 //! These non-reactive, plain-string HTML builders are shared by BOTH the
 //! server-side projector (`crate::render`, via `render_shell`/`render_body`) and
-//! the reactive `PostDisplay` component (`crate::pages::ui`): both call the SAME
+//! the reactive `PostDisplay` component (`crate::posts::component`): both call the SAME
 //! function on the SAME data, so the projector's server-painted post markup and
 //! the client's reactive first paint coincide byte-for-byte (flash-free, #181 /
 //! ADR-0044). There is deliberately NO leptos reactivity here — plain string
