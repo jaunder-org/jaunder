@@ -18,7 +18,7 @@ use crate::tag::{Tag, TagLabel};
 use crate::time::UtcInstant;
 use crate::username::Username;
 
-/// A tag row returned by [`list_tags`].
+/// A tag row returned by the `list_tags` server fn.
 ///
 /// `slug` is the canonical lowercase form used in URLs (`/tags/:slug`).
 /// `display` is the case-preserving form the author most recently used; the
@@ -66,7 +66,7 @@ pub struct TimelinePage {
     pub has_more: bool,
 }
 
-/// Details of a post returned by [`get_post`].
+/// Details of a post returned by the `get_post` server fn.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PostResponse {
     pub post_id: PostId,
