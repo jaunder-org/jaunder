@@ -44,7 +44,8 @@ export default defineConfig({
   // can exceed 5s — the #609 admin-site base_url flake. 10s is the value assertions
   // across the suite already bumped to by hand, so making it the default lets those
   // per-assertion overrides go. A genuine assertion failure now surfaces in 10s,
-  // bounded by the browser-scaled 30s whole-test budget (slowBrowserTimeoutMs).
+  // bounded by the whole-test budget (30s base above, scaled per-test for slow
+  // browsers by the `auto` fixture via slowBrowserTimeoutMs).
   expect: { timeout: 10000 },
   fullyParallel: workers > 1,
   forbidOnly: !!process.env.CI,
