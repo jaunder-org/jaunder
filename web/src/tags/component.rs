@@ -2,109 +2,27 @@
 //! widget — a chip list plus a debounced autocomplete field backed by the
 //! [`list_tags`](super::list_tags) endpoint. Declared
 //! `#[cfg(target_arch = "wasm32")] mod component;` in `tags/mod.rs`, so this file
-//! is wasm-only by its `mod` declaration and carries no cfg gates of its own. The
-//! pure state logic lives in the host-tested [`super::input_logic`].
+//! is wasm-only by its `mod` declaration and carries no cfg gates of its own. Its
+//! state and dispatch logic live in the host-tested [`super::input_state`]; only the
+//! irreducible `web_sys` event touch stays here, inline in the component.
 
 use leptos::prelude::*;
 
 use common::seed::TagSummary;
 
-use super::input_logic::{next_suggestion, parse_committed_tag, prev_suggestion, push_unique};
+use super::input_state::TagInputState;
 
 /// Chip-based tag input with debounced autocomplete.
 ///
 /// Renders each tag in `tags` as a removable chip and emits one
 /// `<input type="hidden" name=name value=display>` per chip so an enclosing
-/// form receives a `Vec<String>`.
-///
-/// Key bindings: `Enter`/`Tab` commit a chip from the text field; `Backspace`
-/// on an empty field removes the last chip; `ArrowUp`/`ArrowDown` navigate
-/// the autocomplete dropdown; `Escape` closes it.
+/// form receives a `Vec<String>`. Its behavior lives on [`TagInputState`].
 #[component]
 pub fn TagInput(
     tags: RwSignal<Vec<TagSummary>>,
     #[prop(default = "tags")] name: &'static str,
 ) -> impl IntoView {
-    let input_text = RwSignal::new(String::new());
-    let error: RwSignal<Option<String>> = RwSignal::new(None);
-    let suggestions: RwSignal<Vec<TagSummary>> = RwSignal::new(Vec::new());
-    let suggestions_open = RwSignal::new(false);
-    let selected_idx: RwSignal<Option<usize>> = RwSignal::new(None);
-    // Tick counter for debounce: increment on each keystroke; the timeout
-    // callback only fires if the tick hasn't changed.
-    let debounce_tick = RwSignal::new(0u64);
-
-    // The one commit path — used by the keyboard handler and the dropdown click:
-    // dedup-append the tag, then clear the field and close the suggestions.
-    let commit = Callback::new(move |tag: TagSummary| {
-        tags.update(|t| push_unique(t, tag));
-        input_text.set(String::new());
-        error.set(None);
-        suggestions.set(Vec::new());
-        suggestions_open.set(false);
-        selected_idx.set(None);
-    });
-
-    let on_input = move |ev: leptos::ev::Event| {
-        let val = event_target_value(&ev);
-        input_text.set(val.clone());
-        error.set(None);
-        selected_idx.set(None);
-
-        let prefix = val.trim().to_lowercase();
-        if prefix.is_empty() {
-            suggestions.set(Vec::new());
-            suggestions_open.set(false);
-            return;
-        }
-
-        let tick = debounce_tick.get_untracked() + 1;
-        debounce_tick.set(tick);
-        schedule_suggestion_fetch(prefix, tick, debounce_tick, suggestions, suggestions_open);
-    };
-
-    let on_keydown = move |ev: leptos::ev::KeyboardEvent| {
-        match ev.key().as_str() {
-            "Enter" | "Tab" => {
-                // A keyboard-selected suggestion commits directly.
-                if let Some(i) = selected_idx.get() {
-                    if let Some(tag) = suggestions.get().get(i).cloned() {
-                        ev.prevent_default();
-                        commit.run(tag);
-                        return;
-                    }
-                }
-                // Otherwise commit the typed text; Tab passes through if empty.
-                if input_text.get().trim().is_empty() {
-                    return;
-                }
-                ev.prevent_default();
-                match parse_committed_tag(&input_text.get()) {
-                    Ok(tag) => commit.run(tag),
-                    Err(e) => error.set(Some(e)),
-                }
-            }
-            "Backspace" if input_text.get().is_empty() => {
-                tags.update(|t| {
-                    t.pop();
-                });
-            }
-            "ArrowDown" => {
-                ev.prevent_default();
-                selected_idx.update(|i| *i = next_suggestion(*i, suggestions.get().len()));
-            }
-            "ArrowUp" => {
-                ev.prevent_default();
-                selected_idx.update(|i| *i = prev_suggestion(*i));
-            }
-            "Escape" => {
-                suggestions.set(Vec::new());
-                suggestions_open.set(false);
-                selected_idx.set(None);
-            }
-            _ => {}
-        }
-    };
+    let state = TagInputState::new(tags);
 
     view! {
         <div class="j-tag-input">
@@ -113,14 +31,33 @@ pub fn TagInput(
                 type="text"
                 class="j-tag-text"
                 placeholder="Add tag\u{2026}"
-                prop:value=input_text
-                on:input=on_input
-                on:keydown=on_keydown
+                prop:value=state.input_text
+                on:input=move |ev| {
+                    if let Some((prefix, tick)) = state.begin_input(&event_target_value(&ev)) {
+                        schedule_suggestion_fetch(
+                            prefix,
+                            tick,
+                            state.debounce_tick,
+                            state.suggestions,
+                            state.suggestions_open,
+                        );
+                    }
+                }
+                on:keydown=move |ev| {
+                    if state.handle_key(ev.key().as_str()) {
+                        ev.prevent_default();
+                    }
+                }
                 autocomplete="off"
             />
-            <TagSuggestions suggestions suggestions_open selected_idx on_commit=commit />
+            <TagSuggestions
+                suggestions=state.suggestions
+                suggestions_open=state.suggestions_open
+                selected_idx=state.selected_idx
+                on_commit=Callback::new(move |tag| state.commit(tag))
+            />
         </div>
-        {move || error.get().map(|e| view! { <p class="j-tag-error">{e}</p> })}
+        {move || state.error.get().map(|e| view! { <p class="j-tag-error">{e}</p> })}
     }
 }
 
