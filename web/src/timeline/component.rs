@@ -18,6 +18,7 @@ use super::state::{LoadStatus, TimelineCursor};
 use crate::error::WebResult;
 use crate::pages::signal_read::read_signal;
 use crate::posts::PostCard;
+use crate::render::TagCtx as TagContext;
 
 /// The reactive state of a cursor-paginated timeline, shared by the public Local
 /// timeline (`home.rs`) and the authed `/app` cockpit (`cockpit.rs`).
@@ -100,6 +101,11 @@ pub fn TimelineRows(
     state: TimelineState,
     on_mutate: Callback<()>,
     on_load_more: Callback<()>,
+    /// Tag-chip linking context for each row's `PostCard`. Defaults to
+    /// `SiteWide` (the site/cockpit timelines); the user timeline passes
+    /// `ForUser` so chips also render the "· here" per-author link.
+    #[prop(default = TagContext::SiteWide)]
+    tag_context: TagContext,
 ) -> impl IntoView {
     let read_rows = move || read_signal!(state.rows);
     let read_has_more = move || read_signal!(state.has_more);
@@ -112,7 +118,16 @@ pub fn TimelineRows(
                     view! { <p>"No posts yet."</p> }.into_any()
                 } else {
                     rows.into_iter()
-                        .map(|p| view! { <PostCard post=p banner=None on_mutate=on_mutate /> })
+                        .map(|p| {
+                            view! {
+                                <PostCard
+                                    post=p
+                                    banner=None
+                                    tag_context=tag_context.clone()
+                                    on_mutate=on_mutate
+                                />
+                            }
+                        })
                         .collect::<Vec<_>>()
                         .into_any()
                 }
