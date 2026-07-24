@@ -23,14 +23,22 @@ relay credential is one `debug!(?config)` from a log line — the exposure the
 `#[str_newtype(secret)]` flavor exists to close. It is the one remaining
 plaintext credential held as a bare `String`.
 
+> **Post-review update (design revised).** Code review reshaped Decisions 1 & 4:
+> `SmtpPassword` is a **stored secret** (`#[str_newtype(secret, sqlx)]`, like
+> `InviteCode`), and the credentials are read through a typed
+> `SiteConfigStorage::get_smtp_credentials()` that decodes `smtp.password` via the
+> sqlx bridge — so an empty/garbage value is rejected as a `ColumnDecode` error at
+> the query boundary rather than by a hand-rolled parse. The sections below reflect
+> the final design.
+
 ## Decisions
 
-1. **`SmtpPassword` secret newtype in `common`.** New module
+1. **`SmtpPassword` secret *stored-secret* newtype in `common`.** New module
    `common/src/smtp_password.rs` (mirrors `common/src/password.rs`):
 
    ```rust
    #[derive(Clone, StrNewtype)]
-   #[str_newtype(secret)]
+   #[str_newtype(secret, sqlx)]
    pub struct SmtpPassword(String);
    ```
 
@@ -41,7 +49,9 @@ plaintext credential held as a bare `String`.
    drift. The `secret` trailer supplies the redacting `Debug`
    (`SmtpPassword([redacted])`), `AsRef<str>` (the sole read-out), and
    `TryFrom<String>`; deliberately **no** `Display`, `Deref`, `Borrow`, serde,
-   owned-`String` conversion, or `PartialEq`.
+   owned-`String` conversion, or `PartialEq`. The `sqlx` opt-in adds **only** the
+   validating sqlx bridge (like `InviteCode`): the `site_config` value column
+   decodes straight into `SmtpPassword` through `FromStr` (#438).
 
 2. **No `Proffered*`/serde twin — yet.** SMTP config is set only via CLI /
    config-KV today (config KV → storage → mailer) and never crosses a
@@ -63,14 +73,16 @@ plaintext credential held as a bare `String`.
    then redacts the password automatically. `username` stays `Option<String>`
    (an identifier, not a secret; audited config-KV carve-out).
 
-4. **Empty stored password is an error.** `load_smtp_config`
-   (`storage/src/smtp.rs:132`) parses a present `smtp.password` through
-   `SmtpPassword`; a present-but-empty value yields a new
-   `SmtpConfigError::InvalidPassword` — consistent with the existing
-   `InvalidPort`/`InvalidTlsMode`/`InvalidSender` handling (surface misconfig,
-   don't silently treat it as "not configured"). The variant carries **no
-   value** (never embed the credential in an error), unlike the sibling variants
-   that echo the offending string. Absent key → `None` (unchanged).
+4. **Typed credential retrieval; empty stored password is rejected at the bridge.**
+   A new `SiteConfigStorage::get_smtp_credentials() -> sqlx::Result<SmtpCredentials>`
+   reads `smtp.username` (plain `String`) and `smtp.password` **together** as a
+   typed `SmtpCredentials { username, password }`. The password is decoded via
+   `query_as::<_, (SmtpPassword,)>` on the value column, so a present-but-empty (or
+   garbage) value fails `FromStr` and surfaces as a `sqlx::Error::ColumnDecode` at
+   the query boundary — the #438 way, no hand-rolled parse. `load_smtp_config`
+   destructures the pair and maps a decode failure to a **valueless**
+   `SmtpConfigError::InvalidPassword` (never embeds the credential, unlike the
+   value-echoing sibling variants). Absent key → `None` (unchanged).
 
 5. **Single expose site.** `server/src/mailer/smtp.rs:66` becomes
    `Credentials::new(username.clone(), password.as_ref().to_owned())` — the one

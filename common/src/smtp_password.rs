@@ -11,11 +11,17 @@ use thiserror::Error;
 /// credential cannot be rendered, serialised, logged, or value-compared. The
 /// `macros` crate is the authoritative list of what `secret` emits.
 ///
+/// It is a **stored secret**: `#[str_newtype(secret, sqlx)]` layers the validating
+/// sqlx bridge back on (like `InviteCode`), so the `site_config` value column
+/// decodes straight into `SmtpPassword` through [`FromStr`] — an empty or garbage
+/// stored value is rejected as a `ColumnDecode` error at the query boundary (#438),
+/// rather than being re-parsed by hand.
+///
 /// SMTP config is server-side only today (CLI / config-KV → storage → mailer), so
 /// there is no inbound `ProfferedSmtpPassword` twin. Making it web-settable (#638)
 /// will add that twin and share [`validate_smtp_password_shape`].
 #[derive(Clone, StrNewtype)]
-#[str_newtype(secret)]
+#[str_newtype(secret, sqlx)]
 pub struct SmtpPassword(String);
 
 /// Error returned when an SMTP password fails its shape invariant (empty).

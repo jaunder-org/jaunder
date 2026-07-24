@@ -71,6 +71,22 @@ pub struct SmtpConfig {
     pub sender: Mailbox,
 }
 
+/// The optional SMTP auth credentials, read together as a typed pair by
+/// [`SiteConfigStorage::get_smtp_credentials`](crate::SiteConfigStorage::get_smtp_credentials).
+///
+/// `password` is the secret [`SmtpPassword`]: it decodes from the `site_config`
+/// value column through its validating sqlx bridge, so an empty/garbage stored
+/// value is rejected at the query boundary rather than reaching here. `username`
+/// is an identifier, not a secret, and stays a plain `String`. The derived `Debug`
+/// redacts the password via `SmtpPassword`'s redacting `Debug`.
+#[derive(Clone, Debug)]
+pub struct SmtpCredentials {
+    /// Optional SMTP auth username.
+    pub username: Option<String>,
+    /// Optional SMTP auth password.
+    pub password: Option<SmtpPassword>,
+}
+
 // ---------------------------------------------------------------------------
 // SmtpConfigError
 // ---------------------------------------------------------------------------
@@ -135,14 +151,16 @@ pub async fn load_smtp_config(
             .map_err(|_| SmtpConfigError::InvalidTlsMode(v))?,
     };
 
-    let username = store.get("smtp.username").await.ok().flatten();
-    let password = match store.get("smtp.password").await.ok().flatten() {
-        None => None,
-        Some(v) => Some(
-            v.parse::<SmtpPassword>()
-                .map_err(|_| SmtpConfigError::InvalidPassword)?,
-        ),
-    };
+    // Username + password are read together as a typed pair; the secret password
+    // decodes through its sqlx bridge, so an empty/garbage stored value surfaces as
+    // a decode error here (rejected, per the non-empty invariant). `smtp.host` was
+    // already read above, so a non-decode storage error can't realistically reach
+    // this point; either way the caller (`build_mailer`) maps an `Err` to the safe
+    // no-op mailer, so folding both into `InvalidPassword` is sound.
+    let SmtpCredentials { username, password } = store
+        .get_smtp_credentials()
+        .await
+        .map_err(|_| SmtpConfigError::InvalidPassword)?;
 
     let sender_str = store
         .get("smtp.sender")
@@ -240,8 +258,8 @@ mod tests {
         assert_eq!(config.tls_mode, SmtpTlsMode::Tls);
         assert_eq!(config.username, Some("user@example.com".to_owned()));
         assert_eq!(
-            config.password.as_ref().map(SmtpPassword::as_ref),
-            Some("s3cr3t")
+            config.password.expect("password present").as_ref(),
+            "s3cr3t"
         );
         assert_eq!(
             config.sender,
