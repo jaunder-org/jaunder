@@ -2,12 +2,14 @@
 
 use crate::backend::Backend;
 use crate::media::{MEDIA_MAX_FILE_SIZE_BYTES_KEY, MEDIA_USER_QUOTA_BYTES_KEY};
+use crate::smtp::SmtpCredentials;
 use async_trait::async_trait;
 use common::absolute_url::AbsoluteUrl;
 use common::backup::{BackupConfig, BackupMode, BackupSchedule, DestinationPath, RetentionCount};
 use common::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
 use common::media::{MaxFileSize, UserQuota};
 use common::site::{SiteIdentity, SiteTitle};
+use common::smtp_password::SmtpPassword;
 use common::visibility::AudienceTarget;
 use sqlx::{Database, Pool};
 
@@ -36,6 +38,16 @@ pub trait SiteConfigStorage: Send + Sync {
     /// Idempotent: deleting an absent key is a no-op that returns `false`. Backs
     /// `jaunder site-config unset`.
     async fn delete(&self, key: &str) -> sqlx::Result<bool>;
+
+    /// Reads the SMTP auth credentials (`smtp.username` + `smtp.password`) as a
+    /// typed [`SmtpCredentials`] pair.
+    ///
+    /// A **required** method rather than a `get`-based default: the secret
+    /// `smtp.password` value decodes through [`SmtpPassword`]'s validating sqlx
+    /// bridge, so an empty/garbage stored value is rejected as a `ColumnDecode`
+    /// error at the query boundary (the non-empty invariant), never reaching a
+    /// caller as a bad `SmtpPassword`.
+    async fn get_smtp_credentials(&self) -> sqlx::Result<SmtpCredentials>;
 
     /// Returns the configured media max upload size, falling back to the
     /// [`MaxFileSize`] default (50 MiB) if unset or unparseable (including a stored
@@ -317,6 +329,9 @@ where
     DB: Backend,
     (String,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (String, String): for<'r> sqlx::FromRow<'r, DB::Row>,
+    // `SmtpPassword` decodes from the `value` column via its validating sqlx bridge
+    // (#438); this bound makes that bridge available on the generic backend.
+    (SmtpPassword,): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
@@ -339,6 +354,20 @@ where
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    async fn get_smtp_credentials(&self) -> sqlx::Result<SmtpCredentials> {
+        let username = self.get("smtp.username").await?;
+        // Decode the `smtp.password` value column straight into the secret
+        // `SmtpPassword` via its sqlx bridge; an empty/garbage value fails
+        // `FromStr` and surfaces as a `ColumnDecode` error (rejected).
+        let password =
+            sqlx::query_as::<_, (SmtpPassword,)>("SELECT value FROM site_config WHERE key = $1")
+                .bind("smtp.password")
+                .fetch_optional(&self.pool)
+                .await?
+                .map(|(password,)| password);
+        Ok(SmtpCredentials { username, password })
     }
 
     async fn list(&self) -> sqlx::Result<Vec<(String, String)>> {
@@ -452,6 +481,51 @@ mod tests {
         // Exercise the derived Clone/Debug so the aggregate struct is covered.
         assert_eq!(loaded.clone(), config);
         assert!(!format!("{config:?}").is_empty());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn get_smtp_credentials_reads_typed_pair(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
+        storage
+            .set("smtp.username", "user@example.com")
+            .await
+            .unwrap();
+        storage.set("smtp.password", "s3cr3t").await.unwrap();
+
+        let creds = storage.get_smtp_credentials().await.unwrap();
+        assert_eq!(creds.username, Some("user@example.com".to_owned()));
+        // Exercise the aggregate's derived Clone/Debug (redacts the password)
+        // before moving the password out below.
+        assert!(format!("{creds:?}").contains("[redacted]"));
+        // The `smtp.password` column decoded into `SmtpPassword` via the bridge.
+        assert_eq!(
+            creds.clone().password.expect("password present").as_ref(),
+            "s3cr3t"
+        );
+
+        // Absent keys read as None.
+        storage.delete("smtp.username").await.unwrap();
+        storage.delete("smtp.password").await.unwrap();
+        let empty = storage.get_smtp_credentials().await.unwrap();
+        assert!(empty.username.is_none());
+        assert!(empty.password.is_none());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn get_smtp_credentials_rejects_empty_password(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
+        // An empty stored password bypasses the non-empty invariant only via
+        // tampering; the bridge decode rejects it as a `ColumnDecode` error.
+        storage.set("smtp.password", "").await.unwrap();
+        let err = storage.get_smtp_credentials().await.unwrap_err();
+        assert!(
+            matches!(err, sqlx::Error::ColumnDecode { .. }),
+            "expected a column-decode error, got: {err:?}"
+        );
     }
 
     #[apply(backends)]
