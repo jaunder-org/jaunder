@@ -1,6 +1,7 @@
 use std::{fmt, str::FromStr};
 
 use common::mailbox::Mailbox;
+use common::smtp_password::SmtpPassword;
 use thiserror::Error;
 
 use crate::SiteConfigStorage;
@@ -63,8 +64,9 @@ pub struct SmtpConfig {
     pub tls_mode: SmtpTlsMode,
     /// Optional SMTP auth username.
     pub username: Option<String>,
-    /// Optional SMTP auth password.
-    pub password: Option<String>,
+    /// Optional SMTP auth password (a redacting secret newtype — never rendered
+    /// or logged; read once at the mailer `Credentials` boundary).
+    pub password: Option<SmtpPassword>,
     /// Sender address (e.g. `"Jaunder <noreply@example.com>"`).
     pub sender: Mailbox,
 }
@@ -85,6 +87,11 @@ pub enum SmtpConfigError {
     /// `smtp.sender` is set to a value that cannot be parsed as an email address.
     #[error("smtp.sender {0:?} is not a valid email address")]
     InvalidSender(String),
+    /// `smtp.password` is present but empty. Deliberately **valueless** — the
+    /// credential is never embedded in an error (unlike the sibling variants,
+    /// which echo the offending string).
+    #[error("smtp.password must not be empty")]
+    InvalidPassword,
 }
 
 // ---------------------------------------------------------------------------
@@ -129,7 +136,13 @@ pub async fn load_smtp_config(
     };
 
     let username = store.get("smtp.username").await.ok().flatten();
-    let password = store.get("smtp.password").await.ok().flatten();
+    let password = match store.get("smtp.password").await.ok().flatten() {
+        None => None,
+        Some(v) => Some(
+            v.parse::<SmtpPassword>()
+                .map_err(|_| SmtpConfigError::InvalidPassword)?,
+        ),
+    };
 
     let sender_str = store
         .get("smtp.sender")
@@ -226,7 +239,10 @@ mod tests {
         assert_eq!(config.port, 465);
         assert_eq!(config.tls_mode, SmtpTlsMode::Tls);
         assert_eq!(config.username, Some("user@example.com".to_owned()));
-        assert_eq!(config.password, Some("s3cr3t".to_owned()));
+        assert_eq!(
+            config.password.as_ref().map(SmtpPassword::as_ref),
+            Some("s3cr3t")
+        );
         assert_eq!(
             config.sender,
             "Jaunder <noreply@example.com>".parse::<Mailbox>().unwrap()
@@ -247,7 +263,7 @@ mod tests {
         assert_eq!(config.port, 587);
         assert_eq!(config.tls_mode, SmtpTlsMode::StartTls);
         assert_eq!(config.username, None);
-        assert_eq!(config.password, None);
+        assert!(config.password.is_none());
         assert_eq!(
             config.sender,
             "Jaunder <noreply@localhost>".parse::<Mailbox>().unwrap()
@@ -288,5 +304,41 @@ mod tests {
 
         let err = load_smtp_config(&store).await.unwrap_err();
         assert!(matches!(err, SmtpConfigError::InvalidTlsMode(_)));
+    }
+
+    // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
+    #[tokio::test]
+    async fn load_smtp_config_returns_err_for_empty_password() {
+        let store = InMemorySiteConfig::from_pairs([
+            ("smtp.host", "mail.example.com"),
+            ("smtp.password", ""),
+        ]);
+
+        let err = load_smtp_config(&store).await.unwrap_err();
+        assert!(matches!(err, SmtpConfigError::InvalidPassword));
+    }
+
+    #[test]
+    fn smtp_config_debug_redacts_password() {
+        use common::test_support::parse_smtp_password;
+
+        let config = SmtpConfig {
+            host: "mail.example.com".to_owned(),
+            port: 587,
+            tls_mode: SmtpTlsMode::StartTls,
+            username: Some("user@example.com".to_owned()),
+            password: Some(parse_smtp_password("s3cr3t")),
+            sender: "Jaunder <noreply@example.com>".parse::<Mailbox>().unwrap(),
+        };
+
+        let out = format!("{config:?}");
+        assert!(out.contains("SmtpPassword([redacted])"));
+        assert!(!out.contains("s3cr3t"));
+
+        // A cloned config also redacts — this exercises the mandatory
+        // `SmtpPassword::clone` derive so it isn't an uncovered llvm-cov region.
+        let cloned = format!("{:?}", config.clone());
+        assert!(cloned.contains("SmtpPassword([redacted])"));
+        assert!(!cloned.contains("s3cr3t"));
     }
 }

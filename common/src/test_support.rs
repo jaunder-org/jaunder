@@ -24,6 +24,7 @@ use crate::post_title::PostTitle;
 use crate::root_relative_url::RootRelativeUrl;
 use crate::site::SiteTitle;
 use crate::slug::Slug;
+use crate::smtp_password::SmtpPassword;
 use crate::tag::{Tag, TagLabel};
 use crate::time::UtcInstant;
 use crate::token::{RawToken, TokenHash};
@@ -347,6 +348,18 @@ pub fn parse_token_hash(s: &str) -> TokenHash {
 #[must_use]
 pub fn parse_password(s: &str) -> Password {
     s.parse().expect("valid test password")
+}
+
+/// Parse `s` into a valid [`SmtpPassword`] for tests — the single place a test
+/// SMTP-password literal is parsed, so an empty fixture fails loudly and the
+/// validating `FromStr` isn't re-spelled at every `SmtpConfig` fixture.
+///
+/// # Panics
+///
+/// Panics if `s` is empty.
+#[must_use]
+pub fn parse_smtp_password(s: &str) -> SmtpPassword {
+    s.parse().expect("valid test SMTP password")
 }
 
 /// Parse `s` into a valid [`Tag`] (a canonical tag slug) for tests — the single place

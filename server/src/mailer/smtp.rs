@@ -63,7 +63,12 @@ impl LettreMailSender {
 
         let builder = match (&config.username, &config.password) {
             (Some(username), Some(password)) => {
-                builder.credentials(Credentials::new(username.clone(), password.clone()))
+                // The one plaintext read of the secret `SmtpPassword`: borrow via
+                // `AsRef<str>` and own it for lettre's `Credentials`.
+                builder.credentials(Credentials::new(
+                    username.clone(),
+                    password.as_ref().to_owned(),
+                ))
             }
             _ => builder,
         };
@@ -119,6 +124,7 @@ impl MailSender for LettreMailSender {
 #[cfg(test)]
 mod tests {
     use common::email::Email;
+    use common::test_support::parse_smtp_password;
     use storage::{SmtpConfig, SmtpTlsMode};
 
     use super::*;
@@ -155,7 +161,7 @@ mod tests {
     async fn from_config_with_credentials_succeeds() {
         let config = SmtpConfig {
             username: Some("user@example.com".to_owned()),
-            password: Some("s3cr3t".to_owned()),
+            password: Some(parse_smtp_password("s3cr3t")),
             ..base_config(SmtpTlsMode::StartTls)
         };
         assert!(LettreMailSender::from_config(&config).is_ok());

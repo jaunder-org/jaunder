@@ -28,7 +28,7 @@ password the ADR-0063 §2 secret newtype (`SmtpPassword`), thread it through
      `validate_smtp_password_shape`, `FromStr`, tests) + `lib.rs` registration.
      (`parse_smtp_password` helper deferred to task 2 — its first user — so it
      is not an uncovered region at this commit.)
-- [ ] 2. `storage` + `server`: `SmtpConfig.password: Option<SmtpPassword>`,
+- [x] 2. `storage` + `server`: `SmtpConfig.password: Option<SmtpPassword>`,
      `load_smtp_config` empty→`InvalidPassword`, the `Credentials::new` expose,
      the `parse_smtp_password` test helper (first used here), and all
      `SmtpConfig` test fixtures/asserts (redaction regression, load cases).
