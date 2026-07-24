@@ -19,7 +19,7 @@ use async_trait::async_trait;
 use common::feed::FeedPath;
 use common::ids::{PostId, UserId};
 use common::mailer::{MailSender, NoopMailSender};
-use common::test_support::{parse_password, parse_slug, parse_username};
+use common::test_support::{parse_display_name, parse_password, parse_slug, parse_username};
 use host::invite::InviteCode;
 use sqlx::{Connection, PgPool, SqlitePool};
 use std::collections::BTreeMap;
@@ -652,23 +652,80 @@ pub async fn seed_posts(
         .expect("seed posts should be created")
 }
 
-/// Creates a throwaway user and returns its id, for tests that need a user to
-/// exist before exercising a per-user handle (replaces raw `INSERT INTO users`).
+/// Fixture for a seeded user, built the real `UserStorage::create_user` way.
+/// Defaults: password `password123`, no display name, non-operator — chain the
+/// setters to override only what a test varies. [`SeedUser::seed`] `expect()`s
+/// success, so it is happy-path setup only; error-path tests (duplicate username,
+/// hash failure) call `create_user` directly and assert the error.
+pub struct SeedUser<'a> {
+    username: &'a str,
+    password: &'a str,
+    display_name: Option<&'a str>,
+    is_operator: bool,
+}
+
+impl<'a> SeedUser<'a> {
+    /// A non-operator user named `username`, password `password123`, no display name.
+    #[must_use]
+    pub fn new(username: &'a str) -> Self {
+        Self {
+            username,
+            password: "password123",
+            display_name: None,
+            is_operator: false,
+        }
+    }
+
+    /// Override the password (auth/duplicate tests).
+    #[must_use]
+    pub fn password(mut self, password: &'a str) -> Self {
+        self.password = password;
+        self
+    }
+
+    /// Set a display name.
+    #[must_use]
+    pub fn display_name(mut self, display_name: &'a str) -> Self {
+        self.display_name = Some(display_name);
+        self
+    }
+
+    /// Mark the user an operator.
+    #[must_use]
+    pub fn operator(mut self) -> Self {
+        self.is_operator = true;
+        self
+    }
+
+    /// Create the user and return its id.
+    ///
+    /// # Panics
+    ///
+    /// If the username/password/display name fail to parse or the user cannot be created.
+    pub async fn seed(self, state: &Arc<AppState>) -> UserId {
+        let display_name = self.display_name.map(parse_display_name);
+        state
+            .users
+            .create_user(
+                &parse_username(self.username),
+                &parse_password(self.password),
+                display_name.as_ref(),
+                self.is_operator,
+            )
+            .await
+            .expect("seed user should be created")
+    }
+}
+
+/// Creates a throwaway user named `testuser` and returns its id, for tests that
+/// need a user to exist before exercising a per-user handle (replaces raw
+/// `INSERT INTO users`).
 ///
 /// # Panics
 ///
-/// If the username/password fail to parse or the user cannot be created.
+/// If the user cannot be created.
 pub async fn seed_user(state: &Arc<AppState>) -> UserId {
-    state
-        .users
-        .create_user(
-            &parse_username("testuser"),
-            &parse_password("password123"),
-            None,
-            false,
-        )
-        .await
-        .expect("seed user should be created")
+    SeedUser::new("testuser").seed(state).await
 }
 
 /// An in-memory [`SiteConfigStorage`] for tests that need a facade over site
@@ -731,7 +788,10 @@ impl SiteConfigStorage for InMemorySiteConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{backends, bootstrap_url, report_drop_outcome, seed_user, splice_db_name, Backend};
+    use super::{
+        backends, bootstrap_url, parse_password, parse_username, report_drop_outcome, seed_user,
+        splice_db_name, Backend, SeedUser,
+    };
     use rstest::*;
     use rstest_reuse::*;
 
@@ -741,6 +801,58 @@ mod tests {
         let env = backend.setup().await;
         let id = seed_user(&env.state).await;
         assert!(i64::from(id) > 0);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn seed_user_builder_defaults_create_a_plain_non_operator_user(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let state = &env.state;
+        let id = SeedUser::new("alice").seed(state).await;
+        let u = state
+            .users
+            .get_user(id)
+            .await
+            .unwrap()
+            .expect("user exists");
+        assert_eq!(u.username, "alice");
+        assert!(!u.is_operator);
+        assert!(u.display_name.is_none());
+        // The default password authenticates — proves `seed` used `password123`.
+        state
+            .users
+            .authenticate(&parse_username("alice"), &parse_password("password123"))
+            .await
+            .expect("default password authenticates");
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn seed_user_builder_overrides_apply_password_display_name_and_operator(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let state = &env.state;
+        let id = SeedUser::new("bob")
+            .password("hunter2xyz")
+            .display_name("Bob B")
+            .operator()
+            .seed(state)
+            .await;
+        let u = state
+            .users
+            .get_user(id)
+            .await
+            .unwrap()
+            .expect("user exists");
+        assert!(u.is_operator);
+        assert_eq!(u.display_name.expect("display name set"), "Bob B");
+        // The overridden password authenticates — not the default.
+        state
+            .users
+            .authenticate(&parse_username("bob"), &parse_password("hunter2xyz"))
+            .await
+            .expect("overridden password authenticates");
     }
 
     // guard:no-backend — harness type-guard on the SQLite CloseablePool variant; no database ops
