@@ -1,65 +1,80 @@
 # Plan — #656 `SeedRawPost` builder + adoption
 
-**Spec:** [`docs/superpowers/specs/2026-07-24-issue-656-seed-raw-post-builder.md`](../specs/2026-07-24-issue-656-seed-raw-post-builder.md)
-**For agentic workers:** drive with `jaunder-iterate`; delegate the mechanical adoption
-tasks (T2–T6) via `jaunder-dispatch` to keep site bulk out of the driver's context.
+**Spec:**
+[`docs/superpowers/specs/2026-07-24-issue-656-seed-raw-post-builder.md`](../specs/2026-07-24-issue-656-seed-raw-post-builder.md)
+**For agentic workers:** drive with `jaunder-iterate`; delegate the mechanical
+adoption tasks (T2–T6) via `jaunder-dispatch` to keep site bulk out of the
+driver's context.
 
 ## Review header
 
 **Goal.** Add a `SeedRawPost` test builder to `storage::test_support` (wraps
-`create_post` directly, autogenerates slug/title, returns a `SeededPost` for read-back),
-then adopt it everywhere post setup is hand-rolled at the `create_post` layer — deleting
-the two mod.rs factories and ~90 `CreatePostInput { … }` literals. Behaviour-preserving.
+`create_post` directly, autogenerates slug/title, returns a `SeededPost` for
+read-back), then adopt it everywhere post setup is hand-rolled at the
+`create_post` layer — deleting the two mod.rs factories and ~90
+`CreatePostInput { … }` literals. Behaviour-preserving.
 
 **Scope.**
+
 - **In:** the builder + its self-tests (T1); adoption in `storage/src/posts.rs`
-  `#[cfg(test)]` (T2), `server/tests/storage/mod.rs` incl. the two batch tests and the
-  `create_rendered_post`/`update_rendered_post` *setup* posts (T3), `feed/*` (T4),
-  `projector` + `web/{tags,media,posts}` (T5), `misc/backup_fixture` (T6).
-- **Out (do not touch):** the `create_rendered_post`/`update_rendered_post` *calls under
-  test* and their render-asserted bodies; `seed_post_published_at` / scheduled-boundary
-  tests; `seed_posts`; `web_posts` HTTP `create_post_json` sites; `web_tags` clamp-limit
-  bulk-tag loops. No production code. No ADR.
+  `#[cfg(test)]` (T2), `server/tests/storage/mod.rs` incl. the two batch tests
+  and the `create_rendered_post`/`update_rendered_post` _setup_ posts (T3),
+  `feed/*` (T4), `projector` + `web/{tags,media,posts}` (T5),
+  `misc/backup_fixture` (T6).
+- **Out (do not touch):** the `create_rendered_post`/`update_rendered_post`
+  _calls under test_ and their render-asserted bodies; `seed_post_published_at`
+  / scheduled-boundary tests; `seed_posts`; `web_posts` HTTP `create_post_json`
+  sites; `web_tags` clamp-limit bulk-tag loops. No production code. No ADR.
 
 **Tasks.**
-- **T1** — `SeededPost` + `SeedRawPost` + `#[apply(backends)]` self-tests in
-  `storage/src/test_support.rs`.
-- **T2** — adopt in `storage/src/posts.rs` `#[cfg(test)]` (~14 literals + `mk` closure).
-- **T3** — `server/tests/storage/mod.rs`: delete both factories; convert routine, contract,
-  batch, and `create_rendered_post`/`update_rendered_post` setup sites.
-- **T4** — `feed/{feed_handlers,feed_worker,feed_regenerate}`.
-- **T5** — `projector/mod.rs` + `web/{web_tags,web_media,web_posts}`.
-- **T6** — `misc/backup_fixture.rs` (+ extend `BackupFixtureIds`); verify via
-  `misc::backup_interop`.
-- **T7** — full `cargo xtask validate`.
+
+- [x] **T1** — `SeededPost` + `SeedRawPost` + `#[apply(backends)]` self-tests in
+      `storage/src/test_support.rs`.
+- [x] **T2** — adopt in `storage/src/posts.rs` `#[cfg(test)]` (~14 literals +
+      `mk` closure).
+- [x] **T3** — `server/tests/storage/mod.rs`: delete both factories; convert
+      routine, contract, batch, and
+      `create_rendered_post`/`update_rendered_post` setup sites.
+- [x] **T4** — `feed/{feed_handlers,feed_worker,feed_regenerate}`.
+- [x] **T5** — `projector/mod.rs` + `web/{web_tags,web_media,web_posts}`.
+- [ ] **T6** — `misc/backup_fixture.rs` (+ extend `BackupFixtureIds`); verify
+      via `misc::backup_interop`.
+- [ ] **T7** — full `cargo xtask validate`.
 
 **Key risks / decisions.**
-- **Default flips to published.** Former `make_create_post_input` (draft) sites MUST gain
-  `.draft()` — the top behaviour-preservation trap. (T3)
-- **Autogen determinism / distinctness.** Slug+title share one per-process `AtomicU64`;
-  correctness rests on the fresh-DB-per-test invariant (ADR-0033/0053), as `SeedUser`.
-  Conflict tests express *sameness* via a shared local slug, never a re-hardcoded literal.
-- **Read-back, not literals.** ~9 sites reference `seeded.{slug,title,published_at,
-  rendered_html}`; the rest ignore the return. Only `web_media`'s `media_url` body survives.
-- **Backup byte-stability.** Safe because `populate_backup_fixture` runs once; keep the
-  fixed `fixture_published_at()` instant; extend `BackupFixtureIds` for read-back. (T6)
+
+- **Default flips to published.** Former `make_create_post_input` (draft) sites
+  MUST gain `.draft()` — the top behaviour-preservation trap. (T3)
+- **Autogen determinism / distinctness.** Slug+title share one per-process
+  `AtomicU64`; correctness rests on the fresh-DB-per-test invariant
+  (ADR-0033/0053), as `SeedUser`. Conflict tests express _sameness_ via a shared
+  local slug, never a re-hardcoded literal.
+- **Read-back, not literals.** ~9 sites reference
+  `seeded.{slug,title,published_at, rendered_html}`; the rest ignore the return.
+  Only `web_media`'s `media_url` body survives.
+- **Backup byte-stability.** Safe because `populate_backup_fixture` runs once;
+  keep the fixed `fixture_published_at()` instant; extend `BackupFixtureIds` for
+  read-back. (T6)
 
 ## Global constraints
 
-- Storage self-tests use the dual-backend template (`#[apply(backends)]` + `#[case]
-  backend: Backend`), per `CONTRIBUTING.md` backend parity; a bare `#[tokio::test]` trips
-  the `test-backend-pattern` guard. Do not touch ADR-0019 dialect files.
-- Each task: `cargo xtask check` clean before commit (fmt + clippy + Nix coverage/tests);
-  commit via `jaunder-commit`; **no `Co-Authored-By` trailer**.
-- Behaviour-preserving: adoption tasks change *how a post is seeded*, never *what is
-  asserted*. The affected tests must stay green with no assertion edits (except read-back
-  rewrites that reference `seeded.*` instead of the old literal).
+- Storage self-tests use the dual-backend template (`#[apply(backends)]` +
+  `#[case] backend: Backend`), per `CONTRIBUTING.md` backend parity; a bare
+  `#[tokio::test]` trips the `test-backend-pattern` guard. Do not touch ADR-0019
+  dialect files.
+- Each task: `cargo xtask check` clean before commit (fmt + clippy + Nix
+  coverage/tests); commit via `jaunder-commit`; **no `Co-Authored-By` trailer**.
+- Behaviour-preserving: adoption tasks change _how a post is seeded_, never
+  _what is asserted_. The affected tests must stay green with no assertion edits
+  (except read-back rewrites that reference `seeded.*` instead of the old
+  literal).
 
 ---
 
 ## T1 — `SeedRawPost` + `SeededPost` in `storage/src/test_support.rs`
 
-**Files.** `storage/src/test_support.rs` (add the builder near `SeedUser`); imports.
+**Files.** `storage/src/test_support.rs` (add the builder near `SeedUser`);
+imports.
 
 **Interfaces (complete — adjust import paths to compile):**
 
@@ -252,11 +267,12 @@ impl SeedRawPost {
 }
 ```
 
-> Note: `input.slug`/`input.rendered_html` are moved into `SeededPost` **after** the
-> `&input` borrow ends (the `create_post` await completes first), so no clone is needed.
+> Note: `input.slug`/`input.rendered_html` are moved into `SeededPost` **after**
+> the `&input` borrow ends (the `create_post` await completes first), so no
+> clone is needed.
 
-**Test (write first — TDD).** Add to `test_support.rs`'s `#[cfg(test)] mod tests`, mirroring
-the `SeedUser` self-tests:
+**Test (write first — TDD).** Add to `test_support.rs`'s
+`#[cfg(test)] mod tests`, mirroring the `SeedUser` self-tests:
 
 ```rust
 #[apply(backends)]
@@ -335,10 +351,11 @@ async fn seed_raw_post_create_surfaces_slug_conflict(#[case] backend: Backend) {
 ```
 
 **Steps.**
-1. Add the four self-tests → `cargo nextest run -p storage seed_raw_post` **FAILS** (no such
-   type).
-2. Implement `SeededPost` + `SeedRawPost`; add imports; export from `test_support` (it is
-   already a `pub mod`).
+
+1. Add the four self-tests → `cargo nextest run -p storage seed_raw_post`
+   **FAILS** (no such type).
+2. Implement `SeededPost` + `SeedRawPost`; add imports; export from
+   `test_support` (it is already a `pub mod`).
 3. `cargo nextest run -p storage seed_raw_post` **PASSES** (both backends).
 4. `cargo xtask check` clean → commit (`jaunder-commit`).
 
@@ -346,28 +363,32 @@ async fn seed_raw_post_create_surfaces_slug_conflict(#[case] backend: Backend) {
 
 ## T2 — adopt in `storage/src/posts.rs` `#[cfg(test)]`
 
-**Sites (survey):** ~14 inline `CreatePostInput { … }` literals — 2432, 2466, 2524, 2606,
-2653 (`mk` closure), 2879, 2933, 2979, 3014, 3043, 3107, 3137, 3243 — plus the `mk` closure
-at 2647. All are draft (`published_at: None`) except the `mk(_, true)` rows.
+**Sites (survey):** ~14 inline `CreatePostInput { … }` literals — 2432, 2466,
+2524, 2606, 2653 (`mk` closure), 2879, 2933, 2979, 3014, 3043, 3107, 3137, 3243
+— plus the `mk` closure at 2647. All are draft (`published_at: None`) except the
+`mk(_, true)` rows.
 
 **Pattern.**
-- Routine (all-ceremony): `CreatePostInput { user_id, … }` + `create_post(&input)` →
-  `SeedRawPost::new(user_id).draft().seed(state).await` (add `.draft()` — these are the
-  draft-default sites). Use `.post_id` where the old code used the returned id.
-- `create_post_persists_summary` (2432): `.summary(PostSummary::truncated("…"))` /
-  `.summary(<the parsed value>)`, drop the rest.
+
+- Routine (all-ceremony): `CreatePostInput { user_id, … }` +
+  `create_post(&input)` → `SeedRawPost::new(user_id).draft().seed(state).await`
+  (add `.draft()` — these are the draft-default sites). Use `.post_id` where the
+  old code used the returned id.
+- `create_post_persists_summary` (2432): `.summary(PostSummary::truncated("…"))`
+  / `.summary(<the parsed value>)`, drop the rest.
 - `post_format_column_round_trips_all_variants` (3107): `.format(fmt)` per case.
 - `mk = |slug, published| CreatePostInput{…}` (2647): replace with
   `|slug: &str, published: bool| { let b = SeedRawPost::new(uid).slug(slug); if published { b } else { b.draft() } }`
   or inline `SeedRawPost` per row. Keep the row semantics identical.
-- Malformed-slug/format DB tests (3014/3043/3137): seed via `SeedRawPost` then corrupt via
-  raw SQL exactly as before (the seeded slug/format value is overwritten, so ceremony).
-- `post_round_trips_slug_title_body_username_and_tag` (2963/2979): read back `post.slug` /
-  `post.title`; if it asserts `record.body`, seed with an explicit `.body("…")` and assert
-  against that same local (body is not on `SeededPost`).
+- Malformed-slug/format DB tests (3014/3043/3137): seed via `SeedRawPost` then
+  corrupt via raw SQL exactly as before (the seeded slug/format value is
+  overwritten, so ceremony).
+- `post_round_trips_slug_title_body_username_and_tag` (2963/2979): read back
+  `post.slug` / `post.title`; if it asserts `record.body`, seed with an explicit
+  `.body("…")` and assert against that same local (body is not on `SeededPost`).
 
-**Steps.** Convert; `cargo nextest run -p storage --lib posts` (or the affected test names)
-**PASSES**; `cargo xtask check`; commit.
+**Steps.** Convert; `cargo nextest run -p storage --lib posts` (or the affected
+test names) **PASSES**; `cargo xtask check`; commit.
 
 ---
 
@@ -377,124 +398,158 @@ at 2647. All are draft (`published_at: None`) except the `mk(_, true)` rows.
 `make_published_create_post_input` (1839). Every caller is rewritten below.
 
 **3b. Routine + tag/list/cursor/audience/format sites (~63, all-ceremony).**
-`make_create_post_input(uid, slug)` → `SeedRawPost::new(uid).slug(slug).draft()` **(draft —
-these were the draft factory)**; `make_published_create_post_input(uid, slug)` →
-`SeedRawPost::new(uid).slug(slug)` (published default). Where the slug is pure ceremony
-(never asserted), drop `.slug(slug)` and let it autogenerate; keep `.slug(slug)` only where
-the test lists/looks-up/orders by that slug value. Read the returned `.post_id`.
+`make_create_post_input(uid, slug)` → `SeedRawPost::new(uid).slug(slug).draft()`
+**(draft — these were the draft factory)**;
+`make_published_create_post_input(uid, slug)` →
+`SeedRawPost::new(uid).slug(slug)` (published default). Where the slug is pure
+ceremony (never asserted), drop `.slug(slug)` and let it autogenerate; keep
+`.slug(slug)` only where the test lists/looks-up/orders by that slug value. Read
+the returned `.post_id`.
 
 **3c. Contract tests (read-back / semantic).**
-- `post_create_and_get_by_id_works` (2133): `let post = SeedRawPost::new(uid).seed(state).await;`
-  then assert `record.slug == post.slug`, `record.title == Some(post.title)`.
+
+- `post_create_and_get_by_id_works` (2133):
+  `let post = SeedRawPost::new(uid).seed(state).await;` then assert
+  `record.slug == post.slug`, `record.title == Some(post.title)`.
 - `post_slug_conflict_returns_slug_conflict` (2158): seed `first`; second create
-  `SeedRawPost::new(uid).slug(first.slug.as_ref()).published_at(first.published_at.unwrap()).create(state).await` →
-  assert `SlugConflict`. (Same-day is required — reuse `first`'s instant.)
+  `SeedRawPost::new(uid).slug(first.slug.as_ref()).published_at(first.published_at.unwrap()).create(state).await`
+  → assert `SlugConflict`. (Same-day is required — reuse `first`'s instant.)
 - `create_post_foreign_key_violation_maps_to_internal` (5988):
-  `SeedRawPost::new(UserId::from(999_999)).create(state).await` → assert `Internal`.
-- `post_audiences_are_persisted_and_replaced` (2464) / `get_post_audiences_round_trips`
-  (2548) / `resolution_matrix` (6919): `.audiences(vec![…])`, else bare.
-- `list_published_in_window_…` (2663): seed each post, hold its `SeededPost`; use
-  `alice_recent.post_id` for the tag/assert instead of `find(|p| p.slug=="alice-recent-1")`;
-  `published_at` instants stay explicit `.published_at(now - Duration::days(k))`.
-- `get_by_permalink_soft_deleted` (5321): read back `post.slug` for the permalink lookup.
+  `SeedRawPost::new(UserId::from(999_999)).create(state).await` → assert
+  `Internal`.
+- `post_audiences_are_persisted_and_replaced` (2464) /
+  `get_post_audiences_round_trips` (2548) / `resolution_matrix` (6919):
+  `.audiences(vec![…])`, else bare.
+- `list_published_in_window_…` (2663): seed each post, hold its `SeededPost`;
+  use `alice_recent.post_id` for the tag/assert instead of
+  `find(|p| p.slug=="alice-recent-1")`; `published_at` instants stay explicit
+  `.published_at(now - Duration::days(k))`.
+- `get_by_permalink_soft_deleted` (5321): read back `post.slug` for the
+  permalink lookup.
 
 **3d. Batch tests.**
+
 - `create_posts_batches_all_rows_in_order` (6031):
-  `let inputs: Vec<_> = (0..3).map(|_| SeedRawPost::new(uid).build()).collect();` →
-  `create_posts(&inputs)`; assert `get_post_by_id(ids[i]).title == inputs[i].title`.
+  `let inputs: Vec<_> = (0..3).map(|_| SeedRawPost::new(uid).build()).collect();`
+  → `create_posts(&inputs)`; assert
+  `get_post_by_id(ids[i]).title == inputs[i].title`.
 - `create_posts_conflict_rolls_back_whole_batch` (6069):
   `let dup = parse_slug("dup");` then
   `vec![SeedRawPost::new(uid).slug(dup.as_ref()).build(), SeedRawPost::new(uid).build(), SeedRawPost::new(uid).slug(dup.as_ref()).build()]`;
   assert `SlugConflict` + empty collection.
 
-**3e. `create_rendered_post`/`update_rendered_post` *setup* posts (in-scope subset).**
-- `create_rendered_post_slug_conflict_returns_storage_error` (5931): replace the first
-  (occupier) `create_rendered_post(...)` with
-  `let occ = SeedRawPost::new(uid).published_at(now).seed(state).await;` then keep the SUT
-  `create_rendered_post(... slug: occ.slug.clone(), published_at: Some(now) ...)` and assert
-  the error. **Leave `_markdown_renders_and_stores` (5852) and `_org_` (5893) untouched.**
-- `update_rendered_post_*` (6110, 6151): replace the pre-update *seed* with `SeedRawPost`
-  (read back `post.slug`/`post.post_id` for the update call); leave the `update_rendered_post`
-  call and its render-asserted body untouched.
+**3e. `create_rendered_post`/`update_rendered_post` _setup_ posts (in-scope
+subset).**
 
-**Steps.** Convert 3a–3e; `cargo nextest run -p jaunder --test integration storage`
-**PASSES**; `cargo xtask check`; commit.
+- `create_rendered_post_slug_conflict_returns_storage_error` (5931): replace the
+  first (occupier) `create_rendered_post(...)` with
+  `let occ = SeedRawPost::new(uid).published_at(now).seed(state).await;` then
+  keep the SUT
+  `create_rendered_post(... slug: occ.slug.clone(), published_at: Some(now) ...)`
+  and assert the error. **Leave `_markdown_renders_and_stores` (5852) and
+  `_org_` (5893) untouched.**
+- `update_rendered_post_*` (6110, 6151): replace the pre-update _seed_ with
+  `SeedRawPost` (read back `post.slug`/`post.post_id` for the update call);
+  leave the `update_rendered_post` call and its render-asserted body untouched.
+
+**Steps.** Convert 3a–3e;
+`cargo nextest run -p jaunder --test integration storage` **PASSES**;
+`cargo xtask check`; commit.
 
 ---
 
 ## T4 — adopt `feed/*`
 
-**Sites:** `feed_handlers.rs` 35, 110, 300 · `feed_worker.rs` 58, 109, 163, 228, 314, 364,
-409 · `feed_regenerate.rs` 24, 41, 187, `mk` closure ~248.
+**Sites:** `feed_handlers.rs` 35, 110, 300 · `feed_worker.rs` 58, 109, 163, 228,
+314, 364, 409 · `feed_regenerate.rs` 24, 41, 187, `mk` closure ~248.
 
 **Pattern.**
-- Bare ceremony → `SeedRawPost::new(author).seed(state).await` (author = the existing
-  session/seeded user; **do not** auto-seed a new one).
-- Tagged (feed_handlers 110): `.tags(["rust"])` instead of the follow-up `tag_post`.
+
+- Bare ceremony → `SeedRawPost::new(author).seed(state).await` (author = the
+  existing session/seeded user; **do not** auto-seed a new one).
+- Tagged (feed_handlers 110): `.tags(["rust"])` instead of the follow-up
+  `tag_post`.
 - Title read-back (feed_worker 58/228, feed_regenerate `mk`): assert
   `row.body.contains(post.title.as_ref())` instead of `contains("Test Post")`.
-- Fixed instants (feed_worker 314/364): `.published_at(t1)` / `.published_at(go_live)`.
-- `feed_regenerate mk` audiences: `.audiences(vec![…])` per row; body read-back on title.
+- Fixed instants (feed_worker 314/364): `.published_at(t1)` /
+  `.published_at(go_live)`.
+- `feed_regenerate mk` audiences: `.audiences(vec![…])` per row; body read-back
+  on title.
 
-**Steps.** Convert; `cargo nextest run -p jaunder --test integration feed` **PASSES**;
-`cargo xtask check`; commit.
+**Steps.** Convert; `cargo nextest run -p jaunder --test integration feed`
+**PASSES**; `cargo xtask check`; commit.
 
 ---
 
 ## T5 — adopt `projector` + `web/{tags,media,posts}`
 
 **Sites & pattern.**
-- `projector/mod.rs` 43 (`seed_tagged_post`): `.tags(["rust"])`; return `post.post_id`.
-- `projector/mod.rs` 71 (`seed_published_post`): `let post = SeedRawPost::new(uid).seed(state).await;`
-  build the permalink from `post.slug` + `post.published_at`; assert
-  `html.contains(post.title.as_ref())` and `html.contains(post.rendered_html.as_ref())`.
-- `web_tags.rs` 25 (`seed_user_and_tagged_post`): `.tags(tags.iter().copied())`, dropping the
-  explicit `tag_post` loop; **leave the clamp-limit bulk-tag tests (120/147) untouched**.
-- `web_media.rs` 263: `SeedRawPost::new(uid).body(format!("![inline]({media_url})")).seed(state)`;
-  the reference scan matches the URL in `body` (`web/src/media/api.rs:157`); assert
-  `referenced_in_posts == vec![post.post_id]`.
-- `web_posts.rs` 1096 (`scheduled_post` closure): `.published_at(now + …)` / `.published_at(now - …)`;
-  correlate via `.post_id`. 2425 (`create_targeted_post`): `.audiences(vec![…])`; read back
-  `.slug` for `timeline_slugs`. **Leave HTTP `create_post_json` sites untouched.**
+
+- `projector/mod.rs` 43 (`seed_tagged_post`): `.tags(["rust"])`; return
+  `post.post_id`.
+- `projector/mod.rs` 71 (`seed_published_post`):
+  `let post = SeedRawPost::new(uid).seed(state).await;` build the permalink from
+  `post.slug` + `post.published_at`; assert `html.contains(post.title.as_ref())`
+  and `html.contains(post.rendered_html.as_ref())`.
+- `web_tags.rs` 25 (`seed_user_and_tagged_post`): `.tags(tags.iter().copied())`,
+  dropping the explicit `tag_post` loop; **leave the clamp-limit bulk-tag tests
+  (120/147) untouched**.
+- `web_media.rs` 263:
+  `SeedRawPost::new(uid).body(format!("![inline]({media_url})")).seed(state)`;
+  the reference scan matches the URL in `body` (`web/src/media/api.rs:157`);
+  assert `referenced_in_posts == vec![post.post_id]`.
+- `web_posts.rs` 1096 (`scheduled_post` closure): `.published_at(now + …)` /
+  `.published_at(now - …)`; correlate via `.post_id`. 2425
+  (`create_targeted_post`): `.audiences(vec![…])`; read back `.slug` for
+  `timeline_slugs`. **Leave HTTP `create_post_json` sites untouched.**
 
 **Steps.** Convert; `cargo nextest run -p jaunder --test integration projector`,
-`… web_tags`, `… web_media`, `… web_posts` **PASS**; `cargo xtask check`; commit.
+`… web_tags`, `… web_media`, `… web_posts` **PASS**; `cargo xtask check`;
+commit.
 
 ---
 
 ## T6 — adopt `misc/backup_fixture.rs` (+ `BackupFixtureIds`)
 
-**Sites:** `backup_fixture.rs` 65 (`public_post`, tag `Backup-Test`), 140 (`named_post`,
-`Named` audience). Both keep `published_at = fixture_published_at()`.
+**Sites:** `backup_fixture.rs` 65 (`public_post`, tag `Backup-Test`), 140
+(`named_post`, `Named` audience). Both keep
+`published_at = fixture_published_at()`.
 
 **Pattern.**
-- 65: `let public = SeedRawPost::new(author).published_at(fixture_published_at()).tags(["Backup-Test"]).seed(state).await;`
-- 140: `SeedRawPost::new(author).published_at(fixture_published_at()).audiences(vec![AudienceTarget::Named(audience)]).seed(state).await`
-- Extend `BackupFixtureIds` with the seeded posts' `slug`/`title` (or store the `SeededPost`);
-  in `assert_backup_fixture_restored`, read those back instead of the `"restored-post"` /
-  `"Restored Post"` literals (backup_fixture.rs ~213–216).
 
-**Steps.** Convert; `cargo nextest run -p jaunder --test integration backup_interop`
-**PASSES** (the module with the `#[test]`s — not `backup_fixture`, which has none);
+- 65:
+  `let public = SeedRawPost::new(author).published_at(fixture_published_at()).tags(["Backup-Test"]).seed(state).await;`
+- 140:
+  `SeedRawPost::new(author).published_at(fixture_published_at()).audiences(vec![AudienceTarget::Named(audience)]).seed(state).await`
+- Extend `BackupFixtureIds` with the seeded posts' `slug`/`title` (or store the
+  `SeededPost`); in `assert_backup_fixture_restored`, read those back instead of
+  the `"restored-post"` / `"Restored Post"` literals (backup_fixture.rs
+  ~213–216).
+
+**Steps.** Convert;
+`cargo nextest run -p jaunder --test integration backup_interop` **PASSES** (the
+module with the `#[test]`s — not `backup_fixture`, which has none);
 `cargo xtask check`; commit.
 
 ---
 
 ## T7 — full gate
 
-**Steps.** `cargo xtask validate` (foreground, `timeout: 600000`) → green. `git status
---porcelain` clean (fmt auto-fixes committed). Confirm no routine site hand-rolls a
-`CreatePostInput { … }` and both mod.rs factories are gone
-(`rg 'CreatePostInput \{' server/tests storage/src` shows only the intentional survivors:
-`web_media`'s body site is now a `.body()`, the `create_rendered_post`/`update_rendered_post`
-SUT calls use `RenderedPostContent`, not `CreatePostInput`). Hand off to `jaunder-ship`.
+**Steps.** `cargo xtask validate` (foreground, `timeout: 600000`) → green.
+`git status --porcelain` clean (fmt auto-fixes committed). Confirm no routine
+site hand-rolls a `CreatePostInput { … }` and both mod.rs factories are gone
+(`rg 'CreatePostInput \{' server/tests storage/src` shows only the intentional
+survivors: `web_media`'s body site is now a `.body()`, the
+`create_rendered_post`/`update_rendered_post` SUT calls use
+`RenderedPostContent`, not `CreatePostInput`). Hand off to `jaunder-ship`.
 
 ## Self-review
 
-- No placeholders: T1 carries the full builder; adoption tasks carry the transformation
-  pattern + exhaustive site refs + representative rewrites.
-- Right-sized: one foundation task, then one task per file/subsystem, each independently
-  green-able and committable.
-- Behaviour-preserving: no assertion is weakened; read-back rewrites reference `seeded.*`;
-  the four spec hazards are called out at their tasks (draft flip in T3; fixed instants in
-  T4/T5; media_url body in T5; backup instant + read-back in T6).
+- No placeholders: T1 carries the full builder; adoption tasks carry the
+  transformation pattern + exhaustive site refs + representative rewrites.
+- Right-sized: one foundation task, then one task per file/subsystem, each
+  independently green-able and committable.
+- Behaviour-preserving: no assertion is weakened; read-back rewrites reference
+  `seeded.*`; the four spec hazards are called out at their tasks (draft flip in
+  T3; fixed instants in T4/T5; media_url body in T5; backup instant + read-back
+  in T6).
