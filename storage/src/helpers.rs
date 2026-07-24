@@ -17,6 +17,7 @@ use common::media::{ByteSize, ContentHash, ContentType, Filename, MediaSource};
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
+use common::session_label::SessionLabel;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::token::TokenHash;
@@ -77,7 +78,7 @@ pub(crate) fn build_session_record(
     token_hash: TokenHash,
     user_id: i64,
     username: Username,
-    label: String,
+    label: SessionLabel,
     created_at: DateTime<Utc>,
     last_used_at: DateTime<Utc>,
 ) -> SessionRecord {
@@ -210,11 +211,16 @@ pub(crate) type SessionRow = (
 
 pub(crate) fn session_record_from_row(row: SessionRow) -> SessionRecord {
     let (token_hash, user_id, username, label, created_at, last_used_at) = row;
+    // The `label` column decodes as a plain `String` and is sanitized into a
+    // `SessionLabel` via the lossy constructor rather than a validating decode: a
+    // label is a best-effort *display* value, so a pre-existing out-of-range row
+    // (e.g. an empty or over-long label minted by the old unvalidated CLI path) is
+    // repaired on read instead of failing the whole `list_sessions` query.
     build_session_record(
         token_hash,
         user_id,
         username,
-        label,
+        SessionLabel::from_lossy(&label),
         created_at,
         last_used_at,
     )
@@ -408,7 +414,8 @@ mod tests {
     use chrono::Utc;
     use common::test_support::{
         parse_bio, parse_content_hash, parse_content_type, parse_display_name, parse_email,
-        parse_filename, parse_password, parse_slug, parse_token_hash, parse_username,
+        parse_filename, parse_password, parse_session_label, parse_slug, parse_token_hash,
+        parse_username,
     };
 
     #[test]
@@ -438,7 +445,7 @@ mod tests {
             parse_token_hash("hash"),
             1,
             parse_username("alice"),
-            "label".to_string(),
+            parse_session_label("label"),
             now,
             now,
         );

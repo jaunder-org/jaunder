@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 use thiserror::Error;
 
 use common::ids::UserId;
+use common::session_label::SessionLabel;
 use common::token::{RawToken, TokenHash};
 use common::username::Username;
 
@@ -17,8 +18,9 @@ pub struct SessionRecord {
     pub user_id: UserId,
     /// Username at the time of session creation.
     pub username: Username,
-    /// Label for the device/client (e.g., "Mobile App", "Safari on macOS", "Sign-up session").
-    pub label: String,
+    /// Validated label for the device/client (e.g., "Mobile App", "Safari on
+    /// macOS", "Sign-up session").
+    pub label: SessionLabel,
     /// When the session was first created.
     pub created_at: DateTime<Utc>,
     /// When the session was last used to authenticate a request.
@@ -65,7 +67,8 @@ pub trait SessionStorage: Send + Sync {
     /// It is stored in the database and returned in session listings.
     ///
     /// Returns the raw (un-hashed) token to be delivered to the client.
-    async fn create_session(&self, user_id: UserId, label: &str) -> sqlx::Result<RawToken>;
+    async fn create_session(&self, user_id: UserId, label: &SessionLabel)
+        -> sqlx::Result<RawToken>;
 
     /// Validates a raw session token and returns the associated record.
     ///
@@ -149,7 +152,11 @@ where
         skip(self, label),
         fields(user_id, db.system = DB::DB_SYSTEM)
     )]
-    async fn create_session(&self, user_id: UserId, label: &str) -> sqlx::Result<RawToken> {
+    async fn create_session(
+        &self,
+        user_id: UserId,
+        label: &SessionLabel,
+    ) -> sqlx::Result<RawToken> {
         let (raw_token, token_hash) = host::token::generate_hashed();
         let now = Utc::now();
 
@@ -221,7 +228,7 @@ where
 mod tests {
     use super::*;
     use crate::test_support::{backends, Backend, CloseablePool, SeedUser, TestEnv};
-    use common::test_support::parse_raw_token;
+    use common::test_support::{parse_raw_token, parse_session_label};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -251,7 +258,7 @@ mod tests {
         let raw_token = env
             .state
             .sessions
-            .create_session(user_id, "Test Device")
+            .create_session(user_id, &parse_session_label("Test Device"))
             .await
             .unwrap();
         let expected_hash = host::token::hash(&raw_token).unwrap();
@@ -272,7 +279,7 @@ mod tests {
         let user_id = SeedUser::new("testuser").seed(&env.state).await;
         env.state
             .sessions
-            .create_session(user_id, "Test Device")
+            .create_session(user_id, &parse_session_label("Test Device"))
             .await
             .unwrap();
 

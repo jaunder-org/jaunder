@@ -5,6 +5,8 @@ use axum::http::StatusCode;
 use rstest::*;
 use rstest_reuse::*;
 
+use common::test_support::parse_session_label;
+
 use crate::helpers::{create_session_for, create_user_and_session, post_form};
 use storage::test_support::{backends, Backend, TestEnv};
 
@@ -17,7 +19,7 @@ async fn list_sessions_returns_sessions_for_authenticated_user(#[case] backend: 
     // Create a second session with a label.
     state
         .sessions
-        .create_session(session.user_id, "mobile")
+        .create_session(session.user_id, &parse_session_label("mobile"))
         .await
         .unwrap();
 
@@ -188,7 +190,29 @@ async fn create_app_password_rejects_blank_label(#[case] backend: Backend) {
     )
     .await;
 
-    // Server-fn errors surface as 500 (the existing session-fn convention).
+    // A blank/whitespace label is now rejected at the typed-wire-arg decode
+    // (SessionLabel's FromStr), not a server-side check; it still fails, surfacing
+    // as 500 (the existing session-fn convention).
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn create_app_password_rejects_overlong_label(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = create_user_and_session(&state, "alice").await.cookie();
+
+    // A label past MAX_SESSION_LABEL_CHARS (255) is rejected at the SessionLabel
+    // decode — coverage the cap makes possible.
+    let overlong = "a".repeat(256);
+    let (status, _body) = post_form(
+        Arc::clone(&state),
+        "/api/create_app_password",
+        format!("label={overlong}"),
+        Some(&cookie),
+    )
+    .await;
+
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
 

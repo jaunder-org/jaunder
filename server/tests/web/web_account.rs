@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use common::mailer::test_utils::CapturingMailSender;
 use common::mailer::MailSender;
-use common::test_support::{parse_bio, parse_display_name};
+use common::test_support::{parse_bio, parse_display_name, parse_session_label};
 use storage::{AppState, ProfileUpdate};
 
 use rstest::*;
@@ -101,13 +101,13 @@ async fn list_sessions_returns_only_authenticated_users_sessions(#[case] backend
 
     let token1 = state
         .sessions
-        .create_session(user1_id, "carol-session")
+        .create_session(user1_id, &parse_session_label("carol-session"))
         .await
         .unwrap();
     // Create a session for user2 — should NOT appear in user1's list.
     state
         .sessions
-        .create_session(user2_id, "dave-session")
+        .create_session(user2_id, &parse_session_label("dave-session"))
         .await
         .unwrap();
 

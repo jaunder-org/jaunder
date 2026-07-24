@@ -19,6 +19,7 @@ use leptos::prelude::*;
 use {
     super::server::{clear_session_cookie, require_auth, set_session_cookie},
     common::password::Password,
+    common::session_label::SessionLabel,
     std::sync::Arc,
     storage::{SessionStorage, UserStorage},
     tracing::Instrument,
@@ -66,7 +67,8 @@ pub async fn login(
             }
         };
 
-        // Prefer explicit label if provided; otherwise derive from User-Agent header
+        // Prefer an explicit client-supplied label; otherwise a User-Agent-derived
+        // device name, capped at 200 chars with an "Unknown device" default.
         let derived_label = if let Some(l) = label.and_then(common::text::non_empty_owned) {
             l
         } else {
@@ -86,9 +88,12 @@ pub async fn login(
                 ua
             }
         };
+        // `from_lossy` is the infallible String -> SessionLabel construction (the
+        // above already keeps `derived_label` valid, so this is a no-op safety net).
+        let session_label = SessionLabel::from_lossy(&derived_label);
 
         let raw_token = sessions
-            .create_session(record.user_id, &derived_label)
+            .create_session(record.user_id, &session_label)
             .instrument(tracing::info_span!("web.auth.login.create_session"))
             .await?;
 
