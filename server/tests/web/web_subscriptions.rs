@@ -1,22 +1,13 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
-use common::ids::UserId;
 use common::visibility::ViewerIdentity;
 
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{create_session_for, post_form};
+use crate::helpers::{create_user_and_session, post_form};
 use storage::test_support::{backends, Backend, SeedUser, TestEnv};
-
-async fn make_user(state: &Arc<storage::AppState>) -> UserId {
-    SeedUser::new().seed(state).await.user_id
-}
-
-async fn cookie_for(state: &Arc<storage::AppState>, user_id: UserId) -> String {
-    create_session_for(state, user_id).await.cookie()
-}
 
 // Authed subscribe makes `is_subscriber` true; unsubscribe reverses it.
 #[apply(backends)]
@@ -24,10 +15,10 @@ async fn cookie_for(state: &Arc<storage::AppState>, user_id: UserId) -> String {
 async fn subscribe_then_unsubscribe_round_trips(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let author = SeedUser::new().seed(&state).await;
-    let subscriber = make_user(&state).await;
-    let cookie = cookie_for(&state, subscriber).await;
+    let subscriber = create_user_and_session(&state).await;
+    let cookie = subscriber.cookie();
     let channel = state.subscriptions.local_channel_id().await.unwrap();
-    let viewer = ViewerIdentity::local(subscriber, channel);
+    let viewer = ViewerIdentity::local(subscriber.user_id, channel);
 
     let (status, body) = post_form(
         Arc::clone(&state),
@@ -69,8 +60,8 @@ async fn subscribe_then_unsubscribe_round_trips(#[case] backend: Backend) {
 #[tokio::test]
 async fn self_subscribe_is_rejected(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let me = SeedUser::new().seed(&state).await;
-    let cookie = cookie_for(&state, me.user_id).await;
+    let me = create_user_and_session(&state).await;
+    let cookie = me.cookie();
     let channel = state.subscriptions.local_channel_id().await.unwrap();
 
     let (status, _body) = post_form(
@@ -114,8 +105,7 @@ async fn subscribe_unauthenticated_is_rejected(#[case] backend: Backend) {
 async fn is_subscribed_to_reports_state(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let author = SeedUser::new().seed(&state).await;
-    let subscriber = make_user(&state).await;
-    let cookie = cookie_for(&state, subscriber).await;
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = post_form(
         Arc::clone(&state),
