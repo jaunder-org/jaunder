@@ -346,7 +346,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::AudienceError;
-    use crate::test_support::{backends, seed_user, Backend};
+    use crate::test_support::{backends, Backend, SeedUser};
     use common::test_support::parse_audience_name;
     use host::error::{ErrorKind, InternalError};
     use rstest::*;
@@ -356,7 +356,7 @@ mod tests {
     #[tokio::test]
     async fn audience_name_round_trips_through_create_and_list(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let author = seed_user(&env.state).await;
+        let author = SeedUser::new("testuser").seed(&env.state).await;
         let id = env
             .state
             .audiences
@@ -376,7 +376,7 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let author = seed_user(&env.state).await;
+        let author = SeedUser::new("testuser").seed(&env.state).await;
         // A whitespace-only name bypasses `AudienceName` validation (which
         // `create_audience` enforces) — only reachable via DB tampering. The
         // validating bridge `Decode` rejects it on read as a column-decode error.

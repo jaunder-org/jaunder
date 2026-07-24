@@ -3,34 +3,19 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use common::ids::{AudienceId, UserId};
 use common::test_support::parse_audience_name;
-use common::username::Username;
 
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{post_form, session_cookie};
-use storage::test_support::{backends, Backend, TestEnv};
+use crate::helpers::{create_session_for, post_form};
+use storage::test_support::{backends, Backend, SeedUser, TestEnv};
 
 async fn make_user(state: &Arc<storage::AppState>, name: &str) -> UserId {
-    state
-        .users
-        .create_user(
-            &name.parse::<Username>().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap()
+    SeedUser::new(name).seed(state).await
 }
 
 async fn cookie_for(state: &Arc<storage::AppState>, user_id: UserId) -> String {
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
-    session_cookie(&token)
+    create_session_for(state, user_id).await.cookie()
 }
 
 /// Parses the JSON-encoded `i64` that `create_audience` returns.

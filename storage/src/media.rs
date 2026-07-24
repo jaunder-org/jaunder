@@ -365,7 +365,7 @@ pub const MEDIA_CACHE_POLICY_DEFAULT_KEY: &str = "media.cache_policy_default";
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, seed_user, Backend, TestEnv};
+    use crate::test_support::{backends, Backend, SeedUser, TestEnv};
     use common::test_support::{
         parse_byte_size, parse_content_hash, parse_content_type, parse_filename, parse_page_offset,
     };
@@ -379,7 +379,7 @@ mod tests {
     #[tokio::test]
     async fn content_hash_and_filename_round_trip_through_create_and_get(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = seed_user(&env.state).await;
+        let user_id = SeedUser::new("testuser").seed(&env.state).await;
         let record = MediaRecord {
             user_id,
             sha256: parse_content_hash(HASH),
@@ -414,7 +414,7 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let user_id = seed_user(&env.state).await;
+        let user_id = SeedUser::new("testuser").seed(&env.state).await;
         // A non-canonical filename (`../evil`) bypasses `Filename` validation — only
         // reachable via DB tampering. The `sha256`/`source` keys stay valid so the row
         // is found; the validating bridge `Decode` then rejects the `filename` column
@@ -446,7 +446,7 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let user_id = seed_user(&env.state).await;
+        let user_id = SeedUser::new("testuser").seed(&env.state).await;
         // A negative `size_bytes` bypasses `ByteSize` validation — only reachable via DB
         // tampering. On read, `media_record_from_row` wraps the column through the validating
         // `ByteSize::try_from`, which rejects it as a column-decode error.
@@ -477,7 +477,7 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let user_id = seed_user(&env.state).await;
+        let user_id = SeedUser::new("testuser").seed(&env.state).await;
         // A negative `size_bytes` upload row (DB tampering) makes `SUM(size_bytes)` negative;
         // `get_user_upload_usage` routes the sum through the validating `ByteSize::try_from`,
         // which rejects the negative total as a decode error.
@@ -506,7 +506,7 @@ mod tests {
     #[tokio::test]
     async fn list_media_skips_a_row_with_a_malformed_sha256_column(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = seed_user(&env.state).await;
+        let user_id = SeedUser::new("testuser").seed(&env.state).await;
         // A valid record is stored normally.
         let good = MediaRecord {
             user_id,

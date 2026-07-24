@@ -5,17 +5,15 @@ use axum::{
     http::{header, Request, StatusCode},
 };
 use chrono::{Timelike, Utc};
-use common::password::Password;
 use common::slug::Slug;
 use common::tag::TagLabel;
-use common::username::Username;
 use tower::ServiceExt;
 
 use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{make_app, setup_with_base_url};
-use storage::test_support::{backends, backends_matrix, fp, Backend, TestEnv};
+use storage::test_support::{backends, backends_matrix, fp, Backend, SeedUser, TestEnv};
 use storage::CreatePostInput;
 use storage::PostFormat;
 use storage::RenderedHtml;
@@ -28,13 +26,7 @@ async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_typ
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let app = make_app(state.clone(), &base);
 
-    let username: Username = "alice".parse().expect("valid username");
-    let password: Password = "password123".parse().expect("valid password");
-    let user_id = state
-        .users
-        .create_user(&username, &password, None, false)
-        .await
-        .expect("create user");
+    let user_id = SeedUser::new("alice").seed(&state).await;
 
     let now = Utc::now();
     state
@@ -110,13 +102,7 @@ async fn handler_serves_site_tag_feed_with_200(#[case] backend: Backend) {
     let app = make_app(state.clone(), &base);
 
     // A tagged, published post so the site-tag surface has content.
-    let username: Username = "frank".parse().expect("valid username");
-    let password: Password = "password123".parse().expect("valid password");
-    let user_id = state
-        .users
-        .create_user(&username, &password, None, false)
-        .await
-        .expect("create user");
+    let user_id = SeedUser::new("frank").seed(&state).await;
     let now = Utc::now();
     let post_id = state
         .posts
@@ -305,13 +291,7 @@ async fn handler_rejects_invalid_request_with_404(backend: Backend, #[case] uri:
 async fn handler_returns_correct_content_type_per_format(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
 
-    let username: Username = "eve".parse().expect("valid username");
-    let password: Password = "password123".parse().expect("valid password");
-    let user_id = state
-        .users
-        .create_user(&username, &password, None, false)
-        .await
-        .expect("create user");
+    let user_id = SeedUser::new("eve").seed(&state).await;
 
     let now = Utc::now();
     state

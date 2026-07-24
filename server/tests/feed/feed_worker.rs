@@ -5,11 +5,9 @@ use crate::helpers::{setup_with_base_url, CapturingWebSubClient};
 use chrono::Utc;
 use common::feed::FeedPath;
 use common::ids::FeedEventId;
-use common::password::Password;
 use common::slug::Slug;
-use common::username::Username;
 use jaunder::feed::worker::FeedWorker;
-use storage::test_support::{backends, fp, Backend, TestEnv};
+use storage::test_support::{backends, fp, Backend, SeedUser, TestEnv};
 use storage::{CreatePostInput, FeedCacheRow, PostFormat, RenderedHtml};
 
 use rstest::*;
@@ -51,13 +49,7 @@ async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub(#[case] bac
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let capture = Arc::new(CapturingWebSubClient::default());
 
-    let username: Username = "alice".parse().expect("valid username");
-    let password: Password = "password123".parse().expect("valid password");
-    let user_id = state
-        .users
-        .create_user(&username, &password, None, false)
-        .await
-        .expect("create user");
+    let user_id = SeedUser::new("alice").seed(&state).await;
 
     let now = Utc::now();
     let _post_id = state
@@ -108,13 +100,7 @@ async fn worker_pings_hub_when_configured(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let capture = Arc::new(CapturingWebSubClient::default());
 
-    let username: Username = "alice".parse().expect("valid username");
-    let password: Password = "password123".parse().expect("valid password");
-    let user_id = state
-        .users
-        .create_user(&username, &password, None, false)
-        .await
-        .expect("create user");
+    let user_id = SeedUser::new("alice").seed(&state).await;
 
     let now = Utc::now();
     let _post_id = state
@@ -165,13 +151,7 @@ async fn worker_groups_duplicate_events_into_single_regen(#[case] backend: Backe
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let capture = Arc::new(CapturingWebSubClient::default());
 
-    let username: Username = "alice".parse().expect("valid username");
-    let password: Password = "password123".parse().expect("valid password");
-    let user_id = state
-        .users
-        .create_user(&username, &password, None, false)
-        .await
-        .expect("create user");
+    let user_id = SeedUser::new("alice").seed(&state).await;
 
     let now = Utc::now();
     let _post_id = state
@@ -234,13 +214,7 @@ async fn worker_applies_backoff_on_ping_failure(#[case] backend: Backend) {
     // test used to construct (which left Postgres uncovered).
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
 
-    let username: Username = "alice".parse().expect("valid username");
-    let password: Password = "password123".parse().expect("valid password");
-    let user_id = state
-        .users
-        .create_user(&username, &password, None, false)
-        .await
-        .expect("create user");
+    let user_id = SeedUser::new("alice").seed(&state).await;
 
     let now = Utc::now();
     let _post_id = state
@@ -310,13 +284,7 @@ async fn startup_catchup_regenerates_feed_for_go_live_while_down(#[case] backend
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let worker = make_worker(&state, Arc::new(CapturingWebSubClient::default()));
 
-    let username: Username = "alice".parse().expect("valid username");
-    let password: Password = "password123".parse().expect("valid password");
-    let user_id = state
-        .users
-        .create_user(&username, &password, None, false)
-        .await
-        .expect("create user");
+    let user_id = SeedUser::new("alice").seed(&state).await;
 
     let t0 = Utc.with_ymd_and_hms(2026, 6, 26, 10, 0, 0).unwrap();
     // A cached site feed generated at t0 (stale).
@@ -377,13 +345,7 @@ async fn steady_state_window_enqueues_newly_live_posts(#[case] backend: Backend)
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let worker = make_worker(&state, Arc::new(CapturingWebSubClient::default()));
 
-    let username: Username = "alice".parse().expect("valid username");
-    let password: Password = "password123".parse().expect("valid password");
-    let user_id = state
-        .users
-        .create_user(&username, &password, None, false)
-        .await
-        .expect("create user");
+    let user_id = SeedUser::new("alice").seed(&state).await;
 
     // First pass seeds last_tick = t0 (startup branch; nothing cached/live).
     let t0 = Utc.with_ymd_and_hms(2026, 6, 26, 10, 0, 0).unwrap();
@@ -434,13 +396,7 @@ async fn worker_marks_exhausted_after_backoff_attempts_are_used_up(#[case] backe
 
     // A published post so regeneration succeeds: the exhausted branch lives in
     // the ping sub-path, reached only after a successful regen.
-    let username: Username = "alice".parse().expect("valid username");
-    let password: Password = "password123".parse().expect("valid password");
-    let user_id = state
-        .users
-        .create_user(&username, &password, None, false)
-        .await
-        .expect("create user");
+    let user_id = SeedUser::new("alice").seed(&state).await;
     let now = Utc::now();
     state
         .posts

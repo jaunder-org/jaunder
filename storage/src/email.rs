@@ -208,7 +208,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, seed_user, Backend, CloseablePool, TestEnv};
+    use crate::test_support::{backends, Backend, CloseablePool, SeedUser, TestEnv};
     use common::test_support::{parse_email, parse_raw_token};
     use rstest::*;
     use rstest_reuse::*;
@@ -219,7 +219,7 @@ mod tests {
         // Keep the whole `TestEnv` bound: dropping `base` unlinks the SQLite file
         // (ADR-0053 TempDir hazard).
         let env = backend.setup().await;
-        let user_id = seed_user(&env.state).await;
+        let user_id = SeedUser::new("testuser").seed(&env.state).await;
         let email = parse_email("alice@example.com");
         let expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
 
@@ -249,7 +249,7 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let user_id = seed_user(&env.state).await;
+        let user_id = SeedUser::new("testuser").seed(&env.state).await;
         let email = parse_email("alice@example.com");
         let expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
         let raw_token = env

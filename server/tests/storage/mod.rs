@@ -34,9 +34,10 @@ use rstest::*;
 // enough (it imports the public items but not the crate path).
 use rstest_reuse::*;
 
+use crate::helpers::create_session_for;
 use storage::test_support::{
     backends, fp, recorded_postgres_url, sqlite_url, template_postgres_url, Backend,
-    PostgresDbGuard, TestEnv,
+    PostgresDbGuard, SeedUser, TestEnv,
 };
 
 // The Postgres-backed cases below (the `::postgres` expansion of each
@@ -183,16 +184,8 @@ async fn local_channel_id_returns_seeded_local(#[case] backend: Backend) {
 async fn subscribe_is_idempotent_and_active(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let author = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
-    let bob = state
-        .users
-        .create_user(&username("bob"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let author = SeedUser::new("alice").seed(state).await;
+    let bob = SeedUser::new("bob").seed(state).await;
     let local = local_channel_id(backend, &env).await;
     let id1 = state
         .subscriptions
@@ -282,18 +275,14 @@ async fn pending_subscription_is_not_admitted(#[case] backend: Backend) {
             ))
         }
     };
-    let author = env
-        .state
-        .users
-        .create_user(&username("alice"), &password("pw1234567"), None, false)
-        .await
-        .unwrap();
-    let bob = env
-        .state
-        .users
-        .create_user(&username("bob"), &password("pw1234567"), None, false)
-        .await
-        .unwrap();
+    let author = SeedUser::new("alice")
+        .password("pw1234567")
+        .seed(&env.state)
+        .await;
+    let bob = SeedUser::new("bob")
+        .password("pw1234567")
+        .seed(&env.state)
+        .await;
     let local = local_channel_id(backend, &env).await;
     store
         .subscribe(author, local, &bob.to_string())
@@ -318,11 +307,7 @@ async fn pending_subscription_is_not_admitted(#[case] backend: Backend) {
 async fn audience_create_list_rename_delete(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let author = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let author = SeedUser::new("alice").seed(state).await;
 
     let friends = state
         .audiences
@@ -353,11 +338,7 @@ async fn audience_create_list_rename_delete(#[case] backend: Backend) {
     assert_eq!(listed[0].name, "Close Friends");
 
     // Renaming an audience the author does not own is NotFound.
-    let stranger = state
-        .users
-        .create_user(&username("bob"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let stranger = SeedUser::new("bob").seed(state).await;
     assert!(matches!(
         state
             .audiences
@@ -384,16 +365,8 @@ async fn audience_create_list_rename_delete(#[case] backend: Backend) {
 async fn audience_duplicate_name_rejected(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let alice = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
-    let bob = state
-        .users
-        .create_user(&username("bob"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let alice = SeedUser::new("alice").seed(state).await;
+    let bob = SeedUser::new("bob").seed(state).await;
 
     state
         .audiences
@@ -437,16 +410,8 @@ async fn audience_duplicate_name_rejected(#[case] backend: Backend) {
 async fn audience_membership_round_trip(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let author = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
-    let bob = state
-        .users
-        .create_user(&username("bob"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let author = SeedUser::new("alice").seed(state).await;
+    let bob = SeedUser::new("bob").seed(state).await;
     let local = local_channel_id(backend, &env).await;
     let sub = state
         .subscriptions
@@ -508,16 +473,8 @@ async fn audience_membership_round_trip(#[case] backend: Backend) {
 async fn audience_add_member_cross_author_rejected(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let alice = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
-    let bob = state
-        .users
-        .create_user(&username("bob"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let alice = SeedUser::new("alice").seed(state).await;
+    let bob = SeedUser::new("bob").seed(state).await;
     let local = local_channel_id(backend, &env).await;
     // Subscription owned by BOB.
     let bob_sub = state
@@ -558,16 +515,8 @@ async fn audience_add_member_cross_author_rejected(#[case] backend: Backend) {
 async fn audience_members_are_author_scoped(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let alice = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
-    let bob = state
-        .users
-        .create_user(&username("bob"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let alice = SeedUser::new("alice").seed(state).await;
+    let bob = SeedUser::new("bob").seed(state).await;
     let local = local_channel_id(backend, &env).await;
     // A subscription and audience both owned by ALICE, with the sub as a member.
     let alice_sub = state
@@ -620,16 +569,8 @@ async fn audience_members_are_author_scoped(#[case] backend: Backend) {
 async fn audience_delete_cascades_memberships(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let alice = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
-    let bob = state
-        .users
-        .create_user(&username("bob"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let alice = SeedUser::new("alice").seed(state).await;
+    let bob = SeedUser::new("bob").seed(state).await;
     let local = local_channel_id(backend, &env).await;
     let sub = state
         .subscriptions
@@ -781,11 +722,10 @@ async fn create_user_duplicate_and_authenticate_work(#[case] backend: Backend) {
 async fn session_lifecycle_works(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_id = state
-        .users
-        .create_user(&username("bob"), &password("secret_password"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("bob")
+        .password("secret_password")
+        .seed(state)
+        .await;
 
     let raw_token = state
         .sessions
@@ -848,11 +788,7 @@ async fn invite_and_atomic_registration_work(#[case] backend: Backend) {
 async fn email_verification_and_password_reset_work(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_id = state
-        .users
-        .create_user(&username("dave"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("dave").seed(state).await;
 
     let verify_token = state
         .email_verifications
@@ -913,16 +849,7 @@ async fn email_verification_and_password_reset_work(#[case] backend: Backend) {
 async fn confirm_password_reset_hash_failure_returns_internal(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_id = state
-        .users
-        .create_user(
-            &username("reset_hash_fail"),
-            &password("password123"),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("reset_hash_fail").seed(state).await;
     let reset_token = state
         .password_resets
         .create_password_reset(user_id, Utc::now() + chrono::Duration::hours(1))
@@ -1063,11 +990,10 @@ async fn authenticate_correct_password_returns_record_and_sets_last_authenticate
     let env = backend.setup().await;
     let state = &env.state;
 
-    state
-        .users
-        .create_user(&username("bob"), &password("secret_password"), None, false)
-        .await
-        .unwrap();
+    SeedUser::new("bob")
+        .password("secret_password")
+        .seed(state)
+        .await;
 
     let record = state
         .users
@@ -1087,16 +1013,10 @@ async fn authenticate_wrong_password_returns_invalid_credentials(#[case] backend
     let env = backend.setup().await;
     let state = &env.state;
 
-    state
-        .users
-        .create_user(
-            &username("carol"),
-            &password("correct_password"),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+    SeedUser::new("carol")
+        .password("correct_password")
+        .seed(state)
+        .await;
 
     let err = state
         .users
@@ -1126,16 +1046,11 @@ async fn update_profile_persists_changes(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
 
-    let user_id = state
-        .users
-        .create_user(
-            &username("dave"),
-            &password("passw0rd!"),
-            Some(&parse_display_name("Dave")),
-            false,
-        )
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("dave")
+        .password("passw0rd!")
+        .display_name("Dave")
+        .seed(state)
+        .await;
 
     state
         .users
@@ -1172,11 +1087,7 @@ async fn create_session_then_authenticate_returns_correct_record(#[case] backend
     let env = backend.setup().await;
     let state = &env.state;
 
-    let user_id = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("alice").seed(state).await;
 
     let raw_token = state
         .sessions
@@ -1197,17 +1108,9 @@ async fn authenticate_updates_last_used_at(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
 
-    let user_id = state
-        .users
-        .create_user(&username("bob"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("bob").seed(state).await;
 
-    let raw_token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
+    let raw_token = create_session_for(state, user_id).await.token;
     let first = state.sessions.authenticate(&raw_token).await.unwrap();
     let second = state.sessions.authenticate(&raw_token).await.unwrap();
 
@@ -1220,17 +1123,9 @@ async fn revoke_session_then_authenticate_returns_session_not_found(#[case] back
     let env = backend.setup().await;
     let state = &env.state;
 
-    let user_id = state
-        .users
-        .create_user(&username("carol"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("carol").seed(state).await;
 
-    let raw_token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
+    let raw_token = create_session_for(state, user_id).await.token;
     let record = state.sessions.authenticate(&raw_token).await.unwrap();
 
     state
@@ -1266,16 +1161,8 @@ async fn list_sessions_returns_only_sessions_for_given_user(#[case] backend: Bac
     let env = backend.setup().await;
     let state = &env.state;
 
-    let alice_id = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
-    let bob_id = state
-        .users
-        .create_user(&username("bob"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let alice_id = SeedUser::new("alice").seed(state).await;
+    let bob_id = SeedUser::new("bob").seed(state).await;
 
     state
         .sessions
@@ -1325,11 +1212,7 @@ async fn use_invite_with_valid_code_marks_it_used(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
 
-    let user_id = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("alice").seed(state).await;
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
     let code = state.invites.create_invite(expires_at).await.unwrap();
@@ -1348,11 +1231,7 @@ async fn use_invite_with_unknown_code_returns_not_found(#[case] backend: Backend
     let env = backend.setup().await;
     let state = &env.state;
 
-    let user_id = state
-        .users
-        .create_user(&username("bob"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("bob").seed(state).await;
 
     let err = state
         .invites
@@ -1368,11 +1247,7 @@ async fn use_invite_with_expired_code_returns_expired(#[case] backend: Backend) 
     let env = backend.setup().await;
     let state = &env.state;
 
-    let user_id = state
-        .users
-        .create_user(&username("carol"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("carol").seed(state).await;
 
     // expires_at in the past
     let expires_at = Utc::now() - chrono::Duration::hours(1);
@@ -1388,11 +1263,7 @@ async fn use_invite_on_already_used_code_returns_already_used(#[case] backend: B
     let env = backend.setup().await;
     let state = &env.state;
 
-    let user_id = state
-        .users
-        .create_user(&username("dave"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("dave").seed(state).await;
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
     let code = state.invites.create_invite(expires_at).await.unwrap();
@@ -1549,11 +1420,7 @@ async fn create_user_with_invite_duplicate_username_returns_username_taken(
     let state = &env.state;
 
     // Create alice directly (without invite)
-    state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    SeedUser::new("alice").seed(state).await;
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
     let code = state.invites.create_invite(expires_at).await.unwrap();
@@ -1607,11 +1474,7 @@ async fn set_email_persists_and_get_user_reflects_it(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
 
-    let user_id = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("alice").seed(state).await;
 
     let addr = parse_email("alice@example.com");
     state
@@ -1631,11 +1494,7 @@ async fn set_email_clears_previously_set_email(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
 
-    let user_id = state
-        .users
-        .create_user(&username("bob"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("bob").seed(state).await;
 
     let addr = parse_email("bob@example.com");
     state
@@ -1659,11 +1518,7 @@ async fn create_email_verification_and_use_returns_user_id_and_email(#[case] bac
     let env = backend.setup().await;
     let state = &env.state;
 
-    let user_id = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("alice").seed(state).await;
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
     let raw_token = state
@@ -1688,11 +1543,7 @@ async fn use_email_verification_already_used_returns_already_used(#[case] backen
     let env = backend.setup().await;
     let state = &env.state;
 
-    let user_id = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("alice").seed(state).await;
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
     let raw_token = state
@@ -1724,11 +1575,7 @@ async fn use_email_verification_expired_returns_expired(#[case] backend: Backend
     let env = backend.setup().await;
     let state = &env.state;
 
-    let user_id = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("alice").seed(state).await;
 
     let expires_at = Utc::now() - chrono::Duration::hours(1);
     let raw_token = state
@@ -1771,11 +1618,7 @@ async fn second_email_verification_supersedes_first(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
 
-    let user_id = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("alice").seed(state).await;
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
     let first_token = state
@@ -1823,11 +1666,7 @@ async fn use_email_verification_with_corrupt_stored_email_returns_internal(
     let env = backend.setup().await;
     let state = &env.state;
 
-    let user_id = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("alice").seed(state).await;
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
     let raw_token = state
@@ -1868,10 +1707,10 @@ async fn set_password_authenticate_with_old_returns_invalid_and_new_succeeds(
     let state = &env.state;
     let users = &state.users;
 
-    let user_id = users
-        .create_user(&username("alice"), &password("old_password1"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("alice")
+        .password("old_password1")
+        .seed(state)
+        .await;
 
     users
         .set_password(user_id, &password("new_password2"))
@@ -1904,11 +1743,7 @@ async fn create_password_reset_and_use_returns_user_id(#[case] backend: Backend)
     let env = backend.setup().await;
     let state = &env.state;
 
-    let user_id = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("alice").seed(state).await;
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
     let raw_token = state
@@ -1931,11 +1766,7 @@ async fn use_password_reset_already_used_returns_already_used(#[case] backend: B
     let env = backend.setup().await;
     let state = &env.state;
 
-    let user_id = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("alice").seed(state).await;
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
     let raw_token = state
@@ -1967,11 +1798,7 @@ async fn use_password_reset_expired_returns_expired(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
 
-    let user_id = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("alice").seed(state).await;
 
     let expires_at = Utc::now() - chrono::Duration::hours(1);
     let raw_token = state
@@ -2075,11 +1902,7 @@ async fn permalink_hides_scheduled_until_due(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
-    let user_id = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("alice").seed(state).await;
     seed_post_published_at(state, user_id, "live-one", now - Duration::hours(1)).await;
     seed_post_published_at(state, user_id, "sched-one", now + Duration::hours(1)).await;
 
@@ -2150,11 +1973,7 @@ async fn list_published_by_user_hides_scheduled_until_due(#[case] backend: Backe
     let env = backend.setup().await;
     let state = &env.state;
     let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
-    let user_id = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("alice").seed(state).await;
     let live = seed_post_published_at(state, user_id, "live-one", now - Duration::hours(1)).await;
     let sched = seed_post_published_at(state, user_id, "sched-one", now + Duration::hours(1)).await;
 
@@ -2201,11 +2020,7 @@ async fn list_published_hides_scheduled_until_due(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
-    let user_id = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("alice").seed(state).await;
     let live = seed_post_published_at(state, user_id, "live-one", now - Duration::hours(1)).await;
     let sched = seed_post_published_at(state, user_id, "sched-one", now + Duration::hours(1)).await;
 
@@ -2240,11 +2055,7 @@ async fn list_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
-    let user_id = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("alice").seed(state).await;
     let live = seed_post_published_at(state, user_id, "live-one", now - Duration::hours(1)).await;
     let sched = seed_post_published_at(state, user_id, "sched-one", now + Duration::hours(1)).await;
     state
@@ -2290,11 +2101,7 @@ async fn list_user_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backe
     let env = backend.setup().await;
     let state = &env.state;
     let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
-    let user_id = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("alice").seed(state).await;
     let live = seed_post_published_at(state, user_id, "live-one", now - Duration::hours(1)).await;
     let sched = seed_post_published_at(state, user_id, "sched-one", now + Duration::hours(1)).await;
     state
@@ -2354,11 +2161,7 @@ async fn list_user_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backe
 async fn post_create_and_get_by_id_works(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_id = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("alice").seed(state).await;
 
     let input = make_create_post_input(user_id, "hello-world");
     let post_id = state.posts.create_post(&input).await.unwrap();
@@ -2383,11 +2186,7 @@ async fn post_create_and_get_by_id_works(#[case] backend: Backend) {
 async fn post_slug_conflict_returns_slug_conflict(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_id = state
-        .users
-        .create_user(&username("bob"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("bob").seed(state).await;
 
     // Two published posts with the same slug on the same date conflict on the
     // unique index (user_id, date(COALESCE(published_at, created_at)), slug).
@@ -2418,11 +2217,7 @@ async fn post_slug_conflict_returns_slug_conflict(#[case] backend: Backend) {
 async fn post_update_writes_revision_and_updates_record(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_id = state
-        .users
-        .create_user(&username("carol"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("carol").seed(state).await;
 
     let post_id = state
         .posts
@@ -2484,16 +2279,14 @@ async fn post_update_not_found_returns_error(#[case] backend: Backend) {
 async fn post_update_by_non_owner_returns_unauthorized(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let owner = state
-        .users
-        .create_user(&username("post_owner"), &password("password"), None, false)
-        .await
-        .expect("owner creation failed");
-    let other = state
-        .users
-        .create_user(&username("other_user"), &password("password"), None, false)
-        .await
-        .expect("other creation failed");
+    let owner = SeedUser::new("post_owner")
+        .password("password")
+        .seed(state)
+        .await;
+    let other = SeedUser::new("other_user")
+        .password("password")
+        .seed(state)
+        .await;
 
     let post_id = state
         .posts
@@ -2567,11 +2360,7 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
-    let alice = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let alice = SeedUser::new("alice").seed(state).await;
 
     // A fresh draft (published_at NULL).
     let draft = state
@@ -2709,11 +2498,7 @@ async fn posts_published_at_index_exists(#[case] backend: Backend) {
 async fn post_audiences_are_persisted_and_replaced(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let author = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let author = SeedUser::new("alice").seed(state).await;
     let aud = state
         .audiences
         .create_audience(author, &parse_audience_name("Friends"))
@@ -2799,11 +2584,7 @@ async fn get_post_audiences_round_trips(#[case] backend: Backend) {
 
     let env = backend.setup().await;
     let state = &env.state;
-    let author = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let author = SeedUser::new("alice").seed(state).await;
     let aud = state
         .audiences
         .create_audience(author, &parse_audience_name("Friends"))
@@ -2878,11 +2659,7 @@ async fn get_post_audiences_round_trips(#[case] backend: Backend) {
 async fn soft_delete_excludes_post_from_lists(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_id = state
-        .users
-        .create_user(&username("dave"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("dave").seed(state).await;
 
     let post_id = state
         .posts
@@ -2925,16 +2702,8 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
     let env = backend.setup().await;
     let state = &env.state;
 
-    let alice_id = state
-        .users
-        .create_user(&username("walice"), &password("password123"), None, false)
-        .await
-        .unwrap();
-    let bob_id = state
-        .users
-        .create_user(&username("wbob"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let alice_id = SeedUser::new("walice").seed(state).await;
+    let bob_id = SeedUser::new("wbob").seed(state).await;
 
     let now = Utc::now();
     let make_post = |user_id: UserId, slug: &str, days_ago: i64| {
@@ -3131,16 +2900,8 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
 async fn list_published_by_user_returns_only_user_posts(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let alice_id = state
-        .users
-        .create_user(&username("ealice"), &password("password123"), None, false)
-        .await
-        .unwrap();
-    let bob_id = state
-        .users
-        .create_user(&username("ebob"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let alice_id = SeedUser::new("ealice").seed(state).await;
+    let bob_id = SeedUser::new("ebob").seed(state).await;
 
     state
         .posts
@@ -3192,11 +2953,7 @@ async fn list_published_by_user_returns_only_user_posts(#[case] backend: Backend
 async fn list_published_returns_published_non_deleted_posts(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_id = state
-        .users
-        .create_user(&username("fuser"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("fuser").seed(state).await;
 
     // Create a draft (should not appear)
     state
@@ -3230,11 +2987,7 @@ async fn list_published_returns_published_non_deleted_posts(#[case] backend: Bac
 async fn list_drafts_by_user_returns_only_drafts(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_id = state
-        .users
-        .create_user(&username("guser"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("guser").seed(state).await;
 
     state
         .posts
@@ -3275,11 +3028,7 @@ async fn drafts_list_includes_scheduled_excludes_live(#[case] backend: Backend) 
     let env = backend.setup().await;
     let state = &env.state;
     let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
-    let user_id = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("alice").seed(state).await;
 
     // True draft (published_at NULL).
     state
@@ -3325,16 +3074,8 @@ async fn list_posts_gone_live_between_returns_only_window_with_tags(#[case] back
     let state = &env.state;
     let after = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
     let upto = after + Duration::hours(1);
-    let alice = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
-    let bob = state
-        .users
-        .create_user(&username("bob"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let alice = SeedUser::new("alice").seed(state).await;
+    let bob = SeedUser::new("bob").seed(state).await;
 
     // Inside the window (after, upto], tagged: must be returned with its tag.
     let inside =
@@ -3392,11 +3133,7 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
     let state = &env.state;
     let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
     let t0 = now - Duration::hours(2);
-    let alice = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let alice = SeedUser::new("alice").seed(state).await;
 
     // A live post, newer than t0, on the site/user feeds and — once tagged —
     // on the site-tag and user-tag feeds too.
@@ -3479,16 +3216,11 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
 async fn multiple_tags_on_single_post(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("multi_tag_user"),
-            &password("password"),
-            Some(&parse_display_name("Multi")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("multi_tag_user")
+        .password("password")
+        .display_name("Multi")
+        .seed(state)
+        .await;
 
     let post_id = state
         .posts
@@ -3541,16 +3273,11 @@ async fn multiple_tags_on_single_post(#[case] backend: Backend) {
 async fn empty_tag_list(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("no_tag_user"),
-            &password("password"),
-            Some(&parse_display_name("NoTag")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("no_tag_user")
+        .password("password")
+        .display_name("NoTag")
+        .seed(state)
+        .await;
 
     let post_id = state
         .posts
@@ -3583,16 +3310,11 @@ async fn empty_tag_list(#[case] backend: Backend) {
 async fn tag_case_preservation_variants(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("case_user"),
-            &password("password"),
-            Some(&parse_display_name("Case")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("case_user")
+        .password("password")
+        .display_name("Case")
+        .seed(state)
+        .await;
 
     let post1 = state
         .posts
@@ -3671,16 +3393,11 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
 async fn tag_list_pagination(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("pagination_user"),
-            &password("password"),
-            Some(&parse_display_name("Pagination")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("pagination_user")
+        .password("password")
+        .display_name("Pagination")
+        .seed(state)
+        .await;
 
     let mut post_ids = Vec::new();
     for i in 0..5 {
@@ -3726,27 +3443,17 @@ async fn tag_list_pagination(#[case] backend: Backend) {
 async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user1 = state
-        .users
-        .create_user(
-            &username("user1_tag"),
-            &password("password"),
-            Some(&parse_display_name("User1")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user1 = SeedUser::new("user1_tag")
+        .password("password")
+        .display_name("User1")
+        .seed(state)
+        .await;
 
-    let user2 = state
-        .users
-        .create_user(
-            &username("user2_tag"),
-            &password("password"),
-            Some(&parse_display_name("User2")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user2 = SeedUser::new("user2_tag")
+        .password("password")
+        .display_name("User2")
+        .seed(state)
+        .await;
 
     let post1 = state
         .posts
@@ -3832,16 +3539,11 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
 async fn selective_untag(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("selective_untag"),
-            &password("password"),
-            Some(&parse_display_name("Selective")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("selective_untag")
+        .password("password")
+        .display_name("Selective")
+        .seed(state)
+        .await;
 
     let post_id = state
         .posts
@@ -3907,16 +3609,11 @@ async fn selective_untag(#[case] backend: Backend) {
 async fn numeric_tag(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("numeric_tag"),
-            &password("password"),
-            Some(&parse_display_name("Numeric")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("numeric_tag")
+        .password("password")
+        .display_name("Numeric")
+        .seed(state)
+        .await;
 
     let post_id = state
         .posts
@@ -3969,16 +3666,11 @@ async fn numeric_tag(#[case] backend: Backend) {
 async fn retag_same_post_with_same_tag_fails(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("retag_user"),
-            &password("password"),
-            Some(&parse_display_name("Retag")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("retag_user")
+        .password("password")
+        .display_name("Retag")
+        .seed(state)
+        .await;
 
     let post_id = state
         .posts
@@ -4062,16 +3754,11 @@ async fn list_posts_by_nonexistent_tag(#[case] backend: Backend) {
 async fn list_user_posts_by_nonexistent_tag(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("user_tag_nope"),
-            &password("password"),
-            Some(&parse_display_name("UserTagNope")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("user_tag_nope")
+        .password("password")
+        .display_name("UserTagNope")
+        .seed(state)
+        .await;
 
     let tag_slug: Tag = "nonexistent-tag-99".parse().unwrap();
     let result = state
@@ -4094,16 +3781,11 @@ async fn list_user_posts_by_nonexistent_tag(#[case] backend: Backend) {
 async fn many_tags_many_posts(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("many_tags_user"),
-            &password("password"),
-            Some(&parse_display_name("ManyTags")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("many_tags_user")
+        .password("password")
+        .display_name("ManyTags")
+        .seed(state)
+        .await;
 
     let mut post_ids = Vec::new();
     let tags = vec!["rust", "golang", "python", "javascript", "typescript"];
@@ -4161,16 +3843,11 @@ async fn many_tags_many_posts(#[case] backend: Backend) {
 async fn tag_all_numeric(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("numeric_only"),
-            &password("password"),
-            Some(&parse_display_name("NumericOnly")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("numeric_only")
+        .password("password")
+        .display_name("NumericOnly")
+        .seed(state)
+        .await;
 
     let post_id = state
         .posts
@@ -4217,16 +3894,11 @@ async fn tag_all_numeric(#[case] backend: Backend) {
 async fn tag_hyphen_boundaries(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("hyphen_user"),
-            &password("password"),
-            Some(&parse_display_name("Hyphen")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("hyphen_user")
+        .password("password")
+        .display_name("Hyphen")
+        .seed(state)
+        .await;
 
     let post_id = state
         .posts
@@ -4281,16 +3953,11 @@ async fn tag_hyphen_boundaries(#[case] backend: Backend) {
 async fn tag_with_long_display(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("long_tag_user"),
-            &password("password"),
-            Some(&parse_display_name("LongTagUser")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("long_tag_user")
+        .password("password")
+        .display_name("LongTagUser")
+        .seed(state)
+        .await;
 
     let post_id = state
         .posts
@@ -4331,16 +3998,11 @@ async fn tag_with_long_display(#[case] backend: Backend) {
 async fn tag_list_ordering(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("ordering_user"),
-            &password("password"),
-            Some(&parse_display_name("Ordering")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("ordering_user")
+        .password("password")
+        .display_name("Ordering")
+        .seed(state)
+        .await;
 
     let post1 = state
         .posts
@@ -4425,16 +4087,11 @@ async fn tag_list_ordering(#[case] backend: Backend) {
 async fn tags_for_multiple_posts(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("multi_post_user"),
-            &password("password"),
-            Some(&parse_display_name("MultiPost")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("multi_post_user")
+        .password("password")
+        .display_name("MultiPost")
+        .seed(state)
+        .await;
 
     let post1 = state
         .posts
@@ -4497,16 +4154,11 @@ async fn tags_for_multiple_posts(#[case] backend: Backend) {
 async fn tag_mixed_alphanumeric(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("mixed_user"),
-            &password("password"),
-            Some(&parse_display_name("Mixed")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("mixed_user")
+        .password("password")
+        .display_name("Mixed")
+        .seed(state)
+        .await;
 
     let post_id = state
         .posts
@@ -4558,16 +4210,11 @@ async fn tag_mixed_alphanumeric(#[case] backend: Backend) {
 async fn simple_tag_lifecycle(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("simple_user"),
-            &password("password"),
-            Some(&parse_display_name("Simple")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("simple_user")
+        .password("password")
+        .display_name("Simple")
+        .seed(state)
+        .await;
 
     let post_id = state
         .posts
@@ -4635,16 +4282,11 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
 async fn tag_creation_and_retrieval(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("alice"),
-            &password("password"),
-            Some(&parse_display_name("Alice")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("alice")
+        .password("password")
+        .display_name("Alice")
+        .seed(state)
+        .await;
 
     let post_id = state
         .posts
@@ -4685,16 +4327,11 @@ async fn tag_creation_and_retrieval(#[case] backend: Backend) {
 async fn tag_normalization(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("bob"),
-            &password("password"),
-            Some(&parse_display_name("Bob")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("bob")
+        .password("password")
+        .display_name("Bob")
+        .seed(state)
+        .await;
 
     let post_id = state
         .posts
@@ -4735,16 +4372,11 @@ async fn tag_normalization(#[case] backend: Backend) {
 async fn untag_post(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("charlie"),
-            &password("password"),
-            Some(&parse_display_name("Charlie")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("charlie")
+        .password("password")
+        .display_name("Charlie")
+        .seed(state)
+        .await;
 
     let post_id = state
         .posts
@@ -4796,16 +4428,11 @@ async fn untag_post(#[case] backend: Backend) {
 async fn duplicate_tag_error(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("dave"),
-            &password("password"),
-            Some(&parse_display_name("Dave")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("dave")
+        .password("password")
+        .display_name("Dave")
+        .seed(state)
+        .await;
 
     let post_id = state
         .posts
@@ -4848,27 +4475,17 @@ async fn duplicate_tag_error(#[case] backend: Backend) {
 async fn list_posts_by_tag(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user1 = state
-        .users
-        .create_user(
-            &username("eve"),
-            &password("password"),
-            Some(&parse_display_name("Eve")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user1 = SeedUser::new("eve")
+        .password("password")
+        .display_name("Eve")
+        .seed(state)
+        .await;
 
-    let user2 = state
-        .users
-        .create_user(
-            &username("frank"),
-            &password("password"),
-            Some(&parse_display_name("Frank")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user2 = SeedUser::new("frank")
+        .password("password")
+        .display_name("Frank")
+        .seed(state)
+        .await;
 
     let post1 = state
         .posts
@@ -4932,27 +4549,17 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
 async fn list_user_posts_by_tag(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user1 = state
-        .users
-        .create_user(
-            &username("grace"),
-            &password("password"),
-            Some(&parse_display_name("Grace")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user1 = SeedUser::new("grace")
+        .password("password")
+        .display_name("Grace")
+        .seed(state)
+        .await;
 
-    let user2 = state
-        .users
-        .create_user(
-            &username("henry"),
-            &password("password"),
-            Some(&parse_display_name("Henry")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user2 = SeedUser::new("henry")
+        .password("password")
+        .display_name("Henry")
+        .seed(state)
+        .await;
 
     let post1 = state
         .posts
@@ -5063,16 +4670,11 @@ async fn tag_not_found_error(#[case] backend: Backend) {
 async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("iris"),
-            &password("password"),
-            Some(&parse_display_name("Iris")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("iris")
+        .password("password")
+        .display_name("Iris")
+        .seed(state)
+        .await;
 
     let post1 = state
         .posts
@@ -5161,16 +4763,11 @@ async fn tag_post_nonexistent_post_error(#[case] backend: Backend) {
 async fn untag_nonexistent_tag_error(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("karen"),
-            &password("password"),
-            Some(&parse_display_name("Karen")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("karen")
+        .password("password")
+        .display_name("Karen")
+        .seed(state)
+        .await;
 
     let post_id = state
         .posts
@@ -5204,16 +4801,11 @@ async fn untag_nonexistent_tag_error(#[case] backend: Backend) {
 async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("jack"),
-            &password("password"),
-            Some(&parse_display_name("Jack")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("jack")
+        .password("password")
+        .display_name("Jack")
+        .seed(state)
+        .await;
 
     let post1 = state
         .posts
@@ -5278,11 +4870,10 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
 async fn post_update_invalid_slug(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(&username("test_user"), &password("password"), None, false)
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("test_user")
+        .password("password")
+        .seed(state)
+        .await;
 
     let post_id = state
         .posts
@@ -5350,16 +4941,10 @@ async fn post_update_invalid_slug(#[case] backend: Backend) {
 async fn list_published_cursor_boundary(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("cursor_test_user"),
-            &password("password"),
-            None,
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("cursor_test_user")
+        .password("password")
+        .seed(state)
+        .await;
 
     let now = Utc::now();
 
@@ -5415,16 +5000,10 @@ async fn list_published_cursor_boundary(#[case] backend: Backend) {
 async fn list_drafts_cursor_boundary(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("draft_cursor_test"),
-            &password("password"),
-            None,
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("draft_cursor_test")
+        .password("password")
+        .seed(state)
+        .await;
 
     let _now = Utc::now();
 
@@ -5480,16 +5059,10 @@ async fn list_drafts_cursor_boundary(#[case] backend: Backend) {
 async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("tag_cursor_test"),
-            &password("password"),
-            None,
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("tag_cursor_test")
+        .password("password")
+        .seed(state)
+        .await;
 
     let now = Utc::now();
 
@@ -5560,16 +5133,10 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
 async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("global_tag_cursor_test"),
-            &password("password"),
-            None,
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("global_tag_cursor_test")
+        .password("password")
+        .seed(state)
+        .await;
 
     let now = Utc::now();
 
@@ -5639,16 +5206,10 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
 async fn soft_delete_then_operations(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("soft_del_test"),
-            &password("password"),
-            None,
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("soft_del_test")
+        .password("password")
+        .seed(state)
+        .await;
 
     let post_id = state
         .posts
@@ -5703,16 +5264,10 @@ async fn soft_delete_then_operations(#[case] backend: Backend) {
 async fn tag_post_multiple_attempts(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("tag_multi_user"),
-            &password("password"),
-            None,
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("tag_multi_user")
+        .password("password")
+        .seed(state)
+        .await;
 
     let post_id = state
         .posts
@@ -5767,16 +5322,10 @@ async fn tag_post_multiple_attempts(#[case] backend: Backend) {
 async fn list_published_by_user_no_posts(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let _user = state
-        .users
-        .create_user(
-            &username("no_posts_user"),
-            &password("password"),
-            None,
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let _user = SeedUser::new("no_posts_user")
+        .password("password")
+        .seed(state)
+        .await;
 
     let posts = state
         .posts
@@ -5814,16 +5363,10 @@ async fn list_published_by_user_no_posts(#[case] backend: Backend) {
 async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("permalink_del_user"),
-            &password("password"),
-            None,
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("permalink_del_user")
+        .password("password")
+        .seed(state)
+        .await;
 
     let created_at = Utc::now();
 
@@ -5890,16 +5433,10 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
 async fn update_soft_deleted_post(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("update_del_user"),
-            &password("password"),
-            None,
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("update_del_user")
+        .password("password")
+        .seed(state)
+        .await;
 
     let post_id = state
         .posts
@@ -5959,16 +5496,10 @@ async fn update_soft_deleted_post(#[case] backend: Backend) {
 async fn tag_edge_case_formats(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("tag_formats_user"),
-            &password("password"),
-            None,
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("tag_formats_user")
+        .password("password")
+        .seed(state)
+        .await;
 
     let post_id = state
         .posts
@@ -6038,16 +5569,10 @@ async fn get_post_by_id_nonexistent(#[case] backend: Backend) {
 async fn list_published_with_cursor_same_timestamp(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("cursor_same_ts_user"),
-            &password("password"),
-            None,
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("cursor_same_ts_user")
+        .password("password")
+        .seed(state)
+        .await;
 
     let now = Utc::now();
 
@@ -6100,16 +5625,10 @@ async fn list_published_with_cursor_same_timestamp(#[case] backend: Backend) {
 async fn post_revisions_created(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("revision_user"),
-            &password("password"),
-            None,
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("revision_user")
+        .password("password")
+        .seed(state)
+        .await;
 
     let post_id = state
         .posts
@@ -6158,16 +5677,10 @@ async fn post_revisions_created(#[case] backend: Backend) {
 async fn tag_display_preservation(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("tag_display_user"),
-            &password("password"),
-            None,
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("tag_display_user")
+        .password("password")
+        .seed(state)
+        .await;
 
     let post_id = state
         .posts
@@ -6208,16 +5721,10 @@ async fn tag_display_preservation(#[case] backend: Backend) {
 async fn untag_preserves_other_tags(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("untag_preserve_user"),
-            &password("password"),
-            None,
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("untag_preserve_user")
+        .password("password")
+        .seed(state)
+        .await;
 
     let post_id = state
         .posts
@@ -6325,16 +5832,10 @@ async fn site_config_operations(#[case] backend: Backend) {
 async fn session_list_operations(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("session_list_user"),
-            &password("password"),
-            None,
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("session_list_user")
+        .password("password")
+        .seed(state)
+        .await;
 
     let session1 = state
         .sessions
@@ -6417,16 +5918,7 @@ async fn invite_list_operations(#[case] backend: Backend) {
 async fn create_rendered_post_markdown_renders_and_stores(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_id = state
-        .users
-        .create_user(
-            &username("render_alice"),
-            &password("password123"),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("render_alice").seed(state).await;
 
     let post_id = create_rendered_post(
         state.posts.as_ref(),
@@ -6467,16 +5959,7 @@ async fn create_rendered_post_markdown_renders_and_stores(#[case] backend: Backe
 async fn create_rendered_post_org_renders_and_stores(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_id = state
-        .users
-        .create_user(
-            &username("render_bob"),
-            &password("password123"),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("render_bob").seed(state).await;
 
     let post_id = create_rendered_post(
         state.posts.as_ref(),
@@ -6517,16 +6000,7 @@ async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backen
     let env = backend.setup().await;
     let state = &env.state;
 
-    let user_id = state
-        .users
-        .create_user(
-            &username("render_carol"),
-            &password("password123"),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("render_carol").seed(state).await;
 
     let now = Utc::now();
 
@@ -6623,16 +6097,7 @@ async fn create_posts_empty_slice_is_noop(#[case] backend: Backend) {
 async fn create_posts_batches_all_rows_in_order(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_id = state
-        .users
-        .create_user(
-            &username("batch_alice"),
-            &password("password123"),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("batch_alice").seed(state).await;
 
     let inputs: Vec<CreatePostInput> = (0..3)
         .map(|i| CreatePostInput {
@@ -6670,16 +6135,7 @@ async fn create_posts_batches_all_rows_in_order(#[case] backend: Backend) {
 async fn create_posts_conflict_rolls_back_whole_batch(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_id = state
-        .users
-        .create_user(
-            &username("batch_bob"),
-            &password("password123"),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("batch_bob").seed(state).await;
 
     let mk = |slug: &str, i: usize| CreatePostInput {
         user_id,
@@ -6720,16 +6176,7 @@ async fn create_posts_conflict_rolls_back_whole_batch(#[case] backend: Backend) 
 async fn update_rendered_post_markdown_renders_and_updates(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_id = state
-        .users
-        .create_user(
-            &username("render_dave"),
-            &password("password123"),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("render_dave").seed(state).await;
 
     let post_id = state
         .posts
@@ -6770,16 +6217,7 @@ async fn update_rendered_post_markdown_renders_and_updates(#[case] backend: Back
 async fn update_rendered_post_org_renders_and_updates(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_id = state
-        .users
-        .create_user(
-            &username("render_eve"),
-            &password("password123"),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("render_eve").seed(state).await;
 
     let post_id = state
         .posts
@@ -6875,16 +6313,7 @@ fn make_media_record(
 async fn create_and_get_media(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_id = state
-        .users
-        .create_user(
-            &username("mediauser1"),
-            &password("password123"),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("mediauser1").seed(state).await;
 
     let sha256 =
         parse_content_hash("abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234");
@@ -6915,16 +6344,7 @@ async fn create_and_get_media(#[case] backend: Backend) {
 async fn list_media_skips_rows_that_fail_to_decode(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_id = state
-        .users
-        .create_user(
-            &username("mediauser_corrupt"),
-            &password("password123"),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("mediauser_corrupt").seed(state).await;
 
     // A valid record via the normal (validating) path.
     let good_sha = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234";
@@ -6980,16 +6400,7 @@ async fn list_media_skips_rows_that_fail_to_decode(#[case] backend: Backend) {
 async fn duplicate_media_returns_already_exists(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_id = state
-        .users
-        .create_user(
-            &username("mediauser2"),
-            &password("password123"),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("mediauser2").seed(state).await;
 
     let sha256 = "bbbb1234bbbb1234bbbb1234bbbb1234bbbb1234bbbb1234bbbb1234bbbb1234".to_string();
     let record = make_media_record(user_id, &sha256, "dup.jpg", MediaSource::Upload);
@@ -7006,16 +6417,7 @@ async fn duplicate_media_returns_already_exists(#[case] backend: Backend) {
 async fn delete_media_removes_record(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_id = state
-        .users
-        .create_user(
-            &username("mediauser3"),
-            &password("password123"),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("mediauser3").seed(state).await;
 
     let sha256 =
         parse_content_hash("cccc1234cccc1234cccc1234cccc1234cccc1234cccc1234cccc1234cccc1234");
@@ -7050,16 +6452,7 @@ async fn delete_media_removes_record(#[case] backend: Backend) {
 async fn delete_nonexistent_returns_not_found(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_id = state
-        .users
-        .create_user(
-            &username("mediauser4"),
-            &password("password123"),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("mediauser4").seed(state).await;
 
     let sha256 =
         parse_content_hash("dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234");
@@ -7084,26 +6477,8 @@ async fn delete_nonexistent_returns_not_found(#[case] backend: Backend) {
 async fn list_media_returns_records_for_user(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_a = state
-        .users
-        .create_user(
-            &username("mediauser5a"),
-            &password("password123"),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let user_b = state
-        .users
-        .create_user(
-            &username("mediauser5b"),
-            &password("password123"),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+    let user_a = SeedUser::new("mediauser5a").seed(state).await;
+    let user_b = SeedUser::new("mediauser5b").seed(state).await;
 
     let sha1 = "eeee1234eeee1234eeee1234eeee1234eeee1234eeee1234eeee1234eeee1234".to_string();
     let sha2 = "ffff1234ffff1234ffff1234ffff1234ffff1234ffff1234ffff1234ffff1234".to_string();
@@ -7154,16 +6529,7 @@ async fn list_media_returns_records_for_user(#[case] backend: Backend) {
 async fn list_media_filtered_by_source(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_id = state
-        .users
-        .create_user(
-            &username("mediauser6"),
-            &password("password123"),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("mediauser6").seed(state).await;
 
     let sha_up = "8888123488881234888812348888123488881234888812348888123488881234".to_string();
     let sha_ca = "7777123477771234777712347777123477771234777712347777123477771234".to_string();
@@ -7221,16 +6587,7 @@ async fn list_media_filtered_by_source(#[case] backend: Backend) {
 async fn get_user_upload_usage_returns_zero_initially(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_id = state
-        .users
-        .create_user(
-            &username("mediauser7"),
-            &password("password123"),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("mediauser7").seed(state).await;
 
     let usage = state.media.get_user_upload_usage(user_id).await.unwrap();
     assert_eq!(usage, parse_byte_size("0"));
@@ -7241,16 +6598,7 @@ async fn get_user_upload_usage_returns_zero_initially(#[case] backend: Backend) 
 async fn get_user_upload_usage_sums_uploads_only(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_id = state
-        .users
-        .create_user(
-            &username("mediauser8"),
-            &password("password123"),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("mediauser8").seed(state).await;
 
     let sha_up = "6666123466661234666612346666123466661234666612346666123466661234".to_string();
     let sha_ca = "5555123455551234555512345555123455551234555512345555123455551234".to_string();
@@ -7276,16 +6624,7 @@ async fn get_user_upload_usage_sums_uploads_only(#[case] backend: Backend) {
 async fn find_by_hash_returns_any_match(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_id = state
-        .users
-        .create_user(
-            &username("mediauser9"),
-            &password("password123"),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("mediauser9").seed(state).await;
 
     let sha256 =
         parse_content_hash("4444123444441234444412344444123444441234444412344444123444441234");
@@ -7308,11 +6647,7 @@ async fn find_by_hash_returns_any_match(#[case] backend: Backend) {
 async fn user_config_get_returns_none_when_unset(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_id = state
-        .users
-        .create_user(&username("cfguser1"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("cfguser1").seed(state).await;
 
     let val = state.user_config.get(user_id, "some.key").await.unwrap();
     assert!(val.is_none());
@@ -7323,11 +6658,7 @@ async fn user_config_get_returns_none_when_unset(#[case] backend: Backend) {
 async fn user_config_set_and_get(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_id = state
-        .users
-        .create_user(&username("cfguser2"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("cfguser2").seed(state).await;
 
     state
         .user_config
@@ -7343,11 +6674,7 @@ async fn user_config_set_and_get(#[case] backend: Backend) {
 async fn user_config_overwrite(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_id = state
-        .users
-        .create_user(&username("cfguser3"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("cfguser3").seed(state).await;
 
     state
         .user_config
@@ -7368,11 +6695,7 @@ async fn user_config_overwrite(#[case] backend: Backend) {
 async fn user_config_delete_removes_key(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_id = state
-        .users
-        .create_user(&username("cfguser4"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("cfguser4").seed(state).await;
 
     state
         .user_config
@@ -7389,11 +6712,7 @@ async fn user_config_delete_removes_key(#[case] backend: Backend) {
 async fn user_config_delete_nonexistent_is_ok(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_id = state
-        .users
-        .create_user(&username("cfguser5"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("cfguser5").seed(state).await;
 
     state
         .user_config
@@ -7409,16 +6728,11 @@ async fn user_config_delete_nonexistent_is_ok(#[case] backend: Backend) {
 async fn list_tags_returns_alphabetical_with_prefix(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("list_tags_user"),
-            &password("password"),
-            Some(&parse_display_name("ListTags")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("list_tags_user")
+        .password("password")
+        .display_name("ListTags")
+        .seed(state)
+        .await;
     let post = state
         .posts
         .create_post(&CreatePostInput {
@@ -7481,16 +6795,11 @@ async fn list_tags_returns_alphabetical_with_prefix(#[case] backend: Backend) {
 async fn post_record_carries_tags(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = state
-        .users
-        .create_user(
-            &username("inline_tags_user"),
-            &password("password"),
-            Some(&parse_display_name("Inline")),
-            false,
-        )
-        .await
-        .expect("user creation failed");
+    let user = SeedUser::new("inline_tags_user")
+        .password("password")
+        .display_name("Inline")
+        .seed(state)
+        .await;
 
     let mut post_ids = Vec::new();
     for n in 1..=3 {
@@ -7625,16 +6934,8 @@ async fn composite_fks_reject_cross_author_membership(#[case] backend: Backend) 
     let env = backend.setup().await;
     let state = &env.state;
     // Users via the already-wired UserStore; audience + subscription via raw SQL.
-    let a = state
-        .users
-        .create_user(&username("alice"), &password("password123"), None, false)
-        .await
-        .unwrap();
-    let b = state
-        .users
-        .create_user(&username("bob"), &password("password123"), None, false)
-        .await
-        .unwrap();
+    let a = SeedUser::new("alice").seed(state).await;
+    let b = SeedUser::new("bob").seed(state).await;
 
     raw_exec(
         backend,
@@ -7689,36 +6990,10 @@ async fn resolution_matrix(#[case] backend: Backend) {
     let local = local_channel_id(backend, &env).await;
 
     // Author A and three other accounts (S, M, N). N never subscribes.
-    let a = state
-        .users
-        .create_user(&username("author_a"), &password("password123"), None, false)
-        .await
-        .unwrap();
-    let s = state
-        .users
-        .create_user(
-            &username("subscriber_s"),
-            &password("password123"),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let m = state
-        .users
-        .create_user(&username("member_m"), &password("password123"), None, false)
-        .await
-        .unwrap();
-    let n = state
-        .users
-        .create_user(
-            &username("nonmember_n"),
-            &password("password123"),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+    let a = SeedUser::new("author_a").seed(state).await;
+    let s = SeedUser::new("subscriber_s").seed(state).await;
+    let m = SeedUser::new("member_m").seed(state).await;
+    let n = SeedUser::new("nonmember_n").seed(state).await;
 
     // S and M are active subscribers to A; N is not. M is additionally a member
     // of audience G (but not G2).

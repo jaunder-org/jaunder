@@ -1,12 +1,10 @@
 use axum::http::StatusCode;
-use common::password::Password;
-use common::username::Username;
 use serde_json::json;
 
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{post_form, post_json, session_cookie};
+use crate::helpers::{create_user_and_session, post_form, post_json};
 use storage::test_support::{backends, backends_matrix, Backend, TestEnv};
 
 // Creating a published post enqueues the Site and User feeds (3 formats each =
@@ -23,20 +21,8 @@ async fn create_published_post_enqueues_expected_feeds(
 ) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let username: Username = "alice".parse().expect("valid username");
-    let password: Password = "password123".parse().expect("valid password");
-    let user_id = state
-        .users
-        .create_user(&username, &password, None, false)
-        .await
-        .expect("create user");
-
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .expect("create session");
-    let cookie = session_cookie(&token);
+    let session = create_user_and_session(&state, "alice").await;
+    let cookie = session.cookie();
 
     let body = json!({
         "args": {
@@ -71,20 +57,8 @@ async fn create_published_post_enqueues_expected_feeds(
 async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let username: Username = "alice".parse().expect("valid username");
-    let password: Password = "password123".parse().expect("valid password");
-    let user_id = state
-        .users
-        .create_user(&username, &password, None, false)
-        .await
-        .expect("create user");
-
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .expect("create session");
-    let cookie = session_cookie(&token);
+    let session = create_user_and_session(&state, "alice").await;
+    let cookie = session.cookie();
 
     let create_body = json!({
         "args": {
@@ -161,20 +135,8 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
 async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let username: Username = "alice".parse().expect("valid username");
-    let password: Password = "password123".parse().expect("valid password");
-    let user_id = state
-        .users
-        .create_user(&username, &password, None, false)
-        .await
-        .expect("create user");
-
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .expect("create session");
-    let cookie = session_cookie(&token);
+    let session = create_user_and_session(&state, "alice").await;
+    let cookie = session.cookie();
 
     let create_body = json!({
         "args": {
@@ -240,20 +202,8 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend
 async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let username: Username = "alice".parse().expect("valid username");
-    let password: Password = "password123".parse().expect("valid password");
-    let user_id = state
-        .users
-        .create_user(&username, &password, None, false)
-        .await
-        .expect("create user");
-
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .expect("create session");
-    let cookie = session_cookie(&token);
+    let session = create_user_and_session(&state, "alice").await;
+    let cookie = session.cookie();
 
     let create_body = json!({
         "args": {
@@ -319,20 +269,8 @@ async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
 async fn delete_draft_post_enqueues_nothing(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let username: Username = "alice".parse().expect("valid username");
-    let password: Password = "password123".parse().expect("valid password");
-    let user_id = state
-        .users
-        .create_user(&username, &password, None, false)
-        .await
-        .expect("create user");
-
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .expect("create session");
-    let cookie = session_cookie(&token);
+    let session = create_user_and_session(&state, "alice").await;
+    let cookie = session.cookie();
 
     let create_body = json!({
         "args": {

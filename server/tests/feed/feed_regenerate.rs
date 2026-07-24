@@ -1,7 +1,5 @@
 use chrono::Utc;
-use common::password::Password;
 use common::slug::Slug;
-use common::username::Username;
 use common::visibility::AudienceTarget;
 use jaunder::feed::regenerate::regenerate_feed;
 use storage::{CreatePostInput, PostFormat, RenderedHtml};
@@ -9,7 +7,7 @@ use storage::{CreatePostInput, PostFormat, RenderedHtml};
 use rstest::*;
 use rstest_reuse::*;
 
-use storage::test_support::{backends, fp, Backend, TestEnv};
+use storage::test_support::{backends, fp, Backend, SeedUser, TestEnv};
 
 use crate::helpers::setup_with_base_url;
 
@@ -18,13 +16,7 @@ use crate::helpers::setup_with_base_url;
 async fn regenerate_writes_cache_row_for_user_feed(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
 
-    let username: Username = "alice".parse().expect("valid username");
-    let password: Password = "password123".parse().expect("valid password");
-    let user_id = state
-        .users
-        .create_user(&username, &password, None, false)
-        .await
-        .expect("create user");
+    let user_id = SeedUser::new("alice").seed(&state).await;
 
     let now = Utc::now();
     let _post1_id = state
@@ -98,13 +90,7 @@ async fn regenerate_writes_empty_feed_for_user_with_no_posts(#[case] backend: Ba
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
 
     // Create a user but no posts
-    let username: Username = "bob".parse().expect("valid username");
-    let password: Password = "password123".parse().expect("valid password");
-    state
-        .users
-        .create_user(&username, &password, None, false)
-        .await
-        .expect("create user");
+    SeedUser::new("bob").seed(&state).await;
 
     let row = regenerate_feed(
         state.site_config.as_ref(),
@@ -136,13 +122,7 @@ async fn regenerate_writes_cache_rows_for_tag_surfaces(#[case] backend: Backend)
 
     // Create a user (posts are not required: the tag-window queries and the
     // SiteTag/UserTag canonical_url arms execute regardless of matches).
-    let username: Username = "alice".parse().expect("valid username");
-    let password: Password = "password123".parse().expect("valid password");
-    state
-        .users
-        .create_user(&username, &password, None, false)
-        .await
-        .expect("create user");
+    SeedUser::new("alice").seed(&state).await;
 
     // Site-tag surface exercises the SiteTag canonical_url arm and the
     // window_site_tag storage query.
@@ -199,13 +179,7 @@ async fn regenerate_writes_each_format(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
 
     // Create a user with one post
-    let username: Username = "charlie".parse().expect("valid username");
-    let password: Password = "password123".parse().expect("valid password");
-    let user_id = state
-        .users
-        .create_user(&username, &password, None, false)
-        .await
-        .expect("create user");
+    let user_id = SeedUser::new("charlie").seed(&state).await;
 
     let now = Utc::now();
     state
@@ -259,13 +233,7 @@ async fn regenerate_writes_each_format(#[case] backend: Backend) {
 async fn feed_contains_only_public_posts(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
 
-    let username: Username = "alice".parse().expect("valid username");
-    let password: Password = "password123".parse().expect("valid password");
-    let user_id = state
-        .users
-        .create_user(&username, &password, None, false)
-        .await
-        .expect("create user");
+    let user_id = SeedUser::new("alice").seed(&state).await;
 
     let now = Utc::now();
     let mk = |title: &str, slug: &str, audiences: Vec<AudienceTarget>| CreatePostInput {

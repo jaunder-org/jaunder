@@ -13,7 +13,7 @@ use rstest_reuse::*;
 use common::ids::UserId;
 use storage::test_support::{backends, backends_matrix, Backend, TestEnv};
 
-use crate::helpers::{make_app, post_multipart, session_cookie, MultipartFile};
+use crate::helpers::{create_user_and_session, make_app, post_multipart, MultipartFile};
 
 // ---------------------------------------------------------------------------
 // Serve tests
@@ -24,22 +24,7 @@ use crate::helpers::{make_app, post_multipart, session_cookie, MultipartFile};
 async fn serve_returns_200_with_cache_headers(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let user_id = state
-        .users
-        .create_user(
-            &"server".parse().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
-    let cookie = session_cookie(&token);
+    let cookie = create_user_and_session(&state, "server").await.cookie();
 
     let storage = TempDir::new().unwrap();
 
@@ -121,22 +106,7 @@ async fn serve_returns_404(backend: Backend, #[case] uri: &str) {
 async fn serve_returns_304_on_if_none_match(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let user_id = state
-        .users
-        .create_user(
-            &"etagger".parse().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
-    let cookie = session_cookie(&token);
+    let cookie = create_user_and_session(&state, "etagger").await.cookie();
 
     let storage = TempDir::new().unwrap();
 
@@ -206,22 +176,9 @@ async fn proxy_requires_auth(#[case] backend: Backend) {
 async fn proxy_redirects_authenticated(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let user_id = state
-        .users
-        .create_user(
-            &"proxyuser".parse().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
-    let cookie = session_cookie(&token);
+    let session = create_user_and_session(&state, "proxyuser").await;
+    let user_id = session.user_id;
+    let cookie = session.cookie();
 
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage);
@@ -255,22 +212,9 @@ async fn proxy_redirects_authenticated(#[case] backend: Backend) {
 async fn proxy_rejects_mismatched_user_id(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let user_id = state
-        .users
-        .create_user(
-            &"mismatch".parse().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
-    let cookie = session_cookie(&token);
+    let session = create_user_and_session(&state, "mismatch").await;
+    let user_id = session.user_id;
+    let cookie = session.cookie();
 
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage);

@@ -16,7 +16,7 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{
-    make_app, post_form, post_multipart, session_cookie, test_options, MultipartFile,
+    create_user_and_session, make_app, post_form, post_multipart, test_options, MultipartFile,
 };
 use common::media::{MaxFileSize, MediaSource, UploadResponse, UserQuota};
 use common::test_support::{
@@ -30,22 +30,7 @@ use storage::test_support::{backends, backends_matrix, noop_mailer, Backend, Tes
 #[tokio::test]
 async fn media_usage_returns_defaults_for_authenticated_user(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let user_id = state
-        .users
-        .create_user(
-            &"alice".parse().expect("valid username"),
-            &"password123".parse().expect("valid password"),
-            None,
-            false,
-        )
-        .await
-        .expect("create_user failed");
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .expect("create_session failed");
-    let cookie = session_cookie(&token);
+    let cookie = create_user_and_session(&state, "alice").await.cookie();
 
     let (status, body) = post_form(Arc::clone(&state), "/api/media_usage", "", Some(&cookie)).await;
 
@@ -85,22 +70,7 @@ async fn media_endpoint_rejects_unauthenticated_request(
 #[tokio::test]
 async fn list_my_media_returns_empty_for_new_user(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let user_id = state
-        .users
-        .create_user(
-            &"bob".parse().expect("valid username"),
-            &"password123".parse().expect("valid password"),
-            None,
-            false,
-        )
-        .await
-        .expect("create_user failed");
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .expect("create_session failed");
-    let cookie = session_cookie(&token);
+    let cookie = create_user_and_session(&state, "bob").await.cookie();
 
     let (status, body) =
         post_form(Arc::clone(&state), "/api/list_my_media", "", Some(&cookie)).await;
@@ -114,22 +84,7 @@ async fn list_my_media_returns_empty_for_new_user(#[case] backend: Backend) {
 #[tokio::test]
 async fn list_my_media_rejects_out_of_range_limit(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let user_id = state
-        .users
-        .create_user(
-            &"erin".parse().expect("valid username"),
-            &"password123".parse().expect("valid password"),
-            None,
-            false,
-        )
-        .await
-        .expect("create_user failed");
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .expect("create_session failed");
-    let cookie = session_cookie(&token);
+    let cookie = create_user_and_session(&state, "erin").await.cookie();
 
     // `limit=999` is outside PageSize's `1..=50`; the typed wire arg rejects it on
     // deserialization instead of fetching an unbounded page.
@@ -152,19 +107,10 @@ async fn list_my_media_rejects_out_of_range_limit(#[case] backend: Backend) {
 #[tokio::test]
 async fn list_my_media_returns_inserted_item(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let user_id = state
-        .users
-        .create_user(
-            &"dave".parse().expect("valid username"),
-            &"password123".parse().expect("valid password"),
-            None,
-            false,
-        )
-        .await
-        .expect("create_user failed");
+    let session = create_user_and_session(&state, "dave").await;
 
     let record = MediaRecord {
-        user_id,
+        user_id: session.user_id,
         sha256: parse_content_hash(
             "aabbccdd11223344000000000000000000000000000000000000000000000000",
         ),
@@ -180,12 +126,7 @@ async fn list_my_media_returns_inserted_item(#[case] backend: Backend) {
         Err(e) => panic!("create_media failed: {e}"),
     }
 
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .expect("create_session failed");
-    let cookie = session_cookie(&token);
+    let cookie = session.cookie();
 
     let (status, body) =
         post_form(Arc::clone(&state), "/api/list_my_media", "", Some(&cookie)).await;
@@ -205,19 +146,10 @@ async fn list_my_media_returns_inserted_item(#[case] backend: Backend) {
 #[tokio::test]
 async fn list_my_media_with_source_filter(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let user_id = state
-        .users
-        .create_user(
-            &"eve".parse().expect("valid username"),
-            &"password123".parse().expect("valid password"),
-            None,
-            false,
-        )
-        .await
-        .expect("create_user failed");
+    let session = create_user_and_session(&state, "eve").await;
 
     let record = MediaRecord {
-        user_id,
+        user_id: session.user_id,
         sha256: parse_content_hash(
             "ff00ee11dd22cc33000000000000000000000000000000000000000000000000",
         ),
@@ -233,12 +165,7 @@ async fn list_my_media_with_source_filter(#[case] backend: Backend) {
         Err(e) => panic!("create_media failed: {e}"),
     }
 
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .expect("create_session failed");
-    let cookie = session_cookie(&token);
+    let cookie = session.cookie();
 
     let (status, body) = post_form(
         Arc::clone(&state),
@@ -260,20 +187,11 @@ async fn list_my_media_with_source_filter(#[case] backend: Backend) {
 #[tokio::test]
 async fn delete_media_succeeds_for_existing_item(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let user_id = state
-        .users
-        .create_user(
-            &"carol".parse().expect("valid username"),
-            &"password123".parse().expect("valid password"),
-            None,
-            false,
-        )
-        .await
-        .expect("create_user failed");
+    let session = create_user_and_session(&state, "carol").await;
 
     // Insert a media record directly so delete has something to act on.
     let record = MediaRecord {
-        user_id,
+        user_id: session.user_id,
         sha256: parse_content_hash(
             "deadbeef01234567000000000000000000000000000000000000000000000000",
         ),
@@ -289,12 +207,7 @@ async fn delete_media_succeeds_for_existing_item(#[case] backend: Backend) {
         Err(e) => panic!("create_media failed: {e}"),
     }
 
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .expect("create_session failed");
-    let cookie = session_cookie(&token);
+    let cookie = session.cookie();
 
     let body = "sha256=deadbeef01234567000000000000000000000000000000000000000000000000&filename=test.png&source=upload&force=false";
     let (status, body_str) =
@@ -320,16 +233,8 @@ async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend:
     use storage::{CreatePostInput, PostFormat, RenderedHtml};
 
     let TestEnv { state, base: _base } = backend.setup().await;
-    let user_id = state
-        .users
-        .create_user(
-            &"darya".parse().expect("valid username"),
-            &"password123".parse().expect("valid password"),
-            None,
-            false,
-        )
-        .await
-        .expect("create_user failed");
+    let session = create_user_and_session(&state, "darya").await;
+    let user_id = session.user_id;
 
     let media_url = common::media::media_url(
         "upload",
@@ -370,12 +275,7 @@ async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend:
         .await
         .expect("create_post failed");
 
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .expect("create_session failed");
-    let cookie = session_cookie(&token);
+    let cookie = session.cookie();
 
     let body = "sha256=deadbeef99999999000000000000000000000000000000000000000000000000&filename=inline.png&source=upload&force=false";
     let (status, body_str) =
@@ -400,22 +300,7 @@ async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend:
 /// Create a user + session and return the `session=<token>` cookie — dedupes the
 /// `create_user`/`create_session` boilerplate every upload test repeats.
 async fn authed_cookie(state: &Arc<storage::AppState>, username: &str) -> String {
-    let user_id = state
-        .users
-        .create_user(
-            &username.parse().expect("valid username"),
-            &"password123".parse().expect("valid password"),
-            None,
-            false,
-        )
-        .await
-        .expect("create_user failed");
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .expect("create_session failed");
-    session_cookie(&token)
+    create_user_and_session(state, username).await.cookie()
 }
 
 #[apply(backends)]

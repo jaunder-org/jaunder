@@ -4,14 +4,15 @@ use axum::http::StatusCode;
 use common::mailer::test_utils::CapturingMailSender;
 use common::mailer::MailSender;
 use common::test_support::{parse_bio, parse_display_name};
-use common::username::Username;
 use storage::{AppState, ProfileUpdate};
 
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{post_form, post_form_with_mailer, session_cookie};
-use storage::test_support::{backends, Backend, TestEnv};
+use crate::helpers::{
+    create_session_for, create_user_and_session, post_form, post_form_with_mailer, session_cookie,
+};
+use storage::test_support::{backends, Backend, SeedUser, TestEnv};
 
 // ── Profile tests (M2.10.5, M2.10.6) ─────────────────────────────────────
 
@@ -20,20 +21,11 @@ use storage::test_support::{backends, Backend, TestEnv};
 #[tokio::test]
 async fn get_profile_returns_display_name_and_bio(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let user_id = state
-        .users
-        .create_user(
-            &"alice".parse::<Username>().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+    let session = create_user_and_session(&state, "alice").await;
     state
         .users
         .update_profile(
-            user_id,
+            session.user_id,
             &ProfileUpdate {
                 display_name: Some(&parse_display_name("Alice Smith")),
                 bio: Some(&parse_bio("Hello world")),
@@ -41,12 +33,7 @@ async fn get_profile_returns_display_name_and_bio(#[case] backend: Backend) {
         )
         .await
         .unwrap();
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
-    let cookie = session_cookie(&token);
+    let cookie = session.cookie();
 
     let (status, body) = post_form(Arc::clone(&state), "/api/get_profile", "", Some(&cookie)).await;
 
@@ -61,25 +48,15 @@ async fn get_profile_with_email_returns_email(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
     // Create user with email and session
-    let username: Username = "emailuser".parse().unwrap();
-    let user_id = state
-        .users
-        .create_user(&username, &"password123".parse().unwrap(), None, false)
-        .await
-        .unwrap();
+    let session = create_user_and_session(&state, "emailuser").await;
     let email = "user@example.com".parse().unwrap();
     state
         .users
-        .set_email(user_id, Some(&email), true)
+        .set_email(session.user_id, Some(&email), true)
         .await
         .unwrap();
 
-    let raw_token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
-    let cookie_header = session_cookie(&raw_token);
+    let cookie_header = session.cookie();
 
     let (status, body) = post_form(state, "/api/get_profile", "", Some(&cookie_header)).await;
     assert_eq!(status, StatusCode::OK);
@@ -91,22 +68,7 @@ async fn get_profile_with_email_returns_email(#[case] backend: Backend) {
 #[tokio::test]
 async fn update_profile_persists_changes(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let user_id = state
-        .users
-        .create_user(
-            &"bob".parse::<Username>().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
-    let cookie = session_cookie(&token);
+    let cookie = create_user_and_session(&state, "bob").await.cookie();
 
     let (status, _) = post_form(
         Arc::clone(&state),
@@ -134,26 +96,8 @@ async fn update_profile_persists_changes(#[case] backend: Backend) {
 async fn list_sessions_returns_only_authenticated_users_sessions(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let user1_id = state
-        .users
-        .create_user(
-            &"carol".parse::<Username>().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let user2_id = state
-        .users
-        .create_user(
-            &"dave".parse::<Username>().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+    let user1_id = SeedUser::new("carol").seed(&state).await;
+    let user2_id = SeedUser::new("dave").seed(&state).await;
 
     let token1 = state
         .sessions
@@ -187,34 +131,16 @@ async fn list_sessions_returns_only_authenticated_users_sessions(#[case] backend
 #[tokio::test]
 async fn revoke_session_removes_session_and_reauth_fails(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let user_id = state
-        .users
-        .create_user(
-            &"eve".parse::<Username>().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+    let session = create_user_and_session(&state, "eve").await;
 
-    // Create two sessions: use token_a to authenticate, revoke token_b's hash.
-    let token_a = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
-    let token_b = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
+    // Create a second session: use `session` to authenticate, revoke token_b's hash.
+    let token_b = create_session_for(&state, session.user_id).await.token;
 
     // Authenticate token_b to get its hash from the session record.
     let record_b = state.sessions.authenticate(&token_b).await.unwrap();
     let hash_b = record_b.token_hash;
 
-    let cookie_a = session_cookie(&token_a);
+    let cookie_a = session.cookie();
     let body = format!(
         "token_hash={}",
         hash_b
@@ -246,22 +172,7 @@ async fn revoke_session_removes_session_and_reauth_fails(#[case] backend: Backen
 
 /// Create an authenticated operator and return its `session=` cookie header.
 async fn operator_cookie(state: &Arc<AppState>, username: &str) -> String {
-    let user_id = state
-        .users
-        .create_user(
-            &username.parse::<Username>().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
-    session_cookie(&token)
+    create_user_and_session(state, username).await.cookie()
 }
 
 // #433: create_invite emails the invitation link to the recipient and records the invite.
@@ -512,22 +423,7 @@ async fn create_invite_empty_hours_uses_default(#[case] backend: Backend) {
 #[tokio::test]
 async fn revoke_session_unknown_hash_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let user_id = state
-        .users
-        .create_user(
-            &"alice".parse::<Username>().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
-    let cookie = session_cookie(&token);
+    let cookie = create_user_and_session(&state, "alice").await.cookie();
 
     let (_status, _) = post_form(
         Arc::clone(&state),
@@ -545,40 +441,10 @@ async fn revoke_session_unknown_hash_returns_error(#[case] backend: Backend) {
 #[tokio::test]
 async fn revoke_session_other_user_hash_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let user1_id = state
-        .users
-        .create_user(
-            &"alice".parse::<Username>().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let user2_id = state
-        .users
-        .create_user(
-            &"bob".parse::<Username>().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+    let cookie1 = create_user_and_session(&state, "alice").await.cookie();
+    let user2 = create_user_and_session(&state, "bob").await;
+    let record2 = state.sessions.authenticate(&user2.token).await.unwrap();
 
-    let token1 = state
-        .sessions
-        .create_session(user1_id, "test session")
-        .await
-        .unwrap();
-    let token2 = state
-        .sessions
-        .create_session(user2_id, "test session")
-        .await
-        .unwrap();
-    let record2 = state.sessions.authenticate(&token2).await.unwrap();
-
-    let cookie1 = session_cookie(&token1);
     let (status, _) = post_form(
         Arc::clone(&state),
         "/api/revoke_session",
@@ -597,22 +463,7 @@ async fn list_invites_returns_error_when_policy_not_invite_only(#[case] backend:
     let TestEnv { state, base: _base } = backend.setup().await;
     // Policy defaults to Closed.
 
-    let user_id = state
-        .users
-        .create_user(
-            &"grace".parse::<Username>().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
-    let cookie = session_cookie(&token);
+    let cookie = create_user_and_session(&state, "grace").await.cookie();
 
     let (status, _) = post_form(Arc::clone(&state), "/api/list_invites", "", Some(&cookie)).await;
     assert_ne!(
@@ -651,17 +502,10 @@ async fn update_profile_unauthorized_returns_error(#[case] backend: Backend) {
 async fn update_profile_with_empty_fields_sets_to_none(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let username: Username = "empty".parse().unwrap();
-    let user_id = state
-        .users
-        .create_user(
-            &username,
-            &"password123".parse().unwrap(),
-            Some(&parse_display_name("Initial")),
-            false,
-        )
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("empty")
+        .display_name("Initial")
+        .seed(&state)
+        .await;
     state
         .users
         .update_profile(
@@ -674,12 +518,7 @@ async fn update_profile_with_empty_fields_sets_to_none(#[case] backend: Backend)
         .await
         .unwrap();
 
-    let raw_token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
-    let cookie_header = session_cookie(&raw_token);
+    let cookie_header = create_session_for(&state, user_id).await.cookie();
 
     // Clearing either field is the dispatch-`None` path: the typed
     // `Option<DisplayName>`/`Option<Bio>` wire args are *omitted* (serde decodes a
@@ -708,18 +547,9 @@ async fn update_profile_rejects_invalid_display_name(#[case] backend: Backend) {
     // from reaching this; a raw POST is the malformed-client path. Mirrors
     // web_auth::register_invalid_username_returns_error.
     let TestEnv { state, base: _base } = backend.setup().await;
-    let username: Username = "invalid_dn".parse().unwrap();
-    let user_id = state
-        .users
-        .create_user(&username, &"password123".parse().unwrap(), None, false)
-        .await
-        .unwrap();
-    let raw_token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
-    let cookie_header = session_cookie(&raw_token);
+    let session = create_user_and_session(&state, "invalid_dn").await;
+    let user_id = session.user_id;
+    let cookie_header = session.cookie();
 
     let overlong = "a".repeat(common::display_name::MAX_DISPLAY_NAME_CHARS + 1);
     let (status, _) = post_form(

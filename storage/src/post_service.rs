@@ -553,8 +553,8 @@ pub async fn perform_post_creation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, seed_user, Backend};
-    use common::test_support::{parse_password, parse_slug, parse_username};
+    use crate::test_support::{backends, Backend, SeedUser};
+    use common::test_support::parse_slug;
     use rstest::*;
     use rstest_reuse::*;
 
@@ -564,7 +564,7 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_creation_success(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = seed_user(&env.state).await;
+        let user_id = SeedUser::new("testuser").seed(&env.state).await;
         let storage = &*env.state.posts;
         let record = perform_post_creation(
             storage,
@@ -595,7 +595,7 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_creation_uses_explicit_title(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = seed_user(&env.state).await;
+        let user_id = SeedUser::new("testuser").seed(&env.state).await;
         let storage = &*env.state.posts;
         // The body has no heading, so any title must come from the explicit arg,
         // which also seeds the slug.
@@ -625,7 +625,7 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_creation_slug_override(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = seed_user(&env.state).await;
+        let user_id = SeedUser::new("testuser").seed(&env.state).await;
         let storage = &*env.state.posts;
         // The override arrives already validated as a `Slug` (the wire/CLI boundary
         // parses it); an invalid override can no longer reach this layer — that
@@ -656,7 +656,7 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_creation_empty_body(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = seed_user(&env.state).await;
+        let user_id = SeedUser::new("testuser").seed(&env.state).await;
         let storage = &*env.state.posts;
         let err = perform_post_creation(
             storage,
@@ -719,7 +719,7 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let user_id = seed_user(&env.state).await;
+        let user_id = SeedUser::new("testuser").seed(&env.state).await;
         let storage = &*env.state.posts;
         let record = perform_post_creation(
             storage,
@@ -748,7 +748,7 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_creation_unicode_title_preserves_slug(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = seed_user(&env.state).await;
+        let user_id = SeedUser::new("testuser").seed(&env.state).await;
         let storage = &*env.state.posts;
         let record = perform_post_creation(
             storage,
@@ -800,7 +800,7 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_creation_slug_conflict_retries(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = seed_user(&env.state).await;
+        let user_id = SeedUser::new("testuser").seed(&env.state).await;
         let storage = &*env.state.posts;
 
         let r1 = perform_post_creation(
@@ -866,7 +866,7 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_creation_slug_exhaustion(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = seed_user(&env.state).await;
+        let user_id = SeedUser::new("testuser").seed(&env.state).await;
         let storage = &*env.state.posts;
 
         let r1 = perform_post_creation(
@@ -933,7 +933,7 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_creation_canonicalizes_org_body(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = seed_user(&env.state).await;
+        let user_id = SeedUser::new("testuser").seed(&env.state).await;
         let storage = &*env.state.posts;
         // Title is derived from the original body's #+TITLE:, then the stored body is
         // canonicalized: the #+TITLE: line is stripped while #+FOO: and content stay.
@@ -969,7 +969,7 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_update_canonicalizes_org_body(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = seed_user(&env.state).await;
+        let user_id = SeedUser::new("testuser").seed(&env.state).await;
         let storage = &*env.state.posts;
         // Canonicalization runs on the update path too: a re-saved Org body has its
         // #+TITLE: stripped while an unrecognized #+FOO: and the content survive.
@@ -1028,7 +1028,7 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let user_id = seed_user(&env.state).await;
+        let user_id = SeedUser::new("testuser").seed(&env.state).await;
         let storage = &*env.state.posts;
         // Canonicalization is Org-only: a Markdown body with a leading `# H1` is
         // stored verbatim (the `# H1` is not stripped).
@@ -1057,7 +1057,7 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_creation_org_title_rendered_once(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = seed_user(&env.state).await;
+        let user_id = SeedUser::new("testuser").seed(&env.state).await;
         let storage = &*env.state.posts;
         // Double-title regression: the title text from the #+TITLE: line must not
         // survive into the stored body (hence rendered_html), so the page chrome's
@@ -1120,7 +1120,7 @@ mod tests {
     #[tokio::test]
     async fn perform_post_creation_dedups_on_idempotency_key(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = seed_user(&env.state).await;
+        let user_id = SeedUser::new("testuser").seed(&env.state).await;
         let storage = &*env.state.posts;
 
         let first =
@@ -1151,7 +1151,7 @@ mod tests {
     #[tokio::test]
     async fn post_id_for_idempotency_key_maps(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = seed_user(&env.state).await;
+        let user_id = SeedUser::new("testuser").seed(&env.state).await;
         let storage = &*env.state.posts;
 
         let record = perform_post_creation(storage, creation_with_key(user_id, "Body", Some("k")))
@@ -1175,18 +1175,8 @@ mod tests {
     #[tokio::test]
     async fn idempotency_key_is_per_user(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_a = seed_user(&env.state).await;
-        let user_b = env
-            .state
-            .users
-            .create_user(
-                &parse_username("userb"),
-                &parse_password("password123"),
-                None,
-                false,
-            )
-            .await
-            .unwrap();
+        let user_a = SeedUser::new("testuser").seed(&env.state).await;
+        let user_b = SeedUser::new("userb").seed(&env.state).await;
         let storage = &*env.state.posts;
 
         // The same key string from two users creates two independent posts.
