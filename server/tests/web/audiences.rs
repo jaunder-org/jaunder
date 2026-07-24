@@ -1,22 +1,14 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
-use common::ids::{AudienceId, UserId};
+use common::ids::AudienceId;
 use common::test_support::parse_audience_name;
 
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{create_session_for, post_form};
+use crate::helpers::{create_user_and_session, post_form};
 use storage::test_support::{backends, Backend, SeedUser, TestEnv};
-
-async fn make_user(state: &Arc<storage::AppState>) -> UserId {
-    SeedUser::new().seed(state).await.user_id
-}
-
-async fn cookie_for(state: &Arc<storage::AppState>, user_id: UserId) -> String {
-    create_session_for(state, user_id).await.cookie()
-}
 
 /// Parses the JSON-encoded `i64` that `create_audience` returns.
 fn parse_id(body: &str) -> i64 {
@@ -28,8 +20,8 @@ fn parse_id(body: &str) -> i64 {
 #[tokio::test]
 async fn audience_crud_round_trips(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let author = make_user(&state).await;
-    let cookie = cookie_for(&state, author).await;
+    let author = create_user_and_session(&state).await;
+    let cookie = author.cookie();
 
     let (status, body) = post_form(
         Arc::clone(&state),
@@ -79,7 +71,11 @@ async fn audience_crud_round_trips(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "delete failed: {body}");
-    let audiences = state.audiences.list_audiences(author).await.unwrap();
+    let audiences = state
+        .audiences
+        .list_audiences(author.user_id)
+        .await
+        .unwrap();
     assert!(audiences.is_empty(), "audience should be gone");
 }
 
@@ -88,8 +84,7 @@ async fn audience_crud_round_trips(#[case] backend: Backend) {
 #[tokio::test]
 async fn duplicate_audience_name_is_user_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let author = make_user(&state).await;
-    let cookie = cookie_for(&state, author).await;
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, _) = post_form(
         Arc::clone(&state),
@@ -120,8 +115,8 @@ async fn duplicate_audience_name_is_user_error(#[case] backend: Backend) {
 #[tokio::test]
 async fn create_audience_empty_name_is_rejected(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let author = make_user(&state).await;
-    let cookie = cookie_for(&state, author).await;
+    let author = create_user_and_session(&state).await;
+    let cookie = author.cookie();
 
     let (status, _body) = post_form(
         Arc::clone(&state),
@@ -134,7 +129,7 @@ async fn create_audience_empty_name_is_rejected(#[case] backend: Backend) {
     assert!(
         state
             .audiences
-            .list_audiences(author)
+            .list_audiences(author.user_id)
             .await
             .unwrap()
             .is_empty(),
@@ -148,8 +143,8 @@ async fn create_audience_empty_name_is_rejected(#[case] backend: Backend) {
 #[tokio::test]
 async fn rename_audience_empty_name_is_rejected(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let author = make_user(&state).await;
-    let cookie = cookie_for(&state, author).await;
+    let author = create_user_and_session(&state).await;
+    let cookie = author.cookie();
 
     let (_status, body) = post_form(
         Arc::clone(&state),
@@ -169,7 +164,11 @@ async fn rename_audience_empty_name_is_rejected(#[case] backend: Backend) {
     .await;
     assert_ne!(status, StatusCode::OK, "empty rename must be rejected");
     // Original name is unchanged.
-    let audiences = state.audiences.list_audiences(author).await.unwrap();
+    let audiences = state
+        .audiences
+        .list_audiences(author.user_id)
+        .await
+        .unwrap();
     assert_eq!(audiences.len(), 1);
     assert_eq!(audiences[0].name, "Friends", "name should be unchanged");
 }
@@ -179,24 +178,24 @@ async fn rename_audience_empty_name_is_rejected(#[case] backend: Backend) {
 #[tokio::test]
 async fn list_audience_members_returns_members(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let author = make_user(&state).await;
-    let subscriber = make_user(&state).await;
-    let cookie = cookie_for(&state, author).await;
+    let author = create_user_and_session(&state).await;
+    let subscriber = SeedUser::new().seed(&state).await.user_id;
+    let cookie = author.cookie();
     let channel = state.subscriptions.local_channel_id().await.unwrap();
     let sub_id = state
         .subscriptions
-        .subscribe(author, channel, &i64::from(subscriber).to_string())
+        .subscribe(author.user_id, channel, &i64::from(subscriber).to_string())
         .await
         .unwrap();
 
     let aud_id = state
         .audiences
-        .create_audience(author, &parse_audience_name("Friends"))
+        .create_audience(author.user_id, &parse_audience_name("Friends"))
         .await
         .unwrap();
     state
         .audiences
-        .add_member(author, aud_id, sub_id)
+        .add_member(author.user_id, aud_id, sub_id)
         .await
         .unwrap();
 
@@ -223,13 +222,13 @@ async fn list_audience_members_returns_members(#[case] backend: Backend) {
 #[tokio::test]
 async fn audience_membership_round_trips(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let author = make_user(&state).await;
-    let subscriber = make_user(&state).await;
-    let cookie = cookie_for(&state, author).await;
+    let author = create_user_and_session(&state).await;
+    let subscriber = SeedUser::new().seed(&state).await.user_id;
+    let cookie = author.cookie();
     let channel = state.subscriptions.local_channel_id().await.unwrap();
     let sub_id = state
         .subscriptions
-        .subscribe(author, channel, &i64::from(subscriber).to_string())
+        .subscribe(author.user_id, channel, &i64::from(subscriber).to_string())
         .await
         .unwrap();
 
@@ -251,7 +250,11 @@ async fn audience_membership_round_trips(#[case] backend: Backend) {
     .await;
     assert_eq!(status, StatusCode::OK, "add_member failed: {body}");
     assert_eq!(
-        state.audiences.list_members(author, aud_id).await.unwrap(),
+        state
+            .audiences
+            .list_members(author.user_id, aud_id)
+            .await
+            .unwrap(),
         vec![sub_id]
     );
 
@@ -265,7 +268,11 @@ async fn audience_membership_round_trips(#[case] backend: Backend) {
     .await;
     assert_eq!(status, StatusCode::OK, "idempotent add failed: {body}");
     assert_eq!(
-        state.audiences.list_members(author, aud_id).await.unwrap(),
+        state
+            .audiences
+            .list_members(author.user_id, aud_id)
+            .await
+            .unwrap(),
         vec![sub_id],
         "a duplicate add must not duplicate the membership"
     );
@@ -280,7 +287,7 @@ async fn audience_membership_round_trips(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::OK, "remove_member failed: {body}");
     assert!(state
         .audiences
-        .list_members(author, aud_id)
+        .list_members(author.user_id, aud_id)
         .await
         .unwrap()
         .is_empty());
@@ -300,7 +307,7 @@ async fn audience_membership_round_trips(#[case] backend: Backend) {
     );
     assert!(state
         .audiences
-        .list_members(author, aud_id)
+        .list_members(author.user_id, aud_id)
         .await
         .unwrap()
         .is_empty());
@@ -315,9 +322,8 @@ async fn audience_membership_round_trips(#[case] backend: Backend) {
 #[tokio::test]
 async fn cross_author_audience_id_is_scoped_away(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let alice = make_user(&state).await;
-    let bob = make_user(&state).await;
-    let subscriber = make_user(&state).await;
+    let alice = SeedUser::new().seed(&state).await.user_id;
+    let subscriber = SeedUser::new().seed(&state).await.user_id;
     let channel = state.subscriptions.local_channel_id().await.unwrap();
     // Alice owns an audience with a member.
     let alice_sub = state
@@ -335,7 +341,7 @@ async fn cross_author_audience_id_is_scoped_away(#[case] backend: Backend) {
         .add_member(alice, alice_aud, alice_sub)
         .await
         .unwrap();
-    let bob_cookie = cookie_for(&state, bob).await;
+    let bob_cookie = create_user_and_session(&state).await.cookie();
 
     // Bob lists Alice's audience members → succeeds, but sees nothing of hers.
     let (status, body) = post_form(
@@ -377,13 +383,17 @@ async fn cross_author_audience_id_is_scoped_away(#[case] backend: Backend) {
 #[tokio::test]
 async fn list_my_subscribers_resolves_usernames(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let author = make_user(&state).await;
+    let author = create_user_and_session(&state).await;
     let subscriber = SeedUser::new().seed(&state).await;
-    let cookie = cookie_for(&state, author).await;
+    let cookie = author.cookie();
     let channel = state.subscriptions.local_channel_id().await.unwrap();
     state
         .subscriptions
-        .subscribe(author, channel, &i64::from(subscriber.user_id).to_string())
+        .subscribe(
+            author.user_id,
+            channel,
+            &i64::from(subscriber.user_id).to_string(),
+        )
         .await
         .unwrap();
 
@@ -444,9 +454,8 @@ async fn audience_endpoints_require_authentication(#[case] backend: Backend) {
 #[tokio::test]
 async fn cross_author_add_member_is_rejected(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let alice = make_user(&state).await;
-    let bob = make_user(&state).await;
-    let subscriber = make_user(&state).await;
+    let alice = SeedUser::new().seed(&state).await.user_id;
+    let subscriber = SeedUser::new().seed(&state).await.user_id;
     let channel = state.subscriptions.local_channel_id().await.unwrap();
     // Alice owns a subscription and an audience (no members yet).
     let alice_sub = state
@@ -459,7 +468,7 @@ async fn cross_author_add_member_is_rejected(#[case] backend: Backend) {
         .create_audience(alice, &parse_audience_name("Secret"))
         .await
         .unwrap();
-    let bob_cookie = cookie_for(&state, bob).await;
+    let bob_cookie = create_user_and_session(&state).await.cookie();
 
     // Bob tries to inject Alice's subscription into Alice's audience.
     let (status, body) = post_form(
@@ -495,14 +504,13 @@ async fn cross_author_add_member_is_rejected(#[case] backend: Backend) {
 #[tokio::test]
 async fn cross_author_rename_and_delete_are_scoped(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let alice = make_user(&state).await;
-    let bob = make_user(&state).await;
+    let alice = SeedUser::new().seed(&state).await.user_id;
     let alice_aud = state
         .audiences
         .create_audience(alice, &parse_audience_name("Secret"))
         .await
         .unwrap();
-    let bob_cookie = cookie_for(&state, bob).await;
+    let bob_cookie = create_user_and_session(&state).await.cookie();
 
     // Bob renames Alice's audience → refused (store NotFound); name unchanged.
     let (status, body) = post_form(
