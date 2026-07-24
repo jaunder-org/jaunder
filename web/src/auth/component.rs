@@ -107,6 +107,10 @@ pub fn LogoutPage() -> impl IntoView {
         }
     });
 
+    // What actually paints: a "Logging out…" transient during the round-trip, then on
+    // success leptos_router's redirect->pushState navigates to "/" (the SSR-era full reload
+    // is gone, #591) on the same resolution that fills the action value — so a logout
+    // *failure* (no redirect) is the only case the resolution block below can show (#649).
     view! {
         <Topbar title="Logout".to_string() />
         <div class="j-scroll">
@@ -116,12 +120,8 @@ pub fn LogoutPage() -> impl IntoView {
                     logout_action
                         .value()
                         .get()
-                        .map(|r: Result<(), WebError>| {
-                            match r {
-                                Ok(()) => view! { <p>"You have been logged out."</p> }.into_any(),
-                                Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
-                            }
-                        })
+                        .and_then(Result::err)
+                        .map(|e| view! { <p class="error">{e.to_string()}</p> })
                 }}
             </div>
         </div>
