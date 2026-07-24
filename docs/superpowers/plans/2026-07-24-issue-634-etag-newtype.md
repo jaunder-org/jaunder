@@ -468,7 +468,7 @@ Run `cargo xtask check` first.
 
 ---
 
-## Task 4 — ✅ DONE (commit pending): `media.rs` producer + consumer
+## Task 4 — ✅ DONE (commit 9ee82e94): `media.rs` producer + consumer
 
 > Also fixed `server/tests/misc/media_handlers.rs` (not in the original file
 > list): its `serve_returns_304_on_if_none_match` hardcoded the old bare-hash
@@ -543,7 +543,7 @@ Run `cargo xtask check` first.
 
 ---
 
-## Task 5: `atompub/posts.rs` producer + consumer
+## Task 5 — ✅ DONE (commit pending): `atompub/posts.rs` producer + consumer
 
 **Files:**
 

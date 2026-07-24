@@ -9,10 +9,10 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use common::absolute_url::{compose, AbsoluteUrl};
 use common::atompub::{entry_from_xml, entry_to_xml, render_feed, FeedMeta};
+use common::etag::ETag;
 use common::ids::PostId;
 use common::pagination::PageSize;
 use common::tag::TagLabel;
@@ -72,7 +72,7 @@ impl<S: Send + Sync> FromRequestParts<S> for PostServices {
 /// the draft flag) — never a timestamp. So identical content yields an identical
 /// `ETag` and an idempotent re-publish does not change it, removing the time-based
 /// divergence false-positive (#78).
-pub(crate) fn etag_for(post: &PostRecord) -> String {
+pub(crate) fn etag_for(post: &PostRecord) -> ETag {
     /// The content projection that the `ETag` hashes.  Every field is reduced to a
     /// plain, `Serialize`-able primitive; `PostFormat`/`PostTag` are never hashed
     /// directly (the latter carries DB-assigned ids that would differ between two
@@ -96,15 +96,16 @@ pub(crate) fn etag_for(post: &PostRecord) -> String {
         draft: post.published_at.is_none(),
     };
     let bytes = serde_json::to_vec(&content).unwrap_or_else(|_| Vec::new());
-    format!("\"sha256-{:x}\"", Sha256::digest(&bytes))
+    ETag::sha256_of(&bytes)
 }
 
 /// Whether a request's `If-Match` precondition is satisfied for a post with ETAG.
 /// An absent (or non-UTF-8) header is unconditional; `*` matches any current
 /// representation; otherwise the value must equal ETAG. Shared by PUT and DELETE.
-fn if_match_satisfied(headers: &HeaderMap, etag: &str) -> bool {
+fn if_match_satisfied(headers: &HeaderMap, etag: &ETag) -> bool {
     match headers.get(header::IF_MATCH).and_then(|v| v.to_str().ok()) {
-        Some(if_match) => if_match == "*" || if_match == etag,
+        // `ETag: PartialEq<&str>` (the reverse `str: PartialEq<ETag>` isn't derived).
+        Some(if_match) => if_match == "*" || *etag == if_match,
         None => true,
     }
 }
@@ -268,7 +269,7 @@ pub async fn member_get(
     Ok((
         [
             (header::CONTENT_TYPE, ENTRY_CONTENT_TYPE.to_string()),
-            (header::ETAG, etag_for(&post)),
+            (header::ETAG, etag_for(&post).to_string()),
         ],
         xml,
     )
@@ -445,7 +446,7 @@ fn post_entry_response(
         [
             (header::CONTENT_TYPE, ENTRY_CONTENT_TYPE.to_string()),
             (header::LOCATION, location.to_string()),
-            (header::ETAG, etag_for(post)),
+            (header::ETAG, etag_for(post).to_string()),
         ],
         xml,
     )
@@ -540,7 +541,7 @@ pub async fn member_put(
         StatusCode::OK,
         [
             (header::CONTENT_TYPE, ENTRY_CONTENT_TYPE.to_string()),
-            (header::ETAG, etag_for(&post)),
+            (header::ETAG, etag_for(&post).to_string()),
         ],
         xml,
     )
