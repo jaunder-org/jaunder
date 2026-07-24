@@ -1,18 +1,15 @@
 use common::ids::PostId;
 use common::seed::TagSummary;
 use common::tag::TagLabel;
-use common::visibility::AudienceTarget;
 use std::sync::Arc;
 
 use axum::http::StatusCode;
-use chrono::Utc;
-use storage::{CreatePostInput, PostFormat, RenderedHtml};
 
 use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::post_json;
-use storage::test_support::{backends, Backend, SeedUser, TestEnv};
+use storage::test_support::{backends, Backend, SeedRawPost, SeedUser, TestEnv};
 
 async fn seed_user_and_tagged_post(
     state: &Arc<storage::AppState>,
@@ -20,30 +17,12 @@ async fn seed_user_and_tagged_post(
     tags: &[&str],
 ) -> PostId {
     let user_id = SeedUser::new().seed(state).await.user_id;
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id,
-            title: Some(format!("Post {slug}").into()),
-            slug: slug.parse().unwrap(),
-            body: format!("body {slug}").into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted(format!("<p>body {slug}</p>")),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
+    SeedRawPost::new(user_id)
+        .slug(slug)
+        .tags(tags.iter().copied())
+        .seed(state)
         .await
-        .expect("create_post failed");
-    for display in tags {
-        state
-            .posts
-            .tag_post(post_id, &display.parse::<TagLabel>().unwrap())
-            .await
-            .unwrap();
-    }
-    post_id
+        .post_id
 }
 
 #[apply(backends)]

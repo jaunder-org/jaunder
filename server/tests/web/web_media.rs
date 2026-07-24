@@ -1,4 +1,3 @@
-use common::visibility::AudienceTarget;
 use std::sync::Arc;
 
 use axum::{
@@ -22,7 +21,9 @@ use common::media::{MaxFileSize, MediaSource, UploadResponse, UserQuota};
 use common::test_support::{
     parse_byte_size, parse_content_hash, parse_content_type, parse_filename,
 };
-use storage::test_support::{backends, backends_matrix, noop_mailer, Backend, TestEnv};
+use storage::test_support::{
+    backends, backends_matrix, noop_mailer, Backend, SeedRawPost, TestEnv,
+};
 
 // ─── media_usage ──────────────────────────────────────────────
 
@@ -229,9 +230,6 @@ async fn delete_media_succeeds_for_existing_item(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend: Backend) {
-    use common::slug::Slug;
-    use storage::{CreatePostInput, PostFormat, RenderedHtml};
-
     let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let user_id = session.user_id;
@@ -258,22 +256,10 @@ async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend:
         Err(e) => panic!("create_media failed: {e}"),
     }
 
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id,
-            title: Some("with media".into()),
-            slug: "with-media".parse::<Slug>().expect("valid slug"),
-            body: format!("![inline]({media_url})").into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted(format!("<p><img src=\"{media_url}\"></p>")),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("create_post failed");
+    let post = SeedRawPost::new(user_id)
+        .body(format!("![inline]({media_url})"))
+        .seed(&state)
+        .await;
 
     let cookie = session.cookie();
 
@@ -290,7 +276,7 @@ async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend:
     );
     assert_eq!(
         result.referenced_in_posts,
-        vec![post_id],
+        vec![post.post_id],
         "referenced_in_posts should list the referencing post"
     );
 }
