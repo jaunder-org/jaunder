@@ -12,7 +12,7 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::post_json;
-use storage::test_support::{backends, Backend, TestEnv};
+use storage::test_support::{backends, Backend, SeedUser, TestEnv};
 
 async fn seed_user_and_tagged_post(
     state: &Arc<storage::AppState>,
@@ -20,16 +20,7 @@ async fn seed_user_and_tagged_post(
     slug: &str,
     tags: &[&str],
 ) -> PostId {
-    let user_id = state
-        .users
-        .create_user(
-            &username.parse().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .expect("create_user failed");
+    let user_id = SeedUser::new(username).seed(state).await;
     let post_id = state
         .posts
         .create_post(&CreatePostInput {

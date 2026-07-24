@@ -2,49 +2,33 @@ use std::sync::Arc;
 
 use axum::http::StatusCode;
 use chrono::Utc;
-use common::ids::UserId;
 use common::mailer::test_utils::CapturingMailSender;
 use common::test_support::parse_email;
-use common::token::RawToken;
 use common::username::Username;
 use storage::AppState;
 
 use crate::helpers::{
-    assert_no_email, assert_one_absolute_link_email, post_form_with_mailer, setup_with_base_url,
+    assert_no_email, assert_one_absolute_link_email, create_user_and_session,
+    post_form_with_mailer, setup_with_base_url, SeededSession,
 };
-use storage::test_support::{backends, Backend, TestEnv};
+use storage::test_support::{backends, Backend, SeedUser, TestEnv};
 
 use rstest::*;
 use rstest_reuse::*;
 
-/// Creates a user with a verified email address. Returns (`user_id`, `raw_session_token`).
+/// Creates a user with a verified email address and an authenticated session.
 async fn create_user_with_verified_email(
     state: &Arc<AppState>,
     username: &str,
     email: &str,
-) -> (UserId, RawToken) {
-    let user_id = state
-        .users
-        .create_user(
-            &username.parse::<Username>().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let email_addr = parse_email(email);
+) -> SeededSession {
+    let session = create_user_and_session(state, username).await;
     state
         .users
-        .set_email(user_id, Some(&email_addr), true)
+        .set_email(session.user_id, Some(&parse_email(email)), true)
         .await
-        .unwrap();
-    let raw_token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
-    (user_id, raw_token)
+        .expect("set verified email");
+    session
 }
 
 // M3.11.7: request_password_reset for a user with a verified email sends a reset email.
@@ -104,16 +88,7 @@ async fn request_password_reset_returns_error_for_user_without_verified_email(
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
-    state
-        .users
-        .create_user(
-            &"bob".parse::<Username>().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+    SeedUser::new("bob").seed(&state).await;
 
     let (status, _body) = post_form_with_mailer(
         Arc::clone(&state),
@@ -170,8 +145,8 @@ async fn confirm_password_reset_sets_password_and_revokes_sessions(#[case] backe
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let (user_id, _session) =
-        create_user_with_verified_email(&state, "carol", "carol@example.com").await;
+    let session = create_user_with_verified_email(&state, "carol", "carol@example.com").await;
+    let user_id = session.user_id;
     // Create a second session to ensure all are revoked
     state
         .sessions
@@ -230,7 +205,9 @@ async fn confirm_password_reset_with_expired_token_returns_error(#[case] backend
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let (user_id, _) = create_user_with_verified_email(&state, "dave", "dave@example.com").await;
+    let user_id = create_user_with_verified_email(&state, "dave", "dave@example.com")
+        .await
+        .user_id;
 
     let expires_at = Utc::now() - chrono::Duration::hours(1);
     let raw_token = state
@@ -303,7 +280,9 @@ async fn confirm_password_reset_with_used_token_returns_error(#[case] backend: B
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let (user_id, _) = create_user_with_verified_email(&state, "eve", "eve@example.com").await;
+    let user_id = create_user_with_verified_email(&state, "eve", "eve@example.com")
+        .await
+        .user_id;
 
     let expires_at = Utc::now() + chrono::Duration::hours(1);
     let raw_token = state
@@ -346,7 +325,9 @@ async fn confirm_password_reset_with_short_password_returns_error(#[case] backen
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let (user_id, _) = create_user_with_verified_email(&state, "frank", "frank@example.com").await;
+    let user_id = create_user_with_verified_email(&state, "frank", "frank@example.com")
+        .await
+        .user_id;
 
     let expires_at = Utc::now() + chrono::Duration::hours(1);
     let raw_token = state

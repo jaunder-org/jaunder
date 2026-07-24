@@ -7,10 +7,8 @@ use axum::{
     Router,
 };
 use chrono::{Datelike, Utc};
-use common::password::Password;
 use common::slug::Slug;
 use common::tag::TagLabel;
-use common::username::Username;
 use common::visibility::AudienceTarget;
 use storage::{CreatePostInput, PostFormat, RenderedHtml};
 use tower::ServiceExt;
@@ -18,7 +16,7 @@ use tower::ServiceExt;
 use rstest::*;
 use rstest_reuse::*;
 
-use storage::test_support::{backends, Backend, TestEnv};
+use storage::test_support::{backends, Backend, SeedUser, TestEnv};
 
 /// A recognizable stand-in for the real `index.html`, so tests can tell a
 /// shell-fallback response apart from a projected one.
@@ -39,13 +37,7 @@ fn projector_app(state: &Arc<storage::AppState>) -> Router {
 
 /// Seed a published, `rust`-tagged post for `alice`.
 async fn seed_tagged_post(state: &Arc<storage::AppState>) {
-    let username: Username = "alice".parse().unwrap();
-    let password: Password = "password123".parse().unwrap();
-    let user_id = state
-        .users
-        .create_user(&username, &password, None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("alice").seed(state).await;
     let post_id = state
         .posts
         .create_post(&CreatePostInput {
@@ -71,13 +63,7 @@ async fn seed_tagged_post(state: &Arc<storage::AppState>) {
 
 /// Seed a published post for `alice` and return the permalink components.
 async fn seed_published_post(state: &Arc<storage::AppState>) -> (String, i32, u32, u32, String) {
-    let username: Username = "alice".parse().unwrap();
-    let password: Password = "password123".parse().unwrap();
-    let user_id = state
-        .users
-        .create_user(&username, &password, None, false)
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("alice").seed(state).await;
     let now = Utc::now();
     state
         .posts
