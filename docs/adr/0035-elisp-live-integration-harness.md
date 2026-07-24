@@ -134,3 +134,27 @@ owns the lifecycle).
 - Bad: a new server surface (`app-password-create`) must be kept secure — it
   mints a real credential; it bypasses no auth a CLI operator doesn't already
   have (the CLI already creates users and runs the server).
+
+## Amendment — 2026-07-23 (#628): one server per suite, per-test fallback
+
+The per-test lifecycle in Decision Outcome §2 flaked in CI: each of the 14 tests
+booted its own server, so each was an independent chance to hit the
+`auth readiness` poll timeout on a contended VM (partial failures like 1/14).
+Two changes reduce this without altering what the tests assert:
+
+- **Readiness budget** (`jaunder-test--wait`) is now a wall-clock deadline
+  (default 30s, `JAUNDER_TEST_READY_TIMEOUT`-tunable) instead of a fixed
+  100×0.1s iteration count, so a slow per-attempt connect (near its `plz`
+  connect-timeout, now 2s) can't starve the poll count.
+- **One shared server per suite.** `run-integration-tests.el` boots a single
+  server via `jaunder-test--server-up`, binds the harness globals for the whole
+  batch, and tears it down after — so the three readiness gates run **once**,
+  not 14×. `jaunder-test--with-live-server` now _reuses_ an already-bound server
+  and only self-boots when none is bound, preserving standalone interactive runs
+  (`M-x ert` on one test).
+
+Isolation implication: tests now share one DB and one `alice` user, so a new
+test must stay collision-tolerant (assert on its own returned
+ids/slugs/statuses, as all current tests already do) or opt back into its own
+server via the fallback macro. Accordingly the §4 smoke assertion is now
+"returns the user's posts collection (HTTP 200)", no longer "empty".

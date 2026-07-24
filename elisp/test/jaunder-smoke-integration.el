@@ -24,7 +24,7 @@
      (should (string-match-p "slug" (plist-get r :body))))))
 
 (ert-deftest jaunder-smoke-authenticated-collection ()
-  "An app-password Basic request returns the user's (empty) posts collection."
+  "An app-password Basic request returns the user's posts collection (HTTP 200)."
   (jaunder-test--with-live-server
    (let ((r (jaunder--http-request
              "GET" (jaunder--build-url jaunder-test-base-url "atompub" jaunder-test-username "posts"))))
