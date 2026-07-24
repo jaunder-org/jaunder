@@ -39,7 +39,13 @@ const chromiumLaunchOptions = {
 export default defineConfig({
   testDir: "./tests",
   timeout: 30 * 1000,
-  expect: { timeout: 5000 },
+  // 10s assertion timeout (not Playwright's 2s / our old 5s): this CSR app populates
+  // fields from async config/data fetches, which on the slowest combo (firefox+sqlite)
+  // can exceed 5s — the #609 admin-site base_url flake. 10s is the value assertions
+  // across the suite already bumped to by hand, so making it the default lets those
+  // per-assertion overrides go. A genuine assertion failure now surfaces in 10s,
+  // bounded by the browser-scaled 30s whole-test budget (slowBrowserTimeoutMs).
+  expect: { timeout: 10000 },
   fullyParallel: workers > 1,
   forbidOnly: !!process.env.CI,
   workers,
