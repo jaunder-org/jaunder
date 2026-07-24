@@ -1,4 +1,3 @@
-pub(crate) mod signal_read;
 pub mod ui;
 pub use ui::{Avatar, Icon, Icons, Sidebar, Topbar};
 

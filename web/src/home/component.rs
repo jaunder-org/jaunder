@@ -6,7 +6,6 @@
 use leptos::prelude::*;
 
 use crate::feed_discovery::FeedDiscovery;
-use crate::pages::signal_read::read_signal;
 use crate::posts::list_local_timeline;
 use crate::timeline::{TimelineRows, TimelineState};
 use common::feed::FeedSurface;
@@ -58,7 +57,7 @@ pub fn HomePage() -> impl IntoView {
     // the failure message changes — not on every `status` write (`resolve()` sets
     // `Idle` on each refresh; load-more toggles `InFlight`). Reading `status` raw
     // would needlessly rebuild the whole page on every refresh/paginate.
-    let read_error = Memo::new(move |_| read_signal!(state.status).into_failure());
+    let read_error = Memo::new(move |_| state.status.get().into_failure());
 
     // The masthead (topbar + anon Sign-in/Register links + hero) is the shared
     // pure fn the projector renders too, so both sides coincide by construction

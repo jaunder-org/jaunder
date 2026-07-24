@@ -65,8 +65,8 @@ impl LoadStatus {
 
     /// Consume the status into the failure message to display, if the last load
     /// failed. Owned (`self`) so the reactive callers — which hold a cloned
-    /// `LoadStatus` from `read_signal!` — can return the `String` directly
-    /// instead of re-matching the `Failed` arm inline.
+    /// `LoadStatus` from the status signal's `.get()` — can return the `String`
+    /// directly instead of re-matching the `Failed` arm inline.
     #[must_use]
     pub fn into_failure(self) -> Option<String> {
         match self {
