@@ -4,7 +4,7 @@ use macros::StrNewtype;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{tag::Tag, username::Username};
+use crate::{media::ContentType, tag::Tag, username::Username};
 
 /// A validated, canonical feed identity path (e.g. `/feed.rss`,
 /// `/~alice/tags/rust/feed.atom`): the dedup/SQL key for `feed_cache` and
@@ -64,13 +64,18 @@ impl FeedFormat {
             FeedFormat::Json => "json",
         }
     }
+    /// The media `Content-Type` served for this feed format. Minted via the trusted
+    /// [`ContentType::from_trusted`] door from a fixed, known-valid `&'static` literal
+    /// (like `detect_content_type`) — `format_content_types` pins that each literal is a
+    /// valid media type, so an edit to an invalid one fails the build, not production.
     #[must_use]
-    pub fn content_type(self) -> &'static str {
-        match self {
+    pub fn content_type(self) -> ContentType {
+        let literal = match self {
             FeedFormat::Rss => "application/rss+xml; charset=utf-8",
             FeedFormat::Atom => "application/atom+xml; charset=utf-8",
             FeedFormat::Json => "application/feed+json",
-        }
+        };
+        ContentType::from_trusted(literal)
     }
 }
 
@@ -251,15 +256,19 @@ mod tests {
 
     #[test]
     fn format_content_types() {
+        use crate::test_support::parse_content_type;
         assert_eq!(
             FeedFormat::Rss.content_type(),
-            "application/rss+xml; charset=utf-8"
+            parse_content_type("application/rss+xml; charset=utf-8")
         );
         assert_eq!(
             FeedFormat::Atom.content_type(),
-            "application/atom+xml; charset=utf-8"
+            parse_content_type("application/atom+xml; charset=utf-8")
         );
-        assert_eq!(FeedFormat::Json.content_type(), "application/feed+json");
+        assert_eq!(
+            FeedFormat::Json.content_type(),
+            parse_content_type("application/feed+json")
+        );
     }
 
     #[test]

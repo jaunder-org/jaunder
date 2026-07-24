@@ -266,6 +266,22 @@ pub fn media_url(source: &str, sha256: &ContentHash, filename: &str) -> String {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, StrNewtype)]
 pub struct ContentType(String);
 
+impl ContentType {
+    /// Mint a `ContentType` from a string the caller asserts is a valid media type —
+    /// a fixed `&'static` literal or other known-valid source — bypassing the
+    /// [`FromStr`] check. The trusted-producer door, `pub(crate)` so outside this crate
+    /// the only way in stays the validating `FromStr`; grep `ContentType::from_trusted`
+    /// to enumerate every mint site, each pinned by a test that the value is valid
+    /// (`detect_content_type_outputs_are_valid`, `feed_path::…::format_content_types`).
+    /// (The `#398` `rendered-html-from-trusted` gate reserves the `from_trusted` name for
+    /// `RenderedHtml`'s XSS-sensitive door but exempts the `ContentType::` qualifier —
+    /// this door mints a media type, never HTML.)
+    #[must_use]
+    pub(crate) fn from_trusted(content_type: impl Into<String>) -> Self {
+        Self(content_type.into())
+    }
+}
+
 /// Error returned when a string is not a valid media `Content-Type` value.
 #[derive(Debug, Error)]
 #[error("content type must be a `type/subtype` media type, e.g. `image/png`")]
@@ -327,10 +343,10 @@ pub fn should_inline(content_type: &str) -> bool {
 }
 
 /// Extension-based content type detection. Falls back to `application/octet-stream`.
-/// The trusted producer door: it mints the [`ContentType`] directly from its canonical
-/// `&'static str` table (all valid `type/subtype` literals), the way `render` mints
-/// `RenderedHtml` — no `FromStr` round-trip, since the table is fixed and known-valid
-/// (pinned by `detect_content_type_outputs_are_valid`).
+/// Mints the [`ContentType`] via [`ContentType::from_trusted`] from its canonical
+/// `&'static str` table (all valid `type/subtype` literals) — no `FromStr` round-trip,
+/// since the table is fixed and known-valid (pinned by
+/// `detect_content_type_outputs_are_valid`).
 #[must_use]
 pub fn detect_content_type(filename: &str) -> ContentType {
     static EXTENSIONS: [(&[&str], &str); 12] = [
@@ -356,10 +372,10 @@ pub fn detect_content_type(filename: &str) -> ContentType {
 
     for (extensions, content_type) in EXTENSIONS {
         if extensions.contains(&ext.as_str()) {
-            return ContentType(content_type.to_owned());
+            return ContentType::from_trusted(content_type);
         }
     }
-    ContentType("application/octet-stream".to_owned())
+    ContentType::from_trusted("application/octet-stream")
 }
 
 /// The maximum accepted upload size, in bytes (site config `media.max_file_size_bytes`).
