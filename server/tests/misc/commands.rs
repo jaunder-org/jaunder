@@ -6,6 +6,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use common::password::Password;
+use common::test_support::parse_invite_ttl_hours;
 use common::username::Username;
 use jaunder::cli::StorageArgs;
 use jaunder::commands::{
@@ -333,7 +334,9 @@ async fn cmd_user_invite_creates_retrievable_invite(#[case] backend: Backend) {
     let (args, _pg) = storage_args(backend, &base).await;
     cmd_init(&args, false).await.expect("init");
 
-    cmd_user_invite(&args, Some(48)).await.expect("user invite");
+    cmd_user_invite(&args, Some(parse_invite_ttl_hours("48")))
+        .await
+        .expect("user invite");
 
     let state = open_existing_database(&args.db).await.expect("open db");
     let invites = state.invites.list_invites().await.expect("list invites");
@@ -354,18 +357,10 @@ async fn cmd_user_invite_default_expires_in(#[case] backend: Backend) {
     assert_eq!(invites.len(), 1, "exactly one invite should exist");
 }
 
-#[apply(backends)]
-#[tokio::test]
-async fn cmd_user_invite_too_large_expires_in_returns_error(#[case] backend: Backend) {
-    let base = TempDir::new().expect("temp dir");
-    let (args, _pg) = storage_args(backend, &base).await;
-    cmd_init(&args, false).await.expect("init");
-
-    // u64::MAX is definitely too large for i64
-    let result = cmd_user_invite(&args, Some(u64::MAX)).await;
-    assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("too large"));
-}
+// #582: the out-of-range rejection that this test used to exercise (in-body `i64::try_from`)
+// moved into `InviteTtlHours` — an out-of-range `--expires-in` is now refused by clap's
+// `FromStr` parse, upstream of `cmd_user_invite`, and is covered by the newtype's unit test.
+// A valid explicit TTL is covered by `cmd_user_invite_creates_retrievable_invite`.
 
 // M6.3.2: backup command writes a directory-mode backup.
 #[apply(backends)]
