@@ -1,4 +1,4 @@
-use crate::error::{InternalError, InternalResult};
+use crate::error::{ErrorKind, InternalError, InternalResult};
 use axum::{
     extract::FromRequestParts,
     http::{request::Parts, StatusCode},
@@ -8,8 +8,9 @@ use common::ids::UserId;
 use common::token::{RawToken, TokenHash};
 use common::username::Username;
 use host::auth::resolve_credential;
+use leptos::prelude::expect_context;
 use std::sync::Arc;
-use storage::SessionStorage;
+use storage::{SessionStorage, UserStorage};
 
 // `CookieSettings` now lives in `host` (pure config data); re-export it so the
 // long-standing `web::auth::CookieSettings` path (the `server` crate provides it
@@ -113,6 +114,55 @@ pub async fn require_auth() -> InternalResult<AuthUser> {
     require_auth_with_parts(leptos::context::use_context::<Parts>()).await
 }
 
+/// Authorizes an operator-only server function: the caller must be authenticated
+/// (`require_auth`) **and** carry the `is_operator` flag. This is the hard guard
+/// (it *errors* `Unauthorized` for a non-operator) — distinct from the soft,
+/// `Ok(false)`-returning operator checks the warning-banner endpoints use. It
+/// lives here beside `require_auth`, not in any one vertical, because it is a
+/// shared authorization primitive (backup + site both gate on it).
+///
+/// # Errors
+///
+/// Returns `Err(Unauthorized)` if the caller is unauthenticated, the user no
+/// longer exists, or the user is not an operator.
+pub async fn require_operator() -> InternalResult<()> {
+    let auth = require_auth().await?;
+    let users = expect_context::<Arc<dyn UserStorage>>();
+    let Some(user) = users.get_user(auth.user_id).await? else {
+        return Err(InternalError::unauthorized("user does not exist"));
+    };
+
+    if !user.is_operator {
+        return Err(InternalError::unauthorized("operator access required"));
+    }
+
+    Ok(())
+}
+
+/// Soft operator check for the warning-banner endpoints: `Ok(true)` when the caller
+/// is an authenticated operator, `Ok(false)` when unauthenticated or a non-operator
+/// (so the banner simply stays hidden). Unlike [`require_operator`], it never returns
+/// `Unauthorized` — it errors only on a non-auth failure (e.g. storage). Both the
+/// backup and site warning endpoints gate on it, so it lives here beside the hard
+/// guard rather than being duplicated per vertical.
+///
+/// # Errors
+///
+/// Returns `Err` only on a non-auth failure resolving the session or loading the user
+/// (e.g. a storage error) — never for a merely unauthenticated/non-operator caller.
+pub async fn is_operator_soft() -> InternalResult<bool> {
+    let auth = match require_auth().await {
+        Ok(auth) => auth,
+        Err(error) if error.kind() == ErrorKind::Auth => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    let users = expect_context::<Arc<dyn UserStorage>>();
+    Ok(users
+        .get_user(auth.user_id)
+        .await?
+        .is_some_and(|u| u.is_operator))
+}
+
 fn auth_rejection_error(error: AuthRejection) -> InternalError {
     match error {
         AuthRejection::MissingToken => InternalError::unauthorized("missing session token"),
@@ -196,6 +246,29 @@ mod tests {
     use super::*;
     use common::test_support::{parse_raw_token, parse_username};
     use leptos::prelude::{provide_context, Owner};
+    // `require_operator`, `Arc`, `UserStorage`, `UserId` arrive via `super::*`; only the
+    // operator test's fixtures are new here.
+    use crate::test_support::auth_parts;
+    use storage::MockUserStorage;
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn require_operator_rejects_when_user_absent() {
+        let owner = Owner::new();
+        owner.set();
+        provide_context(auth_parts(UserId::from(1), "ghost"));
+        let mut users = MockUserStorage::new();
+        users.expect_get_user().returning(|_uid| Ok(None));
+        provide_context(Arc::new(users) as Arc<dyn UserStorage>);
+
+        let result = require_operator().await;
+        drop(owner);
+        let err = result.unwrap_err();
+        assert!(matches!(
+            crate::error::project(err.kind(), err.public_message()),
+            crate::error::WebError::Unauthorized
+        ));
+    }
 
     #[test]
     fn verify_basic_username_passes_without_expected_username() {

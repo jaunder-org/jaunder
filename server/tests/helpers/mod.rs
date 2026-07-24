@@ -68,6 +68,7 @@ pub fn ensure_server_fns_registered() {
         server_fn::axum::register_explicit::<web::posts::PostAudienceSelection>();
         server_fn::axum::register_explicit::<web::site::GetSiteIdentity>();
         server_fn::axum::register_explicit::<web::site::UpdateSiteIdentity>();
+        server_fn::axum::register_explicit::<web::site::BaseUrlWarningVisible>();
         server_fn::axum::register_explicit::<web::media::ListMyMedia>();
         server_fn::axum::register_explicit::<web::media::MediaUsage>();
         server_fn::axum::register_explicit::<web::media::DeleteMedia>();

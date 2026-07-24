@@ -50,7 +50,9 @@ pub use session::{
 
 // Public re-exports — must remain accessible as crate::auth::* for other modules.
 #[cfg(feature = "server")]
-pub use server::{require_auth, AuthRejection, AuthUser, CookieSettings};
+pub use server::{
+    is_operator_soft, require_auth, require_operator, AuthRejection, AuthUser, CookieSettings,
+};
 // Exposed for the sibling `registration` vertical, which logs a new user in after
 // creating their account.
 #[cfg(feature = "server")]

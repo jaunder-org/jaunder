@@ -6,39 +6,22 @@ use common::backup::{BackupConfig, BackupMode, BackupSchedule, DestinationPath, 
 use leptos::prelude::*;
 
 #[cfg(feature = "server")]
-use super::server::require_operator;
-
-#[cfg(feature = "server")]
 use {
-    crate::auth::require_auth,
-    crate::error::{ErrorKind, InternalError},
+    crate::auth::{is_operator_soft, require_operator},
+    crate::error::InternalError,
     std::sync::Arc,
-    storage::{SiteConfigStorage, UserStorage},
+    storage::SiteConfigStorage,
 };
 
 #[server(endpoint = "/backup_warning_visible")]
 #[tracing::instrument(name = "web.backup.warning_visible")]
 pub async fn backup_warning_visible() -> WebResult<bool> {
     boundary!("backup_warning_visible", {
-        let auth = match require_auth().await {
-            Ok(auth) => auth,
-            Err(error) if error.kind() == ErrorKind::Auth => return Ok(false),
-            Err(error) => return Err(error),
-        };
-
-        let users = expect_context::<Arc<dyn UserStorage>>();
-        let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
-        let is_operator = users
-            .get_user(auth.user_id)
-            .await?
-            .is_some_and(|u| u.is_operator);
-
-        if !is_operator {
+        if !is_operator_soft().await? {
             return Ok(false);
         }
-
+        let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
         let config = site_config.get_backup_config().await?;
-
         Ok(config.destination_path.is_none())
     })
 }
