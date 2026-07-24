@@ -23,7 +23,7 @@ async fn request_email_verification_creates_row_and_sends_email(#[case] backend:
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let cookie = create_user_and_session(&state, "alice").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, _body) = post_form_with_mailer(
         Arc::clone(&state),
@@ -46,7 +46,7 @@ async fn request_email_verification_without_base_url_returns_error(#[case] backe
     let TestEnv { state, base: _base } = backend.setup().await; // no base_url seeded
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let cookie = create_user_and_session(&state, "alice").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, _body) = post_form_with_mailer(
         Arc::clone(&state),
@@ -68,7 +68,7 @@ async fn verify_email_with_valid_token_sets_email_verified(#[case] backend: Back
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let user_id = SeedUser::new("bob").seed(&state).await;
+    let user_id = SeedUser::new().seed(&state).await.user_id;
 
     let email = parse_email("bob@example.com");
     let expires_at = Utc::now() + chrono::Duration::hours(24);
@@ -101,7 +101,7 @@ async fn verify_email_with_expired_token_returns_error(#[case] backend: Backend)
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let user_id = SeedUser::new("carol").seed(&state).await;
+    let user_id = SeedUser::new().seed(&state).await.user_id;
 
     let expires_at = Utc::now() - chrono::Duration::hours(1);
     let raw_token = state
@@ -190,7 +190,7 @@ async fn request_email_verification_invalid_email_returns_error(#[case] backend:
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let cookie_header = create_user_and_session(&state, "alice").await.cookie();
+    let cookie_header = create_user_and_session(&state).await.cookie();
 
     let (status, _) = post_form_with_mailer(
         state,

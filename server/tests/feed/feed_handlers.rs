@@ -27,13 +27,13 @@ async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_typ
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let app = make_app(state.clone(), &base);
 
-    let user_id = SeedUser::new("alice").seed(&state).await;
+    let user = SeedUser::new().seed(&state).await;
 
     let now = Utc::now();
     state
         .posts
         .create_post(&CreatePostInput {
-            user_id,
+            user_id: user.user_id,
             title: Some("Test Post".into()),
             slug: "test-post".parse::<Slug>().expect("valid slug"),
             body: "Test body".into(),
@@ -49,7 +49,7 @@ async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_typ
 
     let req = Request::builder()
         .method("GET")
-        .uri("/~alice/feed.rss")
+        .uri(format!("/~{}/feed.rss", user.username))
         .body(Body::empty())
         .expect("build request");
 
@@ -74,7 +74,7 @@ async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_typ
 
     let req = Request::builder()
         .method("GET")
-        .uri("/~alice/feed.rss")
+        .uri(format!("/~{}/feed.rss", user.username))
         .body(Body::empty())
         .expect("build request");
     let resp = app.clone().oneshot(req).await.expect("request");
@@ -89,7 +89,7 @@ async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_typ
 
     let cached = state
         .feed_cache
-        .get(&fp("/~alice/feed.rss"))
+        .get(&fp(&format!("/~{}/feed.rss", user.username)))
         .await
         .expect("get from cache")
         .expect("cache entry should exist");
@@ -103,7 +103,7 @@ async fn handler_serves_site_tag_feed_with_200(#[case] backend: Backend) {
     let app = make_app(state.clone(), &base);
 
     // A tagged, published post so the site-tag surface has content.
-    let user_id = SeedUser::new("frank").seed(&state).await;
+    let user_id = SeedUser::new().seed(&state).await.user_id;
     let now = Utc::now();
     let post_id = state
         .posts
@@ -292,13 +292,13 @@ async fn handler_rejects_invalid_request_with_404(backend: Backend, #[case] uri:
 async fn handler_returns_correct_content_type_per_format(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
 
-    let user_id = SeedUser::new("eve").seed(&state).await;
+    let user = SeedUser::new().seed(&state).await;
 
     let now = Utc::now();
     state
         .posts
         .create_post(&CreatePostInput {
-            user_id,
+            user_id: user.user_id,
             title: Some("Test Post".into()),
             slug: "test-post".parse::<Slug>().expect("valid slug"),
             body: "Test body".into(),
@@ -322,7 +322,7 @@ async fn handler_returns_correct_content_type_per_format(#[case] backend: Backen
         let app = make_app(state.clone(), &base);
         let req = Request::builder()
             .method("GET")
-            .uri(format!("/~eve/feed.{ext}"))
+            .uri(format!("/~{}/feed.{ext}", user.username))
             .body(Body::empty())
             .expect("build request");
 

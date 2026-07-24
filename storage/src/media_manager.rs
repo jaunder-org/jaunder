@@ -611,7 +611,7 @@ mod tests {
     #[tokio::test]
     async fn upload_bytes_is_content_addressed_and_idempotent(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new("uploader").seed(&env.state).await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let manager = MediaManager::new(
             env.state.media.clone(),
             env.state.site_config.clone(),
@@ -649,7 +649,7 @@ mod tests {
     #[tokio::test]
     async fn upload_bytes_rejects_oversized_payload(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new("uploader").seed(&env.state).await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
         // Cap the per-file limit well below the payload size.
         env.state
             .site_config
@@ -684,7 +684,7 @@ mod tests {
         // unit test before — it was e2e-only. Drive it with an in-memory chunk stream so
         // the byte-stream branch stays covered.
         let env = backend.setup().await;
-        let user_id = SeedUser::new("uploader").seed(&env.state).await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let manager = MediaManager::new(
             env.state.media.clone(),
             env.state.site_config.clone(),

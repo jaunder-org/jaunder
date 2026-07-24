@@ -2427,7 +2427,7 @@ mod tests {
     #[tokio::test]
     async fn create_post_persists_summary(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new("testuser").seed(&env.state).await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let posts = &*env.state.posts;
         let input = CreatePostInput {
             user_id,
@@ -2459,7 +2459,7 @@ mod tests {
         // clause, so an edited summary was silently dropped). An edit replaces the
         // value; `None` clears it. The returned record reflects the RETURNING row.
         let env = backend.setup().await;
-        let user_id = SeedUser::new("testuser").seed(&env.state).await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let posts = &*env.state.posts;
 
         let post_id = posts
@@ -2519,7 +2519,7 @@ mod tests {
         // unconstructible via the newtype, so it is forced in with raw SQL.
         // Mirrors `users.rs`'s overlong-display-name fail-closed test.
         let env = backend.setup().await;
-        let user_id = SeedUser::new("testuser").seed(&env.state).await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let posts = &*env.state.posts;
         let input = CreatePostInput {
             user_id,
@@ -2599,7 +2599,7 @@ mod tests {
     #[tokio::test]
     async fn tag_post_insert_error_returns_internal(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let uid = SeedUser::new("testuser").seed(&env.state).await;
+        let uid = SeedUser::new().seed(&env.state).await.user_id;
         let post_id = env
             .state
             .posts
@@ -2641,7 +2641,7 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let uid = SeedUser::new("testuser").seed(&env.state).await;
+        let uid = SeedUser::new().seed(&env.state).await.user_id;
         let now = Utc::now();
 
         let mk = |slug: &str, published: bool| CreatePostInput {
@@ -2826,7 +2826,7 @@ mod tests {
     #[tokio::test]
     async fn fetch_post_record_returns_seeded_post_and_none_for_missing(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new("testuser").seed(&env.state).await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let posts = &*env.state.posts;
         let ids = crate::test_support::seed_posts(&env.state, user_id, 1, true).await;
         let record = posts
@@ -2873,7 +2873,7 @@ mod tests {
     #[tokio::test]
     async fn apply_post_tag_diff_adds_then_removes_tags(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new("testuser").seed(&env.state).await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let posts = &*env.state.posts;
         let post_id = posts
             .create_post(&CreatePostInput {
@@ -2927,7 +2927,7 @@ mod tests {
     #[tokio::test]
     async fn tag_post_round_trips_slug_and_label(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new("testuser").seed(&env.state).await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let posts = &*env.state.posts;
         let post_id = posts
             .create_post(&CreatePostInput {
@@ -2964,7 +2964,8 @@ mod tests {
         // Keep the whole `TestEnv` bound: dropping `base` unlinks the SQLite file
         // (ADR-0053 TempDir hazard).
         let env = backend.setup().await;
-        let user_id = SeedUser::new("testuser").seed(&env.state).await;
+        let user = SeedUser::new().seed(&env.state).await;
+        let user_id = user.user_id;
         let posts = &*env.state.posts;
 
         // `create_post` binds a typed `Slug`, `Option<&PostTitle>`, and `&PostBody`;
@@ -3002,7 +3003,7 @@ mod tests {
         assert_eq!(record.slug, slug);
         assert_eq!(record.title, Some(title));
         assert_eq!(record.body, body);
-        assert_eq!(record.author_username, "testuser");
+        assert_eq!(record.author_username, user.username);
         assert_eq!(record.tags.len(), 1);
         assert_eq!(record.tags[0].tag_slug, "rust");
         assert_eq!(record.tags[0].tag_display, "Rust");
@@ -3036,7 +3037,7 @@ mod tests {
     #[tokio::test]
     async fn get_post_rejects_a_malformed_slug_column(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new("testuser").seed(&env.state).await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let posts = &*env.state.posts;
         let post_id = posts
             .create_post(&CreatePostInput {
@@ -3096,7 +3097,7 @@ mod tests {
     async fn post_format_column_round_trips_all_variants(#[case] backend: Backend) {
         // Keep the whole `TestEnv` bound (ADR-0053 TempDir hazard).
         let env = backend.setup().await;
-        let user_id = SeedUser::new("testuser").seed(&env.state).await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let posts = &*env.state.posts;
 
         // Org and Html exercise the `PostFormat` bridge Encode (write) + Decode (read)
@@ -3130,7 +3131,7 @@ mod tests {
     #[tokio::test]
     async fn get_post_rejects_a_malformed_format_column(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new("testuser").seed(&env.state).await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let posts = &*env.state.posts;
         let post_id = posts
             .create_post(&CreatePostInput {
@@ -3184,7 +3185,7 @@ mod tests {
     #[tokio::test]
     async fn find_draft_by_permalink_for_user_finds_draft_and_misses(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new("testuser").seed(&env.state).await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let posts = &*env.state.posts;
         // Seed unpublished drafts; read one back (via the per-user draft listing,
         // which is author-scoped and so needs no viewer) for its permalink parts.

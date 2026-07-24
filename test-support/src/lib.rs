@@ -173,9 +173,9 @@ mod seed_tests {
     async fn seeds_public_published_posts_visible_to_a_non_author() {
         let test_support::TestEnv { state, base: _base } =
             test_support::Backend::Sqlite.setup().await;
-        let _uid = test_support::SeedUser::new("testuser").seed(&state).await;
+        let user = test_support::SeedUser::new().seed(&state).await;
 
-        let ids = seed_posts_for_user(&state, "testuser", 3, true, "Timeline Post")
+        let ids = seed_posts_for_user(&state, &user.username, 3, true, "Timeline Post")
             .await
             .expect("seed ok");
         assert_eq!(ids.len(), 3);
@@ -187,7 +187,7 @@ mod seed_tests {
         let page = state
             .posts
             .list_published_by_user(
-                &"testuser".parse().unwrap(),
+                &user.username,
                 None,
                 10,
                 &common::visibility::ViewerIdentity::Anonymous,
@@ -202,12 +202,12 @@ mod seed_tests {
     async fn rejects_a_prefix_that_cannot_form_a_valid_slug() {
         let test_support::TestEnv { state, base: _base } =
             test_support::Backend::Sqlite.setup().await;
-        let _uid = test_support::SeedUser::new("testuser").seed(&state).await;
+        let user = test_support::SeedUser::new().seed(&state).await;
 
         // A prefix with no alphanumerics collapses to an empty base, so the slug
         // would begin with '-' and fail `Slug` parsing — surfaced as an error
         // (not a panic) before any post is persisted.
-        let err = seed_posts_for_user(&state, "testuser", 1, false, "***")
+        let err = seed_posts_for_user(&state, &user.username, 1, false, "***")
             .await
             .expect_err("invalid generated slug should error");
         assert!(err.to_string().contains("generated slug invalid"));

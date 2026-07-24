@@ -16,7 +16,8 @@ use storage::test_support::{backends, Backend, TestEnv};
 #[tokio::test]
 async fn service_document_returns_200_with_app_password(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
+    let name: &str = &session.username;
     // Give the user a tagged post so the service document's category list is
     // non-empty (exercises the tag-collection path in `service_document`).
     let post = storage::perform_post_creation(
@@ -47,7 +48,7 @@ async fn service_document_returns_200_with_app_password(#[case] backend: Backend
         .oneshot(atompub_xml(
             "GET",
             "/atompub/service",
-            "alice",
+            name,
             &session.token,
             None,
         ))
@@ -67,8 +68,8 @@ async fn service_document_returns_200_with_app_password(#[case] backend: Backend
     );
     let body = body_string(response).await;
     assert!(body.contains("app:service"));
-    assert!(body.contains("https://example.com/atompub/alice/posts"));
-    assert!(body.contains("https://example.com/atompub/alice/media"));
+    assert!(body.contains(&format!("https://example.com/atompub/{name}/posts")));
+    assert!(body.contains(&format!("https://example.com/atompub/{name}/media")));
     assert!(body.contains("image/webp"));
     // The tagged post surfaces as an inline category in the posts collection.
     assert!(body.contains("term=\"rust\""), "categories missing: {body}");
@@ -85,7 +86,7 @@ async fn service_document_returns_200_with_app_password(#[case] backend: Backend
 #[tokio::test]
 async fn service_document_rejects_basic_username_mismatch(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let app = make_app(state, &base);
 
     // Correct token, but the Basic username does not match the session's user.

@@ -97,7 +97,8 @@ async fn get_post_preview_form(
 #[tokio::test]
 async fn create_post_persists_rendered_published_post(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "author").await.cookie();
+    let session = create_user_and_session(&state).await;
+    let cookie = session.cookie();
 
     // Title embedded as # heading in the body (verbatim storage)
     let (status, body) = create_post_json(
@@ -140,7 +141,8 @@ async fn create_post_persists_rendered_published_post(#[case] backend: Backend) 
     );
     let published_at = record.published_at.expect("published post");
     let expected_permalink = format!(
-        "/~author/{:04}/{:02}/{:02}/{}",
+        "/~{}/{:04}/{:02}/{:02}/{}",
+        session.username,
         published_at.year(),
         published_at.month(),
         published_at.day(),
@@ -153,7 +155,7 @@ async fn create_post_persists_rendered_published_post(#[case] backend: Backend) 
 #[tokio::test]
 async fn create_post_retries_slug_conflicts_for_same_user_and_date(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "author").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     // Title embedded as # heading; two posts with same heading produce conflicting slugs
     let (first_status, first_body) = create_post_json(
@@ -247,7 +249,8 @@ async fn endpoint_rejects_unauthenticated(backend: Backend, #[case] endpoint: Un
 #[tokio::test]
 async fn create_post_accepts_slug_override_and_saves_draft(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "author").await.cookie();
+    let session = create_user_and_session(&state).await;
+    let cookie = session.cookie();
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -266,7 +269,10 @@ async fn create_post_accepts_slug_override_and_saves_draft(#[case] backend: Back
     // A draft now carries its canonical (created_at-based) permalink; the permalink
     // view renders the draft for the author (#24).
     assert!(
-        created.permalink.as_ref().starts_with("/~author/"),
+        created
+            .permalink
+            .as_ref()
+            .starts_with(&format!("/~{}/", session.username)),
         "draft should carry a canonical permalink: {}",
         created.permalink
     );
@@ -290,7 +296,7 @@ async fn create_post_accepts_slug_override_and_saves_draft(#[case] backend: Back
 #[tokio::test]
 async fn create_post_accepts_titleless_body(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "author").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -322,7 +328,7 @@ async fn create_post_accepts_titleless_body(#[case] backend: Backend) {
 #[tokio::test]
 async fn create_post_extracts_markdown_heading_title(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "author").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -377,7 +383,7 @@ async fn create_post_rejects(
     #[case] expected: &str,
 ) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "author").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -397,7 +403,8 @@ async fn create_post_rejects(
 #[tokio::test]
 async fn get_post_returns_published_post(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "author").await.cookie();
+    let session = create_user_and_session(&state).await;
+    let cookie = session.cookie();
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -427,7 +434,7 @@ async fn get_post_returns_published_post(#[case] backend: Backend) {
         .expect("published post should have published_at");
     let (status, body) = get_post_form(
         Arc::clone(&state),
-        "author",
+        &session.username,
         published_at.year(),
         published_at.month(),
         published_at.day(),
@@ -445,8 +452,9 @@ async fn get_post_returns_published_post(#[case] backend: Backend) {
 #[tokio::test]
 async fn get_post_returns_draft_to_author_only(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let author_cookie = create_user_and_session(&state, "author").await.cookie();
-    let stranger_cookie = create_user_and_session(&state, "stranger").await.cookie();
+    let author = create_user_and_session(&state).await;
+    let author_cookie = author.cookie();
+    let stranger_cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -473,7 +481,7 @@ draft",
 
     let (status, body) = get_post_form(
         Arc::clone(&state),
-        "author",
+        &author.username,
         record.created_at.year(),
         record.created_at.month(),
         record.created_at.day(),
@@ -486,7 +494,7 @@ draft",
 
     let (status, body) = get_post_form(
         Arc::clone(&state),
-        "author",
+        &author.username,
         record.created_at.year(),
         record.created_at.month(),
         record.created_at.day(),
@@ -499,7 +507,7 @@ draft",
 
     let (status, body) = get_post_form(
         Arc::clone(&state),
-        "author",
+        &author.username,
         record.created_at.year(),
         record.created_at.month(),
         record.created_at.day(),
@@ -525,8 +533,8 @@ draft",
 #[tokio::test]
 async fn get_post_preview_shows_draft_to_author_only(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let author_cookie = create_user_and_session(&state, "author").await.cookie();
-    let stranger_cookie = create_user_and_session(&state, "stranger").await.cookie();
+    let author_cookie = create_user_and_session(&state).await.cookie();
+    let stranger_cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -561,7 +569,8 @@ draft",
 #[tokio::test]
 async fn get_post_hides_drafts_from_guests(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let author_cookie = create_user_and_session(&state, "author").await.cookie();
+    let author = create_user_and_session(&state).await;
+    let author_cookie = author.cookie();
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -586,7 +595,7 @@ async fn get_post_hides_drafts_from_guests(#[case] backend: Backend) {
 
     let (status, body) = get_post_form(
         Arc::clone(&state),
-        "author",
+        &author.username,
         record.created_at.year(),
         record.created_at.month(),
         record.created_at.day(),
@@ -729,7 +738,7 @@ async fn list_home_feed_form(
 #[tokio::test]
 async fn update_post_updates_draft_content_and_slug(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "author").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -781,7 +790,7 @@ async fn update_post_updates_draft_content_and_slug(#[case] backend: Backend) {
 #[tokio::test]
 async fn update_post_freezes_slug_when_published(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "author").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -821,7 +830,7 @@ async fn update_post_freezes_slug_when_published(#[case] backend: Backend) {
 #[tokio::test]
 async fn update_post_publishes_draft(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "author").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -858,8 +867,8 @@ async fn update_post_publishes_draft(#[case] backend: Backend) {
 #[tokio::test]
 async fn update_post_rejects_non_author(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let author_cookie = create_user_and_session(&state, "author").await.cookie();
-    let stranger_cookie = create_user_and_session(&state, "stranger").await.cookie();
+    let author_cookie = create_user_and_session(&state).await.cookie();
+    let stranger_cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -903,7 +912,7 @@ async fn update_post_rejects(
     #[case] expected: &str,
 ) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "author").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -936,7 +945,7 @@ async fn update_post_rejects(
 #[tokio::test]
 async fn update_post_returns_not_found_for_missing_post(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "author").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = update_post_json(
         Arc::clone(&state),
@@ -957,7 +966,7 @@ async fn update_post_returns_not_found_for_missing_post(#[case] backend: Backend
 #[tokio::test]
 async fn update_post_returns_not_found_for_deleted_post(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "author").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -992,8 +1001,8 @@ async fn update_post_returns_not_found_for_deleted_post(#[case] backend: Backend
 #[tokio::test]
 async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let author_cookie = create_user_and_session(&state, "author").await.cookie();
-    let stranger_cookie = create_user_and_session(&state, "stranger").await.cookie();
+    let author_cookie = create_user_and_session(&state).await.cookie();
+    let stranger_cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -1079,7 +1088,7 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
 #[tokio::test]
 async fn list_drafts_surfaces_scheduled_with_marker_excludes_live(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let author = create_user_and_session(&state, "author").await;
+    let author = create_user_and_session(&state).await;
 
     // Seed a scheduled post (future `published_at`) and a live post (past)
     // directly via storage — the web compose datetime control is Task 6.
@@ -1137,7 +1146,7 @@ async fn list_drafts_surfaces_scheduled_with_marker_excludes_live(#[case] backen
 async fn create_post_with_future_publish_at_is_scheduled(#[case] backend: Backend) {
     use chrono::TimeZone;
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "author").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let future = chrono::Utc.with_ymd_and_hms(2099, 1, 1, 0, 0, 0).unwrap();
     let payload = serde_json::json!({
@@ -1192,7 +1201,7 @@ async fn create_post_with_future_publish_at_is_scheduled(#[case] backend: Backen
 #[tokio::test]
 async fn create_post_publish_without_publish_at_is_live_now(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "author").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -1244,7 +1253,8 @@ async fn create_post_publish_without_publish_at_is_live_now(#[case] backend: Bac
 #[tokio::test]
 async fn publish_post_publishes_draft_and_returns_permalink(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "author").await.cookie();
+    let session = create_user_and_session(&state).await;
+    let cookie = session.cookie();
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -1264,7 +1274,9 @@ async fn publish_post_publishes_draft_and_returns_permalink(#[case] backend: Bac
     assert_eq!(status, StatusCode::OK, "publish body: {body}");
     let published: PublishPostResult = serde_json::from_str(&body).unwrap();
     assert_eq!(published.post_id, created.post_id);
-    assert!(published.permalink.contains("/~author/"));
+    assert!(published
+        .permalink
+        .contains(&format!("/~{}/", session.username)));
 
     let record = state
         .posts
@@ -1282,8 +1294,8 @@ async fn publish_post_publishes_draft_and_returns_permalink(#[case] backend: Bac
 #[tokio::test]
 async fn publish_post_rejects_non_author(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let author_cookie = create_user_and_session(&state, "author").await.cookie();
-    let stranger_cookie = create_user_and_session(&state, "stranger").await.cookie();
+    let author_cookie = create_user_and_session(&state).await.cookie();
+    let stranger_cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -1342,7 +1354,7 @@ async fn list_rejects_invalid_cursor_inputs(
     #[case] bad_time_body: &str,
 ) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "author").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = post_form(
         Arc::clone(&state),
@@ -1365,7 +1377,7 @@ async fn list_rejects_invalid_cursor_inputs(
 #[tokio::test]
 async fn publish_post_returns_not_found_for_missing_or_deleted_posts(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "author").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) =
         publish_post_form(Arc::clone(&state), PostId::from(999_999), Some(&cookie)).await;
@@ -1394,7 +1406,7 @@ async fn publish_post_returns_not_found_for_missing_or_deleted_posts(#[case] bac
 #[tokio::test]
 async fn get_post_finds_author_draft_across_multiple_pages(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state, "author").await;
+    let session = create_user_and_session(&state).await;
 
     let ids = storage::test_support::seed_posts(&state, session.user_id, 55, false).await;
     let first_post_id = ids[0];
@@ -1410,7 +1422,7 @@ async fn get_post_finds_author_draft_across_multiple_pages(#[case] backend: Back
 
     let (status, body) = get_post_form(
         state,
-        "author",
+        &session.username,
         record.created_at.year(),
         record.created_at.month(),
         record.created_at.day(),
@@ -1427,9 +1439,9 @@ async fn get_post_finds_author_draft_across_multiple_pages(#[case] backend: Back
 #[tokio::test]
 async fn list_user_posts_returns_published_posts_with_cursor_pagination(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let author = create_user_and_session(&state, "author").await;
+    let author = create_user_and_session(&state).await;
     let author_cookie = author.cookie();
-    let other_cookie = create_user_and_session(&state, "other").await.cookie();
+    let other_cookie = create_user_and_session(&state).await.cookie();
 
     storage::test_support::seed_posts(&state, author.user_id, 51, true).await;
 
@@ -1456,7 +1468,7 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination(#[case] 
     assert_eq!(status, StatusCode::OK, "create body: {body}");
 
     let (status, body) =
-        list_user_posts_form(Arc::clone(&state), "author", None, None, 50, None).await;
+        list_user_posts_form(Arc::clone(&state), &author.username, None, None, 50, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let first_page: TimelinePage = serde_json::from_str(&body).unwrap();
     assert_eq!(first_page.posts.len(), 50, "body: {body}");
@@ -1467,7 +1479,7 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination(#[case] 
         first_page.posts.iter().all(|post| post
             .permalink
             .as_ref()
-            .is_some_and(|p| p.starts_with("/~author/"))),
+            .is_some_and(|p| p.starts_with(&format!("/~{}/", author.username)))),
         "body: {body}"
     );
     assert!(
@@ -1480,7 +1492,7 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination(#[case] 
 
     let (status, body) = list_user_posts_form(
         Arc::clone(&state),
-        "author",
+        &author.username,
         first_page.next_cursor_created_at,
         first_page.next_cursor_post_id,
         50,
@@ -1509,11 +1521,11 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
     #[case] backend: Backend,
 ) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let author_id = SeedUser::new("author").seed(&state).await;
-    let other_id = SeedUser::new("other").seed(&state).await;
-    let author_cookie = create_session_for(&state, author_id).await.cookie();
-    storage::test_support::seed_posts(&state, author_id, 26, true).await;
-    storage::test_support::seed_posts(&state, other_id, 26, true).await;
+    let author = SeedUser::new().seed(&state).await;
+    let other = SeedUser::new().seed(&state).await;
+    let author_cookie = create_session_for(&state, author.user_id).await.cookie();
+    storage::test_support::seed_posts(&state, author.user_id, 26, true).await;
+    storage::test_support::seed_posts(&state, other.user_id, 26, true).await;
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -1550,11 +1562,14 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
         first_page
             .posts
             .iter()
-            .any(|post| post.username == "author"),
+            .any(|post| post.username == author.username),
         "body: {body}"
     );
     assert!(
-        first_page.posts.iter().any(|post| post.username == "other"),
+        first_page
+            .posts
+            .iter()
+            .any(|post| post.username == other.username),
         "body: {body}"
     );
     assert!(
@@ -1590,9 +1605,9 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
 #[tokio::test]
 async fn list_home_feed_returns_authenticated_users_published_posts_only(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let author = create_user_and_session(&state, "author").await;
+    let author = create_user_and_session(&state).await;
     let author_cookie = author.cookie();
-    let other_cookie = create_user_and_session(&state, "other").await.cookie();
+    let other_cookie = create_user_and_session(&state).await.cookie();
 
     storage::test_support::seed_posts(&state, author.user_id, 51, true).await;
 
@@ -1633,7 +1648,7 @@ async fn list_home_feed_returns_authenticated_users_published_posts_only(#[case]
         first_page
             .posts
             .iter()
-            .all(|post| post.username == "author"),
+            .all(|post| post.username == author.username),
         "body: {body}"
     );
     assert!(
@@ -1676,7 +1691,7 @@ async fn delete_post_form(
 #[tokio::test]
 async fn delete_post_soft_deletes_post(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "author").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -1710,8 +1725,8 @@ async fn delete_post_soft_deletes_post(#[case] backend: Backend) {
 #[tokio::test]
 async fn delete_post_rejects_non_author(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let author_cookie = create_user_and_session(&state, "author").await.cookie();
-    let stranger_cookie = create_user_and_session(&state, "stranger").await.cookie();
+    let author_cookie = create_user_and_session(&state).await.cookie();
+    let stranger_cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -1735,7 +1750,7 @@ async fn delete_post_rejects_non_author(#[case] backend: Backend) {
 #[tokio::test]
 async fn delete_post_rejects_unauthenticated(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "author").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -1758,7 +1773,7 @@ async fn delete_post_rejects_unauthenticated(#[case] backend: Backend) {
 #[tokio::test]
 async fn delete_post_returns_not_found_for_already_deleted_post(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "author").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -1786,7 +1801,8 @@ async fn deleted_post_excluded_from_timelines_and_returns_404_at_permalink(
     #[case] backend: Backend,
 ) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "author").await.cookie();
+    let session = create_user_and_session(&state).await;
+    let cookie = session.cookie();
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -1805,7 +1821,7 @@ body",
 
     // Verify post appears in user timeline before deletion
     let (status, body) =
-        list_user_posts_form(Arc::clone(&state), "author", None, None, 10, None).await;
+        list_user_posts_form(Arc::clone(&state), &session.username, None, None, 10, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(body.contains("Deletable Post"), "expected post in timeline");
 
@@ -1814,7 +1830,7 @@ body",
 
     // Verify excluded from user timeline
     let (status, body) =
-        list_user_posts_form(Arc::clone(&state), "author", None, None, 10, None).await;
+        list_user_posts_form(Arc::clone(&state), &session.username, None, None, 10, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(
         !body.contains("Deletable Post"),
@@ -1838,8 +1854,16 @@ body",
     let day: u32 = parts[3].parse().unwrap();
     let slug = parts[4];
 
-    let (status, body) =
-        get_post_form(Arc::clone(&state), "author", year, month, day, slug, None).await;
+    let (status, body) = get_post_form(
+        Arc::clone(&state),
+        &session.username,
+        year,
+        month,
+        day,
+        slug,
+        None,
+    )
+    .await;
     assert_eq!(StatusCode::NOT_FOUND, status, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 }
@@ -1848,7 +1872,8 @@ body",
 #[tokio::test]
 async fn unpublish_post_reverts_published_post_to_draft(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "author").await.cookie();
+    let session = create_user_and_session(&state).await;
+    let cookie = session.cookie();
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -1871,7 +1896,7 @@ body",
 
     // Should no longer appear in the user timeline
     let (status, body) =
-        list_user_posts_form(Arc::clone(&state), "author", None, None, 10, None).await;
+        list_user_posts_form(Arc::clone(&state), &session.username, None, None, 10, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(
         !body.contains("Unpublish Me"),
@@ -1891,8 +1916,8 @@ body",
 #[tokio::test]
 async fn unpublish_post_rejects_non_author(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let author_cookie = create_user_and_session(&state, "author").await.cookie();
-    let other_cookie = create_user_and_session(&state, "other").await.cookie();
+    let author_cookie = create_user_and_session(&state).await.cookie();
+    let other_cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -1917,7 +1942,8 @@ body",
 #[tokio::test]
 async fn list_user_posts_carries_tags_per_post(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "author").await.cookie();
+    let session = create_user_and_session(&state).await;
+    let cookie = session.cookie();
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -1945,8 +1971,15 @@ async fn list_user_posts_carries_tags_per_post(#[case] backend: Backend) {
         .await
         .unwrap();
 
-    let (status, body) =
-        list_user_posts_form(Arc::clone(&state), "author", None, None, 50, Some(&cookie)).await;
+    let (status, body) = list_user_posts_form(
+        Arc::clone(&state),
+        &session.username,
+        None,
+        None,
+        50,
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "list body: {body}");
     let page: TimelinePage = serde_json::from_str(&body).unwrap();
     assert_eq!(page.posts.len(), 1);
@@ -1963,7 +1996,8 @@ async fn get_post_carries_tags(#[case] backend: Backend) {
     use chrono::Datelike;
 
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "author").await.cookie();
+    let session = create_user_and_session(&state).await;
+    let cookie = session.cookie();
 
     let (status, body) = create_post_json(
         Arc::clone(&state),
@@ -1997,7 +2031,7 @@ async fn get_post_carries_tags(#[case] backend: Backend) {
 
     let (status, body) = get_post_form(
         Arc::clone(&state),
-        "author",
+        &session.username,
         published_at.year(),
         published_at.month(),
         published_at.day(),
@@ -2014,7 +2048,7 @@ async fn get_post_carries_tags(#[case] backend: Backend) {
 
 async fn login_and_state(backend: Backend) -> (TestBase, Arc<storage::AppState>, String) {
     let TestEnv { state, base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "author").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
     (base, state, cookie)
 }
 
@@ -2154,8 +2188,10 @@ async fn list_posts_by_tag_returns_matching_posts_from_all_users(#[case] backend
     let TestEnv { state, base: _base } = backend.setup().await;
 
     // Two authors each post twice; only some posts get the target tag.
-    let alice_cookie = create_user_and_session(&state, "alice").await.cookie();
-    let bob_cookie = create_user_and_session(&state, "bob").await.cookie();
+    let alice = create_user_and_session(&state).await;
+    let alice_cookie = alice.cookie();
+    let bob = create_user_and_session(&state).await;
+    let bob_cookie = bob.cookie();
 
     let create = |cookie: String, body: &'static str, tags: serde_json::Value| {
         let state = Arc::clone(&state);
@@ -2207,8 +2243,8 @@ async fn list_posts_by_tag_returns_matching_posts_from_all_users(#[case] backend
     assert_eq!(page.posts.len(), 3);
     let usernames: std::collections::HashSet<&str> =
         page.posts.iter().map(|p| p.username.as_ref()).collect();
-    assert!(usernames.contains("alice"));
-    assert!(usernames.contains("bob"));
+    assert!(usernames.contains(&*alice.username));
+    assert!(usernames.contains(&*bob.username));
 }
 
 #[apply(backends)]
@@ -2226,8 +2262,10 @@ async fn list_posts_by_tag_returns_empty_for_unknown_tag(#[case] backend: Backen
 #[apply(backends)]
 #[tokio::test]
 async fn list_user_posts_by_tag_scopes_to_user(#[case] backend: Backend) {
-    let (_base, state, alice_cookie) = login_and_state(backend).await;
-    let bob_cookie = create_user_and_session(&state, "bob").await.cookie();
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let author = create_user_and_session(&state).await;
+    let alice_cookie = author.cookie();
+    let bob_cookie = create_user_and_session(&state).await.cookie();
 
     // Alice ("author") + Bob each post with shared tag.
     let create = |cookie: String, body: &'static str| {
@@ -2250,11 +2288,11 @@ async fn list_user_posts_by_tag_scopes_to_user(#[case] backend: Backend) {
     create(bob_cookie, "# Bob Post\n\nbody").await;
 
     let (status, body) =
-        list_user_posts_by_tag_form(Arc::clone(&state), "author", "shared", None).await;
+        list_user_posts_by_tag_form(Arc::clone(&state), &author.username, "shared", None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let page: TimelinePage = serde_json::from_str(&body).unwrap();
     assert_eq!(page.posts.len(), 1);
-    assert_eq!(page.posts[0].username, "author");
+    assert_eq!(page.posts[0].username, author.username);
 }
 
 #[apply(backends)]
@@ -2412,9 +2450,9 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
 
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let author = SeedUser::new("author").seed(&state).await;
-    let subscriber = SeedUser::new("subby").seed(&state).await;
-    let stranger = SeedUser::new("stranger").seed(&state).await;
+    let author = SeedUser::new().seed(&state).await.user_id;
+    let subscriber = SeedUser::new().seed(&state).await.user_id;
+    let stranger = SeedUser::new().seed(&state).await.user_id;
 
     let local = state.subscriptions.local_channel_id().await.unwrap();
     // A named audience containing the subscriber's subscription. `subscribe` is
@@ -2527,19 +2565,19 @@ async fn single_post_permalink_hides_subscribers_post_from_anonymous(#[case] bac
     use common::visibility::AudienceTarget;
 
     let TestEnv { state, base: _base } = backend.setup().await;
-    let author = SeedUser::new("author").seed(&state).await;
-    let subscriber = SeedUser::new("subby").seed(&state).await;
+    let author = SeedUser::new().seed(&state).await;
+    let subscriber = SeedUser::new().seed(&state).await.user_id;
 
     let local = state.subscriptions.local_channel_id().await.unwrap();
     state
         .subscriptions
-        .subscribe(author, local, &i64::from(subscriber).to_string())
+        .subscribe(author.user_id, local, &i64::from(subscriber).to_string())
         .await
         .unwrap();
 
     let post_id = create_targeted_post(
         &state,
-        author,
+        author.user_id,
         "subs-only",
         vec![AudienceTarget::Subscribers],
     )
@@ -2548,7 +2586,7 @@ async fn single_post_permalink_hides_subscribers_post_from_anonymous(#[case] bac
         .posts
         .get_post_by_id(
             post_id,
-            &common::visibility::ViewerIdentity::local(author, local),
+            &common::visibility::ViewerIdentity::local(author.user_id, local),
         )
         .await
         .unwrap()
@@ -2557,8 +2595,16 @@ async fn single_post_permalink_hides_subscribers_post_from_anonymous(#[case] bac
     let (y, m, d) = (published.year(), published.month(), published.day());
 
     // Anonymous → 404 (the resolution filter hides the subscribers-only post).
-    let (status, _body) =
-        get_post_form(Arc::clone(&state), "author", y, m, d, "subs-only", None).await;
+    let (status, _body) = get_post_form(
+        Arc::clone(&state),
+        &author.username,
+        y,
+        m,
+        d,
+        "subs-only",
+        None,
+    )
+    .await;
     assert_eq!(
         status,
         StatusCode::NOT_FOUND,
@@ -2569,7 +2615,7 @@ async fn single_post_permalink_hides_subscribers_post_from_anonymous(#[case] bac
     let subscriber_cookie = create_session_for(&state, subscriber).await.cookie();
     let (status, body) = get_post_form(
         Arc::clone(&state),
-        "author",
+        &author.username,
         y,
         m,
         d,
@@ -2586,14 +2632,14 @@ async fn single_post_permalink_hides_subscribers_post_from_anonymous(#[case] bac
 
 // ── Audience-picker server fns ────────────────────────────────
 
-/// Creates `author` and returns a session cookie for the audience-picker tests.
+/// Creates a user and returns a session cookie for the audience-picker tests.
 async fn author_with_cookie(state: &Arc<storage::AppState>) -> String {
-    user_with_cookie(state, "author").await
+    user_with_cookie(state).await
 }
 
-/// Creates a user with `username` and returns a session cookie.
-async fn user_with_cookie(state: &Arc<storage::AppState>, username: &str) -> String {
-    create_user_and_session(state, username).await.cookie()
+/// Creates a user and returns a session cookie.
+async fn user_with_cookie(state: &Arc<storage::AppState>) -> String {
+    create_user_and_session(state).await.cookie()
 }
 
 #[apply(backends)]
@@ -2688,8 +2734,8 @@ async fn post_audience_selection_rejects_missing_post(#[case] backend: Backend) 
 #[tokio::test]
 async fn post_audience_selection_rejects_non_owner(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let author_cookie = user_with_cookie(&state, "author").await;
-    let other_cookie = user_with_cookie(&state, "intruder").await;
+    let author_cookie = user_with_cookie(&state).await;
+    let other_cookie = user_with_cookie(&state).await;
 
     let (status, body) = create_post_json(
         Arc::clone(&state),

@@ -35,13 +35,13 @@ fn projector_app(state: &Arc<storage::AppState>) -> Router {
         .layer(Extension(state.users.clone()))
 }
 
-/// Seed a published, `rust`-tagged post for `alice`.
-async fn seed_tagged_post(state: &Arc<storage::AppState>) {
-    let user_id = SeedUser::new("alice").seed(state).await;
+/// Seed a published, `rust`-tagged post; returns the seeded user's username.
+async fn seed_tagged_post(state: &Arc<storage::AppState>) -> String {
+    let user = SeedUser::new().seed(state).await;
     let post_id = state
         .posts
         .create_post(&CreatePostInput {
-            user_id,
+            user_id: user.user_id,
             title: Some("Tagged Post".into()),
             slug: "tagged".parse::<Slug>().unwrap(),
             body: "b".into(),
@@ -59,16 +59,17 @@ async fn seed_tagged_post(state: &Arc<storage::AppState>) {
         .tag_post(post_id, &"rust".parse::<TagLabel>().unwrap())
         .await
         .unwrap();
+    user.username.to_string()
 }
 
-/// Seed a published post for `alice` and return the permalink components.
+/// Seed a published post and return the permalink components (username, y, m, d, slug).
 async fn seed_published_post(state: &Arc<storage::AppState>) -> (String, i32, u32, u32, String) {
-    let user_id = SeedUser::new("alice").seed(state).await;
+    let user = SeedUser::new().seed(state).await;
     let now = Utc::now();
     state
         .posts
         .create_post(&CreatePostInput {
-            user_id,
+            user_id: user.user_id,
             title: Some("Hello World".into()),
             slug: "hello".parse::<Slug>().unwrap(),
             body: "Body".into(),
@@ -82,7 +83,7 @@ async fn seed_published_post(state: &Arc<storage::AppState>) -> (String, i32, u3
         .await
         .unwrap();
     (
-        "alice".to_string(),
+        user.username.to_string(),
         now.year(),
         now.month(),
         now.day(),
@@ -255,7 +256,10 @@ async fn profile_projects_user_timeline(#[case] backend: Backend) {
         .await
         .unwrap();
     let html = String::from_utf8_lossy(&body);
-    assert!(html.contains("Posts by alice"), "profile heading: {html}");
+    assert!(
+        html.contains(&format!("Posts by {u}")),
+        "profile heading: {html}"
+    );
     assert!(html.contains("Hello World"), "post title present");
     assert!(html.contains(r#"id="jaunder-seed""#), "data blob present");
 }
@@ -320,9 +324,9 @@ async fn site_tag_projects_tagged_posts(#[case] backend: Backend) {
 #[tokio::test]
 async fn user_tag_projects_tagged_posts(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    seed_tagged_post(&state).await;
+    let u = seed_tagged_post(&state).await;
     let resp = projector_app(&state)
-        .oneshot(get("/~alice/tags/rust"))
+        .oneshot(get(&format!("/~{u}/tags/rust")))
         .await
         .expect("request");
     assert_eq!(resp.status(), StatusCode::OK, "user tag → 200");

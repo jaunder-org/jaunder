@@ -29,18 +29,23 @@ const PNG: &[u8] = &[
 #[tokio::test]
 async fn upload_returns_201_and_media_link_entry(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
 
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage);
 
     let response = app
         .oneshot(
-            atompub_authed("POST", "/atompub/alice/media", "alice", &session.token)
-                .header(header::CONTENT_TYPE, "image/png")
-                .header("slug", "pic.png")
-                .body(Body::from(PNG))
-                .unwrap(),
+            atompub_authed(
+                "POST",
+                &format!("/atompub/{}/media", session.username),
+                &session.username,
+                &session.token,
+            )
+            .header(header::CONTENT_TYPE, "image/png")
+            .header("slug", "pic.png")
+            .body(Body::from(PNG))
+            .unwrap(),
         )
         .await
         .unwrap();
@@ -55,7 +60,10 @@ async fn upload_returns_201_and_media_link_entry(#[case] backend: Backend) {
         .unwrap()
         .to_string();
 
-    assert!(loc.starts_with("https://example.com/atompub/alice/media/"));
+    assert!(loc.starts_with(&format!(
+        "https://example.com/atompub/{}/media/",
+        session.username
+    )));
 
     let body = body_string(response).await;
     assert!(body.contains("rel=\"edit-media\""), "body: {body}");
@@ -70,7 +78,7 @@ async fn upload_returns_201_and_media_link_entry(#[case] backend: Backend) {
 #[tokio::test]
 async fn reupload_identical_returns_200(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
 
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage);
@@ -78,11 +86,16 @@ async fn reupload_identical_returns_200(#[case] backend: Backend) {
     let _resp1 = app
         .clone()
         .oneshot(
-            atompub_authed("POST", "/atompub/alice/media", "alice", &session.token)
-                .header(header::CONTENT_TYPE, "image/png")
-                .header("slug", "pic.png")
-                .body(Body::from(PNG))
-                .unwrap(),
+            atompub_authed(
+                "POST",
+                &format!("/atompub/{}/media", session.username),
+                &session.username,
+                &session.token,
+            )
+            .header(header::CONTENT_TYPE, "image/png")
+            .header("slug", "pic.png")
+            .body(Body::from(PNG))
+            .unwrap(),
         )
         .await
         .unwrap();
@@ -90,11 +103,16 @@ async fn reupload_identical_returns_200(#[case] backend: Backend) {
     // Second upload (identical)
     let resp2 = app
         .oneshot(
-            atompub_authed("POST", "/atompub/alice/media", "alice", &session.token)
-                .header(header::CONTENT_TYPE, "image/png")
-                .header("slug", "pic.png")
-                .body(Body::from(PNG))
-                .unwrap(),
+            atompub_authed(
+                "POST",
+                &format!("/atompub/{}/media", session.username),
+                &session.username,
+                &session.token,
+            )
+            .header(header::CONTENT_TYPE, "image/png")
+            .header("slug", "pic.png")
+            .body(Body::from(PNG))
+            .unwrap(),
         )
         .await
         .unwrap();
@@ -106,7 +124,7 @@ async fn reupload_identical_returns_200(#[case] backend: Backend) {
 #[tokio::test]
 async fn get_media_member_returns_entry(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
 
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage);
@@ -114,11 +132,16 @@ async fn get_media_member_returns_entry(#[case] backend: Backend) {
     let resp = app
         .clone()
         .oneshot(
-            atompub_authed("POST", "/atompub/alice/media", "alice", &session.token)
-                .header(header::CONTENT_TYPE, "image/png")
-                .header("slug", "pic.png")
-                .body(Body::from(PNG))
-                .unwrap(),
+            atompub_authed(
+                "POST",
+                &format!("/atompub/{}/media", session.username),
+                &session.username,
+                &session.token,
+            )
+            .header(header::CONTENT_TYPE, "image/png")
+            .header("slug", "pic.png")
+            .body(Body::from(PNG))
+            .unwrap(),
         )
         .await
         .unwrap();
@@ -132,7 +155,13 @@ async fn get_media_member_returns_entry(#[case] backend: Backend) {
         .to_string();
 
     let get_resp = app
-        .oneshot(atompub_xml("GET", &loc, "alice", &session.token, None))
+        .oneshot(atompub_xml(
+            "GET",
+            &loc,
+            &session.username,
+            &session.token,
+            None,
+        ))
         .await
         .unwrap();
 
@@ -145,7 +174,7 @@ async fn get_media_member_returns_entry(#[case] backend: Backend) {
 #[tokio::test]
 async fn get_unknown_media_returns_404(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
 
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage);
@@ -156,8 +185,11 @@ async fn get_unknown_media_returns_404(#[case] backend: Backend) {
             // A well-formed but never-uploaded hash: the typed extractor accepts it,
             // and the handler returns 404 for the absent record (a *malformed* hash
             // would be a pre-handler 400 — see member_rejects_malformed_segment).
-            "/atompub/alice/media/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/none.png",
-            "alice",
+            &format!(
+                "/atompub/{}/media/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/none.png",
+                session.username
+            ),
+            &session.username,
             &session.token,
             None,
         ))
@@ -171,7 +203,7 @@ async fn get_unknown_media_returns_404(#[case] backend: Backend) {
 #[tokio::test]
 async fn delete_media_member_returns_204_then_404(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
 
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage);
@@ -179,11 +211,16 @@ async fn delete_media_member_returns_204_then_404(#[case] backend: Backend) {
     let resp = app
         .clone()
         .oneshot(
-            atompub_authed("POST", "/atompub/alice/media", "alice", &session.token)
-                .header(header::CONTENT_TYPE, "image/png")
-                .header("slug", "pic.png")
-                .body(Body::from(PNG))
-                .unwrap(),
+            atompub_authed(
+                "POST",
+                &format!("/atompub/{}/media", session.username),
+                &session.username,
+                &session.token,
+            )
+            .header(header::CONTENT_TYPE, "image/png")
+            .header("slug", "pic.png")
+            .body(Body::from(PNG))
+            .unwrap(),
         )
         .await
         .unwrap();
@@ -198,7 +235,13 @@ async fn delete_media_member_returns_204_then_404(#[case] backend: Backend) {
 
     let del_resp = app
         .clone()
-        .oneshot(atompub_xml("DELETE", &loc, "alice", &session.token, None))
+        .oneshot(atompub_xml(
+            "DELETE",
+            &loc,
+            &session.username,
+            &session.token,
+            None,
+        ))
         .await
         .unwrap();
 
@@ -206,7 +249,13 @@ async fn delete_media_member_returns_204_then_404(#[case] backend: Backend) {
 
     // Second delete (should be 404)
     let del_resp2 = app
-        .oneshot(atompub_xml("DELETE", &loc, "alice", &session.token, None))
+        .oneshot(atompub_xml(
+            "DELETE",
+            &loc,
+            &session.username,
+            &session.token,
+            None,
+        ))
         .await
         .unwrap();
 
@@ -217,18 +266,23 @@ async fn delete_media_member_returns_204_then_404(#[case] backend: Backend) {
 #[tokio::test]
 async fn upload_forbids_other_user(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
 
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage);
 
     let response = app
         .oneshot(
-            atompub_authed("POST", "/atompub/bob/media", "alice", &session.token)
-                .header(header::CONTENT_TYPE, "image/png")
-                .header("slug", "pic.png")
-                .body(Body::from(PNG))
-                .unwrap(),
+            atompub_authed(
+                "POST",
+                "/atompub/bob/media",
+                &session.username,
+                &session.token,
+            )
+            .header(header::CONTENT_TYPE, "image/png")
+            .header("slug", "pic.png")
+            .body(Body::from(PNG))
+            .unwrap(),
         )
         .await
         .unwrap();
@@ -240,18 +294,23 @@ async fn upload_forbids_other_user(#[case] backend: Backend) {
 #[tokio::test]
 async fn upload_rejects_empty_slug(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let storage = TempDir::new().unwrap();
     let app = make_app(state, &storage);
 
     // ".." sanitizes to an empty filename.
     let response = app
         .oneshot(
-            atompub_authed("POST", "/atompub/alice/media", "alice", &session.token)
-                .header(header::CONTENT_TYPE, "image/png")
-                .header("slug", "..")
-                .body(Body::from(PNG))
-                .unwrap(),
+            atompub_authed(
+                "POST",
+                &format!("/atompub/{}/media", session.username),
+                &session.username,
+                &session.token,
+            )
+            .header(header::CONTENT_TYPE, "image/png")
+            .header("slug", "..")
+            .body(Body::from(PNG))
+            .unwrap(),
         )
         .await
         .unwrap();
@@ -268,7 +327,7 @@ async fn upload_rejects_empty_slug(#[case] backend: Backend) {
 #[tokio::test]
 async fn member_forbids_other_user(backend: Backend, #[case] method: &str) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let storage = TempDir::new().unwrap();
     let app = make_app(state, &storage);
 
@@ -278,7 +337,7 @@ async fn member_forbids_other_user(backend: Backend, #[case] method: &str) {
             // A well-formed hash so the typed extractor passes and the wrong-user
             // check (alice authenticated, bob's namespace) is what yields 403.
             "/atompub/bob/media/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/pic.png",
-            "alice",
+            &session.username,
             &session.token,
             None,
         ))
@@ -296,7 +355,7 @@ async fn member_forbids_other_user(backend: Backend, #[case] method: &str) {
 #[tokio::test]
 async fn member_rejects_malformed_segment_returns_400(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage);
 
@@ -305,8 +364,8 @@ async fn member_rejects_malformed_segment_returns_400(#[case] backend: Backend) 
         .clone()
         .oneshot(atompub_xml(
             "GET",
-            "/atompub/alice/media/deadbeef/pic.png",
-            "alice",
+            &format!("/atompub/{}/media/deadbeef/pic.png", session.username),
+            &session.username,
             &session.token,
             None,
         ))
@@ -319,8 +378,11 @@ async fn member_rejects_malformed_segment_returns_400(#[case] backend: Backend) 
     let bad_name = app
         .oneshot(atompub_xml(
             "GET",
-            "/atompub/alice/media/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/a%5Cb.png",
-            "alice",
+            &format!(
+                "/atompub/{}/media/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/a%5Cb.png",
+                session.username
+            ),
+            &session.username,
             &session.token,
             None,
         ))

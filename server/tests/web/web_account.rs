@@ -4,13 +4,14 @@ use axum::http::StatusCode;
 use common::mailer::test_utils::CapturingMailSender;
 use common::mailer::MailSender;
 use common::test_support::{parse_bio, parse_display_name, parse_session_label};
-use storage::{AppState, ProfileUpdate};
+use storage::ProfileUpdate;
 
 use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{
-    create_session_for, create_user_and_session, post_form, post_form_with_mailer, session_cookie,
+    create_operator_and_session, create_session_for, create_user_and_session, post_form,
+    post_form_with_mailer, session_cookie,
 };
 use storage::test_support::{backends, Backend, SeedUser, TestEnv};
 
@@ -21,7 +22,7 @@ use storage::test_support::{backends, Backend, SeedUser, TestEnv};
 #[tokio::test]
 async fn get_profile_returns_display_name_and_bio(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     state
         .users
         .update_profile(
@@ -48,7 +49,7 @@ async fn get_profile_with_email_returns_email(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
     // Create user with email and session
-    let session = create_user_and_session(&state, "emailuser").await;
+    let session = create_user_and_session(&state).await;
     let email = "user@example.com".parse().unwrap();
     state
         .users
@@ -68,7 +69,7 @@ async fn get_profile_with_email_returns_email(#[case] backend: Backend) {
 #[tokio::test]
 async fn update_profile_persists_changes(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "bob").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, _) = post_form(
         Arc::clone(&state),
@@ -96,8 +97,8 @@ async fn update_profile_persists_changes(#[case] backend: Backend) {
 async fn list_sessions_returns_only_authenticated_users_sessions(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let user1_id = SeedUser::new("carol").seed(&state).await;
-    let user2_id = SeedUser::new("dave").seed(&state).await;
+    let user1_id = SeedUser::new().seed(&state).await.user_id;
+    let user2_id = SeedUser::new().seed(&state).await.user_id;
 
     let token1 = state
         .sessions
@@ -131,7 +132,7 @@ async fn list_sessions_returns_only_authenticated_users_sessions(#[case] backend
 #[tokio::test]
 async fn revoke_session_removes_session_and_reauth_fails(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state, "eve").await;
+    let session = create_user_and_session(&state).await;
 
     // Create a second session: use `session` to authenticate, revoke token_b's hash.
     let token_b = create_session_for(&state, session.user_id).await.token;
@@ -170,11 +171,6 @@ async fn revoke_session_removes_session_and_reauth_fails(#[case] backend: Backen
 
 // ── Invites tests (M2.10.9, #433) ─────────────────────────────────────────
 
-/// Create an authenticated operator and return its `session=` cookie header.
-async fn operator_cookie(state: &Arc<AppState>, username: &str) -> String {
-    create_user_and_session(state, username).await.cookie()
-}
-
 // #433: create_invite emails the invitation link to the recipient and records the invite.
 #[apply(backends)]
 #[tokio::test]
@@ -190,7 +186,7 @@ async fn create_invite_emails_link_and_appears_in_list(#[case] backend: Backend)
         .set("site.base_url", "https://example.com")
         .await
         .unwrap();
-    let cookie = operator_cookie(&state, "frank").await;
+    let cookie = create_operator_and_session(&state).await.cookie();
     let mailer = Arc::new(CapturingMailSender::new());
 
     let (status, body) = post_form_with_mailer(
@@ -251,7 +247,7 @@ async fn create_invite_unauthorized_returns_error(#[case] backend: Backend) {
 #[tokio::test]
 async fn create_invite_without_base_url_errors_and_sends_nothing(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = operator_cookie(&state, "frank").await;
+    let cookie = create_operator_and_session(&state).await.cookie();
     let mailer = Arc::new(CapturingMailSender::new());
 
     let (status, _) = post_form_with_mailer(
@@ -280,7 +276,7 @@ async fn create_invite_invalid_recipient_returns_error(#[case] backend: Backend)
         .set("site.base_url", "https://example.com")
         .await
         .unwrap();
-    let cookie = operator_cookie(&state, "frank").await;
+    let cookie = create_operator_and_session(&state).await.cookie();
     let mailer = Arc::new(CapturingMailSender::new());
 
     let (status, _) = post_form_with_mailer(
@@ -309,7 +305,7 @@ async fn create_invite_send_failure_returns_error(#[case] backend: Backend) {
         .set("site.base_url", "https://example.com")
         .await
         .unwrap();
-    let cookie = operator_cookie(&state, "frank").await;
+    let cookie = create_operator_and_session(&state).await.cookie();
 
     // `post_form` uses the noop mailer, whose `send_email` fails with NotConfigured.
     let (status, _) = post_form(
@@ -333,7 +329,7 @@ async fn create_invite_large_hours_returns_error(#[case] backend: Backend) {
         .set("site.base_url", "https://example.com")
         .await
         .unwrap();
-    let cookie = operator_cookie(&state, "alice").await;
+    let cookie = create_operator_and_session(&state).await.cookie();
     let mailer = Arc::new(CapturingMailSender::new());
 
     let (status, _) = post_form_with_mailer(
@@ -366,7 +362,7 @@ async fn create_invite_omits_hours_uses_default(#[case] backend: Backend) {
         .set("site.base_url", "https://example.com")
         .await
         .unwrap();
-    let cookie = operator_cookie(&state, "grace").await;
+    let cookie = create_operator_and_session(&state).await.cookie();
     let mailer = Arc::new(CapturingMailSender::new());
 
     let (status, body) = post_form_with_mailer(
@@ -398,7 +394,7 @@ async fn create_invite_empty_hours_uses_default(#[case] backend: Backend) {
         .set("site.base_url", "https://example.com")
         .await
         .unwrap();
-    let cookie = operator_cookie(&state, "heidi").await;
+    let cookie = create_operator_and_session(&state).await.cookie();
     let mailer = Arc::new(CapturingMailSender::new());
 
     let (status, body) = post_form_with_mailer(
@@ -423,7 +419,7 @@ async fn create_invite_empty_hours_uses_default(#[case] backend: Backend) {
 #[tokio::test]
 async fn revoke_session_unknown_hash_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "alice").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let (_status, _) = post_form(
         Arc::clone(&state),
@@ -441,8 +437,8 @@ async fn revoke_session_unknown_hash_returns_error(#[case] backend: Backend) {
 #[tokio::test]
 async fn revoke_session_other_user_hash_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie1 = create_user_and_session(&state, "alice").await.cookie();
-    let user2 = create_user_and_session(&state, "bob").await;
+    let cookie1 = create_user_and_session(&state).await.cookie();
+    let user2 = create_user_and_session(&state).await;
     let record2 = state.sessions.authenticate(&user2.token).await.unwrap();
 
     let (status, _) = post_form(
@@ -463,7 +459,7 @@ async fn list_invites_returns_error_when_policy_not_invite_only(#[case] backend:
     let TestEnv { state, base: _base } = backend.setup().await;
     // Policy defaults to Closed.
 
-    let cookie = create_user_and_session(&state, "grace").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, _) = post_form(Arc::clone(&state), "/api/list_invites", "", Some(&cookie)).await;
     assert_ne!(
@@ -502,10 +498,11 @@ async fn update_profile_unauthorized_returns_error(#[case] backend: Backend) {
 async fn update_profile_with_empty_fields_sets_to_none(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let user_id = SeedUser::new("empty")
+    let user_id = SeedUser::new()
         .display_name("Initial")
         .seed(&state)
-        .await;
+        .await
+        .user_id;
     state
         .users
         .update_profile(
@@ -547,7 +544,7 @@ async fn update_profile_rejects_invalid_display_name(#[case] backend: Backend) {
     // from reaching this; a raw POST is the malformed-client path. Mirrors
     // web_auth::register_invalid_username_returns_error.
     let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state, "invalid_dn").await;
+    let session = create_user_and_session(&state).await;
     let user_id = session.user_id;
     let cookie_header = session.cookie();
 

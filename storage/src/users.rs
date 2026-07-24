@@ -538,7 +538,7 @@ mod tests {
     #[tokio::test]
     async fn get_user_rejects_a_malformed_username_column(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new("testuser").seed(&env.state).await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
 
         // Overwrite the `username` column with a value `Username::from_str`
         // rejects (a space is not a valid username character), binding it as a raw
@@ -582,7 +582,7 @@ mod tests {
         // bridge) and decodes back into `Option<Bio>`; `None` clears it. Exercises
         // both the set and the clear paths across both backends.
         let env = backend.setup().await;
-        let user_id = SeedUser::new("testuser").seed(&env.state).await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
 
         let bio = parse_bio("hi");
         env.state
@@ -623,7 +623,7 @@ mod tests {
         // `Bio`'s `FromStr`. The over-cap value is unconstructible via the newtype, so
         // it is forced in with raw SQL. Mirrors the overlong-display-name case.
         let env = backend.setup().await;
-        let user_id = SeedUser::new("testuser").seed(&env.state).await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let overlong = "a".repeat(common::bio::MAX_BIO_CHARS + 1);
         let sql = format!(
             "UPDATE users SET bio='{overlong}' WHERE user_id={}",
@@ -663,16 +663,16 @@ mod tests {
     #[tokio::test]
     async fn authenticate_with_corrupted_hash_returns_internal_error(#[case] backend: Backend) {
         let env = backend.setup().await;
-        SeedUser::new("testuser").seed(&env.state).await;
-        env.base
-            .pool()
-            .execute("UPDATE users SET password_hash='not-a-bcrypt-hash' WHERE username='testuser'")
-            .await
-            .unwrap();
+        let user = SeedUser::new().seed(&env.state).await;
+        let sql = format!(
+            "UPDATE users SET password_hash='not-a-bcrypt-hash' WHERE username='{}'",
+            user.username
+        );
+        env.base.pool().execute(sql.as_str()).await.unwrap();
         let result = env
             .state
             .users
-            .authenticate(&parse_username("testuser"), &parse_password("password123"))
+            .authenticate(&user.username, &parse_password("password123"))
             .await;
         assert!(matches!(result, Err(UserAuthError::Internal(_))));
     }
@@ -683,16 +683,16 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        SeedUser::new("testuser").seed(&env.state).await;
-        env.base
-            .pool()
-            .execute("UPDATE users SET email='not-an-email' WHERE username='testuser'")
-            .await
-            .unwrap();
+        let user = SeedUser::new().seed(&env.state).await;
+        let sql = format!(
+            "UPDATE users SET email='not-an-email' WHERE username='{}'",
+            user.username
+        );
+        env.base.pool().execute(sql.as_str()).await.unwrap();
         let result = env
             .state
             .users
-            .authenticate(&parse_username("testuser"), &parse_password("password123"))
+            .authenticate(&user.username, &parse_password("password123"))
             .await;
         assert!(matches!(result, Err(UserAuthError::Internal(_))));
     }
@@ -707,14 +707,17 @@ mod tests {
         // Internal error at the strict read boundary — never a panic. Mirrors the
         // invalid-email-in-db case above.
         let env = backend.setup().await;
-        SeedUser::new("testuser").seed(&env.state).await;
+        let user = SeedUser::new().seed(&env.state).await;
         let overlong = "a".repeat(common::display_name::MAX_DISPLAY_NAME_CHARS + 1);
-        let sql = format!("UPDATE users SET display_name='{overlong}' WHERE username='testuser'");
+        let sql = format!(
+            "UPDATE users SET display_name='{overlong}' WHERE username='{}'",
+            user.username
+        );
         env.base.pool().execute(sql.as_str()).await.unwrap();
         let result = env
             .state
             .users
-            .authenticate(&parse_username("testuser"), &parse_password("password123"))
+            .authenticate(&user.username, &parse_password("password123"))
             .await;
         assert!(matches!(result, Err(UserAuthError::Internal(_))));
     }
@@ -723,7 +726,7 @@ mod tests {
     #[tokio::test]
     async fn authenticate_with_blocked_update_returns_internal_error(#[case] backend: Backend) {
         let env = backend.setup().await;
-        SeedUser::new("testuser").seed(&env.state).await;
+        let user = SeedUser::new().seed(&env.state).await;
         // Block the `last_authenticated_at` UPDATE the successful-auth path runs,
         // so authentication fails with `Internal` after the password verifies.
         match backend {
@@ -761,7 +764,7 @@ mod tests {
         let result = env
             .state
             .users
-            .authenticate(&parse_username("testuser"), &parse_password("password123"))
+            .authenticate(&user.username, &parse_password("password123"))
             .await;
         assert!(matches!(result, Err(UserAuthError::Internal(_))));
     }

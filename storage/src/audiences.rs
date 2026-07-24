@@ -356,7 +356,7 @@ mod tests {
     #[tokio::test]
     async fn audience_name_round_trips_through_create_and_list(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let author = SeedUser::new("testuser").seed(&env.state).await;
+        let author = SeedUser::new().seed(&env.state).await.user_id;
         let id = env
             .state
             .audiences
@@ -376,7 +376,7 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let author = SeedUser::new("testuser").seed(&env.state).await;
+        let author = SeedUser::new().seed(&env.state).await.user_id;
         // A whitespace-only name bypasses `AudienceName` validation (which
         // `create_audience` enforces) — only reachable via DB tampering. The
         // validating bridge `Decode` rejects it on read as a column-decode error.

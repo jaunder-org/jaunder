@@ -508,7 +508,7 @@ async fn logout_revokes_session_and_clears_cookie(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     // Create a user and a session directly, bypassing the HTTP layer so we
     // have the raw token without needing to parse the register response.
-    let session = create_user_and_session(&state, "grace").await;
+    let session = create_user_and_session(&state).await;
 
     let sessions_before = state.sessions.list_sessions(session.user_id).await.unwrap();
     assert_eq!(
@@ -637,7 +637,7 @@ async fn logout_with_bearer_token_revokes_session(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
     // Create a user and session directly so we have the raw token.
-    let session = create_user_and_session(&state, "henry").await;
+    let session = create_user_and_session(&state).await;
 
     let sessions_before = state
         .sessions
@@ -760,7 +760,7 @@ async fn auth_user_extraction_fails(backend: Backend, #[case] cookie: Option<&st
 #[tokio::test]
 async fn logout_clears_cookie_without_secure_attribute_when_disabled(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie_header = create_user_and_session(&state, "insecure").await.cookie();
+    let cookie_header = create_user_and_session(&state).await.cookie();
     let (status, set_cookie, _) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/logout",
