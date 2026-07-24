@@ -310,6 +310,18 @@ pub fn atompub_put_xml(session: &SeededSession, suffix: &str, xml: &str) -> Requ
     atompub_send_xml(session, "PUT", suffix, xml)
 }
 
+/// A media upload for `session`'s user: `POST /atompub/{username}/media` with an
+/// `image/png` body, the `slug` header, and `bytes` — the dominant media request.
+/// The odd cases (a non-`image/png` content type, a slug like `".."`, a foreign
+/// username) compose the chainable [`atompub`] / [`atompub_at`] builders directly.
+pub fn atompub_upload(session: &SeededSession, slug: &str, bytes: &'static [u8]) -> Request<Body> {
+    atompub(session, "POST", "media")
+        .header(header::CONTENT_TYPE, "image/png")
+        .header("slug", slug)
+        .body(Body::from(bytes))
+        .expect("failed to build atompub media upload request")
+}
+
 /// Read a response body fully and decode it as UTF-8.
 pub async fn body_string(response: axum::response::Response) -> String {
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)

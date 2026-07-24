@@ -35,7 +35,7 @@ CRUD-variant families. No production or runtime-behaviour change.
      post-seeding to `SeedPost`.
 - [x] 3. Session-keyed AtomPub request helpers + migrate `atompub_posts.rs` &
      `atompub_service.rs`.
-- [ ] 4. `atompub_upload` + migrate `atompub_media.rs` request sites.
+- [x] 4. `atompub_upload` + migrate `atompub_media.rs` request sites.
 - [ ] 5. Aggressive `#[case]` parameterization of the uniform CRUD-variant
      families.
 
