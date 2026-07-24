@@ -5,6 +5,7 @@ use axum::{
     body::Body,
     http::{header, Request, StatusCode},
 };
+use common::ids::UserId;
 use common::mailer::test_utils::CapturingMailSender;
 use common::mailer::MailSender;
 use common::token::RawToken;
@@ -105,6 +106,47 @@ pub fn tmp_storage_path() -> std::path::PathBuf {
 /// `RawToken` directly instead of re-`format!`-ing it.
 pub fn session_cookie(token: &RawToken) -> String {
     format!("session={token}")
+}
+
+/// A user seeded together with one authenticated web session. `token` is the raw
+/// session token (what bearer/basic-auth callers want); `cookie()` renders the
+/// `session=<token>` header for cookie-authenticated requests.
+pub struct SeededSession {
+    pub user_id: UserId,
+    pub token: RawToken,
+}
+
+impl SeededSession {
+    /// The `session=<token>` cookie header authenticating a request as this user.
+    #[must_use]
+    pub fn cookie(&self) -> String {
+        session_cookie(&self.token)
+    }
+}
+
+/// Create an authenticated `"test session"` session for an already-seeded
+/// `user_id` — the one place the default session label lives, so a
+/// `create_session`-signature change (#325) touches only here.
+pub async fn create_session_for(state: &Arc<storage::AppState>, user_id: UserId) -> SeededSession {
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .expect("create session");
+    SeededSession { user_id, token }
+}
+
+/// Seed a non-operator user and an authenticated web session in one step — the
+/// workhorse behind the integration suite's `create_user` + `create_session` +
+/// `session_cookie` setup.
+pub async fn create_user_and_session(
+    state: &Arc<storage::AppState>,
+    username: &str,
+) -> SeededSession {
+    let user_id = storage::test_support::SeedUser::new(username)
+        .seed(state)
+        .await;
+    create_session_for(state, user_id).await
 }
 
 /// An `Authorization: Basic <base64(username:token)>` header value — the app-password
