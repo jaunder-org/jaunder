@@ -55,20 +55,26 @@ token) and surfaced only on a non-zero exit."
              (data (json-read-file path)))
         (cons (alist-get 'ip data) (alist-get 'port data))))))
 
-(defun jaunder-test--wait (predicate what)
-  "Poll PREDICATE up to 100 times every 0.1s; return its value or error WHAT."
-  (or (catch 'done
-        (dotimes (_ 100)
-          (let ((v (funcall predicate)))
-            (when v (throw 'done v)))
-          (sleep-for 0.1))
-        nil)
-      (error "jaunder-test: timed out waiting for %s" what)))
+(defun jaunder-test--wait (predicate what &optional timeout)
+  "Poll PREDICATE until non-nil or TIMEOUT seconds elapse; then error WHAT.
+TIMEOUT defaults to $JAUNDER_TEST_READY_TIMEOUT (seconds) or 30.  The budget is
+wall-clock, not an iteration count, so a slow per-attempt connect can't starve
+the poll count on a loaded CI VM (#628)."
+  (let* ((budget (or timeout
+                     (let ((env (getenv "JAUNDER_TEST_READY_TIMEOUT")))
+                       (if env (string-to-number env) 30))))
+         (deadline (+ (float-time) budget)))
+    (catch 'done
+      (while (< (float-time) deadline)
+        (let ((v (funcall predicate)))
+          (when v (throw 'done v)))
+        (sleep-for 0.1))
+      (error "jaunder-test: timed out (%.1fs) waiting for %s" budget what))))
 
 (defun jaunder-test--http-reachable-p (url)
   "Return non-nil if a GET of URL yields any HTTP response (any status)."
   (condition-case nil
-      (progn (plz 'get url :as 'response :connect-timeout 5) t)
+      (progn (plz 'get url :as 'response :connect-timeout 2) t)
     ;; An HTTP error status still means the server answered = reachable.
     (plz-http-error t)
     ;; A curl/connection error means it is not up yet.
@@ -84,7 +90,7 @@ is exactly what this suite exists to avoid (ADR-0038)."
                (plz 'get url
                     :headers (list (jaunder--basic-auth-header user password))
                     :as 'response
-                    :connect-timeout 5)))
+                    :connect-timeout 2)))
     ;; A non-200 status (plz signals on 4xx/5xx) or a connection error both
     ;; mean "not ready yet" — the caller retries.
     (error nil)))
