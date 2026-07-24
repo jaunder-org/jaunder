@@ -10,9 +10,13 @@
 //! Self-subscription is rejected — an author cannot subscribe to themselves.
 
 mod api;
+#[cfg(target_arch = "wasm32")]
+mod component;
 #[cfg(feature = "server")]
 mod server;
 
 pub use api::{
     is_subscribed_to, subscribe_to, unsubscribe_from, IsSubscribedTo, SubscribeTo, UnsubscribeFrom,
 };
+#[cfg(target_arch = "wasm32")]
+pub use component::SubscribeButton;
