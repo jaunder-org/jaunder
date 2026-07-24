@@ -2,6 +2,7 @@ use std::{fmt, str::FromStr};
 
 use common::mailbox::Mailbox;
 use common::smtp_password::SmtpPassword;
+use common::smtp_username::SmtpUsername;
 use thiserror::Error;
 
 use crate::SiteConfigStorage;
@@ -62,8 +63,8 @@ pub struct SmtpConfig {
     pub port: u16,
     /// TLS mode (default: [`SmtpTlsMode::StartTls`]).
     pub tls_mode: SmtpTlsMode,
-    /// Optional SMTP auth username.
-    pub username: Option<String>,
+    /// Optional SMTP auth username (a validated non-empty identifier).
+    pub username: Option<SmtpUsername>,
     /// Optional SMTP auth password (a redacting secret newtype — never rendered
     /// or logged; read once at the mailer `Credentials` boundary).
     pub password: Option<SmtpPassword>,
@@ -74,15 +75,15 @@ pub struct SmtpConfig {
 /// The optional SMTP auth credentials, read together as a typed pair by
 /// [`SiteConfigStorage::get_smtp_credentials`](crate::SiteConfigStorage::get_smtp_credentials).
 ///
-/// `password` is the secret [`SmtpPassword`]: it decodes from the `site_config`
-/// value column through its validating sqlx bridge, so an empty/garbage stored
-/// value is rejected at the query boundary rather than reaching here. `username`
-/// is an identifier, not a secret, and stays a plain `String`. The derived `Debug`
-/// redacts the password via `SmtpPassword`'s redacting `Debug`.
+/// Both fields decode from the `site_config` value column through their validating
+/// sqlx bridges, so an empty/garbage stored value is rejected at the query boundary
+/// rather than reaching here. `username` is a validated identifier ([`SmtpUsername`],
+/// non-secret); `password` is the secret [`SmtpPassword`], whose redacting `Debug`
+/// the derived `Debug` inherits.
 #[derive(Clone, Debug)]
 pub struct SmtpCredentials {
     /// Optional SMTP auth username.
-    pub username: Option<String>,
+    pub username: Option<SmtpUsername>,
     /// Optional SMTP auth password.
     pub password: Option<SmtpPassword>,
 }
@@ -103,11 +104,11 @@ pub enum SmtpConfigError {
     /// `smtp.sender` is set to a value that cannot be parsed as an email address.
     #[error("smtp.sender {0:?} is not a valid email address")]
     InvalidSender(String),
-    /// `smtp.password` is present but empty. Deliberately **valueless** — the
-    /// credential is never embedded in an error (unlike the sibling variants,
-    /// which echo the offending string).
-    #[error("smtp.password must not be empty")]
-    InvalidPassword,
+    /// `smtp.username` or `smtp.password` holds an invalid (e.g. empty) value.
+    /// Deliberately **valueless** — a credential is never embedded in an error
+    /// (unlike the sibling variants, which echo the offending string).
+    #[error("smtp.username or smtp.password holds an invalid value")]
+    InvalidCredential,
 }
 
 // ---------------------------------------------------------------------------
@@ -151,16 +152,16 @@ pub async fn load_smtp_config(
             .map_err(|_| SmtpConfigError::InvalidTlsMode(v))?,
     };
 
-    // Username + password are read together as a typed pair; the secret password
-    // decodes through its sqlx bridge, so an empty/garbage stored value surfaces as
-    // a decode error here (rejected, per the non-empty invariant). `smtp.host` was
-    // already read above, so a non-decode storage error can't realistically reach
-    // this point; either way the caller (`build_mailer`) maps an `Err` to the safe
-    // no-op mailer, so folding both into `InvalidPassword` is sound.
+    // Username + password are read together as a typed pair; both decode through
+    // their sqlx bridges, so an empty/garbage stored value surfaces as a decode
+    // error here (rejected, per the non-empty invariant). `smtp.host` was already
+    // read above, so a non-decode storage error can't realistically reach this
+    // point; either way the caller (`build_mailer`) maps an `Err` to the safe no-op
+    // mailer, so folding both into `InvalidCredential` is sound.
     let SmtpCredentials { username, password } = store
         .get_smtp_credentials()
         .await
-        .map_err(|_| SmtpConfigError::InvalidPassword)?;
+        .map_err(|_| SmtpConfigError::InvalidCredential)?;
 
     let sender_str = store
         .get("smtp.sender")
@@ -192,6 +193,7 @@ mod tests {
     use super::*;
 
     use crate::test_support::InMemorySiteConfig;
+    use common::test_support::{parse_smtp_password, parse_smtp_username};
 
     // -- SmtpTlsMode parsing tests --
 
@@ -256,7 +258,10 @@ mod tests {
         assert_eq!(config.host, "mail.example.com");
         assert_eq!(config.port, 465);
         assert_eq!(config.tls_mode, SmtpTlsMode::Tls);
-        assert_eq!(config.username, Some("user@example.com".to_owned()));
+        assert_eq!(
+            config.username,
+            Some(parse_smtp_username("user@example.com"))
+        );
         assert_eq!(
             config.password.expect("password present").as_ref(),
             "s3cr3t"
@@ -333,18 +338,28 @@ mod tests {
         ]);
 
         let err = load_smtp_config(&store).await.unwrap_err();
-        assert!(matches!(err, SmtpConfigError::InvalidPassword));
+        assert!(matches!(err, SmtpConfigError::InvalidCredential));
+    }
+
+    // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
+    #[tokio::test]
+    async fn load_smtp_config_returns_err_for_empty_username() {
+        let store = InMemorySiteConfig::from_pairs([
+            ("smtp.host", "mail.example.com"),
+            ("smtp.username", ""),
+        ]);
+
+        let err = load_smtp_config(&store).await.unwrap_err();
+        assert!(matches!(err, SmtpConfigError::InvalidCredential));
     }
 
     #[test]
     fn smtp_config_debug_redacts_password() {
-        use common::test_support::parse_smtp_password;
-
         let config = SmtpConfig {
             host: "mail.example.com".to_owned(),
             port: 587,
             tls_mode: SmtpTlsMode::StartTls,
-            username: Some("user@example.com".to_owned()),
+            username: Some(parse_smtp_username("user@example.com")),
             password: Some(parse_smtp_password("s3cr3t")),
             sender: "Jaunder <noreply@example.com>".parse::<Mailbox>().unwrap(),
         };

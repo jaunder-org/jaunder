@@ -26,7 +26,7 @@ generalize the load error to a shared valueless `InvalidCredential`.
      trailer tests) + `lib.rs` registration. (`parse_smtp_username` helper
      deferred to task 2, its first user — so it is not an uncovered region at
      this commit.)
-- [ ] 2. `storage` + `server`: thread `SmtpUsername` through `SmtpConfig` /
+- [x] 2. `storage` + `server`: thread `SmtpUsername` through `SmtpConfig` /
      `SmtpCredentials`; `get_smtp_credentials` decodes the username via the
      bridge; `InvalidPassword` → `InvalidCredential`; `InMemorySiteConfig`
      double; the mailer expose; `parse_smtp_username` helper; all test updates +
