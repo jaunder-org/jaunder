@@ -42,41 +42,34 @@ aliases to `helpers/` (which would enshrine near-duplicates of
 Delete the local `make_user` and `cookie_for` definitions from `audiences.rs`
 and `web_subscriptions.rs`, and rewrite every call site using the shared
 fixtures already in `server/tests/helpers/mod.rs` / `storage::test_support`, per
-these behavior-preserving rules:
+these two behavior-preserving rules keyed on whether the user needs a session:
 
-1. **Standalone seed** (a `make_user` whose `UserId` is used, no cookie for that
-   user) → `SeedUser::new().seed(&state).await.user_id`.
-2. **Seed + cookie for the same user, id not used elsewhere** →
-   `create_user_and_session(&state).await.cookie()` (drop the now-unused id
-   binding).
-3. **Seed + cookie for the same user, id also used** →
-   `let s = create_user_and_session(&state).await;` then `s.user_id` /
-   `s.cookie()`.
-4. **Cookie for a separately-seeded / pre-existing id** →
-   `create_session_for(&state, id).await.cookie()`.
+1. **Authed user** (needs a cookie/session — its `.user_id` and/or `.username`
+   may also be used) → `let u = create_user_and_session(&state).await;` then
+   `u.cookie()` / `u.user_id` / `u.username` (or `create_user_and_session(&state)
+   .await.cookie()` inline when only the cookie is needed). This is the
+   purpose-built "authed user" fixture: a fresh `SeedUser` seed + one session,
+   returning a `SeededSession` with all three — exactly `make_user` followed by
+   `cookie_for` on that user.
+2. **Session-less target** (a user referenced only by `.user_id`/`.username`,
+   never logged in — subscription targets like `subscriber`/`alice`) →
+   `SeedUser::new().seed(&state).await.user_id` (or the full seed result when the
+   `.username` is asserted).
 
-Rule 2 assumes the `make_user` and `cookie_for` calls are adjacent. In the
-cross-author cases (`audiences.rs` `bob`), the seed and the cookie call are
-**non-adjacent** — the seed precedes another author's setup, the cookie follows
-it. For those, prefer keeping the seed in place via Rule 1
-(`let bob = SeedUser::new().seed(&state).await.user_id;`) and taking the cookie
-at its original site via Rule 4
-(`create_session_for(&state, bob).await.cookie()`), rather than collapsing to
-`create_user_and_session` at the cookie site (which would relocate the seed
-later). Both are behavior-neutral — no assertion depends on user-id ordering —
-but Rule 1 + Rule 4 preserves source locality; pick whichever reads cleaner per
-site.
+`create_session_for` is **not** used: every user that needs a cookie is freshly
+seeded for that purpose, so `create_user_and_session` (seed + session in one) is
+the right fixture and avoids `create_session_for`'s redundant `get_user`
+round-trip. The cross-author `bob` users are only ever used for their cookie, so
+they collapse to `create_user_and_session(&state).await.cookie()` at the cookie
+site (dropping the separate seed binding); relocating that seed a few lines later
+is behavior-neutral (no assertion depends on user-id ordering).
 
-Each rule maps one alias call onto the canonical shared helper it already
-wrapped; `create_user_and_session` = seed a fresh `SeedUser` + issue one
-session, which is exactly `make_user` followed by `cookie_for` on that user. No
-test semantics change (same seeding, same single session per user). The compiler
-enforces correctness: a dropped id binding that is still referenced fails to
-compile.
+No test semantics change (same seeding, same single session per user). The
+compiler enforces correctness: a bare `SeededSession` used where a `UserId` is
+expected fails to compile, forcing the `.user_id` projection.
 
 No new helper is added to `helpers/mod.rs` — the shared surface (`SeedUser`,
-`create_session_for`, `create_user_and_session`, `SeededSession::cookie`)
-already covers every case.
+`create_user_and_session`, `SeededSession`) already covers every case.
 
 ## Scope
 
@@ -100,8 +93,8 @@ aliases), plus a correcting update to the #430 issue body noting
    anywhere under `server/tests` (`rg 'fn make_user|fn cookie_for'` → no
    matches).
 2. **Every former call site uses a shared fixture** per the rules above — no
-   call site references `make_user`/`cookie_for`; each uses `SeedUser`,
-   `create_session_for`, or `create_user_and_session` directly.
+   call site references `make_user`/`cookie_for`; each uses `SeedUser` or
+   `create_user_and_session` directly.
 3. **No new shared helper** was added to `helpers/mod.rs` (diff there is empty).
 4. **No product code changed** — the diff is confined to the two test files (and
    the issue body).
