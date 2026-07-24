@@ -775,9 +775,14 @@ impl SiteConfigStorage for InMemorySiteConfig {
     }
 
     async fn get_smtp_credentials(&self) -> sqlx::Result<crate::smtp::SmtpCredentials> {
-        let username = self.get("smtp.username").await?;
-        // Mirror the real backend's bridge decode: parse the stored value and
+        // Mirror the real backend's bridge decode: parse each stored value and
         // surface a reject (empty) as a decode error.
+        let username = self
+            .get("smtp.username")
+            .await?
+            .map(|v| v.parse::<common::smtp_username::SmtpUsername>())
+            .transpose()
+            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
         let password = self
             .get("smtp.password")
             .await?

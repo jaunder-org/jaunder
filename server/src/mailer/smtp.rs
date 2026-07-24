@@ -63,10 +63,10 @@ impl LettreMailSender {
 
         let builder = match (&config.username, &config.password) {
             (Some(username), Some(password)) => {
-                // The one plaintext read of the secret `SmtpPassword`: borrow via
-                // `AsRef<str>` and own it for lettre's `Credentials`.
+                // Borrow each credential via `AsRef<str>` and own it for lettre's
+                // `Credentials` (the sole plaintext read of the secret password).
                 builder.credentials(Credentials::new(
-                    username.clone(),
+                    username.as_ref().to_owned(),
                     password.as_ref().to_owned(),
                 ))
             }
@@ -124,7 +124,7 @@ impl MailSender for LettreMailSender {
 #[cfg(test)]
 mod tests {
     use common::email::Email;
-    use common::test_support::parse_smtp_password;
+    use common::test_support::{parse_smtp_password, parse_smtp_username};
     use storage::{SmtpConfig, SmtpTlsMode};
 
     use super::*;
@@ -160,7 +160,7 @@ mod tests {
     #[tokio::test]
     async fn from_config_with_credentials_succeeds() {
         let config = SmtpConfig {
-            username: Some("user@example.com".to_owned()),
+            username: Some(parse_smtp_username("user@example.com")),
             password: Some(parse_smtp_password("s3cr3t")),
             ..base_config(SmtpTlsMode::StartTls)
         };
@@ -171,7 +171,7 @@ mod tests {
     async fn from_config_with_only_username_no_credentials_applied() {
         // Credentials are only applied when both username AND password are present.
         let config = SmtpConfig {
-            username: Some("user@example.com".to_owned()),
+            username: Some(parse_smtp_username("user@example.com")),
             password: None,
             ..base_config(SmtpTlsMode::StartTls)
         };

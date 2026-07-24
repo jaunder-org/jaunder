@@ -10,6 +10,7 @@ use common::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
 use common::media::{MaxFileSize, UserQuota};
 use common::site::{SiteIdentity, SiteTitle};
 use common::smtp_password::SmtpPassword;
+use common::smtp_username::SmtpUsername;
 use common::visibility::AudienceTarget;
 use sqlx::{Database, Pool};
 
@@ -42,11 +43,11 @@ pub trait SiteConfigStorage: Send + Sync {
     /// Reads the SMTP auth credentials (`smtp.username` + `smtp.password`) as a
     /// typed [`SmtpCredentials`] pair.
     ///
-    /// A **required** method rather than a `get`-based default: the secret
-    /// `smtp.password` value decodes through [`SmtpPassword`]'s validating sqlx
-    /// bridge, so an empty/garbage stored value is rejected as a `ColumnDecode`
-    /// error at the query boundary (the non-empty invariant), never reaching a
-    /// caller as a bad `SmtpPassword`.
+    /// A **required** method rather than a `get`-based default: both values decode
+    /// through their validating sqlx bridges ([`SmtpUsername`]/[`SmtpPassword`]), so
+    /// an empty/garbage stored value is rejected as a `ColumnDecode` error at the
+    /// query boundary (the non-empty invariant), never reaching a caller as a bad
+    /// credential.
     async fn get_smtp_credentials(&self) -> sqlx::Result<SmtpCredentials>;
 
     /// Returns the configured media max upload size, falling back to the
@@ -329,8 +330,10 @@ where
     DB: Backend,
     (String,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (String, String): for<'r> sqlx::FromRow<'r, DB::Row>,
-    // `SmtpPassword` decodes from the `value` column via its validating sqlx bridge
-    // (#438); this bound makes that bridge available on the generic backend.
+    // `SmtpUsername`/`SmtpPassword` decode from the `value` column via their
+    // validating sqlx bridges (#438); these bounds make the bridges available on
+    // the generic backend.
+    (SmtpUsername,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (SmtpPassword,): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
@@ -357,10 +360,15 @@ where
     }
 
     async fn get_smtp_credentials(&self) -> sqlx::Result<SmtpCredentials> {
-        let username = self.get("smtp.username").await?;
-        // Decode the `smtp.password` value column straight into the secret
-        // `SmtpPassword` via its sqlx bridge; an empty/garbage value fails
-        // `FromStr` and surfaces as a `ColumnDecode` error (rejected).
+        // Decode each value column straight into its newtype via the sqlx bridge;
+        // an empty/garbage value fails `FromStr` and surfaces as a `ColumnDecode`
+        // error (rejected). Symmetric for username and password.
+        let username =
+            sqlx::query_as::<_, (SmtpUsername,)>("SELECT value FROM site_config WHERE key = $1")
+                .bind("smtp.username")
+                .fetch_optional(&self.pool)
+                .await?
+                .map(|(username,)| username);
         let password =
             sqlx::query_as::<_, (SmtpPassword,)>("SELECT value FROM site_config WHERE key = $1")
                 .bind("smtp.password")
@@ -400,7 +408,8 @@ mod tests {
     use common::media::{MaxFileSize, UserQuota};
     use common::test_support::{
         parse_absolute_url, parse_destination_path, parse_feed_min_days, parse_feed_min_items,
-        parse_max_file_size, parse_retention_count, parse_site_title, parse_user_quota,
+        parse_max_file_size, parse_retention_count, parse_site_title, parse_smtp_username,
+        parse_user_quota,
     };
     use rstest::*;
     use rstest_reuse::*;
@@ -495,7 +504,10 @@ mod tests {
         storage.set("smtp.password", "s3cr3t").await.unwrap();
 
         let creds = storage.get_smtp_credentials().await.unwrap();
-        assert_eq!(creds.username, Some("user@example.com".to_owned()));
+        assert_eq!(
+            creds.username,
+            Some(parse_smtp_username("user@example.com"))
+        );
         // Exercise the aggregate's derived Clone/Debug (redacts the password)
         // before moving the password out below.
         assert!(format!("{creds:?}").contains("[redacted]"));
@@ -521,6 +533,21 @@ mod tests {
         // An empty stored password bypasses the non-empty invariant only via
         // tampering; the bridge decode rejects it as a `ColumnDecode` error.
         storage.set("smtp.password", "").await.unwrap();
+        let err = storage.get_smtp_credentials().await.unwrap_err();
+        assert!(
+            matches!(err, sqlx::Error::ColumnDecode { .. }),
+            "expected a column-decode error, got: {err:?}"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn get_smtp_credentials_rejects_empty_username(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
+        // An empty stored username is rejected by the bridge decode, symmetric with
+        // the password.
+        storage.set("smtp.username", "").await.unwrap();
         let err = storage.get_smtp_credentials().await.unwrap_err();
         assert!(
             matches!(err, sqlx::Error::ColumnDecode { .. }),

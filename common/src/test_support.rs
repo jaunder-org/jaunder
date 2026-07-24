@@ -26,6 +26,7 @@ use crate::session_label::SessionLabel;
 use crate::site::SiteTitle;
 use crate::slug::Slug;
 use crate::smtp_password::SmtpPassword;
+use crate::smtp_username::SmtpUsername;
 use crate::tag::{Tag, TagLabel};
 use crate::time::UtcInstant;
 use crate::token::{RawToken, TokenHash};
@@ -374,6 +375,17 @@ pub fn parse_password(s: &str) -> Password {
 #[must_use]
 pub fn parse_smtp_password(s: &str) -> SmtpPassword {
     s.parse().expect("valid test SMTP password")
+}
+
+/// Parse `s` into a valid [`SmtpUsername`] for tests — the single place a test
+/// SMTP-username literal is parsed, so an empty fixture fails loudly.
+///
+/// # Panics
+///
+/// Panics if `s` is empty.
+#[must_use]
+pub fn parse_smtp_username(s: &str) -> SmtpUsername {
+    s.parse().expect("valid test SMTP username")
 }
 
 /// Parse `s` into a valid [`Tag`] (a canonical tag slug) for tests — the single place
