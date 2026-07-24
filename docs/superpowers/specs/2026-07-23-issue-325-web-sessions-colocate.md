@@ -78,21 +78,20 @@ validated, non-empty, bounded human label) modelled as a primitive.
        the **user-supplied** `--label` arg becomes a `SessionLabel` — so the CLI
        path now gets the same non-empty/≤255 validation as the web wire (a small
        bonus of the sweep, previously unvalidated).
-   - **Read-side validating-decode risk + mitigation.** `StrNewtype`'s sqlx
-     `Decode` re-validates each stored label through `FromStr`, so
-     `SessionRecord.label: SessionLabel` means `list_sessions` decodes existing
-     rows as `SessionLabel`. The `label` column pre-dates any max-length rule
-     (only non-empty was enforced), so a legacy row over 255 chars would fail
-     decode. This is **accepted**: the cap is deliberately generous (255) and
-     every write path already bounds the label far below it — the app-password
-     form is short user input, the **login label is already truncated to 200
-     chars**, and the registration literal is fixed. No realistic stored label
-     approaches 255; no data migration. _(This truncation is now load-bearing
-     for read-decode safety — if a future change lifts the 200-char login
-     truncation, it must keep the label ≤ `MAX_SESSION_LABEL_CHARS`. If the
-     maintainer knows the column can already hold long labels, flag at approval
-     and we type only the write side, leaving `SessionRecord.label` a
-     `String`.)_
+   - **Read side is decoded leniently (revised after the standards review).**
+     `SessionRecord.label` is still typed `SessionLabel`, but the `label` column
+     is decoded as a plain `String` and repaired into a `SessionLabel` via
+     `SessionLabel::from_lossy` in `storage::helpers::session_record_from_row` —
+     **not** the validating sqlx `Decode`. A label is a best-effort _display_
+     value, and the old CLI minter (`server/src/commands.rs`) applied no length
+     or non-empty check, so a pre-existing empty/over-long row must not break
+     the whole `list_sessions` query. `from_lossy` trims, truncates, and
+     defaults such a row on read, so **read-decode never fails** and no data
+     migration is needed. The validating `FromStr`/serde path still guards the
+     _write_ side (the wire arg + CLI). `MAX_SESSION_LABEL_CHARS` is therefore
+     no longer load-bearing for row survival; login keeps its own 200-char
+     device-name cap as product behavior, with `from_lossy` the infallible type
+     construction.
 
 ## Target end state (observable criteria)
 

@@ -204,18 +204,23 @@ pub(crate) type SessionRow = (
     TokenHash,
     i64,
     Username,
-    SessionLabel,
+    String,
     DateTime<Utc>,
     DateTime<Utc>,
 );
 
 pub(crate) fn session_record_from_row(row: SessionRow) -> SessionRecord {
     let (token_hash, user_id, username, label, created_at, last_used_at) = row;
+    // The `label` column decodes as a plain `String` and is sanitized into a
+    // `SessionLabel` via the lossy constructor rather than a validating decode: a
+    // label is a best-effort *display* value, so a pre-existing out-of-range row
+    // (e.g. an empty or over-long label minted by the old unvalidated CLI path) is
+    // repaired on read instead of failing the whole `list_sessions` query.
     build_session_record(
         token_hash,
         user_id,
         username,
-        label,
+        SessionLabel::from_lossy(&label),
         created_at,
         last_used_at,
     )
@@ -666,7 +671,7 @@ mod tests {
             parse_token_hash("tokenhash"),
             1,
             parse_username("alice"),
-            parse_session_label("label"),
+            "label".to_string(),
             now,
             now,
         );

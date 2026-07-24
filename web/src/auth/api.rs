@@ -67,7 +67,8 @@ pub async fn login(
             }
         };
 
-        // Prefer explicit label if provided; otherwise derive from User-Agent header
+        // Prefer an explicit client-supplied label; otherwise a User-Agent-derived
+        // device name, capped at 200 chars with an "Unknown device" default.
         let derived_label = if let Some(l) = label.and_then(common::text::non_empty_owned) {
             l
         } else {
@@ -87,9 +88,8 @@ pub async fn login(
                 ua
             }
         };
-        // The device label is a best-effort display string (UA or client-supplied),
-        // so build it losslessly at the `SessionLabel` chokepoint — truncating an
-        // over-long value and defaulting an empty one rather than failing the login.
+        // `from_lossy` is the infallible String -> SessionLabel construction (the
+        // above already keeps `derived_label` valid, so this is a no-op safety net).
         let session_label = SessionLabel::from_lossy(&derived_label);
 
         let raw_token = sessions

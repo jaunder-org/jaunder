@@ -5,9 +5,10 @@ use thiserror::Error;
 
 /// Maximum session/app-password label length, in Unicode scalar values. Generous —
 /// a label is a free-form human tag (a device or app name), not an identifier —
-/// while still bounding the stored value and the create form. Chosen ≥ the login
-/// User-Agent label truncation (200 chars, [`crate`]-external) so the read-side
-/// decode of pre-existing session rows never fails (#325).
+/// while still bounding the wire arg and the create form. Chosen for `DisplayName`
+/// parity (#325). The stored column is read back leniently (via [`SessionLabel::from_lossy`]
+/// in `storage`), so this cap governs the validating [`FromStr`]/wire path, not the
+/// survival of pre-existing rows.
 pub const MAX_SESSION_LABEL_CHARS: usize = 255;
 
 /// A validated session label: surrounding whitespace trimmed, non-empty, at most
