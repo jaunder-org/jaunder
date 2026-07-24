@@ -11,6 +11,7 @@ use crate::posts::list_local_timeline;
 use crate::timeline::{TimelineRows, TimelineState};
 use common::feed::FeedSurface;
 use common::pagination::PageSize;
+use common::seed::PageSeed;
 
 #[component]
 pub fn HomePage() -> impl IntoView {
@@ -22,8 +23,8 @@ pub fn HomePage() -> impl IntoView {
     // personalized feed (a content swap can't be flash-free; the projector paints
     // anonymous-only bytes). The personalized Feed lives at the `/app` cockpit.
     // Adopt the seed as the initial state so first paint shows content, no swap.
-    if let Some(crate::render::PageSeed::SiteTimeline(page)) =
-        leptos::prelude::use_context::<Option<crate::render::PageSeed>>().flatten()
+    if let Some(PageSeed::SiteTimeline(page)) =
+        leptos::prelude::use_context::<Option<PageSeed>>().flatten()
     {
         state.adopt(page);
     }

@@ -1,6 +1,6 @@
 use crate::error::{ErrorClass, ErrorKind, InternalError, WebError};
-use crate::tags::TagSummary;
 use common::ids::UserId;
+use common::seed::{PostResponse, TagSummary, TimelinePostSummary};
 use common::time::UtcInstant;
 use leptos::context::use_context;
 use leptos_axum::ResponseOptions;
@@ -9,7 +9,7 @@ use storage::{PostRecord, PostTag};
 pub fn timeline_post_summary(
     post: PostRecord,
     viewer_user_id: Option<UserId>,
-) -> Option<super::TimelinePostSummary> {
+) -> Option<TimelinePostSummary> {
     let published_at = post.published_at?;
     let permalink = post.permalink();
     let PostRecord {
@@ -24,7 +24,7 @@ pub fn timeline_post_summary(
         tags,
         ..
     } = post;
-    Some(super::TimelinePostSummary {
+    Some(TimelinePostSummary {
         post_id,
         username: author_username,
         title,
@@ -51,7 +51,7 @@ fn post_tags_to_summaries(tags: Vec<PostTag>) -> Vec<TagSummary> {
 }
 
 #[must_use]
-pub fn post_response(post: PostRecord, is_author: bool) -> super::PostResponse {
+pub fn post_response(post: PostRecord, is_author: bool) -> PostResponse {
     // Only published posts have a public permalink. For drafts, the permalink is None.
     let permalink = post.published_at.is_some().then(|| post.permalink());
     let PostRecord {
@@ -68,7 +68,7 @@ pub fn post_response(post: PostRecord, is_author: bool) -> super::PostResponse {
         tags,
         ..
     } = post;
-    super::PostResponse {
+    PostResponse {
         post_id,
         username: author_username,
         title,

@@ -11,7 +11,7 @@ use leptos::server_fn::codec::Json;
 use serde::{Deserialize, Serialize};
 
 /// Timeline/listing endpoints, split out from the single-post lifecycle below.
-/// Re-exported so `crate::posts::list_*` / `TimelinePage` keep resolving.
+/// Re-exported so `crate::posts::list_*` keep resolving.
 mod listing;
 pub use listing::*;
 
@@ -21,9 +21,9 @@ use common::{
     tag::TagLabel, time::UtcInstant, username::Username, visibility::AudienceSelection,
 };
 
-use crate::error::WebResult;
+use common::seed::PostResponse;
 
-use super::PostResponse;
+use crate::error::WebResult;
 
 // The audience-picker DTO and its converters live in `common::visibility` (beside
 // `AudienceBase`/`AudienceTarget`); the server fn bodies below use these two to
@@ -605,9 +605,9 @@ mod tests {
     // reconstruction door.
     #[test]
     fn timeline_summary_round_trips_rendered_html_via_trusted_rebuild() {
-        use crate::posts::TimelinePostSummary;
         use common::ids::PostId;
         use common::render::RenderedHtml;
+        use common::seed::TimelinePostSummary;
         use common::test_support::{parse_root_relative_url, parse_utc_instant};
 
         let original = TimelinePostSummary {

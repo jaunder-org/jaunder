@@ -6,10 +6,10 @@
 
 use leptos::prelude::*;
 
+use common::seed::TimelinePage;
 use common::{ids::PostId, pagination::PageSize, tag::Tag, time::UtcInstant, username::Username};
 
 use crate::error::WebResult;
-use crate::posts::TimelinePage;
 
 #[cfg(feature = "server")]
 use {

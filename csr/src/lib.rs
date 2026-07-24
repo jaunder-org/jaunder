@@ -3,8 +3,8 @@
 // to monomorphize it (mirrors web/src/lib.rs).
 #![recursion_limit = "512"]
 
+use common::seed::PageSeed;
 use leptos::prelude::*;
-use web::render::PageSeed;
 use web::App;
 
 // The e2e suite waits on `body[data-hydrated]` (end2end/tests/hydration.ts) as the

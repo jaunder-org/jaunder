@@ -7,9 +7,9 @@ use leptos::server_fn::codec::Json;
 #[cfg(feature = "server")]
 use {common::tag::TagLabel, std::sync::Arc, storage::PostStorage};
 
-use crate::error::WebResult;
+use common::seed::TagSummary;
 
-use super::TagSummary;
+use crate::error::WebResult;
 
 /// Default number of suggestions returned to the autocomplete dropdown when
 /// the caller doesn't specify a limit.
@@ -46,7 +46,7 @@ pub async fn list_tags(prefix: Option<String>, limit: Option<u32>) -> WebResult<
 
 #[cfg(test)]
 mod tests {
-    use super::TagSummary;
+    use common::seed::TagSummary;
     use common::tag::TagLabel;
 
     /// #416 agreement: the `TagInput` commit path validates the raw token with

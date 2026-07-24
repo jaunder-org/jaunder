@@ -14,12 +14,9 @@
 //! fallback share styling.
 
 use crate::icon;
+use common::seed::PageSeed;
 use common::username::Username;
 use std::fmt::Write as _;
-
-// Transitional re-export: `PageSeed` moved to `common::seed` (#610); consumers
-// still reach it at `crate::render::PageSeed` until Task 2 repoints them.
-pub use common::seed::PageSeed;
 
 /// The default theme applied to `<div class="j-root" data-theme=…>`. Lives here
 /// (the shell-rendering layer) so the projector's server-painted shell and the
