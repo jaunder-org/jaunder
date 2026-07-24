@@ -342,19 +342,10 @@ pub fn PostCard(
 /// while Private is chosen to make that explicit.
 #[component]
 pub fn AudiencePicker(selection: RwSignal<AudienceSelection>) -> impl IntoView {
-    // SSR-resolved Resources serialize their value to the client and are not
-    // re-fetched on hydration; if `list_my_audiences` lost the disposal race and
-    // resolved to `Err` during SSR, the client would reuse that `Err` and the
-    // multiselect would stay empty. So resolve it client-only: SSR renders no
-    // checkboxes, and a wasm-only Effect seeds them after hydration
-    // (web-style-guide.md §9, mirroring `home.rs`).
+    // The named audiences the author owns, consumed directly in the checkbox
+    // view below. `None` (unresolved) and `Some(Err)` both fold to an empty
+    // list, so the multiselect renders no rows until the fetch lands.
     let named = Resource::new(|| (), |()| list_my_audiences());
-    let named_audiences = RwSignal::new(Vec::<AudienceSummary>::new());
-    Effect::new(move |_| {
-        if let Some(Ok(list)) = named.get() {
-            named_audiences.set(list);
-        }
-    });
 
     // Each base variant paired with its UI caption in one place, so the two
     // can't drift out of order.
@@ -394,7 +385,7 @@ pub fn AudiencePicker(selection: RwSignal<AudienceSelection>) -> impl IntoView {
             </select>
         </div>
         {move || {
-            let audiences = named_audiences.get();
+            let audiences = named.get().and_then(Result::ok).unwrap_or_default();
             if audiences.is_empty() {
                 ().into_any()
             } else {
