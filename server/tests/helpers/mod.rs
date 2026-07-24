@@ -149,6 +149,19 @@ pub async fn create_user_and_session(
     create_session_for(state, user_id).await
 }
 
+/// Like [`create_user_and_session`] but the seeded user is an operator — for the
+/// operator-gated site/backup settings tests.
+pub async fn create_operator_and_session(
+    state: &Arc<storage::AppState>,
+    username: &str,
+) -> SeededSession {
+    let user_id = storage::test_support::SeedUser::new(username)
+        .operator()
+        .seed(state)
+        .await;
+    create_session_for(state, user_id).await
+}
+
 /// An `Authorization: Basic <base64(username:token)>` header value — the app-password
 /// credential the `atompub` suite sends. Takes the `RawToken` directly.
 pub fn basic_header(username: &str, token: &RawToken) -> String {
