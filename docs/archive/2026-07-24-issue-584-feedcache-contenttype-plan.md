@@ -33,7 +33,7 @@ repo-wide `ETag` newtype deferred to a filed follow-up).
      coupled `regenerate.rs` / `handlers.rs`-test updates + the `ETag` deferral
      comment. (Sweep also fixed 5 `FeedCacheRow` construction sites in
      `server/tests/` the plan-review grep missed — `src/`-only.)
-- [ ] 4. Full gate: `cargo xtask validate --no-e2e` clean.
+- [x] 4. Full gate: `cargo xtask validate --no-e2e` clean.
 
 **Key risks / decisions.**
 
