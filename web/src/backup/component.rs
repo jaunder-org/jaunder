@@ -186,26 +186,11 @@ fn backup_settings_form(
 #[component]
 pub fn BackupBanner() -> impl IntoView {
     let visible = Resource::new(|| (), |()| backup_warning_visible());
-
     view! {
-        <Suspense fallback=|| ()>
-            {move || Suspend::new(async move {
-                match visible.await {
-                    Ok(true) => {
-                        view! {
-                            <div class="j-backup-banner" role="alert">
-                                <span>"Backups are not configured. Your data is at risk."</span>
-                                <div>
-                                    <a href="/admin/backups">"Configure Backups"</a>
-                                    <a href="/admin/site">"Site Settings"</a>
-                                </div>
-                            </div>
-                        }
-                            .into_any()
-                    }
-                    _ => ().into_any(),
-                }
-            })}
-        </Suspense>
+        <crate::banner::WarnBanner
+            visible=visible
+            message="Backups are not configured. Your data is at risk."
+            links=vec![("/admin/backups", "Configure Backups"), ("/admin/site", "Site Settings")]
+        />
     }
 }

@@ -135,7 +135,7 @@
     overflow: hidden;
 }
 
-.j-backup-banner {
+.j-warn-banner {
     flex-shrink: 0;
     position: sticky;
     top: 0;

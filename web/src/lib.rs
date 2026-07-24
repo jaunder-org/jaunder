@@ -22,6 +22,7 @@ pub mod audiences;
 pub mod auth;
 pub mod avatar;
 pub mod backup;
+pub mod banner;
 pub mod cockpit;
 pub mod email;
 pub mod error;
