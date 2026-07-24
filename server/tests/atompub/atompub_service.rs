@@ -20,23 +20,7 @@ async fn service_document_returns_200_with_app_password(#[case] backend: Backend
     let name: &str = &session.username;
     // Give the user a tagged post so the service document's category list is
     // non-empty (exercises the tag-collection path in `service_document`).
-    let post = storage::perform_post_creation(
-        state.posts.as_ref(),
-        storage::PostCreation {
-            user_id: session.user_id,
-            body: "a tagged post".into(),
-            title: Some("Tagged"),
-            format: storage::PostFormat::Markdown,
-            slug_override: None,
-            published_at: Some(chrono::Utc::now()),
-            max_attempts: 100,
-            summary: None,
-            audiences: vec![common::visibility::AudienceTarget::Public],
-            idempotency_key: None,
-        },
-    )
-    .await
-    .unwrap();
+    let post = session.seed_post().seed(&state).await;
     state
         .posts
         .tag_post(post.post_id, &"rust".parse::<TagLabel>().unwrap())

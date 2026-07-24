@@ -21,8 +21,9 @@ boilerplate:
    **storage layer** with explicit pre-rendered HTML and explicit slugs. Those
    `create_post`-layer sites are a different fixture (a `create_post` builder,
    not `SeedPost`) and belong with the storage-layer dedup in **#656** — _not_
-   in this issue. This issue's axis 1 is therefore `atompub_posts.rs`'s
-   `perform_post_creation` blocks only.
+   in this issue. This issue's axis 1 is therefore the atompub suite's
+   `perform_post_creation` blocks (the ~16 in `atompub_posts.rs` plus one in
+   `atompub_service.rs`).
 2. **Session-keyed AtomPub request construction (~70).** Every authenticated
    AtomPub request repeats `session.username` twice (in the URI _and_ the
    Basic-auth arg) and hardcodes the `/atompub/{username}/` prefix — ~54 sites
@@ -74,9 +75,8 @@ exactly as `SeedUser` is (in-process test use only), distinct from `seed_posts`'
 batch `create_posts` path.
 
 ```rust
-let post = SeedPost::new(user_id).seed(&state).await;               // 95% case → PostRecord
-let post = SeedPost::new(user_id).title("Hello Title One").seed(&state).await;
-let draft = SeedPost::new(user_id).draft().seed(&state).await;
+let post = session.seed_post().seed(&state).await;                  // 95% case → PostRecord
+let post = session.seed_post().title("Hello Title One").seed(&state).await;
 ```
 
 **Aggressive defaults — a call site deviates from a default ONLY when required
@@ -116,16 +116,14 @@ possible"):**
   (ADR-0033/0053) passes the DB handle explicitly everywhere; there is no
   ambient handle, and every sibling fixture (`SeedUser::seed(&state)`,
   `seed_posts(&state, …)`) takes it. Keeping it is consistency, not ceremony.
-- `user_id` is **shed at the dominant authenticated sites** via a thin forwarder
-  on the session fixture:
-  `impl SeededSession { fn seed_post(&self) -> SeedPost }` (in
-  `server/tests/helpers`, returning `SeedPost::new(self.user_id)`). Authed sites
-  — the ~54 AtomPub sites, all of which hold a `session` — write
-  `session.seed_post().seed(&state).await` and never repeat `session.user_id`.
-  Session-less seeders (the ~15 `feed/*`, `web/*`, `misc/*` sites that hold only
-  a bare `user_id`) use `SeedPost::new(user_id)` directly. Both funnel through
-  the one builder; the forwarder is analogous to how `create_user_and_session`
-  wraps `SeedUser`.
+- `user_id` is **shed at every #639 call site** via a thin forwarder on the
+  session fixture: `impl SeededSession { fn seed_post(&self) -> SeedPost }` (in
+  `server/tests/helpers`, returning `SeedPost::new(self.user_id)`). All atompub
+  seeding sites hold a `session`, so every one writes
+  `session.seed_post()…seed(&state).await` and never repeats `session.user_id`.
+  (`SeedPost::new(user_id)` stays public for session-less callers — e.g. storage
+  tests — but #639 has none after the re-scope.) The forwarder is analogous to
+  how `create_user_and_session` wraps `SeedUser`.
 
 ### Axis 2 — session-keyed AtomPub request helpers (`server/tests/helpers/mod.rs`)
 
@@ -183,17 +181,19 @@ data-only-varying bar.
 Each is observable by `dev-cycle-ship`'s conformance review against the branch
 diff:
 
-- **AC1 — no hand-rolled `perform_post_creation` for routine setup in
-  `atompub_posts.rs`.** In `server/tests/atompub/atompub_posts.rs`, no test
-  constructs a `storage::PostCreation { … }` literal for routine post setup;
-  each such site is a `SeedPost` builder chain (or `session.seed_post()`).
-  Explicitly **excluded** (may keep literals, by design): (i) every
-  `state.posts.create_post(&CreatePostInput { … })` **storage-layer** site — the
-  `storage`-crate contract suite _and_ the `feed/*`, `projector/*`, `web/*`,
-  `misc/*` integration sites — all of which are #656's concern; (ii) tests that
-  deliberately exercise `perform_post_creation`'s own contract (idempotency-key
-  dedup, empty-post) in `post_service.rs`. The plan enumerates any borderline
-  site it leaves as a literal with a one-line reason.
+- **AC1 — no hand-rolled `perform_post_creation` for routine setup in the
+  atompub suite.** In `server/tests/atompub/*` (every `perform_post_creation`
+  site — the ~16 in `atompub_posts.rs` plus the one tagged-post seed in
+  `atompub_service.rs`), no test constructs a `storage::PostCreation { … }`
+  literal for routine post setup; each such site is a `SeedPost` builder chain
+  (or `session.seed_post()`). Explicitly **excluded** (may keep literals, by
+  design): (i) every `state.posts.create_post(&CreatePostInput { … })`
+  **storage-layer** site — the `storage`-crate contract suite _and_ the
+  `feed/*`, `projector/*`, `web/*`, `misc/*` integration sites — all of which
+  are #656's concern; (ii) tests that deliberately exercise
+  `perform_post_creation`'s own contract (idempotency-key dedup, empty-post) in
+  `post_service.rs`. The plan enumerates any borderline site it leaves as a
+  literal with a one-line reason.
 - **AC2 — `SeedPost` shape.** `storage::test_support` exports a `SeedPost`
   builder with the defaults and setters in the table above; `new(user_id)` +
   `.seed(&state)` returns `PostRecord`; a bare
