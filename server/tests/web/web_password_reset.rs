@@ -4,7 +4,6 @@ use axum::http::StatusCode;
 use chrono::Utc;
 use common::mailer::test_utils::CapturingMailSender;
 use common::test_support::parse_email;
-use common::username::Username;
 use storage::AppState;
 
 use crate::helpers::{
@@ -17,12 +16,8 @@ use rstest::*;
 use rstest_reuse::*;
 
 /// Creates a user with a verified email address and an authenticated session.
-async fn create_user_with_verified_email(
-    state: &Arc<AppState>,
-    username: &str,
-    email: &str,
-) -> SeededSession {
-    let session = create_user_and_session(state, username).await;
+async fn create_user_with_verified_email(state: &Arc<AppState>, email: &str) -> SeededSession {
+    let session = create_user_and_session(state).await;
     state
         .users
         .set_email(session.user_id, Some(&parse_email(email)), true)
@@ -40,13 +35,13 @@ async fn request_password_reset_sends_email_for_verified_user(#[case] backend: B
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let mailer = Arc::new(CapturingMailSender::new());
 
-    create_user_with_verified_email(&state, "alice", "alice@example.com").await;
+    let session = create_user_with_verified_email(&state, "alice@example.com").await;
 
     let (status, _body) = post_form_with_mailer(
         Arc::clone(&state),
         mailer.clone() as Arc<dyn common::mailer::MailSender>,
         "/api/request_password_reset",
-        "username=alice",
+        format!("username={}", session.username),
         None,
     )
     .await;
@@ -64,13 +59,13 @@ async fn request_password_reset_without_base_url_returns_error(#[case] backend: 
     let TestEnv { state, base: _base } = backend.setup().await; // no base_url seeded
     let mailer = Arc::new(CapturingMailSender::new());
 
-    create_user_with_verified_email(&state, "alice", "alice@example.com").await;
+    let session = create_user_with_verified_email(&state, "alice@example.com").await;
 
     let (status, _body) = post_form_with_mailer(
         Arc::clone(&state),
         mailer.clone() as Arc<dyn common::mailer::MailSender>,
         "/api/request_password_reset",
-        "username=alice",
+        format!("username={}", session.username),
         None,
     )
     .await;
@@ -88,13 +83,13 @@ async fn request_password_reset_returns_error_for_user_without_verified_email(
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
-    SeedUser::new("bob").seed(&state).await;
+    let user = SeedUser::new().seed(&state).await;
 
     let (status, _body) = post_form_with_mailer(
         Arc::clone(&state),
         mailer.clone() as Arc<dyn common::mailer::MailSender>,
         "/api/request_password_reset",
-        "username=bob",
+        format!("username={}", user.username),
         None,
     )
     .await;
@@ -145,7 +140,7 @@ async fn confirm_password_reset_sets_password_and_revokes_sessions(#[case] backe
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let session = create_user_with_verified_email(&state, "carol", "carol@example.com").await;
+    let session = create_user_with_verified_email(&state, "carol@example.com").await;
     let user_id = session.user_id;
     // Create a second session to ensure all are revoked
     create_session_for(&state, user_id).await;
@@ -172,20 +167,14 @@ async fn confirm_password_reset_sets_password_and_revokes_sessions(#[case] backe
     // Old password should fail authentication
     let old_auth = state
         .users
-        .authenticate(
-            &"carol".parse::<Username>().unwrap(),
-            &"password123".parse().unwrap(),
-        )
+        .authenticate(&session.username, &"password123".parse().unwrap())
         .await;
     assert!(old_auth.is_err(), "old password should no longer work");
 
     // New password should succeed
     let new_auth = state
         .users
-        .authenticate(
-            &"carol".parse::<Username>().unwrap(),
-            &"newpassword456".parse().unwrap(),
-        )
+        .authenticate(&session.username, &"newpassword456".parse().unwrap())
         .await;
     assert!(new_auth.is_ok(), "new password should work");
 
@@ -201,7 +190,7 @@ async fn confirm_password_reset_with_expired_token_returns_error(#[case] backend
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let user_id = create_user_with_verified_email(&state, "dave", "dave@example.com")
+    let user_id = create_user_with_verified_email(&state, "dave@example.com")
         .await
         .user_id;
 
@@ -276,7 +265,7 @@ async fn confirm_password_reset_with_used_token_returns_error(#[case] backend: B
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let user_id = create_user_with_verified_email(&state, "eve", "eve@example.com")
+    let user_id = create_user_with_verified_email(&state, "eve@example.com")
         .await
         .user_id;
 
@@ -321,14 +310,12 @@ async fn confirm_password_reset_with_short_password_returns_error(#[case] backen
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let user_id = create_user_with_verified_email(&state, "frank", "frank@example.com")
-        .await
-        .user_id;
+    let session = create_user_with_verified_email(&state, "frank@example.com").await;
 
     let expires_at = Utc::now() + chrono::Duration::hours(1);
     let raw_token = state
         .password_resets
-        .create_password_reset(user_id, expires_at)
+        .create_password_reset(session.user_id, expires_at)
         .await
         .unwrap();
 
@@ -347,10 +334,7 @@ async fn confirm_password_reset_with_short_password_returns_error(#[case] backen
     // The reset must not have been applied: the original password still authenticates.
     let auth = state
         .users
-        .authenticate(
-            &"frank".parse::<Username>().unwrap(),
-            &"password123".parse().unwrap(),
-        )
+        .authenticate(&session.username, &"password123".parse().unwrap())
         .await;
     assert!(
         auth.is_ok(),

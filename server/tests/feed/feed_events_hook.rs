@@ -21,8 +21,7 @@ async fn create_published_post_enqueues_expected_feeds(
 ) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let session = create_user_and_session(&state, "alice").await;
-    let cookie = session.cookie();
+    let session = create_user_and_session(&state).await;
 
     let body = json!({
         "args": {
@@ -34,8 +33,13 @@ async fn create_published_post_enqueues_expected_feeds(
         }
     });
 
-    let (status, _response) =
-        post_json(state.clone(), "/api/create_post", body, Some(&cookie)).await;
+    let (status, _response) = post_json(
+        state.clone(),
+        "/api/create_post",
+        body,
+        Some(&session.cookie()),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK);
 
@@ -57,7 +61,7 @@ async fn create_published_post_enqueues_expected_feeds(
 async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let cookie = session.cookie();
 
     let create_body = json!({
@@ -135,7 +139,7 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
 async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let cookie = session.cookie();
 
     let create_body = json!({
@@ -202,7 +206,7 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend
 async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let cookie = session.cookie();
 
     let create_body = json!({
@@ -269,7 +273,7 @@ async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
 async fn delete_draft_post_enqueues_nothing(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let cookie = session.cookie();
 
     let create_body = json!({

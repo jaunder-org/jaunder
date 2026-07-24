@@ -14,7 +14,7 @@ use storage::test_support::{backends, Backend, TestEnv};
 #[tokio::test]
 async fn list_sessions_returns_sessions_for_authenticated_user(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let cookie = session.cookie();
     // Create a second session with a label.
     state
@@ -41,7 +41,7 @@ async fn list_sessions_returns_sessions_for_authenticated_user(#[case] backend: 
 #[tokio::test]
 async fn list_sessions_marks_current_session(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "alice").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) =
         post_form(Arc::clone(&state), "/api/list_sessions", "", Some(&cookie)).await;
@@ -67,7 +67,7 @@ async fn list_sessions_requires_authentication(#[case] backend: Backend) {
 #[tokio::test]
 async fn revoke_session_removes_session_for_authenticated_user(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let cookie1 = session.cookie();
     // Create a second session to revoke.
     let raw_token2 = create_session_for(&state, session.user_id).await.token;
@@ -107,8 +107,8 @@ async fn revoke_session_removes_session_for_authenticated_user(#[case] backend: 
 #[tokio::test]
 async fn revoke_session_rejects_session_belonging_to_another_user(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let alice_cookie = create_user_and_session(&state, "alice").await.cookie();
-    let bob = create_user_and_session(&state, "bob").await;
+    let alice_cookie = create_user_and_session(&state).await.cookie();
+    let bob = create_user_and_session(&state).await;
     let bob_token_hash = state
         .sessions
         .authenticate(&bob.token)
@@ -156,7 +156,7 @@ async fn revoke_session_requires_authentication(#[case] backend: Backend) {
 #[tokio::test]
 async fn create_app_password_mints_labelled_session(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let cookie = session.cookie();
 
     let (status, body) = post_form(
@@ -180,7 +180,7 @@ async fn create_app_password_mints_labelled_session(#[case] backend: Backend) {
 #[tokio::test]
 async fn create_app_password_rejects_blank_label(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "alice").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, _body) = post_form(
         Arc::clone(&state),

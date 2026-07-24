@@ -784,7 +784,7 @@ mod tests {
         }
 
         // A single non-seeded row (a user) makes the database non-empty.
-        SeedUser::new("alice").seed(&env.state).await;
+        SeedUser::new().seed(&env.state).await;
         assert!(
             !crate::database_is_empty(&db).await?,
             "a database holding a user must not count as empty"
@@ -1174,8 +1174,8 @@ mod tests {
         let source = backend.setup().await;
         // Two users so the exported users.ndjson has a later row to corrupt while
         // leaving row 0 (which seeds `column_names`) complete.
-        for username in ["userone", "usertwo"] {
-            SeedUser::new(username).seed(&source.state).await;
+        for _ in 0..2 {
+            SeedUser::new().seed(&source.state).await;
         }
 
         let temp = TempDir::new()?;

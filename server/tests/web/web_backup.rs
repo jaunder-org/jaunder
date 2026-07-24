@@ -16,9 +16,7 @@ use storage::test_support::{backends, backends_matrix, Backend, TestEnv};
 #[tokio::test]
 async fn operator_gets_default_backup_settings(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state, "operator")
-        .await
-        .cookie();
+    let cookie = create_operator_and_session(&state).await.cookie();
 
     let (status, body) = post_form(state, "/api/get_backup_settings", "", Some(&cookie)).await;
 
@@ -34,9 +32,7 @@ async fn operator_gets_default_backup_settings(#[case] backend: Backend) {
 #[tokio::test]
 async fn operator_gets_configured_backup_settings(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state, "operator")
-        .await
-        .cookie();
+    let cookie = create_operator_and_session(&state).await.cookie();
     state
         .site_config
         .set(BACKUP_DESTINATION_PATH_KEY, "/srv/backups")
@@ -72,9 +68,7 @@ async fn operator_gets_configured_backup_settings(#[case] backend: Backend) {
 #[tokio::test]
 async fn operator_gets_defaults_for_invalid_backup_settings(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state, "operator")
-        .await
-        .cookie();
+    let cookie = create_operator_and_session(&state).await.cookie();
     state
         .site_config
         .set(BACKUP_DESTINATION_PATH_KEY, "/srv/backups")
@@ -110,9 +104,7 @@ async fn operator_gets_defaults_for_invalid_backup_settings(#[case] backend: Bac
 #[tokio::test]
 async fn operator_can_update_backup_settings(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state, "operator")
-        .await
-        .cookie();
+    let cookie = create_operator_and_session(&state).await.cookie();
 
     let (status, body) = post_form(
         Arc::clone(&state),
@@ -165,9 +157,7 @@ async fn operator_can_update_backup_settings(#[case] backend: Backend) {
 #[tokio::test]
 async fn operator_can_update_backup_settings_to_archive_mode(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state, "operator")
-        .await
-        .cookie();
+    let cookie = create_operator_and_session(&state).await.cookie();
 
     let (status, body) = post_form(
         Arc::clone(&state),
@@ -219,9 +209,7 @@ async fn operator_update_backup_settings_rejects_invalid_typed_arg(
     #[case] form: &str,
 ) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state, "operator")
-        .await
-        .cookie();
+    let cookie = create_operator_and_session(&state).await.cookie();
 
     let (status, body) = post_form(state, "/api/update_backup_settings", form, Some(&cookie)).await;
 
@@ -232,7 +220,7 @@ async fn operator_update_backup_settings_rejects_invalid_typed_arg(
 #[tokio::test]
 async fn non_operator_cannot_update_backup_settings(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "member").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = post_form(
         state,
@@ -250,9 +238,7 @@ async fn non_operator_cannot_update_backup_settings(#[case] backend: Backend) {
 #[tokio::test]
 async fn backup_warning_visible_for_operator_without_destination(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state, "operator")
-        .await
-        .cookie();
+    let cookie = create_operator_and_session(&state).await.cookie();
 
     let (status, body) = post_form(
         Arc::clone(&state),
@@ -270,9 +256,7 @@ async fn backup_warning_visible_for_operator_without_destination(#[case] backend
 #[tokio::test]
 async fn backup_warning_hidden_when_destination_configured(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state, "operator")
-        .await
-        .cookie();
+    let cookie = create_operator_and_session(&state).await.cookie();
     state
         .site_config
         .set(BACKUP_DESTINATION_PATH_KEY, "/srv/backups")
@@ -295,9 +279,7 @@ async fn backup_warning_hidden_when_destination_configured(#[case] backend: Back
 #[tokio::test]
 async fn backup_warning_visible_when_configured_schedule_is_invalid(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state, "operator")
-        .await
-        .cookie();
+    let cookie = create_operator_and_session(&state).await.cookie();
     state
         .site_config
         .set(BACKUP_DESTINATION_PATH_KEY, "/srv/backups")
@@ -326,7 +308,7 @@ async fn backup_warning_visible_when_configured_schedule_is_invalid(#[case] back
 #[tokio::test]
 async fn backup_warning_hidden_for_non_operator(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "member").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = post_form(
         Arc::clone(&state),
@@ -360,9 +342,7 @@ async fn backup_warning_hidden_without_authentication(#[case] backend: Backend) 
 #[tokio::test]
 async fn operator_can_update_backup_settings_omits_destination_as_none(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state, "operator")
-        .await
-        .cookie();
+    let cookie = create_operator_and_session(&state).await.cookie();
 
     let (status, body) = post_form(
         Arc::clone(&state),
@@ -394,9 +374,7 @@ async fn operator_can_update_backup_settings_clears_via_empty_destination(
     #[case] backend: Backend,
 ) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state, "operator")
-        .await
-        .cookie();
+    let cookie = create_operator_and_session(&state).await.cookie();
 
     let (status, body) = post_form(
         Arc::clone(&state),
@@ -425,9 +403,7 @@ async fn backup_warning_visible_propagates_storage_error_during_auth(#[case] bac
     // Covers the Err(non-Unauthorized) branch: close the pool after session
     // creation so authenticate() returns Internal (not Unauthorized) → 500.
     let TestEnv { state, base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state, "operator")
-        .await
-        .cookie();
+    let cookie = create_operator_and_session(&state).await.cookie();
 
     base.close_pool().await;
 
@@ -449,10 +425,10 @@ async fn backup_warning_visible_propagates_storage_error_during_auth(#[case] bac
 #[tokio::test]
 async fn session_reports_username_and_operator(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let operator_cookie = create_operator_and_session(&state, "operator")
-        .await
-        .cookie();
-    let member_cookie = create_user_and_session(&state, "member").await.cookie();
+    let operator = create_operator_and_session(&state).await;
+    let member = create_user_and_session(&state).await;
+    let operator_cookie = operator.cookie();
+    let member_cookie = member.cookie();
 
     let (status, body) = post_form(
         Arc::clone(&state),
@@ -462,13 +438,19 @@ async fn session_reports_username_and_operator(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    assert!(body.contains(r#""username":"operator""#), "body: {body}");
+    assert!(
+        body.contains(&format!(r#""username":"{}""#, operator.username)),
+        "body: {body}"
+    );
     assert!(body.contains(r#""is_operator":true"#), "body: {body}");
 
     let (status, body) =
         post_form(Arc::clone(&state), "/api/session", "", Some(&member_cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    assert!(body.contains(r#""username":"member""#), "body: {body}");
+    assert!(
+        body.contains(&format!(r#""username":"{}""#, member.username)),
+        "body: {body}"
+    );
     assert!(body.contains(r#""is_operator":false"#), "body: {body}");
 
     let (status, body) = post_form(state, "/api/session", "", None).await;
@@ -482,9 +464,7 @@ async fn session_propagates_storage_error_during_auth(#[case] backend: Backend) 
     // Covers the Err(non-Unauthorized) branch: close the pool after session
     // creation so authenticate() returns Internal (not Unauthorized) → 500.
     let TestEnv { state, base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state, "operator")
-        .await
-        .cookie();
+    let cookie = create_operator_and_session(&state).await.cookie();
 
     base.close_pool().await;
 

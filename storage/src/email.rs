@@ -219,7 +219,7 @@ mod tests {
         // Keep the whole `TestEnv` bound: dropping `base` unlinks the SQLite file
         // (ADR-0053 TempDir hazard).
         let env = backend.setup().await;
-        let user_id = SeedUser::new("testuser").seed(&env.state).await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let email = parse_email("alice@example.com");
         let expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
 
@@ -249,7 +249,7 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new("testuser").seed(&env.state).await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let email = parse_email("alice@example.com");
         let expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
         let raw_token = env

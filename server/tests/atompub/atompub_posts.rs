@@ -24,14 +24,14 @@ use storage::test_support::{backends, backends_matrix, Backend, TestEnv};
 async fn collection_get_without_base_url_returns_500(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
     // Deliberately do NOT seed_base_url.
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let app = make_app(state, &base);
 
     let response = app
         .oneshot(atompub_xml(
             "GET",
-            "/atompub/alice/posts",
-            "alice",
+            &format!("/atompub/{}/posts", session.username),
+            &session.username,
             &session.token,
             None,
         ))
@@ -45,7 +45,7 @@ async fn collection_get_without_base_url_returns_500(#[case] backend: Backend) {
 #[tokio::test]
 async fn collection_lists_user_posts(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
 
     let _post1 = storage::perform_post_creation(
         state.posts.as_ref(),
@@ -88,8 +88,8 @@ async fn collection_lists_user_posts(#[case] backend: Backend) {
     let response = app
         .oneshot(atompub_xml(
             "GET",
-            "/atompub/alice/posts",
-            "alice",
+            &format!("/atompub/{}/posts", session.username),
+            &session.username,
             &session.token,
             None,
         ))
@@ -127,7 +127,7 @@ async fn collection_lists_user_posts(#[case] backend: Backend) {
 #[tokio::test]
 async fn member_returns_native_source_with_etag(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
 
     let post = storage::perform_post_creation(
         state.posts.as_ref(),
@@ -152,8 +152,8 @@ async fn member_returns_native_source_with_etag(#[case] backend: Backend) {
     let response = app
         .oneshot(atompub_xml(
             "GET",
-            &format!("/atompub/alice/posts/{}", post.post_id),
-            "alice",
+            &format!("/atompub/{}/posts/{}", session.username, post.post_id),
+            &session.username,
             &session.token,
             None,
         ))
@@ -181,15 +181,15 @@ async fn member_returns_native_source_with_etag(#[case] backend: Backend) {
 #[tokio::test]
 async fn member_get_unknown_returns_404(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
 
     let app = make_app(state, &base);
 
     let response = app
         .oneshot(atompub_xml(
             "GET",
-            "/atompub/alice/posts/999999",
-            "alice",
+            &format!("/atompub/{}/posts/999999", session.username),
+            &session.username,
             &session.token,
             None,
         ))
@@ -203,7 +203,7 @@ async fn member_get_unknown_returns_404(#[case] backend: Backend) {
 #[tokio::test]
 async fn delete_then_get_is_404(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
 
     let post = storage::perform_post_creation(
         state.posts.as_ref(),
@@ -230,8 +230,8 @@ async fn delete_then_get_is_404(#[case] backend: Backend) {
         .clone()
         .oneshot(atompub_xml(
             "DELETE",
-            &format!("/atompub/alice/posts/{}", post.post_id),
-            "alice",
+            &format!("/atompub/{}/posts/{}", session.username, post.post_id),
+            &session.username,
             &session.token,
             None,
         ))
@@ -244,8 +244,8 @@ async fn delete_then_get_is_404(#[case] backend: Backend) {
     let get_response = app
         .oneshot(atompub_xml(
             "GET",
-            &format!("/atompub/alice/posts/{}", post.post_id),
-            "alice",
+            &format!("/atompub/{}/posts/{}", session.username, post.post_id),
+            &session.username,
             &session.token,
             None,
         ))
@@ -259,7 +259,7 @@ async fn delete_then_get_is_404(#[case] backend: Backend) {
 #[tokio::test]
 async fn collection_paging_emits_next_link(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
 
     for i in 0..2 {
         storage::perform_post_creation(
@@ -287,8 +287,8 @@ async fn collection_paging_emits_next_link(#[case] backend: Backend) {
     let response = app
         .oneshot(atompub_xml(
             "GET",
-            "/atompub/alice/posts?limit=1",
-            "alice",
+            &format!("/atompub/{}/posts?limit=1", session.username),
+            &session.username,
             &session.token,
             None,
         ))
@@ -313,7 +313,7 @@ async fn collection_paging_emits_next_link(#[case] backend: Backend) {
 #[tokio::test]
 async fn collection_clamps_out_of_range_limit(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
 
     // Seed 51 posts so the `1..=50` page-size cap is observable (50 < 51).
     for i in 0..51 {
@@ -343,8 +343,8 @@ async fn collection_clamps_out_of_range_limit(#[case] backend: Backend) {
         .clone()
         .oneshot(atompub_xml(
             "GET",
-            "/atompub/alice/posts?limit=999",
-            "alice",
+            &format!("/atompub/{}/posts?limit=999", session.username),
+            &session.username,
             &session.token,
             None,
         ))
@@ -362,8 +362,8 @@ async fn collection_clamps_out_of_range_limit(#[case] backend: Backend) {
     let under = app
         .oneshot(atompub_xml(
             "GET",
-            "/atompub/alice/posts?limit=0",
-            "alice",
+            &format!("/atompub/{}/posts?limit=0", session.username),
+            &session.username,
             &session.token,
             None,
         ))
@@ -401,7 +401,7 @@ async fn collection_cursor_validation(
     #[case] expected: StatusCode,
 ) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     if seed_post {
         storage::perform_post_creation(
             state.posts.as_ref(),
@@ -426,8 +426,8 @@ async fn collection_cursor_validation(
     let response = app
         .oneshot(atompub_xml(
             "GET",
-            &format!("/atompub/alice/posts?{query}"),
-            "alice",
+            &format!("/atompub/{}/posts?{query}", session.username),
+            &session.username,
             &session.token,
             None,
         ))
@@ -441,14 +441,14 @@ async fn collection_cursor_validation(
 #[tokio::test]
 async fn collection_empty_returns_feed_without_entries(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let app = make_app(state, &base);
 
     let response = app
         .oneshot(atompub_xml(
             "GET",
-            "/atompub/alice/posts",
-            "alice",
+            &format!("/atompub/{}/posts", session.username),
+            &session.username,
             &session.token,
             None,
         ))
@@ -500,25 +500,25 @@ enum ForbiddenRequest {
 }
 
 impl ForbiddenRequest {
-    fn build(&self, token: &RawToken) -> Request<Body> {
+    fn build(&self, token: &RawToken, username: &str) -> Request<Body> {
         match self {
             ForbiddenRequest::Collection => {
-                atompub_xml("GET", "/atompub/bob/posts", "alice", token, None)
+                atompub_xml("GET", "/atompub/bob/posts", username, token, None)
             }
             ForbiddenRequest::Member => {
-                atompub_xml("GET", "/atompub/bob/posts/1", "alice", token, None)
+                atompub_xml("GET", "/atompub/bob/posts/1", username, token, None)
             }
             ForbiddenRequest::Create => atompub_xml(
                 "POST",
                 "/atompub/bob/posts",
-                "alice",
+                username,
                 token,
                 Some(&entry_xml("Hello", "text", "the body")),
             ),
             ForbiddenRequest::Update => atompub_xml(
                 "PUT",
                 "/atompub/bob/posts/1",
-                "alice",
+                username,
                 token,
                 Some(&entry_xml("New", "text", "new body")),
             ),
@@ -537,10 +537,13 @@ impl ForbiddenRequest {
 #[tokio::test]
 async fn forbids_other_user(backend: Backend, #[case] request: ForbiddenRequest) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let app = make_app(state, &base);
 
-    let response = app.oneshot(request.build(&session.token)).await.unwrap();
+    let response = app
+        .oneshot(request.build(&session.token, &session.username))
+        .await
+        .unwrap();
 
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
@@ -553,14 +556,14 @@ async fn forbids_other_user(backend: Backend, #[case] request: ForbiddenRequest)
 #[tokio::test]
 async fn malformed_username_path_returns_400(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let app = make_app(state, &base);
 
     let response = app
         .oneshot(atompub_xml(
             "GET",
             "/atompub/a@b/posts",
-            "alice",
+            &session.username,
             &session.token,
             None,
         ))
@@ -574,7 +577,7 @@ async fn malformed_username_path_returns_400(#[case] backend: Backend) {
 #[tokio::test]
 async fn create_post_returns_201_and_is_retrievable(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     // Set default format to Markdown so text entries round-trip properly
     storage::set_default_post_format(
         state.user_config.as_ref(),
@@ -590,8 +593,8 @@ async fn create_post_returns_201_and_is_retrievable(#[case] backend: Backend) {
         .clone()
         .oneshot(atompub_xml(
             "POST",
-            "/atompub/alice/posts",
-            "alice",
+            &format!("/atompub/{}/posts", session.username),
+            &session.username,
             &session.token,
             Some(&xml),
         ))
@@ -612,7 +615,13 @@ async fn create_post_returns_201_and_is_retrievable(#[case] backend: Backend) {
     let app2 = make_app(state, &base);
     let loc_path = loc.unwrap();
     let get_response = app2
-        .oneshot(atompub_xml("GET", &loc_path, "alice", &session.token, None))
+        .oneshot(atompub_xml(
+            "GET",
+            &loc_path,
+            &session.username,
+            &session.token,
+            None,
+        ))
         .await
         .unwrap();
 
@@ -632,15 +641,15 @@ async fn create_post_returns_201_and_is_retrievable(#[case] backend: Backend) {
 #[tokio::test]
 async fn create_post_applies_categories(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let app = make_app(state, &base);
 
     let xml = entry_xml("Hello", "text", "the body");
     let response = app
         .oneshot(atompub_xml(
             "POST",
-            "/atompub/alice/posts",
-            "alice",
+            &format!("/atompub/{}/posts", session.username),
+            &session.username,
             &session.token,
             Some(&xml),
         ))
@@ -659,15 +668,15 @@ async fn create_post_applies_categories(#[case] backend: Backend) {
 #[tokio::test]
 async fn create_html_entry_is_stored_as_html(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let app = make_app(state, &base);
 
     let xml = entry_xml("H", "html", "&lt;p&gt;hi&lt;/p&gt;");
     let response = app
         .oneshot(atompub_xml(
             "POST",
-            "/atompub/alice/posts",
-            "alice",
+            &format!("/atompub/{}/posts", session.username),
+            &session.username,
             &session.token,
             Some(&xml),
         ))
@@ -696,7 +705,7 @@ async fn create_format_media_type_round_trips(
     #[case] content: &str,
 ) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let app = make_app(state.clone(), &base);
 
     let xml = entry_xml("Formatted", content_type, content);
@@ -704,8 +713,8 @@ async fn create_format_media_type_round_trips(
         .clone()
         .oneshot(atompub_xml(
             "POST",
-            "/atompub/alice/posts",
-            "alice",
+            &format!("/atompub/{}/posts", session.username),
+            &session.username,
             &session.token,
             Some(&xml),
         ))
@@ -723,7 +732,13 @@ async fn create_format_media_type_round_trips(
 
     // GET the member back: it must echo the same content media type.
     let get = make_app(state, &base)
-        .oneshot(atompub_xml("GET", &location, "alice", &session.token, None))
+        .oneshot(atompub_xml(
+            "GET",
+            &location,
+            &session.username,
+            &session.token,
+            None,
+        ))
         .await
         .unwrap();
 
@@ -739,7 +754,7 @@ async fn create_format_media_type_round_trips(
 #[tokio::test]
 async fn update_replaces_post_body(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
 
     let post = storage::perform_post_creation(
         state.posts.as_ref(),
@@ -765,8 +780,8 @@ async fn update_replaces_post_body(#[case] backend: Backend) {
     let response = app
         .oneshot(atompub_xml(
             "PUT",
-            &format!("/atompub/alice/posts/{}", post.post_id),
-            "alice",
+            &format!("/atompub/{}/posts/{}", session.username, post.post_id),
+            &session.username,
             &session.token,
             Some(&xml),
         ))
@@ -785,7 +800,7 @@ async fn update_replaces_post_body(#[case] backend: Backend) {
 #[tokio::test]
 async fn update_with_stale_if_match_returns_412(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
 
     let post = storage::perform_post_creation(
         state.posts.as_ref(),
@@ -812,8 +827,8 @@ async fn update_with_stale_if_match_returns_412(#[case] backend: Backend) {
         .oneshot(
             atompub_authed(
                 "PUT",
-                &format!("/atompub/alice/posts/{}", post.post_id),
-                "alice",
+                &format!("/atompub/{}/posts/{}", session.username, post.post_id),
+                &session.username,
                 &session.token,
             )
             .header(header::CONTENT_TYPE, "application/atom+xml")
@@ -831,14 +846,14 @@ async fn update_with_stale_if_match_returns_412(#[case] backend: Backend) {
 #[tokio::test]
 async fn create_rejects_malformed_entry(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let app = make_app(state, &base);
 
     let response = app
         .oneshot(atompub_xml(
             "POST",
-            "/atompub/alice/posts",
-            "alice",
+            &format!("/atompub/{}/posts", session.username),
+            &session.username,
             &session.token,
             Some("not xml"),
         ))
@@ -852,7 +867,7 @@ async fn create_rejects_malformed_entry(#[case] backend: Backend) {
 #[tokio::test]
 async fn update_removes_categories_not_in_new_entry(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
 
     let post = storage::perform_post_creation(
         state.posts.as_ref(),
@@ -885,8 +900,8 @@ async fn update_removes_categories_not_in_new_entry(#[case] backend: Backend) {
     let response = app
         .oneshot(atompub_xml(
             "PUT",
-            &format!("/atompub/alice/posts/{}", post.post_id),
-            "alice",
+            &format!("/atompub/{}/posts/{}", session.username, post.post_id),
+            &session.username,
             &session.token,
             Some(&xml),
         ))
@@ -903,7 +918,7 @@ async fn update_removes_categories_not_in_new_entry(#[case] backend: Backend) {
 #[tokio::test]
 async fn update_with_put_returns_200_and_etag(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
 
     let post = storage::perform_post_creation(
         state.posts.as_ref(),
@@ -929,8 +944,8 @@ async fn update_with_put_returns_200_and_etag(#[case] backend: Backend) {
     let response = app
         .oneshot(atompub_xml(
             "PUT",
-            &format!("/atompub/alice/posts/{}", post.post_id),
-            "alice",
+            &format!("/atompub/{}/posts/{}", session.username, post.post_id),
+            &session.username,
             &session.token,
             Some(&xml),
         ))
@@ -968,13 +983,13 @@ enum EmptyEntryOp {
 #[tokio::test]
 async fn empty_entry_returns_400(backend: Backend, #[case] op: EmptyEntryOp) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
 
     let request = match op {
         EmptyEntryOp::Create => atompub_xml(
             "POST",
-            "/atompub/alice/posts",
-            "alice",
+            &format!("/atompub/{}/posts", session.username),
+            &session.username,
             &session.token,
             Some(EMPTY_ENTRY_XML),
         ),
@@ -999,8 +1014,8 @@ async fn empty_entry_returns_400(backend: Backend, #[case] op: EmptyEntryOp) {
             .unwrap();
             atompub_xml(
                 "PUT",
-                &format!("/atompub/alice/posts/{}", post.post_id),
-                "alice",
+                &format!("/atompub/{}/posts/{}", session.username, post.post_id),
+                &session.username,
                 &session.token,
                 Some(EMPTY_ENTRY_XML),
             )
@@ -1018,7 +1033,7 @@ async fn empty_entry_returns_400(backend: Backend, #[case] op: EmptyEntryOp) {
 #[tokio::test]
 async fn create_draft_entry_is_unpublished(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let app = make_app(state, &base);
 
     let xml = r#"<?xml version="1.0"?>
@@ -1032,8 +1047,8 @@ async fn create_draft_entry_is_unpublished(#[case] backend: Backend) {
         .clone()
         .oneshot(atompub_xml(
             "POST",
-            "/atompub/alice/posts",
-            "alice",
+            &format!("/atompub/{}/posts", session.username),
+            &session.username,
             &session.token,
             Some(xml),
         ))
@@ -1049,7 +1064,13 @@ async fn create_draft_entry_is_unpublished(#[case] backend: Backend) {
         .to_string();
 
     let get = app
-        .oneshot(atompub_xml("GET", &location, "alice", &session.token, None))
+        .oneshot(atompub_xml(
+            "GET",
+            &location,
+            &session.username,
+            &session.token,
+            None,
+        ))
         .await
         .unwrap();
     assert_eq!(get.status(), StatusCode::OK);
@@ -1071,7 +1092,7 @@ async fn create_draft_entry_is_unpublished(#[case] backend: Backend) {
 #[tokio::test]
 async fn member_carries_read_only_j_slug(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
 
     let post = storage::perform_post_creation(
         state.posts.as_ref(),
@@ -1096,8 +1117,8 @@ async fn member_carries_read_only_j_slug(#[case] backend: Backend) {
     let response = app
         .oneshot(atompub_xml(
             "GET",
-            &format!("/atompub/alice/posts/{}", post.post_id),
-            "alice",
+            &format!("/atompub/{}/posts/{}", session.username, post.post_id),
+            &session.username,
             &session.token,
             None,
         ))
@@ -1120,7 +1141,7 @@ async fn member_carries_read_only_j_slug(#[case] backend: Backend) {
 #[tokio::test]
 async fn incoming_j_slug_is_ignored(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let app = make_app(state.clone(), &base);
 
     // A client-supplied <j:slug> must NOT determine the stored slug — the server
@@ -1136,8 +1157,8 @@ async fn incoming_j_slug_is_ignored(#[case] backend: Backend) {
         .clone()
         .oneshot(atompub_xml(
             "POST",
-            "/atompub/alice/posts",
-            "alice",
+            &format!("/atompub/{}/posts", session.username),
+            &session.username,
             &session.token,
             Some(xml),
         ))
@@ -1164,7 +1185,7 @@ async fn incoming_j_slug_is_ignored(#[case] backend: Backend) {
 #[tokio::test]
 async fn create_skips_invalid_category(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let app = make_app(state, &base);
 
     let xml = r#"<?xml version="1.0"?>
@@ -1178,8 +1199,8 @@ async fn create_skips_invalid_category(#[case] backend: Backend) {
         .clone()
         .oneshot(atompub_xml(
             "POST",
-            "/atompub/alice/posts",
-            "alice",
+            &format!("/atompub/{}/posts", session.username),
+            &session.username,
             &session.token,
             Some(xml),
         ))
@@ -1198,7 +1219,7 @@ async fn create_skips_invalid_category(#[case] backend: Backend) {
 #[tokio::test]
 async fn update_keeps_unchanged_category(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let app = make_app(state, &base);
 
     let with_rust = r#"<?xml version="1.0"?>
@@ -1212,8 +1233,8 @@ async fn update_keeps_unchanged_category(#[case] backend: Backend) {
         .clone()
         .oneshot(atompub_xml(
             "POST",
-            "/atompub/alice/posts",
-            "alice",
+            &format!("/atompub/{}/posts", session.username),
+            &session.username,
             &session.token,
             Some(with_rust),
         ))
@@ -1233,7 +1254,7 @@ async fn update_keeps_unchanged_category(#[case] backend: Backend) {
         .oneshot(atompub_xml(
             "PUT",
             &location,
-            "alice",
+            &session.username,
             &session.token,
             Some(with_rust),
         ))
@@ -1248,7 +1269,7 @@ async fn update_keeps_unchanged_category(#[case] backend: Backend) {
 #[tokio::test]
 async fn update_with_matching_if_match_succeeds(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let app = make_app(state, &base);
 
     let xml = r#"<?xml version="1.0"?>
@@ -1261,8 +1282,8 @@ async fn update_with_matching_if_match_succeeds(#[case] backend: Backend) {
         .clone()
         .oneshot(atompub_xml(
             "POST",
-            "/atompub/alice/posts",
-            "alice",
+            &format!("/atompub/{}/posts", session.username),
+            &session.username,
             &session.token,
             Some(xml),
         ))
@@ -1286,7 +1307,7 @@ async fn update_with_matching_if_match_succeeds(#[case] backend: Backend) {
     // A matching If-Match passes the precondition and the update proceeds.
     let updated = app
         .oneshot(
-            atompub_authed("PUT", &location, "alice", &session.token)
+            atompub_authed("PUT", &location, &session.username, &session.token)
                 .header(header::CONTENT_TYPE, "application/atom+xml")
                 .header(header::IF_MATCH, etag)
                 .body(Body::from(xml))
@@ -1305,12 +1326,16 @@ const ETAG_POST_XML: &str = r#"<?xml version="1.0"?>
 </entry>"#;
 
 /// POST `ETAG_POST_XML` as alice; return the create response's (`Location`, `ETag`).
-async fn create_location_etag(app: axum::Router, token: &RawToken) -> (String, String) {
+async fn create_location_etag(
+    app: axum::Router,
+    token: &RawToken,
+    username: &str,
+) -> (String, String) {
     let created = app
         .oneshot(atompub_xml(
             "POST",
-            "/atompub/alice/posts",
-            "alice",
+            &format!("/atompub/{username}/posts"),
+            username,
             token,
             Some(ETAG_POST_XML),
         ))
@@ -1334,13 +1359,18 @@ async fn create_location_etag(app: axum::Router, token: &RawToken) -> (String, S
 }
 
 /// POST `ETAG_POST_XML` as alice and return the create response's `ETag`.
-async fn create_etag(app: axum::Router, token: &RawToken) -> String {
-    create_location_etag(app, token).await.1
+async fn create_etag(app: axum::Router, token: &RawToken, username: &str) -> String {
+    create_location_etag(app, token, username).await.1
 }
 
 /// GET `location` as alice, returning the response status.
-async fn get_status(app: axum::Router, token: &RawToken, location: &str) -> StatusCode {
-    app.oneshot(atompub_xml("GET", location, "alice", token, None))
+async fn get_status(
+    app: axum::Router,
+    token: &RawToken,
+    location: &str,
+    username: &str,
+) -> StatusCode {
+    app.oneshot(atompub_xml("GET", location, username, token, None))
         .await
         .unwrap()
         .status()
@@ -1351,14 +1381,15 @@ async fn get_status(app: axum::Router, token: &RawToken, location: &str) -> Stat
 async fn delete_with_stale_if_match_returns_412(#[case] backend: Backend) {
     // AC7: a stale If-Match blocks the DELETE (412) and the post survives.
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let app = make_app(state, &base);
-    let (location, _etag) = create_location_etag(app.clone(), &session.token).await;
+    let (location, _etag) =
+        create_location_etag(app.clone(), &session.token, &session.username).await;
 
     let resp = app
         .clone()
         .oneshot(
-            atompub_authed("DELETE", &location, "alice", &session.token)
+            atompub_authed("DELETE", &location, &session.username, &session.token)
                 .header(header::IF_MATCH, "\"0\"")
                 .body(Body::empty())
                 .unwrap(),
@@ -1367,7 +1398,7 @@ async fn delete_with_stale_if_match_returns_412(#[case] backend: Backend) {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::PRECONDITION_FAILED);
     assert_eq!(
-        get_status(app, &session.token, &location).await,
+        get_status(app, &session.token, &location, &session.username).await,
         StatusCode::OK
     );
 }
@@ -1377,14 +1408,15 @@ async fn delete_with_stale_if_match_returns_412(#[case] backend: Backend) {
 async fn delete_with_matching_if_match_succeeds(#[case] backend: Backend) {
     // AC7: a matching If-Match deletes the post.
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let app = make_app(state, &base);
-    let (location, etag) = create_location_etag(app.clone(), &session.token).await;
+    let (location, etag) =
+        create_location_etag(app.clone(), &session.token, &session.username).await;
 
     let resp = app
         .clone()
         .oneshot(
-            atompub_authed("DELETE", &location, "alice", &session.token)
+            atompub_authed("DELETE", &location, &session.username, &session.token)
                 .header(header::IF_MATCH, etag)
                 .body(Body::empty())
                 .unwrap(),
@@ -1393,7 +1425,7 @@ async fn delete_with_matching_if_match_succeeds(#[case] backend: Backend) {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     assert_eq!(
-        get_status(app, &session.token, &location).await,
+        get_status(app, &session.token, &location, &session.username).await,
         StatusCode::NOT_FOUND
     );
 }
@@ -1403,15 +1435,16 @@ async fn delete_with_matching_if_match_succeeds(#[case] backend: Backend) {
 async fn delete_without_if_match_succeeds(#[case] backend: Backend) {
     // AC7: absent If-Match deletes unconditionally (unchanged default).
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let app = make_app(state, &base);
-    let (location, _etag) = create_location_etag(app.clone(), &session.token).await;
+    let (location, _etag) =
+        create_location_etag(app.clone(), &session.token, &session.username).await;
 
     let resp = app
         .oneshot(atompub_xml(
             "DELETE",
             &location,
-            "alice",
+            &session.username,
             &session.token,
             None,
         ))
@@ -1425,14 +1458,15 @@ async fn delete_without_if_match_succeeds(#[case] backend: Backend) {
 async fn delete_with_wildcard_if_match_succeeds(#[case] backend: Backend) {
     // AC7: `If-Match: *` deletes unconditionally (wildcard matches any current ETag).
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let app = make_app(state, &base);
-    let (location, _etag) = create_location_etag(app.clone(), &session.token).await;
+    let (location, _etag) =
+        create_location_etag(app.clone(), &session.token, &session.username).await;
 
     let resp = app
         .clone()
         .oneshot(
-            atompub_authed("DELETE", &location, "alice", &session.token)
+            atompub_authed("DELETE", &location, &session.username, &session.token)
                 .header(header::IF_MATCH, "*")
                 .body(Body::empty())
                 .unwrap(),
@@ -1441,7 +1475,7 @@ async fn delete_with_wildcard_if_match_succeeds(#[case] backend: Backend) {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     assert_eq!(
-        get_status(app, &session.token, &location).await,
+        get_status(app, &session.token, &location, &session.username).await,
         StatusCode::NOT_FOUND
     );
 }
@@ -1451,9 +1485,9 @@ async fn delete_with_wildcard_if_match_succeeds(#[case] backend: Backend) {
 async fn editing_content_via_put_changes_etag(#[case] backend: Backend) {
     // AC4 (HTTP): a PUT that changes the body changes the ETag end-to-end.
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let app = make_app(state, &base);
-    let (location, e1) = create_location_etag(app.clone(), &session.token).await;
+    let (location, e1) = create_location_etag(app.clone(), &session.token, &session.username).await;
 
     let edited = r#"<?xml version="1.0"?>
 <entry xmlns="http://www.w3.org/2005/Atom">
@@ -1463,7 +1497,7 @@ async fn editing_content_via_put_changes_etag(#[case] backend: Backend) {
 </entry>"#;
     let updated = app
         .oneshot(
-            atompub_authed("PUT", &location, "alice", &session.token)
+            atompub_authed("PUT", &location, &session.username, &session.token)
                 .header(header::CONTENT_TYPE, "application/atom+xml")
                 .header(header::IF_MATCH, &e1)
                 .body(Body::from(edited))
@@ -1487,10 +1521,10 @@ async fn editing_content_via_put_changes_etag(#[case] backend: Backend) {
 async fn etag_is_content_hash_format(#[case] backend: Backend) {
     // AC1: the emitted ETag is a strong, quoted "sha256-<64 lowercase hex>" token.
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let app = make_app(state, &base);
 
-    let etag = create_etag(app, &session.token).await;
+    let etag = create_etag(app, &session.token, &session.username).await;
     let hex = etag
         .strip_prefix("\"sha256-")
         .and_then(|s| s.strip_suffix('"'))
@@ -1507,11 +1541,11 @@ async fn identical_posts_share_etag(#[case] backend: Backend) {
     // AC2: two distinct posts with identical content get the same ETag — the
     // per-post id / tag ids / slug are excluded from the hash.
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let app = make_app(state, &base);
 
-    let e1 = create_etag(app.clone(), &session.token).await;
-    let e2 = create_etag(app, &session.token).await;
+    let e1 = create_etag(app.clone(), &session.token, &session.username).await;
+    let e2 = create_etag(app, &session.token, &session.username).await;
     assert_eq!(e1, e2);
 }
 
@@ -1521,15 +1555,15 @@ async fn idempotent_reput_keeps_etag(#[case] backend: Backend) {
     // AC3 + AC5: re-PUT byte-identical content → the ETag is unchanged (a
     // timestamp ETag would have bumped on the write).
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let app = make_app(state, &base);
 
     let created = app
         .clone()
         .oneshot(atompub_xml(
             "POST",
-            "/atompub/alice/posts",
-            "alice",
+            &format!("/atompub/{}/posts", session.username),
+            &session.username,
             &session.token,
             Some(ETAG_POST_XML),
         ))
@@ -1552,7 +1586,7 @@ async fn idempotent_reput_keeps_etag(#[case] backend: Backend) {
 
     let updated = app
         .oneshot(
-            atompub_authed("PUT", &location, "alice", &session.token)
+            atompub_authed("PUT", &location, &session.username, &session.token)
                 .header(header::CONTENT_TYPE, "application/atom+xml")
                 .header(header::IF_MATCH, &e1)
                 .body(Body::from(ETAG_POST_XML))
@@ -1575,7 +1609,7 @@ async fn idempotent_reput_keeps_etag(#[case] backend: Backend) {
 #[tokio::test]
 async fn update_preserves_non_public_targeting(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
 
     // A Subscribers-targeted post is hidden from an anonymous viewer. Editing it
     // via AtomPub must still succeed (the handler loads it as the authenticated
@@ -1606,8 +1640,8 @@ async fn update_preserves_non_public_targeting(#[case] backend: Backend) {
     let response = app
         .oneshot(atompub_xml(
             "PUT",
-            &format!("/atompub/alice/posts/{}", post.post_id),
-            "alice",
+            &format!("/atompub/{}/posts/{}", session.username, post.post_id),
+            &session.username,
             &session.token,
             Some(&xml),
         ))
@@ -1632,7 +1666,7 @@ async fn update_preserves_non_public_targeting(#[case] backend: Backend) {
 #[tokio::test]
 async fn member_get_serves_owner_non_public_post(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
 
     // A Subscribers-targeted post is hidden from Anonymous; the owner must still
     // be able to GET it via AtomPub (handler loads as the authenticated owner).
@@ -1659,8 +1693,8 @@ async fn member_get_serves_owner_non_public_post(#[case] backend: Backend) {
     let response = app
         .oneshot(atompub_xml(
             "GET",
-            &format!("/atompub/alice/posts/{}", post.post_id),
-            "alice",
+            &format!("/atompub/{}/posts/{}", session.username, post.post_id),
+            &session.username,
             &session.token,
             None,
         ))
@@ -1680,7 +1714,7 @@ async fn member_get_serves_owner_non_public_post(#[case] backend: Backend) {
 #[tokio::test]
 async fn create_adopts_default_audience(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
 
     // The instance default audience is Subscribers; an AtomPub POST (which has no
     // audience field) must adopt it.
@@ -1696,8 +1730,8 @@ async fn create_adopts_default_audience(#[case] backend: Backend) {
     let response = app
         .oneshot(atompub_xml(
             "POST",
-            "/atompub/alice/posts",
-            "alice",
+            &format!("/atompub/{}/posts", session.username),
+            &session.username,
             &session.token,
             Some(&xml),
         ))
@@ -1740,7 +1774,7 @@ fn location_post_id(response: &axum::response::Response) -> i64 {
 #[tokio::test]
 async fn create_with_future_published_is_scheduled(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let app = make_app(state.clone(), &base);
 
     // A non-draft entry whose <published> is in the far future schedules the post.
@@ -1748,8 +1782,8 @@ async fn create_with_future_published_is_scheduled(#[case] backend: Backend) {
     let response = app
         .oneshot(atompub_xml(
             "POST",
-            "/atompub/alice/posts",
-            "alice",
+            &format!("/atompub/{}/posts", session.username),
+            &session.username,
             &session.token,
             Some(&xml),
         ))
@@ -1773,11 +1807,10 @@ async fn create_with_future_published_is_scheduled(#[case] backend: Backend) {
     );
 
     // ...and it is invisible on the public permalink at "now".
-    let username = "alice".parse().unwrap();
     let public = state
         .posts
         .get_post_by_permalink(
-            &username,
+            &session.username,
             storage::PermalinkDate {
                 year: 2099,
                 month: 1,
@@ -1799,7 +1832,7 @@ async fn create_with_future_published_is_scheduled(#[case] backend: Backend) {
 #[tokio::test]
 async fn create_with_past_published_is_live_backdated(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let app = make_app(state.clone(), &base);
 
     // A non-draft entry whose <published> is in the past is live, backdated.
@@ -1807,8 +1840,8 @@ async fn create_with_past_published_is_live_backdated(#[case] backend: Backend) 
     let response = app
         .oneshot(atompub_xml(
             "POST",
-            "/atompub/alice/posts",
-            "alice",
+            &format!("/atompub/{}/posts", session.username),
+            &session.username,
             &session.token,
             Some(&xml),
         ))
@@ -1835,7 +1868,7 @@ async fn create_with_past_published_is_live_backdated(#[case] backend: Backend) 
 #[tokio::test]
 async fn update_with_future_published_schedules_post(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
 
     // Start from a live post, then PUT a non-draft entry with a future
     // <published>: it must become scheduled (future published_at, hidden).
@@ -1863,8 +1896,8 @@ async fn update_with_future_published_schedules_post(#[case] backend: Backend) {
     let response = app
         .oneshot(atompub_xml(
             "PUT",
-            &format!("/atompub/alice/posts/{}", post.post_id),
-            "alice",
+            &format!("/atompub/{}/posts/{}", session.username, post.post_id),
+            &session.username,
             &session.token,
             Some(&xml),
         ))
@@ -1893,9 +1926,15 @@ async fn create_post_keyed(
     token: &RawToken,
     xml: &str,
     idempotency_key: Option<&str>,
+    username: &str,
 ) -> axum::response::Response {
-    let mut builder = atompub_authed("POST", "/atompub/alice/posts", "alice", token)
-        .header(header::CONTENT_TYPE, "application/atom+xml");
+    let mut builder = atompub_authed(
+        "POST",
+        &format!("/atompub/{username}/posts"),
+        username,
+        token,
+    )
+    .header(header::CONTENT_TYPE, "application/atom+xml");
     if let Some(key) = idempotency_key {
         builder = builder.header("Idempotency-Key", key);
     }
@@ -1918,17 +1957,25 @@ fn location_of(response: &axum::response::Response) -> String {
 async fn create_with_same_idempotency_key_dedups(#[case] backend: Backend) {
     // AC-S1: the same key creates one post; the retry returns it as 200.
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let app = make_app(state, &base);
     let xml = entry_xml("Hello", "text", "the body");
 
-    let first = create_post_keyed(app.clone(), &session.token, &xml, Some("idem-1")).await;
+    let first = create_post_keyed(
+        app.clone(),
+        &session.token,
+        &xml,
+        Some("idem-1"),
+        &session.username,
+    )
+    .await;
     assert_eq!(first.status(), StatusCode::CREATED);
     let loc1 = location_of(&first);
     let etag1 = etag_of(&first);
     let body1 = body_string(first).await;
 
-    let second = create_post_keyed(app, &session.token, &xml, Some("idem-1")).await;
+    let second =
+        create_post_keyed(app, &session.token, &xml, Some("idem-1"), &session.username).await;
     assert_eq!(second.status(), StatusCode::OK);
     assert_eq!(
         location_of(&second),
@@ -1957,13 +2004,20 @@ fn etag_of(response: &axum::response::Response) -> String {
 async fn create_with_fresh_idempotency_key_is_201(#[case] backend: Backend) {
     // AC-S2: distinct keys create distinct posts.
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let app = make_app(state, &base);
     let xml = entry_xml("Hello", "text", "the body");
 
-    let first = create_post_keyed(app.clone(), &session.token, &xml, Some("k-a")).await;
+    let first = create_post_keyed(
+        app.clone(),
+        &session.token,
+        &xml,
+        Some("k-a"),
+        &session.username,
+    )
+    .await;
     assert_eq!(first.status(), StatusCode::CREATED);
-    let second = create_post_keyed(app, &session.token, &xml, Some("k-b")).await;
+    let second = create_post_keyed(app, &session.token, &xml, Some("k-b"), &session.username).await;
     assert_eq!(second.status(), StatusCode::CREATED);
     assert_ne!(location_of(&first), location_of(&second));
 }
@@ -1973,10 +2027,10 @@ async fn create_with_fresh_idempotency_key_is_201(#[case] backend: Backend) {
 async fn create_without_idempotency_key_is_201(#[case] backend: Backend) {
     // AC-S3: no header → create as today.
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let session = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state).await;
     let app = make_app(state, &base);
     let xml = entry_xml("Hello", "text", "the body");
 
-    let response = create_post_keyed(app, &session.token, &xml, None).await;
+    let response = create_post_keyed(app, &session.token, &xml, None, &session.username).await;
     assert_eq!(response.status(), StatusCode::CREATED);
 }

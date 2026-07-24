@@ -50,13 +50,13 @@ async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub(#[case] bac
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let capture = Arc::new(CapturingWebSubClient::default());
 
-    let user_id = SeedUser::new("alice").seed(&state).await;
+    let user = SeedUser::new().seed(&state).await;
 
     let now = Utc::now();
     let _post_id = state
         .posts
         .create_post(&CreatePostInput {
-            user_id,
+            user_id: user.user_id,
             title: Some("Test Post".into()),
             slug: "test-post".parse::<Slug>().expect("valid slug"),
             body: "# Test\n\nContent".into(),
@@ -70,7 +70,7 @@ async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub(#[case] bac
         .await
         .expect("create post");
 
-    let feed_path = fp("/~alice/feed.rss");
+    let feed_path = fp(&format!("/~{}/feed.rss", user.username));
     state
         .feed_events
         .enqueue(&feed_path)
@@ -101,13 +101,13 @@ async fn worker_pings_hub_when_configured(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let capture = Arc::new(CapturingWebSubClient::default());
 
-    let user_id = SeedUser::new("alice").seed(&state).await;
+    let user = SeedUser::new().seed(&state).await;
 
     let now = Utc::now();
     let _post_id = state
         .posts
         .create_post(&CreatePostInput {
-            user_id,
+            user_id: user.user_id,
             title: Some("Test Post".into()),
             slug: "test-post".parse::<Slug>().expect("valid slug"),
             body: "# Test\n\nContent".into(),
@@ -127,7 +127,7 @@ async fn worker_pings_hub_when_configured(#[case] backend: Backend) {
         .await
         .expect("set hub url");
 
-    let feed_path = fp("/~alice/feed.rss");
+    let feed_path = fp(&format!("/~{}/feed.rss", user.username));
     state
         .feed_events
         .enqueue(&feed_path)
@@ -140,8 +140,11 @@ async fn worker_pings_hub_when_configured(#[case] backend: Backend) {
     assert_eq!(pings.len(), 1, "should have exactly one ping");
     assert_eq!(pings[0].hub_url, "https://hub.example.com/");
     assert!(
-        pings[0].feed_url.ends_with("/~alice/feed.rss"),
-        "feed url should end with /~alice/feed.rss, got: {}",
+        pings[0]
+            .feed_url
+            .ends_with(&format!("/~{}/feed.rss", user.username)),
+        "feed url should end with /~{}/feed.rss, got: {}",
+        user.username,
         pings[0].feed_url
     );
 }
@@ -152,13 +155,13 @@ async fn worker_groups_duplicate_events_into_single_regen(#[case] backend: Backe
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let capture = Arc::new(CapturingWebSubClient::default());
 
-    let user_id = SeedUser::new("alice").seed(&state).await;
+    let user = SeedUser::new().seed(&state).await;
 
     let now = Utc::now();
     let _post_id = state
         .posts
         .create_post(&CreatePostInput {
-            user_id,
+            user_id: user.user_id,
             title: Some("Test Post".into()),
             slug: "test-post".parse::<Slug>().expect("valid slug"),
             body: "# Test\n\nContent".into(),
@@ -178,7 +181,7 @@ async fn worker_groups_duplicate_events_into_single_regen(#[case] backend: Backe
         .await
         .expect("set hub url");
 
-    let feed_path = fp("/~alice/feed.rss");
+    let feed_path = fp(&format!("/~{}/feed.rss", user.username));
     for _ in 0..5 {
         state
             .feed_events
@@ -197,7 +200,9 @@ async fn worker_groups_duplicate_events_into_single_regen(#[case] backend: Backe
         "should have exactly one ping (duplicates grouped)"
     );
     assert_eq!(pings[0].hub_url, "https://hub.example.com/");
-    assert!(pings[0].feed_url.ends_with("/~alice/feed.rss"));
+    assert!(pings[0]
+        .feed_url
+        .ends_with(&format!("/~{}/feed.rss", user.username)));
 }
 
 // The regen-failure backoff behavior moved to a mock-based worker unit test
@@ -215,13 +220,13 @@ async fn worker_applies_backoff_on_ping_failure(#[case] backend: Backend) {
     // test used to construct (which left Postgres uncovered).
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
 
-    let user_id = SeedUser::new("alice").seed(&state).await;
+    let user = SeedUser::new().seed(&state).await;
 
     let now = Utc::now();
     let _post_id = state
         .posts
         .create_post(&CreatePostInput {
-            user_id,
+            user_id: user.user_id,
             title: Some("Test Post".into()),
             slug: "test-post".parse::<Slug>().expect("valid slug"),
             body: "# Test\n\nContent".into(),
@@ -241,7 +246,7 @@ async fn worker_applies_backoff_on_ping_failure(#[case] backend: Backend) {
         .await
         .expect("set hub url");
 
-    let feed_path = fp("/~alice/feed.rss");
+    let feed_path = fp(&format!("/~{}/feed.rss", user.username));
     state
         .feed_events
         .enqueue(&feed_path)
@@ -285,7 +290,7 @@ async fn startup_catchup_regenerates_feed_for_go_live_while_down(#[case] backend
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let worker = make_worker(&state, Arc::new(CapturingWebSubClient::default()));
 
-    let user_id = SeedUser::new("alice").seed(&state).await;
+    let user = SeedUser::new().seed(&state).await;
 
     let t0 = Utc.with_ymd_and_hms(2026, 6, 26, 10, 0, 0).unwrap();
     // A cached site feed generated at t0 (stale).
@@ -307,7 +312,7 @@ async fn startup_catchup_regenerates_feed_for_go_live_while_down(#[case] backend
     state
         .posts
         .create_post(&CreatePostInput {
-            user_id,
+            user_id: user.user_id,
             title: Some("Went live".into()),
             slug: "went-live".parse::<Slug>().expect("valid slug"),
             body: "# Went live\n\nbody".into(),
@@ -346,7 +351,7 @@ async fn steady_state_window_enqueues_newly_live_posts(#[case] backend: Backend)
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let worker = make_worker(&state, Arc::new(CapturingWebSubClient::default()));
 
-    let user_id = SeedUser::new("alice").seed(&state).await;
+    let user = SeedUser::new().seed(&state).await;
 
     // First pass seeds last_tick = t0 (startup branch; nothing cached/live).
     let t0 = Utc.with_ymd_and_hms(2026, 6, 26, 10, 0, 0).unwrap();
@@ -357,7 +362,7 @@ async fn steady_state_window_enqueues_newly_live_posts(#[case] backend: Backend)
     state
         .posts
         .create_post(&CreatePostInput {
-            user_id,
+            user_id: user.user_id,
             title: Some("Soon".into()),
             slug: "soon".parse::<Slug>().expect("valid slug"),
             body: "# Soon\n\nbody".into(),
@@ -381,7 +386,7 @@ async fn steady_state_window_enqueues_newly_live_posts(#[case] backend: Backend)
         .expect("claim pending");
     let urls: Vec<&FeedPath> = pending.iter().map(|r| &r.feed_path).collect();
     assert!(
-        urls.iter().any(|u| u.contains("alice")),
+        urls.iter().any(|u| u.contains(&*user.username)),
         "the author's feeds must be enqueued on go-live: {urls:?}"
     );
     assert!(
@@ -397,12 +402,12 @@ async fn worker_marks_exhausted_after_backoff_attempts_are_used_up(#[case] backe
 
     // A published post so regeneration succeeds: the exhausted branch lives in
     // the ping sub-path, reached only after a successful regen.
-    let user_id = SeedUser::new("alice").seed(&state).await;
+    let user = SeedUser::new().seed(&state).await;
     let now = Utc::now();
     state
         .posts
         .create_post(&CreatePostInput {
-            user_id,
+            user_id: user.user_id,
             title: Some("Test Post".into()),
             slug: "test-post".parse::<Slug>().expect("valid slug"),
             body: "# Test\n\nContent".into(),
@@ -422,7 +427,7 @@ async fn worker_marks_exhausted_after_backoff_attempts_are_used_up(#[case] backe
         .await
         .expect("set hub url");
 
-    let feed_path = fp("/~alice/feed.rss");
+    let feed_path = fp(&format!("/~{}/feed.rss", user.username));
     state
         .feed_events
         .enqueue(&feed_path)

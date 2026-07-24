@@ -399,7 +399,7 @@ mod tests {
         let CloseablePool::Postgres(source_pool) = source.base.pool() else {
             unreachable!("postgres_only yields a Postgres pool")
         };
-        SeedUser::new("userone").seed(&source.state).await;
+        SeedUser::new().seed(&source.state).await;
 
         // Export a real backup so its manifest's schema version/checksum match the
         // fresh target, and users.ndjson has a complete row to corrupt.

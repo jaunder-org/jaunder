@@ -250,7 +250,7 @@ mod tests {
         // Keep the whole `TestEnv` bound: dropping `base` unlinks the SQLite file
         // (ADR-0053 TempDir hazard).
         let env = backend.setup().await;
-        let user_id = SeedUser::new("testuser").seed(&env.state).await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
 
         // `create_session` binds the `TokenHash`; `authenticate`/`list_sessions`
         // decode the `token_hash` and joined `username` columns straight back into
@@ -276,7 +276,7 @@ mod tests {
     #[tokio::test]
     async fn list_sessions_rejects_a_malformed_token_hash_column(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new("testuser").seed(&env.state).await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
         env.state
             .sessions
             .create_session(user_id, &parse_session_label("Test Device"))

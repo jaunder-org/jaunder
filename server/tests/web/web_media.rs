@@ -30,7 +30,7 @@ use storage::test_support::{backends, backends_matrix, noop_mailer, Backend, Tes
 #[tokio::test]
 async fn media_usage_returns_defaults_for_authenticated_user(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "alice").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = post_form(Arc::clone(&state), "/api/media_usage", "", Some(&cookie)).await;
 
@@ -70,7 +70,7 @@ async fn media_endpoint_rejects_unauthenticated_request(
 #[tokio::test]
 async fn list_my_media_returns_empty_for_new_user(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "bob").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) =
         post_form(Arc::clone(&state), "/api/list_my_media", "", Some(&cookie)).await;
@@ -84,7 +84,7 @@ async fn list_my_media_returns_empty_for_new_user(#[case] backend: Backend) {
 #[tokio::test]
 async fn list_my_media_rejects_out_of_range_limit(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "erin").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     // `limit=999` is outside PageSize's `1..=50`; the typed wire arg rejects it on
     // deserialization instead of fetching an unbounded page.
@@ -107,7 +107,7 @@ async fn list_my_media_rejects_out_of_range_limit(#[case] backend: Backend) {
 #[tokio::test]
 async fn list_my_media_returns_inserted_item(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state, "dave").await;
+    let session = create_user_and_session(&state).await;
 
     let record = MediaRecord {
         user_id: session.user_id,
@@ -146,7 +146,7 @@ async fn list_my_media_returns_inserted_item(#[case] backend: Backend) {
 #[tokio::test]
 async fn list_my_media_with_source_filter(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state, "eve").await;
+    let session = create_user_and_session(&state).await;
 
     let record = MediaRecord {
         user_id: session.user_id,
@@ -187,7 +187,7 @@ async fn list_my_media_with_source_filter(#[case] backend: Backend) {
 #[tokio::test]
 async fn delete_media_succeeds_for_existing_item(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state, "carol").await;
+    let session = create_user_and_session(&state).await;
 
     // Insert a media record directly so delete has something to act on.
     let record = MediaRecord {
@@ -233,7 +233,7 @@ async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend:
     use storage::{CreatePostInput, PostFormat, RenderedHtml};
 
     let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state, "darya").await;
+    let session = create_user_and_session(&state).await;
     let user_id = session.user_id;
 
     let media_url = common::media::media_url(
@@ -297,17 +297,11 @@ async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend:
 
 // ─── upload_media ─────────────────────────────────────────────
 
-/// Create a user + session and return the `session=<token>` cookie — dedupes the
-/// `create_user`/`create_session` boilerplate every upload test repeats.
-async fn authed_cookie(state: &Arc<storage::AppState>, username: &str) -> String {
-    create_user_and_session(state, username).await.cookie()
-}
-
 #[apply(backends)]
 #[tokio::test]
 async fn upload_media_stores_file_and_returns_metadata(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = authed_cookie(&state, "uploader").await;
+    let cookie = create_user_and_session(&state).await.cookie();
 
     // A real writable root so the upload lands on disk (separate from the DB backend).
     let storage = TempDir::new().unwrap();
@@ -362,7 +356,7 @@ async fn upload_media_rejects_unauthenticated_request(#[case] backend: Backend) 
 #[tokio::test]
 async fn upload_media_rejects_invalid_filename(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = authed_cookie(&state, "badname").await;
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let storage = TempDir::new().unwrap();
     // `..` sanitizes to empty → `MediaError::BadRequest`, exercising `map_media_error`'s
@@ -398,7 +392,7 @@ async fn upload_media_rejects_oversized_file(#[case] backend: Backend) {
         .set(storage::MEDIA_MAX_FILE_SIZE_BYTES_KEY, "5")
         .await
         .unwrap();
-    let cookie = authed_cookie(&state, "toobig").await;
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let storage = TempDir::new().unwrap();
     let (status, body) = post_multipart(
@@ -432,7 +426,7 @@ async fn upload_media_rejects_over_quota_file(#[case] backend: Backend) {
         .set(storage::MEDIA_USER_QUOTA_BYTES_KEY, "5")
         .await
         .unwrap();
-    let cookie = authed_cookie(&state, "overquota").await;
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let storage = TempDir::new().unwrap();
     let (status, body) = post_multipart(
@@ -459,7 +453,7 @@ async fn upload_media_rejects_over_quota_file(#[case] backend: Backend) {
 #[tokio::test]
 async fn upload_media_rejects_missing_file_field(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = authed_cookie(&state, "nofield").await;
+    let cookie = create_user_and_session(&state).await.cookie();
 
     // An empty multipart body (a closing boundary with no field) yields
     // `next_field() == None`, exercising the "no file field" guard.

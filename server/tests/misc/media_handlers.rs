@@ -24,7 +24,7 @@ use crate::helpers::{create_user_and_session, make_app, post_multipart, Multipar
 async fn serve_returns_200_with_cache_headers(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let cookie = create_user_and_session(&state, "server").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let storage = TempDir::new().unwrap();
 
@@ -106,7 +106,7 @@ async fn serve_returns_404(backend: Backend, #[case] uri: &str) {
 async fn serve_returns_304_on_if_none_match(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let cookie = create_user_and_session(&state, "etagger").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     let storage = TempDir::new().unwrap();
 
@@ -176,14 +176,16 @@ async fn proxy_requires_auth(#[case] backend: Backend) {
 async fn proxy_redirects_authenticated(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let session = create_user_and_session(&state, "proxyuser").await;
-    let user_id = session.user_id;
+    let session = create_user_and_session(&state).await;
     let cookie = session.cookie();
 
     let storage = TempDir::new().unwrap();
     let app = make_app(Arc::clone(&state), &storage);
 
-    let url = format!("/media/proxy?url=http%3A%2F%2Fexample.com%2Fimage.jpg&user_id={user_id}");
+    let url = format!(
+        "/media/proxy?url=http%3A%2F%2Fexample.com%2Fimage.jpg&user_id={}",
+        session.user_id
+    );
 
     let response = app
         .oneshot(
@@ -212,7 +214,7 @@ async fn proxy_redirects_authenticated(#[case] backend: Backend) {
 async fn proxy_rejects_mismatched_user_id(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let session = create_user_and_session(&state, "mismatch").await;
+    let session = create_user_and_session(&state).await;
     let user_id = session.user_id;
     let cookie = session.cookie();
 

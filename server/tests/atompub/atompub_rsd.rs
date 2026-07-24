@@ -88,7 +88,7 @@ async fn user_page_includes_rsd_autodiscovery_link(
     #[case] expected_fragment: &str,
 ) {
     let TestEnv { state, base } = backend.setup().await;
-    create_user_and_session(&state, "alice").await;
+    create_user_and_session(&state).await;
     let app = make_app(state, &base);
 
     // Rendering the user page (server-side) hoists the EditURI autodiscovery

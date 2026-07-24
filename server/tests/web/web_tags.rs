@@ -16,11 +16,10 @@ use storage::test_support::{backends, Backend, SeedUser, TestEnv};
 
 async fn seed_user_and_tagged_post(
     state: &Arc<storage::AppState>,
-    username: &str,
     slug: &str,
     tags: &[&str],
 ) -> PostId {
-    let user_id = SeedUser::new(username).seed(state).await;
+    let user_id = SeedUser::new().seed(state).await.user_id;
     let post_id = state
         .posts
         .create_post(&CreatePostInput {
@@ -65,7 +64,6 @@ async fn list_tags_returns_all_when_prefix_absent(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     seed_user_and_tagged_post(
         &state,
-        "alice",
         "post-1",
         &["Rust", "rust-lang", "performance", "web"],
     )
@@ -96,7 +94,6 @@ async fn list_tags_filters_by_prefix_case_insensitive(#[case] backend: Backend) 
     let TestEnv { state, base: _base } = backend.setup().await;
     seed_user_and_tagged_post(
         &state,
-        "bob",
         "post-2",
         &["rust", "rust-lang", "javascript", "web"],
     )
@@ -120,7 +117,7 @@ async fn list_tags_filters_by_prefix_case_insensitive(#[case] backend: Backend) 
 #[tokio::test]
 async fn list_tags_clamps_limit_to_max(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let post = seed_user_and_tagged_post(&state, "carol", "post-3", &[]).await;
+    let post = seed_user_and_tagged_post(&state, "post-3", &[]).await;
     // 60 tags — exceeds the MAX_TAG_LIMIT of 50.
     for n in 0..60 {
         state
@@ -147,7 +144,7 @@ async fn list_tags_clamps_limit_to_max(#[case] backend: Backend) {
 #[tokio::test]
 async fn list_tags_uses_default_limit_when_unspecified(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let post = seed_user_and_tagged_post(&state, "dan", "post-4", &[]).await;
+    let post = seed_user_and_tagged_post(&state, "post-4", &[]).await;
     for n in 0..20 {
         state
             .posts

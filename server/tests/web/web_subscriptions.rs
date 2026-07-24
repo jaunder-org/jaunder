@@ -10,8 +10,8 @@ use rstest_reuse::*;
 use crate::helpers::{create_session_for, post_form};
 use storage::test_support::{backends, Backend, SeedUser, TestEnv};
 
-async fn make_user(state: &Arc<storage::AppState>, name: &str) -> UserId {
-    SeedUser::new(name).seed(state).await
+async fn make_user(state: &Arc<storage::AppState>) -> UserId {
+    SeedUser::new().seed(state).await.user_id
 }
 
 async fn cookie_for(state: &Arc<storage::AppState>, user_id: UserId) -> String {
@@ -23,8 +23,8 @@ async fn cookie_for(state: &Arc<storage::AppState>, user_id: UserId) -> String {
 #[tokio::test]
 async fn subscribe_then_unsubscribe_round_trips(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let author = make_user(&state, "author").await;
-    let subscriber = make_user(&state, "subscriber").await;
+    let author = SeedUser::new().seed(&state).await;
+    let subscriber = make_user(&state).await;
     let cookie = cookie_for(&state, subscriber).await;
     let channel = state.subscriptions.local_channel_id().await.unwrap();
     let viewer = ViewerIdentity::local(subscriber, channel);
@@ -32,7 +32,7 @@ async fn subscribe_then_unsubscribe_round_trips(#[case] backend: Backend) {
     let (status, body) = post_form(
         Arc::clone(&state),
         "/api/subscribe_to",
-        "author_username=author",
+        format!("author_username={}", author.username),
         Some(&cookie),
     )
     .await;
@@ -40,7 +40,7 @@ async fn subscribe_then_unsubscribe_round_trips(#[case] backend: Backend) {
     assert!(
         state
             .subscriptions
-            .is_subscriber(author, &viewer)
+            .is_subscriber(author.user_id, &viewer)
             .await
             .unwrap(),
         "is_subscriber should be true after subscribe"
@@ -49,7 +49,7 @@ async fn subscribe_then_unsubscribe_round_trips(#[case] backend: Backend) {
     let (status, body) = post_form(
         Arc::clone(&state),
         "/api/unsubscribe_from",
-        "author_username=author",
+        format!("author_username={}", author.username),
         Some(&cookie),
     )
     .await;
@@ -57,7 +57,7 @@ async fn subscribe_then_unsubscribe_round_trips(#[case] backend: Backend) {
     assert!(
         !state
             .subscriptions
-            .is_subscriber(author, &viewer)
+            .is_subscriber(author.user_id, &viewer)
             .await
             .unwrap(),
         "is_subscriber should be false after unsubscribe"
@@ -69,14 +69,14 @@ async fn subscribe_then_unsubscribe_round_trips(#[case] backend: Backend) {
 #[tokio::test]
 async fn self_subscribe_is_rejected(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let me = make_user(&state, "narcissus").await;
-    let cookie = cookie_for(&state, me).await;
+    let me = SeedUser::new().seed(&state).await;
+    let cookie = cookie_for(&state, me.user_id).await;
     let channel = state.subscriptions.local_channel_id().await.unwrap();
 
     let (status, _body) = post_form(
         Arc::clone(&state),
         "/api/subscribe_to",
-        "author_username=narcissus",
+        format!("author_username={}", me.username),
         Some(&cookie),
     )
     .await;
@@ -84,7 +84,7 @@ async fn self_subscribe_is_rejected(#[case] backend: Backend) {
     assert!(
         !state
             .subscriptions
-            .is_subscriber(me, &ViewerIdentity::local(me, channel))
+            .is_subscriber(me.user_id, &ViewerIdentity::local(me.user_id, channel))
             .await
             .unwrap(),
         "no self-subscription row may be created"
@@ -96,12 +96,12 @@ async fn self_subscribe_is_rejected(#[case] backend: Backend) {
 #[tokio::test]
 async fn subscribe_unauthenticated_is_rejected(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    make_user(&state, "author").await;
+    let author = SeedUser::new().seed(&state).await;
 
     let (status, _body) = post_form(
         Arc::clone(&state),
         "/api/subscribe_to",
-        "author_username=author",
+        format!("author_username={}", author.username),
         None,
     )
     .await;
@@ -113,14 +113,14 @@ async fn subscribe_unauthenticated_is_rejected(#[case] backend: Backend) {
 #[tokio::test]
 async fn is_subscribed_to_reports_state(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let _author = make_user(&state, "author").await;
-    let subscriber = make_user(&state, "subscriber").await;
+    let author = SeedUser::new().seed(&state).await;
+    let subscriber = make_user(&state).await;
     let cookie = cookie_for(&state, subscriber).await;
 
     let (status, body) = post_form(
         Arc::clone(&state),
         "/api/is_subscribed_to",
-        "author_username=author",
+        format!("author_username={}", author.username),
         Some(&cookie),
     )
     .await;
@@ -133,7 +133,7 @@ async fn is_subscribed_to_reports_state(#[case] backend: Backend) {
     post_form(
         Arc::clone(&state),
         "/api/subscribe_to",
-        "author_username=author",
+        format!("author_username={}", author.username),
         Some(&cookie),
     )
     .await;
@@ -141,7 +141,7 @@ async fn is_subscribed_to_reports_state(#[case] backend: Backend) {
     let (status, body) = post_form(
         Arc::clone(&state),
         "/api/is_subscribed_to",
-        "author_username=author",
+        format!("author_username={}", author.username),
         Some(&cookie),
     )
     .await;
