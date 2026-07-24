@@ -4,6 +4,11 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Run the required checks on merge-queue branches (gh-readonly-queue/…) so the
+  # queue can gate on the combined-with-main state. All jobs run on merge_group:
+  # both required contexts — "Validate (no e2e)" and "e2e gate" (via its needs) —
+  # must report on the queue branch. See docs/ci-merge-queue.md.
+  merge_group:
 
 jobs:
   validate-no-e2e:
