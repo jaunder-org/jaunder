@@ -477,10 +477,10 @@ pub fn PostCreateForm(
         named: Vec::new(),
     });
     let default_audience = Resource::new(|| (), |()| default_audience_selection());
-    // Client-only: copying the resolved Resource into `audience` must not run
-    // during SSR, where the future can resolve after the per-request reactive
-    // owner is disposed (web-style-guide.md §9). SSR renders the Public
-    // default; the real default is seeded on the client after hydration.
+    // The site-wide default audience resolves asynchronously; the composer must
+    // render immediately (no Suspense), so seed the editable `audience` signal
+    // once the Resource resolves, over the Public placeholder above. The author
+    // can then edit the selection via `AudiencePicker`.
     Effect::new(move |_| {
         if let Some(Ok(default)) = default_audience.get() {
             audience.set(default);
