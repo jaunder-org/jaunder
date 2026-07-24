@@ -119,3 +119,19 @@ fn site_settings_form(
         </div>
     }
 }
+
+/// The #575 warning banner: shown in the authed admin chrome when `site.base_url` is
+/// unconfigured (feeds/AtomPub disabled). A thin wrapper over the shared `WarnBanner`,
+/// driven by the soft `base_url_warning_visible` server fn — hidden for non-operators
+/// and once a base URL is set.
+#[component]
+pub fn SiteBaseUrlBanner() -> impl IntoView {
+    let visible = Resource::new(|| (), |()| super::base_url_warning_visible());
+    view! {
+        <crate::banner::WarnBanner
+            visible=visible
+            message="Site base URL is not configured — feeds and AtomPub are disabled."
+            links=vec![("/admin/site", "Site Settings")]
+        />
+    }
+}

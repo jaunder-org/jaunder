@@ -28,7 +28,7 @@ use crate::posts::{
 use crate::profile::ProfilePage;
 use crate::registration::RegisterPage;
 use crate::route_segments::TildeUsername;
-use crate::site::SiteSettingsPage;
+use crate::site::{SiteBaseUrlBanner, SiteSettingsPage};
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, Title};
 use leptos_router::{
@@ -55,6 +55,7 @@ fn AppShell() -> impl IntoView {
                 <Sidebar />
                 <div class="j-main-region">
                     <BackupBanner />
+                    <SiteBaseUrlBanner />
                     <main class="j-main">
                         <Outlet />
                     </main>

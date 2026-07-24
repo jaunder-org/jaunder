@@ -238,3 +238,80 @@ async fn update_site_identity_requires_operator(#[case] backend: Backend) {
     );
     assert!(member_body.contains("unauthorized"), "body: {member_body}");
 }
+
+// #575 base-URL warning banner endpoint. Mirrors web_backup.rs's `backup_warning_*`
+// tests: a soft operator check (`Ok(false)`, never an error, for non-operators) over
+// whether `SiteIdentity.base_url` is unset. `base_url` defaults to `None`, so the
+// "visible" case needs no seeding.
+#[apply(backends)]
+#[tokio::test]
+async fn base_url_warning_visible_for_operator_when_unset(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = create_operator_and_session(&state, "operator")
+        .await
+        .cookie();
+    let (status, body) = post_form(state, "/api/base_url_warning_visible", "", Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert_eq!(body, "true");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn base_url_warning_hidden_when_base_url_configured(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = create_operator_and_session(&state, "operator")
+        .await
+        .cookie();
+    let (up, up_body) = post_form(
+        Arc::clone(&state),
+        "/api/update_site_identity",
+        "title=My+Blog&base_url=https%3A%2F%2Fexample.com%2F",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(up, StatusCode::OK, "body: {up_body}");
+    let (status, body) = post_form(state, "/api/base_url_warning_visible", "", Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert_eq!(body, "false");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn base_url_warning_hidden_for_non_operator(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = create_user_and_session(&state, "member").await.cookie();
+    let (status, body) = post_form(state, "/api/base_url_warning_visible", "", Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert_eq!(body, "false");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn base_url_warning_hidden_without_authentication(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let (status, body) = post_form(state, "/api/base_url_warning_visible", "", None).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert_eq!(body, "false");
+}
+
+// Covers the Err(non-Auth) branch of the endpoint body — required because #[server]
+// bodies stay coverage-measured. Mirrors web_backup.rs's
+// backup_warning_visible_propagates_storage_error_during_auth: close the pool after
+// session creation so authenticate() returns Internal (not Auth) → 500.
+#[apply(backends)]
+#[tokio::test]
+async fn base_url_warning_propagates_storage_error_during_auth(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
+    let cookie = create_operator_and_session(&state, "operator")
+        .await
+        .cookie();
+    base.close_pool().await;
+    let (status, _body) = post_form(
+        Arc::clone(&state),
+        "/api/base_url_warning_visible",
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}

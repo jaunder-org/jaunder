@@ -98,3 +98,35 @@ test("non-operator user is denied access to /admin/site", async ({ page }) => {
   // Expect to see an error message or be redirected
   await expect(page.locator(SEL.error)).toBeVisible({ timeout: 5_000 });
 });
+
+// #575: the site base-URL warning banner appears in the authed admin chrome when
+// `base_url` is unset and disappears once it is configured. After #326 both banners
+// share the `.j-warn-banner` class, and the backup banner is *also* visible for
+// operators (backup unconfigured by default) — so the site banner is located by its
+// copy text, never by class/role. States are driven explicitly (set → hidden, clear →
+// visible via the ADR-0065 clear-to-None path) rather than relying on a seed default.
+test("site base URL warning banner shows when unset and hides once configured", async ({
+  page,
+}) => {
+  await login(page, "testoperator", "testpassword123");
+  await goto(page, "/admin/site");
+  await waitForSelector(page, "input[name='base_url']");
+
+  const banner = page.getByText("Site base URL is not configured");
+  const saveButton = page.locator('button:has-text("Save Site Settings")');
+
+  // Configure a base URL → banner hidden after reload.
+  await page.fill('input[name="title"]', "Banner Site");
+  await page.fill('input[name="base_url"]', "https://example.com");
+  await saveButton.click();
+  await waitForSelector(page, ".j-settings-saved");
+  await goto(page, "/admin/site");
+  await expect(banner).toBeHidden();
+
+  // Clear the base URL (dispatches `None`) → banner visible after reload.
+  await page.fill('input[name="base_url"]', "");
+  await page.locator('button:has-text("Save Site Settings")').click();
+  await waitForSelector(page, ".j-settings-saved");
+  await goto(page, "/admin/site");
+  await expect(banner).toBeVisible();
+});
