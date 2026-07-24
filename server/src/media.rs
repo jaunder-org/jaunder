@@ -1,25 +1,24 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::{Multipart, Path, Query};
+use axum::extract::{Path, Query};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
-use axum::routing::{get, post};
-use axum::{Extension, Json, Router};
-use serde::{Deserialize, Serialize};
+use axum::routing::get;
+use axum::{Extension, Router};
+use serde::Deserialize;
 use tokio::fs;
 use tokio_util::io::ReaderStream;
 
 use common::ids::UserId;
-use common::media::{
-    detect_content_type, should_inline, ByteSize, ContentHash, ContentType, Filename, MediaSource,
-};
-use storage::{MediaStorage, SiteConfigStorage};
+use common::media::{detect_content_type, should_inline, ContentHash, Filename, MediaSource};
+use storage::{MediaError, MediaStorage};
 use web::auth::AuthUser;
 
 use crate::soft_path::SoftPath;
 
-/// Builds the media routes (upload, content-addressed serve, remote proxy).
+/// Builds the media routes (content-addressed serve, remote proxy). Upload moved to
+/// the `web::media::upload_media` `#[server]` fn (#517).
 ///
 /// The handlers read shared state via `Extension`, so the routes are generic
 /// over the application's router state type.
@@ -28,7 +27,6 @@ where
     S: Clone + Send + Sync + 'static,
 {
     Router::new()
-        .route("/media/upload", post(upload_handler))
         .route(
             "/media/{source}/{p1}/{p2}/{hash}/{filename}",
             get(serve_handler),
@@ -37,53 +35,19 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// Response types
+// Error mapping
 // ---------------------------------------------------------------------------
 
-/// JSON body returned on a successful upload.
-#[derive(Debug, Serialize)]
-pub struct UploadResponse {
-    pub sha256: ContentHash,
-    pub filename: Filename,
-    pub content_type: ContentType,
-    pub size_bytes: ByteSize,
-    pub url: String,
-}
-
-// ---------------------------------------------------------------------------
-// Upload handler  POST /media/upload
-// ---------------------------------------------------------------------------
-
-/// Accepts a multipart upload, stores the file content-addressed under
-/// `<storage_path>/media/upload/`, deduplicates via hard-links, inserts a DB
-/// record, and returns 201 JSON.
-///
-/// # Errors
-///
-/// Returns `4xx`/`5xx` status codes on validation failures or I/O errors.
-#[tracing::instrument(name = "media.upload", skip_all)]
-pub async fn upload_handler(
-    Extension(media): Extension<Arc<dyn MediaStorage>>,
-    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
-    Extension(storage_path): Extension<Arc<PathBuf>>,
-    auth_user: AuthUser,
-    mut multipart: Multipart,
-) -> Result<Response, StatusCode> {
-    let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|_| StatusCode::BAD_REQUEST)?
-    else {
-        return Err(StatusCode::BAD_REQUEST);
-    };
-
-    let manager = crate::media_manager::MediaManager::new(media, site_config, storage_path);
-    let response = manager.upload(&auth_user, field).await.map_err(|e| {
-        tracing::error!(error = %e, "upload failed");
-        crate::media_manager::MediaManager::map_error(&e)
-    })?;
-
-    Ok((StatusCode::CREATED, Json(response)).into_response())
+/// Maps a media upload `anyhow::Error` to the client-facing HTTP status. The
+/// upload metric is emitted inside `storage::MediaManager`, so this is a pure map.
+#[must_use]
+pub fn map_error(err: &anyhow::Error) -> StatusCode {
+    match err.downcast_ref::<MediaError>() {
+        Some(MediaError::BadRequest(_)) => StatusCode::BAD_REQUEST,
+        Some(MediaError::PayloadTooLarge) => StatusCode::PAYLOAD_TOO_LARGE,
+        Some(MediaError::InsufficientStorage) => StatusCode::INSUFFICIENT_STORAGE,
+        Some(MediaError::Internal(_)) | None => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -357,6 +321,30 @@ mod tests {
     fn serve_internal_error_maps_to_500() {
         assert_eq!(
             serve_internal_error(sqlx::Error::PoolClosed),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[test]
+    fn map_error_maps_each_media_error() {
+        assert_eq!(
+            map_error(&anyhow::anyhow!(MediaError::BadRequest("bad".to_owned()))),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            map_error(&anyhow::anyhow!(MediaError::PayloadTooLarge)),
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+        assert_eq!(
+            map_error(&anyhow::anyhow!(MediaError::InsufficientStorage)),
+            StatusCode::INSUFFICIENT_STORAGE
+        );
+        assert_eq!(
+            map_error(&anyhow::anyhow!(MediaError::Internal("error".to_owned()))),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(
+            map_error(&anyhow::anyhow!("unknown")),
             StatusCode::INTERNAL_SERVER_ERROR
         );
     }

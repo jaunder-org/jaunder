@@ -7,9 +7,10 @@ test.describe("Media upload and serving", () => {
   }, testInfo) => {
     await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 30000));
 
-    // Upload via the API directly — session cookie is in page's cookie jar
+    // Drive the `upload_media` server fn directly — session cookie is in page's
+    // cookie jar. The fn returns 200 with the bare `UploadResponse` JSON.
     const fileContent = Buffer.from("fake image content for testing");
-    const response = await page.request.post(BASE_URL + "/media/upload", {
+    const response = await page.request.post(BASE_URL + "/api/upload_media", {
       multipart: {
         file: {
           name: "test-image.jpg",
@@ -18,10 +19,9 @@ test.describe("Media upload and serving", () => {
         },
       },
     });
-    expect(response.status()).toBe(201);
+    expect(response.status()).toBe(200);
 
     const json = await response.json();
-    expect(json.sha256).toBeTruthy();
     expect(json.filename).toBe("test-image.jpg");
     expect(json.url).toContain("/media/upload/");
 
@@ -33,8 +33,10 @@ test.describe("Media upload and serving", () => {
     );
   });
 
-  test("unauthenticated upload returns 401", async ({ page }) => {
-    const response = await page.request.post(BASE_URL + "/media/upload", {
+  test("unauthenticated upload is rejected", async ({ page }) => {
+    // No session: `require_auth()` rejects and the server fn returns a serialized
+    // `WebError::Unauthorized` — not necessarily a bare 401 status.
+    const response = await page.request.post(BASE_URL + "/api/upload_media", {
       multipart: {
         file: {
           name: "test.jpg",
@@ -43,7 +45,9 @@ test.describe("Media upload and serving", () => {
         },
       },
     });
-    expect(response.status()).toBe(401);
+    expect(response.ok()).toBeFalsy();
+    const body = await response.text();
+    expect(body).toContain("unauthorized");
   });
 
   test("media nav link appears for authenticated users", async ({

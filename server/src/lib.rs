@@ -12,7 +12,6 @@ pub mod context;
 pub mod feed;
 pub mod mailer;
 pub mod media;
-pub mod media_manager;
 pub mod observability;
 pub mod projector;
 pub mod runtime_file;

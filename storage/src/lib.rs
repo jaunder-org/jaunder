@@ -1,13 +1,13 @@
 //! Persistence layer for Jaunder.
 
-// `mockall`'s `#[automock]` (behind `test-utils`) generates matcher code taking
-// `&Option<&T>` for the traits with `Option<&…Cursor>`/`Option<&str>` args
-// (PostStorage/UserStorage/MediaStorage), tripping `clippy::ref_option_ref` under
-// `-D warnings`. The generated `Mock*` structs are module-level siblings of the
-// traits, so the allow is scoped at the crate root and gated to `test-utils` (the
-// only build where the mocks exist). No production code uses `&Option<&T>`, so
-// nothing genuine is masked (#245).
-#![cfg_attr(feature = "test-utils", allow(clippy::ref_option_ref))]
+// `mockall`'s `#[automock]` generates matcher code taking `&Option<&T>` for the
+// traits with `Option<&…Cursor>`/`Option<&str>` args (PostStorage/UserStorage/
+// MediaStorage), tripping `clippy::ref_option_ref` under `-D warnings`. The generated
+// `Mock*` structs are module-level siblings of the traits, so the allow is scoped at
+// the crate root and gated to the same `any(test, feature = "test-utils")` as the mocks
+// (`storage`'s own `cfg(test)` build now uses them too, #517). No production code uses
+// `&Option<&T>`, so nothing genuine is masked (#245).
+#![cfg_attr(any(test, feature = "test-utils"), allow(clippy::ref_option_ref))]
 
 mod app_state;
 mod atomic;
@@ -22,6 +22,7 @@ mod feed_events;
 mod helpers;
 mod invites;
 mod media;
+mod media_manager;
 mod password;
 mod post_service;
 mod postgres;
@@ -56,6 +57,7 @@ pub use feed_cache::*;
 pub use feed_events::*;
 pub use invites::*;
 pub use media::*;
+pub use media_manager::{MediaError, MediaManager};
 pub use password::*;
 pub use post_service::*;
 pub use postgres::{

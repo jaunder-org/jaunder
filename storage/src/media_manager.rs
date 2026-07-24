@@ -1,24 +1,32 @@
+//! Content-addressed media upload service: streams an upload to a hashed,
+//! dedup'd on-disk path, enforces per-file and per-user limits, and records the
+//! result. Relocated from `server` (#517) so a `web` `#[server]` fn can construct
+//! it directly — its work is persistence and its deps are all `storage`'s.
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use bytes::Bytes;
 use chrono::Utc;
+use futures_util::{Stream, StreamExt};
 use sha2::{Digest, Sha256};
+use thiserror::Error;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
 use common::ids::UserId;
 use common::media::{
     detect_content_type, media_path, media_url, ByteSize, ContentHash, ContentType, Filename,
-    MaxFileSize, MediaSource, UserQuota,
+    MaxFileSize, MediaSource, UploadResponse, UserQuota,
 };
-use storage::{CreateMediaError, MediaRecord, MediaStorage, SiteConfigStorage};
-use web::auth::AuthUser;
 
-use axum::http::StatusCode;
-use thiserror::Error;
+use crate::{CreateMediaError, MediaRecord, MediaStorage, SiteConfigStorage};
 
+/// A media upload failure with a bounded, client-mappable classification. `pub`
+/// so the HTTP boundary in `server` can `downcast_ref` it to a `StatusCode`
+/// (`server::media::map_error`).
 #[derive(Debug, Error)]
-enum MediaError {
+pub enum MediaError {
     #[error("Bad request: {0}")]
     BadRequest(String),
     #[error("Payload too large")]
@@ -28,6 +36,12 @@ enum MediaError {
     #[error("Internal server error: {0}")]
     Internal(String),
 }
+
+// `UploadResponse` is defined in `common::media`, not here — it is the `#[server]` fn's
+// return type, which must be nameable on the wasm client build where `storage` is not
+// compiled (`storage` is a `server`-gated `web` dep). `common` is ungated and reachable
+// by storage + web (both targets) + server, so the manager returns it directly with no
+// mapping layer.
 
 pub struct MediaManager {
     media: Arc<dyn MediaStorage>,
@@ -58,65 +72,83 @@ impl MediaManager {
         }
     }
 
-    /// Accepts a multipart upload, stores the file content-addressed under
-    /// `<storage_path>/media/upload/`, deduplicates via hard-links, inserts a DB
-    /// record, and returns an `UploadResponse`.
+    /// Streams a multipart upload to a content-addressed, dedup'd path and records
+    /// it. `filename`/`content_type` are extracted by the caller off its multipart
+    /// field (before the field is consumed as the byte stream); `stream` yields the
+    /// file bytes. Emits exactly one `media_upload*` metric (success in
+    /// `finalize_upload`, failure here).
     ///
     /// # Errors
     ///
-    /// Returns `anyhow::Error` on validation failures, I/O errors, or quota exceeded.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the target path does not have a parent directory.
-    pub async fn upload(
+    /// Returns `anyhow::Error` on validation failure, quota exhaustion, or I/O error.
+    pub async fn upload<S, E>(
         &self,
-        auth_user: &AuthUser,
-        mut field: axum::extract::multipart::Field<'_>,
-    ) -> anyhow::Result<crate::media::UploadResponse> {
+        user_id: UserId,
+        filename: &Filename,
+        content_type: Option<&str>,
+        stream: S,
+    ) -> anyhow::Result<UploadResponse>
+    where
+        S: Stream<Item = Result<Bytes, E>> + Unpin,
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        let result = self
+            .upload_inner(user_id, filename, content_type, stream)
+            .await;
+        Self::emit_failure_metric(&result);
+        result
+    }
+
+    async fn upload_inner<S, E>(
+        &self,
+        user_id: UserId,
+        filename: &Filename,
+        content_type: Option<&str>,
+        stream: S,
+    ) -> anyhow::Result<UploadResponse>
+    where
+        S: Stream<Item = Result<Bytes, E>> + Unpin,
+        E: std::error::Error + Send + Sync + 'static,
+    {
         let (max_file_size, user_quota) = self.get_limits().await?;
 
-        let filename = Self::validate_filename(field.file_name())?;
-        let content_type = Self::get_content_type(field.content_type(), &filename)?;
+        let content_type = Self::get_content_type(content_type, filename)?;
 
         let tmp_path = self.create_temp_file().await?;
-
         let (sha256_hex, size_bytes) = self
-            .stream_to_temp(&mut field, &tmp_path, max_file_size)
+            .stream_to_temp(stream, &tmp_path, max_file_size)
             .await?;
 
         let metadata = UploadMetadata {
-            filename,
+            filename: filename.clone(),
             content_type,
             sha256_hex,
             size_bytes,
         };
 
-        self.finalize_upload(auth_user.user_id, metadata, &tmp_path, user_quota)
+        self.finalize_upload(user_id, metadata, &tmp_path, user_quota)
             .await
     }
 
-    /// Validates a filename and returns a sanitized version.
+    /// Validates a filename and returns a sanitized version. Callers on the
+    /// multipart path run this on the field's `file_name()` before streaming.
     ///
     /// # Errors
     ///
     /// Returns `anyhow::Error` if the filename is empty after sanitization.
     pub fn validate_filename(file_name: Option<&str>) -> anyhow::Result<Filename> {
         let raw_name = file_name.unwrap_or("upload");
-        // Door B: normalize the client's arbitrary name to a safe leaf, rejecting an
-        // empty-after-sanitize result as a bad request.
         Filename::sanitized(raw_name)
             .map_err(|_| anyhow::anyhow!(MediaError::BadRequest("Invalid filename".to_owned())))
     }
 
-    /// The single validating content-type door, shared by the multipart and atompub intake
-    /// paths: a present client `Content-Type` is validated (a malformed one is a bad
-    /// request), an absent one is detected from the filename.
+    /// The single validating content-type door: a present client `Content-Type` is
+    /// validated (malformed → bad request), an absent one is detected from the name.
     ///
     /// # Errors
     ///
-    /// Returns `anyhow::Error` (`MediaError::BadRequest`) when `content_type` is present but
-    /// not a valid `type/subtype` media type.
+    /// Returns `anyhow::Error` (`MediaError::BadRequest`) when `content_type` is present
+    /// but not a valid `type/subtype` media type.
     pub fn get_content_type(
         content_type: Option<&str>,
         filename: &str,
@@ -129,21 +161,17 @@ impl MediaManager {
         }
     }
 
-    #[must_use]
-    pub fn map_error(err: &anyhow::Error) -> StatusCode {
-        let media_err = err.downcast_ref::<MediaError>();
-        host::metrics::media_upload(Self::upload_outcome(media_err));
-        match media_err {
-            Some(MediaError::BadRequest(_)) => StatusCode::BAD_REQUEST,
-            Some(MediaError::PayloadTooLarge) => StatusCode::PAYLOAD_TOO_LARGE,
-            Some(MediaError::InsufficientStorage) => StatusCode::INSUFFICIENT_STORAGE,
-            Some(MediaError::Internal(_)) | None => StatusCode::INTERNAL_SERVER_ERROR,
+    /// Emits the single `media_upload` failure metric for a completed upload attempt.
+    /// The success metrics are emitted in `finalize_upload`, so this fires only on
+    /// the `Err` path — keeping emission to exactly once per upload.
+    fn emit_failure_metric(result: &anyhow::Result<UploadResponse>) {
+        if let Err(err) = result {
+            host::metrics::media_upload(Self::upload_outcome(err.downcast_ref::<MediaError>()));
         }
     }
 
     /// Maps a failed upload to its bounded `outcome` attribute for the
-    /// `jaunder.media.uploads` metric. A non-`MediaError` (unexpected I/O, etc.)
-    /// counts as `error`. Exhaustively tested so every arm's mapping is covered.
+    /// `jaunder.media.uploads` metric. A non-`MediaError` counts as `error`.
     fn upload_outcome(err: Option<&MediaError>) -> host::metrics::UploadOutcome {
         match err {
             Some(MediaError::BadRequest(_)) => host::metrics::UploadOutcome::Invalid,
@@ -162,7 +190,6 @@ impl MediaManager {
     async fn create_temp_file(&self) -> anyhow::Result<PathBuf> {
         let tmp_dir = self.storage_path.join("media").join("tmp");
         fs::create_dir_all(&tmp_dir).await?;
-
         let tmp_id = uuid::Uuid::new_v4();
         Ok(tmp_dir.join(tmp_id.to_string()))
     }
@@ -174,7 +201,6 @@ impl MediaManager {
         user_quota: UserQuota,
     ) -> anyhow::Result<()> {
         let current_usage = self.media.get_user_upload_usage(user_id).await?;
-
         if current_usage.value() + size_bytes > user_quota.value() {
             anyhow::bail!(MediaError::InsufficientStorage);
         }
@@ -196,9 +222,7 @@ impl MediaManager {
             Ok(true)
         } else {
             let existing_file = self.first_file_in_dir(hash_dir).await;
-
             fs::create_dir_all(hash_dir).await?;
-
             if let Some(existing) = existing_file {
                 fs::hard_link(&existing, target_path).await?;
                 let _ = fs::remove_file(tmp_path).await;
@@ -240,14 +264,15 @@ impl MediaManager {
     /// Shared finalization for an upload whose bytes are already written to
     /// `tmp_path` with a known content hash and size: enforces quota, content-
     /// addresses the file (dedup via hard-link), records it in the DB, and builds
-    /// the response. The temp file is consumed (moved, linked, or removed).
+    /// the response. The temp file is consumed (moved, linked, or removed). Emits
+    /// the success `media_upload*` metrics.
     async fn finalize_upload(
         &self,
         user_id: UserId,
         metadata: UploadMetadata,
         tmp_path: &Path,
         user_quota: UserQuota,
-    ) -> anyhow::Result<crate::media::UploadResponse> {
+    ) -> anyhow::Result<UploadResponse> {
         if let Err(e) = self
             .check_quota(user_id, metadata.size_bytes, user_quota)
             .await
@@ -287,7 +312,7 @@ impl MediaManager {
             host::metrics::UploadOutcome::Stored
         });
         let url = media_url("upload", &metadata.sha256_hex, &metadata.filename);
-        Ok(crate::media::UploadResponse {
+        Ok(UploadResponse {
             sha256: metadata.sha256_hex,
             filename: metadata.filename,
             content_type: metadata.content_type,
@@ -297,21 +322,33 @@ impl MediaManager {
     }
 
     /// Uploads raw in-memory bytes (e.g. an `AtomPub` media POST), reusing the same
-    /// content-addressing, dedup, quota, and DB-record path as multipart uploads.
-    /// Returns the existing record's response when identical content was already
-    /// stored (idempotent).
+    /// content-addressing/dedup/quota/DB path. Emits exactly one `media_upload*`.
     ///
     /// # Errors
     ///
-    /// Returns `anyhow::Error` on an invalid filename, oversized payload, quota
+    /// Returns `anyhow::Error` on invalid filename, oversized payload, quota
     /// exhaustion, I/O failure, or DB error.
     pub async fn upload_bytes(
         &self,
-        auth_user: &AuthUser,
+        user_id: UserId,
         filename: &Filename,
         content_type: &str,
         bytes: &[u8],
-    ) -> anyhow::Result<crate::media::UploadResponse> {
+    ) -> anyhow::Result<UploadResponse> {
+        let result = self
+            .upload_bytes_inner(user_id, filename, content_type, bytes)
+            .await;
+        Self::emit_failure_metric(&result);
+        result
+    }
+
+    async fn upload_bytes_inner(
+        &self,
+        user_id: UserId,
+        filename: &Filename,
+        content_type: &str,
+        bytes: &[u8],
+    ) -> anyhow::Result<UploadResponse> {
         let (max_file_size, user_quota) = self.get_limits().await?;
         // `filename` is already a validated `Filename` (the caller ran Door B on the
         // client's name), so there is no re-sanitize here.
@@ -323,7 +360,6 @@ impl MediaManager {
         }
 
         let sha256_hex = ContentHash::from_digest(Sha256::digest(bytes).into());
-
         let tmp_path = self.create_temp_file().await?;
         fs::write(&tmp_path, bytes).await?;
 
@@ -333,27 +369,30 @@ impl MediaManager {
             sha256_hex,
             size_bytes,
         };
-
-        self.finalize_upload(auth_user.user_id, metadata, &tmp_path, user_quota)
+        self.finalize_upload(user_id, metadata, &tmp_path, user_quota)
             .await
     }
 
-    async fn stream_to_temp(
+    async fn stream_to_temp<S, E>(
         &self,
-        field: &mut axum::extract::multipart::Field<'_>,
+        mut stream: S,
         tmp_path: &Path,
         max_file_size: MaxFileSize,
-    ) -> anyhow::Result<(ContentHash, i64)> {
+    ) -> anyhow::Result<(ContentHash, i64)>
+    where
+        S: Stream<Item = Result<Bytes, E>> + Unpin,
+        E: std::error::Error + Send + Sync + 'static,
+    {
         let mut file = fs::File::create(tmp_path).await?;
         let mut hasher = Sha256::new();
         let mut bytes_written: i64 = 0;
 
-        while let Some(chunk) = field.chunk().await? {
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
             bytes_written += i64::try_from(chunk.len()).unwrap_or(i64::MAX);
             if bytes_written > max_file_size.value() {
                 anyhow::bail!(MediaError::PayloadTooLarge);
             }
-
             hasher.update(&chunk);
             file.write_all(&chunk).await?;
         }
@@ -380,10 +419,23 @@ impl MediaManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{media, migrated_sqlite_db, site_config, users};
+    use crate::test_support::{backends, seed_user, Backend};
+    use crate::MEDIA_MAX_FILE_SIZE_BYTES_KEY;
     use common::test_support::{parse_content_hash, parse_content_type, parse_filename};
-    use storage::MEDIA_MAX_FILE_SIZE_BYTES_KEY;
+    use rstest::*;
+    use rstest_reuse::*;
     use tempfile::TempDir;
+
+    /// A `MediaManager` whose storage handles are mocks with no expectations, over a
+    /// bare `TempDir` root — for the pure filesystem paths (`first_file_in_dir`,
+    /// `handle_deduplication`) that never touch the DB (ADR-0053 sidestep).
+    fn mock_manager(storage_path: Arc<PathBuf>) -> MediaManager {
+        MediaManager::new(
+            Arc::new(crate::MockMediaStorage::new()),
+            Arc::new(crate::MockSiteConfigStorage::new()),
+            storage_path,
+        )
+    }
 
     #[test]
     fn upload_outcome_maps_each_media_error() {
@@ -425,17 +477,31 @@ mod tests {
         );
     }
 
+    #[test]
+    fn validate_filename_sanitizes_or_rejects() {
+        assert_eq!(
+            MediaManager::validate_filename(Some("test.jpg")).unwrap(),
+            "test.jpg"
+        );
+        assert_eq!(
+            MediaManager::validate_filename(None::<&str>).unwrap(),
+            "upload"
+        );
+        assert!(MediaManager::validate_filename(Some("")).is_err());
+        assert!(MediaManager::validate_filename(Some("..")).is_err());
+    }
+
     // guard:no-backend — mock store
     #[tokio::test]
     async fn register_in_db_maps_internal_create_error() {
-        let mut media = storage::MockMediaStorage::new();
+        let mut media = crate::MockMediaStorage::new();
         media
             .expect_create_media()
             .times(1)
             .returning(|_| Err(CreateMediaError::Internal(sqlx::Error::PoolClosed)));
         let manager = MediaManager::new(
             Arc::new(media),
-            Arc::new(storage::MockSiteConfigStorage::new()),
+            Arc::new(crate::MockSiteConfigStorage::new()),
             Arc::new(PathBuf::from("/tmp")),
         );
 
@@ -458,16 +524,12 @@ mod tests {
         assert!(matches!(media_err, MediaError::Internal(_)));
     }
 
+    // guard:no-backend — mock store; the DB is unused by the dir scan
     #[tokio::test]
-    async fn test_first_file_in_dir() {
+    async fn first_file_in_dir_skips_subdirs_and_finds_a_file() {
         let temp = TempDir::new().unwrap();
         let dir = temp.path();
-
-        // Keep the DB out of `dir`, which the test scans for media files.
-        let db = TempDir::new().unwrap();
-        let (_, pool) = migrated_sqlite_db(db.path()).await;
-        let storage_path = Arc::new(dir.to_path_buf());
-        let manager = MediaManager::new(media(&pool), site_config(&pool), storage_path);
+        let manager = mock_manager(Arc::new(dir.to_path_buf()));
 
         // Empty dir
         assert_eq!(manager.first_file_in_dir(dir).await, None);
@@ -483,20 +545,16 @@ mod tests {
         assert_eq!(manager.first_file_in_dir(dir).await, Some(file));
     }
 
+    // guard:no-backend — mock store; dedup is a pure filesystem operation
     #[tokio::test]
-    async fn test_handle_deduplication() {
+    async fn handle_deduplication_removes_links_or_renames() {
         let temp = TempDir::new().unwrap();
         let dir = temp.path();
         let media_dir = dir.join("media");
         fs::create_dir(&media_dir).await.unwrap();
         let tmp_dir = media_dir.join("tmp");
         fs::create_dir(&tmp_dir).await.unwrap();
-
-        // The DB is unused by dedup; keep it out of the scanned storage dir.
-        let db = TempDir::new().unwrap();
-        let (_, pool) = migrated_sqlite_db(db.path()).await;
-        let storage_path = Arc::new(dir.to_path_buf());
-        let manager = MediaManager::new(media(&pool), site_config(&pool), storage_path);
+        let manager = mock_manager(Arc::new(dir.to_path_buf()));
 
         let tmp_path = tmp_dir.join("temp_file");
         fs::write(&tmp_path, "content").await.unwrap();
@@ -549,65 +607,16 @@ mod tests {
         assert!(target_path3.exists());
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn test_validate_filename() {
-        assert_eq!(
-            MediaManager::validate_filename(Some("test.jpg")).unwrap(),
-            "test.jpg"
+    async fn upload_bytes_is_content_addressed_and_idempotent(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let manager = MediaManager::new(
+            env.state.media.clone(),
+            env.state.site_config.clone(),
+            Arc::new(env.base.path().to_path_buf()),
         );
-        assert_eq!(
-            MediaManager::validate_filename(None::<&str>).unwrap(),
-            "upload"
-        );
-        assert!(MediaManager::validate_filename(Some("")).is_err());
-        assert!(MediaManager::validate_filename(Some("..")).is_err());
-    }
-
-    #[tokio::test]
-    async fn test_map_error() {
-        assert_eq!(
-            MediaManager::map_error(&anyhow::anyhow!(MediaError::BadRequest("bad".to_owned()))),
-            StatusCode::BAD_REQUEST
-        );
-        assert_eq!(
-            MediaManager::map_error(&anyhow::anyhow!(MediaError::PayloadTooLarge)),
-            StatusCode::PAYLOAD_TOO_LARGE
-        );
-        assert_eq!(
-            MediaManager::map_error(&anyhow::anyhow!(MediaError::InsufficientStorage)),
-            StatusCode::INSUFFICIENT_STORAGE
-        );
-        assert_eq!(
-            MediaManager::map_error(&anyhow::anyhow!(MediaError::Internal("error".to_owned()))),
-            StatusCode::INTERNAL_SERVER_ERROR
-        );
-        assert_eq!(
-            MediaManager::map_error(&anyhow::anyhow!("unknown")),
-            StatusCode::INTERNAL_SERVER_ERROR
-        );
-    }
-
-    #[tokio::test]
-    async fn upload_bytes_is_content_addressed_and_idempotent() {
-        let temp = TempDir::new().unwrap();
-        let (_, pool) = migrated_sqlite_db(temp.path()).await;
-        let user_id = users(&pool)
-            .create_user(
-                &"uploader".parse().unwrap(),
-                &"password123".parse().unwrap(),
-                None,
-                false,
-            )
-            .await
-            .unwrap();
-        let storage_path = Arc::new(temp.path().to_path_buf());
-        let manager = MediaManager::new(media(&pool), site_config(&pool), storage_path);
-
-        let auth = web::auth::AuthUser {
-            user_id,
-            username: "uploader".parse().unwrap(),
-            token_hash: common::token::TokenHash::from_digest(""),
-        };
 
         // A tiny PNG signature + IHDR-ish bytes (content need not be a valid image).
         let bytes: &[u8] = &[
@@ -616,7 +625,7 @@ mod tests {
         let expected_sha = format!("{:x}", Sha256::digest(bytes));
 
         let first = manager
-            .upload_bytes(&auth, &parse_filename("pic.png"), "image/png", bytes)
+            .upload_bytes(user_id, &parse_filename("pic.png"), "image/png", bytes)
             .await
             .unwrap();
         assert_eq!(first.sha256.as_ref(), expected_sha.as_str());
@@ -629,45 +638,78 @@ mod tests {
 
         // Identical re-upload must succeed and dedup to the same record.
         let second = manager
-            .upload_bytes(&auth, &parse_filename("pic.png"), "image/png", bytes)
+            .upload_bytes(user_id, &parse_filename("pic.png"), "image/png", bytes)
             .await
             .unwrap();
         assert_eq!(second.sha256, first.sha256);
         assert_eq!(second.url, first.url);
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn upload_bytes_rejects_oversized_payload() {
-        let temp = TempDir::new().unwrap();
-        let (_, pool) = migrated_sqlite_db(temp.path()).await;
-        let cfg = site_config(&pool);
+    async fn upload_bytes_rejects_oversized_payload(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
         // Cap the per-file limit well below the payload size.
-        cfg.set(MEDIA_MAX_FILE_SIZE_BYTES_KEY, "5").await.unwrap();
-        let user_id = users(&pool)
-            .create_user(
-                &"uploader".parse().unwrap(),
-                &"password123".parse().unwrap(),
-                None,
-                false,
-            )
+        env.state
+            .site_config
+            .set(MEDIA_MAX_FILE_SIZE_BYTES_KEY, "5")
             .await
             .unwrap();
-        let manager = MediaManager::new(media(&pool), cfg, Arc::new(temp.path().to_path_buf()));
-        let auth = web::auth::AuthUser {
-            user_id,
-            username: "uploader".parse().unwrap(),
-            token_hash: common::token::TokenHash::from_digest(""),
-        };
+        let manager = MediaManager::new(
+            env.state.media.clone(),
+            env.state.site_config.clone(),
+            Arc::new(env.base.path().to_path_buf()),
+        );
 
         let err = manager
             .upload_bytes(
-                &auth,
+                user_id,
                 &parse_filename("big.bin"),
                 "application/octet-stream",
                 &[0_u8; 11],
             )
             .await
             .unwrap_err();
-        assert_eq!(MediaManager::map_error(&err), StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(matches!(
+            err.downcast_ref::<MediaError>(),
+            Some(MediaError::PayloadTooLarge)
+        ));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn upload_streams_to_a_content_addressed_path(#[case] backend: Backend) {
+        // The generic `stream_to_temp` path (multipart in production) had no host-level
+        // unit test before — it was e2e-only. Drive it with an in-memory chunk stream so
+        // the byte-stream branch stays covered.
+        let env = backend.setup().await;
+        let user_id = seed_user(&env.state).await;
+        let manager = MediaManager::new(
+            env.state.media.clone(),
+            env.state.site_config.clone(),
+            Arc::new(env.base.path().to_path_buf()),
+        );
+
+        let chunks = [
+            Bytes::from_static(&[0x89, 0x50, 0x4E, 0x47]),
+            Bytes::from_static(&[0x0D, 0x0A, 0x1A, 0x0A]),
+        ];
+        let mut hasher = Sha256::new();
+        for chunk in &chunks {
+            hasher.update(chunk);
+        }
+        let expected = ContentHash::from_digest(hasher.finalize().into());
+
+        let stream = futures_util::stream::iter(chunks.into_iter().map(Ok::<_, std::io::Error>));
+        let filename = parse_filename("s.png");
+        let resp = manager
+            .upload(user_id, &filename, Some("image/png"), stream)
+            .await
+            .unwrap();
+
+        assert_eq!(resp.sha256, expected);
+        assert_eq!(resp.content_type, "image/png");
+        assert_eq!(resp.url, media_url("upload", &expected, &filename));
     }
 }

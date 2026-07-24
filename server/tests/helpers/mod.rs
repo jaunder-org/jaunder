@@ -70,6 +70,7 @@ pub fn ensure_server_fns_registered() {
         server_fn::axum::register_explicit::<web::media::ListMyMedia>();
         server_fn::axum::register_explicit::<web::media::MediaUsage>();
         server_fn::axum::register_explicit::<web::media::DeleteMedia>();
+        server_fn::axum::register_explicit::<web::media::UploadMedia>();
         server_fn::axum::register_explicit::<web::tags::ListTags>();
         server_fn::axum::register_explicit::<web::subscriptions::SubscribeTo>();
         server_fn::axum::register_explicit::<web::subscriptions::UnsubscribeFrom>();
@@ -393,6 +394,52 @@ pub async fn post_json(
     )
     .await;
     (status, body)
+}
+
+/// A single `multipart/form-data` file field, as [`post_multipart`] sends it.
+pub struct MultipartFile<'a> {
+    pub filename: &'a str,
+    pub content_type: &'a str,
+    pub bytes: &'a [u8],
+}
+
+/// POST a single-file `multipart/form-data` body to `uri` against a router built
+/// over `storage` as a real writable media root (via [`make_app`]), so the upload
+/// lands on disk. Returns `(status, body)`. Mirrors the exact CRLF framing of the
+/// multipart request in `misc/media_handlers.rs`.
+pub async fn post_multipart(
+    state: Arc<storage::AppState>,
+    storage: &TempDir,
+    uri: &str,
+    file: MultipartFile<'_>,
+    cookie: Option<&str>,
+) -> (StatusCode, String) {
+    let boundary = "----testboundary1234";
+    let mut body: Vec<u8> = Vec::new();
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{}\"\r\nContent-Type: {}\r\n\r\n",
+            file.filename, file.content_type,
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(file.bytes);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+
+    let app = make_app(state, storage);
+    let mut builder = Request::builder().method("POST").uri(uri).header(
+        header::CONTENT_TYPE,
+        format!("multipart/form-data; boundary={boundary}"),
+    );
+    if let Some(c) = cookie {
+        builder = builder.header(header::COOKIE, c);
+    }
+    let request = builder
+        .body(Body::from(body))
+        .expect("failed to build request");
+    let response = app.oneshot(request).await.expect("router oneshot failed");
+    let status = response.status();
+    (status, body_string(response).await)
 }
 
 /// GET a static asset and return `(status, Content-Type)`. Pins the Sqlite backend

@@ -1882,7 +1882,6 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "urlencoding",
- "uuid",
  "web",
 ]
 
@@ -3806,6 +3805,7 @@ dependencies = [
  "hyper",
  "inventory",
  "js-sys",
+ "multer",
  "or_poisoned",
  "pin-project-lite",
  "rustc_version",
@@ -4183,6 +4183,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64",
+ "bytes",
  "chrono",
  "clap",
  "common",
@@ -4204,6 +4205,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -5167,6 +5169,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_qs",
+ "server_fn",
  "sqlx",
  "storage",
  "strum",
@@ -5174,7 +5177,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "wasm-bindgen-futures",
  "web-sys",
 ]
 

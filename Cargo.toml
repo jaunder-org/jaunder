@@ -35,6 +35,9 @@ leptos_meta = { version = "0.8.2" }
 leptos_router = { version = "0.8.2" }
 leptos_axum = { version = "0.8.2" }
 reactive_stores = { version = "0.4.3" }
+# Version-matched to leptos 0.8.2's transitive `server_fn` (Cargo.lock) so the
+# `multipart` codec reuses the existing vendor rather than pulling a second copy.
+server_fn = { version = "0.8.12" }
 
 async-trait = "0.1"
 axum = "0.8.4"
@@ -62,6 +65,7 @@ mockall = "0.13"
 anyhow = "1"
 argon2 = { version = "0.5", features = ["std"] }
 base64 = "0.22"
+bytes = "1"
 rand = "0.9"
 sha2 = "0.10"
 rpassword = "7"
@@ -87,6 +91,7 @@ js-sys = "0.3.82"
 urlencoding = "2"
 percent-encoding = "2"
 url = "2.5.8"
+uuid = { version = "1", features = ["v4"] }
 
 # proc-macro toolchain for the `macros` crate (build-time only)
 syn = "2"

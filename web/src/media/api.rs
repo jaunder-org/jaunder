@@ -8,14 +8,24 @@ use common::media::{
     ByteSize, ContentHash, ContentType, Filename, MaxFileSize, MediaSource, UserQuota,
 };
 use leptos::prelude::*;
+// `MultipartData`/`MultipartFormData` are named in the `upload_media` signature,
+// which compiles for both the wasm client stub and the server build, so this import
+// is ungated. (#517)
+use leptos::server_fn::codec::{MultipartData, MultipartFormData};
 use serde::{Deserialize, Serialize};
+
+// `upload_media`'s return type; ungated so it is nameable on the wasm client stub
+// (where `storage` is not compiled). (#517)
+use common::media::UploadResponse;
 
 #[cfg(feature = "server")]
 use {
     crate::auth::require_auth,
     crate::error::InternalError,
+    leptos_axum::extract,
+    std::path::PathBuf,
     std::sync::Arc,
-    storage::{MediaStorage, PostStorage, SiteConfigStorage},
+    storage::{MediaError, MediaManager, MediaStorage, PostStorage, SiteConfigStorage},
 };
 
 use common::ids::PostId;
@@ -49,32 +59,6 @@ pub struct MediaUsageData {
 pub struct DeleteMediaResult {
     pub deleted: bool,
     pub referenced_in_posts: Vec<PostId>,
-}
-
-/// Extracts the `url` field from the `/media/upload` JSON response body.
-///
-/// The upload endpoint (`server/src/media.rs`) returns `{"url": "/media/…", …}`;
-/// the wasm-only upload glue in [`super::component`] calls this to pull the media
-/// URL out of the response text. It lives here — ungated, host-compiled, and
-/// coverage-measured — so the parse is unit-tested off the browser (ADR-0055: pure
-/// logic is extracted before the surrounding code is wasm-gated).
-///
-/// # Errors
-///
-/// Returns `Err` with a human-readable message when the body is not valid JSON or
-/// has no string `url` field.
-///
-/// `pub` (and re-exported from `mod.rs`) so it is an *exported* item: its only
-/// callers are the wasm-only `component` leaf and the `#[cfg(test)]` tests below,
-/// so a `pub(crate)` fn would be `dead_code` on the host non-test build. This
-/// mirrors `auth::marker`'s public host-tested codec.
-pub fn extract_upload_url(body: &str) -> Result<String, String> {
-    let parsed: serde_json::Value =
-        serde_json::from_str(body).map_err(|_| "invalid JSON in response".to_string())?;
-    parsed["url"]
-        .as_str()
-        .map(ToString::to_string)
-        .ok_or_else(|| "response JSON missing 'url' field".to_string())
 }
 
 /// Lists media items owned by the authenticated user.
@@ -193,47 +177,96 @@ pub async fn delete_media(
     })
 }
 
-#[cfg(test)]
+/// Maps a media upload `anyhow::Error` (carrying a `storage::MediaError`) to an
+/// `InternalError`, so `boundary!` projects it to the right `WebError`: a bad
+/// request / too-large / over-quota is client validation (`WebError::Validation`),
+/// an internal or unknown failure masks as a server error (`WebError::Server`). The
+/// upload metric is already emitted inside `storage::MediaManager`, so this is a
+/// pure classification.
+#[cfg(feature = "server")]
+fn map_media_error(err: &anyhow::Error) -> InternalError {
+    match err.downcast_ref::<MediaError>() {
+        Some(MediaError::BadRequest(message)) => InternalError::validation(message.clone()),
+        Some(MediaError::PayloadTooLarge) => InternalError::validation("payload too large"),
+        Some(MediaError::InsufficientStorage) => InternalError::validation("insufficient storage"),
+        // A `MediaError::Internal` or a non-`MediaError` upload failure (e.g. a mid-stream
+        // IO fault, which downcasts to `None`) masks as a generic server error.
+        Some(MediaError::Internal(_)) | None => InternalError::server_message(err.to_string()),
+    }
+}
+
+/// Streams a multipart file upload to storage and returns its stored URL/metadata.
+/// The multipart `#[server]` fn replacing the old `POST /media/upload` glue (#517).
+#[server(input = MultipartFormData, endpoint = "/upload_media")]
+pub async fn upload_media(data: MultipartData) -> WebResult<UploadResponse> {
+    boundary!("upload_media", {
+        let auth = require_auth().await?;
+        let media = expect_context::<Arc<dyn MediaStorage>>();
+        let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
+
+        // `storage_path` is an axum `Extension` (server/src/lib.rs), not a leptos
+        // context value, so pull it via the request extractor rather than expect_context.
+        let axum::Extension(storage_path) = extract::<axum::Extension<Arc<PathBuf>>>()
+            .await
+            .map_err(|e| InternalError::server_message(format!("storage_path extract: {e}")))?;
+
+        // `into_inner()` is `Some` on the server (the parsed multipart body).
+        let mut multipart = data
+            .into_inner()
+            .ok_or_else(|| InternalError::validation("missing multipart body"))?;
+
+        let field = multipart
+            .next_field()
+            .await
+            .map_err(|e| InternalError::validation(format!("bad multipart: {e}")))?
+            .ok_or_else(|| InternalError::validation("no file field"))?;
+
+        // The `file_name()`/`content_type()` borrows must end before `field` is moved
+        // into `upload` as the byte stream.
+        let filename =
+            MediaManager::validate_filename(field.file_name()).map_err(|e| map_media_error(&e))?;
+        // `multer::Field::content_type()` yields `Option<&mime::Mime>`; render it to a
+        // `String` so it outlives the field being moved into `upload` as the stream.
+        let content_type = field.content_type().map(ToString::to_string);
+
+        let manager = MediaManager::new(media, site_config, storage_path);
+        manager
+            .upload(auth.user_id, &filename, content_type.as_deref(), field)
+            .await
+            .map_err(|e| map_media_error(&e))
+    })
+}
+
+#[cfg(all(test, feature = "server"))]
 mod tests {
-    use super::extract_upload_url;
+    use super::{map_media_error, MediaError};
+    use crate::error::ErrorKind;
 
     #[test]
-    fn extracts_url_field() {
+    fn map_media_error_classifies_each_arm() {
+        // A bad request / too-large / over-quota is client validation.
         assert_eq!(
-            extract_upload_url(r#"{"url":"/media/upload/ab/cd/hash/pic.png"}"#),
-            Ok("/media/upload/ab/cd/hash/pic.png".to_string())
+            map_media_error(&anyhow::anyhow!(MediaError::BadRequest("bad".to_owned()))).kind(),
+            ErrorKind::Validation
         );
-    }
-
-    #[test]
-    fn extracts_url_ignoring_other_fields() {
         assert_eq!(
-            extract_upload_url(r#"{"size_bytes":11,"url":"/media/x","content_type":"image/png"}"#),
-            Ok("/media/x".to_string())
+            map_media_error(&anyhow::anyhow!(MediaError::PayloadTooLarge)).kind(),
+            ErrorKind::Validation
         );
-    }
-
-    #[test]
-    fn rejects_missing_url_field() {
         assert_eq!(
-            extract_upload_url(r#"{"size_bytes":11}"#),
-            Err("response JSON missing 'url' field".to_string())
+            map_media_error(&anyhow::anyhow!(MediaError::InsufficientStorage)).kind(),
+            ErrorKind::Validation
         );
-    }
-
-    #[test]
-    fn rejects_non_string_url_field() {
+        // An internal storage fault masks as a generic server error.
         assert_eq!(
-            extract_upload_url(r#"{"url":42}"#),
-            Err("response JSON missing 'url' field".to_string())
+            map_media_error(&anyhow::anyhow!(MediaError::Internal("boom".to_owned()))).kind(),
+            ErrorKind::Internal
         );
-    }
-
-    #[test]
-    fn rejects_invalid_json() {
+        // A non-`MediaError` failure (e.g. a mid-stream IO fault) downcasts to `None`
+        // and also masks as a server error — the previously-uncovered fallback arm.
         assert_eq!(
-            extract_upload_url("not json"),
-            Err("invalid JSON in response".to_string())
+            map_media_error(&anyhow::anyhow!("io boom")).kind(),
+            ErrorKind::Internal
         );
     }
 }

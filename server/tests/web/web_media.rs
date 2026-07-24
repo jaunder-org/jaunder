@@ -3,8 +3,9 @@ use std::sync::Arc;
 
 use axum::{
     body::Body,
-    http::{Request, StatusCode},
+    http::{header, Request, StatusCode},
 };
+use tempfile::TempDir;
 use tower::ServiceExt;
 use web::media::{DeleteMediaResult, MediaItem, MediaUsageData};
 
@@ -14,8 +15,10 @@ use storage::{CreateMediaError, MediaRecord};
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{post_form, session_cookie, test_options};
-use common::media::{MaxFileSize, MediaSource, UserQuota};
+use crate::helpers::{
+    make_app, post_form, post_multipart, session_cookie, test_options, MultipartFile,
+};
+use common::media::{MaxFileSize, MediaSource, UploadResponse, UserQuota};
 use common::test_support::{
     parse_byte_size, parse_content_hash, parse_content_type, parse_filename,
 };
@@ -389,6 +392,217 @@ async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend:
         result.referenced_in_posts,
         vec![post_id],
         "referenced_in_posts should list the referencing post"
+    );
+}
+
+// ─── upload_media ─────────────────────────────────────────────
+
+/// Create a user + session and return the `session=<token>` cookie — dedupes the
+/// `create_user`/`create_session` boilerplate every upload test repeats.
+async fn authed_cookie(state: &Arc<storage::AppState>, username: &str) -> String {
+    let user_id = state
+        .users
+        .create_user(
+            &username.parse().expect("valid username"),
+            &"password123".parse().expect("valid password"),
+            None,
+            false,
+        )
+        .await
+        .expect("create_user failed");
+    let token = state
+        .sessions
+        .create_session(user_id, "test session")
+        .await
+        .expect("create_session failed");
+    session_cookie(&token)
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn upload_media_stores_file_and_returns_metadata(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = authed_cookie(&state, "uploader").await;
+
+    // A real writable root so the upload lands on disk (separate from the DB backend).
+    let storage = TempDir::new().unwrap();
+    let (status, body) = post_multipart(
+        Arc::clone(&state),
+        &storage,
+        "/api/upload_media",
+        MultipartFile {
+            filename: "photo.jpg",
+            content_type: "image/jpeg",
+            bytes: b"fake jpeg data",
+        },
+        Some(&cookie),
+    )
+    .await;
+
+    // The server fn returns 200 with the bare `UploadResponse` JSON — not the old
+    // `/media/upload` handler's 201.
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let resp: UploadResponse = serde_json::from_str(&body).expect("response should be valid JSON");
+    assert_eq!(resp.filename, "photo.jpg");
+    assert_eq!(resp.content_type, "image/jpeg");
+    assert!(resp.url.contains("/media/upload/"), "url: {}", resp.url);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn upload_media_rejects_unauthenticated_request(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+
+    let storage = TempDir::new().unwrap();
+    let (status, body) = post_multipart(
+        Arc::clone(&state),
+        &storage,
+        "/api/upload_media",
+        MultipartFile {
+            filename: "photo.jpg",
+            content_type: "image/jpeg",
+            bytes: b"fake jpeg data",
+        },
+        None,
+    )
+    .await;
+
+    // Same shape as the sibling media fns: the Leptos server-fn auth-error path is
+    // a 500 carrying "unauthorized", not a bare 401.
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(body.contains("unauthorized"), "body: {body}");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn upload_media_rejects_invalid_filename(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = authed_cookie(&state, "badname").await;
+
+    let storage = TempDir::new().unwrap();
+    // `..` sanitizes to empty → `MediaError::BadRequest`, exercising `map_media_error`'s
+    // BadRequest arm (projected to `WebError::Validation`).
+    let (status, body) = post_multipart(
+        Arc::clone(&state),
+        &storage,
+        "/api/upload_media",
+        MultipartFile {
+            filename: "..",
+            content_type: "image/jpeg",
+            bytes: b"fake jpeg data",
+        },
+        Some(&cookie),
+    )
+    .await;
+
+    assert_ne!(
+        status,
+        StatusCode::OK,
+        "invalid filename must be rejected: {body}"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn upload_media_rejects_oversized_file(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    // Cap the max file size at 5 bytes so a 14-byte upload trips PayloadTooLarge,
+    // exercising `map_media_error`'s PayloadTooLarge arm.
+    state
+        .site_config
+        .set(storage::MEDIA_MAX_FILE_SIZE_BYTES_KEY, "5")
+        .await
+        .unwrap();
+    let cookie = authed_cookie(&state, "toobig").await;
+
+    let storage = TempDir::new().unwrap();
+    let (status, body) = post_multipart(
+        Arc::clone(&state),
+        &storage,
+        "/api/upload_media",
+        MultipartFile {
+            filename: "big.jpg",
+            content_type: "image/jpeg",
+            bytes: b"fake jpeg data",
+        },
+        Some(&cookie),
+    )
+    .await;
+
+    assert_ne!(
+        status,
+        StatusCode::OK,
+        "oversized file must be rejected: {body}"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn upload_media_rejects_over_quota_file(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    // A 5-byte user quota with a 14-byte upload trips InsufficientStorage, exercising
+    // `map_media_error`'s InsufficientStorage arm.
+    state
+        .site_config
+        .set(storage::MEDIA_USER_QUOTA_BYTES_KEY, "5")
+        .await
+        .unwrap();
+    let cookie = authed_cookie(&state, "overquota").await;
+
+    let storage = TempDir::new().unwrap();
+    let (status, body) = post_multipart(
+        Arc::clone(&state),
+        &storage,
+        "/api/upload_media",
+        MultipartFile {
+            filename: "big.jpg",
+            content_type: "image/jpeg",
+            bytes: b"fake jpeg data",
+        },
+        Some(&cookie),
+    )
+    .await;
+
+    assert_ne!(
+        status,
+        StatusCode::OK,
+        "over-quota file must be rejected: {body}"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn upload_media_rejects_missing_file_field(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = authed_cookie(&state, "nofield").await;
+
+    // An empty multipart body (a closing boundary with no field) yields
+    // `next_field() == None`, exercising the "no file field" guard.
+    let storage = TempDir::new().unwrap();
+    let app = make_app(Arc::clone(&state), &storage);
+    let boundary = "----testboundary1234";
+    let body = format!("--{boundary}--\r\n");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/upload_media")
+                .header(
+                    header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .header(header::COOKIE, cookie)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_ne!(
+        response.status(),
+        StatusCode::OK,
+        "a multipart body with no file field must be rejected"
     );
 }
 

@@ -14,6 +14,11 @@ leptos_meta.workspace = true
 leptos_router.workspace = true
 leptos_axum = { workspace = true, optional = true }
 reactive_stores.workspace = true
+# Non-optional: `MultipartData` is named in the `upload_media` signature, which
+# compiles for both the wasm client stub and the server build, so the `multipart`
+# codec cannot be gated to the `server` feature (`multer` stays server-only inside
+# `server_fn`). (#517)
+server_fn = { workspace = true, features = ["multipart"] }
 
 axum = { workspace = true, optional = true }
 client = { path = "../client" }
@@ -28,7 +33,6 @@ croner.workspace = true
 serde.workspace = true
 serde_json = { workspace = true }
 strum.workspace = true
-wasm-bindgen-futures = { workspace = true }
 web-sys = { workspace = true, features = [
     "Window",
     "Document",
@@ -38,10 +42,6 @@ web-sys = { workspace = true, features = [
     "FileList",
     "FormData",
     "HtmlInputElement",
-    "Request",
-    "RequestInit",
-    "RequestMode",
-    "Response",
 ] }
 thiserror.workspace = true
 tracing = { workspace = true }
