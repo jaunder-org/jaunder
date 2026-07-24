@@ -35,6 +35,7 @@ pub mod session_label;
 pub mod site;
 pub mod slug;
 pub mod smtp_password;
+pub mod smtp_username;
 pub mod tag;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
