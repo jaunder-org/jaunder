@@ -48,6 +48,7 @@ pub mod render;
 /// rather than under the wasm-only `pages` module that consumes it.
 pub mod route_segments;
 pub mod sessions;
+pub mod sidebar;
 pub mod site;
 pub mod subscriptions;
 pub mod taglist;

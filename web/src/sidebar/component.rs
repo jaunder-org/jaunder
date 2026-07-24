@@ -1,24 +1,8 @@
+use super::markup::{render_sidebar, NAV_ITEMS, SIDEBAR_SOURCES};
+use crate::avatar::Avatar;
+use crate::icon::{Icon, Icons};
 use common::username::Username;
 use leptos::prelude::*;
-
-/// Linking context for a post's footer tag chips — re-exported from the pure
-/// `render` layer (`SiteWide` / `ForUser`) so the reactive components and the
-/// projector share one type. See [`crate::render::TagCtx`]. Anonymous posts get
-/// their chips from the pure [`crate::taglist::render`] (byte-coincident with
-/// the projector, injected via `inner_html`); the authored post view — which the
-/// projector never renders — uses the reactive [`crate::taglist::TagList`].
-pub use crate::render::TagCtx as TagContext;
-
-// ─── re-exported from the top-level leaf modules (avatar, icon, taglist, topbar) ─────────────────
-
-pub use crate::{
-    avatar::Avatar,
-    icon::{Icon, Icons},
-    taglist::TagList,
-    topbar::Topbar,
-};
-
-// ─── 3.8 Sidebar ──────────────────────────────────────────────
 
 /// A single nav item in the sidebar.
 #[component]
@@ -72,12 +56,12 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
     // The shared session context (#591) is the single source: its `current` signal
     // is marker-seeded (flash-free for BOTH username and operator chrome, since
     // `is_operator` now rides in the marker) and the reconcile keeps it current. The
-    // anonymous sidebar is the pure `render::render_sidebar` (the SAME code the
+    // anonymous sidebar is the pure `markup::render_sidebar` (the SAME code the
     // projector server-renders) injected via `inner_html`, so a seeded first paint
     // and the reactive re-render coincide (flash-free). `display:contents` keeps the
     // host wrapper out of the aside's layout.
     let session = crate::auth::use_session().current;
-    let anon_html = crate::render::render_sidebar(&active_key);
+    let anon_html = render_sidebar(&active_key);
     view! {
         <aside class="j-sidebar">
             {move || match session.get() {
@@ -97,7 +81,6 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
 /// sources, footer avatar). Shared by the marker-seeded initial render and the
 /// reconciled render (#181) so both are byte-for-byte the same authed markup —
 /// only its inputs change from awaited values to these params.
-// cov:ignore-start
 fn authed_sidebar(active_key: &str, username: &Username, is_operator: bool) -> impl IntoView {
     let active_key = active_key.to_string();
     let username = username.clone();
@@ -113,7 +96,7 @@ fn authed_sidebar(active_key: &str, username: &Username, is_operator: bool) -> i
                 <span class="j-kbd">"⌘K"</span>
             </div>
             <nav class="j-nav">
-                {crate::render::NAV_ITEMS
+                {NAV_ITEMS
                     .iter()
                     .filter(|&&(_, _, _, href, _)| href.is_some())
                     .map(|&(key, label, icon_path, href, _)| {
@@ -153,7 +136,7 @@ fn authed_sidebar(active_key: &str, username: &Username, is_operator: bool) -> i
                     <span>"Sources"</span>
                     <span class="j-sb-add">"+"</span>
                 </div>
-                {crate::render::SIDEBAR_SOURCES
+                {SIDEBAR_SOURCES
                     .iter()
                     .map(|&(proto, name, sub)| {
                         view! { <SidebarSource proto=proto name=name sub=sub /> }
@@ -171,5 +154,4 @@ fn authed_sidebar(active_key: &str, username: &Username, is_operator: bool) -> i
             </div>
         </div>
     }
-    // cov:ignore-stop
-} // cov:ignore
+}
