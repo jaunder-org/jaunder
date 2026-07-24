@@ -434,11 +434,76 @@ async fn create_invite_large_hours_returns_error(#[case] backend: Backend) {
     )
     .await;
 
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    // The out-of-range expiry is now rejected at typed-arg decode (`Option<InviteTtlHours>`,
+    // #582) — the framework's status, not the old in-body 500 — before the handler runs.
+    assert_ne!(status, StatusCode::OK);
     // The overflow must be caught before any email is attempted (proves ordering).
     assert!(
         mailer.sent().is_empty(),
         "an out-of-range expiry must error before emailing"
+    );
+}
+
+// #582: an omitted `expires_in_hours` (the field left out entirely) decodes the optional
+// `InviteTtlHours` arg to `None` → the 168 default → the invite is created and emailed.
+#[apply(backends)]
+#[tokio::test]
+async fn create_invite_omits_hours_uses_default(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    state
+        .site_config
+        .set("site.base_url", "https://example.com")
+        .await
+        .unwrap();
+    let cookie = operator_cookie(&state, "grace").await;
+    let mailer = Arc::new(CapturingMailSender::new());
+
+    let (status, body) = post_form_with_mailer(
+        Arc::clone(&state),
+        mailer.clone() as Arc<dyn MailSender>,
+        "/api/create_invite",
+        "recipient_email=invitee@example.com", // no expires_in_hours key
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "omitted TTL should default: {body}");
+    assert_eq!(
+        mailer.sent().len(),
+        1,
+        "default-TTL invite should be emailed"
+    );
+}
+
+// #582: an *empty-present* `expires_in_hours=` (what the ValidatedInput submits when the
+// field is left blank) must also decode to `None` → the 168 default, not a rejection — the
+// arbiter for keeping the `<ActionForm>` (mirrors #581's clears_via_empty_destination).
+#[apply(backends)]
+#[tokio::test]
+async fn create_invite_empty_hours_uses_default(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    state
+        .site_config
+        .set("site.base_url", "https://example.com")
+        .await
+        .unwrap();
+    let cookie = operator_cookie(&state, "heidi").await;
+    let mailer = Arc::new(CapturingMailSender::new());
+
+    let (status, body) = post_form_with_mailer(
+        Arc::clone(&state),
+        mailer.clone() as Arc<dyn MailSender>,
+        "/api/create_invite",
+        "expires_in_hours=&recipient_email=invitee@example.com", // empty-present
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "empty TTL should default: {body}");
+    assert_eq!(
+        mailer.sent().len(),
+        1,
+        "default-TTL invite should be emailed"
     );
 }
 
