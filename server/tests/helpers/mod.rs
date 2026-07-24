@@ -127,6 +127,16 @@ impl SeededSession {
     pub fn cookie(&self) -> String {
         session_cookie(&self.token)
     }
+
+    /// A [`SeedPost`](storage::test_support::SeedPost) pre-owned by this session's
+    /// user — so authenticated tests seed a post without re-typing `session.user_id`.
+    /// `.seed(&state)` still takes the state (irreducible — no ambient DB handle).
+    /// The returned builder's lifetime is decoupled from `&self` (it only copies
+    /// `user_id`), so a caller may pass a borrowed title/key that outlives the receiver.
+    #[must_use]
+    pub fn seed_post<'p>(&self) -> storage::test_support::SeedPost<'p> {
+        storage::test_support::SeedPost::new(self.user_id)
+    }
 }
 
 /// Issue a `"test session"` session for `user_id` — the one place the default

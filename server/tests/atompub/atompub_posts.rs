@@ -47,41 +47,17 @@ async fn collection_lists_user_posts(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
 
-    let _post1 = storage::perform_post_creation(
-        state.posts.as_ref(),
-        storage::PostCreation {
-            user_id: session.user_id,
-            body: "Hello body one".into(),
-            title: Some("Hello Title One"),
-            format: storage::PostFormat::Markdown,
-            slug_override: None,
-            published_at: Some(chrono::Utc::now()),
-            max_attempts: 100,
-            summary: None,
-            audiences: vec![common::visibility::AudienceTarget::Public],
-            idempotency_key: None,
-        },
-    )
-    .await
-    .unwrap();
+    let _post1 = session
+        .seed_post()
+        .title("Hello Title One")
+        .seed(&state)
+        .await;
 
-    let _post2 = storage::perform_post_creation(
-        state.posts.as_ref(),
-        storage::PostCreation {
-            user_id: session.user_id,
-            body: "Hello body two".into(),
-            title: Some("Hello Title Two"),
-            format: storage::PostFormat::Markdown,
-            slug_override: None,
-            published_at: Some(chrono::Utc::now()),
-            max_attempts: 100,
-            summary: None,
-            audiences: vec![common::visibility::AudienceTarget::Public],
-            idempotency_key: None,
-        },
-    )
-    .await
-    .unwrap();
+    let _post2 = session
+        .seed_post()
+        .title("Hello Title Two")
+        .seed(&state)
+        .await;
 
     let app = make_app(state, &base);
 
@@ -129,23 +105,11 @@ async fn member_returns_native_source_with_etag(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
 
-    let post = storage::perform_post_creation(
-        state.posts.as_ref(),
-        storage::PostCreation {
-            user_id: session.user_id,
-            body: "# Markdown body".into(),
-            title: Some("My Post"),
-            format: storage::PostFormat::Markdown,
-            slug_override: None,
-            published_at: Some(chrono::Utc::now()),
-            max_attempts: 100,
-            summary: None,
-            audiences: vec![common::visibility::AudienceTarget::Public],
-            idempotency_key: None,
-        },
-    )
-    .await
-    .unwrap();
+    let post = session
+        .seed_post()
+        .body("# Markdown body")
+        .seed(&state)
+        .await;
 
     let app = make_app(state, &base);
 
@@ -205,23 +169,7 @@ async fn delete_then_get_is_404(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
 
-    let post = storage::perform_post_creation(
-        state.posts.as_ref(),
-        storage::PostCreation {
-            user_id: session.user_id,
-            body: "Delete me".into(),
-            title: Some("Temporary Post"),
-            format: storage::PostFormat::Markdown,
-            slug_override: None,
-            published_at: Some(chrono::Utc::now()),
-            max_attempts: 100,
-            summary: None,
-            audiences: vec![common::visibility::AudienceTarget::Public],
-            idempotency_key: None,
-        },
-    )
-    .await
-    .unwrap();
+    let post = session.seed_post().seed(&state).await;
 
     let app = make_app(state, &base);
 
@@ -261,24 +209,8 @@ async fn collection_paging_emits_next_link(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
 
-    for i in 0..2 {
-        storage::perform_post_creation(
-            state.posts.as_ref(),
-            storage::PostCreation {
-                user_id: session.user_id,
-                body: format!("Body {i}").into(),
-                title: Some(&format!("Title {i}")),
-                format: storage::PostFormat::Markdown,
-                slug_override: None,
-                published_at: Some(chrono::Utc::now()),
-                max_attempts: 100,
-                summary: None,
-                audiences: vec![common::visibility::AudienceTarget::Public],
-                idempotency_key: None,
-            },
-        )
-        .await
-        .unwrap();
+    for _ in 0..2 {
+        session.seed_post().seed(&state).await;
     }
 
     let app = make_app(state, &base);
@@ -316,24 +248,8 @@ async fn collection_clamps_out_of_range_limit(#[case] backend: Backend) {
     let session = create_user_and_session(&state).await;
 
     // Seed 51 posts so the `1..=50` page-size cap is observable (50 < 51).
-    for i in 0..51 {
-        storage::perform_post_creation(
-            state.posts.as_ref(),
-            storage::PostCreation {
-                user_id: session.user_id,
-                body: format!("Body {i}").into(),
-                title: Some(&format!("Title {i}")),
-                format: storage::PostFormat::Markdown,
-                slug_override: None,
-                published_at: Some(chrono::Utc::now()),
-                max_attempts: 100,
-                summary: None,
-                audiences: vec![common::visibility::AudienceTarget::Public],
-                idempotency_key: None,
-            },
-        )
-        .await
-        .unwrap();
+    for _ in 0..51 {
+        session.seed_post().seed(&state).await;
     }
 
     let app = make_app(state, &base);
@@ -403,23 +319,7 @@ async fn collection_cursor_validation(
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
     if seed_post {
-        storage::perform_post_creation(
-            state.posts.as_ref(),
-            storage::PostCreation {
-                user_id: session.user_id,
-                body: "Body".into(),
-                title: Some("Title"),
-                format: storage::PostFormat::Markdown,
-                slug_override: None,
-                published_at: Some(chrono::Utc::now()),
-                max_attempts: 100,
-                summary: None,
-                audiences: vec![common::visibility::AudienceTarget::Public],
-                idempotency_key: None,
-            },
-        )
-        .await
-        .unwrap();
+        session.seed_post().seed(&state).await;
     }
     let app = make_app(state, &base);
 
@@ -756,23 +656,7 @@ async fn update_replaces_post_body(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
 
-    let post = storage::perform_post_creation(
-        state.posts.as_ref(),
-        storage::PostCreation {
-            user_id: session.user_id,
-            body: "Old body".into(),
-            title: Some("Old"),
-            format: storage::PostFormat::Markdown,
-            slug_override: None,
-            published_at: Some(chrono::Utc::now()),
-            max_attempts: 100,
-            summary: None,
-            audiences: vec![common::visibility::AudienceTarget::Public],
-            idempotency_key: None,
-        },
-    )
-    .await
-    .unwrap();
+    let post = session.seed_post().seed(&state).await;
 
     let app = make_app(state, &base);
 
@@ -802,23 +686,7 @@ async fn update_with_stale_if_match_returns_412(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
 
-    let post = storage::perform_post_creation(
-        state.posts.as_ref(),
-        storage::PostCreation {
-            user_id: session.user_id,
-            body: "Old body".into(),
-            title: Some("Old"),
-            format: storage::PostFormat::Markdown,
-            slug_override: None,
-            published_at: Some(chrono::Utc::now()),
-            max_attempts: 100,
-            summary: None,
-            audiences: vec![common::visibility::AudienceTarget::Public],
-            idempotency_key: None,
-        },
-    )
-    .await
-    .unwrap();
+    let post = session.seed_post().seed(&state).await;
 
     let app = make_app(state, &base);
 
@@ -869,23 +737,7 @@ async fn update_removes_categories_not_in_new_entry(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
 
-    let post = storage::perform_post_creation(
-        state.posts.as_ref(),
-        storage::PostCreation {
-            user_id: session.user_id,
-            body: "Body".into(),
-            title: Some("Title"),
-            format: storage::PostFormat::Markdown,
-            slug_override: None,
-            published_at: Some(chrono::Utc::now()),
-            max_attempts: 100,
-            summary: None,
-            audiences: vec![common::visibility::AudienceTarget::Public],
-            idempotency_key: None,
-        },
-    )
-    .await
-    .unwrap();
+    let post = session.seed_post().seed(&state).await;
 
     state
         .posts
@@ -920,23 +772,7 @@ async fn update_with_put_returns_200_and_etag(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
 
-    let post = storage::perform_post_creation(
-        state.posts.as_ref(),
-        storage::PostCreation {
-            user_id: session.user_id,
-            body: "Original".into(),
-            title: Some("Title"),
-            format: storage::PostFormat::Markdown,
-            slug_override: None,
-            published_at: Some(chrono::Utc::now()),
-            max_attempts: 100,
-            summary: None,
-            audiences: vec![common::visibility::AudienceTarget::Public],
-            idempotency_key: None,
-        },
-    )
-    .await
-    .unwrap();
+    let post = session.seed_post().seed(&state).await;
 
     let app = make_app(state, &base);
 
@@ -995,23 +831,7 @@ async fn empty_entry_returns_400(backend: Backend, #[case] op: EmptyEntryOp) {
         ),
         EmptyEntryOp::Update => {
             // Create an initial post to update.
-            let post = storage::perform_post_creation(
-                state.posts.as_ref(),
-                storage::PostCreation {
-                    user_id: session.user_id,
-                    body: "Original body".into(),
-                    title: Some("Original"),
-                    format: storage::PostFormat::Markdown,
-                    slug_override: None,
-                    published_at: Some(chrono::Utc::now()),
-                    max_attempts: 100,
-                    summary: None,
-                    audiences: vec![common::visibility::AudienceTarget::Public],
-                    idempotency_key: None,
-                },
-            )
-            .await
-            .unwrap();
+            let post = session.seed_post().seed(&state).await;
             atompub_xml(
                 "PUT",
                 &format!("/atompub/{}/posts/{}", session.username, post.post_id),
@@ -1094,23 +914,7 @@ async fn member_carries_read_only_j_slug(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
 
-    let post = storage::perform_post_creation(
-        state.posts.as_ref(),
-        storage::PostCreation {
-            user_id: session.user_id,
-            body: "Body".into(),
-            title: Some("My Post"),
-            format: storage::PostFormat::Markdown,
-            slug_override: None,
-            published_at: Some(chrono::Utc::now()),
-            max_attempts: 100,
-            summary: None,
-            audiences: vec![common::visibility::AudienceTarget::Public],
-            idempotency_key: None,
-        },
-    )
-    .await
-    .unwrap();
+    let post = session.seed_post().title("My Post").seed(&state).await;
 
     let app = make_app(state, &base);
 
@@ -1616,23 +1420,11 @@ async fn update_preserves_non_public_targeting(#[case] backend: Backend) {
     // owner) AND must preserve the targeting across the edit (AtomPub has no
     // audience picker). Before owner-viewer threading, owned_post loaded the
     // post as Anonymous and the PUT 404'd before reaching this preservation.
-    let post = storage::perform_post_creation(
-        state.posts.as_ref(),
-        storage::PostCreation {
-            user_id: session.user_id,
-            body: "Old body".into(),
-            title: Some("Old"),
-            format: storage::PostFormat::Markdown,
-            slug_override: None,
-            published_at: Some(chrono::Utc::now()),
-            max_attempts: 100,
-            summary: None,
-            audiences: vec![common::visibility::AudienceTarget::Subscribers],
-            idempotency_key: None,
-        },
-    )
-    .await
-    .unwrap();
+    let post = session
+        .seed_post()
+        .audiences(vec![common::visibility::AudienceTarget::Subscribers])
+        .seed(&state)
+        .await;
 
     let app = make_app(state.clone(), &base);
 
@@ -1670,23 +1462,12 @@ async fn member_get_serves_owner_non_public_post(#[case] backend: Backend) {
 
     // A Subscribers-targeted post is hidden from Anonymous; the owner must still
     // be able to GET it via AtomPub (handler loads as the authenticated owner).
-    let post = storage::perform_post_creation(
-        state.posts.as_ref(),
-        storage::PostCreation {
-            user_id: session.user_id,
-            body: "Secret body".into(),
-            title: Some("Secret"),
-            format: storage::PostFormat::Markdown,
-            slug_override: None,
-            published_at: Some(chrono::Utc::now()),
-            max_attempts: 100,
-            summary: None,
-            audiences: vec![common::visibility::AudienceTarget::Subscribers],
-            idempotency_key: None,
-        },
-    )
-    .await
-    .unwrap();
+    let post = session
+        .seed_post()
+        .body("Secret body")
+        .audiences(vec![common::visibility::AudienceTarget::Subscribers])
+        .seed(&state)
+        .await;
 
     let app = make_app(state, &base);
 
@@ -1872,23 +1653,7 @@ async fn update_with_future_published_schedules_post(#[case] backend: Backend) {
 
     // Start from a live post, then PUT a non-draft entry with a future
     // <published>: it must become scheduled (future published_at, hidden).
-    let post = storage::perform_post_creation(
-        state.posts.as_ref(),
-        storage::PostCreation {
-            user_id: session.user_id,
-            body: "Old body".into(),
-            title: Some("Old"),
-            format: storage::PostFormat::Markdown,
-            slug_override: None,
-            published_at: Some(chrono::Utc::now()),
-            max_attempts: 100,
-            summary: None,
-            audiences: vec![common::visibility::AudienceTarget::Public],
-            idempotency_key: None,
-        },
-    )
-    .await
-    .unwrap();
+    let post = session.seed_post().seed(&state).await;
 
     let app = make_app(state.clone(), &base);
 

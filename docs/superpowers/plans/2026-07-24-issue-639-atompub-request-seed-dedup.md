@@ -29,13 +29,15 @@ CRUD-variant families. No production or runtime-behaviour change.
 
 **Tasks (one line each).**
 
-1. `SeedPost` builder + its dual-backend unit tests in `storage::test_support`.
-2. `SeededSession::seed_post()` forwarder + migrate `atompub_posts.rs`
-   post-seeding to `SeedPost`.
-3. Session-keyed AtomPub request helpers + migrate `atompub_posts.rs` &
-   `atompub_service.rs`.
-4. `atompub_upload` + migrate `atompub_media.rs` request sites.
-5. Aggressive `#[case]` parameterization of the uniform CRUD-variant families.
+- [x] 1. `SeedPost` builder + its dual-backend unit tests in
+     `storage::test_support`.
+- [x] 2. `SeededSession::seed_post()` forwarder + migrate `atompub_posts.rs`
+     post-seeding to `SeedPost`.
+- [ ] 3. Session-keyed AtomPub request helpers + migrate `atompub_posts.rs` &
+     `atompub_service.rs`.
+- [ ] 4. `atompub_upload` + migrate `atompub_media.rs` request sites.
+- [ ] 5. Aggressive `#[case]` parameterization of the uniform CRUD-variant
+     families.
 
 **Key risks / decisions.**
 
