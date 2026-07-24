@@ -1,4 +1,4 @@
-use crate::error::{InternalError, InternalResult};
+use crate::error::{ErrorKind, InternalError, InternalResult};
 use axum::{
     extract::FromRequestParts,
     http::{request::Parts, StatusCode},
@@ -137,6 +137,30 @@ pub async fn require_operator() -> InternalResult<()> {
     }
 
     Ok(())
+}
+
+/// Soft operator check for the warning-banner endpoints: `Ok(true)` when the caller
+/// is an authenticated operator, `Ok(false)` when unauthenticated or a non-operator
+/// (so the banner simply stays hidden). Unlike [`require_operator`], it never returns
+/// `Unauthorized` — it errors only on a non-auth failure (e.g. storage). Both the
+/// backup and site warning endpoints gate on it, so it lives here beside the hard
+/// guard rather than being duplicated per vertical.
+///
+/// # Errors
+///
+/// Returns `Err` only on a non-auth failure resolving the session or loading the user
+/// (e.g. a storage error) — never for a merely unauthenticated/non-operator caller.
+pub async fn is_operator_soft() -> InternalResult<bool> {
+    let auth = match require_auth().await {
+        Ok(auth) => auth,
+        Err(error) if error.kind() == ErrorKind::Auth => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    let users = expect_context::<Arc<dyn UserStorage>>();
+    Ok(users
+        .get_user(auth.user_id)
+        .await?
+        .is_some_and(|u| u.is_operator))
 }
 
 fn auth_rejection_error(error: AuthRejection) -> InternalError {
