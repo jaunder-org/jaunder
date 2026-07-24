@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 
 use crate::absolute_url::AbsoluteUrl;
+use crate::etag::ETag;
 use crate::ids::PostId;
 use crate::post_summary::PostSummary;
 use crate::post_title::PostTitle;
@@ -36,9 +37,11 @@ impl crate::feed::window::HasPublishedAt for FeedItem {
     }
 }
 
-/// Strong validator. Format: `"sha256-<hex32>"`.
+/// Strong validator over the feed's identity fields (max `updated_at`, item count, last
+/// post id) — a `"sha256-<64hex>"` [`ETag`]. The `ETag` door owns the digest→hex→prefix→
+/// quotes format; this fn owns only *which bytes* identify a feed version.
 #[must_use]
-pub fn feed_etag(items: &[FeedItem], generated_at: DateTime<Utc>) -> String {
+pub fn feed_etag(items: &[FeedItem], generated_at: DateTime<Utc>) -> ETag {
     let mut hasher = Sha256::new();
     let max_updated = items
         .iter()
@@ -51,13 +54,7 @@ pub fn feed_etag(items: &[FeedItem], generated_at: DateTime<Utc>) -> String {
     hasher.update((items.len() as u64).to_le_bytes());
     hasher.update(b"|");
     hasher.update(last_id.to_le_bytes());
-    let digest = hasher.finalize();
-    let hex = digest.iter().take(16).fold(String::new(), |mut acc, b| {
-        use std::fmt::Write as _;
-        let _ = write!(acc, "{b:02x}");
-        acc
-    });
-    format!("\"sha256-{hex}\"")
+    ETag::from_sha256(hasher.finalize().into())
 }
 
 #[cfg(test)]

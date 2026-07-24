@@ -5,8 +5,8 @@ use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::test_support::{
     parse_audience_name, parse_bio, parse_byte_size, parse_content_hash, parse_content_type,
-    parse_display_name, parse_email, parse_filename, parse_page_offset, parse_raw_token,
-    parse_session_label,
+    parse_display_name, parse_email, parse_etag, parse_filename, parse_page_offset,
+    parse_raw_token, parse_session_label,
 };
 use common::username::Username;
 use common::visibility::{
@@ -3129,7 +3129,7 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
     let mk_row = |feed_url: &str, generated_at| FeedCacheRow {
         feed_path: fp(feed_url),
         body: "cached".to_string(),
-        etag: "etag".to_string(),
+        etag: parse_etag("\"etag\""),
         content_type: parse_content_type("application/atom+xml; charset=utf-8"),
         updated_at: generated_at,
         generated_at,

@@ -6,7 +6,7 @@ use chrono::Utc;
 use common::feed::FeedPath;
 use common::ids::FeedEventId;
 use common::slug::Slug;
-use common::test_support::parse_content_type;
+use common::test_support::{parse_content_type, parse_etag};
 use jaunder::feed::worker::FeedWorker;
 use storage::test_support::{backends, fp, Backend, SeedUser, TestEnv};
 use storage::{CreatePostInput, FeedCacheRow, PostFormat, RenderedHtml};
@@ -299,7 +299,7 @@ async fn startup_catchup_regenerates_feed_for_go_live_while_down(#[case] backend
         .upsert(FeedCacheRow {
             feed_path: fp("/feed.atom"),
             body: "stale".to_string(),
-            etag: "etag".to_string(),
+            etag: parse_etag("\"etag\""),
             content_type: parse_content_type("application/atom+xml; charset=utf-8"),
             updated_at: t0,
             generated_at: t0,

@@ -543,7 +543,7 @@ Run `cargo xtask check` first.
 
 ---
 
-## Task 5 — ✅ DONE (commit pending): `atompub/posts.rs` producer + consumer
+## Task 5 — ✅ DONE (commit f3dcba88): `atompub/posts.rs` producer + consumer
 
 **Files:**
 
@@ -610,7 +610,11 @@ Run `cargo xtask check` first.
 
 ---
 
-## Task 6: Feed ETag vertical — `common` + `storage` + `server` (atomic)
+## Task 6 — ✅ DONE (commit pending): Feed ETag vertical — `common` + `storage` + `server` (atomic)
+
+> Also fixed the inline `server/src/feed/handlers.rs` test helper `sample_row`
+> (not in the file list): `etag: etag.to_owned()` (a `String`) →
+> `parse_etag(etag)`.
 
 This task must land as **one commit**: typing `feed_etag`'s return and
 `FeedCacheRow.etag` are compile-coupled through `regenerate.rs`.

@@ -4,7 +4,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use common::{feed::FeedPath, media::ContentType};
+use common::{etag::ETag, feed::FeedPath, media::ContentType};
 use sqlx::{Database, Pool};
 use thiserror::Error;
 
@@ -15,11 +15,9 @@ use crate::backend::Backend;
 pub struct FeedCacheRow {
     pub feed_path: FeedPath,
     pub body: String,
-    /// The stored `ETag`. Stays `String`: the `"…"`-quoted-format invariant is upheld
-    /// by construction at every producer and only this copy is ever stored, so a
-    /// stored-only newtype would enforce nothing across the untyped producers. A
-    /// repo-wide `ETag` newtype threading all producers is tracked in #634.
-    pub etag: String,
+    /// The stored strong `ETag`. Decodes through the `ETag` sqlx bridge (#438/#634), so a
+    /// corrupt/migrated value is rejected as a `ColumnDecode` error on read-back.
+    pub etag: ETag,
     pub content_type: ContentType,
     pub updated_at: DateTime<Utc>,
     pub generated_at: DateTime<Utc>,
@@ -42,7 +40,7 @@ pub trait FeedCacheStorage: Send + Sync {
 type CacheTuple = (
     FeedPath,
     String,
-    String,
+    ETag,
     ContentType,
     DateTime<Utc>,
     DateTime<Utc>,
@@ -129,7 +127,7 @@ where
         )
         .bind(&row.feed_path)
         .bind(row.body.as_str())
-        .bind(row.etag.as_str())
+        .bind(&row.etag)
         .bind(&row.content_type)
         .bind(row.updated_at)
         .bind(row.generated_at)
@@ -156,7 +154,7 @@ where
 mod tests {
     use super::*;
     use crate::test_support::{backends, fp, Backend};
-    use common::test_support::parse_content_type;
+    use common::test_support::{parse_content_type, parse_etag};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -164,7 +162,7 @@ mod tests {
         FeedCacheRow {
             feed_path: fp(url),
             body: "<rss/>".into(),
-            etag: "\"sha256-deadbeef\"".into(),
+            etag: parse_etag("\"sha256-deadbeef\""),
             content_type: parse_content_type("application/rss+xml"),
             updated_at: Utc::now(),
             generated_at: Utc::now(),
@@ -227,6 +225,38 @@ mod tests {
             .pool()
             .execute(
                 "UPDATE feed_cache SET content_type = 'not-a-content-type' \
+                 WHERE feed_url = '/feed.rss'",
+            )
+            .await
+            .unwrap();
+        let err = env
+            .state
+            .feed_cache
+            .get(&fp("/feed.rss"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, FeedCacheError::Db(sqlx::Error::ColumnDecode { .. })),
+            "expected a column-decode error, got: {err:?}"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn get_surfaces_a_column_decode_error_for_a_malformed_etag(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        env.state
+            .feed_cache
+            .upsert(sample("/feed.rss"))
+            .await
+            .unwrap();
+        // An unquoted value bypasses `ETag`'s quoted-format invariant — only reachable via
+        // DB tampering. The key stays valid so the row is found; the validating bridge
+        // `Decode` (#438/#634) then rejects the `etag` column on read.
+        env.base
+            .pool()
+            .execute(
+                "UPDATE feed_cache SET etag = 'not-a-quoted-etag' \
                  WHERE feed_url = '/feed.rss'",
             )
             .await
