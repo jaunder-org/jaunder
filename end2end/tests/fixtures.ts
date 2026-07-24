@@ -337,7 +337,7 @@ const test = base.extend<{
     await goto(page, "/profile/email");
     await page.fill('input[name="email"]', user.email);
     await click(page, SEL.submit);
-    await expectFlash(page, "Check your email", 10_000);
+    await expectFlash(page, "Check your email");
     const mail = await mailbox.waitForNewEmail();
     const token = extractToken(mail);
     await goto(page, `/verify-email?token=${token}`);

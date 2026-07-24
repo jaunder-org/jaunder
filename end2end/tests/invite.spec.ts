@@ -102,7 +102,7 @@ test("invite-only /register with no code shows guidance and no submit button", a
 
   await expect(
     page.locator('p:has-text("You need an invitation link to register")'),
-  ).toBeVisible({ timeout: 10_000 });
+  ).toBeVisible();
   // The guidance branch replaces the whole form — no register submit button.
   await expect(
     page.locator('.j-page-narrow button[type="submit"]'),
@@ -122,8 +122,6 @@ test("invites page shows not-found fallback when not invite-only", async ({
   await login(page, "testoperator", "testpassword123");
   await goto(page, "/invites", { timeout: firstNav });
 
-  await expect(page.locator('p:has-text("Page not found.")')).toBeVisible({
-    timeout: 10_000,
-  });
+  await expect(page.locator('p:has-text("Page not found.")')).toBeVisible();
   await expect(page.locator('input[name="recipient_email"]')).toHaveCount(0);
 });
