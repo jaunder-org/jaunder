@@ -33,6 +33,7 @@ pub mod root_relative_url;
 pub mod seed;
 pub mod site;
 pub mod slug;
+pub mod smtp_password;
 pub mod tag;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
