@@ -6,7 +6,7 @@ use common::backup::{BackupConfig, BackupMode, BackupSchedule, DestinationPath, 
 use leptos::prelude::*;
 
 #[cfg(feature = "server")]
-use super::server::require_operator;
+use crate::auth::require_operator;
 
 #[cfg(feature = "server")]
 use {

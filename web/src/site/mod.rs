@@ -4,7 +4,7 @@ use common::site::{SiteIdentity, SiteTitle};
 use leptos::prelude::*;
 
 #[cfg(feature = "server")]
-use crate::backup::server::require_operator;
+use crate::auth::require_operator;
 
 #[cfg(feature = "server")]
 use {crate::error::InternalError, std::sync::Arc, storage::SiteConfigStorage};
