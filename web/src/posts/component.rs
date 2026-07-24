@@ -21,11 +21,12 @@ use crate::posts::{
     default_audience_selection, draft_row_display, get_post, get_post_preview, list_drafts,
     list_posts_by_tag, list_user_posts, list_user_posts_by_tag, parse_permalink_params,
     post_audience_selection, CreatePost, CreatePostArgs, CreatePostResult, DeletePost,
-    DraftRowDisplay, DraftSummary, ListPostsByTag, ListUserPosts, ListUserPostsByTag, PublishPost,
+    DraftRowDisplay, DraftSummary, ListPostsByTag, ListUserPostsByTag, PublishPost,
     PublishPostResult, UnpublishPost, UpdatePost, UpdatePostArgs, UpdatePostResult,
 };
 use crate::render::TagCtx as TagContext;
 use crate::subscriptions::SubscribeButton;
+use crate::timeline::{spawn_load_more, TimelineRows, TimelineState};
 use crate::topbar::Topbar;
 use common::feed::FeedSurface;
 use common::ids::{AudienceId, PostId};
@@ -342,19 +343,10 @@ pub fn PostCard(
 /// while Private is chosen to make that explicit.
 #[component]
 pub fn AudiencePicker(selection: RwSignal<AudienceSelection>) -> impl IntoView {
-    // SSR-resolved Resources serialize their value to the client and are not
-    // re-fetched on hydration; if `list_my_audiences` lost the disposal race and
-    // resolved to `Err` during SSR, the client would reuse that `Err` and the
-    // multiselect would stay empty. So resolve it client-only: SSR renders no
-    // checkboxes, and a wasm-only Effect seeds them after hydration
-    // (web-style-guide.md §9, mirroring `home.rs`).
+    // The named audiences the author owns, consumed directly in the checkbox
+    // view below. `None` (unresolved) and `Some(Err)` both fold to an empty
+    // list, so the multiselect renders no rows until the fetch lands.
     let named = Resource::new(|| (), |()| list_my_audiences());
-    let named_audiences = RwSignal::new(Vec::<AudienceSummary>::new());
-    Effect::new(move |_| {
-        if let Some(Ok(list)) = named.get() {
-            named_audiences.set(list);
-        }
-    });
 
     // Each base variant paired with its UI caption in one place, so the two
     // can't drift out of order.
@@ -394,7 +386,7 @@ pub fn AudiencePicker(selection: RwSignal<AudienceSelection>) -> impl IntoView {
             </select>
         </div>
         {move || {
-            let audiences = named_audiences.get();
+            let audiences = named.get().and_then(Result::ok).unwrap_or_default();
             if audiences.is_empty() {
                 ().into_any()
             } else {
@@ -486,10 +478,10 @@ pub fn PostCreateForm(
         named: Vec::new(),
     });
     let default_audience = Resource::new(|| (), |()| default_audience_selection());
-    // Client-only: copying the resolved Resource into `audience` must not run
-    // during SSR, where the future can resolve after the per-request reactive
-    // owner is disposed (web-style-guide.md §9). SSR renders the Public
-    // default; the real default is seeded on the client after hydration.
+    // The site-wide default audience resolves asynchronously; the composer must
+    // render immediately (no Suspense), so seed the editable `audience` signal
+    // once the Resource resolves, over the Public placeholder above. The author
+    // can then edit the selection via `AudiencePicker`.
     Effect::new(move |_| {
         if let Some(Ok(default)) = default_audience.get() {
             audience.set(default);
@@ -1290,12 +1282,14 @@ pub fn UserTimelinePage() -> impl IntoView {
         },
     );
 
-    let timeline = RwSignal::new(Vec::<TimelinePostSummary>::new());
-    let next_cursor_created_at = RwSignal::new(None::<UtcInstant>);
-    let next_cursor_post_id = RwSignal::new(None::<PostId>);
-    let has_more = RwSignal::new(false);
-    let error = RwSignal::new(None::<String>);
-    let initial_loaded = RwSignal::new(false);
+    let state = TimelineState::default();
+    // CSR loading gate: the shared `TimelineState`/`LoadStatus` has no
+    // "never-loaded" state (home.rs is always projector-seeded; cockpit.rs gates
+    // on its username resolving), but this page gets `username` from the route
+    // param immediately and is not always seeded. Without the gate, the unseeded
+    // client-nav first load would flash `TimelineRows`' "No posts yet." empty
+    // state before the fetch resolves.
+    let loaded = RwSignal::new(false);
 
     // Public projector seed (#178/#179): if the server painted this profile,
     // adopt its posts as the initial state so first paint shows content (no
@@ -1308,81 +1302,40 @@ pub fn UserTimelinePage() -> impl IntoView {
     }) = use_context::<Option<PageSeed>>().flatten()
     {
         if username.get_untracked().as_ref() == Some(&seed_user) {
-            next_cursor_created_at.set(page.next_cursor_created_at);
-            next_cursor_post_id.set(page.next_cursor_post_id);
-            has_more.set(page.has_more);
-            timeline.set(page.posts);
-            initial_loaded.set(true);
+            state.adopt(page);
+            loaded.set(true);
         }
     }
 
-    let load_more_action = ServerAction::<ListUserPosts>::new();
-
-    // Client-only: `Effect::new_isomorphic` would race with SSR reactive-owner
-    // disposal because the Resource future can resolve on a tokio worker after
-    // the per-request owner is gone, panicking on signal access. SSR renders
-    // the loading placeholder; signals seed on the client after hydration.
+    // The initial-page fetch resolves on the client; seed the shared timeline
+    // once it arrives (load-more appends via `spawn_load_more`). Canonical CSR
+    // shape, mirroring home.rs / cockpit.rs.
     Effect::new(move |_| {
         if let Some(result) = initial_page.try_get().flatten() {
             match result {
-                Ok(page) => {
-                    timeline.set(page.posts);
-                    next_cursor_created_at.set(page.next_cursor_created_at);
-                    next_cursor_post_id.set(page.next_cursor_post_id);
-                    has_more.set(page.has_more);
-                    error.set(None);
-                    initial_loaded.set(true);
-                }
-                Err(err) => {
-                    error.set(Some(err.to_string()));
-                    timeline.set(Vec::new());
-                    has_more.set(false);
-                    initial_loaded.set(true);
-                }
+                Ok(page) => state.resolve(page),
+                Err(err) => state.fail(err.to_string()),
             }
+            loaded.set(true);
         }
     });
 
-    // ServerAction dispatches happen only on the client, so this effect's body
-    // never fires server-side; using `Effect::new` matches that reality.
-    Effect::new(move |_| {
-        if let Some(result) = load_more_action.value().get() {
-            match result {
-                Ok(page) => {
-                    timeline.update(|rows| rows.extend(page.posts));
-                    next_cursor_created_at.set(page.next_cursor_created_at);
-                    next_cursor_post_id.set(page.next_cursor_post_id);
-                    has_more.set(page.has_more);
-                    error.set(None);
-                }
-                Err(err) => error.set(Some(err.to_string())),
-            }
-        }
-    });
-
-    let on_load_more = move |_| {
+    let on_load_more = Callback::new(move |()| {
         let Some(username) = username.get_untracked() else {
             return;
         };
-        if !has_more.get_untracked() {
-            return;
-        }
-        load_more_action.dispatch(ListUserPosts {
-            username,
-            cursor_created_at: next_cursor_created_at.get_untracked(),
-            cursor_post_id: next_cursor_post_id.get_untracked(),
-            limit: Some(PageSize::default()),
+        spawn_load_more(state, move |created_at, post_id, limit| {
+            list_user_posts(username, created_at, post_id, limit)
         });
-    };
+    });
+
+    // A `Memo` (not a bare closure) so the outer view closure re-runs only when
+    // the failure message changes — not on every `status` write, mirroring home.rs.
+    let read_error = Memo::new(move |_| state.status.get().into_failure());
 
     // The heading shows the canonical (parsed, lowercased) username, or empty for an
     // invalid segment — the page renders a validation error in that case anyway.
     let display_username = move || username.get().map(String::from).unwrap_or_default();
-    let read_error = move || error.get();
-    let read_initial_loaded = move || initial_loaded.get();
-    let read_timeline = move || timeline.get();
-    let read_has_more = move || has_more.get();
-    let read_pending = move || load_more_action.pending().get();
 
     view! {
         {move || {
@@ -1398,56 +1351,29 @@ pub fn UserTimelinePage() -> impl IntoView {
                 })
         }}
         <Topbar title=move || format!("Posts by {}", display_username()) sub="User timeline" />
-        <div class="j-scroll">
-            <div class="j-page">
-                {move || {
-                    username.get().map(|username| view! { <SubscribeButton username=username /> })
-                }}
-                {move || {
-                    if let Some(err) = read_error() {
-                        return view! { <p class="error">{err}</p> }.into_any();
-                    }
-                    if !read_initial_loaded() {
-                        return view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any();
-                    }
-                    let rows = read_timeline();
-                    if rows.is_empty() {
-                        return view! { <p>"No posts yet."</p> }.into_any();
-                    }
+        {move || { username.get().map(|username| view! { <SubscribeButton username=username /> }) }}
+        {move || {
+            if let Some(err) = read_error.get() {
+                return view! { <p class="error">{err}</p> }.into_any();
+            }
+            if !loaded.get() {
+                return view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any();
+            }
+            match username.get() {
+                Some(user) => {
                     view! {
-                        <div>
-                            {rows
-                                .into_iter()
-                                .map(|post| {
-                                    let username_for_tags = post.username.clone();
-                                    view! {
-                                        <PostCard
-                                            post=post
-                                            banner=None
-                                            tag_context=TagContext::ForUser(username_for_tags)
-                                            on_mutate=on_mutate
-                                        />
-                                    }
-                                })
-                                .collect::<Vec<_>>()}
-                        </div>
-                        {move || {
-                            read_has_more()
-                                .then(|| {
-                                    view! {
-                                        <button on:click=on_load_more disabled=read_pending>
-                                            {move || {
-                                                if read_pending() { "Loading\u{2026}" } else { "Load more" }
-                                            }}
-                                        </button>
-                                    }
-                                })
-                        }}
+                        <TimelineRows
+                            state=state
+                            on_mutate=on_mutate
+                            on_load_more=on_load_more
+                            tag_context=TagContext::ForUser(user)
+                        />
                     }
                         .into_any()
-                }}
-            </div>
-        </div>
+                }
+                None => ().into_any(),
+            }
+        }}
     }
 }
 
@@ -1505,19 +1431,16 @@ pub fn EditPostPage() -> impl IntoView {
             None => Err(WebError::not_found("Post")),
         }
     });
+    // Seeded into the editable `audience` picker inside the `Suspense` block below
+    // (awaited alongside `post`, not via a standalone Effect, since the page
+    // already suspends on `post`). On a fetch error the Public default survives
+    // (the `Ok`-only guard mirrors the dissolved post-resolve Effect). The intent
+    // comment lives here, outside `view!`, because leptosfmt relocates comments
+    // inside the macro.
     let current_audience = Resource::new(post_id_param, |maybe_id| async move {
         match maybe_id {
             Some(id) => post_audience_selection(id).await,
             None => Err(WebError::not_found("Post")),
-        }
-    });
-    // Client-only: copying the resolved Resource into `audience` must not run
-    // during SSR, where the future can resolve after the per-request reactive
-    // owner is disposed (web-style-guide.md §9). The picker is seeded with the
-    // post's current targeting on the client after hydration.
-    Effect::new(move |_| {
-        if let Some(Ok(selection)) = current_audience.get() {
-            audience.set(selection);
         }
     });
 
@@ -1536,6 +1459,9 @@ pub fn EditPostPage() -> impl IntoView {
                             .value
                             .set(fetched.summary.as_deref().unwrap_or_default().to_owned());
                         post_tags.set(fetched.tags.clone());
+                        if let Ok(selection) = current_audience.await {
+                            audience.set(selection);
+                        }
                         let post_id = fetched.post_id;
                         let is_published = fetched.published_at.is_some();
                         let dispatch_update = move |publish: bool| {

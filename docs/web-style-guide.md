@@ -222,46 +222,46 @@ host-tested files — extraction precedes gating. The only `target_arch` cfgs in
 `web/src` are these wiring lines — the `mod component;` declarations and their
 paired `pub use` re-exports.
 
-## 9. SSR-safe Resource patterns
+## 9. Resource → signal patterns (CSR)
 
-Two anti-patterns to avoid (both have caused production panics — see the saved
-`bd memories`):
+Routed Leptos components serve a static CSR shell and mount fresh on the client
+via `mount_to_body` — there is no server-render-then-hydrate pass
+(`csr/src/lib.rs`; the `server`/`leptos/ssr` build serves the server functions,
+the projector's pure render fns, and `leptos_axum` routing, **not** component
+hydration). So a plain client-only `Effect::new` that copies a resolved
+`Resource` into `RwSignal`s is the normal idiom, not an SSR-safety workaround.
 
-1. **`Effect::new_isomorphic` (or unwrapped `Effect::new`) that copies a
-   `Resource` into `RwSignal`s.** The future can resolve on a tokio worker after
-   the per-request reactive owner is disposed. An isomorphic effect firing then
-   would access disposed signals and panic. Even a plain `Effect::new` runs its
-   closure once initially on the server during SSR, and can rerun if the
-   resource resolves before SSR finishes, causing random/flaky server-side test
-   coverage (e.g., in `home.rs` or `posts.rs`).
-
-   **Client-only `Effect::new` belongs in the vertical's wasm-only
+1. **Copying a `Resource` into signals.** Mirror `home.rs`: a plain
+   `Effect::new` that copies the resolved page into signals and only writes when
+   the value actually changes (to prevent remounting child components). A
+   **client-only `Effect::new` belongs in the vertical's wasm-only
    `component.rs`** (§8), where it is structurally stripped from every host
    build — never add an `Effect::new` to host-compiled code, and never re-gate
    it per-call inside a file.
 
-2. **SSR-eager `Resource` calling `expect_context::<Arc<dyn FooStorage>>()`.**
-   The same disposal race can hit the context lookup. Consumers take a specific
-   `Arc<dyn FooStorage>` handle, never the whole `AppState` (ADR-0016). Replace
-   `expect_context::<Arc<dyn FooStorage>>()` with
-   `use_context::<Arc<dyn FooStorage>>().ok_or_else(…)?` — returning the `Err`
-   branch gracefully instead of panicking and wedging the worker. Do _not_
-   switch to `LocalResource` as a structural fix; it never resolves inside an
-   SSR-rendered `Suspense`.
+   Three cases, narrowest first:
+   - Where the signals exist _only_ to receive the copy, **skip the seed
+     entirely** and consume the `Resource` directly in the view (under
+     `Suspense`/`.get()`, or a derived signal) — one fewer intermediate signal
+     that can drift from its source (`AudiencePicker`'s named-audience list).
+   - For a **seed-then-edit** signal (the user mutates it after the fetched
+     value seeds it) on a component that **already awaits** the value under
+     `Suspense`, seed it inside the `Suspend` block, not a standalone `Effect`
+     (the editor's current-audience seed).
+   - Reach for a standalone client-only `Effect` **only** for a seed-then-edit
+     signal on a component that **renders immediately**, with no `Suspense` to
+     await under — the composer seeds its site-default audience after first
+     paint this way, because the compose box must appear without waiting on the
+     fetch.
 
-   **Read context before the first `.await`.** When such a function runs as a
-   `Resource` resolved during SSR, the renderer can resume the future on a
-   worker thread where the Leptos task-local context is no longer installed — so
-   any `use_context` placed _after_ an await point (e.g. after
-   `require_auth().await`) returns `None`, and because an SSR-resolved
-   `Resource` serializes its value to the client and is **not** re-fetched on
-   hydration, that `Err` sticks. Fetch every `Arc<dyn FooStorage>` handle first,
-   then `await` (mirror `get_registration_policy`; `require_auth` is await-safe
-   because it reads its `Parts` context synchronously before its own await).
-
-When in doubt, mirror `home.rs`: a plain `Effect::new` (in wasm-only component
-code) that copies the resolved page into signals and only writes when the value
-actually changes (to prevent remounting child components).
+2. **Server-fn storage handles: take a specific `Arc<dyn FooStorage>`, not the
+   whole `AppState` (ADR-0016), and fail gracefully.** Prefer
+   `use_context::<Arc<dyn FooStorage>>().ok_or_else(…)?` over
+   `expect_context::<Arc<dyn FooStorage>>()`, returning the `Err` branch instead
+   of panicking and wedging the worker. Fetch every handle **before** the first
+   `.await` (mirror `get_registration_policy`; `require_auth` reads its `Parts`
+   context synchronously before its own await), so a future resumed on another
+   worker thread never reads a task-local context that is no longer installed.
 
 **Don't hand-roll the sticky copy for a flat list.** When the retained value is
 a plain `Vec`/scalar (not a keyed store — that's §10's `patched`) driven by an

@@ -199,6 +199,63 @@ test("authenticated user can edit a draft post", async ({
   );
 });
 
+test("edit page pre-selects the post's current audience", async ({
+  registeredPage: page,
+}) => {
+  test.slow();
+  // Characterization test (#643): opening the editor must render the post's
+  // stored targeting — `#audience-base` set to the saved base and the
+  // named-audience checkbox pre-checked. Pins the seed behavior before it is
+  // refactored from a post-hydration Effect into the Suspense block; must pass
+  // on the current (unrefactored) code too. The picker renders only for
+  // unpublished posts, so this targets a draft.
+
+  // A named audience must exist for its checkbox to appear in the picker.
+  await goto(page, "/audiences");
+  await page.fill('input[name="name"]', "Confidants");
+  await click(page, 'button:has-text("Create")');
+  await expect(
+    page.locator(".j-audience-item", { hasText: "Confidants" }),
+  ).toBeVisible();
+
+  // Save a draft targeted to Subscribers + the named audience.
+  await goto(page, "/posts/new");
+  await waitForSelector(page, "#audience-base");
+  await page.fill(SEL.postBody, "# Targeted Draft\n\nbody for targeted draft");
+  await page.selectOption("#audience-base", "subscribers");
+  await page
+    .locator("label", { hasText: "Confidants" })
+    .locator('input[type="checkbox"]')
+    .check();
+  await click(page, SEL.publishButton("false"));
+  await waitForSelector(page, SEL.saveSummary);
+
+  // Reach the draft's edit page via the post_id on its PostCard Edit affordance.
+  const permalinkHref = (await page
+    .locator(SEL.saveSummary)
+    .locator('[data-test="permalink-link"]')
+    .getAttribute("href"))!;
+  expect(permalinkHref).toBeTruthy();
+  await goto(page, permalinkHref);
+  const editLink = page.locator('.j-post-acts a:has-text("Edit")');
+  await editLink.waitFor();
+  const postId = (await editLink.getAttribute("href"))!.match(
+    /\/posts\/(\d+)\/edit/,
+  )![1];
+
+  await goto(page, `/posts/${postId}/edit`);
+  await waitForSelector(page, "#audience-base");
+
+  // The seed pre-selects the stored base...
+  await expect(page.locator("#audience-base")).toHaveValue("subscribers");
+  // ...and pre-checks the named-audience checkbox.
+  await expect(
+    page
+      .locator("label", { hasText: "Confidants" })
+      .locator('input[type="checkbox"]'),
+  ).toBeChecked();
+});
+
 test("editing an invalid or nonexistent post shows not-found", async ({
   registeredPage: page,
 }) => {
