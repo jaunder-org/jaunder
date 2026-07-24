@@ -1691,10 +1691,7 @@ pub fn SiteTagPage() -> impl IntoView {
                     .map(|tag| view! { <FeedDiscovery surface=FeedSurface::SiteTag { tag } /> })}
             }
         }}
-        <Topbar
-            title=Signal::derive(move || format!("#{}", read_tag()))
-            sub="Posts on this instance"
-        />
+        <Topbar title=move || format!("#{}", read_tag()) sub="Posts on this instance" />
         <div class="j-scroll">
             <div class="j-page">
                 {move || {
@@ -1888,8 +1885,8 @@ pub fn UserTagPage() -> impl IntoView {
             }
         }}
         <Topbar
-            title=Signal::derive(move || format!("#{}", read_tag()))
-            sub=Signal::derive(move || format!("Posts by ~{}", read_username()))
+            title=move || format!("#{}", read_tag())
+            sub=move || format!("Posts by ~{}", read_username())
         />
         <div class="j-scroll">
             <div class="j-page">
