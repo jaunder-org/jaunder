@@ -1083,7 +1083,10 @@
               e2e-elisp-integration = pkgs.testers.nixosTest {
                 name = "jaunder-e2e-elisp-integration";
                 nodes.machine = _: {
-                  virtualisation.memorySize = 2048;
+                  # #628: headroom so the server boots fast enough for the one
+                  # remaining readiness gate under CI load (was 2048 / 1 core).
+                  virtualisation.memorySize = 4096;
+                  virtualisation.cores = 2;
                   environment.systemPackages = [
                     emacsForCi
                     jaunderBin

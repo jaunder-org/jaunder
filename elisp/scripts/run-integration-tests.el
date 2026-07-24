@@ -21,6 +21,15 @@
   (dolist (f (directory-files test-dir t "-integration\\.el\\'"))
     (load f nil t)))
 
-(ert-run-tests-batch-and-exit)
+;; #628: one shared server for the whole suite — the readiness gates run once,
+;; not once per test.  Tests reuse it through `jaunder-test--with-live-server',
+;; which passes through when the harness globals are already bound.  Teardown
+;; must precede exit, so this mirrors `ert-run-tests-batch-and-exit' by hand.
+(let ((st (jaunder-test--server-up-retrying)))
+  (jaunder-test--set-globals st)
+  (let ((stats (unwind-protect
+                   (ert-run-tests-batch)
+                 (jaunder-test--server-down st))))
+    (kill-emacs (if (zerop (ert-stats-completed-unexpected stats)) 0 1))))
 
 ;;; run-integration-tests.el ends here
