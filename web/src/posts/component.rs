@@ -1502,15 +1502,6 @@ pub fn EditPostPage() -> impl IntoView {
             None => Err(WebError::not_found("Post")),
         }
     });
-    // Client-only: copying the resolved Resource into `audience` must not run
-    // during SSR, where the future can resolve after the per-request reactive
-    // owner is disposed (web-style-guide.md §9). The picker is seeded with the
-    // post's current targeting on the client after hydration.
-    Effect::new(move |_| {
-        if let Some(Ok(selection)) = current_audience.get() {
-            audience.set(selection);
-        }
-    });
 
     view! {
         <Topbar title="Edit Post" sub="Long-form" />
@@ -1527,6 +1518,13 @@ pub fn EditPostPage() -> impl IntoView {
                             .value
                             .set(fetched.summary.as_deref().unwrap_or_default().to_owned());
                         post_tags.set(fetched.tags.clone());
+                        // Seed the audience picker with the post's stored
+                        // targeting; on a fetch error leave the Public default
+                        // (matching the removed Effect's Ok-only guard). Awaited
+                        // alongside `post` so it resolves under the same Suspense.
+                        if let Ok(selection) = current_audience.await {
+                            audience.set(selection);
+                        }
                         let post_id = fetched.post_id;
                         let is_published = fetched.published_at.is_some();
                         let dispatch_update = move |publish: bool| {
