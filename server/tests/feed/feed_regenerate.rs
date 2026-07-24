@@ -1,13 +1,10 @@
-use chrono::Utc;
-use common::slug::Slug;
 use common::visibility::AudienceTarget;
 use jaunder::feed::regenerate::regenerate_feed;
-use storage::{CreatePostInput, PostFormat, RenderedHtml};
 
 use rstest::*;
 use rstest_reuse::*;
 
-use storage::test_support::{backends, fp, Backend, SeedUser, TestEnv};
+use storage::test_support::{backends, fp, Backend, SeedRawPost, SeedUser, TestEnv};
 
 use crate::helpers::setup_with_base_url;
 
@@ -18,40 +15,8 @@ async fn regenerate_writes_cache_row_for_user_feed(#[case] backend: Backend) {
 
     let user = SeedUser::new().seed(&state).await;
 
-    let now = Utc::now();
-    let _post1_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user.user_id,
-            title: Some("Post 1".into()),
-            slug: "post-1".parse::<Slug>().expect("valid slug"),
-            body: "Post 1 body".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Post 1 body</p>"),
-            published_at: Some(now),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("create post 1");
-
-    let _post2_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user.user_id,
-            title: Some("Post 2".into()),
-            slug: "post-2".parse::<Slug>().expect("valid slug"),
-            body: "Post 2 body".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Post 2 body</p>"),
-            published_at: Some(now),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("create post 2");
+    SeedRawPost::new(user.user_id).seed(&state).await;
+    SeedRawPost::new(user.user_id).seed(&state).await;
 
     let row = regenerate_feed(
         state.site_config.as_ref(),
@@ -181,23 +146,7 @@ async fn regenerate_writes_each_format(#[case] backend: Backend) {
     // Create a user with one post
     let user = SeedUser::new().seed(&state).await;
 
-    let now = Utc::now();
-    state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user.user_id,
-            title: Some("Test Post".into()),
-            slug: "test-post".parse::<Slug>().expect("valid slug"),
-            body: "Test body".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Test body</p>"),
-            published_at: Some(now),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("create post");
+    SeedRawPost::new(user.user_id).seed(&state).await;
 
     // Test each format
     let formats = [
@@ -244,44 +193,19 @@ async fn feed_contains_only_public_posts(#[case] backend: Backend) {
 
     let user = SeedUser::new().seed(&state).await;
 
-    let now = Utc::now();
-    let mk = |title: &str, slug: &str, audiences: Vec<AudienceTarget>| CreatePostInput {
-        user_id: user.user_id,
-        title: Some(title.into()),
-        slug: slug.parse::<Slug>().expect("valid slug"),
-        body: format!("{title} body").into(),
-        format: PostFormat::Markdown,
-        rendered_html: RenderedHtml::from_trusted(format!("<p>{title} body</p>")),
-        published_at: Some(now),
-        summary: None,
-        audiences,
-        idempotency_key: None,
-    };
-
-    state
-        .posts
-        .create_post(&mk(
-            "Public Post",
-            "public-post",
-            vec![AudienceTarget::Public],
-        ))
-        .await
-        .expect("create public post");
-    state
-        .posts
-        .create_post(&mk(
-            "Subscribers Post",
-            "subscribers-post",
-            vec![AudienceTarget::Subscribers],
-        ))
-        .await
-        .expect("create subscribers post");
+    let public = SeedRawPost::new(user.user_id)
+        .audiences(vec![AudienceTarget::Public])
+        .seed(&state)
+        .await;
+    let subscribers = SeedRawPost::new(user.user_id)
+        .audiences(vec![AudienceTarget::Subscribers])
+        .seed(&state)
+        .await;
     // Private = no audience rows.
-    state
-        .posts
-        .create_post(&mk("Private Post", "private-post", vec![]))
-        .await
-        .expect("create private post");
+    let private = SeedRawPost::new(user.user_id)
+        .audiences(vec![])
+        .seed(&state)
+        .await;
 
     let row = regenerate_feed(
         state.site_config.as_ref(),
@@ -293,17 +217,17 @@ async fn feed_contains_only_public_posts(#[case] backend: Backend) {
     .expect("regenerate feed");
 
     assert!(
-        row.body.contains("Public Post"),
+        row.body.contains(public.title.as_ref()),
         "Public post must appear in the feed: {}",
         row.body
     );
     assert!(
-        !row.body.contains("Subscribers Post"),
+        !row.body.contains(subscribers.title.as_ref()),
         "Subscribers post must NOT appear in the public feed: {}",
         row.body
     );
     assert!(
-        !row.body.contains("Private Post"),
+        !row.body.contains(private.title.as_ref()),
         "Private post must NOT appear in the public feed: {}",
         row.body
     );

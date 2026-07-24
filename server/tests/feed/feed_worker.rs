@@ -1,15 +1,13 @@
-use common::visibility::AudienceTarget;
 use std::sync::Arc;
 
 use crate::helpers::{setup_with_base_url, CapturingWebSubClient};
 use chrono::Utc;
 use common::feed::FeedPath;
 use common::ids::FeedEventId;
-use common::slug::Slug;
 use common::test_support::{parse_content_type, parse_etag};
 use jaunder::feed::worker::FeedWorker;
-use storage::test_support::{backends, fp, Backend, SeedUser, TestEnv};
-use storage::{CreatePostInput, FeedCacheRow, PostFormat, RenderedHtml};
+use storage::test_support::{backends, fp, Backend, SeedRawPost, SeedUser, TestEnv};
+use storage::FeedCacheRow;
 
 use rstest::*;
 use rstest_reuse::*;
@@ -52,23 +50,7 @@ async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub(#[case] bac
 
     let user = SeedUser::new().seed(&state).await;
 
-    let now = Utc::now();
-    let _post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user.user_id,
-            title: Some("Test Post".into()),
-            slug: "test-post".parse::<Slug>().expect("valid slug"),
-            body: "# Test\n\nContent".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<h1>Test</h1>\n<p>Content</p>"),
-            published_at: Some(now),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("create post");
+    let post = SeedRawPost::new(user.user_id).seed(&state).await;
 
     let feed_path = fp(&format!("/~{}/feed.rss", user.username));
     state
@@ -85,7 +67,7 @@ async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub(#[case] bac
         .await
         .expect("get cache")
         .expect("cache row should exist");
-    assert!(cache_row.body.contains("Test Post"));
+    assert!(cache_row.body.contains(post.title.as_ref()));
 
     let pending = state
         .feed_events
@@ -103,23 +85,7 @@ async fn worker_pings_hub_when_configured(#[case] backend: Backend) {
 
     let user = SeedUser::new().seed(&state).await;
 
-    let now = Utc::now();
-    let _post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user.user_id,
-            title: Some("Test Post".into()),
-            slug: "test-post".parse::<Slug>().expect("valid slug"),
-            body: "# Test\n\nContent".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<h1>Test</h1>\n<p>Content</p>"),
-            published_at: Some(now),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("create post");
+    SeedRawPost::new(user.user_id).seed(&state).await;
 
     state
         .site_config
@@ -157,23 +123,7 @@ async fn worker_groups_duplicate_events_into_single_regen(#[case] backend: Backe
 
     let user = SeedUser::new().seed(&state).await;
 
-    let now = Utc::now();
-    let _post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user.user_id,
-            title: Some("Test Post".into()),
-            slug: "test-post".parse::<Slug>().expect("valid slug"),
-            body: "# Test\n\nContent".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<h1>Test</h1>\n<p>Content</p>"),
-            published_at: Some(now),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("create post");
+    SeedRawPost::new(user.user_id).seed(&state).await;
 
     state
         .site_config
@@ -222,23 +172,7 @@ async fn worker_applies_backoff_on_ping_failure(#[case] backend: Backend) {
 
     let user = SeedUser::new().seed(&state).await;
 
-    let now = Utc::now();
-    let _post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user.user_id,
-            title: Some("Test Post".into()),
-            slug: "test-post".parse::<Slug>().expect("valid slug"),
-            body: "# Test\n\nContent".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<h1>Test</h1>\n<p>Content</p>"),
-            published_at: Some(now),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("create post");
+    let post = SeedRawPost::new(user.user_id).seed(&state).await;
 
     state
         .site_config
@@ -276,7 +210,7 @@ async fn worker_applies_backoff_on_ping_failure(#[case] backend: Backend) {
         .await
         .expect("get cache")
         .expect("cache row should exist even though ping failed");
-    assert!(cache_row.body.contains("Test Post"));
+    assert!(cache_row.body.contains(post.title.as_ref()));
 }
 
 /// Restart-straddle (the centerpiece): a future-dated post goes live while the
@@ -309,22 +243,10 @@ async fn startup_catchup_regenerates_feed_for_go_live_while_down(#[case] backend
 
     // A post that went live at t1 > t0 while the worker was "down".
     let t1 = t0 + Duration::hours(1);
-    state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user.user_id,
-            title: Some("Went live".into()),
-            slug: "went-live".parse::<Slug>().expect("valid slug"),
-            body: "# Went live\n\nbody".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<h1>Went live</h1>"),
-            published_at: Some(t1),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("create post");
+    SeedRawPost::new(user.user_id)
+        .published_at(t1)
+        .seed(&state)
+        .await;
 
     // Restart: first go-live pass at t2 > t1 (last_tick == None => catch-up).
     let t2 = t1 + Duration::hours(1);
@@ -359,22 +281,10 @@ async fn steady_state_window_enqueues_newly_live_posts(#[case] backend: Backend)
 
     // A post that goes live between t0 and t1.
     let go_live = t0 + Duration::minutes(30);
-    state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user.user_id,
-            title: Some("Soon".into()),
-            slug: "soon".parse::<Slug>().expect("valid slug"),
-            body: "# Soon\n\nbody".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<h1>Soon</h1>"),
-            published_at: Some(go_live),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("create post");
+    SeedRawPost::new(user.user_id)
+        .published_at(go_live)
+        .seed(&state)
+        .await;
 
     let t1 = t0 + Duration::hours(1);
     worker.go_live_pass(t1).await.expect("window pass");
@@ -403,23 +313,7 @@ async fn worker_marks_exhausted_after_backoff_attempts_are_used_up(#[case] backe
     // A published post so regeneration succeeds: the exhausted branch lives in
     // the ping sub-path, reached only after a successful regen.
     let user = SeedUser::new().seed(&state).await;
-    let now = Utc::now();
-    state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user.user_id,
-            title: Some("Test Post".into()),
-            slug: "test-post".parse::<Slug>().expect("valid slug"),
-            body: "# Test\n\nContent".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<h1>Test</h1>\n<p>Content</p>"),
-            published_at: Some(now),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("create post");
+    SeedRawPost::new(user.user_id).seed(&state).await;
 
     state
         .site_config
