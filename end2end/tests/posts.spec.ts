@@ -383,13 +383,9 @@ test("per-user timeline lists published posts with pagination", async ({
   perf.mark("load_more_clicked");
   await expect(page.locator("article.j-post")).toHaveCount(
     TIMELINE_PAGE_SIZE + TIMELINE_OVERFLOW_COUNT,
-    {
-      timeout: 10_000,
-    },
   );
   await expect(page.locator("article.j-post").last()).toContainText(
     "Timeline Post 0",
-    { timeout: 10_000 },
   );
   perf.mark("assertions_complete");
   await perf.log({ username });
@@ -429,9 +425,7 @@ test("home page shows local timeline for unauthenticated users", async ({
   // This test alone seeds 2 * LOCAL_TIMELINE_AUTHOR_COUNT (52) posts, so a full
   // page is guaranteed regardless of concurrent publishers.
   await expect
-    .poll(async () => guestPage.locator("article.j-post").count(), {
-      timeout: 10_000,
-    })
+    .poll(async () => guestPage.locator("article.j-post").count())
     .toBeGreaterThanOrEqual(TIMELINE_PAGE_SIZE);
   const firstPageCount = await guestPage.locator("article.j-post").count();
 
@@ -439,9 +433,7 @@ test("home page shows local timeline for unauthenticated users", async ({
   await click(guestPage, 'button:has-text("Load more")');
   perf.mark("load_more_clicked");
   await expect
-    .poll(async () => guestPage.locator("article.j-post").count(), {
-      timeout: 10_000,
-    })
+    .poll(async () => guestPage.locator("article.j-post").count())
     .toBeGreaterThan(firstPageCount);
   perf.mark("assertions_complete");
   await perf.log();
@@ -482,9 +474,6 @@ test("cockpit /app shows the authenticated home feed with pagination", async ({
   perf.mark("load_more_clicked");
   await expect(page.locator("article.j-post")).toHaveCount(
     HOME_FEED_SELF_COUNT,
-    {
-      timeout: 10_000,
-    },
   );
   await expect(page.locator("body")).not.toContainText("Home Feed Other");
   perf.mark("assertions_complete");

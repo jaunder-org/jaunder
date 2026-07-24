@@ -15,7 +15,7 @@ test("email verification flow completes successfully", async ({
   await page.fill('input[name="email"]', user.email);
   await click(page, SEL.submit);
 
-  await expectFlash(page, "Check your email", 10_000);
+  await expectFlash(page, "Check your email");
 
   // Read this recipient's verification mail (recipient-scoped, parallel-safe) and
   // follow the emitted link — asserting it is absolute, so a relative-link

@@ -21,9 +21,7 @@ test("password reset flow completes successfully", async ({
   await click(page, SEL.submit);
 
   // Page should show a neutral confirmation (not confirm whether user exists).
-  await expect(page.locator("p")).toContainText(/check|sent|email/i, {
-    timeout: 10_000,
-  });
+  await expect(page.locator("p")).toContainText(/check|sent|email/i);
 
   // Read this recipient's reset mail (recipient-scoped, parallel-safe) and follow
   // the emitted link — asserting it is absolute, so a relative-link regression fails.
@@ -38,7 +36,7 @@ test("password reset flow completes successfully", async ({
   // Login with the OLD password should fail
   await goto(page, "/login");
   await fillLoginForm(page, verifiedUser.username, verifiedUser.password);
-  await expect(page.locator(SEL.error)).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator(SEL.error)).toBeVisible();
 
   // Login with new password should succeed from the same hydrated login page.
   await page.fill(SEL.username, "");
