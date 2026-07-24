@@ -37,7 +37,7 @@ use rstest_reuse::*;
 
 use crate::helpers::create_session_for;
 use storage::test_support::{
-    backends, fp, recorded_postgres_url, sqlite_url, template_postgres_url, Backend,
+    backends, fp, recorded_postgres_url, seed_users, sqlite_url, template_postgres_url, Backend,
     PostgresDbGuard, SeedUser, TestEnv,
 };
 
@@ -185,8 +185,7 @@ async fn local_channel_id_returns_seeded_local(#[case] backend: Backend) {
 async fn subscribe_is_idempotent_and_active(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let author = SeedUser::new().seed(state).await.user_id;
-    let bob = SeedUser::new().seed(state).await.user_id;
+    let [author, bob] = seed_users(state).await;
     let local = local_channel_id(backend, &env).await;
     let id1 = state
         .subscriptions
@@ -276,16 +275,7 @@ async fn pending_subscription_is_not_admitted(#[case] backend: Backend) {
             ))
         }
     };
-    let author = SeedUser::new()
-        .password("pw1234567")
-        .seed(&env.state)
-        .await
-        .user_id;
-    let bob = SeedUser::new()
-        .password("pw1234567")
-        .seed(&env.state)
-        .await
-        .user_id;
+    let [author, bob] = seed_users(&env.state).await;
     let local = local_channel_id(backend, &env).await;
     store
         .subscribe(author, local, &bob.to_string())
@@ -368,8 +358,7 @@ async fn audience_create_list_rename_delete(#[case] backend: Backend) {
 async fn audience_duplicate_name_rejected(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let alice = SeedUser::new().seed(state).await.user_id;
-    let bob = SeedUser::new().seed(state).await.user_id;
+    let [alice, bob] = seed_users(state).await;
 
     state
         .audiences
@@ -413,8 +402,7 @@ async fn audience_duplicate_name_rejected(#[case] backend: Backend) {
 async fn audience_membership_round_trip(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let author = SeedUser::new().seed(state).await.user_id;
-    let bob = SeedUser::new().seed(state).await.user_id;
+    let [author, bob] = seed_users(state).await;
     let local = local_channel_id(backend, &env).await;
     let sub = state
         .subscriptions
@@ -476,8 +464,7 @@ async fn audience_membership_round_trip(#[case] backend: Backend) {
 async fn audience_add_member_cross_author_rejected(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let alice = SeedUser::new().seed(state).await.user_id;
-    let bob = SeedUser::new().seed(state).await.user_id;
+    let [alice, bob] = seed_users(state).await;
     let local = local_channel_id(backend, &env).await;
     // Subscription owned by BOB.
     let bob_sub = state
@@ -518,8 +505,7 @@ async fn audience_add_member_cross_author_rejected(#[case] backend: Backend) {
 async fn audience_members_are_author_scoped(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let alice = SeedUser::new().seed(state).await.user_id;
-    let bob = SeedUser::new().seed(state).await.user_id;
+    let [alice, bob] = seed_users(state).await;
     let local = local_channel_id(backend, &env).await;
     // A subscription and audience both owned by ALICE, with the sub as a member.
     let alice_sub = state
@@ -572,8 +558,7 @@ async fn audience_members_are_author_scoped(#[case] backend: Backend) {
 async fn audience_delete_cascades_memberships(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let alice = SeedUser::new().seed(state).await.user_id;
-    let bob = SeedUser::new().seed(state).await.user_id;
+    let [alice, bob] = seed_users(state).await;
     let local = local_channel_id(backend, &env).await;
     let sub = state
         .subscriptions
@@ -725,10 +710,7 @@ async fn create_user_duplicate_and_authenticate_work(#[case] backend: Backend) {
 async fn session_lifecycle_works(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = SeedUser::new()
-        .password("secret_password")
-        .seed(state)
-        .await;
+    let user = SeedUser::new().seed(state).await;
 
     let raw_token = state
         .sessions
@@ -1051,7 +1033,6 @@ async fn update_profile_persists_changes(#[case] backend: Backend) {
     let state = &env.state;
 
     let user_id = SeedUser::new()
-        .password("passw0rd!")
         .display_name("Dave")
         .seed(state)
         .await
@@ -1166,8 +1147,7 @@ async fn list_sessions_returns_only_sessions_for_given_user(#[case] backend: Bac
     let env = backend.setup().await;
     let state = &env.state;
 
-    let alice_id = SeedUser::new().seed(state).await.user_id;
-    let bob_id = SeedUser::new().seed(state).await.user_id;
+    let [alice_id, bob_id] = seed_users(state).await;
 
     state
         .sessions
@@ -2271,16 +2251,8 @@ async fn post_update_not_found_returns_error(#[case] backend: Backend) {
 async fn post_update_by_non_owner_returns_unauthorized(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let owner = SeedUser::new()
-        .password("password")
-        .seed(state)
-        .await
-        .user_id;
-    let other = SeedUser::new()
-        .password("password")
-        .seed(state)
-        .await
-        .user_id;
+    let owner = SeedUser::new().seed(state).await.user_id;
+    let other = SeedUser::new().seed(state).await.user_id;
 
     let post_id = state
         .posts
@@ -3227,7 +3199,6 @@ async fn multiple_tags_on_single_post(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user = SeedUser::new()
-        .password("password")
         .display_name("Multi")
         .seed(state)
         .await
@@ -3285,7 +3256,6 @@ async fn empty_tag_list(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user = SeedUser::new()
-        .password("password")
         .display_name("NoTag")
         .seed(state)
         .await
@@ -3323,7 +3293,6 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user = SeedUser::new()
-        .password("password")
         .display_name("Case")
         .seed(state)
         .await
@@ -3407,7 +3376,6 @@ async fn tag_list_pagination(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user = SeedUser::new()
-        .password("password")
         .display_name("Pagination")
         .seed(state)
         .await
@@ -3458,14 +3426,12 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user1 = SeedUser::new()
-        .password("password")
         .display_name("User1")
         .seed(state)
         .await
         .user_id;
 
     let user2 = SeedUser::new()
-        .password("password")
         .display_name("User2")
         .seed(state)
         .await
@@ -3556,7 +3522,6 @@ async fn selective_untag(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user = SeedUser::new()
-        .password("password")
         .display_name("Selective")
         .seed(state)
         .await
@@ -3627,7 +3592,6 @@ async fn numeric_tag(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user = SeedUser::new()
-        .password("password")
         .display_name("Numeric")
         .seed(state)
         .await
@@ -3685,7 +3649,6 @@ async fn retag_same_post_with_same_tag_fails(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user = SeedUser::new()
-        .password("password")
         .display_name("Retag")
         .seed(state)
         .await
@@ -3774,7 +3737,6 @@ async fn list_user_posts_by_nonexistent_tag(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user = SeedUser::new()
-        .password("password")
         .display_name("UserTagNope")
         .seed(state)
         .await
@@ -3802,7 +3764,6 @@ async fn many_tags_many_posts(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user = SeedUser::new()
-        .password("password")
         .display_name("ManyTags")
         .seed(state)
         .await
@@ -3865,7 +3826,6 @@ async fn tag_all_numeric(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user = SeedUser::new()
-        .password("password")
         .display_name("NumericOnly")
         .seed(state)
         .await
@@ -3917,7 +3877,6 @@ async fn tag_hyphen_boundaries(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user = SeedUser::new()
-        .password("password")
         .display_name("Hyphen")
         .seed(state)
         .await
@@ -3977,7 +3936,6 @@ async fn tag_with_long_display(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user = SeedUser::new()
-        .password("password")
         .display_name("LongTagUser")
         .seed(state)
         .await
@@ -4023,7 +3981,6 @@ async fn tag_list_ordering(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user = SeedUser::new()
-        .password("password")
         .display_name("Ordering")
         .seed(state)
         .await
@@ -4113,7 +4070,6 @@ async fn tags_for_multiple_posts(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user = SeedUser::new()
-        .password("password")
         .display_name("MultiPost")
         .seed(state)
         .await
@@ -4181,7 +4137,6 @@ async fn tag_mixed_alphanumeric(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user = SeedUser::new()
-        .password("password")
         .display_name("Mixed")
         .seed(state)
         .await
@@ -4238,7 +4193,6 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user = SeedUser::new()
-        .password("password")
         .display_name("Simple")
         .seed(state)
         .await
@@ -4311,7 +4265,6 @@ async fn tag_creation_and_retrieval(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user = SeedUser::new()
-        .password("password")
         .display_name("Alice")
         .seed(state)
         .await
@@ -4357,7 +4310,6 @@ async fn tag_normalization(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user = SeedUser::new()
-        .password("password")
         .display_name("Bob")
         .seed(state)
         .await
@@ -4403,7 +4355,6 @@ async fn untag_post(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user = SeedUser::new()
-        .password("password")
         .display_name("Charlie")
         .seed(state)
         .await
@@ -4460,7 +4411,6 @@ async fn duplicate_tag_error(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user = SeedUser::new()
-        .password("password")
         .display_name("Dave")
         .seed(state)
         .await
@@ -4508,14 +4458,12 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user1 = SeedUser::new()
-        .password("password")
         .display_name("Eve")
         .seed(state)
         .await
         .user_id;
 
     let user2 = SeedUser::new()
-        .password("password")
         .display_name("Frank")
         .seed(state)
         .await
@@ -4584,14 +4532,12 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user1 = SeedUser::new()
-        .password("password")
         .display_name("Grace")
         .seed(state)
         .await
         .user_id;
 
     let user2 = SeedUser::new()
-        .password("password")
         .display_name("Henry")
         .seed(state)
         .await
@@ -4707,7 +4653,6 @@ async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user = SeedUser::new()
-        .password("password")
         .display_name("Iris")
         .seed(state)
         .await
@@ -4801,7 +4746,6 @@ async fn untag_nonexistent_tag_error(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user = SeedUser::new()
-        .password("password")
         .display_name("Karen")
         .seed(state)
         .await
@@ -4840,7 +4784,6 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user = SeedUser::new()
-        .password("password")
         .display_name("Jack")
         .seed(state)
         .await
@@ -4909,11 +4852,7 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
 async fn post_update_invalid_slug(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = SeedUser::new()
-        .password("password")
-        .seed(state)
-        .await
-        .user_id;
+    let user = SeedUser::new().seed(state).await.user_id;
 
     let post_id = state
         .posts
@@ -4981,11 +4920,7 @@ async fn post_update_invalid_slug(#[case] backend: Backend) {
 async fn list_published_cursor_boundary(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = SeedUser::new()
-        .password("password")
-        .seed(state)
-        .await
-        .user_id;
+    let user = SeedUser::new().seed(state).await.user_id;
 
     let now = Utc::now();
 
@@ -5041,11 +4976,7 @@ async fn list_published_cursor_boundary(#[case] backend: Backend) {
 async fn list_drafts_cursor_boundary(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = SeedUser::new()
-        .password("password")
-        .seed(state)
-        .await
-        .user_id;
+    let user = SeedUser::new().seed(state).await.user_id;
 
     let _now = Utc::now();
 
@@ -5101,11 +5032,7 @@ async fn list_drafts_cursor_boundary(#[case] backend: Backend) {
 async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = SeedUser::new()
-        .password("password")
-        .seed(state)
-        .await
-        .user_id;
+    let user = SeedUser::new().seed(state).await.user_id;
 
     let now = Utc::now();
 
@@ -5176,11 +5103,7 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
 async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = SeedUser::new()
-        .password("password")
-        .seed(state)
-        .await
-        .user_id;
+    let user = SeedUser::new().seed(state).await.user_id;
 
     let now = Utc::now();
 
@@ -5250,11 +5173,7 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
 async fn soft_delete_then_operations(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = SeedUser::new()
-        .password("password")
-        .seed(state)
-        .await
-        .user_id;
+    let user = SeedUser::new().seed(state).await.user_id;
 
     let post_id = state
         .posts
@@ -5309,11 +5228,7 @@ async fn soft_delete_then_operations(#[case] backend: Backend) {
 async fn tag_post_multiple_attempts(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = SeedUser::new()
-        .password("password")
-        .seed(state)
-        .await
-        .user_id;
+    let user = SeedUser::new().seed(state).await.user_id;
 
     let post_id = state
         .posts
@@ -5368,7 +5283,7 @@ async fn tag_post_multiple_attempts(#[case] backend: Backend) {
 async fn list_published_by_user_no_posts(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = SeedUser::new().password("password").seed(state).await;
+    let user = SeedUser::new().seed(state).await;
 
     let posts = state
         .posts
@@ -5406,7 +5321,7 @@ async fn list_published_by_user_no_posts(#[case] backend: Backend) {
 async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = SeedUser::new().password("password").seed(state).await;
+    let user = SeedUser::new().seed(state).await;
 
     let created_at = Utc::now();
 
@@ -5473,11 +5388,7 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
 async fn update_soft_deleted_post(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = SeedUser::new()
-        .password("password")
-        .seed(state)
-        .await
-        .user_id;
+    let user = SeedUser::new().seed(state).await.user_id;
 
     let post_id = state
         .posts
@@ -5537,11 +5448,7 @@ async fn update_soft_deleted_post(#[case] backend: Backend) {
 async fn tag_edge_case_formats(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = SeedUser::new()
-        .password("password")
-        .seed(state)
-        .await
-        .user_id;
+    let user = SeedUser::new().seed(state).await.user_id;
 
     let post_id = state
         .posts
@@ -5611,11 +5518,7 @@ async fn get_post_by_id_nonexistent(#[case] backend: Backend) {
 async fn list_published_with_cursor_same_timestamp(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = SeedUser::new()
-        .password("password")
-        .seed(state)
-        .await
-        .user_id;
+    let user = SeedUser::new().seed(state).await.user_id;
 
     let now = Utc::now();
 
@@ -5668,11 +5571,7 @@ async fn list_published_with_cursor_same_timestamp(#[case] backend: Backend) {
 async fn post_revisions_created(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = SeedUser::new()
-        .password("password")
-        .seed(state)
-        .await
-        .user_id;
+    let user = SeedUser::new().seed(state).await.user_id;
 
     let post_id = state
         .posts
@@ -5721,11 +5620,7 @@ async fn post_revisions_created(#[case] backend: Backend) {
 async fn tag_display_preservation(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = SeedUser::new()
-        .password("password")
-        .seed(state)
-        .await
-        .user_id;
+    let user = SeedUser::new().seed(state).await.user_id;
 
     let post_id = state
         .posts
@@ -5766,11 +5661,7 @@ async fn tag_display_preservation(#[case] backend: Backend) {
 async fn untag_preserves_other_tags(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = SeedUser::new()
-        .password("password")
-        .seed(state)
-        .await
-        .user_id;
+    let user = SeedUser::new().seed(state).await.user_id;
 
     let post_id = state
         .posts
@@ -5878,11 +5769,7 @@ async fn site_config_operations(#[case] backend: Backend) {
 async fn session_list_operations(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user = SeedUser::new()
-        .password("password")
-        .seed(state)
-        .await
-        .user_id;
+    let user = SeedUser::new().seed(state).await.user_id;
 
     let session1 = state
         .sessions
@@ -6524,8 +6411,7 @@ async fn delete_nonexistent_returns_not_found(#[case] backend: Backend) {
 async fn list_media_returns_records_for_user(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let user_a = SeedUser::new().seed(state).await.user_id;
-    let user_b = SeedUser::new().seed(state).await.user_id;
+    let [user_a, user_b] = seed_users(state).await;
 
     let sha1 = "eeee1234eeee1234eeee1234eeee1234eeee1234eeee1234eeee1234eeee1234".to_string();
     let sha2 = "ffff1234ffff1234ffff1234ffff1234ffff1234ffff1234ffff1234ffff1234".to_string();
@@ -6776,7 +6662,6 @@ async fn list_tags_returns_alphabetical_with_prefix(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user = SeedUser::new()
-        .password("password")
         .display_name("ListTags")
         .seed(state)
         .await
@@ -6844,7 +6729,6 @@ async fn post_record_carries_tags(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user = SeedUser::new()
-        .password("password")
         .display_name("Inline")
         .seed(state)
         .await
@@ -6983,8 +6867,7 @@ async fn composite_fks_reject_cross_author_membership(#[case] backend: Backend) 
     let env = backend.setup().await;
     let state = &env.state;
     // Users via the already-wired UserStore; audience + subscription via raw SQL.
-    let a = SeedUser::new().seed(state).await.user_id;
-    let b = SeedUser::new().seed(state).await.user_id;
+    let [a, b] = seed_users(state).await;
 
     raw_exec(
         backend,
@@ -7039,10 +6922,7 @@ async fn resolution_matrix(#[case] backend: Backend) {
     let local = local_channel_id(backend, &env).await;
 
     // Author A and three other accounts (S, M, N). N never subscribes.
-    let a = SeedUser::new().seed(state).await.user_id;
-    let s = SeedUser::new().seed(state).await.user_id;
-    let m = SeedUser::new().seed(state).await.user_id;
-    let n = SeedUser::new().seed(state).await.user_id;
+    let [a, s, m, n] = seed_users(state).await;
 
     // S and M are active subscribers to A; N is not. M is additionally a member
     // of audience G (but not G2).
