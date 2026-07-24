@@ -9,7 +9,7 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{
-    post_form_with_bearer, post_form_with_secure_flag, post_form_with_ua, session_cookie,
+    create_user_and_session, post_form_with_bearer, post_form_with_secure_flag, post_form_with_ua,
 };
 use storage::test_support::{backends, backends_matrix, Backend, TestEnv};
 
@@ -508,30 +508,16 @@ async fn logout_revokes_session_and_clears_cookie(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     // Create a user and a session directly, bypassing the HTTP layer so we
     // have the raw token without needing to parse the register response.
-    let user_id = state
-        .users
-        .create_user(
-            &"grace".parse::<Username>().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let raw_token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
+    let session = create_user_and_session(&state, "grace").await;
 
-    let sessions_before = state.sessions.list_sessions(user_id).await.unwrap();
+    let sessions_before = state.sessions.list_sessions(session.user_id).await.unwrap();
     assert_eq!(
         sessions_before.len(),
         1,
         "one session should exist before logout"
     );
 
-    let cookie_header = session_cookie(&raw_token);
+    let cookie_header = session.cookie();
     let (status, set_cookie, _body) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/logout",
@@ -549,7 +535,7 @@ async fn logout_revokes_session_and_clears_cookie(#[case] backend: Backend) {
         "logout should clear cookie via Max-Age=0, got: {clear_cookie}"
     );
 
-    let sessions_after = state.sessions.list_sessions(user_id).await.unwrap();
+    let sessions_after = state.sessions.list_sessions(session.user_id).await.unwrap();
     assert!(
         sessions_after.is_empty(),
         "session should be revoked after logout"
@@ -651,25 +637,11 @@ async fn logout_with_bearer_token_revokes_session(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
     // Create a user and session directly so we have the raw token.
-    let user_id = state
-        .users
-        .create_user(
-            &"henry".parse::<Username>().expect("valid username"),
-            &"password123".parse().expect("valid password"),
-            None,
-            false,
-        )
-        .await
-        .expect("failed to create user");
-    let raw_token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .expect("failed to create session");
+    let session = create_user_and_session(&state, "henry").await;
 
     let sessions_before = state
         .sessions
-        .list_sessions(user_id)
+        .list_sessions(session.user_id)
         .await
         .expect("failed to list sessions");
     assert_eq!(
@@ -679,8 +651,13 @@ async fn logout_with_bearer_token_revokes_session(#[case] backend: Backend) {
     );
 
     // POST to /api/logout with Bearer token instead of a cookie.
-    let (status, set_cookie, _body) =
-        post_form_with_bearer(Arc::clone(&state), "/api/logout", "", raw_token.as_ref()).await;
+    let (status, set_cookie, _body) = post_form_with_bearer(
+        Arc::clone(&state),
+        "/api/logout",
+        "",
+        session.token.as_ref(),
+    )
+    .await;
 
     assert_eq!(
         status,
@@ -696,7 +673,7 @@ async fn logout_with_bearer_token_revokes_session(#[case] backend: Backend) {
 
     let sessions_after = state
         .sessions
-        .list_sessions(user_id)
+        .list_sessions(session.user_id)
         .await
         .expect("failed to list sessions after logout");
     assert!(
@@ -783,23 +760,7 @@ async fn auth_user_extraction_fails(backend: Backend, #[case] cookie: Option<&st
 #[tokio::test]
 async fn logout_clears_cookie_without_secure_attribute_when_disabled(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let user_id = state
-        .users
-        .create_user(
-            &"insecure".parse::<Username>().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let raw_token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
-
-    let cookie_header = session_cookie(&raw_token);
+    let cookie_header = create_user_and_session(&state, "insecure").await.cookie();
     let (status, set_cookie, _) = post_form_with_secure_flag(
         Arc::clone(&state),
         "/api/logout",

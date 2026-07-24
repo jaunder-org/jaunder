@@ -1,49 +1,23 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
-use common::ids::UserId;
-use common::token::RawToken;
-use common::username::Username;
 
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{post_form, session_cookie};
+use crate::helpers::{create_user_and_session, post_form};
 use storage::test_support::{backends, Backend, TestEnv};
-
-/// Creates a user and a session, returning (`user_id`, `raw_token`, `cookie_header`).
-async fn create_user_and_session(
-    state: &Arc<storage::AppState>,
-    username: &str,
-) -> (UserId, RawToken, String) {
-    let user_id = state
-        .users
-        .create_user(
-            &username.parse::<Username>().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let raw_token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
-    let cookie = session_cookie(&raw_token);
-    (user_id, raw_token, cookie)
-}
 
 #[apply(backends)]
 #[tokio::test]
 async fn list_sessions_returns_sessions_for_authenticated_user(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let (user_id, raw_token, cookie) = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state, "alice").await;
+    let cookie = session.cookie();
     // Create a second session with a label.
     state
         .sessions
-        .create_session(user_id, "mobile")
+        .create_session(session.user_id, "mobile")
         .await
         .unwrap();
 
@@ -59,15 +33,13 @@ async fn list_sessions_returns_sessions_for_authenticated_user(#[case] backend: 
         body.contains("mobile"),
         "label should appear in body: {body}"
     );
-    // Suppress unused variable warning — raw_token was used to authenticate.
-    let _ = raw_token;
 }
 
 #[apply(backends)]
 #[tokio::test]
 async fn list_sessions_marks_current_session(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let (_user_id, _raw_token, cookie) = create_user_and_session(&state, "alice").await;
+    let cookie = create_user_and_session(&state, "alice").await.cookie();
 
     let (status, body) =
         post_form(Arc::clone(&state), "/api/list_sessions", "", Some(&cookie)).await;
@@ -93,11 +65,12 @@ async fn list_sessions_requires_authentication(#[case] backend: Backend) {
 #[tokio::test]
 async fn revoke_session_removes_session_for_authenticated_user(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let (user_id, raw_token1, cookie1) = create_user_and_session(&state, "alice").await;
+    let session = create_user_and_session(&state, "alice").await;
+    let cookie1 = session.cookie();
     // Create a second session to revoke.
     let raw_token2 = state
         .sessions
-        .create_session(user_id, "test session")
+        .create_session(session.user_id, "test session")
         .await
         .unwrap();
     let token_hash2 = state
@@ -119,15 +92,15 @@ async fn revoke_session_removes_session_for_authenticated_user(#[case] backend: 
     assert_eq!(status, StatusCode::OK);
 
     // Verify the revoked session is gone but the requester's session remains.
-    let sessions = state.sessions.list_sessions(user_id).await.unwrap();
+    let sessions = state.sessions.list_sessions(session.user_id).await.unwrap();
     assert_eq!(sessions.len(), 1, "only one session should remain");
     assert!(
         !sessions.iter().any(|s| s.token_hash == token_hash2),
         "revoked session should not appear"
     );
-    // The requesting session (raw_token1) should still be valid.
+    // The requesting session should still be valid.
     assert!(
-        state.sessions.authenticate(&raw_token1).await.is_ok(),
+        state.sessions.authenticate(&session.token).await.is_ok(),
         "requesting session should still be valid"
     );
 }
@@ -136,11 +109,11 @@ async fn revoke_session_removes_session_for_authenticated_user(#[case] backend: 
 #[tokio::test]
 async fn revoke_session_rejects_session_belonging_to_another_user(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let (_alice_id, _alice_token, alice_cookie) = create_user_and_session(&state, "alice").await;
-    let (bob_id, bob_raw_token, _bob_cookie) = create_user_and_session(&state, "bob").await;
+    let alice_cookie = create_user_and_session(&state, "alice").await.cookie();
+    let bob = create_user_and_session(&state, "bob").await;
     let bob_token_hash = state
         .sessions
-        .authenticate(&bob_raw_token)
+        .authenticate(&bob.token)
         .await
         .unwrap()
         .token_hash;
@@ -158,7 +131,7 @@ async fn revoke_session_rejects_session_belonging_to_another_user(#[case] backen
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 
     // Bob's session should still exist.
-    let bob_sessions = state.sessions.list_sessions(bob_id).await.unwrap();
+    let bob_sessions = state.sessions.list_sessions(bob.user_id).await.unwrap();
     assert!(
         !bob_sessions.is_empty(),
         "Bob's session should not be revoked"
@@ -185,8 +158,8 @@ async fn revoke_session_requires_authentication(#[case] backend: Backend) {
 #[tokio::test]
 async fn create_app_password_mints_labelled_session(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let (user_id, raw_token, cookie) = create_user_and_session(&state, "alice").await;
-    let _ = raw_token;
+    let session = create_user_and_session(&state, "alice").await;
+    let cookie = session.cookie();
 
     let (status, body) = post_form(
         Arc::clone(&state),
@@ -201,7 +174,7 @@ async fn create_app_password_mints_labelled_session(#[case] backend: Backend) {
     assert!(body.contains("MarsEdit"), "label missing: {body}");
 
     // The new app password appears as a session with its label.
-    let sessions = state.sessions.list_sessions(user_id).await.unwrap();
+    let sessions = state.sessions.list_sessions(session.user_id).await.unwrap();
     assert!(sessions.iter().any(|s| s.label == "MarsEdit"));
 }
 
@@ -209,7 +182,7 @@ async fn create_app_password_mints_labelled_session(#[case] backend: Backend) {
 #[tokio::test]
 async fn create_app_password_rejects_blank_label(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let (_user_id, _raw_token, cookie) = create_user_and_session(&state, "alice").await;
+    let cookie = create_user_and_session(&state, "alice").await.cookie();
 
     let (status, _body) = post_form(
         Arc::clone(&state),

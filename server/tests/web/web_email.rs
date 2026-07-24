@@ -4,13 +4,12 @@ use axum::http::StatusCode;
 use chrono::Utc;
 use common::mailer::test_utils::CapturingMailSender;
 use common::test_support::parse_email;
-use common::username::Username;
 
 use crate::helpers::{
-    assert_no_email, assert_one_absolute_link_email, post_form_with_mailer, session_cookie,
-    setup_with_base_url,
+    assert_no_email, assert_one_absolute_link_email, create_user_and_session,
+    post_form_with_mailer, setup_with_base_url,
 };
-use storage::test_support::{backends, Backend, TestEnv};
+use storage::test_support::{backends, Backend, SeedUser, TestEnv};
 
 use rstest::*;
 use rstest_reuse::*;
@@ -24,22 +23,7 @@ async fn request_email_verification_creates_row_and_sends_email(#[case] backend:
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let user_id = state
-        .users
-        .create_user(
-            &"alice".parse::<Username>().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let raw_token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
-    let cookie = session_cookie(&raw_token);
+    let cookie = create_user_and_session(&state, "alice").await.cookie();
 
     let (status, _body) = post_form_with_mailer(
         Arc::clone(&state),
@@ -62,22 +46,7 @@ async fn request_email_verification_without_base_url_returns_error(#[case] backe
     let TestEnv { state, base: _base } = backend.setup().await; // no base_url seeded
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let user_id = state
-        .users
-        .create_user(
-            &"alice".parse::<Username>().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let raw_token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
-    let cookie = session_cookie(&raw_token);
+    let cookie = create_user_and_session(&state, "alice").await.cookie();
 
     let (status, _body) = post_form_with_mailer(
         Arc::clone(&state),
@@ -99,16 +68,7 @@ async fn verify_email_with_valid_token_sets_email_verified(#[case] backend: Back
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let user_id = state
-        .users
-        .create_user(
-            &"bob".parse::<Username>().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("bob").seed(&state).await;
 
     let email = parse_email("bob@example.com");
     let expires_at = Utc::now() + chrono::Duration::hours(24);
@@ -141,16 +101,7 @@ async fn verify_email_with_expired_token_returns_error(#[case] backend: Backend)
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let user_id = state
-        .users
-        .create_user(
-            &"carol".parse::<Username>().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+    let user_id = SeedUser::new("carol").seed(&state).await;
 
     let expires_at = Utc::now() - chrono::Duration::hours(1);
     let raw_token = state
@@ -239,18 +190,7 @@ async fn request_email_verification_invalid_email_returns_error(#[case] backend:
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let username: Username = "alice".parse().unwrap();
-    let user_id = state
-        .users
-        .create_user(&username, &"password123".parse().unwrap(), None, false)
-        .await
-        .unwrap();
-    let raw_token = state
-        .sessions
-        .create_session(user_id, "test session")
-        .await
-        .unwrap();
-    let cookie_header = session_cookie(&raw_token);
+    let cookie_header = create_user_and_session(&state, "alice").await.cookie();
 
     let (status, _) = post_form_with_mailer(
         state,
