@@ -15,6 +15,7 @@ pub mod bio;
 mod db_enum;
 pub mod display_name;
 pub mod email;
+pub mod etag;
 pub mod feed;
 pub mod ids;
 pub mod invite;
