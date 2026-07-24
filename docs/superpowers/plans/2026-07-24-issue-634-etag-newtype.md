@@ -296,7 +296,7 @@ Run `cargo xtask check` first (clean).
 
 ---
 
-## Task 2: `site.rs` producer + consumer
+## Task 2 — ✅ DONE (commit 6ddc3a1e): `site.rs` producer + consumer
 
 **Files:**
 

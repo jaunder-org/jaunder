@@ -26,6 +26,7 @@ use axum::{
     routing::get,
     Router,
 };
+use common::etag::ETag;
 use common::pagination::PageSize;
 use common::seed::{PageSeed, TimelinePage};
 use common::slug::Slug;
@@ -34,7 +35,6 @@ use common::username::Username;
 use common::visibility::ViewerIdentity;
 
 use crate::soft_path::SoftPath;
-use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use storage::{fetch_post_record, PostStorage, UserStorage};
 use web::posts::{
@@ -102,10 +102,10 @@ pub fn document(seed: &PageSeed) -> String {
 /// already matches. Identical `seed` ⇒ identical bytes ⇒ identical `ETag`.
 fn cacheable(headers: &HeaderMap, seed: &PageSeed) -> Response {
     let body = document(seed);
-    let etag = format!("\"sha256-{:x}\"", Sha256::digest(body.as_bytes()));
+    let etag = ETag::sha256_of(body.as_bytes());
 
     if let Some(inm) = headers.get(header::IF_NONE_MATCH) {
-        if inm.to_str().ok() == Some(etag.as_str()) {
+        if inm.to_str().ok() == Some(etag.as_ref()) {
             return StatusCode::NOT_MODIFIED.into_response();
         }
     }
@@ -115,7 +115,7 @@ fn cacheable(headers: &HeaderMap, seed: &PageSeed) -> Response {
         header::CONTENT_TYPE,
         HeaderValue::from_static("text/html; charset=utf-8"),
     );
-    if let Ok(value) = HeaderValue::from_str(&etag) {
+    if let Ok(value) = HeaderValue::from_str(etag.as_ref()) {
         resp_headers.insert(header::ETAG, value);
     }
     resp_headers.insert(
