@@ -13,6 +13,7 @@ use common::absolute_url::compose;
 use common::backup::BackupMode;
 use common::display_name::DisplayName;
 use common::email::Email;
+use common::invite::InviteTtlHours;
 use common::mailer::{EmailMessage, MailSender};
 use common::password::Password;
 use common::token::RawToken;
@@ -290,15 +291,18 @@ pub async fn cmd_app_password_create(
 ///
 /// Returns an error if the database cannot be opened, or if the invitation
 /// cannot be saved.
-pub async fn cmd_user_invite(storage: &StorageArgs, expires_in: Option<u64>) -> anyhow::Result<()> {
+pub async fn cmd_user_invite(
+    storage: &StorageArgs,
+    expires_in: Option<InviteTtlHours>,
+) -> anyhow::Result<()> {
     let state = open_existing_database(&storage.db)
         .await
         .map_err(|e| anyhow::anyhow!("{e}; run `jaunder init` first"))?;
 
-    let hours_u64 = expires_in.unwrap_or(168);
-    let hours = i64::try_from(hours_u64)
-        .map_err(|_| anyhow::anyhow!("--expires-in value {hours_u64} is too large"))?;
-    let expires_at = chrono::Utc::now() + chrono::Duration::hours(hours);
+    // The 1..=336 bound lives in `InviteTtlHours` (clap rejects an out-of-range `--expires-in`
+    // at parse), so no in-body overflow check is needed.
+    let expires_at =
+        chrono::Utc::now() + chrono::Duration::hours(expires_in.unwrap_or_default().value());
 
     let code = state.invites.create_invite(expires_at).await?;
     host::metrics::invite(host::metrics::InviteEvent::Created);
@@ -764,6 +768,7 @@ fn format_entries(entries: &[(String, String)]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::test_support::parse_invite_ttl_hours;
     use storage::DbConnectOptions;
     use tempfile::TempDir;
 
@@ -958,7 +963,7 @@ mod tests {
         };
 
         let before = chrono::Utc::now();
-        cmd_user_invite(&storage_args, Some(24))
+        cmd_user_invite(&storage_args, Some(parse_invite_ttl_hours("24")))
             .await
             .expect("create invite");
 
@@ -992,7 +997,7 @@ mod tests {
             db: opts,
         };
 
-        cmd_user_invite(&storage_args, Some(24))
+        cmd_user_invite(&storage_args, Some(parse_invite_ttl_hours("24")))
             .await
             .expect("create invite");
 

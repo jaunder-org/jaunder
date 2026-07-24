@@ -15,6 +15,7 @@ use {
 use crate::error::WebResult;
 use common::email::Email;
 use common::ids::UserId;
+use common::invite::InviteTtlHours;
 use common::time::UtcInstant;
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -37,7 +38,10 @@ pub struct InviteInfo {
 /// code is never returned to the client (#400) — it is delivered only as the link in
 /// the email (mirrors `request_password_reset`).
 #[server(endpoint = "/create_invite")]
-pub async fn create_invite(expires_in_hours: Option<u64>, recipient_email: Email) -> WebResult<()> {
+pub async fn create_invite(
+    expires_in_hours: Option<InviteTtlHours>,
+    recipient_email: Email,
+) -> WebResult<()> {
     boundary!("create_invite", {
         let _auth = require_auth().await?;
         let invites = expect_context::<Arc<dyn InviteStorage>>();
@@ -50,12 +54,11 @@ pub async fn create_invite(expires_in_hours: Option<u64>, recipient_email: Email
         // address at decode time (ADR-0065), so no in-handler parse is needed.
         let base_url = crate::mail::require_base_url(&*site_config).await?;
 
-        let hours = expires_in_hours.unwrap_or(168);
-        let duration = i64::try_from(hours)
-            .ok()
-            .and_then(chrono::Duration::try_hours)
-            .ok_or_else(|| InternalError::validation("expires_in_hours too large"))?;
-        let expires_at = Utc::now() + duration;
+        // The bound now lives in `InviteTtlHours` (1..=336): the typed arg rejects an
+        // out-of-range value at decode, so no in-body overflow check is needed. `hours` is
+        // reused in the email body below.
+        let hours = expires_in_hours.unwrap_or_default().value();
+        let expires_at = Utc::now() + chrono::Duration::hours(hours);
 
         let code = invites
             .create_invite(expires_at)

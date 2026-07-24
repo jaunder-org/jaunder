@@ -15,6 +15,7 @@ use crate::bio::Bio;
 use crate::display_name::DisplayName;
 use crate::email::Email;
 use crate::feed::{FeedMinDays, FeedMinItems};
+use crate::invite::InviteTtlHours;
 use crate::media::{ByteSize, ContentHash, ContentType, Filename, MaxFileSize, UserQuota};
 use crate::pagination::{PageOffset, PageSize};
 use crate::password::Password;
@@ -110,6 +111,17 @@ pub fn parse_bio(s: &str) -> Bio {
 #[must_use]
 pub fn parse_retention_count(s: &str) -> RetentionCount {
     s.parse().expect("valid test retention count")
+}
+
+/// Parse `s` into an [`InviteTtlHours`] for tests — the single place a test invite-TTL literal
+/// is parsed, so a malformed fixture fails loudly.
+///
+/// # Panics
+///
+/// Panics if `s` is not an integer in `1..=336`.
+#[must_use]
+pub fn parse_invite_ttl_hours(s: &str) -> InviteTtlHours {
+    s.parse().expect("valid test invite TTL")
 }
 
 /// Parse `s` into a valid [`DestinationPath`] for tests — the single place a test backup

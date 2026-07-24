@@ -6,6 +6,7 @@ use crate::forms::{Field, ValidatedInput};
 use crate::registration::get_registration_policy;
 use crate::topbar::Topbar;
 use common::email::Email;
+use common::invite::InviteTtlHours;
 use common::registration::RegistrationPolicy;
 use leptos::prelude::*;
 
@@ -19,6 +20,9 @@ use leptos::prelude::*;
 pub fn InvitesPage() -> impl IntoView {
     let create_action = ServerAction::<CreateInvite>::new();
     let recipient = Field::<Email>::new();
+    // Optional TTL: empty ⇒ valid ⇒ server default 168 (#582). A non-empty out-of-range value
+    // shows the newtype's message and gates submit.
+    let ttl = Field::<InviteTtlHours>::optional();
     let policy = Resource::new(|| (), |()| get_registration_policy());
     let invites = Resource::new(move || create_action.version().get(), |_| list_invites());
 
@@ -46,14 +50,20 @@ pub fn InvitesPage() -> impl IntoView {
                                             autocomplete="email"
                                             field=recipient
                                         />
-                                        <label>
-                                            "Expires in hours"
-                                            <input type="number" name="expires_in_hours" />
-                                        </label>
+                                        <ValidatedInput<
+                                        InviteTtlHours,
+                                    >
+                                            label="Expires in hours"
+                                            name="expires_in_hours"
+                                            input_type="number"
+                                            field=ttl
+                                        />
                                         <button
                                             type="submit"
                                             class="j-btn is-primary"
-                                            prop:disabled=move || !recipient.is_valid()
+                                            prop:disabled=move || {
+                                                !recipient.is_valid() || !ttl.is_valid()
+                                            }
                                         >
                                             "Send Invite"
                                         </button>

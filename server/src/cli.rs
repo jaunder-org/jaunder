@@ -5,6 +5,7 @@ use clap::{Args, Parser, Subcommand};
 
 use common::backup::BackupMode;
 use common::display_name::DisplayName;
+use common::invite::InviteTtlHours;
 use common::username::Username;
 use storage::DbConnectOptions;
 
@@ -186,9 +187,9 @@ pub enum Commands {
         #[command(flatten)]
         storage: StorageArgs,
 
-        /// Hours until the invite code expires. Defaults to 168 (7 days).
+        /// Hours until the invite code expires (1..=336). Defaults to 168 (7 days).
         #[arg(long)]
-        expires_in: Option<u64>,
+        expires_in: Option<InviteTtlHours>,
     },
 
     /// Send a test email via the configured SMTP relay.
@@ -287,7 +288,7 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
-    use common::test_support::parse_display_name;
+    use common::test_support::{parse_display_name, parse_invite_ttl_hours};
 
     /// Serializes all tests that read or write the env vars clap resolves at parse time.
     /// `cargo test` runs tests in parallel threads within the same process, so concurrent
@@ -603,7 +604,7 @@ mod tests {
         let Commands::UserInvite { expires_in, .. } = cli.command.expect("subcommand") else {
             unreachable!("parse yields Commands::UserInvite")
         };
-        assert_eq!(expires_in, Some(48));
+        assert_eq!(expires_in, Some(parse_invite_ttl_hours("48")));
     }
 
     #[test]

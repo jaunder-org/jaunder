@@ -10,7 +10,7 @@
 
 use std::str::FromStr;
 
-use macros::StrNewtype;
+use macros::{NumNewtype, StrNewtype};
 
 use crate::token::{validate_shape, InvalidTokenShape};
 
@@ -34,6 +34,22 @@ impl FromStr for ProfferedInviteCode {
         Ok(ProfferedInviteCode(s.to_owned()))
     }
 }
+
+/// Hours until an invite code expires — bounded `1..=336` (14 days), default 168 (7 days).
+///
+/// The bound that `create_invite` (web and CLI) used to enforce in-body now lives in the type.
+/// The `i64` inner feeds `chrono::Duration::hours` directly, and the `max = 336` keeps it far
+/// from overflow; the `NumNewtype` trailer rejects a non-integer, a negative, `0`, `> 336`, and
+/// (at serde/`FromStr`) a `u64::MAX`-shaped value that doesn't fit `i64`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, NumNewtype)]
+#[num_newtype(
+    inner = i64,
+    min = 1,
+    max = 336,
+    default = 168,
+    error = "invite expiry must be between 1 and 336 hours"
+)]
+pub struct InviteTtlHours(i64);
 
 #[cfg(test)]
 mod tests {
@@ -63,5 +79,62 @@ mod tests {
         let out = format!("{p:?}");
         assert!(!out.contains(raw));
         assert_eq!(out, "ProfferedInviteCode([redacted])");
+    }
+
+    #[test]
+    fn invite_ttl_hours_surface() {
+        // value()/From<Self>, trim, in-range parse.
+        assert_eq!(
+            "168".parse::<InviteTtlHours>().map(i64::from).ok(),
+            Some(168)
+        );
+        assert_eq!(
+            "  1  "
+                .parse::<InviteTtlHours>()
+                .map(InviteTtlHours::value)
+                .ok(),
+            Some(1)
+        );
+        assert_eq!(
+            "336"
+                .parse::<InviteTtlHours>()
+                .map(InviteTtlHours::value)
+                .ok(),
+            Some(336)
+        );
+        // FromStr rejects out-of-range / non-integer / u64::MAX (doesn't fit i64)...
+        for bad in ["0", "337", "-1", "abc", "1.5", "18446744073709551615"] {
+            assert!(
+                bad.parse::<InviteTtlHours>().is_err(),
+                "{bad} should reject"
+            );
+        }
+        // ...with the domain message.
+        assert!("0"
+            .parse::<InviteTtlHours>()
+            .err()
+            .is_some_and(|e| e.to_string().starts_with("invite expiry")));
+        // Default is 168 and Display round-trips.
+        let d = InviteTtlHours::default();
+        assert_eq!(d.value(), 168);
+        assert_eq!(d.to_string().parse::<InviteTtlHours>().ok(), Some(d));
+        // serde: bare integer, round-trip, wire-rejection of out-of-range.
+        assert_eq!(serde_json::to_string(&d).ok(), Some("168".to_owned()));
+        assert_eq!(
+            serde_json::from_str::<InviteTtlHours>("24")
+                .map(i64::from)
+                .ok(),
+            Some(24)
+        );
+        assert!(serde_json::from_str::<InviteTtlHours>("0").is_err());
+        assert!(serde_json::from_str::<InviteTtlHours>("337").is_err());
+        // The generated TryFrom<i64>.
+        assert_eq!(InviteTtlHours::try_from(48_i64).map(i64::from), Ok(48));
+        assert!(InviteTtlHours::try_from(0_i64).is_err());
+        // The shared fixture.
+        assert_eq!(
+            crate::test_support::parse_invite_ttl_hours("48").value(),
+            48
+        );
     }
 }
