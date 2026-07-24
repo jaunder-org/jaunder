@@ -1,6 +1,5 @@
 pub mod sessions;
 pub(crate) mod signal_read;
-pub mod site;
 pub mod ui;
 pub use ui::{Avatar, Icon, Icons, Sidebar, Topbar};
 
@@ -22,7 +21,6 @@ use crate::home::HomePage;
 use crate::invites::InvitesPage;
 use crate::media::MediaPage;
 use crate::pages::sessions::SessionsPage;
-use crate::pages::site::SiteSettingsPage;
 use crate::password_reset::{ForgotPasswordPage, ResetPasswordPage};
 use crate::posts::{
     CreatePostPage, DraftsPage, EditPostPage, PostPage, SiteTagPage, UserTagPage, UserTimelinePage,
@@ -30,6 +28,7 @@ use crate::posts::{
 use crate::profile::ProfilePage;
 use crate::registration::RegisterPage;
 use crate::route_segments::TildeUsername;
+use crate::site::SiteSettingsPage;
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, Title};
 use leptos_router::{

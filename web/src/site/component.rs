@@ -1,7 +1,7 @@
+use super::{get_site_identity, UpdateSiteIdentity};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
-use crate::pages::Topbar;
-use crate::site::{get_site_identity, UpdateSiteIdentity};
+use crate::topbar::Topbar;
 use common::absolute_url::AbsoluteUrl;
 use common::site::{SiteIdentity, SiteTitle};
 use leptos::prelude::*;
@@ -55,7 +55,6 @@ pub fn SiteSettingsPage() -> impl IntoView {
     }
 }
 
-// cov:ignore-start
 /// Renders the site-settings form, seeded from the persisted `identity`. The
 /// component-owned `title` buffer and the optional `base_url` `Field` are created
 /// **here** (inside the resolved-`identity` scope, like the backup form) so the
@@ -120,4 +119,3 @@ fn site_settings_form(
         </div>
     }
 }
-// cov:ignore-stop
