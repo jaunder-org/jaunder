@@ -6,7 +6,7 @@ use common::tag::{Tag, TagLabel};
 use common::test_support::{
     parse_audience_name, parse_bio, parse_byte_size, parse_content_hash, parse_content_type,
     parse_display_name, parse_email, parse_etag, parse_filename, parse_page_offset,
-    parse_raw_token, parse_session_label,
+    parse_raw_token, parse_session_label, parse_slug,
 };
 use common::username::Username;
 use common::visibility::{
@@ -17,13 +17,12 @@ use sqlx::{PgPool, SqlitePool};
 use std::sync::Arc;
 use storage::{
     create_rendered_post, open_database, perform_post_update, update_rendered_post, AppState,
-    AudienceError, ConfirmPasswordResetError, CreatePostError, CreatePostInput, CreateUserError,
-    DbConnectOptions, FeedCacheRow, GoLivePost, ListByTagError, PermalinkDate, PostCursor,
-    PostFormat, PostUpdate, PostgresSubscriptionStorage, ProfileUpdate, PublishUpdate,
-    RegisterWithInviteError, RenderedHtml, RenderedPostContent, RenderedPostUpdate,
-    SessionAuthError, SqliteSubscriptionStorage, SubscriptionStorage, TaggingError,
-    UpdatePostError, UpdatePostInput, UseEmailVerificationError, UseInviteError,
-    UsePasswordResetError, UserAuthError,
+    AudienceError, ConfirmPasswordResetError, CreatePostError, CreateUserError, DbConnectOptions,
+    FeedCacheRow, GoLivePost, ListByTagError, PermalinkDate, PostCursor, PostFormat, PostUpdate,
+    PostgresSubscriptionStorage, ProfileUpdate, PublishUpdate, RegisterWithInviteError,
+    RenderedHtml, RenderedPostContent, RenderedPostUpdate, SessionAuthError,
+    SqliteSubscriptionStorage, SubscriptionStorage, TaggingError, UpdatePostError, UpdatePostInput,
+    UseEmailVerificationError, UseInviteError, UsePasswordResetError, UserAuthError,
 };
 use tempfile::TempDir;
 
@@ -38,7 +37,7 @@ use rstest_reuse::*;
 use crate::helpers::create_session_for;
 use storage::test_support::{
     backends, fp, recorded_postgres_url, seed_users, sqlite_url, template_postgres_url, Backend,
-    PostgresDbGuard, SeedUser, TestEnv,
+    PostgresDbGuard, SeedRawPost, SeedUser, TestEnv,
 };
 
 // The Postgres-backed cases below (the `::postgres` expansion of each
@@ -1821,29 +1820,6 @@ async fn use_password_reset_unknown_token_returns_not_found(#[case] backend: Bac
 // PostStorage integration tests
 // ---------------------------------------------------------------------------
 
-fn make_create_post_input(user_id: UserId, slug: &str) -> CreatePostInput {
-    CreatePostInput {
-        user_id,
-        title: Some(format!("Post {slug}").into()),
-        slug: slug.parse().unwrap(),
-        body: "body text".into(),
-        format: PostFormat::Markdown,
-        rendered_html: RenderedHtml::from_trusted("<p>body text</p>"),
-        published_at: None,
-        summary: None,
-        audiences: vec![AudienceTarget::Public],
-        idempotency_key: None,
-    }
-}
-
-fn make_published_create_post_input(user_id: UserId, slug: &str) -> CreatePostInput {
-    CreatePostInput {
-        published_at: Some(Utc::now()),
-        summary: None,
-        ..make_create_post_input(user_id, slug)
-    }
-}
-
 /// Creates a public post for `user_id` with an explicit `published_at`, returning
 /// the new post id. A future `published_at` seeds a *scheduled* post (publicly
 /// invisible until its time); a past one a live post. Lets the boundary tests
@@ -2135,19 +2111,18 @@ async fn post_create_and_get_by_id_works(#[case] backend: Backend) {
     let state = &env.state;
     let user_id = SeedUser::new().seed(state).await.user_id;
 
-    let input = make_create_post_input(user_id, "hello-world");
-    let post_id = state.posts.create_post(&input).await.unwrap();
+    let post = SeedRawPost::new(user_id).draft().seed(state).await;
 
     let record = state
         .posts
-        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
+        .get_post_by_id(post.post_id, &ViewerIdentity::Anonymous)
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(record.post_id, post_id);
+    assert_eq!(record.post_id, post.post_id);
     assert_eq!(record.user_id, user_id);
-    assert_eq!(record.title.as_deref(), Some("Post hello-world"));
-    assert_eq!(record.slug, "hello-world");
+    assert_eq!(record.title, Some(post.title));
+    assert_eq!(record.slug, post.slug);
     assert_eq!(record.format, PostFormat::Markdown);
     assert!(record.published_at.is_none());
     assert!(record.deleted_at.is_none());
@@ -2162,22 +2137,14 @@ async fn post_slug_conflict_returns_slug_conflict(#[case] backend: Backend) {
 
     // Two published posts with the same slug on the same date conflict on the
     // unique index (user_id, date(COALESCE(published_at, created_at)), slug).
-    let now = Utc::now();
-    let pub_input = CreatePostInput {
-        user_id,
-        title: Some("Published".into()),
-        slug: "same-day-slug".parse().unwrap(),
-        body: "body".into(),
-        format: PostFormat::Markdown,
-        rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
-        published_at: Some(now),
-        summary: None,
-        audiences: vec![AudienceTarget::Public],
-        idempotency_key: None,
-    };
-    state.posts.create_post(&pub_input.clone()).await.unwrap();
+    let first = SeedRawPost::new(user_id).seed(state).await;
 
-    let err = state.posts.create_post(&pub_input).await.unwrap_err();
+    let err = SeedRawPost::new(user_id)
+        .slug(first.slug.as_ref())
+        .published_at(first.published_at.unwrap())
+        .create(state)
+        .await
+        .unwrap_err();
     assert!(
         matches!(err, CreatePostError::SlugConflict),
         "expected SlugConflict, got {err:?}"
@@ -2191,11 +2158,7 @@ async fn post_update_writes_revision_and_updates_record(#[case] backend: Backend
     let state = &env.state;
     let user_id = SeedUser::new().seed(state).await.user_id;
 
-    let post_id = state
-        .posts
-        .create_post(&make_create_post_input(user_id, "update-test"))
-        .await
-        .unwrap();
+    let post_id = SeedRawPost::new(user_id).draft().seed(state).await.post_id;
 
     let update_input = UpdatePostInput {
         title: Some("Updated Title".into()),
@@ -2254,22 +2217,7 @@ async fn post_update_by_non_owner_returns_unauthorized(#[case] backend: Backend)
     let owner = SeedUser::new().seed(state).await.user_id;
     let other = SeedUser::new().seed(state).await.user_id;
 
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: owner,
-            title: Some("Owned".into()),
-            slug: "owned".parse().unwrap(),
-            body: "Content".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
-            published_at: None,
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post_id = SeedRawPost::new(owner).draft().seed(state).await.post_id;
 
     let err = state
         .posts
@@ -2329,11 +2277,7 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     let alice = SeedUser::new().seed(state).await.user_id;
 
     // A fresh draft (published_at NULL).
-    let draft = state
-        .posts
-        .create_post(&make_create_post_input(alice, "p"))
-        .await
-        .unwrap();
+    let draft = SeedRawPost::new(alice).draft().seed(state).await.post_id;
 
     // Pinned override slugs (already valid, as they arrive at the storage layer).
     let p: Slug = "p".parse().unwrap();
@@ -2381,11 +2325,7 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     assert_eq!(rec3.published_at, None, "unpublish clears published_at");
 
     // Publish { at: None } on a never-published draft stamps ~now.
-    let draft2 = state
-        .posts
-        .create_post(&make_create_post_input(alice, "q"))
-        .await
-        .unwrap();
+    let draft2 = SeedRawPost::new(alice).draft().seed(state).await.post_id;
     let rec4 = perform_post_update(
         &*state.posts,
         update_input(draft2, alice, &q, PublishUpdate::Publish { at: None }),
@@ -2472,11 +2412,12 @@ async fn post_audiences_are_persisted_and_replaced(#[case] backend: Backend) {
         .unwrap();
 
     // Create targeting [Public, Named(aud)] → two rows.
-    let input = CreatePostInput {
-        audiences: vec![AudienceTarget::Public, AudienceTarget::Named(aud)],
-        ..make_create_post_input(author, "audience-post")
-    };
-    let post_id = state.posts.create_post(&input).await.unwrap();
+    let post_id = SeedRawPost::new(author)
+        .draft()
+        .audiences(vec![AudienceTarget::Public, AudienceTarget::Named(aud)])
+        .seed(state)
+        .await
+        .post_id;
     let rows = post_audience_rows(backend, &env, post_id).await;
     assert_eq!(
         rows,
@@ -2558,11 +2499,12 @@ async fn get_post_audiences_round_trips(#[case] backend: Backend) {
         .unwrap();
 
     // Public + Named(aud) → union read back (order-independent compare).
-    let input = CreatePostInput {
-        audiences: vec![AudienceTarget::Public, AudienceTarget::Named(aud)],
-        ..make_create_post_input(author, "round-trip")
-    };
-    let post_id = state.posts.create_post(&input).await.unwrap();
+    let post_id = SeedRawPost::new(author)
+        .draft()
+        .audiences(vec![AudienceTarget::Public, AudienceTarget::Named(aud)])
+        .seed(state)
+        .await
+        .post_id;
     let read: HashSet<_> = state
         .posts
         .get_post_audiences(post_id)
@@ -2627,11 +2569,7 @@ async fn soft_delete_excludes_post_from_lists(#[case] backend: Backend) {
     let state = &env.state;
     let user_id = SeedUser::new().seed(state).await.user_id;
 
-    let post_id = state
-        .posts
-        .create_post(&make_published_create_post_input(user_id, "to-delete"))
-        .await
-        .unwrap();
+    let post_id = SeedRawPost::new(user_id).seed(state).await.post_id;
 
     let published = state
         .posts
@@ -2674,45 +2612,21 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
     let bob_id = bob.user_id;
 
     let now = Utc::now();
-    let make_post = |user_id: UserId, slug: &str, days_ago: i64| {
-        let mut input = make_create_post_input(user_id, slug);
-        input.published_at = Some(now - Duration::days(days_ago));
-        input
+    let make_post = |user_id: UserId, days_ago: i64| {
+        SeedRawPost::new(user_id).published_at(now - Duration::days(days_ago))
     };
 
     // Alice: 4 posts published 1, 2, 100, 200 days ago.
-    state
-        .posts
-        .create_post(&make_post(alice_id, "alice-recent-1", 1))
-        .await
-        .unwrap();
-    state
-        .posts
-        .create_post(&make_post(alice_id, "alice-recent-2", 2))
-        .await
-        .unwrap();
-    state
-        .posts
-        .create_post(&make_post(alice_id, "alice-old-1", 100))
-        .await
-        .unwrap();
-    state
-        .posts
-        .create_post(&make_post(alice_id, "alice-old-2", 200))
-        .await
-        .unwrap();
+    let alice_recent_1 = make_post(alice_id, 1).seed(state).await;
+    make_post(alice_id, 2).seed(state).await;
+    make_post(alice_id, 100).seed(state).await;
+    make_post(alice_id, 200).seed(state).await;
 
     // Bob: 1 post published 5 days ago.
-    state
-        .posts
-        .create_post(&make_post(bob_id, "bob-recent", 5))
-        .await
-        .unwrap();
+    make_post(bob_id, 5).seed(state).await;
 
     // Future-dated draft-equivalent (excluded).
-    let mut future_input = make_create_post_input(alice_id, "alice-future");
-    future_input.published_at = Some(now + Duration::days(1));
-    state.posts.create_post(&future_input).await.unwrap();
+    make_post(alice_id, -1).seed(state).await;
 
     // Site feed, window {3 items, 30 days} → union of "top 3" and "in last 30
     // days". Alice 1d+2d and Bob 5d are in-window (3 posts). Alice 100d/200d
@@ -2787,20 +2701,6 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
     assert_eq!(bob_feed[0].user_id, bob_id);
 
     // Add a tag to alice-recent-1 and verify site-tag / user-tag feeds.
-    let alice_recent_1 = state
-        .posts
-        .list_published_by_user(
-            &alice.username,
-            None,
-            10,
-            &ViewerIdentity::Anonymous,
-            Utc::now(),
-        )
-        .await
-        .unwrap()
-        .into_iter()
-        .find(|p| p.slug == "alice-recent-1")
-        .unwrap();
     state
         .posts
         .tag_post(alice_recent_1.post_id, &"rust".parse::<TagLabel>().unwrap())
@@ -2823,7 +2723,7 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
         .await
         .unwrap();
     assert_eq!(tag_site.len(), 1);
-    assert_eq!(tag_site[0].slug, "alice-recent-1");
+    assert_eq!(tag_site[0].slug, alice_recent_1.slug);
 
     let tag_user = state
         .posts
@@ -2873,21 +2773,9 @@ async fn list_published_by_user_returns_only_user_posts(#[case] backend: Backend
     let alice_id = alice.user_id;
     let bob_id = bob.user_id;
 
-    state
-        .posts
-        .create_post(&make_published_create_post_input(alice_id, "alice-post1"))
-        .await
-        .unwrap();
-    state
-        .posts
-        .create_post(&make_published_create_post_input(alice_id, "alice-post2"))
-        .await
-        .unwrap();
-    state
-        .posts
-        .create_post(&make_published_create_post_input(bob_id, "bob-post1"))
-        .await
-        .unwrap();
+    SeedRawPost::new(alice_id).seed(state).await;
+    SeedRawPost::new(alice_id).seed(state).await;
+    SeedRawPost::new(bob_id).seed(state).await;
 
     let alice_posts = state
         .posts
@@ -2926,22 +2814,10 @@ async fn list_published_returns_published_non_deleted_posts(#[case] backend: Bac
     let user_id = SeedUser::new().seed(state).await.user_id;
 
     // Create a draft (should not appear)
-    state
-        .posts
-        .create_post(&make_create_post_input(user_id, "draft-post"))
-        .await
-        .unwrap();
+    SeedRawPost::new(user_id).draft().seed(state).await;
 
-    state
-        .posts
-        .create_post(&make_published_create_post_input(user_id, "pub-post1"))
-        .await
-        .unwrap();
-    state
-        .posts
-        .create_post(&make_published_create_post_input(user_id, "pub-post2"))
-        .await
-        .unwrap();
+    SeedRawPost::new(user_id).seed(state).await;
+    SeedRawPost::new(user_id).seed(state).await;
 
     let published = state
         .posts
@@ -2959,23 +2835,11 @@ async fn list_drafts_by_user_returns_only_drafts(#[case] backend: Backend) {
     let state = &env.state;
     let user_id = SeedUser::new().seed(state).await.user_id;
 
-    state
-        .posts
-        .create_post(&make_create_post_input(user_id, "draft-a"))
-        .await
-        .unwrap();
-    state
-        .posts
-        .create_post(&make_create_post_input(user_id, "draft-b"))
-        .await
-        .unwrap();
+    SeedRawPost::new(user_id).draft().seed(state).await;
+    SeedRawPost::new(user_id).draft().seed(state).await;
 
     // Create a published post (should not appear in drafts)
-    state
-        .posts
-        .create_post(&make_published_create_post_input(user_id, "published-c"))
-        .await
-        .unwrap();
+    SeedRawPost::new(user_id).seed(state).await;
 
     let drafts = state
         .posts
@@ -3001,11 +2865,11 @@ async fn drafts_list_includes_scheduled_excludes_live(#[case] backend: Backend) 
     let user_id = SeedUser::new().seed(state).await.user_id;
 
     // True draft (published_at NULL).
-    state
-        .posts
-        .create_post(&make_create_post_input(user_id, "a-draft"))
-        .await
-        .unwrap();
+    SeedRawPost::new(user_id)
+        .draft()
+        .slug("a-draft")
+        .seed(state)
+        .await;
     // Scheduled post (published_at in the future).
     seed_post_published_at(state, user_id, "a-sched", now + Duration::hours(2)).await;
     // Live post (published_at in the past).
@@ -3204,22 +3068,7 @@ async fn multiple_tags_on_single_post(#[case] backend: Backend) {
         .await
         .user_id;
 
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Multi Tag Post".into()),
-            slug: "multi-tag-post".parse().unwrap(),
-            body: "Content with many tags".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content with many tags</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
     state
         .posts
@@ -3261,22 +3110,7 @@ async fn empty_tag_list(#[case] backend: Backend) {
         .await
         .user_id;
 
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("No Tags".into()),
-            slug: "no-tags".parse().unwrap(),
-            body: "Untagged post".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Untagged post</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
     let tags = state
         .posts
@@ -3298,39 +3132,9 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
         .await
         .user_id;
 
-    let post1 = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Post 1".into()),
-            slug: "post-1".parse().unwrap(),
-            body: "Content 1".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content 1</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post1 = SeedRawPost::new(user).seed(state).await.post_id;
 
-    let post2 = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Post 2".into()),
-            slug: "post-2".parse().unwrap(),
-            body: "Content 2".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content 2</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post2 = SeedRawPost::new(user).seed(state).await.post_id;
 
     // Tag with different casings but same canonical form - should map to same slug
     state
@@ -3382,23 +3186,8 @@ async fn tag_list_pagination(#[case] backend: Backend) {
         .user_id;
 
     let mut post_ids = Vec::new();
-    for i in 0..5 {
-        let post_id = state
-            .posts
-            .create_post(&CreatePostInput {
-                user_id: user,
-                title: Some(format!("Post {i}").into()),
-                slug: format!("post-{i}").parse().unwrap(),
-                body: format!("Content {i}").into(),
-                format: PostFormat::Markdown,
-                rendered_html: RenderedHtml::from_trusted(format!("<p>Content {i}</p>")),
-                published_at: Some(Utc::now()),
-                summary: None,
-                audiences: vec![AudienceTarget::Public],
-                idempotency_key: None,
-            })
-            .await
-            .expect("post creation failed");
+    for _ in 0..5 {
+        let post_id = SeedRawPost::new(user).seed(state).await.post_id;
         post_ids.push(post_id);
 
         state
@@ -3437,39 +3226,9 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
         .await
         .user_id;
 
-    let post1 = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user1,
-            title: Some("User1 Post".into()),
-            slug: "user1-post".parse().unwrap(),
-            body: "Content 1".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content 1</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post1 = SeedRawPost::new(user1).seed(state).await.post_id;
 
-    let post2 = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user2,
-            title: Some("User2 Post".into()),
-            slug: "user2-post".parse().unwrap(),
-            body: "Content 2".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content 2</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post2 = SeedRawPost::new(user2).seed(state).await.post_id;
 
     state
         .posts
@@ -3527,22 +3286,7 @@ async fn selective_untag(#[case] backend: Backend) {
         .await
         .user_id;
 
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Multi Tag".into()),
-            slug: "multi-tag".parse().unwrap(),
-            body: "Content".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
     state
         .posts
@@ -3597,22 +3341,7 @@ async fn numeric_tag(#[case] backend: Backend) {
         .await
         .user_id;
 
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Numeric Tag".into()),
-            slug: "numeric-tag".parse().unwrap(),
-            body: "Content".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
     state
         .posts
@@ -3654,22 +3383,7 @@ async fn retag_same_post_with_same_tag_fails(#[case] backend: Backend) {
         .await
         .user_id;
 
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Retag Post".into()),
-            slug: "retag-post".parse().unwrap(),
-            body: "Content".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
     state
         .posts
@@ -3772,23 +3486,8 @@ async fn many_tags_many_posts(#[case] backend: Backend) {
     let mut post_ids = Vec::new();
     let tags = vec!["rust", "golang", "python", "javascript", "typescript"];
 
-    for i in 0..3 {
-        let post_id = state
-            .posts
-            .create_post(&CreatePostInput {
-                user_id: user,
-                title: Some(format!("Post {i}").into()),
-                slug: format!("post-many-{i}").parse().unwrap(),
-                body: format!("Content {i}").into(),
-                format: PostFormat::Markdown,
-                rendered_html: RenderedHtml::from_trusted(format!("<p>Content {i}</p>")),
-                published_at: Some(Utc::now()),
-                summary: None,
-                audiences: vec![AudienceTarget::Public],
-                idempotency_key: None,
-            })
-            .await
-            .expect("post creation failed");
+    for _ in 0..3 {
+        let post_id = SeedRawPost::new(user).seed(state).await.post_id;
         post_ids.push(post_id);
 
         for tag in &tags {
@@ -3831,22 +3530,7 @@ async fn tag_all_numeric(#[case] backend: Backend) {
         .await
         .user_id;
 
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Numeric Tag".into()),
-            slug: "numeric-slug".parse().unwrap(),
-            body: "Content".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
     state
         .posts
@@ -3882,22 +3566,7 @@ async fn tag_hyphen_boundaries(#[case] backend: Backend) {
         .await
         .user_id;
 
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Hyphen Test".into()),
-            slug: "hyphen-test".parse().unwrap(),
-            body: "Content".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
     // Valid: hyphens in the middle and at end
     state
@@ -3941,22 +3610,7 @@ async fn tag_with_long_display(#[case] backend: Backend) {
         .await
         .user_id;
 
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Long Tag Test".into()),
-            slug: "long-tag-test".parse().unwrap(),
-            body: "Content".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
     let long_display = "very-long-technical-term-with-many-hyphens-and-lowercase-letters";
     state
@@ -3986,39 +3640,9 @@ async fn tag_list_ordering(#[case] backend: Backend) {
         .await
         .user_id;
 
-    let post1 = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Post 1".into()),
-            slug: "post-1-order".parse().unwrap(),
-            body: "Content 1".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content 1</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post1 = SeedRawPost::new(user).seed(state).await.post_id;
 
-    let post2 = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Post 2".into()),
-            slug: "post-2-order".parse().unwrap(),
-            body: "Content 2".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content 2</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post2 = SeedRawPost::new(user).seed(state).await.post_id;
 
     // Tag in different orders
     state
@@ -4075,39 +3699,9 @@ async fn tags_for_multiple_posts(#[case] backend: Backend) {
         .await
         .user_id;
 
-    let post1 = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Post A".into()),
-            slug: "post-a".parse().unwrap(),
-            body: "Content A".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content A</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post1 = SeedRawPost::new(user).seed(state).await.post_id;
 
-    let post2 = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Post B".into()),
-            slug: "post-b".parse().unwrap(),
-            body: "Content B".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content B</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post2 = SeedRawPost::new(user).seed(state).await.post_id;
 
     // Only post2 is tagged; post1 stays untagged to assert the empty case.
     state
@@ -4142,22 +3736,7 @@ async fn tag_mixed_alphanumeric(#[case] backend: Backend) {
         .await
         .user_id;
 
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Mixed Post".into()),
-            slug: "mixed-post".parse().unwrap(),
-            body: "Content".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
     state
         .posts
@@ -4198,22 +3777,7 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
         .await
         .user_id;
 
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Simple".into()),
-            slug: "simple".parse().unwrap(),
-            body: "Content".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
     state
         .posts
@@ -4270,22 +3834,7 @@ async fn tag_creation_and_retrieval(#[case] backend: Backend) {
         .await
         .user_id;
 
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Test Post".into()),
-            slug: "test-post".parse().unwrap(),
-            body: "Content".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
     state
         .posts
@@ -4315,22 +3864,7 @@ async fn tag_normalization(#[case] backend: Backend) {
         .await
         .user_id;
 
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Test Post".into()),
-            slug: "test-post".parse().unwrap(),
-            body: "Content".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
     state
         .posts
@@ -4360,22 +3894,7 @@ async fn untag_post(#[case] backend: Backend) {
         .await
         .user_id;
 
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Test Post".into()),
-            slug: "test-post".parse().unwrap(),
-            body: "Content".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
     state
         .posts
@@ -4416,22 +3935,7 @@ async fn duplicate_tag_error(#[case] backend: Backend) {
         .await
         .user_id;
 
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Test Post".into()),
-            slug: "test-post".parse().unwrap(),
-            body: "Content".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
     state
         .posts
@@ -4469,39 +3973,9 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
         .await
         .user_id;
 
-    let post1 = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user1,
-            title: Some("Post 1".into()),
-            slug: "post-1".parse().unwrap(),
-            body: "Content 1".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content 1</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post1 = SeedRawPost::new(user1).seed(state).await.post_id;
 
-    let post2 = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user2,
-            title: Some("Post 2".into()),
-            slug: "post-2".parse().unwrap(),
-            body: "Content 2".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content 2</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post2 = SeedRawPost::new(user2).seed(state).await.post_id;
 
     state
         .posts
@@ -4543,56 +4017,11 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
         .await
         .user_id;
 
-    let post1 = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user1,
-            title: Some("Post 1".into()),
-            slug: "post-1".parse().unwrap(),
-            body: "Content 1".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content 1</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post1 = SeedRawPost::new(user1).seed(state).await.post_id;
 
-    let post2 = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user1,
-            title: Some("Post 2".into()),
-            slug: "post-2".parse().unwrap(),
-            body: "Content 2".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content 2</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post2 = SeedRawPost::new(user1).seed(state).await.post_id;
 
-    let post3 = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user2,
-            title: Some("Post 3".into()),
-            slug: "post-3".parse().unwrap(),
-            body: "Content 3".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content 3</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post3 = SeedRawPost::new(user2).seed(state).await.post_id;
 
     state
         .posts
@@ -4658,39 +4087,9 @@ async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
         .await
         .user_id;
 
-    let post1 = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Post 1".into()),
-            slug: "post-1".parse().unwrap(),
-            body: "Content 1".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content 1</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post1 = SeedRawPost::new(user).seed(state).await.post_id;
 
-    let post2 = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Post 2".into()),
-            slug: "post-2".parse().unwrap(),
-            body: "Content 2".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content 2</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post2 = SeedRawPost::new(user).seed(state).await.post_id;
 
     state
         .posts
@@ -4751,22 +4150,7 @@ async fn untag_nonexistent_tag_error(#[case] backend: Backend) {
         .await
         .user_id;
 
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Test Post".into()),
-            slug: "test-post".parse().unwrap(),
-            body: "Content".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
     let tag_slug: Tag = "nonexistent".parse().unwrap();
     let result = state.posts.untag_post(post_id, &tag_slug).await;
@@ -4789,39 +4173,9 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
         .await
         .user_id;
 
-    let post1 = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Draft Post".into()),
-            slug: "draft-post".parse().unwrap(),
-            body: "Draft content".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Draft</p>"),
-            published_at: None, // Draft,
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post1 = SeedRawPost::new(user).draft().seed(state).await.post_id;
 
-    let post2 = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Published Post".into()),
-            slug: "published-post".parse().unwrap(),
-            body: "Published content".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Published</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post2 = SeedRawPost::new(user).seed(state).await.post_id;
 
     state
         .posts
@@ -4854,39 +4208,14 @@ async fn post_update_invalid_slug(#[case] backend: Backend) {
     let state = &env.state;
     let user = SeedUser::new().seed(state).await.user_id;
 
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Original".into()),
-            slug: "original-slug".parse().unwrap(),
-            body: "Content".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
-            published_at: None,
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post_id = SeedRawPost::new(user).draft().seed(state).await.post_id;
 
-    let _post_id2 = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Second".into()),
-            slug: "second-slug".parse().unwrap(),
-            body: "Content".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
-            published_at: None,
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
+    let _post_id2 = SeedRawPost::new(user)
+        .draft()
+        .slug("second-slug")
+        .seed(state)
         .await
-        .expect("post creation failed");
+        .post_id;
 
     let update_result = state
         .posts
@@ -4922,25 +4251,8 @@ async fn list_published_cursor_boundary(#[case] backend: Backend) {
     let state = &env.state;
     let user = SeedUser::new().seed(state).await.user_id;
 
-    let now = Utc::now();
-
-    for i in 0..5 {
-        let _ = state
-            .posts
-            .create_post(&CreatePostInput {
-                user_id: user,
-                title: Some(format!("Post {i}").into()),
-                slug: format!("post-{i}").parse().unwrap(),
-                body: "Content".into(),
-                format: PostFormat::Markdown,
-                rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
-                published_at: Some(now),
-                summary: None,
-                audiences: vec![AudienceTarget::Public],
-                idempotency_key: None,
-            })
-            .await
-            .expect("post creation failed");
+    for _ in 0..5 {
+        SeedRawPost::new(user).seed(state).await;
     }
 
     let all = state
@@ -4980,23 +4292,8 @@ async fn list_drafts_cursor_boundary(#[case] backend: Backend) {
 
     let _now = Utc::now();
 
-    for i in 0..3 {
-        let _ = state
-            .posts
-            .create_post(&CreatePostInput {
-                user_id: user,
-                title: Some(format!("Draft {i}").into()),
-                slug: format!("draft-{i}").parse().unwrap(),
-                body: "Content".into(),
-                format: PostFormat::Markdown,
-                rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
-                published_at: None,
-                summary: None,
-                audiences: vec![AudienceTarget::Public],
-                idempotency_key: None,
-            })
-            .await
-            .expect("post creation failed");
+    for _ in 0..3 {
+        SeedRawPost::new(user).draft().seed(state).await;
     }
 
     let all = state
@@ -5034,25 +4331,8 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
     let state = &env.state;
     let user = SeedUser::new().seed(state).await.user_id;
 
-    let now = Utc::now();
-
-    for i in 0..3 {
-        let post_id = state
-            .posts
-            .create_post(&CreatePostInput {
-                user_id: user,
-                title: Some(format!("Tagged {i}").into()),
-                slug: format!("tagged-{i}").parse().unwrap(),
-                body: "Content".into(),
-                format: PostFormat::Markdown,
-                rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
-                published_at: Some(now),
-                summary: None,
-                audiences: vec![AudienceTarget::Public],
-                idempotency_key: None,
-            })
-            .await
-            .expect("post creation failed");
+    for _ in 0..3 {
+        let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
         state
             .posts
@@ -5105,25 +4385,8 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
     let state = &env.state;
     let user = SeedUser::new().seed(state).await.user_id;
 
-    let now = Utc::now();
-
-    for i in 0..3 {
-        let post_id = state
-            .posts
-            .create_post(&CreatePostInput {
-                user_id: user,
-                title: Some(format!("Global {i}").into()),
-                slug: format!("global-{i}").parse().unwrap(),
-                body: "Content".into(),
-                format: PostFormat::Markdown,
-                rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
-                published_at: Some(now),
-                summary: None,
-                audiences: vec![AudienceTarget::Public],
-                idempotency_key: None,
-            })
-            .await
-            .expect("post creation failed");
+    for _ in 0..3 {
+        let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
         state
             .posts
@@ -5175,22 +4438,7 @@ async fn soft_delete_then_operations(#[case] backend: Backend) {
     let state = &env.state;
     let user = SeedUser::new().seed(state).await.user_id;
 
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("To Delete".into()),
-            slug: "to-delete".parse().unwrap(),
-            body: "Content".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
     state
         .posts
@@ -5230,22 +4478,7 @@ async fn tag_post_multiple_attempts(#[case] backend: Backend) {
     let state = &env.state;
     let user = SeedUser::new().seed(state).await.user_id;
 
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("For Tagging".into()),
-            slug: "for-tagging".parse().unwrap(),
-            body: "Content".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
     state
         .posts
@@ -5325,22 +4558,10 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
 
     let created_at = Utc::now();
 
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user.user_id,
-            title: Some("Permalink Test".into()),
-            slug: "permalink-test".parse().unwrap(),
-            body: "Content".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
-            published_at: Some(created_at),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let seeded = SeedRawPost::new(user.user_id)
+        .published_at(created_at)
+        .seed(state)
+        .await;
 
     let post = state
         .posts
@@ -5351,7 +4572,7 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
                 month: created_at.month(),
                 day: created_at.day(),
             },
-            &"permalink-test".parse().unwrap(),
+            &seeded.slug,
             &ViewerIdentity::Anonymous,
             Utc::now(),
         )
@@ -5361,7 +4582,7 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
 
     state
         .posts
-        .soft_delete_post(post_id)
+        .soft_delete_post(seeded.post_id)
         .await
         .expect("soft_delete_post failed");
 
@@ -5374,7 +4595,7 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
                 month: created_at.month(),
                 day: created_at.day(),
             },
-            &"permalink-test".parse().unwrap(),
+            &seeded.slug,
             &ViewerIdentity::Anonymous,
             Utc::now(),
         )
@@ -5390,22 +4611,7 @@ async fn update_soft_deleted_post(#[case] backend: Backend) {
     let state = &env.state;
     let user = SeedUser::new().seed(state).await.user_id;
 
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("To Update".into()),
-            slug: "to-update".parse().unwrap(),
-            body: "Content".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
-            published_at: None,
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post_id = SeedRawPost::new(user).draft().seed(state).await.post_id;
 
     state
         .posts
@@ -5450,22 +4656,7 @@ async fn tag_edge_case_formats(#[case] backend: Backend) {
     let state = &env.state;
     let user = SeedUser::new().seed(state).await.user_id;
 
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Edge Cases".into()),
-            slug: "edge-cases".parse().unwrap(),
-            body: "Content".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
     state
         .posts
@@ -5520,27 +4711,10 @@ async fn list_published_with_cursor_same_timestamp(#[case] backend: Backend) {
     let state = &env.state;
     let user = SeedUser::new().seed(state).await.user_id;
 
-    let now = Utc::now();
-
-    // Create posts at same timestamp
+    // Create posts at the same time
     let mut post_ids = vec![];
-    for i in 0..4 {
-        let post_id = state
-            .posts
-            .create_post(&CreatePostInput {
-                user_id: user,
-                title: Some(format!("Post {i}").into()),
-                slug: format!("post-cursor-same-{i}").parse().unwrap(),
-                body: "Content".into(),
-                format: PostFormat::Markdown,
-                rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
-                published_at: Some(now),
-                summary: None,
-                audiences: vec![AudienceTarget::Public],
-                idempotency_key: None,
-            })
-            .await
-            .expect("post creation failed");
+    for _ in 0..4 {
+        let post_id = SeedRawPost::new(user).seed(state).await.post_id;
         post_ids.push(post_id);
     }
 
@@ -5573,22 +4747,7 @@ async fn post_revisions_created(#[case] backend: Backend) {
     let state = &env.state;
     let user = SeedUser::new().seed(state).await.user_id;
 
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Original".into()),
-            slug: "revision-test".parse().unwrap(),
-            body: "Original content".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Original</p>"),
-            published_at: None,
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post_id = SeedRawPost::new(user).draft().seed(state).await.post_id;
 
     let result = state
         .posts
@@ -5622,22 +4781,7 @@ async fn tag_display_preservation(#[case] backend: Backend) {
     let state = &env.state;
     let user = SeedUser::new().seed(state).await.user_id;
 
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Display Test".into()),
-            slug: "display-test".parse().unwrap(),
-            body: "Content".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
     state
         .posts
@@ -5663,22 +4807,7 @@ async fn untag_preserves_other_tags(#[case] backend: Backend) {
     let state = &env.state;
     let user = SeedUser::new().seed(state).await.user_id;
 
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Multi Tag".into()),
-            slug: "multi-tag".parse().unwrap(),
-            body: "Content".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Content</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
     state
         .posts
@@ -5938,22 +5067,10 @@ async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backen
 
     let now = Utc::now();
 
-    create_rendered_post(
-        state.posts.as_ref(),
-        RenderedPostContent {
-            user_id,
-            title: Some("First Post".into()),
-            slug: "conflict-slug".parse().unwrap(),
-            body: "body".into(),
-            format: PostFormat::Markdown,
-            published_at: Some(now),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        },
-    )
-    .await
-    .unwrap();
+    let occ = SeedRawPost::new(user_id)
+        .published_at(now)
+        .seed(state)
+        .await;
 
     // Second create with same slug+date conflicts
     let err = create_rendered_post(
@@ -5961,7 +5078,7 @@ async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backen
         RenderedPostContent {
             user_id,
             title: Some("Second Post".into()),
-            slug: "conflict-slug".parse().unwrap(),
+            slug: occ.slug.clone(),
             body: "body".into(),
             format: PostFormat::Markdown,
             published_at: Some(now),
@@ -5994,20 +5111,10 @@ async fn create_post_foreign_key_violation_maps_to_internal(#[case] backend: Bac
     // defaults `foreign_keys` to ON), a *non-unique* DB error. So `create_post`
     // (via the shared `write_post_in_tx`) maps it to `Internal`, not `SlugConflict`
     // — exercising the generic-error arm.
-    let input = CreatePostInput {
-        user_id: UserId::from(999_999),
-        title: Some("Orphan".into()),
-        slug: "orphan".parse().unwrap(),
-        body: "body".into(),
-        format: PostFormat::Markdown,
-        rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
-        published_at: Some(Utc::now()),
-        summary: None,
-        audiences: vec![AudienceTarget::Public],
-        idempotency_key: None,
-    };
-
-    let err = state.posts.create_post(&input).await.unwrap_err();
+    let err = SeedRawPost::new(UserId::from(999_999))
+        .create(state)
+        .await
+        .unwrap_err();
     assert!(
         matches!(err, CreatePostError::Internal(_)),
         "expected Internal for FK violation, got {err:?}"
@@ -6033,20 +5140,7 @@ async fn create_posts_batches_all_rows_in_order(#[case] backend: Backend) {
     let state = &env.state;
     let user_id = SeedUser::new().seed(state).await.user_id;
 
-    let inputs: Vec<CreatePostInput> = (0..3)
-        .map(|i| CreatePostInput {
-            user_id,
-            title: Some(format!("Batch {i}").into()),
-            slug: format!("batch-{i}").parse().unwrap(),
-            body: format!("body {i}").into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted(format!("<p>body {i}</p>")),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .collect();
+    let inputs: Vec<_> = (0..3).map(|_| SeedRawPost::new(user_id).build()).collect();
 
     let ids = state.posts.create_posts(&inputs).await.unwrap();
     assert_eq!(ids.len(), 3);
@@ -6060,7 +5154,7 @@ async fn create_posts_batches_all_rows_in_order(#[case] backend: Backend) {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(rec.title.as_deref(), Some(format!("Batch {i}").as_str()));
+        assert_eq!(rec.title, inputs[i].title);
     }
 }
 
@@ -6071,20 +5165,13 @@ async fn create_posts_conflict_rolls_back_whole_batch(#[case] backend: Backend) 
     let state = &env.state;
     let user_id = SeedUser::new().seed(state).await.user_id;
 
-    let mk = |slug: &str, i: usize| CreatePostInput {
-        user_id,
-        title: Some(format!("Row {i}").into()),
-        slug: slug.parse().unwrap(),
-        body: format!("body {i}").into(),
-        format: PostFormat::Markdown,
-        rendered_html: RenderedHtml::from_trusted(format!("<p>body {i}</p>")),
-        published_at: Some(Utc::now()),
-        summary: None,
-        audiences: vec![AudienceTarget::Public],
-        idempotency_key: None,
-    };
+    let dup = parse_slug("dup");
     // Rows 0 and 2 collide on slug — the batch must fail on row 2 and undo 0/1.
-    let inputs = vec![mk("dup", 0), mk("unique", 1), mk("dup", 2)];
+    let inputs = vec![
+        SeedRawPost::new(user_id).slug(dup.as_ref()).build(),
+        SeedRawPost::new(user_id).build(),
+        SeedRawPost::new(user_id).slug(dup.as_ref()).build(),
+    ];
 
     let err = state.posts.create_posts(&inputs).await.unwrap_err();
     assert!(
@@ -6112,19 +5199,15 @@ async fn update_rendered_post_markdown_renders_and_updates(#[case] backend: Back
     let state = &env.state;
     let user_id = SeedUser::new().seed(state).await.user_id;
 
-    let post_id = state
-        .posts
-        .create_post(&make_create_post_input(user_id, "update-render-md"))
-        .await
-        .unwrap();
+    let post = SeedRawPost::new(user_id).draft().seed(state).await;
 
     let record = update_rendered_post(
         state.posts.as_ref(),
         RenderedPostUpdate {
-            post_id,
+            post_id: post.post_id,
             editor_user_id: user_id,
             title: Some("Updated Title".into()),
-            slug: "update-render-md".parse().unwrap(),
+            slug: post.slug.clone(),
             body: "**updated**".into(),
             format: PostFormat::Markdown,
             publish: PublishUpdate::Unpublish,
@@ -6153,19 +5236,15 @@ async fn update_rendered_post_org_renders_and_updates(#[case] backend: Backend) 
     let state = &env.state;
     let user_id = SeedUser::new().seed(state).await.user_id;
 
-    let post_id = state
-        .posts
-        .create_post(&make_create_post_input(user_id, "update-render-org"))
-        .await
-        .unwrap();
+    let post = SeedRawPost::new(user_id).draft().seed(state).await;
 
     let record = update_rendered_post(
         state.posts.as_ref(),
         RenderedPostUpdate {
-            post_id,
+            post_id: post.post_id,
             editor_user_id: user_id,
             title: Some("Updated Org Title".into()),
-            slug: "update-render-org".parse().unwrap(),
+            slug: post.slug.clone(),
             body: "*bold org*".into(),
             format: PostFormat::Org,
             publish: PublishUpdate::Unpublish,
@@ -6666,22 +5745,7 @@ async fn list_tags_returns_alphabetical_with_prefix(#[case] backend: Backend) {
         .seed(state)
         .await
         .user_id;
-    let post = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user,
-            title: Some("Tagged".into()),
-            slug: "tagged".parse().unwrap(),
-            body: "body".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
-            published_at: Some(Utc::now()),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("post creation failed");
+    let post = SeedRawPost::new(user).seed(state).await.post_id;
 
     // Mixed-case display tokens — the slug should normalize to lowercase.
     for display in &["Rust", "rust-lang", "performance", "PostgreSQL", "web"] {
@@ -6735,23 +5799,8 @@ async fn post_record_carries_tags(#[case] backend: Backend) {
         .user_id;
 
     let mut post_ids = Vec::new();
-    for n in 1..=3 {
-        let id = state
-            .posts
-            .create_post(&CreatePostInput {
-                user_id: user,
-                title: Some(format!("Post {n}").into()),
-                slug: format!("post-{n}").parse().unwrap(),
-                body: format!("body {n}").into(),
-                format: PostFormat::Markdown,
-                rendered_html: RenderedHtml::from_trusted(format!("<p>body {n}</p>")),
-                published_at: Some(Utc::now()),
-                summary: None,
-                audiences: vec![AudienceTarget::Public],
-                idempotency_key: None,
-            })
-            .await
-            .expect("post creation failed");
+    for _ in 1..=3 {
+        let id = SeedRawPost::new(user).seed(state).await.post_id;
         post_ids.push(id);
     }
     let (p1, p2, p3) = (post_ids[0], post_ids[1], post_ids[2]);
@@ -6950,51 +5999,25 @@ async fn resolution_matrix(#[case] backend: Backend) {
 
     // One published post per audience targeting. `Private` carries no audience
     // rows; `Public+Named(G)` carries both.
-    let make = |slug: &str, audiences: Vec<AudienceTarget>| CreatePostInput {
-        user_id: a,
-        title: Some(format!("Post {slug}").into()),
-        slug: slug.parse().unwrap(),
-        body: "body".into(),
-        format: PostFormat::Markdown,
-        rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
-        published_at: Some(Utc::now()),
-        summary: None,
-        audiences,
-        idempotency_key: None,
-    };
-    let p_public = state
-        .posts
-        .create_post(&make("public", vec![AudienceTarget::Public]))
+    let make = |audiences: Vec<AudienceTarget>| SeedRawPost::new(a).audiences(audiences);
+    let p_public = make(vec![AudienceTarget::Public]).seed(state).await.post_id;
+    let p_private = make(vec![]).seed(state).await.post_id;
+    let p_subscribers = make(vec![AudienceTarget::Subscribers])
+        .seed(state)
         .await
-        .unwrap();
-    let p_private = state
-        .posts
-        .create_post(&make("private", vec![]))
+        .post_id;
+    let p_named_g = make(vec![AudienceTarget::Named(g)])
+        .seed(state)
         .await
-        .unwrap();
-    let p_subscribers = state
-        .posts
-        .create_post(&make("subscribers", vec![AudienceTarget::Subscribers]))
+        .post_id;
+    let p_named_g2 = make(vec![AudienceTarget::Named(g2)])
+        .seed(state)
         .await
-        .unwrap();
-    let p_named_g = state
-        .posts
-        .create_post(&make("named-g", vec![AudienceTarget::Named(g)]))
+        .post_id;
+    let p_public_named_g = make(vec![AudienceTarget::Public, AudienceTarget::Named(g)])
+        .seed(state)
         .await
-        .unwrap();
-    let p_named_g2 = state
-        .posts
-        .create_post(&make("named-g2", vec![AudienceTarget::Named(g2)]))
-        .await
-        .unwrap();
-    let p_public_named_g = state
-        .posts
-        .create_post(&make(
-            "public-named-g",
-            vec![AudienceTarget::Public, AudienceTarget::Named(g)],
-        ))
-        .await
-        .unwrap();
+        .post_id;
 
     let anon = ViewerIdentity::Anonymous;
     let viewer_a = ViewerIdentity::local(a, local);
