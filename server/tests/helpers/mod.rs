@@ -170,6 +170,42 @@ pub fn basic_header(username: &str, token: &RawToken) -> String {
     format!("Basic {encoded}")
 }
 
+/// A `Request::builder()` preloaded with `method`, `uri`, and an
+/// `Authorization: Basic <username:token>` header — the base every authenticated
+/// `AtomPub` request shares. Callers add any extra headers (`If-Match`, `slug`,
+/// `Idempotency-Key`, a content type) and finish with `.body(...)`.
+pub fn atompub_authed(
+    method: &str,
+    uri: &str,
+    username: &str,
+    token: &RawToken,
+) -> axum::http::request::Builder {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::AUTHORIZATION, basic_header(username, token))
+}
+
+/// The dominant `AtomPub` request: Basic auth plus an optional
+/// `application/atom+xml` body. `Some(xml)` sends the entry body (POST/PUT);
+/// `None` sends an empty body (GET/DELETE).
+pub fn atompub_xml(
+    method: &str,
+    uri: &str,
+    username: &str,
+    token: &RawToken,
+    body: Option<&str>,
+) -> Request<Body> {
+    let builder = atompub_authed(method, uri, username, token);
+    match body {
+        Some(xml) => builder
+            .header(header::CONTENT_TYPE, "application/atom+xml")
+            .body(Body::from(xml.to_owned())),
+        None => builder.body(Body::empty()),
+    }
+    .expect("failed to build atompub request")
+}
+
 /// Read a response body fully and decode it as UTF-8.
 pub async fn body_string(response: axum::response::Response) -> String {
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)

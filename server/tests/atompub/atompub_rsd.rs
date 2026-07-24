@@ -7,7 +7,7 @@ use tower::ServiceExt;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{body_string, make_app};
+use crate::helpers::{body_string, create_user_and_session, make_app};
 use storage::test_support::{backends_matrix, Backend, TestEnv};
 
 // SPIKE (jaunder Task 1):
@@ -88,16 +88,7 @@ async fn user_page_includes_rsd_autodiscovery_link(
     #[case] expected_fragment: &str,
 ) {
     let TestEnv { state, base } = backend.setup().await;
-    state
-        .users
-        .create_user(
-            &"alice".parse().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+    create_user_and_session(&state, "alice").await;
     let app = make_app(state, &base);
 
     // Rendering the user page (server-side) hoists the EditURI autodiscovery

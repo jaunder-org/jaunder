@@ -7,34 +7,22 @@ use rstest::*;
 use rstest_reuse::*;
 use tower::ServiceExt;
 
-use crate::helpers::{basic_header, body_string, make_app, setup_with_base_url};
+use crate::helpers::{
+    atompub_xml, body_string, create_user_and_session, make_app, setup_with_base_url,
+};
 use storage::test_support::{backends, Backend, TestEnv};
 
 #[apply(backends)]
 #[tokio::test]
 async fn service_document_returns_200_with_app_password(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
-    let user_id = state
-        .users
-        .create_user(
-            &"alice".parse().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let token = state
-        .sessions
-        .create_session(user_id, "MarsEdit")
-        .await
-        .unwrap();
+    let session = create_user_and_session(&state, "alice").await;
     // Give the user a tagged post so the service document's category list is
     // non-empty (exercises the tag-collection path in `service_document`).
     let post = storage::perform_post_creation(
         state.posts.as_ref(),
         storage::PostCreation {
-            user_id,
+            user_id: session.user_id,
             body: "a tagged post".into(),
             title: Some("Tagged"),
             format: storage::PostFormat::Markdown,
@@ -56,13 +44,13 @@ async fn service_document_returns_200_with_app_password(#[case] backend: Backend
     let app = make_app(state, &base);
 
     let response = app
-        .oneshot(
-            Request::builder()
-                .uri("/atompub/service")
-                .header(header::AUTHORIZATION, basic_header("alice", &token))
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(atompub_xml(
+            "GET",
+            "/atompub/service",
+            "alice",
+            &session.token,
+            None,
+        ))
         .await
         .unwrap();
 
@@ -97,32 +85,18 @@ async fn service_document_returns_200_with_app_password(#[case] backend: Backend
 #[tokio::test]
 async fn service_document_rejects_basic_username_mismatch(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
-    let user_id = state
-        .users
-        .create_user(
-            &"alice".parse().unwrap(),
-            &"password123".parse().unwrap(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let token = state
-        .sessions
-        .create_session(user_id, "MarsEdit")
-        .await
-        .unwrap();
+    let session = create_user_and_session(&state, "alice").await;
     let app = make_app(state, &base);
 
     // Correct token, but the Basic username does not match the session's user.
     let response = app
-        .oneshot(
-            Request::builder()
-                .uri("/atompub/service")
-                .header(header::AUTHORIZATION, basic_header("mallory", &token))
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(atompub_xml(
+            "GET",
+            "/atompub/service",
+            "mallory",
+            &session.token,
+            None,
+        ))
         .await
         .unwrap();
 
