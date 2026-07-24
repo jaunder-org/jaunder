@@ -717,17 +717,6 @@ impl<'a> SeedUser<'a> {
     }
 }
 
-/// Creates a throwaway user named `testuser` and returns its id, for tests that
-/// need a user to exist before exercising a per-user handle (replaces raw
-/// `INSERT INTO users`).
-///
-/// # Panics
-///
-/// If the user cannot be created.
-pub async fn seed_user(state: &Arc<AppState>) -> UserId {
-    SeedUser::new("testuser").seed(state).await
-}
-
 /// An in-memory [`SiteConfigStorage`] for tests that need a facade over site
 /// config without a database. A real key/value store: `set`/`delete` mutate a
 /// `BTreeMap` (so `list` is naturally key-ordered) and `get` reads it. Shared by
@@ -789,19 +778,11 @@ impl SiteConfigStorage for InMemorySiteConfig {
 #[cfg(test)]
 mod tests {
     use super::{
-        backends, bootstrap_url, parse_password, parse_username, report_drop_outcome, seed_user,
+        backends, bootstrap_url, parse_password, parse_username, report_drop_outcome,
         splice_db_name, Backend, SeedUser,
     };
     use rstest::*;
     use rstest_reuse::*;
-
-    #[apply(backends)]
-    #[tokio::test]
-    async fn seed_user_creates_a_user(#[case] backend: Backend) {
-        let env = backend.setup().await;
-        let id = seed_user(&env.state).await;
-        assert!(i64::from(id) > 0);
-    }
 
     #[apply(backends)]
     #[tokio::test]

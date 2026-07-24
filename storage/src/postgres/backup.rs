@@ -356,8 +356,7 @@ async fn schema_checksum(connection: &mut PgConnection) -> Result<String, Backup
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{postgres_only, Backend, CloseablePool};
-    use common::test_support::{parse_password, parse_username};
+    use crate::test_support::{postgres_only, Backend, CloseablePool, SeedUser};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -400,17 +399,7 @@ mod tests {
         let CloseablePool::Postgres(source_pool) = source.base.pool() else {
             unreachable!("postgres_only yields a Postgres pool")
         };
-        source
-            .state
-            .users
-            .create_user(
-                &parse_username("userone"),
-                &parse_password("password123"),
-                None,
-                false,
-            )
-            .await
-            .expect("seed user");
+        SeedUser::new("userone").seed(&source.state).await;
 
         // Export a real backup so its manifest's schema version/checksum match the
         // fresh target, and users.ndjson has a complete row to corrupt.

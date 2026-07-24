@@ -173,7 +173,7 @@ mod seed_tests {
     async fn seeds_public_published_posts_visible_to_a_non_author() {
         let test_support::TestEnv { state, base: _base } =
             test_support::Backend::Sqlite.setup().await;
-        let _uid = test_support::seed_user(&state).await; // creates "testuser"
+        let _uid = test_support::SeedUser::new("testuser").seed(&state).await; // creates "testuser"
 
         let ids = seed_posts_for_user(&state, "testuser", 3, true, "Timeline Post")
             .await
@@ -202,7 +202,7 @@ mod seed_tests {
     async fn rejects_a_prefix_that_cannot_form_a_valid_slug() {
         let test_support::TestEnv { state, base: _base } =
             test_support::Backend::Sqlite.setup().await;
-        let _uid = test_support::seed_user(&state).await; // creates "testuser"
+        let _uid = test_support::SeedUser::new("testuser").seed(&state).await; // creates "testuser"
 
         // A prefix with no alphanumerics collapses to an empty base, so the slug
         // would begin with '-' and fail `Slug` parsing — surfaced as an error

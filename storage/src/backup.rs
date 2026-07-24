@@ -598,9 +598,8 @@ mod tests {
     #![expect(clippy::similar_names)]
     use super::*;
     use crate::test_support::{
-        backends, recorded_postgres_url, sqlite_url, Backend, CloseablePool,
+        backends, recorded_postgres_url, sqlite_url, Backend, CloseablePool, SeedUser,
     };
-    use common::test_support::{parse_password, parse_username};
     use rstest::*;
     use rstest_reuse::*;
     use std::str::FromStr;
@@ -785,16 +784,7 @@ mod tests {
         }
 
         // A single non-seeded row (a user) makes the database non-empty.
-        env.state
-            .users
-            .create_user(
-                &parse_username("alice"),
-                &parse_password("password123"),
-                None,
-                false,
-            )
-            .await
-            .expect("create user");
+        SeedUser::new("alice").seed(&env.state).await;
         assert!(
             !crate::database_is_empty(&db).await?,
             "a database holding a user must not count as empty"
@@ -1185,17 +1175,7 @@ mod tests {
         // Two users so the exported users.ndjson has a later row to corrupt while
         // leaving row 0 (which seeds `column_names`) complete.
         for username in ["userone", "usertwo"] {
-            source
-                .state
-                .users
-                .create_user(
-                    &parse_username(username),
-                    &parse_password("password123"),
-                    None,
-                    false,
-                )
-                .await
-                .expect("seed user");
+            SeedUser::new(username).seed(&source.state).await;
         }
 
         let temp = TempDir::new()?;

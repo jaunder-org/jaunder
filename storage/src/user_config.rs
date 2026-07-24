@@ -145,7 +145,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, seed_user, Backend};
+    use crate::test_support::{backends, Backend, SeedUser};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -153,7 +153,7 @@ mod tests {
     #[tokio::test]
     async fn get_default_post_format_unset_returns_markdown(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = seed_user(&env.state).await;
+        let user_id = SeedUser::new("testuser").seed(&env.state).await;
         let config = &*env.state.user_config;
         let result = get_default_post_format(config, user_id).await.unwrap();
         assert_eq!(result, PostFormat::Markdown);
@@ -163,7 +163,7 @@ mod tests {
     #[tokio::test]
     async fn set_and_get_default_post_format_markdown(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = seed_user(&env.state).await;
+        let user_id = SeedUser::new("testuser").seed(&env.state).await;
         let config = &*env.state.user_config;
         set_default_post_format(config, user_id, PostFormat::Markdown)
             .await
@@ -176,7 +176,7 @@ mod tests {
     #[tokio::test]
     async fn set_and_get_default_post_format_org(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = seed_user(&env.state).await;
+        let user_id = SeedUser::new("testuser").seed(&env.state).await;
         let config = &*env.state.user_config;
         set_default_post_format(config, user_id, PostFormat::Org)
             .await
@@ -189,7 +189,7 @@ mod tests {
     #[tokio::test]
     async fn get_default_post_format_invalid_string_returns_markdown(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = seed_user(&env.state).await;
+        let user_id = SeedUser::new("testuser").seed(&env.state).await;
         let config = &*env.state.user_config;
 
         // Store a garbage value through the storage handle.
