@@ -467,7 +467,7 @@ async fn login_truncates_long_user_agent(#[case] backend: Backend) {
     let record = state.sessions.authenticate(&raw_token).await.unwrap();
     // Label should be truncated to 200 chars
     assert_eq!(record.label.len(), 200);
-    assert_eq!(record.label, "a".repeat(200));
+    assert_eq!(record.label, "a".repeat(200).as_str());
 }
 
 // M2.9.13: `login` with wrong password returns error.

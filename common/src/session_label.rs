@@ -43,6 +43,30 @@ impl FromStr for SessionLabel {
     }
 }
 
+impl SessionLabel {
+    /// The label used when a lossy source yields nothing usable.
+    const DEFAULT: &'static str = "Unknown device";
+
+    /// **Infallible** best-effort construction from a *trusted internal* device/
+    /// session hint (e.g. a User-Agent string, or a fixed literal like
+    /// `"Sign-up session"`): trims, truncates to [`MAX_SESSION_LABEL_CHARS`]
+    /// scalars, and falls back to `"Unknown device"` when the result is empty —
+    /// so it always yields a valid label and can be used in production without a
+    /// panic or a dead error path.
+    ///
+    /// Untrusted *wire* input must go through the validating [`FromStr`] instead
+    /// (which rejects rather than silently truncates).
+    #[must_use]
+    pub fn from_lossy(s: &str) -> Self {
+        let bounded: String = s.trim().chars().take(MAX_SESSION_LABEL_CHARS).collect();
+        if bounded.is_empty() {
+            SessionLabel(Self::DEFAULT.to_owned())
+        } else {
+            SessionLabel(bounded)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,6 +106,28 @@ mod tests {
         // push an otherwise-valid label over the limit.
         let padded = format!("  {}  ", "a".repeat(MAX_SESSION_LABEL_CHARS));
         assert!(padded.parse::<SessionLabel>().is_ok());
+    }
+
+    #[test]
+    fn from_lossy_passes_through_valid_trimmed() {
+        assert_eq!(SessionLabel::from_lossy("  MarsEdit  "), "MarsEdit");
+        assert_eq!(
+            SessionLabel::from_lossy("Sign-up session"),
+            "Sign-up session"
+        );
+    }
+
+    #[test]
+    fn from_lossy_truncates_overlong_instead_of_rejecting() {
+        let over = "a".repeat(MAX_SESSION_LABEL_CHARS + 50);
+        let label = SessionLabel::from_lossy(&over);
+        assert_eq!(label.chars().count(), MAX_SESSION_LABEL_CHARS);
+    }
+
+    #[test]
+    fn from_lossy_defaults_empty_to_unknown_device() {
+        assert_eq!(SessionLabel::from_lossy(""), "Unknown device");
+        assert_eq!(SessionLabel::from_lossy("   "), "Unknown device");
     }
 
     #[test]

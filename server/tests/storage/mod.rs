@@ -6,6 +6,7 @@ use common::tag::{Tag, TagLabel};
 use common::test_support::{
     parse_audience_name, parse_bio, parse_byte_size, parse_content_hash, parse_content_type,
     parse_display_name, parse_email, parse_filename, parse_page_offset, parse_raw_token,
+    parse_session_label,
 };
 use common::username::Username;
 use common::visibility::{
@@ -729,7 +730,7 @@ async fn session_lifecycle_works(#[case] backend: Backend) {
 
     let raw_token = state
         .sessions
-        .create_session(user_id, "Laptop")
+        .create_session(user_id, &parse_session_label("Laptop"))
         .await
         .unwrap();
     let record = state.sessions.authenticate(&raw_token).await.unwrap();
@@ -1091,7 +1092,7 @@ async fn create_session_then_authenticate_returns_correct_record(#[case] backend
 
     let raw_token = state
         .sessions
-        .create_session(user_id, "test")
+        .create_session(user_id, &parse_session_label("test"))
         .await
         .unwrap();
     let record = state.sessions.authenticate(&raw_token).await.unwrap();
@@ -1166,17 +1167,17 @@ async fn list_sessions_returns_only_sessions_for_given_user(#[case] backend: Bac
 
     state
         .sessions
-        .create_session(alice_id, "alice-1")
+        .create_session(alice_id, &parse_session_label("alice-1"))
         .await
         .unwrap();
     state
         .sessions
-        .create_session(alice_id, "alice-2")
+        .create_session(alice_id, &parse_session_label("alice-2"))
         .await
         .unwrap();
     state
         .sessions
-        .create_session(bob_id, "bob-1")
+        .create_session(bob_id, &parse_session_label("bob-1"))
         .await
         .unwrap();
 
@@ -5839,19 +5840,19 @@ async fn session_list_operations(#[case] backend: Backend) {
 
     let session1 = state
         .sessions
-        .create_session(user, "session 1")
+        .create_session(user, &parse_session_label("session 1"))
         .await
         .expect("create_session 1 failed");
 
     let _session2 = state
         .sessions
-        .create_session(user, "session 2")
+        .create_session(user, &parse_session_label("session 2"))
         .await
         .expect("create_session 2 failed");
 
     let _session3 = state
         .sessions
-        .create_session(user, "test session")
+        .create_session(user, &parse_session_label("test session"))
         .await
         .expect("create_session 3 failed");
 
@@ -5863,7 +5864,7 @@ async fn session_list_operations(#[case] backend: Backend) {
 
     assert_eq!(sessions.len(), 3);
 
-    let labels: Vec<_> = sessions.iter().map(|s| s.label.as_str()).collect();
+    let labels: Vec<&str> = sessions.iter().map(|s| s.label.as_ref()).collect();
     assert!(labels.contains(&"session 1"));
     assert!(labels.contains(&"session 2"));
     assert!(labels.contains(&"test session"));

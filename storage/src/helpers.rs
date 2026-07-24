@@ -17,6 +17,7 @@ use common::media::{ByteSize, ContentHash, ContentType, Filename, MediaSource};
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
+use common::session_label::SessionLabel;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::token::TokenHash;
@@ -77,7 +78,7 @@ pub(crate) fn build_session_record(
     token_hash: TokenHash,
     user_id: i64,
     username: Username,
-    label: String,
+    label: SessionLabel,
     created_at: DateTime<Utc>,
     last_used_at: DateTime<Utc>,
 ) -> SessionRecord {
@@ -203,7 +204,7 @@ pub(crate) type SessionRow = (
     TokenHash,
     i64,
     Username,
-    String,
+    SessionLabel,
     DateTime<Utc>,
     DateTime<Utc>,
 );
@@ -408,7 +409,8 @@ mod tests {
     use chrono::Utc;
     use common::test_support::{
         parse_bio, parse_content_hash, parse_content_type, parse_display_name, parse_email,
-        parse_filename, parse_password, parse_slug, parse_token_hash, parse_username,
+        parse_filename, parse_password, parse_session_label, parse_slug, parse_token_hash,
+        parse_username,
     };
 
     #[test]
@@ -438,7 +440,7 @@ mod tests {
             parse_token_hash("hash"),
             1,
             parse_username("alice"),
-            "label".to_string(),
+            parse_session_label("label"),
             now,
             now,
         );
@@ -664,7 +666,7 @@ mod tests {
             parse_token_hash("tokenhash"),
             1,
             parse_username("alice"),
-            "label".to_string(),
+            parse_session_label("label"),
             now,
             now,
         );

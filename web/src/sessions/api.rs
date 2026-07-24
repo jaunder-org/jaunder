@@ -7,6 +7,7 @@
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use common::session_label::SessionLabel;
 use common::time::UtcInstant;
 use common::token::{RawToken, TokenHash};
 
@@ -21,7 +22,7 @@ use {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub token_hash: TokenHash,
-    pub label: String,
+    pub label: SessionLabel,
     pub created_at: UtcInstant,
     pub last_used_at: UtcInstant,
     pub is_current: bool,
@@ -54,25 +55,21 @@ pub struct AppPassword {
     /// The raw token — used as the password for `AtomPub` HTTP Basic auth.
     pub token: RawToken,
     /// The label recorded for this app password.
-    pub label: String,
+    pub label: SessionLabel,
 }
 
 /// Mints a new app-specific password (a labelled session) for the authenticated
 /// user. The returned raw token is shown only once; only its hash is stored.
 #[server(endpoint = "/create_app_password")]
-pub async fn create_app_password(label: String) -> WebResult<AppPassword> {
+pub async fn create_app_password(label: SessionLabel) -> WebResult<AppPassword> {
     boundary!("create_app_password", {
+        // `label` is a typed wire arg (ADR-0065): the `SessionLabel` serde bridge
+        // already trimmed it and rejected empty/over-long at decode, so there is no
+        // manual validation here.
         let auth = require_auth().await?;
-        let label = label.trim();
-        if label.is_empty() {
-            return Err(InternalError::validation("a label is required"));
-        }
         let sessions = expect_context::<Arc<dyn SessionStorage>>();
-        let token = sessions.create_session(auth.user_id, label).await?;
-        Ok(AppPassword {
-            token,
-            label: label.to_string(),
-        })
+        let token = sessions.create_session(auth.user_id, &label).await?;
+        Ok(AppPassword { token, label })
     })
 }
 

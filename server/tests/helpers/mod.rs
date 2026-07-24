@@ -8,6 +8,7 @@ use axum::{
 use common::ids::UserId;
 use common::mailer::test_utils::CapturingMailSender;
 use common::mailer::MailSender;
+use common::test_support::parse_session_label;
 use common::token::RawToken;
 use leptos::prelude::LeptosOptions;
 use std::sync::{Arc, OnceLock};
@@ -131,7 +132,7 @@ impl SeededSession {
 pub async fn create_session_for(state: &Arc<storage::AppState>, user_id: UserId) -> SeededSession {
     let token = state
         .sessions
-        .create_session(user_id, "test session")
+        .create_session(user_id, &parse_session_label("test session"))
         .await
         .expect("create session");
     SeededSession { user_id, token }

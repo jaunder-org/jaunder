@@ -22,6 +22,7 @@ use crate::password::Password;
 use crate::post_summary::PostSummary;
 use crate::post_title::PostTitle;
 use crate::root_relative_url::RootRelativeUrl;
+use crate::session_label::SessionLabel;
 use crate::site::SiteTitle;
 use crate::slug::Slug;
 use crate::smtp_password::SmtpPassword;
@@ -100,6 +101,19 @@ pub fn parse_display_name(name: &str) -> DisplayName {
 #[must_use]
 pub fn parse_bio(s: &str) -> Bio {
     s.parse().expect("valid test bio")
+}
+
+/// Parse `s` into a valid [`SessionLabel`] for tests — the single place a test
+/// session/app-password label literal is parsed, so a malformed fixture (empty or
+/// over the length bound) fails loudly and the validating `FromStr` isn't
+/// re-spelled at every session/create-session fixture across the workspace.
+///
+/// # Panics
+///
+/// Panics if `s` is empty/whitespace-only or longer than the length bound.
+#[must_use]
+pub fn parse_session_label(s: &str) -> SessionLabel {
+    s.parse().expect("valid test session label")
 }
 
 /// Parse `s` into a valid [`RetentionCount`] for tests — the single place a test

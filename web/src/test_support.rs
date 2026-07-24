@@ -29,7 +29,7 @@ pub(crate) fn auth_parts(user_id: UserId, username: &str) -> Parts {
             token_hash: common::token::TokenHash::from_digest("hash"),
             user_id,
             username: username.clone(),
-            label: "test".to_string(),
+            label: "test".parse().expect("valid session label"),
             created_at: chrono::Utc::now(),
             last_used_at: chrono::Utc::now(),
         })

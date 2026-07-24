@@ -27,6 +27,7 @@ use {
     crate::error::InternalError,
     common::ids::UserId,
     common::password::Password,
+    common::session_label::SessionLabel,
     host::invite::InviteCode,
     std::sync::Arc,
     storage::{
@@ -123,8 +124,9 @@ pub async fn register(
         );
         let user_id = user_id_result?;
 
+        let signup_label = SessionLabel::from_lossy("Sign-up session");
         let raw_token = sessions
-            .create_session(user_id, "Sign-up session")
+            .create_session(user_id, &signup_label)
             .instrument(tracing::info_span!(
                 "web.registration.register.create_session"
             ))

@@ -16,6 +16,7 @@ use common::email::Email;
 use common::invite::InviteTtlHours;
 use common::mailer::{EmailMessage, MailSender};
 use common::password::Password;
+use common::session_label::SessionLabel;
 use common::token::RawToken;
 use common::username::Username;
 use host::capture;
@@ -259,9 +260,14 @@ pub async fn app_password_create(
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?
         .ok_or_else(|| anyhow::anyhow!("no such user '{username}'"))?;
+    // Validate the CLI-supplied label at the `SessionLabel` chokepoint (#325) —
+    // the same non-empty/≤255 rule the web wire enforces.
+    let label: SessionLabel = label
+        .parse()
+        .map_err(|e| anyhow::anyhow!("invalid label: {e}"))?;
     let token = state
         .sessions
-        .create_session(user.user_id, label)
+        .create_session(user.user_id, &label)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     Ok(token)

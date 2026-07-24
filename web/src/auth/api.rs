@@ -19,6 +19,7 @@ use leptos::prelude::*;
 use {
     super::server::{clear_session_cookie, require_auth, set_session_cookie},
     common::password::Password,
+    common::session_label::SessionLabel,
     std::sync::Arc,
     storage::{SessionStorage, UserStorage},
     tracing::Instrument,
@@ -86,9 +87,13 @@ pub async fn login(
                 ua
             }
         };
+        // The device label is a best-effort display string (UA or client-supplied),
+        // so build it losslessly at the `SessionLabel` chokepoint — truncating an
+        // over-long value and defaulting an empty one rather than failing the login.
+        let session_label = SessionLabel::from_lossy(&derived_label);
 
         let raw_token = sessions
-            .create_session(record.user_id, &derived_label)
+            .create_session(record.user_id, &session_label)
             .instrument(tracing::info_span!("web.auth.login.create_session"))
             .await?;
 

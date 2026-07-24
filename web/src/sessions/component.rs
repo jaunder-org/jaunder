@@ -67,7 +67,7 @@ pub fn SessionsPage() -> impl IntoView {
                                                 let hash = s.token_hash.to_string();
                                                 view! {
                                                     <li>
-                                                        {s.label.clone()} " — last used: "
+                                                        {s.label.to_string()} " — last used: "
                                                         {s.last_used_at.to_string()}
                                                         {s.is_current.then_some(view! { " (current)" })} " "
                                                         <ActionForm action=revoke_action>
