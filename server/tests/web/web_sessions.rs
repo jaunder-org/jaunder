@@ -200,7 +200,7 @@ async fn create_app_password_rejects_blank_label(#[case] backend: Backend) {
 #[tokio::test]
 async fn create_app_password_rejects_overlong_label(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state, "alice").await.cookie();
+    let cookie = create_user_and_session(&state).await.cookie();
 
     // A label past MAX_SESSION_LABEL_CHARS (255) is rejected at the SessionLabel
     // decode — coverage the cap makes possible.

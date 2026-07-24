@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 use common::mailer::test_utils::CapturingMailSender;
 use common::mailer::MailSender;
 use common::test_support::{parse_bio, parse_display_name, parse_session_label};
-use storage::{AppState, ProfileUpdate};
+use storage::ProfileUpdate;
 
 use rstest::*;
 use rstest_reuse::*;
