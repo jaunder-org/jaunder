@@ -3,14 +3,13 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use chrono::Datelike;
 use common::ids::{PostId, UserId};
+use common::seed::{PostResponse, TimelinePage};
 use common::tag::TagLabel;
 use common::test_support::parse_audience_name;
 use common::time::UtcInstant;
 use common::visibility::{AudienceBase, AudienceSelection};
 use storage::{PostFormat, RenderedHtml};
-use web::posts::{
-    CreatePostResult, DraftSummary, PublishPostResult, TimelinePage, UpdatePostResult,
-};
+use web::posts::{CreatePostResult, DraftSummary, PublishPostResult, UpdatePostResult};
 
 use rstest::*;
 use rstest_reuse::*;
@@ -2750,7 +2749,7 @@ async fn get_post_carries_tags(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "get body: {body}");
-    let response: web::posts::PostResponse = serde_json::from_str(&body).unwrap();
+    let response: PostResponse = serde_json::from_str(&body).unwrap();
     assert_eq!(response.tags.len(), 1);
     assert_eq!(response.tags[0].slug, "performance");
     assert_eq!(response.tags[0].display, "Performance");

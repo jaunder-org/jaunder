@@ -11,12 +11,13 @@ use leptos::task::spawn_local;
 
 use common::ids::PostId;
 use common::pagination::PageSize;
+use common::seed::{TimelinePage, TimelinePostSummary};
 use common::time::UtcInstant;
 
 use super::state::{LoadStatus, TimelineCursor};
 use crate::error::WebResult;
 use crate::pages::signal_read::read_signal;
-use crate::posts::{PostCard, TimelinePage, TimelinePostSummary};
+use crate::posts::PostCard;
 
 /// The reactive state of a cursor-paginated timeline, shared by the public Local
 /// timeline (`home.rs`) and the authed `/app` cockpit (`cockpit.rs`).

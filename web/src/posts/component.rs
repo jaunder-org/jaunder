@@ -21,19 +21,18 @@ use crate::posts::{
     default_audience_selection, draft_row_display, get_post, get_post_preview, list_drafts,
     list_posts_by_tag, list_user_posts, list_user_posts_by_tag, parse_permalink_params,
     post_audience_selection, CreatePost, CreatePostArgs, CreatePostResult, DeletePost,
-    DraftRowDisplay, DraftSummary, ListPostsByTag, ListUserPosts, ListUserPostsByTag, PostResponse,
-    PublishPost, PublishPostResult, TimelinePostSummary, UnpublishPost, UpdatePost, UpdatePostArgs,
-    UpdatePostResult,
+    DraftRowDisplay, DraftSummary, ListPostsByTag, ListUserPosts, ListUserPostsByTag, PublishPost,
+    PublishPostResult, UnpublishPost, UpdatePost, UpdatePostArgs, UpdatePostResult,
 };
 use crate::render::TagCtx as TagContext;
 use crate::subscriptions::{is_subscribed_to, SubscribeTo, UnsubscribeFrom};
-use crate::tags::TagSummary;
 use crate::topbar::Topbar;
 use common::feed::FeedSurface;
 use common::ids::{AudienceId, PostId};
 use common::pagination::PageSize;
 use common::post_summary::PostSummary;
 use common::render::PostFormat;
+use common::seed::{PageSeed, PostResponse, TagSummary, TimelinePostSummary};
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::time::utc_instant_from_local;
@@ -1151,8 +1150,8 @@ pub fn PostPage() -> impl IntoView {
     // real content (flash-free) instead of a spinner. The reactive fetch still
     // runs and takes over — restoring the author's edit/delete affordances when
     // the viewer owns the post — so this *enhances* rather than *replaces*.
-    let seed_post = match use_context::<Option<crate::render::PageSeed>>().flatten() {
-        Some(crate::render::PageSeed::Permalink(post)) => Some(post),
+    let seed_post = match use_context::<Option<PageSeed>>().flatten() {
+        Some(PageSeed::Permalink(post)) => Some(post),
         _ => None,
     };
 
@@ -1381,10 +1380,10 @@ pub fn UserTimelinePage() -> impl IntoView {
     // Loading flash). Guarded on the username so a client-side navigation to a
     // *different* profile ignores the initial URL's seed; the reactive fetch
     // still runs and takes over.
-    if let Some(crate::render::PageSeed::Profile {
+    if let Some(PageSeed::Profile {
         username: seed_user,
         page,
-    }) = use_context::<Option<crate::render::PageSeed>>().flatten()
+    }) = use_context::<Option<PageSeed>>().flatten()
     {
         if username.get_untracked().as_ref() == Some(&seed_user) {
             next_cursor_created_at.set(page.next_cursor_created_at);
@@ -1991,10 +1990,10 @@ pub fn SiteTagPage() -> impl IntoView {
     // Public projector seed (#178/#179): adopt the seeded posts for a matching
     // tag so first paint shows content (guarded so a client-side nav to a
     // different tag ignores the initial URL's seed); the reactive fetch still runs.
-    if let Some(crate::render::PageSeed::SiteTag {
+    if let Some(PageSeed::SiteTag {
         tag: seed_tag,
         page,
-    }) = use_context::<Option<crate::render::PageSeed>>().flatten()
+    }) = use_context::<Option<PageSeed>>().flatten()
     {
         if tag.get_untracked().as_ref() == Some(&seed_tag) {
             next_cursor_created_at.set(page.next_cursor_created_at);
@@ -2169,11 +2168,11 @@ pub fn UserTagPage() -> impl IntoView {
 
     // Public projector seed (#178/#179): adopt the seeded posts for a matching
     // username+tag so first paint shows content; the reactive fetch still runs.
-    if let Some(crate::render::PageSeed::UserTag {
+    if let Some(PageSeed::UserTag {
         username: seed_user,
         tag: seed_tag,
         page,
-    }) = use_context::<Option<crate::render::PageSeed>>().flatten()
+    }) = use_context::<Option<PageSeed>>().flatten()
     {
         if username.get_untracked().as_ref() == Some(&seed_user)
             && tag.get_untracked().as_ref() == Some(&seed_tag)

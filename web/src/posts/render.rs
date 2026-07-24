@@ -13,11 +13,10 @@
 //! coverage-measured; the `#[cfg(test)] mod tests` below are the coincidence
 //! tests that protect the byte-identical output.
 
-use crate::posts::{PostResponse, TimelinePostSummary};
-use crate::render::{escape_html, render_load_more, PageSeed, TagCtx};
-use crate::tags::TagSummary;
+use crate::render::{escape_html, render_load_more, TagCtx};
 use crate::{avatar, taglist, topbar};
 use common::render::RenderedHtml;
+use common::seed::{PageSeed, PostResponse, TagSummary, TimelinePostSummary};
 use common::time::UtcInstant;
 use common::username::Username;
 
@@ -254,9 +253,9 @@ fn render_timeline_page(
 #[cfg(test)]
 pub(crate) mod test_fixtures {
     use super::*;
-    use crate::posts::TimelinePage;
     use common::ids::PostId;
     use common::render::PostFormat;
+    use common::seed::TimelinePage;
     use common::test_support::{
         parse_post_summary, parse_root_relative_url, parse_username, parse_utc_instant,
     };
@@ -314,7 +313,7 @@ pub(crate) mod test_fixtures {
 mod tests {
     use super::test_fixtures::{one_post_page, sample_post, sample_summary};
     use super::*;
-    use crate::posts::TimelinePage;
+    use common::seed::TimelinePage;
     use common::test_support::{parse_username, parse_utc_instant};
 
     #[test]

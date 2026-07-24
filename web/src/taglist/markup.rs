@@ -1,7 +1,8 @@
 use std::fmt::Write;
 
+use common::seed::TagSummary;
+
 use crate::render::{escape_html, TagCtx};
-use crate::tags::TagSummary;
 
 /// The footer tag chips: a `<span class="j-tag-list">` of `<span class="j-tag-cell">`
 /// chips, each a `#display` link to `/tags/:slug`, plus the "· here" link under
@@ -36,9 +37,10 @@ pub(crate) fn render(tags: &[TagSummary], ctx: &TagCtx) -> String {
 #[cfg(test)]
 mod tests {
     use super::render;
-    use crate::render::TagCtx;
-    use crate::tags::TagSummary;
+    use common::seed::TagSummary;
     use common::test_support::parse_username;
+
+    use crate::render::TagCtx;
 
     #[test]
     fn tag_list_site_wide_has_hash_chip_and_no_here_link() {

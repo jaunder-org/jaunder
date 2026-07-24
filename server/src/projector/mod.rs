@@ -27,6 +27,7 @@ use axum::{
     Router,
 };
 use common::pagination::PageSize;
+use common::seed::{PageSeed, TimelinePage};
 use common::slug::Slug;
 use common::tag::Tag;
 use common::username::Username;
@@ -40,7 +41,7 @@ use web::posts::{
     fetch_local_timeline, fetch_posts_by_tag, fetch_user_posts, fetch_user_posts_by_tag,
     post_response,
 };
-use web::render::{render_head, render_shell, PageSeed, PREPAINT_SCRIPT};
+use web::render::{render_head, render_shell, PREPAINT_SCRIPT};
 
 /// The static SPA shell (`index.html`) the projector falls back to when a public
 /// URL has no anonymous-public content. Cheap to clone (shared `Arc`).
@@ -204,9 +205,9 @@ async fn site_timeline(
 /// under a live DB failure — stays unit-testable; `into_seed` wraps the page in
 /// its route's [`PageSeed`] variant.
 fn timeline_response(
-    result: web::error::InternalResult<web::posts::TimelinePage>,
+    result: web::error::InternalResult<TimelinePage>,
     headers: &HeaderMap,
-    into_seed: impl FnOnce(web::posts::TimelinePage) -> PageSeed,
+    into_seed: impl FnOnce(TimelinePage) -> PageSeed,
 ) -> Response {
     match result {
         Ok(page) => cacheable(headers, &into_seed(page)),
@@ -221,10 +222,10 @@ fn timeline_response(
 /// handlers so the error arm — otherwise reachable only under a live DB failure —
 /// stays unit-testable; `into_seed` wraps the page in its route's [`PageSeed`].
 fn tag_response(
-    result: web::error::InternalResult<web::posts::TimelinePage>,
+    result: web::error::InternalResult<TimelinePage>,
     headers: &HeaderMap,
     shell: &Shell,
-    into_seed: impl FnOnce(web::posts::TimelinePage) -> PageSeed,
+    into_seed: impl FnOnce(TimelinePage) -> PageSeed,
 ) -> Response {
     match result {
         Ok(page) => cacheable(headers, &into_seed(page)),
@@ -381,8 +382,8 @@ mod tests {
     #[test]
     fn document_head_starts_with_the_prepaint_script() {
         use super::document;
-        use web::render::PageSeed;
-        let doc = document(&PageSeed::SiteTimeline(web::posts::TimelinePage {
+        use common::seed::{PageSeed, TimelinePage};
+        let doc = document(&PageSeed::SiteTimeline(TimelinePage {
             posts: vec![],
             next_cursor_created_at: None,
             next_cursor_post_id: None,
@@ -398,7 +399,7 @@ mod tests {
     #[test]
     fn document_boots_the_same_wasm_url_as_the_spa_shell() {
         use super::document;
-        use web::render::PageSeed;
+        use common::seed::{PageSeed, TimelinePage};
         // Drift guard (#234): the projector's server-rendered boot and the SPA
         // shell (`csr/index.html`) are two hand-written copies — they must load the
         // SAME wasm URL, or hydration 404s on projector routes. Cross-checking the
@@ -411,7 +412,7 @@ mod tests {
             let rest = &html[start..];
             &rest[..rest.find('"').expect("init(\"…\") closing quote")]
         }
-        let doc = document(&PageSeed::SiteTimeline(web::posts::TimelinePage {
+        let doc = document(&PageSeed::SiteTimeline(TimelinePage {
             posts: vec![],
             next_cursor_created_at: None,
             next_cursor_post_id: None,

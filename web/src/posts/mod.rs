@@ -40,9 +40,8 @@ pub use api::{
     list_user_posts_by_tag, post_audience_selection, publish_post, unpublish_post, update_post,
     CreatePost, CreatePostArgs, CreatePostResult, DefaultAudienceSelection, DeletePost,
     DraftSummary, GetPost, GetPostPreview, ListDrafts, ListHomeFeed, ListLocalTimeline,
-    ListPostsByTag, ListUserPosts, ListUserPostsByTag, PostAudienceSelection, PostResponse,
-    PublishPost, PublishPostResult, TimelinePage, TimelinePostSummary, UnpublishPost, UpdatePost,
-    UpdatePostArgs, UpdatePostResult,
+    ListPostsByTag, ListUserPosts, ListUserPostsByTag, PostAudienceSelection, PublishPost,
+    PublishPostResult, UnpublishPost, UpdatePost, UpdatePostArgs, UpdatePostResult,
 };
 
 // Server-only shared fetch helpers, consumed by the `server` crate's public

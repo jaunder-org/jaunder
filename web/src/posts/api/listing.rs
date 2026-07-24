@@ -5,18 +5,11 @@
 //! their module path, so this relocation has no routing impact.
 
 use leptos::prelude::*;
-use serde::{Deserialize, Serialize};
 
-use common::{
-    ids::PostId, pagination::PageSize, post_summary::PostSummary, post_title::PostTitle,
-    render::RenderedHtml, root_relative_url::RootRelativeUrl, slug::Slug, tag::Tag,
-    time::UtcInstant, username::Username,
-};
+use common::seed::TimelinePage;
+use common::{ids::PostId, pagination::PageSize, tag::Tag, time::UtcInstant, username::Username};
 
 use crate::error::WebResult;
-use crate::tags::TagSummary;
-
-use super::deserialize_rendered_html;
 
 #[cfg(feature = "server")]
 use {
@@ -32,41 +25,6 @@ use {
         UserStorage,
     },
 };
-
-/// A published post row returned by timeline listing endpoints.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TimelinePostSummary {
-    pub post_id: PostId,
-    pub username: Username,
-    pub title: Option<PostTitle>,
-    pub summary: Option<PostSummary>,
-    pub slug: Slug,
-    #[serde(deserialize_with = "deserialize_rendered_html")]
-    pub rendered_html: RenderedHtml,
-    pub created_at: UtcInstant,
-    pub published_at: UtcInstant,
-    /// Root-relative permalink of a published post; `None` when the summary is
-    /// rebuilt from a draft `PostResponse` (no public permalink), so the title
-    /// renders without a link — coinciding with the projector's draft paint.
-    pub permalink: Option<RootRelativeUrl>,
-    /// True when the viewing user is the post author.
-    pub is_author: bool,
-    /// True when this post is the author's own unpublished draft. Timeline
-    /// listings only ever carry published rows, so this is `false` there; it is
-    /// `true` only when `PostPage` renders a draft at its permalink.
-    pub is_draft: bool,
-    /// Tags applied to this post, ordered by canonical slug.
-    pub tags: Vec<TagSummary>,
-}
-
-/// A cursor-paginated page of timeline posts.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TimelinePage {
-    pub posts: Vec<TimelinePostSummary>,
-    pub next_cursor_created_at: Option<UtcInstant>,
-    pub next_cursor_post_id: Option<PostId>,
-    pub has_more: bool,
-}
 
 /// Assemble a cursor-paginated [`TimelinePage`] from one over-fetched row set
 /// (`page_size + 1` rows detect `has_more`). Shared by every `fetch_*` below.

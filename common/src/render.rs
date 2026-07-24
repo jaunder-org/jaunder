@@ -151,6 +151,18 @@ impl serde::Serialize for RenderedHtml {
     }
 }
 
+/// Deserializes a wire `String` into a `RenderedHtml` via `from_trusted` — the
+/// deserialize counterpart to `RenderedHtml`'s deliberate lack of a `Deserialize`
+/// impl (it is server-rendered, trusted output; see the note above). Used by the
+/// seed DTOs' `#[serde(deserialize_with = ...)]`.
+pub(crate) fn deserialize_rendered_html<'de, D>(deserializer: D) -> Result<RenderedHtml, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize as _;
+    String::deserialize(deserializer).map(RenderedHtml::from_trusted)
+}
+
 // The rest of the StrNewtype read-out trailer (#502), hand-written to preserve the
 // carve-outs: `Borrow`/`PartialEq` are read-only, and `From<Self> for String` moves the
 // inner out (it does not turn a `String` *into* a `RenderedHtml`), so the trust boundary

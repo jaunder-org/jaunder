@@ -12,6 +12,7 @@ web = { path = "../web", default-features = false, features = ["csr"] }
 client = { path = "../client" }
 leptos = { workspace = true, features = [ "csr" ] }
 
+common.workspace = true
 console_error_panic_hook.workspace = true
 console_log.workspace = true
 log.workspace = true

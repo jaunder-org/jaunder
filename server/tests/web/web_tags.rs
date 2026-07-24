@@ -1,4 +1,5 @@
 use common::ids::PostId;
+use common::seed::TagSummary;
 use common::tag::TagLabel;
 use common::visibility::AudienceTarget;
 use std::sync::Arc;
@@ -6,7 +7,6 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use chrono::Utc;
 use storage::{CreatePostInput, PostFormat, RenderedHtml};
-use web::tags::TagSummary;
 
 use rstest::*;
 use rstest_reuse::*;

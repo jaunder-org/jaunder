@@ -4,9 +4,8 @@
 //! `component.rs`; everything here is ungated and coverage-measured.
 
 use common::ids::PostId;
+use common::seed::TimelinePage;
 use common::time::UtcInstant;
-
-use crate::posts::TimelinePage;
 
 /// A keyset pagination cursor: the `(created_at, post_id)` pair a timeline page
 /// hands back to fetch the next page. Bundling the two — which always move

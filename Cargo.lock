@@ -780,6 +780,7 @@ name = "csr"
 version = "0.1.0"
 dependencies = [
  "client",
+ "common",
  "console_error_panic_hook",
  "console_log",
  "leptos",
