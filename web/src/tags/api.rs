@@ -1,12 +1,15 @@
-use common::tag::{Tag, TagLabel};
 use leptos::prelude::*;
 use leptos::server_fn::codec::Json;
-use serde::{Deserialize, Serialize};
 
+// `TagLabel` is only named in the server-only `list_tags` body (the client build
+// strips it via the `#[server]` stub), so gate it to match — the wire `TagSummary`
+// it builds now lives in `common::seed`.
 #[cfg(feature = "server")]
-use {std::sync::Arc, storage::PostStorage};
+use {common::tag::TagLabel, std::sync::Arc, storage::PostStorage};
 
 use crate::error::WebResult;
+
+use super::TagSummary;
 
 /// Default number of suggestions returned to the autocomplete dropdown when
 /// the caller doesn't specify a limit.
@@ -15,19 +18,6 @@ pub const DEFAULT_TAG_LIMIT: u32 = 10;
 /// Hard upper bound on the autocomplete result set; protects the database
 /// against pathological requests.
 pub const MAX_TAG_LIMIT: u32 = 50;
-
-/// A tag row returned by [`list_tags`].
-///
-/// `slug` is the canonical lowercase form used in URLs (`/tags/:slug`).
-/// `display` is the case-preserving form the author most recently used; the
-/// autocomplete dropdown should render this to the user. When a tag has been
-/// applied with multiple casings across posts, `display` reflects whichever
-/// row the underlying `SELECT` returned first.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TagSummary {
-    pub slug: Tag,
-    pub display: TagLabel,
-}
 
 /// Returns tag suggestions for the autocomplete dropdown.
 ///

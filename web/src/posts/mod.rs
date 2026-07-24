@@ -40,10 +40,13 @@ pub use api::{
     list_user_posts_by_tag, post_audience_selection, publish_post, unpublish_post, update_post,
     CreatePost, CreatePostArgs, CreatePostResult, DefaultAudienceSelection, DeletePost,
     DraftSummary, GetPost, GetPostPreview, ListDrafts, ListHomeFeed, ListLocalTimeline,
-    ListPostsByTag, ListUserPosts, ListUserPostsByTag, PostAudienceSelection, PostResponse,
-    PublishPost, PublishPostResult, TimelinePage, TimelinePostSummary, UnpublishPost, UpdatePost,
-    UpdatePostArgs, UpdatePostResult,
+    ListPostsByTag, ListUserPosts, ListUserPostsByTag, PostAudienceSelection, PublishPost,
+    PublishPostResult, UnpublishPost, UpdatePost, UpdatePostArgs, UpdatePostResult,
 };
+
+// Transitional re-export: the seed wire DTOs moved to `common::seed` (#610);
+// consumers still reach them at `crate::posts::…` until Task 2 repoints them.
+pub use common::seed::{PostResponse, TimelinePage, TimelinePostSummary};
 
 // Server-only shared fetch helpers, consumed by the `server` crate's public
 // projector (one query, no drift). Re-exported from `api` (their home is its

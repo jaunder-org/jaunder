@@ -16,22 +16,14 @@ mod listing;
 pub use listing::*;
 
 use common::{
-    ids::PostId,
-    pagination::PageSize,
-    post_body::PostBody,
-    post_summary::PostSummary,
-    post_title::PostTitle,
-    render::{PostFormat, RenderedHtml},
-    root_relative_url::RootRelativeUrl,
-    slug::Slug,
-    tag::TagLabel,
-    time::UtcInstant,
-    username::Username,
-    visibility::AudienceSelection,
+    ids::PostId, pagination::PageSize, post_body::PostBody, post_summary::PostSummary,
+    post_title::PostTitle, render::PostFormat, root_relative_url::RootRelativeUrl, slug::Slug,
+    tag::TagLabel, time::UtcInstant, username::Username, visibility::AudienceSelection,
 };
 
 use crate::error::WebResult;
-use crate::tags::TagSummary;
+
+use super::PostResponse;
 
 // The audience-picker DTO and its converters live in `common::visibility` (beside
 // `AudienceBase`/`AudienceTarget`); the server fn bodies below use these two to
@@ -118,39 +110,6 @@ pub struct PublishPostResult {
     pub slug: Slug,
     pub published_at: UtcInstant,
     pub permalink: RootRelativeUrl,
-}
-
-/// Trusted-rebuild `deserialize_with` for a wire `RenderedHtml` field: the value
-/// is prior `render()` output serialized by our own server, so reconstruct it via
-/// [`RenderedHtml::from_trusted`] (the type has no blanket `Deserialize` by design).
-pub(crate) fn deserialize_rendered_html<'de, D>(deserializer: D) -> Result<RenderedHtml, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    String::deserialize(deserializer).map(RenderedHtml::from_trusted)
-}
-
-/// Details of a post returned by [`get_post`].
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PostResponse {
-    pub post_id: PostId,
-    pub username: Username,
-    pub title: Option<PostTitle>,
-    pub slug: Slug,
-    pub body: PostBody,
-    pub format: PostFormat,
-    #[serde(deserialize_with = "deserialize_rendered_html")]
-    pub rendered_html: RenderedHtml,
-    pub created_at: UtcInstant,
-    pub published_at: Option<UtcInstant>,
-    pub is_draft: bool,
-    pub is_author: bool,
-    /// Permalink URL for published posts; `None` for drafts.
-    pub permalink: Option<RootRelativeUrl>,
-    /// Tags applied to this post, ordered by canonical slug.
-    pub tags: Vec<TagSummary>,
-    /// Optional summary/excerpt of the post.
-    pub summary: Option<PostSummary>,
 }
 
 /// Bundled arguments for [`create_post`]. The eight fields are the RPC input
@@ -646,7 +605,7 @@ mod tests {
     // reconstruction door.
     #[test]
     fn timeline_summary_round_trips_rendered_html_via_trusted_rebuild() {
-        use super::TimelinePostSummary;
+        use crate::posts::TimelinePostSummary;
         use common::ids::PostId;
         use common::render::RenderedHtml;
         use common::test_support::{parse_root_relative_url, parse_utc_instant};

@@ -14,11 +14,12 @@
 //! fallback share styling.
 
 use crate::icon;
-use crate::posts::{PostResponse, TimelinePage};
-use common::tag::Tag;
 use common::username::Username;
-use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
+
+// Transitional re-export: `PageSeed` moved to `common::seed` (#610); consumers
+// still reach it at `crate::render::PageSeed` until Task 2 repoints them.
+pub use common::seed::PageSeed;
 
 /// The default theme applied to `<div class="j-root" data-theme=…>`. Lives here
 /// (the shell-rendering layer) so the projector's server-painted shell and the
@@ -47,31 +48,6 @@ if(localStorage.getItem('jaunder_home_redirect')==='app'&&location.pathname==='/
 /// same way the projector renders its routes from constants. Single source of the
 /// shell; copied to no build output.
 pub const SPA_SHELL: &str = include_str!("../../../csr/index.html");
-
-/// The initial data a public page is rendered from — serialized into the
-/// projector's `#jaunder-seed` blob and adopted by the CSR client on boot.
-///
-/// Variants carry the route context (`username` / `tag`) the bare
-/// [`TimelinePage`] lacks but the heading, title, and permalinks need — the
-/// reactive components get it from the route params today.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PageSeed {
-    SiteTimeline(TimelinePage),
-    Profile {
-        username: Username,
-        page: TimelinePage,
-    },
-    SiteTag {
-        tag: Tag,
-        page: TimelinePage,
-    },
-    UserTag {
-        username: Username,
-        tag: Tag,
-        page: TimelinePage,
-    },
-    Permalink(PostResponse),
-}
 
 /// Linking context for a post's footer tag chips — the pure mirror of
 /// `pages::ui::TagContext` (which is a re-export of this). `SiteWide` links each
