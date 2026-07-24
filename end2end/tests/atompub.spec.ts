@@ -6,8 +6,8 @@ import { setTestBudget, slowBrowserFirstNavigationTimeoutMs } from "./fixtures";
 /// Mints an app password via the Sessions UI and returns the raw token.
 async function mintAppPassword(page: Page, label: string): Promise<string> {
   await goto(page, "/sessions");
-  await page.fill('input[name="label"]', label);
-  await click(page, '.j-app-passwords button[type="submit"]');
+  await page.fill("#app-password-label", label);
+  await click(page, '.j-app-passwords button:has-text("Create app password")');
   const tokenEl = page.locator(".j-app-password-token code");
   await tokenEl.waitFor({ state: "visible", timeout: 15_000 });
   return ((await tokenEl.textContent()) ?? "").trim();
@@ -78,8 +78,8 @@ test("an app password can be minted from the sessions page", async ({
   await goto(page, "/sessions");
 
   // goto waits for hydration, so the label input is safe to fill.
-  await page.fill('input[name="label"]', "MarsEdit e2e");
-  await click(page, '.j-app-passwords button[type="submit"]');
+  await page.fill("#app-password-label", "MarsEdit e2e");
+  await click(page, '.j-app-passwords button:has-text("Create app password")');
 
   // The raw token is shown exactly once.
   const tokenEl = page.locator(".j-app-password-token code");
