@@ -82,18 +82,18 @@ let draft = SeedPost::new(user_id).draft().seed(&state).await;
 **Aggressive defaults — a call site deviates from a default ONLY when required
 for test correctness** (the `SeedUser` discipline):
 
-| Field             | Default                        | Setter to override                          |
-| ----------------- | ------------------------------ | ------------------------------------------- |
-| `user_id`         | (required arg to `new`)        | —                                           |
-| `title`           | `None`                         | `.title(&str)`                              |
-| `body`            | a fixed non-empty default      | `.body(impl Into<PostBody>)`                |
-| `format`          | `PostFormat::Markdown`         | `.format(PostFormat)`                       |
-| `published_at`    | `Some(Utc::now())` (published) | `.draft()` (→ `None`) / `.published_at(dt)` |
-| `audiences`       | `vec![AudienceTarget::Public]` | `.audiences(Vec<AudienceTarget>)`           |
-| `slug_override`   | `None`                         | `.slug_override(Slug)`                      |
-| `summary`         | `None`                         | `.summary(PostSummary)`                     |
-| `idempotency_key` | `None`                         | `.idempotency_key(&str)`                    |
-| `max_attempts`    | `100` (internal, not a setter) | —                                           |
+| Field             | Default                        | Settable?                         |
+| ----------------- | ------------------------------ | --------------------------------- |
+| `user_id`         | (required arg to `new`)        | —                                 |
+| `title`           | `None`                         | `.title(&str)`                    |
+| `body`            | a fixed non-empty default      | `.body(impl Into<PostBody>)`      |
+| `audiences`       | `vec![AudienceTarget::Public]` | `.audiences(Vec<AudienceTarget>)` |
+| `format`          | `PostFormat::Markdown`         | fixed (no setter)                 |
+| `published_at`    | `Some(Utc::now())` (published) | fixed (no setter)                 |
+| `slug_override`   | `None`                         | fixed (no setter)                 |
+| `summary`         | `None`                         | fixed (no setter)                 |
+| `idempotency_key` | `None`                         | fixed (no setter)                 |
+| `max_attempts`    | `100` (internal)               | —                                 |
 
 - The default body is **non-empty** (so `derive_post_metadata` never returns
   `EmptyPost`) and title-less, so repeated bare `SeedPost::new(uid).seed()`
@@ -101,9 +101,13 @@ for test correctness** (the `SeedUser` discipline):
 - `.seed(&state)` is `async`, returns `PostRecord` (carries `post_id` _and_
   `slug` — both are read at call sites), and `expect()`s success (happy-path
   setup, like `SeedUser::seed`).
-- **Only the setters that real call sites need** are added — enumerated from the
-  ~52 existing blocks: title, body, draft/published_at, format, audiences,
-  slug_override, summary, idempotency_key. No speculative setters.
+- **Only the three fields real call sites vary — title, body, audiences — are
+  settable.** After the atompub-only re-scope, the migrated `atompub_posts.rs`
+  seeds override just those; the rest (Markdown, published-now, no
+  slug/summary/idempotency) are fixed defaults with **no setter**, mirroring how
+  `SeedUser` exposes only the setters its callers use (no speculative setters).
+  The `create_post`-layer builder in #656 owns the
+  `rendered_html`/`slug`/scheduled-post vocabulary its contract tests need.
 
 **On shedding `user_id` and `&state` (the interview ask "get rid of them if
 possible"):**

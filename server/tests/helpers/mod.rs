@@ -286,9 +286,9 @@ pub fn atompub_get(session: &SeededSession, suffix: &str) -> Request<Body> {
 }
 
 /// Send an `application/atom+xml` `xml` body with `method` to `session`'s `suffix`
-/// resource — the `AtomPub` create/update entry request. See [`atompub_post_xml`] /
-/// [`atompub_put_xml`] for the two common verbs.
-pub fn atompub_send_xml(
+/// resource — the shared body behind [`atompub_post_xml`] / [`atompub_put_xml`], the
+/// two verbs call sites actually use. Private: no caller needs an arbitrary method.
+fn atompub_send_xml(
     session: &SeededSession,
     method: &str,
     suffix: &str,
