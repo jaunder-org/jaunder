@@ -39,7 +39,7 @@ use macros::{NumNewtype, StrNewtype};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::parse_error::parse_error;
+use crate::strum_enum::{impl_string_serde_proxy, parse_error};
 
 /// A validated media content hash: exactly 64 lowercase hex characters
 /// (`[0-9a-f]{64}`), the canonical `format!("{digest:x}")` form of a SHA-256
@@ -251,21 +251,7 @@ parse_error!(
     "media source must be \"upload\" or \"cached\""
 );
 
-// serde `into`/`try_from` proxy: serialize the wire token, deserialize an owned
-// `String` through `FromStr` so the domain `InvalidMediaSource` message surfaces.
-impl From<MediaSource> for String {
-    fn from(source: MediaSource) -> Self {
-        source.as_ref().to_owned()
-    }
-}
-
-impl TryFrom<String> for MediaSource {
-    type Error = InvalidMediaSource;
-
-    fn try_from(s: String) -> Result<Self, Self::Error> {
-        s.parse()
-    }
-}
+impl_string_serde_proxy!(MediaSource);
 
 // Typed `sqlx` bind/decode (feature = "sqlx"): stores/loads the TEXT token as a
 // `MediaSource` value, not a stringly `.as_str()`/`.parse()` strip.

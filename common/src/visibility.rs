@@ -2,7 +2,7 @@
 //! the viewer identity, and the subscription-admission seam. See ADR-0020.
 
 use crate::ids::{AudienceId, ChannelId, UserId};
-use crate::parse_error::parse_error;
+use crate::strum_enum::{impl_string_serde_proxy, parse_error};
 
 // String-backed enums use the `strum` stack (`AsRefStr`/`Display`/`EnumString`) with
 // the wire token as the snake_case variant name, plus a named `thiserror` parse error
@@ -111,21 +111,7 @@ parse_error!(
     "audience must be \"private\", \"public\", or \"subscribers\""
 );
 
-// serde `into`/`try_from` proxy: serialize the wire token, deserialize an owned
-// `String` through `FromStr` so the domain `InvalidAudienceBase` message surfaces.
-impl From<AudienceBase> for String {
-    fn from(base: AudienceBase) -> Self {
-        base.as_ref().to_owned()
-    }
-}
-
-impl TryFrom<String> for AudienceBase {
-    type Error = InvalidAudienceBase;
-
-    fn try_from(s: String) -> Result<Self, Self::Error> {
-        s.parse()
-    }
-}
+impl_string_serde_proxy!(AudienceBase);
 
 /// Who is reading. Wider than Layer A needs (only `Anonymous` and the local
 /// channel are constructed today) so non-local channels need no signature change

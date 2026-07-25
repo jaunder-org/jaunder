@@ -3,7 +3,7 @@
 //! `SiteConfigStorage::get_registration_policy`) and `web` (returns it typed from
 //! `get_registration_policy`). A `strum` string enum (ADR-0075).
 
-use crate::parse_error::parse_error;
+use crate::strum_enum::{impl_string_serde_proxy, parse_error};
 
 /// The site's user-registration access policy.
 ///
@@ -43,21 +43,7 @@ parse_error!(
     "registration policy must be \"open\", \"invite_only\", or \"closed\""
 );
 
-// serde `into`/`try_from` proxy: serialize the wire token, deserialize an owned
-// `String` through `FromStr` so the domain `InvalidRegistrationPolicy` message surfaces.
-impl From<RegistrationPolicy> for String {
-    fn from(policy: RegistrationPolicy) -> Self {
-        policy.as_ref().to_owned()
-    }
-}
-
-impl TryFrom<String> for RegistrationPolicy {
-    type Error = InvalidRegistrationPolicy;
-
-    fn try_from(s: String) -> Result<Self, Self::Error> {
-        s.parse()
-    }
-}
+impl_string_serde_proxy!(RegistrationPolicy);
 
 #[cfg(test)]
 mod tests {
