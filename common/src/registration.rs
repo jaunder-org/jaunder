@@ -3,6 +3,8 @@
 //! `SiteConfigStorage::get_registration_policy`) and `web` (returns it typed from
 //! `get_registration_policy`). A `strum` string enum (ADR-0075).
 
+use crate::parse_error::parse_error;
+
 /// The site's user-registration access policy.
 ///
 /// A `strum` string enum: `serialize_all = "snake_case"` gives the wire/DB
@@ -35,14 +37,11 @@ pub enum RegistrationPolicy {
     Closed,
 }
 
-/// Error returned when a string matches no [`RegistrationPolicy`] variant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("registration policy must be \"open\", \"invite_only\", or \"closed\"")]
-pub struct InvalidRegistrationPolicy;
-
-fn registration_policy_parse_err(_: &str) -> InvalidRegistrationPolicy {
-    InvalidRegistrationPolicy
-}
+parse_error!(
+    InvalidRegistrationPolicy,
+    registration_policy_parse_err,
+    "registration policy must be \"open\", \"invite_only\", or \"closed\""
+);
 
 // serde `into`/`try_from` proxy: serialize the wire token, deserialize an owned
 // `String` through `FromStr` so the domain `InvalidRegistrationPolicy` message surfaces.

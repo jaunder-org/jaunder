@@ -2,6 +2,7 @@
 //! the viewer identity, and the subscription-admission seam. See ADR-0020.
 
 use crate::ids::{AudienceId, ChannelId, UserId};
+use crate::parse_error::parse_error;
 
 // String-backed enums use the `strum` stack (`AsRefStr`/`Display`/`EnumString`) with
 // the wire token as the snake_case variant name, plus a named `thiserror` parse error
@@ -18,14 +19,11 @@ pub enum Channel {
     Local,
 }
 
-/// Error returned when a string matches no [`Channel`] variant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("channel must be \"local\"")]
-pub struct InvalidChannel;
-
-fn channel_parse_err(_: &str) -> InvalidChannel {
-    InvalidChannel
-}
+parse_error!(
+    InvalidChannel,
+    channel_parse_err,
+    "channel must be \"local\""
+);
 
 #[derive(
     Clone,
@@ -47,14 +45,11 @@ pub enum SubscriptionStatus {
     Blocked,
 }
 
-/// Error returned when a string matches no [`SubscriptionStatus`] variant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("subscription status must be \"active\", \"pending\", or \"blocked\"")]
-pub struct InvalidSubscriptionStatus;
-
-fn subscription_status_parse_err(_: &str) -> InvalidSubscriptionStatus {
-    InvalidSubscriptionStatus
-}
+parse_error!(
+    InvalidSubscriptionStatus,
+    subscription_status_parse_err,
+    "subscription status must be \"active\", \"pending\", or \"blocked\""
+);
 
 #[derive(
     Clone,
@@ -76,14 +71,11 @@ pub enum TargetKind {
     Named,
 }
 
-/// Error returned when a string matches no [`TargetKind`] variant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("audience target kind must be \"public\", \"subscribers\", or \"named\"")]
-pub struct InvalidTargetKind;
-
-fn target_kind_parse_err(_: &str) -> InvalidTargetKind {
-    InvalidTargetKind
-}
+parse_error!(
+    InvalidTargetKind,
+    target_kind_parse_err,
+    "audience target kind must be \"public\", \"subscribers\", or \"named\""
+);
 
 // The mutually-exclusive built-in audience base chosen in the editor / API — the
 // typed form of the audience-picker's `base`. Composes with named audiences by
@@ -113,14 +105,11 @@ pub enum AudienceBase {
     Subscribers,
 }
 
-/// Error returned when a string matches no [`AudienceBase`] variant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("audience must be \"private\", \"public\", or \"subscribers\"")]
-pub struct InvalidAudienceBase;
-
-fn audience_base_parse_err(_: &str) -> InvalidAudienceBase {
-    InvalidAudienceBase
-}
+parse_error!(
+    InvalidAudienceBase,
+    audience_base_parse_err,
+    "audience must be \"private\", \"public\", or \"subscribers\""
+);
 
 // serde `into`/`try_from` proxy: serialize the wire token, deserialize an owned
 // `String` through `FromStr` so the domain `InvalidAudienceBase` message surfaces.

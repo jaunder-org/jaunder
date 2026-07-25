@@ -24,6 +24,7 @@ pub mod mailbox;
 pub mod mailer;
 pub mod media;
 pub mod pagination;
+mod parse_error;
 pub mod password;
 pub mod post_body;
 pub mod post_summary;

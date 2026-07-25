@@ -39,6 +39,8 @@ use macros::{NumNewtype, StrNewtype};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::parse_error::parse_error;
+
 /// A validated media content hash: exactly 64 lowercase hex characters
 /// (`[0-9a-f]{64}`), the canonical `format!("{digest:x}")` form of a SHA-256
 /// digest. Introducing the type means an arbitrary string can no longer be passed
@@ -243,14 +245,11 @@ pub enum MediaSource {
     Cached,
 }
 
-/// Error returned when a string matches no [`MediaSource`] variant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("media source must be \"upload\" or \"cached\"")]
-pub struct InvalidMediaSource;
-
-fn media_source_parse_err(_: &str) -> InvalidMediaSource {
-    InvalidMediaSource
-}
+parse_error!(
+    InvalidMediaSource,
+    media_source_parse_err,
+    "media source must be \"upload\" or \"cached\""
+);
 
 // serde `into`/`try_from` proxy: serialize the wire token, deserialize an owned
 // `String` through `FromStr` so the domain `InvalidMediaSource` message surfaces.
