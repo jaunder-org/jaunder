@@ -55,9 +55,9 @@ pub fn specs(mode: Mode) -> Vec<StepSpec> {
             program: "cargo",
             args: vec!["clippy", "--all-targets", "--", "-D", "warnings"],
         },
-        // wasm-clippy — `web::pages` compiles wasm-only (#300), so the host `clippy`
-        // step above never sees it. Lint it on the wasm target: `-p web --features csr`
-        // pulls `pages/` into the compile under `target_arch = "wasm32"`. The wasm-only
+        // wasm-clippy — `web::app`'s `component.rs` compiles wasm-only (#300), so the host
+        // `clippy` step above never sees it. Lint it on the wasm target: `-p web --features csr`
+        // pulls `app/component.rs` into the compile under `target_arch = "wasm32"`. The wasm-only
         // `client` crate (ADR-0058 trio; #513) and the wasm-only `csr` entry crate (#519,
         // also `#![cfg(target_arch = "wasm32")]` → empty rlib on host) are linted in the
         // same invocation — for both this is their sole clippy gate. `--features csr` is a

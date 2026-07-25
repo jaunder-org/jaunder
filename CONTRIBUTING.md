@@ -21,8 +21,11 @@ instead of duplicating project policy.
 - `storage/`: storage traits, records, migrations, and backend-specific storage
   support
 - `server/`: backend, CLI, server runner, and integration tests
-- `web/`: Leptos server functions in `web/src/*.rs` and page components in
-  `web/src/pages/`
+- `web/`: Leptos frontend as co-located verticals — each `web/src/<vertical>/`
+  splits into `mod.rs` (wiring/re-exports), `api.rs` (`#[server]` fns + wire
+  types), optional `server.rs` (host-only support), and a wasm-only
+  `component.rs` (`#[component]` UI); pure host-tested render twins live in an
+  extra leaf (`render.rs`) per ADR-0070
 
 ## Development setup
 
@@ -428,7 +431,8 @@ line fails the gate** unless one of three things exempts it:
   the prop list needs hand-marking — a `cov:ignore` on a function declaration).
   The exemption is keyed on the **construct**, not on files or directories, so
   `#[server]` and plain helper code (incl. non-`#[component]` `-> impl IntoView`
-  view builders) co-located in `web/src/pages/*` stays measured.
+  view builders) co-located in a vertical (`web/src/<vertical>/`) stays
+  measured.
 - **Structural exemption — `unreachable!("msg")`.** A literal `unreachable!`
   invocation carrying a **non-empty message** is dropped from the executable set
   with **no marker**. It is _self-enforcing_: reaching the line panics ⇒ the
@@ -526,9 +530,9 @@ the marginal ratchet protection on already-accepted lines. See
 Some areas are inherently uncovered host-side and are accepted rather than
 force-fitted with artificial tests:
 
-- **Leptos page components** (`web/src/pages/*.rs`): `#[component]` bodies
-  render view trees, validated by the e2e matrix — **structurally exempt** (no
-  marker needed).
+- **Leptos view components** (`web/src/<vertical>/component.rs`): `#[component]`
+  bodies render view trees, validated by the e2e matrix — **structurally
+  exempt** (no marker needed).
 - **WASM entry point** (`csr/src/lib.rs`): runs only in the browser WASM context
   — `cov:ignore`'d.
 - **A few PostgreSQL storage error branches** (`storage/src/postgres/*`) and

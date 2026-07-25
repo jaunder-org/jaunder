@@ -14,7 +14,7 @@ The workspace is divided into four primary crates:
 | -------- | ------------ | -------------------------------------------------------------------------------------------------------------------------- |
 | `server` | Binary / Lib | Axum web server, storage implementations (SQLite/Postgres), CLI commands, and SSR (Server-Side Rendering).                 |
 | `web`    | Library      | Shared frontend logic: components, routing, and reactive state. Compiled to both native and WASM.                          |
-| `csr`    | WASM Binary  | Browser entry point: boots the client-side-rendered (CSR) bundle, mounting `web::App` via `web::mount_csr()`.              |
+| `csr`    | WASM Binary  | Browser entry point: boots the client-side-rendered (CSR) bundle, mounting `web::app::App` via `web::mount_csr()`.         |
 | `common` | Library      | Shared logic and data structures: storage traits, auth types, mailer, and utility modules used by both `server` and `web`. |
 
 ## Component Overview
