@@ -62,12 +62,13 @@ stored DB tokens for every enum; existing tests green;
 Each of `Channel`, `SubscriptionStatus`, `TargetKind`, `AudienceBase`,
 `MediaSource`, `RegistrationPolicy`:
 
-- Uses `strum` derives (`VariantArray`, `AsRefStr`, `IntoStaticStr`,
-  `EnumString`, `Display`) with `#[strum(serialize_all = "snake_case")]` —
-  producing the **same tokens** as today (`local`, `active`/`pending`/`blocked`,
-  `public`/`subscribers`/ `named`, `private`/`public`/`subscribers`,
-  `upload`/`cached`, `open`/`invite_only`/ `closed`). `AudienceBase` keeps
-  `#[default] Private`.
+- Uses the minimal `strum` derives (`AsRefStr`, `Display`, `EnumString`; plus
+  `IntoStaticStr` only where an FK-name bind needs a `&'static str` — the two
+  FK-normalized enums; no `VariantArray`/`EnumMessage`, unused here) with
+  `#[strum(serialize_all = "snake_case")]` — producing the **same tokens** as
+  today (`local`, `active`/`pending`/`blocked`, `public`/`subscribers`/ `named`,
+  `private`/`public`/`subscribers`, `upload`/`cached`, `open`/`invite_only`/
+  `closed`). `AudienceBase` keeps `#[default] Private`.
 - Carries a **named `thiserror` error** (`InvalidChannel`,
   `InvalidSubscriptionStatus`, `InvalidTargetKind`, `InvalidAudienceBase`,
   `InvalidMediaSource`, `InvalidRegistrationPolicy`) wired via
