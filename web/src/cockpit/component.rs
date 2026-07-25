@@ -44,7 +44,7 @@ pub fn CockpitPage() -> impl IntoView {
         },
     );
 
-    // Client-only effect copies the resolved Resource into the timeline signals.
+    // Copy the resolved Resource into the timeline signals once it loads.
     Effect::new(move |_| {
         if let Some(result) = initial_page.try_get().flatten() {
             match result {

@@ -414,7 +414,7 @@ mod tests {
         use common::seed::{PageSeed, TimelinePage};
         // Drift guard (#234): the projector's server-rendered boot and the SPA
         // shell (`csr/index.html`) are two hand-written copies — they must load the
-        // SAME wasm URL, or hydration 404s on projector routes. Cross-checking the
+        // SAME wasm URL, or the CSR boot 404s on projector routes. Cross-checking the
         // two (rather than asserting a literal against itself) means neither can
         // silently drift; `cargo xtask audit-wasm` ties that shared URL to the file
         // the build actually emits.

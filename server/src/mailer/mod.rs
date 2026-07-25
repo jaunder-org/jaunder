@@ -2,8 +2,8 @@
 //!
 //! The transport-neutral pieces — the [`MailSender`] trait, `EmailMessage`,
 //! `MailError`, and the dependency-free `NoopMailSender`/`CapturingMailSender`
-//! — live in [`common::mailer`]. `common` is compiled to WebAssembly (via
-//! `web`/`hydrate`), so it must stay free of native-only crates like `lettre`;
+//! — live in [`common::mailer`]. `common` is compiled to WebAssembly (as part
+//! of the `web` CSR client), so it must stay free of native-only crates like `lettre`;
 //! keeping the trait and data types there lets the web layer name the mailer in
 //! `#[server]` functions without pulling a SMTP stack into the wasm build.
 //!

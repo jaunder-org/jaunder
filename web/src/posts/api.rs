@@ -41,7 +41,7 @@ use crate::error::WebResult;
 #[cfg(feature = "server")]
 use common::visibility::{audience_targets_or_public, targets_to_audience_selection};
 
-// SSR-only imports for #[server] bodies
+// Server-only imports for the #[server] fn bodies (gated on `feature = "server"`).
 #[cfg(feature = "server")]
 use {
     super::server::{not_found_error, post_response, private_post_not_found_error},

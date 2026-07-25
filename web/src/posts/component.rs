@@ -1174,9 +1174,8 @@ pub fn EditPostPage() -> impl IntoView {
         base: AudienceBase::Public,
         named: Vec::new(),
     });
-    // ServerAction dispatches happen only on the client; this redirect-on-publish
-    // effect only ever fires there. `Effect::new_isomorphic` would needlessly
-    // schedule on the server. Editor → permalink is always a route change, so a fresh
+    // The redirect-on-publish effect reacts to the client-only ServerAction
+    // dispatch. Editor → permalink is always a route change, so a fresh
     // `PostPage` mount refetches — no explicit invalidation needed here (#592).
     let navigate = use_navigate();
     Effect::new(move |_| {

@@ -85,7 +85,7 @@ mod tests {
     #[test]
     fn generate_path_emits_a_param_segment() {
         // Path generation treats it exactly like a `ParamSegment` (the `~`-guard is a
-        // match-time concern only), so SSR route-list / link generation is unaffected.
+        // match-time concern only), so client-side link generation is unaffected.
         use leptos_router::PathSegment;
         let mut segments = Vec::new();
         TildeUsername("username").generate_path(&mut segments);

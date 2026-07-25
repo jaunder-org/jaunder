@@ -47,7 +47,7 @@ fn AppShell() -> impl IntoView {
         .unwrap_or_else(|| RwSignal::new(DEFAULT_THEME.to_string()));
     // `data-theme` must be a plain dynamic attribute, NOT `attr:data-theme`: the
     // Leptos `attr:` directive prefix is only for spreading onto a component; on a
-    // plain element it leaks a literal `attr:data-theme` attribute into the hydrated
+    // plain element it leaks a literal `attr:data-theme` attribute into the mounted
     // DOM and the `.j-root[data-theme=...]` theme selector stops matching (#22).
     view! {
         <div class="j-root" data-theme=move || theme.get()>

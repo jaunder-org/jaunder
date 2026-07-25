@@ -1,5 +1,5 @@
-//! Cardinality-safe OpenTelemetry metric emitters, shared by `web` (SSR),
-//! `server`, `storage`, and the CLI. Instruments are built once from the global
+//! Cardinality-safe OpenTelemetry metric emitters, shared by `web` (its native
+//! `#[server]` bodies), `server`, `storage`, and the CLI. Instruments are built once from the global
 //! meter; when no `MeterProvider` is installed (no OTLP endpoint, or any
 //! non-server process) they are no-ops. Helper arguments are bounded enums, so a
 //! call site can never emit an unbounded attribute. Exporter setup lives in the
