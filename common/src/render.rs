@@ -54,30 +54,15 @@ pub enum PostFormat {
     Html,
 }
 
-/// Error returned when a string matches no `PostFormat` variant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("post format must be \"markdown\", \"org\", or \"html\"")]
-pub struct InvalidPostFormat;
+crate::strum_enum::parse_error!(
+    InvalidPostFormat,
+    post_format_parse_err,
+    "post format must be \"markdown\", \"org\", or \"html\""
+);
 
-fn post_format_parse_err(_: &str) -> InvalidPostFormat {
-    InvalidPostFormat
-}
-
-// serde `into`/`try_from` proxy: serialize the wire token, deserialize an owned
-// `String` through `FromStr` so the domain `InvalidPostFormat` message is preserved.
-impl From<PostFormat> for String {
-    fn from(format: PostFormat) -> Self {
-        format.as_ref().to_owned()
-    }
-}
-
-impl TryFrom<String> for PostFormat {
-    type Error = InvalidPostFormat;
-
-    fn try_from(s: String) -> Result<Self, Self::Error> {
-        s.parse()
-    }
-}
+// serde `into`/`try_from = "String"` proxy so a bad token surfaces the named
+// `InvalidPostFormat` message (deserialize routes through `FromStr`).
+crate::strum_enum::impl_string_serde_proxy!(PostFormat);
 
 // Typed `sqlx` bind/decode (feature = "sqlx"): stores/loads the TEXT token as a
 // `PostFormat` value, like the newtypes (#438) — not a stringly `.to_string()` strip.
