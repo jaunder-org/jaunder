@@ -33,7 +33,7 @@ async fn media_usage_returns_defaults_for_authenticated_user(#[case] backend: Ba
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
 
-    let (status, body) = post_form(Arc::clone(&state), "/api/media_usage", "", Some(&cookie)).await;
+    let (status, body) = post_form(&state, "/api/media_usage", "", Some(&cookie)).await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let usage: MediaUsageData = serde_json::from_str(&body).expect("response should be valid JSON");
@@ -59,7 +59,7 @@ async fn media_endpoint_rejects_unauthenticated_request(
 ) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, body) = post_form(state, uri, body, None).await;
+    let (status, body) = post_form(&state, uri, body, None).await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("unauthorized"), "body: {body}");
@@ -73,8 +73,7 @@ async fn list_my_media_returns_empty_for_new_user(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
 
-    let (status, body) =
-        post_form(Arc::clone(&state), "/api/list_my_media", "", Some(&cookie)).await;
+    let (status, body) = post_form(&state, "/api/list_my_media", "", Some(&cookie)).await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let items: Vec<MediaItem> = serde_json::from_str(&body).expect("response should be valid JSON");
@@ -89,13 +88,7 @@ async fn list_my_media_rejects_out_of_range_limit(#[case] backend: Backend) {
 
     // `limit=999` is outside PageSize's `1..=50`; the typed wire arg rejects it on
     // deserialization instead of fetching an unbounded page.
-    let (status, _body) = post_form(
-        Arc::clone(&state),
-        "/api/list_my_media",
-        "limit=999",
-        Some(&cookie),
-    )
-    .await;
+    let (status, _body) = post_form(&state, "/api/list_my_media", "limit=999", Some(&cookie)).await;
 
     assert_ne!(
         status,
@@ -129,8 +122,7 @@ async fn list_my_media_returns_inserted_item(#[case] backend: Backend) {
 
     let cookie = session.cookie();
 
-    let (status, body) =
-        post_form(Arc::clone(&state), "/api/list_my_media", "", Some(&cookie)).await;
+    let (status, body) = post_form(&state, "/api/list_my_media", "", Some(&cookie)).await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let items: Vec<MediaItem> = serde_json::from_str(&body).expect("response should be valid JSON");
@@ -168,13 +160,8 @@ async fn list_my_media_with_source_filter(#[case] backend: Backend) {
 
     let cookie = session.cookie();
 
-    let (status, body) = post_form(
-        Arc::clone(&state),
-        "/api/list_my_media",
-        "source=upload",
-        Some(&cookie),
-    )
-    .await;
+    let (status, body) =
+        post_form(&state, "/api/list_my_media", "source=upload", Some(&cookie)).await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let items: Vec<MediaItem> = serde_json::from_str(&body).expect("response should be valid JSON");
@@ -211,8 +198,7 @@ async fn delete_media_succeeds_for_existing_item(#[case] backend: Backend) {
     let cookie = session.cookie();
 
     let body = "sha256=deadbeef01234567000000000000000000000000000000000000000000000000&filename=test.png&source=upload&force=false";
-    let (status, body_str) =
-        post_form(Arc::clone(&state), "/api/delete_media", body, Some(&cookie)).await;
+    let (status, body_str) = post_form(&state, "/api/delete_media", body, Some(&cookie)).await;
 
     assert_eq!(status, StatusCode::OK, "body: {body_str}");
     let result: DeleteMediaResult =
@@ -264,8 +250,7 @@ async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend:
     let cookie = session.cookie();
 
     let body = "sha256=deadbeef99999999000000000000000000000000000000000000000000000000&filename=inline.png&source=upload&force=false";
-    let (status, body_str) =
-        post_form(Arc::clone(&state), "/api/delete_media", body, Some(&cookie)).await;
+    let (status, body_str) = post_form(&state, "/api/delete_media", body, Some(&cookie)).await;
 
     assert_eq!(status, StatusCode::OK, "body: {body_str}");
     let result: DeleteMediaResult =
@@ -292,7 +277,7 @@ async fn upload_media_stores_file_and_returns_metadata(#[case] backend: Backend)
     // A real writable root so the upload lands on disk (separate from the DB backend).
     let storage = TempDir::new().unwrap();
     let (status, body) = post_multipart(
-        Arc::clone(&state),
+        &state,
         &storage,
         "/api/upload_media",
         MultipartFile {
@@ -320,7 +305,7 @@ async fn upload_media_rejects_unauthenticated_request(#[case] backend: Backend) 
 
     let storage = TempDir::new().unwrap();
     let (status, body) = post_multipart(
-        Arc::clone(&state),
+        &state,
         &storage,
         "/api/upload_media",
         MultipartFile {
@@ -348,7 +333,7 @@ async fn upload_media_rejects_invalid_filename(#[case] backend: Backend) {
     // `..` sanitizes to empty → `MediaError::BadRequest`, exercising `map_media_error`'s
     // BadRequest arm (projected to `WebError::Validation`).
     let (status, body) = post_multipart(
-        Arc::clone(&state),
+        &state,
         &storage,
         "/api/upload_media",
         MultipartFile {
@@ -382,7 +367,7 @@ async fn upload_media_rejects_oversized_file(#[case] backend: Backend) {
 
     let storage = TempDir::new().unwrap();
     let (status, body) = post_multipart(
-        Arc::clone(&state),
+        &state,
         &storage,
         "/api/upload_media",
         MultipartFile {
@@ -416,7 +401,7 @@ async fn upload_media_rejects_over_quota_file(#[case] backend: Backend) {
 
     let storage = TempDir::new().unwrap();
     let (status, body) = post_multipart(
-        Arc::clone(&state),
+        &state,
         &storage,
         "/api/upload_media",
         MultipartFile {
@@ -444,7 +429,7 @@ async fn upload_media_rejects_missing_file_field(#[case] backend: Backend) {
     // An empty multipart body (a closing boundary with no field) yields
     // `next_field() == None`, exercising the "no file field" guard.
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage);
+    let app = make_app(&state, &storage);
     let boundary = "----testboundary1234";
     let body = format!("--{boundary}--\r\n");
 
@@ -473,7 +458,7 @@ async fn upload_media_rejects_missing_file_field(#[case] backend: Backend) {
 
 // ─── serve_handler hash validation (security: §2.2) ────────────
 
-async fn media_serve_get(state: Arc<storage::AppState>, uri: &str) -> StatusCode {
+async fn media_serve_get(state: &Arc<storage::AppState>, uri: &str) -> StatusCode {
     let request = Request::builder()
         .method("GET")
         .uri(uri)
@@ -482,7 +467,7 @@ async fn media_serve_get(state: Arc<storage::AppState>, uri: &str) -> StatusCode
 
     let app = jaunder::create_router(
         test_options(),
-        state,
+        Arc::clone(state),
         noop_mailer(),
         true,
         crate::helpers::tmp_storage_path(),
@@ -507,7 +492,7 @@ async fn media_serve_get(state: Arc<storage::AppState>, uri: &str) -> StatusCode
 async fn serve_handler_rejects_malformed_hash(backend: Backend, #[case] uri: String) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let status = media_serve_get(state, &uri).await;
+    let status = media_serve_get(&state, &uri).await;
 
     assert_eq!(status, StatusCode::NOT_FOUND);
 }

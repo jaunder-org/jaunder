@@ -334,13 +334,19 @@ pub async fn body_string(response: axum::response::Response) -> String {
 /// noop mailer and insecure cookies. Always creates the `media/{upload,cached,tmp}`
 /// layout so upload-exercising and read-only tests share one helper (the dirs are
 /// harmless empty setup for tests that never upload).
-pub fn make_app(state: Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
+pub fn make_app(state: &Arc<storage::AppState>, storage: &TempDir) -> axum::Router {
     ensure_server_fns_registered();
     let storage_path = storage.path().to_path_buf();
     std::fs::create_dir_all(storage_path.join("media").join("upload")).unwrap();
     std::fs::create_dir_all(storage_path.join("media").join("cached")).unwrap();
     std::fs::create_dir_all(storage_path.join("media").join("tmp")).unwrap();
-    jaunder::create_router(test_options(), state, noop_mailer(), false, storage_path)
+    jaunder::create_router(
+        test_options(),
+        Arc::clone(state),
+        noop_mailer(),
+        false,
+        storage_path,
+    )
 }
 
 /// Seeds the required `site.base_url` precondition (#560): the `AtomPub` handlers
@@ -421,7 +427,7 @@ impl PostBody {
 /// with the given `body` (and its content type), and return `(status, Set-Cookie,
 /// body)`. The public wrappers below fix the arguments most callers don't vary.
 async fn post_inner(
-    state: Arc<storage::AppState>,
+    state: &Arc<storage::AppState>,
     mailer: Arc<dyn MailSender>,
     uri: &str,
     body: PostBody,
@@ -451,7 +457,7 @@ async fn post_inner(
 
     let app = jaunder::create_router(
         test_options(),
-        state,
+        Arc::clone(state),
         mailer,
         secure_cookies,
         tmp_storage_path(),
@@ -474,7 +480,7 @@ async fn post_inner(
 
 /// Canonical case: noop mailer, secure cookies, cookie auth, `Set-Cookie` dropped.
 pub async fn post_form(
-    state: Arc<storage::AppState>,
+    state: &Arc<storage::AppState>,
     uri: &str,
     body: impl Into<String>,
     cookie: Option<&str>,
@@ -495,14 +501,17 @@ pub async fn post_form(
 
 /// Like [`post_form`], but injects a specific `mailer` (e.g. a capturing sender)
 /// instead of the noop.
-pub async fn post_form_with_mailer(
-    state: Arc<storage::AppState>,
-    mailer: Arc<dyn MailSender>,
+pub async fn post_form_with_mailer<M: MailSender + 'static>(
+    state: &Arc<storage::AppState>,
+    mailer: &Arc<M>,
     uri: &str,
     body: impl Into<String>,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
     let auth = cookie.map_or(Auth::None, Auth::Cookie);
+    // The router consumes an owned `Arc<dyn MailSender>`; borrow at the call site and
+    // do the single clone-and-unsize (`Arc<M>` -> `Arc<dyn MailSender>`) here.
+    let mailer: Arc<dyn MailSender> = mailer.clone();
     let (status, _set_cookie, body) = post_inner(
         state,
         mailer,
@@ -519,7 +528,7 @@ pub async fn post_form_with_mailer(
 /// Exposes the `secure_cookies` toggle and returns the `Set-Cookie` value —
 /// what the auth/session tests need over the canonical [`post_form`].
 pub async fn post_form_with_secure_flag(
-    state: Arc<storage::AppState>,
+    state: &Arc<storage::AppState>,
     uri: &str,
     body: impl Into<String>,
     cookie: Option<&str>,
@@ -540,7 +549,7 @@ pub async fn post_form_with_secure_flag(
 
 /// Like [`post_form_with_secure_flag`], but also sets a `User-Agent` header.
 pub async fn post_form_with_ua(
-    state: Arc<storage::AppState>,
+    state: &Arc<storage::AppState>,
     uri: &str,
     body: impl Into<String>,
     cookie: Option<&str>,
@@ -563,7 +572,7 @@ pub async fn post_form_with_ua(
 /// Authenticates with an `Authorization: Bearer <token>` header instead of a
 /// cookie. Returns the `Set-Cookie` value like the other auth helpers.
 pub async fn post_form_with_bearer(
-    state: Arc<storage::AppState>,
+    state: &Arc<storage::AppState>,
     uri: &str,
     body: impl Into<String>,
     bearer: &str,
@@ -584,7 +593,7 @@ pub async fn post_form_with_bearer(
 /// optional cookie auth; returns `(status, body)` — drops `Set-Cookie`, like the
 /// canonical [`post_form`].
 pub async fn post_json(
-    state: Arc<storage::AppState>,
+    state: &Arc<storage::AppState>,
     uri: &str,
     body: serde_json::Value,
     cookie: Option<&str>,
@@ -615,7 +624,7 @@ pub struct MultipartFile<'a> {
 /// lands on disk. Returns `(status, body)`. Mirrors the exact CRLF framing of the
 /// multipart request in `misc/media_handlers.rs`.
 pub async fn post_multipart(
-    state: Arc<storage::AppState>,
+    state: &Arc<storage::AppState>,
     storage: &TempDir,
     uri: &str,
     file: MultipartFile<'_>,

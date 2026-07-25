@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use axum::http::StatusCode;
 use common::mailer::test_utils::CapturingMailSender;
-use common::mailer::MailSender;
 use common::test_support::{parse_bio, parse_display_name, parse_session_label};
 use storage::ProfileUpdate;
 
@@ -36,7 +35,7 @@ async fn get_profile_returns_display_name_and_bio(#[case] backend: Backend) {
         .unwrap();
     let cookie = session.cookie();
 
-    let (status, body) = post_form(Arc::clone(&state), "/api/get_profile", "", Some(&cookie)).await;
+    let (status, body) = post_form(&state, "/api/get_profile", "", Some(&cookie)).await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(body.contains("Alice Smith"), "display_name missing: {body}");
@@ -59,7 +58,7 @@ async fn get_profile_with_email_returns_email(#[case] backend: Backend) {
 
     let cookie_header = session.cookie();
 
-    let (status, body) = post_form(state, "/api/get_profile", "", Some(&cookie_header)).await;
+    let (status, body) = post_form(&state, "/api/get_profile", "", Some(&cookie_header)).await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("user@example.com"));
 }
@@ -72,7 +71,7 @@ async fn update_profile_persists_changes(#[case] backend: Backend) {
     let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, _) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/update_profile",
         "display_name=Robert&bio=My+bio",
         Some(&cookie),
@@ -80,7 +79,7 @@ async fn update_profile_persists_changes(#[case] backend: Backend) {
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    let (status, body) = post_form(Arc::clone(&state), "/api/get_profile", "", Some(&cookie)).await;
+    let (status, body) = post_form(&state, "/api/get_profile", "", Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(
         body.contains("Robert"),
@@ -113,8 +112,7 @@ async fn list_sessions_returns_only_authenticated_users_sessions(#[case] backend
         .unwrap();
 
     let cookie = session_cookie(&token1);
-    let (status, body) =
-        post_form(Arc::clone(&state), "/api/list_sessions", "", Some(&cookie)).await;
+    let (status, body) = post_form(&state, "/api/list_sessions", "", Some(&cookie)).await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(
@@ -155,13 +153,7 @@ async fn revoke_session_removes_session_and_reauth_fails(#[case] backend: Backen
             })
             .collect::<String>()
     );
-    let (status, _) = post_form(
-        Arc::clone(&state),
-        "/api/revoke_session",
-        body,
-        Some(&cookie_a),
-    )
-    .await;
+    let (status, _) = post_form(&state, "/api/revoke_session", body, Some(&cookie_a)).await;
     assert_eq!(status, StatusCode::OK);
 
     // Re-authenticate with token_b should fail (session revoked).
@@ -190,8 +182,8 @@ async fn create_invite_emails_link_and_appears_in_list(#[case] backend: Backend)
     let mailer = Arc::new(CapturingMailSender::new());
 
     let (status, body) = post_form_with_mailer(
-        Arc::clone(&state),
-        mailer.clone() as Arc<dyn MailSender>,
+        &state,
+        &mailer,
         "/api/create_invite",
         "expires_in_hours=24&recipient_email=invitee@example.com",
         Some(&cookie),
@@ -212,8 +204,7 @@ async fn create_invite_emails_link_and_appears_in_list(#[case] backend: Backend)
     );
 
     // The invite is tracked — as metadata only, never the raw code.
-    let (status, list_body) =
-        post_form(Arc::clone(&state), "/api/list_invites", "", Some(&cookie)).await;
+    let (status, list_body) = post_form(&state, "/api/list_invites", "", Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "list_invites failed: {list_body}");
     assert!(
         list_body.contains("expires_at"),
@@ -232,7 +223,7 @@ async fn create_invite_unauthorized_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, _) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/create_invite",
         "recipient_email=invitee@example.com",
         None,
@@ -251,8 +242,8 @@ async fn create_invite_without_base_url_errors_and_sends_nothing(#[case] backend
     let mailer = Arc::new(CapturingMailSender::new());
 
     let (status, _) = post_form_with_mailer(
-        Arc::clone(&state),
-        mailer.clone() as Arc<dyn MailSender>,
+        &state,
+        &mailer,
         "/api/create_invite",
         "expires_in_hours=24&recipient_email=invitee@example.com",
         Some(&cookie),
@@ -280,8 +271,8 @@ async fn create_invite_invalid_recipient_returns_error(#[case] backend: Backend)
     let mailer = Arc::new(CapturingMailSender::new());
 
     let (status, _) = post_form_with_mailer(
-        Arc::clone(&state),
-        mailer.clone() as Arc<dyn MailSender>,
+        &state,
+        &mailer,
         "/api/create_invite",
         "expires_in_hours=24&recipient_email=not-an-email",
         Some(&cookie),
@@ -309,7 +300,7 @@ async fn create_invite_send_failure_returns_error(#[case] backend: Backend) {
 
     // `post_form` uses the noop mailer, whose `send_email` fails with NotConfigured.
     let (status, _) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/create_invite",
         "expires_in_hours=24&recipient_email=invitee@example.com",
         Some(&cookie),
@@ -333,8 +324,8 @@ async fn create_invite_large_hours_returns_error(#[case] backend: Backend) {
     let mailer = Arc::new(CapturingMailSender::new());
 
     let (status, _) = post_form_with_mailer(
-        Arc::clone(&state),
-        mailer.clone() as Arc<dyn MailSender>,
+        &state,
+        &mailer,
         "/api/create_invite",
         "expires_in_hours=18446744073709551615&recipient_email=invitee@example.com", // u64::MAX
         Some(&cookie),
@@ -366,8 +357,8 @@ async fn create_invite_omits_hours_uses_default(#[case] backend: Backend) {
     let mailer = Arc::new(CapturingMailSender::new());
 
     let (status, body) = post_form_with_mailer(
-        Arc::clone(&state),
-        mailer.clone() as Arc<dyn MailSender>,
+        &state,
+        &mailer,
         "/api/create_invite",
         "recipient_email=invitee@example.com", // no expires_in_hours key
         Some(&cookie),
@@ -398,8 +389,8 @@ async fn create_invite_empty_hours_uses_default(#[case] backend: Backend) {
     let mailer = Arc::new(CapturingMailSender::new());
 
     let (status, body) = post_form_with_mailer(
-        Arc::clone(&state),
-        mailer.clone() as Arc<dyn MailSender>,
+        &state,
+        &mailer,
         "/api/create_invite",
         "expires_in_hours=&recipient_email=invitee@example.com", // empty-present
         Some(&cookie),
@@ -422,7 +413,7 @@ async fn revoke_session_unknown_hash_returns_error(#[case] backend: Backend) {
     let cookie = create_user_and_session(&state).await.cookie();
 
     let (_status, _) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/revoke_session",
         "token_hash=nonexistenthash",
         Some(&cookie),
@@ -442,7 +433,7 @@ async fn revoke_session_other_user_hash_returns_error(#[case] backend: Backend) 
     let record2 = state.sessions.authenticate(&user2.token).await.unwrap();
 
     let (status, _) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/revoke_session",
         format!("token_hash={}", record2.token_hash),
         Some(&cookie1),
@@ -461,7 +452,7 @@ async fn list_invites_returns_error_when_policy_not_invite_only(#[case] backend:
 
     let cookie = create_user_and_session(&state).await.cookie();
 
-    let (status, _) = post_form(Arc::clone(&state), "/api/list_invites", "", Some(&cookie)).await;
+    let (status, _) = post_form(&state, "/api/list_invites", "", Some(&cookie)).await;
     assert_ne!(
         status,
         StatusCode::OK,
@@ -474,7 +465,7 @@ async fn list_invites_returns_error_when_policy_not_invite_only(#[case] backend:
 async fn get_profile_unauthorized_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, _) = post_form(state, "/api/get_profile", "", None).await;
+    let (status, _) = post_form(&state, "/api/get_profile", "", None).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
 
@@ -484,7 +475,7 @@ async fn update_profile_unauthorized_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, _) = post_form(
-        state,
+        &state,
         "/api/update_profile",
         "display_name=New&bio=Bio",
         None,
@@ -521,13 +512,7 @@ async fn update_profile_with_empty_fields_sets_to_none(#[case] backend: Backend)
     // `Option<DisplayName>`/`Option<Bio>` wire args are *omitted* (serde decodes a
     // missing Option field to `None`). An empty `display_name=`/`bio=` would instead
     // fail to parse (ADR-0065), so the clear body omits both fields entirely.
-    let (status, _) = post_form(
-        Arc::clone(&state),
-        "/api/update_profile",
-        "",
-        Some(&cookie_header),
-    )
-    .await;
+    let (status, _) = post_form(&state, "/api/update_profile", "", Some(&cookie_header)).await;
     assert_eq!(status, StatusCode::OK);
 
     let user = state.users.get_user(user_id).await.unwrap().unwrap();
@@ -550,7 +535,7 @@ async fn update_profile_rejects_invalid_display_name(#[case] backend: Backend) {
 
     let overlong = "a".repeat(common::display_name::MAX_DISPLAY_NAME_CHARS + 1);
     let (status, _) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/update_profile",
         &format!("display_name={overlong}&bio=x"),
         Some(&cookie_header),

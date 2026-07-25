@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use axum::http::StatusCode;
 use common::visibility::ViewerIdentity;
 
@@ -21,7 +19,7 @@ async fn subscribe_then_unsubscribe_round_trips(#[case] backend: Backend) {
     let viewer = ViewerIdentity::local(subscriber.user_id, channel);
 
     let (status, body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/subscribe_to",
         format!("author_username={}", author.username),
         Some(&cookie),
@@ -38,7 +36,7 @@ async fn subscribe_then_unsubscribe_round_trips(#[case] backend: Backend) {
     );
 
     let (status, body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/unsubscribe_from",
         format!("author_username={}", author.username),
         Some(&cookie),
@@ -65,7 +63,7 @@ async fn self_subscribe_is_rejected(#[case] backend: Backend) {
     let channel = state.subscriptions.local_channel_id().await.unwrap();
 
     let (status, _body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/subscribe_to",
         format!("author_username={}", me.username),
         Some(&cookie),
@@ -90,7 +88,7 @@ async fn subscribe_unauthenticated_is_rejected(#[case] backend: Backend) {
     let author = SeedUser::new().seed(&state).await;
 
     let (status, _body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/subscribe_to",
         format!("author_username={}", author.username),
         None,
@@ -108,7 +106,7 @@ async fn is_subscribed_to_reports_state(#[case] backend: Backend) {
     let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/is_subscribed_to",
         format!("author_username={}", author.username),
         Some(&cookie),
@@ -121,7 +119,7 @@ async fn is_subscribed_to_reports_state(#[case] backend: Backend) {
     );
 
     post_form(
-        Arc::clone(&state),
+        &state,
         "/api/subscribe_to",
         format!("author_username={}", author.username),
         Some(&cookie),
@@ -129,7 +127,7 @@ async fn is_subscribed_to_reports_state(#[case] backend: Backend) {
     .await;
 
     let (status, body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/is_subscribed_to",
         format!("author_username={}", author.username),
         Some(&cookie),

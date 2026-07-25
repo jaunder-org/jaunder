@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use axum::http::StatusCode;
 use common::site::SiteIdentity;
 
@@ -16,13 +14,8 @@ async fn get_site_identity_requires_operator(#[case] backend: Backend) {
     let anonymous_cookie = None;
     let member_cookie = create_user_and_session(&state).await.cookie();
 
-    let (anon_status, anon_body) = post_form(
-        Arc::clone(&state),
-        "/api/get_site_identity",
-        "",
-        anonymous_cookie,
-    )
-    .await;
+    let (anon_status, anon_body) =
+        post_form(&state, "/api/get_site_identity", "", anonymous_cookie).await;
     assert_eq!(
         anon_status,
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -30,13 +23,8 @@ async fn get_site_identity_requires_operator(#[case] backend: Backend) {
     );
     assert!(anon_body.contains("unauthorized"), "body: {anon_body}");
 
-    let (member_status, member_body) = post_form(
-        Arc::clone(&state),
-        "/api/get_site_identity",
-        "",
-        Some(&member_cookie),
-    )
-    .await;
+    let (member_status, member_body) =
+        post_form(&state, "/api/get_site_identity", "", Some(&member_cookie)).await;
     assert_eq!(
         member_status,
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -51,7 +39,7 @@ async fn get_site_identity_returns_defaults_when_unconfigured(#[case] backend: B
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_operator_and_session(&state).await.cookie();
 
-    let (status, body) = post_form(state, "/api/get_site_identity", "", Some(&cookie)).await;
+    let (status, body) = post_form(&state, "/api/get_site_identity", "", Some(&cookie)).await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let identity: SiteIdentity = serde_json::from_str(&body).expect("json");
@@ -67,7 +55,7 @@ async fn update_site_identity_round_trips_via_get(#[case] backend: Backend) {
 
     let update_body = "title=My+Blog&base_url=https%3A%2F%2Fexample.com%2F";
     let (update_status, update_body_resp) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/update_site_identity",
         update_body,
         Some(&cookie),
@@ -75,13 +63,8 @@ async fn update_site_identity_round_trips_via_get(#[case] backend: Backend) {
     .await;
     assert_eq!(update_status, StatusCode::OK, "body: {update_body_resp}");
 
-    let (get_status, get_body) = post_form(
-        Arc::clone(&state),
-        "/api/get_site_identity",
-        "",
-        Some(&cookie),
-    )
-    .await;
+    let (get_status, get_body) =
+        post_form(&state, "/api/get_site_identity", "", Some(&cookie)).await;
     assert_eq!(get_status, StatusCode::OK, "body: {get_body}");
     let identity: SiteIdentity = serde_json::from_str(&get_body).expect("json");
     assert_eq!(identity.title, "My Blog");
@@ -100,7 +83,7 @@ async fn update_site_identity_rejects_empty_title(#[case] backend: Backend) {
     let cookie = create_operator_and_session(&state).await.cookie();
 
     let (status, body) = post_form(
-        state,
+        &state,
         "/api/update_site_identity",
         "title=+++&base_url=https%3A%2F%2Fexample.com",
         Some(&cookie),
@@ -122,7 +105,7 @@ async fn update_site_identity_rejects_non_http_base_url(#[case] backend: Backend
     let cookie = create_operator_and_session(&state).await.cookie();
 
     let (status, body) = post_form(
-        state,
+        &state,
         "/api/update_site_identity",
         "title=My+Blog&base_url=ftp%3A%2F%2Fexample.com",
         Some(&cookie),
@@ -145,7 +128,7 @@ async fn update_site_identity_rejects_malformed_base_url(#[case] backend: Backen
     let cookie = create_operator_and_session(&state).await.cookie();
 
     let (status, body) = post_form(
-        state,
+        &state,
         "/api/update_site_identity",
         "title=My+Blog&base_url=not-a-url",
         Some(&cookie),
@@ -169,7 +152,7 @@ async fn update_site_identity_omits_base_url_as_none(#[case] backend: Backend) {
     let cookie = create_operator_and_session(&state).await.cookie();
 
     let (update_status, update_body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/update_site_identity",
         "title=My+Blog",
         Some(&cookie),
@@ -177,13 +160,8 @@ async fn update_site_identity_omits_base_url_as_none(#[case] backend: Backend) {
     .await;
     assert_eq!(update_status, StatusCode::OK, "body: {update_body}");
 
-    let (get_status, get_body) = post_form(
-        Arc::clone(&state),
-        "/api/get_site_identity",
-        "",
-        Some(&cookie),
-    )
-    .await;
+    let (get_status, get_body) =
+        post_form(&state, "/api/get_site_identity", "", Some(&cookie)).await;
     assert_eq!(get_status, StatusCode::OK, "body: {get_body}");
     let identity: SiteIdentity = serde_json::from_str(&get_body).expect("json");
     assert_eq!(identity.base_url, None);
@@ -198,13 +176,8 @@ async fn update_site_identity_requires_operator(#[case] backend: Backend) {
 
     let body = "title=My+Blog&base_url=https%3A%2F%2Fexample.com";
 
-    let (anon_status, anon_body) = post_form(
-        Arc::clone(&state),
-        "/api/update_site_identity",
-        body,
-        anonymous_cookie,
-    )
-    .await;
+    let (anon_status, anon_body) =
+        post_form(&state, "/api/update_site_identity", body, anonymous_cookie).await;
     assert_eq!(
         anon_status,
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -213,7 +186,7 @@ async fn update_site_identity_requires_operator(#[case] backend: Backend) {
     assert!(anon_body.contains("unauthorized"), "body: {anon_body}");
 
     let (member_status, member_body) = post_form(
-        state,
+        &state,
         "/api/update_site_identity",
         body,
         Some(&member_cookie),
@@ -236,7 +209,8 @@ async fn update_site_identity_requires_operator(#[case] backend: Backend) {
 async fn base_url_warning_visible_for_operator_when_unset(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_operator_and_session(&state).await.cookie();
-    let (status, body) = post_form(state, "/api/base_url_warning_visible", "", Some(&cookie)).await;
+    let (status, body) =
+        post_form(&state, "/api/base_url_warning_visible", "", Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert_eq!(body, "true");
 }
@@ -247,14 +221,15 @@ async fn base_url_warning_hidden_when_base_url_configured(#[case] backend: Backe
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_operator_and_session(&state).await.cookie();
     let (up, up_body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/update_site_identity",
         "title=My+Blog&base_url=https%3A%2F%2Fexample.com%2F",
         Some(&cookie),
     )
     .await;
     assert_eq!(up, StatusCode::OK, "body: {up_body}");
-    let (status, body) = post_form(state, "/api/base_url_warning_visible", "", Some(&cookie)).await;
+    let (status, body) =
+        post_form(&state, "/api/base_url_warning_visible", "", Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert_eq!(body, "false");
 }
@@ -264,7 +239,8 @@ async fn base_url_warning_hidden_when_base_url_configured(#[case] backend: Backe
 async fn base_url_warning_hidden_for_non_operator(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
-    let (status, body) = post_form(state, "/api/base_url_warning_visible", "", Some(&cookie)).await;
+    let (status, body) =
+        post_form(&state, "/api/base_url_warning_visible", "", Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert_eq!(body, "false");
 }
@@ -273,7 +249,7 @@ async fn base_url_warning_hidden_for_non_operator(#[case] backend: Backend) {
 #[tokio::test]
 async fn base_url_warning_hidden_without_authentication(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let (status, body) = post_form(state, "/api/base_url_warning_visible", "", None).await;
+    let (status, body) = post_form(&state, "/api/base_url_warning_visible", "", None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert_eq!(body, "false");
 }
@@ -288,12 +264,7 @@ async fn base_url_warning_propagates_storage_error_during_auth(#[case] backend: 
     let TestEnv { state, base } = backend.setup().await;
     let cookie = create_operator_and_session(&state).await.cookie();
     base.close_pool().await;
-    let (status, _body) = post_form(
-        Arc::clone(&state),
-        "/api/base_url_warning_visible",
-        "",
-        Some(&cookie),
-    )
-    .await;
+    let (status, _body) =
+        post_form(&state, "/api/base_url_warning_visible", "", Some(&cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
