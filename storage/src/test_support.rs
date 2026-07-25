@@ -14,13 +14,16 @@
 #![expect(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::sql::quote_identifier;
-use crate::{AppState, DbConnectOptions, SiteConfigStorage};
+use crate::{AppState, DbConnectOptions, PostFormat, PostRecord, SiteConfigStorage};
 use async_trait::async_trait;
+use chrono::Utc;
 use common::feed::FeedPath;
 use common::ids::{PostId, UserId};
 use common::mailer::{MailSender, NoopMailSender};
+use common::post_body::PostBody;
 use common::test_support::{parse_display_name, parse_password, parse_slug, parse_username};
 use common::username::Username;
+use common::visibility::AudienceTarget;
 use host::invite::InviteCode;
 use sqlx::{Connection, PgPool, SqlitePool};
 use std::collections::BTreeMap;
@@ -765,6 +768,94 @@ pub async fn seed_users<const N: usize>(state: &Arc<AppState>) -> [UserId; N] {
     ids.try_into().expect("seeded exactly N users")
 }
 
+/// A single seeded post, built the real [`perform_post_creation`](crate::perform_post_creation)
+/// way — the same service-layer path production uses (renders the body, generates a
+/// unique slug via collision-retry, re-reads the row). Aggressively defaulted: a
+/// **published, public, Markdown** post with a fixed non-empty body, so the
+/// overwhelming majority of call sites are the bare `SeedPost::new(user_id).seed(&state)`
+/// and a setter appears only where a test asserts on (or requires) that field — the
+/// [`SeedUser`] discipline.
+///
+/// Distinct from [`seed_posts`] (batch, generic `seed-{i}` posts) and from the
+/// `create_post`-layer literals the storage-contract tests hand-roll (#656): those seed
+/// *below* `perform_post_creation` and control `rendered_html`/slug explicitly, which
+/// this builder deliberately does not.
+///
+/// Repeated bare seeds get **distinct** slugs: a title-less post derives its slug from
+/// the fixed body, and `perform_post_creation`'s collision-suffix retry disambiguates
+/// (`seeded-post-body`, `seeded-post-body-2`, …).
+pub struct SeedPost<'a> {
+    user_id: UserId,
+    title: Option<&'a str>,
+    body: PostBody,
+    audiences: Vec<AudienceTarget>,
+}
+
+impl<'a> SeedPost<'a> {
+    /// A published, public, Markdown post owned by `user_id`, with a fixed non-empty
+    /// body and no explicit title. Deviate from a default only where a test requires
+    /// it. Only the three fields real call sites vary — title, body, audiences — are
+    /// settable; the rest (Markdown, published-now, no slug/summary/idempotency) are
+    /// fixed defaults, mirroring how `SeedUser` exposes only the setters its callers use.
+    #[must_use]
+    pub fn new(user_id: UserId) -> Self {
+        Self {
+            user_id,
+            title: None,
+            body: PostBody::from("Seeded post body"),
+            audiences: vec![AudienceTarget::Public],
+        }
+    }
+
+    /// Set an explicit title — for the permalink/listing tests that assert on it.
+    #[must_use]
+    pub fn title(mut self, title: &'a str) -> Self {
+        self.title = Some(title);
+        self
+    }
+
+    /// Override the default body.
+    #[must_use]
+    pub fn body(mut self, body: impl Into<PostBody>) -> Self {
+        self.body = body.into();
+        self
+    }
+
+    /// Replace the default `[Public]` audience targeting.
+    #[must_use]
+    pub fn audiences(mut self, audiences: Vec<AudienceTarget>) -> Self {
+        self.audiences = audiences;
+        self
+    }
+
+    /// Persist via [`perform_post_creation`](crate::perform_post_creation)
+    /// (`max_attempts = 100`) and return the re-read [`PostRecord`] (carries `post_id`
+    /// and `slug`).
+    ///
+    /// # Panics
+    ///
+    /// If the post cannot be created — happy-path setup only, like [`SeedUser::seed`].
+    pub async fn seed(self, state: &Arc<AppState>) -> PostRecord {
+        crate::perform_post_creation(
+            state.posts.as_ref(),
+            crate::PostCreation {
+                user_id: self.user_id,
+                body: self.body,
+                title: self.title,
+                format: PostFormat::Markdown,
+                slug_override: None,
+                published_at: Some(Utc::now()),
+                max_attempts: 100,
+                summary: None,
+                audiences: self.audiences,
+                idempotency_key: None,
+            },
+        )
+        .await
+        .expect("seed post should be created")
+    }
+}
+
 /// An in-memory [`SiteConfigStorage`] for tests that need a facade over site
 /// config without a database. A real key/value store: `set`/`delete` mutate a
 /// `BTreeMap` (so `list` is naturally key-ordered) and `get` reads it. Shared by
@@ -844,8 +935,8 @@ impl SiteConfigStorage for InMemorySiteConfig {
 #[cfg(test)]
 mod tests {
     use super::{
-        backends, bootstrap_url, parse_password, report_drop_outcome, splice_db_name, Backend,
-        SeedUser,
+        backends, bootstrap_url, parse_password, report_drop_outcome, splice_db_name,
+        AudienceTarget, Backend, PostFormat, SeedPost, SeedUser,
     };
     use rstest::*;
     use rstest_reuse::*;
@@ -921,6 +1012,56 @@ mod tests {
                 .expect("exists");
             assert_eq!(rec.username, user.username);
         }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn seed_post_builder_defaults_create_published_public_markdown(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let state = &env.state;
+        let user = SeedUser::new().seed(state).await;
+        let post = SeedPost::new(user.user_id).seed(state).await;
+        assert!(
+            post.published_at.is_some(),
+            "default post should be published"
+        );
+        assert!(!post.slug.as_ref().is_empty(), "post should have a slug");
+        assert!(!post.body.as_ref().is_empty(), "post should have a body");
+        assert_eq!(post.format, PostFormat::Markdown);
+        let audiences = state.posts.get_post_audiences(post.post_id).await.unwrap();
+        assert_eq!(audiences, vec![AudienceTarget::Public]);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn seed_post_builder_setters_apply(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let state = &env.state;
+        let user = SeedUser::new().seed(state).await;
+        // Exercise the three settable fields and assert each lands on the record.
+        let post = SeedPost::new(user.user_id)
+            .title("Custom Title")
+            .body("Custom body text")
+            .audiences(vec![AudienceTarget::Public])
+            .seed(state)
+            .await;
+        assert_eq!(post.title.as_ref().map(AsRef::as_ref), Some("Custom Title"));
+        assert!(post.body.as_ref().contains("Custom body text"));
+        let audiences = state.posts.get_post_audiences(post.post_id).await.unwrap();
+        assert_eq!(audiences, vec![AudienceTarget::Public]);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn seed_post_bare_repeated_seeds_get_distinct_slugs(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let state = &env.state;
+        let user = SeedUser::new().seed(state).await;
+        // Two title-less bare seeds derive the same slug seed from the fixed body;
+        // `perform_post_creation`'s collision-suffix retry keeps them distinct.
+        let a = SeedPost::new(user.user_id).seed(state).await;
+        let b = SeedPost::new(user.user_id).seed(state).await;
+        assert_ne!(a.slug, b.slug, "bare seeds should get distinct slugs");
     }
 
     // guard:no-backend — harness type-guard on the SQLite CloseablePool variant; no database ops

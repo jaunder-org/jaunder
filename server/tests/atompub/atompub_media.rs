@@ -13,8 +13,8 @@ use rstest_reuse::*;
 use storage::test_support::{backends, backends_matrix, Backend, TestEnv};
 
 use crate::helpers::{
-    atompub_authed, atompub_xml, body_string, create_user_and_session, make_app,
-    setup_with_base_url,
+    atompub, atompub_at, atompub_get, atompub_upload, body_string, create_user_and_session,
+    make_app, setup_with_base_url,
 };
 
 const PNG: &[u8] = &[
@@ -35,18 +35,7 @@ async fn upload_returns_201_and_media_link_entry(#[case] backend: Backend) {
     let app = make_app(Arc::clone(&state), &storage);
 
     let response = app
-        .oneshot(
-            atompub_authed(
-                "POST",
-                &format!("/atompub/{}/media", session.username),
-                &session.username,
-                &session.token,
-            )
-            .header(header::CONTENT_TYPE, "image/png")
-            .header("slug", "pic.png")
-            .body(Body::from(PNG))
-            .unwrap(),
-        )
+        .oneshot(atompub_upload(&session, "pic.png", PNG))
         .await
         .unwrap();
 
@@ -85,35 +74,13 @@ async fn reupload_identical_returns_200(#[case] backend: Backend) {
 
     let _resp1 = app
         .clone()
-        .oneshot(
-            atompub_authed(
-                "POST",
-                &format!("/atompub/{}/media", session.username),
-                &session.username,
-                &session.token,
-            )
-            .header(header::CONTENT_TYPE, "image/png")
-            .header("slug", "pic.png")
-            .body(Body::from(PNG))
-            .unwrap(),
-        )
+        .oneshot(atompub_upload(&session, "pic.png", PNG))
         .await
         .unwrap();
 
     // Second upload (identical)
     let resp2 = app
-        .oneshot(
-            atompub_authed(
-                "POST",
-                &format!("/atompub/{}/media", session.username),
-                &session.username,
-                &session.token,
-            )
-            .header(header::CONTENT_TYPE, "image/png")
-            .header("slug", "pic.png")
-            .body(Body::from(PNG))
-            .unwrap(),
-        )
+        .oneshot(atompub_upload(&session, "pic.png", PNG))
         .await
         .unwrap();
 
@@ -131,18 +98,7 @@ async fn get_media_member_returns_entry(#[case] backend: Backend) {
 
     let resp = app
         .clone()
-        .oneshot(
-            atompub_authed(
-                "POST",
-                &format!("/atompub/{}/media", session.username),
-                &session.username,
-                &session.token,
-            )
-            .header(header::CONTENT_TYPE, "image/png")
-            .header("slug", "pic.png")
-            .body(Body::from(PNG))
-            .unwrap(),
-        )
+        .oneshot(atompub_upload(&session, "pic.png", PNG))
         .await
         .unwrap();
 
@@ -155,13 +111,11 @@ async fn get_media_member_returns_entry(#[case] backend: Backend) {
         .to_string();
 
     let get_resp = app
-        .oneshot(atompub_xml(
-            "GET",
-            &loc,
-            &session.username,
-            &session.token,
-            None,
-        ))
+        .oneshot(
+            atompub_at(&session, "GET", &loc)
+                .body(Body::empty())
+                .expect("failed to build atompub GET request"),
+        )
         .await
         .unwrap();
 
@@ -180,18 +134,12 @@ async fn get_unknown_media_returns_404(#[case] backend: Backend) {
     let app = make_app(Arc::clone(&state), &storage);
 
     let response = app
-        .oneshot(atompub_xml(
-            "GET",
+        .oneshot(atompub_get(
+            &session,
             // A well-formed but never-uploaded hash: the typed extractor accepts it,
             // and the handler returns 404 for the absent record (a *malformed* hash
             // would be a pre-handler 400 — see member_rejects_malformed_segment).
-            &format!(
-                "/atompub/{}/media/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/none.png",
-                session.username
-            ),
-            &session.username,
-            &session.token,
-            None,
+            "media/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/none.png",
         ))
         .await
         .unwrap();
@@ -210,18 +158,7 @@ async fn delete_media_member_returns_204_then_404(#[case] backend: Backend) {
 
     let resp = app
         .clone()
-        .oneshot(
-            atompub_authed(
-                "POST",
-                &format!("/atompub/{}/media", session.username),
-                &session.username,
-                &session.token,
-            )
-            .header(header::CONTENT_TYPE, "image/png")
-            .header("slug", "pic.png")
-            .body(Body::from(PNG))
-            .unwrap(),
-        )
+        .oneshot(atompub_upload(&session, "pic.png", PNG))
         .await
         .unwrap();
 
@@ -235,13 +172,11 @@ async fn delete_media_member_returns_204_then_404(#[case] backend: Backend) {
 
     let del_resp = app
         .clone()
-        .oneshot(atompub_xml(
-            "DELETE",
-            &loc,
-            &session.username,
-            &session.token,
-            None,
-        ))
+        .oneshot(
+            atompub_at(&session, "DELETE", &loc)
+                .body(Body::empty())
+                .expect("failed to build atompub request"),
+        )
         .await
         .unwrap();
 
@@ -249,13 +184,11 @@ async fn delete_media_member_returns_204_then_404(#[case] backend: Backend) {
 
     // Second delete (should be 404)
     let del_resp2 = app
-        .oneshot(atompub_xml(
-            "DELETE",
-            &loc,
-            &session.username,
-            &session.token,
-            None,
-        ))
+        .oneshot(
+            atompub_at(&session, "DELETE", &loc)
+                .body(Body::empty())
+                .expect("failed to build atompub request"),
+        )
         .await
         .unwrap();
 
@@ -273,16 +206,11 @@ async fn upload_forbids_other_user(#[case] backend: Backend) {
 
     let response = app
         .oneshot(
-            atompub_authed(
-                "POST",
-                "/atompub/bob/media",
-                &session.username,
-                &session.token,
-            )
-            .header(header::CONTENT_TYPE, "image/png")
-            .header("slug", "pic.png")
-            .body(Body::from(PNG))
-            .unwrap(),
+            atompub_at(&session, "POST", "/atompub/bob/media")
+                .header(header::CONTENT_TYPE, "image/png")
+                .header("slug", "pic.png")
+                .body(Body::from(PNG))
+                .unwrap(),
         )
         .await
         .unwrap();
@@ -301,16 +229,11 @@ async fn upload_rejects_empty_slug(#[case] backend: Backend) {
     // ".." sanitizes to an empty filename.
     let response = app
         .oneshot(
-            atompub_authed(
-                "POST",
-                &format!("/atompub/{}/media", session.username),
-                &session.username,
-                &session.token,
-            )
-            .header(header::CONTENT_TYPE, "image/png")
-            .header("slug", "..")
-            .body(Body::from(PNG))
-            .unwrap(),
+            atompub(&session, "POST", "media")
+                .header(header::CONTENT_TYPE, "image/png")
+                .header("slug", "..")
+                .body(Body::from(PNG))
+                .unwrap(),
         )
         .await
         .unwrap();
@@ -332,15 +255,17 @@ async fn member_forbids_other_user(backend: Backend, #[case] method: &str) {
     let app = make_app(state, &storage);
 
     let response = app
-        .oneshot(atompub_xml(
-            method,
-            // A well-formed hash so the typed extractor passes and the wrong-user
-            // check (alice authenticated, bob's namespace) is what yields 403.
-            "/atompub/bob/media/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/pic.png",
-            &session.username,
-            &session.token,
-            None,
-        ))
+        .oneshot(
+            atompub_at(
+                &session,
+                method,
+                // A well-formed hash so the typed extractor passes and the wrong-user
+                // check (alice authenticated, bob's namespace) is what yields 403.
+                "/atompub/bob/media/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/pic.png",
+            )
+            .body(Body::empty())
+            .expect("failed to build atompub request"),
+        )
         .await
         .unwrap();
 
@@ -362,13 +287,7 @@ async fn member_rejects_malformed_segment_returns_400(#[case] backend: Backend) 
     // Malformed hash segment (`deadbeef` is not 64 hex) → ContentHash parse fails → 400.
     let bad_hash = app
         .clone()
-        .oneshot(atompub_xml(
-            "GET",
-            &format!("/atompub/{}/media/deadbeef/pic.png", session.username),
-            &session.username,
-            &session.token,
-            None,
-        ))
+        .oneshot(atompub_get(&session, "media/deadbeef/pic.png"))
         .await
         .unwrap();
     assert_eq!(bad_hash.status(), StatusCode::BAD_REQUEST);
@@ -376,15 +295,9 @@ async fn member_rejects_malformed_segment_returns_400(#[case] backend: Backend) 
     // Non-canonical filename segment (`a%5Cb.png` decodes to `a\b.png`, not a safe leaf)
     // → Filename parse fails → 400.
     let bad_name = app
-        .oneshot(atompub_xml(
-            "GET",
-            &format!(
-                "/atompub/{}/media/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/a%5Cb.png",
-                session.username
-            ),
-            &session.username,
-            &session.token,
-            None,
+        .oneshot(atompub_get(
+            &session,
+            "media/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/a%5Cb.png",
         ))
         .await
         .unwrap();
