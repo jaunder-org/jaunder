@@ -238,12 +238,12 @@ fn render_timeline_page(
         format!("<p>{}</p>", escape_html(empty_text))
     } else {
         format!(
-            "<div>{}</div>{}",
+            "{}{}",
             render_posts(posts, tag_ctx),
-            render_load_more(has_more),
+            render_load_more(has_more)
         )
     };
-    format!("{topbar}<div class=\"j-scroll\"><div class=\"j-page\">{inner}</div></div>")
+    format!("{topbar}<div class=\"j-scroll\">{inner}</div>")
 }
 
 /// Shared coincidence-test fixtures. Both this module's tests and the projector's
@@ -432,7 +432,7 @@ mod tests {
         assert!(site.contains("<h1>#rust</h1>"), "{site}");
         assert!(site.contains("Posts on this instance"), "{site}");
         assert!(
-            site.contains("<div class=\"j-scroll\"><div class=\"j-page\">"),
+            site.contains("<div class=\"j-scroll\"><article class=\"j-post\">"),
             "{site}"
         );
         assert!(site.contains("First"), "expected post rendered: {site}");
