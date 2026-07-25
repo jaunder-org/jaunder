@@ -217,13 +217,13 @@ mod tests {
         assert!(env
             .state
             .site_config
-            .get("site.registration_policy")
+            .get(crate::SITE_REGISTRATION_POLICY_KEY)
             .await
             .is_err());
         assert!(env
             .state
             .site_config
-            .set("site.registration_policy", "open")
+            .set(crate::SITE_REGISTRATION_POLICY_KEY, "open")
             .await
             .is_err());
         assert!(env

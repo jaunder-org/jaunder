@@ -30,9 +30,7 @@ use {
     common::session_label::SessionLabel,
     host::invite::InviteCode,
     std::sync::Arc,
-    storage::{
-        load_registration_policy, AtomicOps, SessionStorage, SiteConfigStorage, UserStorage,
-    },
+    storage::{AtomicOps, SessionStorage, SiteConfigStorage, UserStorage},
     tracing::Instrument,
 };
 
@@ -44,7 +42,7 @@ use {
 pub async fn get_registration_policy() -> WebResult<RegistrationPolicy> {
     boundary!("get_registration_policy", {
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
-        let policy = load_registration_policy(&*site_config).await;
+        let policy = site_config.get_registration_policy().await?;
         Ok(policy)
     })
 }
@@ -69,11 +67,12 @@ pub async fn register(
         // `<ValidatedInput<_>>` (ADR-0065). `ProfferedPassword` is the inbound-secret
         // twin of the serde-free `Password` (ADR-0063); convert into it here.
         let password = Password::try_from(password)?;
-        let policy = load_registration_policy(&*site_config)
+        let policy = site_config
+            .get_registration_policy()
             .instrument(tracing::info_span!(
-                "web.registration.register.load_registration_policy"
+                "web.registration.register.get_registration_policy"
             ))
-            .await;
+            .await?;
 
         let metric_policy = match &policy {
             RegistrationPolicy::Open => host::metrics::RegistrationPolicy::Open,

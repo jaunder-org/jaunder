@@ -240,7 +240,7 @@ fn resolve_media_path(
     let (source, hash, filename) = validate_serve_params(params)?;
     let file_path = storage_path
         .join("media")
-        .join(source.as_str())
+        .join(source.as_ref())
         .join(&params.p1)
         .join(&params.p2)
         // Join the parsed hash and filename, not the raw `params.*`: identical bytes

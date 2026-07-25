@@ -276,7 +276,7 @@ pub(crate) type MediaRow = (
     i64,
     ContentHash,
     Filename,
-    String,
+    MediaSource,
     ContentType,
     i64,
     Option<String>,
@@ -285,14 +285,10 @@ pub(crate) type MediaRow = (
 
 pub(crate) fn media_record_from_row(row: MediaRow) -> sqlx::Result<MediaRecord> {
     let (user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at) = row;
-    // `sha256` and `filename` already arrived as their domain newtypes — the sqlx
-    // bridge (#438) decoded each column through its validating `FromStr`, so a
-    // corrupt or hand-edited value is rejected as a column-decode error before we
-    // get here (was a hand re-parse). `source` (a `MediaSource` enum) still parses
-    // here, so this step stays fallible.
-    let source: MediaSource = source
-        .parse()
-        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    // `sha256`, `filename`, and `source` already arrived as their domain types — the
+    // sqlx bridge decoded each column through its validating `FromStr` (the newtypes
+    // via #438, `source` via its `MediaSource` text-enum bridge, #607), so a corrupt
+    // or hand-edited value is rejected as a column-decode error before we get here.
     // `size_bytes` arrives as the raw `i64` column; route it through the checked
     // door so a negative stored value is rejected as a column-decode error (mirrors
     // the `source` parse above).
@@ -623,27 +619,12 @@ mod tests {
     /// A canonical 64-char lowercase-hex content hash for row fixtures.
     const ROW_HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
-    #[test]
-    fn media_record_from_row_rejects_invalid_source() {
-        let row: MediaRow = (
-            1,
-            parse_content_hash(ROW_HASH),
-            parse_filename("file.png"),
-            "not-a-source".to_string(),
-            parse_content_type("image/png"),
-            42,
-            None,
-            Utc::now(),
-        );
-        let err = media_record_from_row(row).unwrap_err();
-        assert!(matches!(err, sqlx::Error::Decode(_)));
-    }
-
-    // `media_record_from_row` no longer hand-parses `sha256`/`filename`: those columns
-    // decode straight into `ContentHash`/`Filename` via the sqlx bridge (#438), so a
+    // `media_record_from_row` no longer hand-parses `sha256`/`filename`/`source`: those
+    // columns decode straight into `ContentHash`/`Filename`/`MediaSource` via the sqlx
+    // bridge (the newtypes via #438, `source` via its text-enum bridge #607), so a
     // malformed stored value is rejected as a `ColumnDecode` error at the query boundary
-    // (covered by `media.rs`'s decode-error test), not here — a `MediaRow` cannot even
-    // hold an invalid value. Only `source` (a `MediaSource` enum) still parses here.
+    // (covered by `media.rs`'s decode-error tests), not here — a `MediaRow` cannot even
+    // hold an invalid value.
 
     #[test]
     fn media_record_from_row_accepts_valid_source() {
@@ -651,7 +632,7 @@ mod tests {
             1,
             parse_content_hash(ROW_HASH),
             parse_filename("file.png"),
-            "upload".to_string(),
+            MediaSource::Upload,
             parse_content_type("image/png"),
             42,
             None,

@@ -374,7 +374,7 @@ pub fn AudiencePicker(selection: RwSignal<AudienceSelection>) -> impl IntoView {
                     .map(|(base, label)| {
                         view! {
                             <option
-                                value=base.as_str()
+                                value=base.to_string()
                                 selected=move || selection.get().base == base
                             >
                                 {label}

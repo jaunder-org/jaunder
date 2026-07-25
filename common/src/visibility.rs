@@ -2,43 +2,116 @@
 //! the viewer identity, and the subscription-admission seam. See ADR-0020.
 
 use crate::ids::{AudienceId, ChannelId, UserId};
-use macros::StrEnum;
+use crate::strum_enum::{impl_string_serde_proxy, parse_error};
 
-// String-backed enums ride the `StrEnum` trailer: `as_str`/`Display`/`FromStr`/
-// `TryFrom<&str>` + a generated `Invalid<Name>` error, with the wire token defaulting to the
-// lowercased variant name. Wire-facing enums add `#[str_enum(serde)]`; std derives (incl.
-// `Default` via `#[default]`) stay in each enum's own list.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, StrEnum)]
+// String-backed enums use the `strum` stack (`AsRefStr`/`Display`/`EnumString`) with
+// the wire token as the snake_case variant name, plus a named `thiserror` parse error
+// via `parse_err_ty`/`parse_err_fn`. Wire-facing enums add serde (`into`/`try_from`
+// String) so a bad wire value surfaces the named error; DB-bound enums that are stored
+// as their token adopt `crate::db_enum::impl_text_column_enum!`, while FK-normalized
+// enums bind their name as a typed `&'static str` (`IntoStaticStr`).
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, strum::AsRefStr, strum::Display, strum::EnumString,
+)]
+#[strum(serialize_all = "snake_case")]
+#[strum(parse_err_ty = InvalidChannel, parse_err_fn = channel_parse_err)]
 pub enum Channel {
     Local,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, StrEnum)]
+parse_error!(
+    InvalidChannel,
+    channel_parse_err,
+    "channel must be \"local\""
+);
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    strum::AsRefStr,
+    strum::Display,
+    strum::EnumString,
+    strum::IntoStaticStr,
+)]
+#[strum(serialize_all = "snake_case")]
+#[strum(parse_err_ty = InvalidSubscriptionStatus, parse_err_fn = subscription_status_parse_err)]
 pub enum SubscriptionStatus {
     Active,
     Pending,
     Blocked,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, StrEnum)]
+parse_error!(
+    InvalidSubscriptionStatus,
+    subscription_status_parse_err,
+    "subscription status must be \"active\", \"pending\", or \"blocked\""
+);
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    strum::AsRefStr,
+    strum::Display,
+    strum::EnumString,
+    strum::IntoStaticStr,
+)]
+#[strum(serialize_all = "snake_case")]
+#[strum(parse_err_ty = InvalidTargetKind, parse_err_fn = target_kind_parse_err)]
 pub enum TargetKind {
     Public,
     Subscribers,
     Named,
 }
 
+parse_error!(
+    InvalidTargetKind,
+    target_kind_parse_err,
+    "audience target kind must be \"public\", \"subscribers\", or \"named\""
+);
+
 // The mutually-exclusive built-in audience base chosen in the editor / API — the
 // typed form of the audience-picker's `base`. Composes with named audiences by
 // union except for `Private` (author-only), which is the safe, non-widening
 // `Default` (faithful to the prior empty-string -> author-only fall-through). #499.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, StrEnum)]
-#[str_enum(serde)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    strum::AsRefStr,
+    strum::Display,
+    strum::EnumString,
+)]
+#[serde(into = "String", try_from = "String")]
+#[strum(serialize_all = "snake_case")]
+#[strum(parse_err_ty = InvalidAudienceBase, parse_err_fn = audience_base_parse_err)]
 pub enum AudienceBase {
     #[default]
     Private,
     Public,
     Subscribers,
 }
+
+parse_error!(
+    InvalidAudienceBase,
+    audience_base_parse_err,
+    "audience must be \"private\", \"public\", or \"subscribers\""
+);
+
+impl_string_serde_proxy!(AudienceBase);
 
 /// Who is reading. Wider than Layer A needs (only `Anonymous` and the local
 /// channel are constructed today) so non-local channels need no signature change
@@ -203,9 +276,13 @@ mod tests {
             TargetKind::Subscribers,
             TargetKind::Named,
         ] {
-            assert_eq!(TargetKind::try_from(k.as_str()), Ok(k));
+            assert_eq!(TargetKind::try_from(k.as_ref()), Ok(k));
         }
-        assert!(TargetKind::try_from("private").is_err());
+        let err = TargetKind::try_from("private").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "audience target kind must be \"public\", \"subscribers\", or \"named\""
+        );
     }
 
     #[test]
@@ -213,30 +290,45 @@ mod tests {
         // Covers the macro-generated `Display` impl for every enum, including
         // the `SubscriptionStatus` variants reserved for later milestones that
         // have no lookup row (and thus no bijection-test exposure) yet.
-        assert_eq!(Channel::Local.to_string(), Channel::Local.as_str());
+        assert_eq!(Channel::Local.to_string(), Channel::Local.as_ref());
         for s in [
             SubscriptionStatus::Active,
             SubscriptionStatus::Pending,
             SubscriptionStatus::Blocked,
         ] {
-            assert_eq!(s.to_string(), s.as_str());
-            assert_eq!(SubscriptionStatus::try_from(s.as_str()), Ok(s));
+            assert_eq!(s.to_string(), s.as_ref());
+            assert_eq!(SubscriptionStatus::try_from(s.as_ref()), Ok(s));
         }
         for k in [
             TargetKind::Public,
             TargetKind::Subscribers,
             TargetKind::Named,
         ] {
-            assert_eq!(k.to_string(), k.as_str());
+            assert_eq!(k.to_string(), k.as_ref());
         }
         for b in [
             AudienceBase::Public,
             AudienceBase::Subscribers,
             AudienceBase::Private,
         ] {
-            assert_eq!(b.to_string(), b.as_str());
-            assert_eq!(AudienceBase::try_from(b.as_str()), Ok(b));
+            assert_eq!(b.to_string(), b.as_ref());
+            assert_eq!(AudienceBase::try_from(b.as_ref()), Ok(b));
         }
+    }
+
+    #[test]
+    fn channel_rejects_unknown_with_named_error() {
+        let err = Channel::try_from("bogus").unwrap_err();
+        assert_eq!(err.to_string(), "channel must be \"local\"");
+    }
+
+    #[test]
+    fn subscription_status_rejects_unknown_with_named_error() {
+        let err = SubscriptionStatus::try_from("bogus").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "subscription status must be \"active\", \"pending\", or \"blocked\""
+        );
     }
 
     #[test]
@@ -270,6 +362,15 @@ mod tests {
     #[test]
     fn audience_base_deserialize_rejects_unknown() {
         assert!(serde_json::from_str::<AudienceBase>("\"bogus\"").is_err());
+    }
+
+    #[test]
+    fn audience_base_rejects_unknown_with_named_error() {
+        let err = "bogus".parse::<AudienceBase>().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "audience must be \"private\", \"public\", or \"subscribers\""
+        );
     }
 
     #[test]

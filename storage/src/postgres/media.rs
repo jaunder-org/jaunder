@@ -34,7 +34,7 @@ impl MediaDialect for Postgres {
         .bind(i64::from(user_id))
         .bind(sha256)
         .bind(filename)
-        .bind(source.as_str())
+        .bind(*source)
         .execute(pool)
         .await?;
 

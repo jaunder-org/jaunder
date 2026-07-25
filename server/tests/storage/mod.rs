@@ -94,7 +94,7 @@ async fn channels_bijection(#[case] backend: Backend) {
     }
     let c = Channel::Local;
     assert!(
-        names.iter().any(|n| n == c.as_str()),
+        names.iter().any(|n| n == c.as_ref()),
         "missing seed for {c}"
     );
 }
@@ -116,7 +116,7 @@ async fn target_kinds_bijection(#[case] backend: Backend) {
         TargetKind::Named,
     ] {
         assert!(
-            names.iter().any(|n| n == k.as_str()),
+            names.iter().any(|n| n == k.as_ref()),
             "missing seed for {k}"
         );
     }
@@ -140,7 +140,7 @@ async fn statuses_seed_maps_to_enum(#[case] backend: Backend) {
     assert!(
         names
             .iter()
-            .any(|n| n == SubscriptionStatus::Active.as_str()),
+            .any(|n| n == SubscriptionStatus::Active.as_ref()),
         "missing seed for {}",
         SubscriptionStatus::Active
     );

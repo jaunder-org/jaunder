@@ -4,8 +4,8 @@
 - Date: 2026-07-22
 - Issue: [#607](https://github.com/jaunder-org/jaunder/issues/607)
 
-Supersedes ADR-0074 (`StrEnum` derive — the standard string-enum trailer), which
-is still `Status: proposed`.
+Supersedes ADR-0074 (`StrEnum` derive — the standard string-enum trailer), now
+`Status: superseded`.
 
 ## Context
 
