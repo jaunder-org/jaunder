@@ -8,16 +8,51 @@ use macros::StrEnum;
 // `TryFrom<&str>` + a generated `Invalid<Name>` error, with the wire token defaulting to the
 // lowercased variant name. Wire-facing enums add `#[str_enum(serde)]`; std derives (incl.
 // `Default` via `#[default]`) stay in each enum's own list.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, StrEnum)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, strum::AsRefStr, strum::Display, strum::EnumString,
+)]
+#[strum(serialize_all = "snake_case")]
+#[strum(parse_err_ty = InvalidChannel, parse_err_fn = channel_parse_err)]
 pub enum Channel {
     Local,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, StrEnum)]
+/// Error returned when a string matches no [`Channel`] variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("channel must be \"local\"")]
+pub struct InvalidChannel;
+
+fn channel_parse_err(_: &str) -> InvalidChannel {
+    InvalidChannel
+}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    strum::AsRefStr,
+    strum::Display,
+    strum::EnumString,
+    strum::IntoStaticStr,
+)]
+#[strum(serialize_all = "snake_case")]
+#[strum(parse_err_ty = InvalidSubscriptionStatus, parse_err_fn = subscription_status_parse_err)]
 pub enum SubscriptionStatus {
     Active,
     Pending,
     Blocked,
+}
+
+/// Error returned when a string matches no [`SubscriptionStatus`] variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("subscription status must be \"active\", \"pending\", or \"blocked\"")]
+pub struct InvalidSubscriptionStatus;
+
+fn subscription_status_parse_err(_: &str) -> InvalidSubscriptionStatus {
+    InvalidSubscriptionStatus
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, StrEnum)]
@@ -213,14 +248,14 @@ mod tests {
         // Covers the macro-generated `Display` impl for every enum, including
         // the `SubscriptionStatus` variants reserved for later milestones that
         // have no lookup row (and thus no bijection-test exposure) yet.
-        assert_eq!(Channel::Local.to_string(), Channel::Local.as_str());
+        assert_eq!(Channel::Local.to_string(), Channel::Local.as_ref());
         for s in [
             SubscriptionStatus::Active,
             SubscriptionStatus::Pending,
             SubscriptionStatus::Blocked,
         ] {
-            assert_eq!(s.to_string(), s.as_str());
-            assert_eq!(SubscriptionStatus::try_from(s.as_str()), Ok(s));
+            assert_eq!(s.to_string(), s.as_ref());
+            assert_eq!(SubscriptionStatus::try_from(s.as_ref()), Ok(s));
         }
         for k in [
             TargetKind::Public,
@@ -237,6 +272,21 @@ mod tests {
             assert_eq!(b.to_string(), b.as_str());
             assert_eq!(AudienceBase::try_from(b.as_str()), Ok(b));
         }
+    }
+
+    #[test]
+    fn channel_rejects_unknown_with_named_error() {
+        let err = Channel::try_from("bogus").unwrap_err();
+        assert_eq!(err.to_string(), "channel must be \"local\"");
+    }
+
+    #[test]
+    fn subscription_status_rejects_unknown_with_named_error() {
+        let err = SubscriptionStatus::try_from("bogus").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "subscription status must be \"active\", \"pending\", or \"blocked\""
+        );
     }
 
     #[test]

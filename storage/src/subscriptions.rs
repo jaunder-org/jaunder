@@ -162,11 +162,15 @@ where
         let status = self
             .policy
             .initial_status(author_user_id, channel_id, subscriber_ref);
+        // The insert resolves the status *name* to its FK `status_id` (the column is
+        // an integer FK, not a TEXT-token enum column). Bind the name as a typed
+        // `&'static str` (strum `IntoStaticStr`) — not a stringly `.as_str()` strip.
+        let status_name: &'static str = status.into();
         sqlx::query(DB::INSERT_SUBSCRIPTION)
             .bind(i64::from(author_user_id))
             .bind(i64::from(channel_id))
             .bind(subscriber_ref)
-            .bind(status.as_str())
+            .bind(status_name)
             .execute(&self.pool)
             .await?;
         sqlx::query_as::<_, (i64,)>(DB::SELECT_SUBSCRIPTION_ID)
