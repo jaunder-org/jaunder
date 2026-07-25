@@ -116,7 +116,7 @@ async fn target_kinds_bijection(#[case] backend: Backend) {
         TargetKind::Named,
     ] {
         assert!(
-            names.iter().any(|n| n == k.as_str()),
+            names.iter().any(|n| n == k.as_ref()),
             "missing seed for {k}"
         );
     }

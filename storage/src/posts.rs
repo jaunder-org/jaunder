@@ -1804,9 +1804,9 @@ impl ResolutionBinds {
 fn audience_target_row(target: &AudienceTarget) -> Option<(&'static str, Option<i64>)> {
     use common::visibility::TargetKind;
     match target {
-        AudienceTarget::Public => Some((TargetKind::Public.as_str(), None)),
-        AudienceTarget::Subscribers => Some((TargetKind::Subscribers.as_str(), None)),
-        AudienceTarget::Named(id) => Some((TargetKind::Named.as_str(), Some(i64::from(*id)))),
+        AudienceTarget::Public => Some((TargetKind::Public.into(), None)),
+        AudienceTarget::Subscribers => Some((TargetKind::Subscribers.into(), None)),
+        AudienceTarget::Named(id) => Some((TargetKind::Named.into(), Some(i64::from(*id)))),
         AudienceTarget::Private => None,
     }
 }

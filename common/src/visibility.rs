@@ -55,11 +55,33 @@ fn subscription_status_parse_err(_: &str) -> InvalidSubscriptionStatus {
     InvalidSubscriptionStatus
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, StrEnum)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    strum::AsRefStr,
+    strum::Display,
+    strum::EnumString,
+    strum::IntoStaticStr,
+)]
+#[strum(serialize_all = "snake_case")]
+#[strum(parse_err_ty = InvalidTargetKind, parse_err_fn = target_kind_parse_err)]
 pub enum TargetKind {
     Public,
     Subscribers,
     Named,
+}
+
+/// Error returned when a string matches no [`TargetKind`] variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("audience target kind must be \"public\", \"subscribers\", or \"named\"")]
+pub struct InvalidTargetKind;
+
+fn target_kind_parse_err(_: &str) -> InvalidTargetKind {
+    InvalidTargetKind
 }
 
 // The mutually-exclusive built-in audience base chosen in the editor / API — the
@@ -238,9 +260,13 @@ mod tests {
             TargetKind::Subscribers,
             TargetKind::Named,
         ] {
-            assert_eq!(TargetKind::try_from(k.as_str()), Ok(k));
+            assert_eq!(TargetKind::try_from(k.as_ref()), Ok(k));
         }
-        assert!(TargetKind::try_from("private").is_err());
+        let err = TargetKind::try_from("private").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "audience target kind must be \"public\", \"subscribers\", or \"named\""
+        );
     }
 
     #[test]
@@ -262,7 +288,7 @@ mod tests {
             TargetKind::Subscribers,
             TargetKind::Named,
         ] {
-            assert_eq!(k.to_string(), k.as_str());
+            assert_eq!(k.to_string(), k.as_ref());
         }
         for b in [
             AudienceBase::Public,
