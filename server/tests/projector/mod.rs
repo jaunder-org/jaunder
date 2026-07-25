@@ -142,6 +142,24 @@ async fn permalink_unknown_serves_spa_shell(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
+async fn permalink_impossible_date_serves_shell(#[case] backend: Backend) {
+    // An impossible date (month 13, day 40) must be a soft-404 (SPA shell), not a
+    // 400/500 — the `SoftPath` date assembly resolves it to `None` (#583).
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let resp = projector_app(&state)
+        .oneshot(get("/~ghost/2026/13/40/missing"))
+        .await
+        .expect("request");
+    assert_eq!(resp.status(), StatusCode::OK, "impossible date → SPA shell");
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+    assert!(html.contains("test-shell"), "served the SPA shell: {html}");
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn permalink_invalid_segment_serves_shell(#[case] backend: Backend) {
     // An unparseable username segment (a dot is not allowed) is never public
     // content — serve the shell and let the client route it.

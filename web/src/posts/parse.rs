@@ -8,6 +8,7 @@
 
 use crate::posts::DraftSummary;
 use common::slug::Slug;
+use common::time::PermalinkDate;
 use common::username::Username;
 
 /// Decode the `~username`/`year`/`month`/`day`/`slug` permalink route params into
@@ -15,26 +16,29 @@ use common::username::Username;
 /// fetches (ADR-0063 §4). A segment that is not a `~username` yields `None` (a
 /// non-permalink URL the caller reloads for the server to handle); a `~`-prefixed
 /// URL whose slug won't parse names no real post, so `slug` is `None` and the
-/// caller 404s client-side without a round-trip. `year`/`month`/`day` fall back to
-/// `0` on absence or parse failure, as the original inline closure did.
+/// caller 404s client-side without a round-trip. The three date segments are
+/// assembled into one [`PermalinkDate`]; an absent, non-numeric, or impossible
+/// date (e.g. month 13) yields `None`, so the caller 404s client-side rather than
+/// fetching a date that can name no post.
 pub fn parse_permalink_params(
     username: Option<&str>,
     year: Option<&str>,
     month: Option<&str>,
     day: Option<&str>,
     slug: Option<&str>,
-) -> (Option<Username>, i32, u32, u32, Option<Slug>) {
+) -> (Option<Username>, Option<PermalinkDate>, Option<Slug>) {
     let username = username
         .unwrap_or_default()
         .strip_prefix('~')
         .and_then(|s| s.parse::<Username>().ok());
-    let year = year.and_then(|v| v.parse::<i32>().ok()).unwrap_or_default();
-    let month = month
-        .and_then(|v| v.parse::<u32>().ok())
-        .unwrap_or_default();
-    let day = day.and_then(|v| v.parse::<u32>().ok()).unwrap_or_default();
+    // Present at all three segments, each numeric, and together a real calendar date —
+    // else `None` (the caller 404s client-side). `.parse().ok()?` bridges each segment's
+    // parse to the `Option` `from_ymd` returns; the target int types are inferred from it.
+    let date = year.zip(month).zip(day).and_then(|((y, m), d)| {
+        PermalinkDate::from_ymd(y.parse().ok()?, m.parse().ok()?, d.parse().ok()?)
+    });
     let slug = slug.and_then(|s| s.parse::<Slug>().ok());
-    (username, year, month, day, slug)
+    (username, date, slug)
 }
 
 /// Presentational data for one draft row, computed by [`draft_row_display`] so the
@@ -75,7 +79,7 @@ mod tests {
 
     #[test]
     fn parses_valid_permalink_params() {
-        let (username, year, month, day, slug) = parse_permalink_params(
+        let (username, date, slug) = parse_permalink_params(
             Some("~alice"),
             Some("2026"),
             Some("01"),
@@ -83,9 +87,7 @@ mod tests {
             Some("hello"),
         );
         assert_eq!(username, Some(parse_username("alice")));
-        assert_eq!(year, 2026);
-        assert_eq!(month, 1);
-        assert_eq!(day, 2);
+        assert_eq!(date, PermalinkDate::from_ymd(2026, 1, 2));
         assert_eq!(slug, Some(parse_slug("hello")));
     }
 
@@ -104,34 +106,25 @@ mod tests {
     }
 
     #[test]
-    fn missing_segments_are_absent_or_zero() {
-        let (username, year, month, day, slug) =
-            parse_permalink_params(None, None, None, None, None);
-        assert_eq!(username, None);
-        assert_eq!(year, 0);
-        assert_eq!(month, 0);
-        assert_eq!(day, 0);
-        assert_eq!(slug, None);
-    }
-
-    #[test]
-    fn unparseable_date_segments_default_to_zero() {
-        let (_, year, month, day, _) = parse_permalink_params(
-            Some("~alice"),
-            Some("nope"),
-            None,
-            Some("xx"),
-            Some("hello"),
-        );
-        assert_eq!(year, 0);
-        assert_eq!(month, 0);
-        assert_eq!(day, 0);
+    fn unparseable_or_impossible_date_is_none() {
+        // A non-numeric segment can't form a date.
+        let (_, d1, _) =
+            parse_permalink_params(Some("~a"), Some("x"), Some("01"), Some("02"), Some("s"));
+        assert_eq!(d1, None);
+        // An impossible date (month 13) is rejected by construction.
+        let (_, d2, _) =
+            parse_permalink_params(Some("~a"), Some("2026"), Some("13"), Some("02"), Some("s"));
+        assert_eq!(d2, None);
+        // A missing segment leaves no date.
+        let (_, d3, _) =
+            parse_permalink_params(Some("~a"), None, Some("01"), Some("02"), Some("s"));
+        assert_eq!(d3, None);
     }
 
     #[test]
     fn unparseable_slug_is_none() {
         // A '~'-prefixed permalink with an invalid slug names no real post.
-        let (username, _, _, _, slug) = parse_permalink_params(
+        let (username, _, slug) = parse_permalink_params(
             Some("~alice"),
             Some("2026"),
             Some("01"),

@@ -82,7 +82,9 @@ async fn get_post_form(
     slug: &str,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
-    let body = format!("username={username}&year={year}&month={month}&day={day}&slug={slug}");
+    // `get_post` now takes a single `date: PermalinkDate` wire arg (serde-transparent →
+    // the ISO `YYYY-MM-DD` field), replacing the old loose `year/month/day` triple (#583).
+    let body = format!("username={username}&date={year:04}-{month:02}-{day:02}&slug={slug}");
     post_form(state, "/api/get_post", body, cookie).await
 }
 

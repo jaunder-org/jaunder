@@ -29,7 +29,7 @@ use crate::slug::Slug;
 use crate::smtp_password::SmtpPassword;
 use crate::smtp_username::SmtpUsername;
 use crate::tag::{Tag, TagLabel};
-use crate::time::UtcInstant;
+use crate::time::{PermalinkDate, UtcInstant};
 use crate::token::{RawToken, TokenHash};
 use crate::username::Username;
 
@@ -435,4 +435,16 @@ pub fn parse_tag_label(s: &str) -> TagLabel {
 #[must_use]
 pub fn parse_utc_instant(s: &str) -> UtcInstant {
     s.parse().expect("valid test UTC instant")
+}
+
+/// Build a valid [`PermalinkDate`] for tests from a `(year, month, day)` triple — the
+/// single place a test permalink-date literal is assembled, so an impossible fixture
+/// fails loudly and the `from_ymd(...).unwrap()` isn't re-spelled at every call site.
+///
+/// # Panics
+///
+/// Panics if the triple is not a real calendar date.
+#[must_use]
+pub fn permalink_date(year: i32, month: u32, day: u32) -> PermalinkDate {
+    PermalinkDate::from_ymd(year, month, day).expect("valid test permalink date")
 }

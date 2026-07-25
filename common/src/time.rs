@@ -1,7 +1,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use chrono::{DateTime, Local, NaiveDateTime, SecondsFormat, TimeZone, Utc};
+use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, SecondsFormat, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -72,6 +72,49 @@ impl fmt::Display for UtcInstant {
     }
 }
 
+/// A validated permalink calendar date (`YYYY-MM-DD`), wrapping a [`chrono::NaiveDate`] so
+/// an impossible date is unrepresentable — the permalink-route sibling of [`UtcInstant`]
+/// (ADR-0072/0063/0065). Like `UtcInstant` it is **serde-transparent** (a newtype struct →
+/// (de)serializes exactly as its inner `NaiveDate`, i.e. the ISO string `"2026-01-02"`), so
+/// a corrupt wire value is a decode error, not a silent bad date. It crosses the web
+/// `#[server]` boundary (`get_post`) in place of a loose `(i32, u32, u32)` triple, and is
+/// assembled from the permalink URL's three `/YYYY/MM/DD/` segments via
+/// [`from_ymd`](PermalinkDate::from_ymd). `chrono` is compiled into the CSR/wasm bundle via
+/// `common`, so the type is expressible on both server and wasm client.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PermalinkDate(NaiveDate);
+
+impl PermalinkDate {
+    /// The one fallible construction door: an impossible date (bad month/day, non-existent
+    /// day-of-month) yields `None`. Used to assemble the type from the URL's three parsed
+    /// segments (the client parse and the server `SoftPath` route).
+    #[must_use]
+    pub fn from_ymd(year: i32, month: u32, day: u32) -> Option<Self> {
+        NaiveDate::from_ymd_opt(year, month, day).map(Self)
+    }
+
+    /// The inner [`NaiveDate`] — the ADR-0063 `value()` accessor (by value; `Copy`), for
+    /// in-Rust date comparison.
+    #[must_use]
+    pub fn value(self) -> NaiveDate {
+        self.0
+    }
+}
+
+impl From<NaiveDate> for PermalinkDate {
+    fn from(date: NaiveDate) -> Self {
+        Self(date)
+    }
+}
+
+impl fmt::Display for PermalinkDate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // `NaiveDate`'s Display is ISO `YYYY-MM-DD` (4-digit zero-padded year) — the exact
+        // string the permalink storage query binds.
+        write!(f, "{}", self.0)
+    }
+}
+
 /// Converts a `<input type="datetime-local">` value — a naive local wall-clock such
 /// as `"2026-07-01T13:30"` (seconds optional) — into a [`UtcInstant`], interpreting
 /// it in the ambient local timezone. `None` for an empty/whitespace or unparseable
@@ -108,6 +151,47 @@ fn utc_instant_from_local_in<Tz: TimeZone>(local: &str, tz: &Tz) -> Option<UtcIn
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    #[test]
+    fn permalink_date_from_ymd_accepts_a_real_date() {
+        assert!(PermalinkDate::from_ymd(2026, 1, 2).is_some());
+    }
+
+    #[test]
+    fn permalink_date_from_ymd_rejects_impossible_dates() {
+        for (y, m, d) in [
+            (2026, 13, 1),
+            (2026, 0, 1),
+            (2026, 1, 0),
+            (2026, 2, 30),
+            (2026, 4, 31),
+        ] {
+            assert!(
+                PermalinkDate::from_ymd(y, m, d).is_none(),
+                "{y}-{m}-{d} must reject"
+            );
+        }
+    }
+
+    #[test]
+    fn permalink_date_serde_is_transparent_iso_and_rejects_invalid() {
+        let pd = PermalinkDate::from_ymd(2026, 1, 2).unwrap();
+        assert_eq!(serde_json::to_string(&pd).unwrap(), "\"2026-01-02\"");
+        assert_eq!(
+            serde_json::from_str::<PermalinkDate>("\"2026-01-02\"").unwrap(),
+            pd
+        );
+        assert!(serde_json::from_str::<PermalinkDate>("\"2026-13-40\"").is_err());
+    }
+
+    #[test]
+    fn permalink_date_display_and_value_round_trip() {
+        let pd = PermalinkDate::from_ymd(2026, 1, 2).unwrap();
+        assert_eq!(pd.to_string(), "2026-01-02");
+        let nd = NaiveDate::from_ymd_opt(2026, 1, 2).unwrap();
+        assert_eq!(pd.value(), nd);
+        assert_eq!(PermalinkDate::from(nd), pd);
+    }
 
     #[test]
     fn parses_an_rfc3339_z_string() {

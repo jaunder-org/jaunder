@@ -1,7 +1,7 @@
 //! Content storage for posts, revisions, and tagging.
 
 use async_trait::async_trait;
-use chrono::{DateTime, Datelike, NaiveDate, Utc};
+use chrono::{DateTime, Utc};
 use sqlx::{Database, Pool};
 use thiserror::Error;
 
@@ -22,18 +22,10 @@ use crate::helpers::{post_record_from_row, PostRow};
 
 pub use common::render::{InvalidPostFormat, PostFormat, RenderedHtml};
 
-/// The `year`/`month`/`day` component of a public permalink lookup key. Bundling
-/// the date triple keeps [`PostStorage::get_post_by_permalink`] under the
-/// argument limit while naming the trio at every call site.
-#[derive(Debug, Clone, Copy)]
-pub struct PermalinkDate {
-    /// Four-digit calendar year.
-    pub year: i32,
-    /// Month of year, 1–12.
-    pub month: u32,
-    /// Day of month, 1–31.
-    pub day: u32,
-}
+/// The validated calendar date of a public permalink lookup key. Re-exported from
+/// `common::time` so storage callers and the trait method name the domain type
+/// directly (an impossible date is unrepresentable by construction — #583).
+pub use common::time::PermalinkDate;
 
 /// A post record returned by [`PostStorage`] queries.
 ///
@@ -443,27 +435,18 @@ pub async fn apply_post_tag_diff(
 ///
 /// # Errors
 ///
-/// Returns a validation error for an impossible calendar date, or a storage
-/// error if the permalink lookup fails.
+/// Returns a storage error if the permalink lookup fails. The date is already a
+/// valid calendar date by construction ([`PermalinkDate`]), so there is no
+/// in-function date guard.
 pub async fn fetch_post_record(
     posts: &dyn PostStorage,
     viewer: &ViewerIdentity,
     username: &Username,
-    year: i32,
-    month: u32,
-    day: u32,
+    date: PermalinkDate,
     slug: &Slug,
 ) -> InternalResult<Option<PostRecord>> {
-    NaiveDate::from_ymd_opt(year, month, day)
-        .ok_or_else(|| InternalError::validation("Invalid permalink"))?;
     posts
-        .get_post_by_permalink(
-            username,
-            PermalinkDate { year, month, day },
-            slug,
-            viewer,
-            Utc::now(),
-        )
+        .get_post_by_permalink(username, date, slug, viewer, Utc::now())
         .await
         .map_err(InternalError::storage)
 }
@@ -477,9 +460,7 @@ pub async fn fetch_post_record(
 pub async fn find_draft_by_permalink_for_user(
     posts: &dyn PostStorage,
     user_id: UserId,
-    year: i32,
-    month: u32,
-    day: u32,
+    date: PermalinkDate,
     slug: &Slug,
 ) -> InternalResult<Option<PostRecord>> {
     let mut cursor = None;
@@ -497,12 +478,10 @@ pub async fn find_draft_by_permalink_for_user(
 
         let next_cursor = drafts.last().map(to_post_cursor);
 
-        if let Some(found) = drafts.into_iter().find(|post| {
-            post.slug == *slug
-                && post.created_at.year() == year
-                && post.created_at.month() == month
-                && post.created_at.day() == day
-        }) {
+        if let Some(found) = drafts
+            .into_iter()
+            .find(|post| post.slug == *slug && post.created_at.date_naive() == date.value())
+        {
             return Ok(Some(found));
         }
 
@@ -987,8 +966,9 @@ where
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
     ) -> sqlx::Result<Option<PostRecord>> {
-        let PermalinkDate { year, month, day } = date;
-        let date_str = format!("{year:04}-{month:02}-{day:02}");
+        // `PermalinkDate`'s Display is ISO `YYYY-MM-DD` — the exact string the
+        // `PERMALINK_DATE_CLAUSE` binds (replacing the old `format!("{y:04}-…")`).
+        let date_str = date.to_string();
         let (resolution, binds, _) = resolution_where(viewer, 5);
         // `published_at <= $4` hides scheduled (future-dated) posts until due.
         let sql = format!(
@@ -2252,7 +2232,7 @@ mod tests {
     use super::*;
     use crate::test_support::{backends, Backend, CloseablePool, SeedRawPost, SeedUser};
     use common::test_support::{
-        parse_post_summary, parse_slug, parse_tag, parse_tag_label, parse_username,
+        parse_post_summary, parse_slug, parse_tag, parse_tag_label, parse_username, permalink_date,
     };
     use rstest::*;
     use rstest_reuse::*;
@@ -2766,20 +2746,14 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let (year, month, day) = (
-            record.created_at.year(),
-            record.created_at.month(),
-            record.created_at.day(),
-        );
+        let date = PermalinkDate::from(record.created_at.date_naive());
 
         // A published, public post is visible to an anonymous viewer at its permalink.
         let found = fetch_post_record(
             posts,
             &ViewerIdentity::Anonymous,
             &record.author_username,
-            year,
-            month,
-            day,
+            date,
             &record.slug,
         )
         .await
@@ -2791,9 +2765,7 @@ mod tests {
             posts,
             &ViewerIdentity::Anonymous,
             &record.author_username,
-            year,
-            month,
-            day,
+            date,
             &parse_slug("no-such-slug"),
         )
         .await
@@ -3067,29 +3039,18 @@ mod tests {
             .await
             .unwrap();
         let record = drafts.first().expect("seeded draft is listed");
-        let (year, month, day) = (
-            record.created_at.year(),
-            record.created_at.month(),
-            record.created_at.day(),
-        );
+        let date = PermalinkDate::from(record.created_at.date_naive());
 
-        let found =
-            find_draft_by_permalink_for_user(posts, user_id, year, month, day, &record.slug)
-                .await
-                .unwrap();
+        let found = find_draft_by_permalink_for_user(posts, user_id, date, &record.slug)
+            .await
+            .unwrap();
         assert_eq!(found.map(|p| p.post_id), Some(record.post_id));
 
         // A slug the user has no draft for pages to an empty page and returns None.
-        let missing = find_draft_by_permalink_for_user(
-            posts,
-            user_id,
-            year,
-            month,
-            day,
-            &parse_slug("no-such-draft"),
-        )
-        .await
-        .unwrap();
+        let missing =
+            find_draft_by_permalink_for_user(posts, user_id, date, &parse_slug("no-such-draft"))
+                .await
+                .unwrap();
         assert!(missing.is_none());
     }
 
@@ -3131,10 +3092,14 @@ mod tests {
             });
 
         let searched = parse_slug("target-slug");
-        let result =
-            find_draft_by_permalink_for_user(&mock, UserId::from(1), 2020, 1, 1, &searched)
-                .await
-                .unwrap();
+        let result = find_draft_by_permalink_for_user(
+            &mock,
+            UserId::from(1),
+            permalink_date(2020, 1, 1),
+            &searched,
+        )
+        .await
+        .unwrap();
         assert!(result.is_none());
     }
 }

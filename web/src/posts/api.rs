@@ -16,9 +16,18 @@ mod listing;
 pub use listing::*;
 
 use common::{
-    ids::PostId, pagination::PageSize, post_body::PostBody, post_summary::PostSummary,
-    post_title::PostTitle, render::PostFormat, root_relative_url::RootRelativeUrl, slug::Slug,
-    tag::TagLabel, time::UtcInstant, username::Username, visibility::AudienceSelection,
+    ids::PostId,
+    pagination::PageSize,
+    post_body::PostBody,
+    post_summary::PostSummary,
+    post_title::PostTitle,
+    render::PostFormat,
+    root_relative_url::RootRelativeUrl,
+    slug::Slug,
+    tag::TagLabel,
+    time::{PermalinkDate, UtcInstant},
+    username::Username,
+    visibility::AudienceSelection,
 };
 
 use common::seed::PostResponse;
@@ -234,9 +243,7 @@ pub async fn create_post(args: CreatePostArgs) -> WebResult<CreatePostResult> {
 #[server(endpoint = "/get_post")]
 pub async fn get_post(
     username: Username,
-    year: i32,
-    month: u32,
-    day: u32,
+    date: PermalinkDate,
     slug: Slug,
 ) -> WebResult<PostResponse> {
     boundary!("get_post", {
@@ -244,7 +251,7 @@ pub async fn get_post(
 
         let viewer = viewer_identity().await;
         if let Some(post) =
-            fetch_post_record(posts.as_ref(), &viewer, &username, year, month, day, &slug).await?
+            fetch_post_record(posts.as_ref(), &viewer, &username, date, &slug).await?
         {
             let is_author = require_auth()
                 .await
@@ -264,10 +271,9 @@ pub async fn get_post(
             return Err(not_found_error());
         }
 
-        let draft =
-            find_draft_by_permalink_for_user(posts.as_ref(), auth.user_id, year, month, day, &slug)
-                .await?
-                .ok_or_else(not_found_error)?;
+        let draft = find_draft_by_permalink_for_user(posts.as_ref(), auth.user_id, date, &slug)
+            .await?
+            .ok_or_else(not_found_error)?;
 
         Ok(post_response(draft, true))
     })
