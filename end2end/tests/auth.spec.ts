@@ -140,6 +140,10 @@ test("login with wrong password shows error", async ({ page }) => {
 });
 
 test("logout page logs out", async ({ page, user }) => {
+  // #649: /logout is a pure redirect trigger — leptos_router's redirect->pushState
+  // navigates to "/" on the same resolution that would render a success message, so
+  // there is no perceivable "You have been logged out." page. This test pins that the
+  // flow ends signed-out at "/"; the LogoutPage render carries no success branch.
   await login(page, user.username, user.password);
 
   // Use the rendered logout link to avoid Firefox navigation abort races.
