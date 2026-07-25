@@ -124,7 +124,7 @@ fn variant_path(logical: &str, encoding: Encoding) -> String {
 /// The SPA-shell fallthrough: the same embedded `index.html` boot document the
 /// old `ServeDir(...).fallback(spa_shell)` served for unknown paths.
 fn spa_shell() -> Response {
-    Html(web::render::SPA_SHELL).into_response()
+    Html(web::app::SPA_SHELL).into_response()
 }
 
 /// Insert a validated `ETag` header, skipping it if the value can't be a header

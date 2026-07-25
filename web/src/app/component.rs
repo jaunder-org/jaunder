@@ -1,7 +1,11 @@
-/// Default theme identifier (the CSS variable pack applied via `data-theme` on the
-/// root element). Defined in `crate::render` (the shell layer) so the projector's
-/// server-painted shell and this reactive `AppShell` share one value.
-pub use crate::render::DEFAULT_THEME;
+//! The app vertical's wasm-only reactive shell (ADR-0070): `App` (Router + route
+//! table) and its private `AppShell` (the `j-root` frame). The pure projector twin
+//! that must coincide byte-for-byte lives in the sibling `super::render` leaf. No
+//! `#[cfg]` of its own — wasm-only via its `mod` line in `mod.rs`.
+
+/// The default theme, shared with the pure projector so the server-painted shell
+/// and this reactive `AppShell` agree on the initial `data-theme`.
+use super::DEFAULT_THEME;
 
 /// The localStorage key holding the persisted theme. Local to `web` — unlike the
 /// auth marker's key, it is not shared with the pre-paint script or any other layer.

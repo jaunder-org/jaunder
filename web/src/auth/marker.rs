@@ -2,7 +2,7 @@
 //! value advertising "probably the owner" for pre-paint chrome adjustment. It is
 //! ADVISORY, not a credential — the real session stays the HTTP-only cookie, and
 //! the server authorizes every mutation. The pre-paint `<head>` script
-//! (`render::PREPAINT_SCRIPT`) reads the SAME key + `.username` field, so the
+//! (`app::PREPAINT_SCRIPT`) reads the SAME key + `.username` field, so the
 //! encode/decode shape here and that script must stay in sync.
 //!
 //! Pure codec only: the wasm-only `localStorage` binding lives in

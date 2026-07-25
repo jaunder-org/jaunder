@@ -18,6 +18,7 @@ macro_rules! boundary {
     };
 }
 
+pub mod app;
 pub mod audiences;
 pub mod auth;
 pub mod avatar;
@@ -35,8 +36,6 @@ pub mod invites;
 #[cfg(feature = "server")]
 mod mail;
 pub mod media;
-#[cfg(target_arch = "wasm32")]
-pub mod pages;
 pub mod password_reset;
 pub mod posts;
 pub mod profile;
@@ -45,7 +44,7 @@ pub mod registration;
 pub mod render;
 /// The `~`-only permalink route segment (#592). Pure `leptos_router` matching logic
 /// (no `web_sys`), so it lives at the crate root — host-compiled and host-tested —
-/// rather than under the wasm-only `pages` module that consumes it.
+/// rather than under the wasm-only `app` module that consumes it.
 pub mod route_segments;
 pub mod sessions;
 pub mod sidebar;
@@ -58,6 +57,3 @@ mod test_support;
 pub mod timeline;
 pub mod topbar;
 pub mod viewer;
-
-#[cfg(target_arch = "wasm32")]
-pub use pages::App;
