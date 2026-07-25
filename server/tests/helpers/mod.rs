@@ -11,7 +11,6 @@ use common::mailer::MailSender;
 use common::test_support::parse_session_label;
 use common::token::RawToken;
 use common::username::Username;
-use leptos::prelude::LeptosOptions;
 use std::sync::{Arc, OnceLock};
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -88,10 +87,6 @@ pub fn ensure_server_fns_registered() {
         server_fn::axum::register_explicit::<web::audiences::RemoveSubscriberFromAudience>();
         server_fn::axum::register_explicit::<web::audiences::ListAudienceMembers>();
     });
-}
-
-pub fn test_options() -> LeptosOptions {
-    LeptosOptions::builder().output_name("test").build()
 }
 
 /// Returns a `PathBuf` pointing to a temporary directory usable as a storage
@@ -340,13 +335,7 @@ pub fn make_app(state: &Arc<storage::AppState>, storage: &TempDir) -> axum::Rout
     std::fs::create_dir_all(storage_path.join("media").join("upload")).unwrap();
     std::fs::create_dir_all(storage_path.join("media").join("cached")).unwrap();
     std::fs::create_dir_all(storage_path.join("media").join("tmp")).unwrap();
-    jaunder::create_router(
-        test_options(),
-        Arc::clone(state),
-        noop_mailer(),
-        false,
-        storage_path,
-    )
+    jaunder::create_router(Arc::clone(state), noop_mailer(), false, storage_path)
 }
 
 /// Seeds the required `site.base_url` precondition (#560): the `AtomPub` handlers
@@ -456,7 +445,6 @@ async fn post_inner(
         .expect("failed to build request");
 
     let app = jaunder::create_router(
-        test_options(),
         Arc::clone(state),
         mailer,
         secure_cookies,
@@ -669,13 +657,7 @@ pub async fn get_asset(uri: &str) -> (StatusCode, Option<String>) {
         .body(Body::empty())
         .unwrap();
 
-    let app = jaunder::create_router(
-        test_options(),
-        state,
-        noop_mailer(),
-        false,
-        tmp_storage_path(),
-    );
+    let app = jaunder::create_router(state, noop_mailer(), false, tmp_storage_path());
     let response = app.oneshot(request).await.unwrap();
 
     let status = response.status();

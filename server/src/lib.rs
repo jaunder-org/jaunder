@@ -1,8 +1,3 @@
-// The ParentRoute wrapping all routes in web::app::App generates a wide tuple of
-// route types; the compiler needs a higher recursion limit to monomorphize it,
-// particularly under llvm-cov instrumentation. Root cause under investigation.
-#![recursion_limit = "512"]
-
 pub mod assets;
 pub mod atompub;
 pub mod backup;
@@ -32,7 +27,6 @@ use crate::assets::StaticAssets;
 use ::storage::AppState;
 
 pub fn create_router(
-    leptos_options: LeptosOptions,
     state: Arc<AppState>,
     mailer: Arc<dyn common::mailer::MailSender>,
     secure_cookies: bool,
@@ -131,5 +125,5 @@ pub fn create_router(
         .layer(axum::Extension(feed_cache_ext))
         .layer(axum::Extension(subscriptions_ext))
         .layer(axum::Extension(sessions_ext));
-    crate::observability::with_http_observability(app).with_state(leptos_options)
+    crate::observability::with_http_observability(app)
 }

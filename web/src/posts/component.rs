@@ -226,7 +226,7 @@ pub fn PostCard(
     let publish_action = ServerAction::<PublishPost>::new();
     let deleted = RwSignal::new(false);
 
-    Effect::new_isomorphic(move |_| {
+    Effect::new(move |_| {
         if let Some(Ok(())) = delete_action.value().get() {
             deleted.set(true);
             if let Some(cb) = on_mutate {
@@ -234,7 +234,7 @@ pub fn PostCard(
             }
         }
     });
-    Effect::new_isomorphic(move |_| {
+    Effect::new(move |_| {
         if let Some(Ok(())) = unpublish_action.value().get() {
             let cb = on_unpublish.or(on_mutate);
             if let Some(cb) = cb {
@@ -242,10 +242,8 @@ pub fn PostCard(
             }
         }
     });
-    // Client-only navigation side-effect (web-style-guide §9): the publish action
-    // only ever dispatches on the client, so `Effect::new` (not `_isomorphic`)
-    // avoids needlessly scheduling on the server — matching EditPostPage's
-    // publish redirect.
+    // Client-only navigation side-effect (web-style-guide §9): react to the
+    // resolved publish action, mirroring EditPostPage's publish redirect.
     let navigate = use_navigate();
     Effect::new(move |_| {
         if let Some(Ok(published)) = publish_action.value().get() {
@@ -1176,9 +1174,8 @@ pub fn EditPostPage() -> impl IntoView {
         base: AudienceBase::Public,
         named: Vec::new(),
     });
-    // ServerAction dispatches happen only on the client; this redirect-on-publish
-    // effect only ever fires there. `Effect::new_isomorphic` would needlessly
-    // schedule on the server. Editor → permalink is always a route change, so a fresh
+    // The redirect-on-publish effect reacts to the client-only ServerAction
+    // dispatch. Editor → permalink is always a route change, so a fresh
     // `PostPage` mount refetches — no explicit invalidation needed here (#592).
     let navigate = use_navigate();
     Effect::new(move |_| {

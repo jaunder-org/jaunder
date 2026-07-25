@@ -96,7 +96,7 @@ pub const DISCOVERY_MARKER_ATTR: &str = "data-jaunder-discovery";
 /// Feed + RSD autodiscovery `<link>`s for the seed's surface, the pure mirror of
 /// the reactive `FeedDiscovery`/`RsdDiscovery` components (`web::feed_discovery`)
 /// so the projector's `<head>` carries the same discovery metadata the reactive
-/// SSR render did (feed readers + `AtomPub` editors follow these). Each page emits
+/// CSR components produce (feed readers + `AtomPub` editors follow these). Each page emits
 /// exactly what its reactive counterpart does: the RSS/Atom/JSON feed links for
 /// its surface, and — only on the user-profile page — the RSD `EditURI` link. The
 /// permalink page renders none. Post-boot the reactive components re-add

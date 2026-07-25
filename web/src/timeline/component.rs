@@ -51,7 +51,7 @@ impl TimelineState {
 
     /// Resolve a re-fetch into the signals and settle to idle (clearing any prior
     /// failure). wasm-only: re-fetches resolve on the client, in the page's
-    /// post-hydration `Effect`.
+    /// client-side `Effect`.
     pub fn resolve(&self, page: TimelinePage) {
         self.adopt(page);
         self.status.set(LoadStatus::Idle);

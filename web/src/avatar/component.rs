@@ -14,7 +14,7 @@ use super::markup::avatar_parts;
 pub fn Avatar(name: Username, #[prop(default = 38)] size: u32) -> impl IntoView {
     let (initials, hue) = avatar_parts(&name);
     // Integer equivalent of `(size as f32 * 0.36).round()`; must match the pure
-    // `render` twin so SSR and reactive output coincide.
+    // `render` twin so the projector paint and this reactive component coincide.
     let font_size = (size * 36 + 50) / 100;
     let style = format!(
         "width:{size}px;height:{size}px;background:oklch(0.58 0.07 {hue});font-size:{font_size}px"

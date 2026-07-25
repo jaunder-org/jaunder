@@ -20,7 +20,6 @@ use common::session_label::SessionLabel;
 use common::token::RawToken;
 use common::username::Username;
 use host::capture;
-use leptos::prelude::{Env, LeptosOptions};
 use storage::load_smtp_config;
 use storage::{
     export_backup, restore_backup, BackupExportOptions, BackupRestoreOptions, DbConnectOptions,
@@ -537,12 +536,6 @@ pub async fn prepare_server(
         Err(e) => return Err(anyhow::anyhow!("{e}; run `jaunder init` first")),
     };
 
-    let leptos_options = LeptosOptions::builder()
-        .output_name("jaunder")
-        .env(if prod { Env::PROD } else { Env::DEV })
-        .site_addr(bind)
-        .build();
-
     let backup_scheduler = crate::backup::start_backup_worker(
         db.site_config.clone(),
         storage.db.clone(),
@@ -566,13 +559,7 @@ pub async fn prepare_server(
         capture::file(capture::Stream::Mail),
     )
     .await;
-    let router = crate::create_router(
-        leptos_options,
-        db,
-        mailer,
-        prod,
-        storage.storage_path.clone(),
-    );
+    let router = crate::create_router(db, mailer, prod, storage.storage_path.clone());
     let listener = tokio::net::TcpListener::bind(bind).await?;
     // `local_addr` cannot fail on a just-bound listener; fall back to the
     // requested `bind` rather than add a never-taken error branch.

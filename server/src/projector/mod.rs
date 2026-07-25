@@ -51,8 +51,8 @@ pub struct Shell(pub Arc<str>);
 
 /// Register the public projector routes. Generic over the router state because
 /// the handlers extract only request `Extension`s (the storage traits + the
-/// shell), never `State`, so they compose onto the live `Router<LeptosOptions>`
-/// in `create_router` and a bare `Router<()>` in tests alike.
+/// shell), never `State`, so they compose onto the bare `Router<()>` in
+/// `create_router` and in tests alike.
 ///
 /// Only the permalink route lands here for now; the profile / timeline / tag
 /// routes arrive with their verticals. Until then those URLs keep hitting the
@@ -414,7 +414,7 @@ mod tests {
         use common::seed::{PageSeed, TimelinePage};
         // Drift guard (#234): the projector's server-rendered boot and the SPA
         // shell (`csr/index.html`) are two hand-written copies — they must load the
-        // SAME wasm URL, or hydration 404s on projector routes. Cross-checking the
+        // SAME wasm URL, or the CSR boot 404s on projector routes. Cross-checking the
         // two (rather than asserting a literal against itself) means neither can
         // silently drift; `cargo xtask audit-wasm` ties that shared URL to the file
         // the build actually emits.

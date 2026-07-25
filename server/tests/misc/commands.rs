@@ -13,7 +13,6 @@ use jaunder::commands::{
     cmd_app_password_create, cmd_backup, cmd_create_pg_db, cmd_init, cmd_restore, cmd_serve,
     cmd_smtp_test, cmd_user_create, cmd_user_invite, prepare_server,
 };
-use leptos::prelude::LeptosOptions;
 use storage::{open_database, open_existing_database, BackupMode};
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -143,29 +142,12 @@ async fn after_init_server_responds_to_health_check(#[case] backend: Backend) {
     cmd_init(&args, false).await.unwrap();
 
     let db = open_existing_database(&args.db).await.unwrap();
-    let leptos_options = LeptosOptions::builder().output_name("test").build();
-    let router = jaunder::create_router(
-        leptos_options,
-        db,
-        noop_mailer(),
-        true,
-        args.storage_path.clone(),
-    );
+    let router = jaunder::create_router(db, noop_mailer(), true, args.storage_path.clone());
 
-    // Wrap the request in a LocalSet so Leptos's SSR rendering (which spawns
-    // resource fetchers via `tokio::task::spawn_local` for `<Suspense>`)
-    // doesn't panic with "spawn_local called from outside of a task::LocalSet".
-    // The production serving path provides this via leptos-axum's setup; bare
-    // `router.oneshot` on the default multi-thread runtime does not.
-    let local = tokio::task::LocalSet::new();
-    let response = local
-        .run_until(async move {
-            router
-                .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
-                .await
-                .unwrap()
-        })
-        .await;
+    let response = router
+        .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 }
 
@@ -197,18 +179,12 @@ async fn prepare_server_binds_and_builds_serving_router(#[case] backend: Backend
         "listener should be bound to the requested address"
     );
 
-    // The router serves; drive it directly (no real socket needed). Wrap in a
-    // LocalSet for Leptos SSR's spawn_local, as in after_init_server_responds_to_health_check.
-    let local = tokio::task::LocalSet::new();
-    let response = local
-        .run_until(async move {
-            prepared
-                .router
-                .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
-                .await
-                .unwrap()
-        })
-        .await;
+    // The router serves; drive it directly (no real socket needed).
+    let response = prepared
+        .router
+        .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 }
 

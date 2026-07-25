@@ -2,8 +2,8 @@
 //! [`MailError`], and the dependency-free [`NoopMailSender`] (plus the
 //! `test_utils::CapturingMailSender` test double).
 //!
-//! These live in `common` — which is compiled to WebAssembly via `web`/`hydrate`
-//! — precisely because they pull in no native-only crates, so the web layer can
+//! These live in `common` — which is compiled to WebAssembly as part of the
+//! `web` CSR client — precisely because they pull in no native-only crates, so the web layer can
 //! name `MailSender`/`EmailMessage` in its `#[server]` functions. The concrete
 //! senders that need a SMTP stack or filesystem I/O (`LettreMailSender`,
 //! `FileMailSender`) would drag `lettre` into the wasm build, so they live in

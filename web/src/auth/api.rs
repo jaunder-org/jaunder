@@ -14,7 +14,7 @@ use common::username::Username;
 use leptos::prelude::*;
 
 // One grouped `feature = "server"` support block for the `#[server]` bodies: the
-// sibling `server` module's helpers plus the crate-level SSR dependencies.
+// sibling `server` module's helpers plus the crate-level server-only dependencies.
 #[cfg(feature = "server")]
 use {
     super::server::{clear_session_cookie, require_auth, set_session_cookie},
