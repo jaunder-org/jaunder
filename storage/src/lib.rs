@@ -12,7 +12,6 @@
 mod app_state;
 mod atomic;
 mod audiences;
-mod auth;
 mod backend;
 mod backup;
 mod db;
@@ -45,7 +44,6 @@ pub mod test_support;
 pub use app_state::*;
 pub use atomic::*;
 pub use audiences::*;
-pub use auth::*;
 pub use backend::*;
 pub use backup::{
     export_backup, restore_backup, BackupError, BackupExportOptions, BackupManifest, BackupMode,

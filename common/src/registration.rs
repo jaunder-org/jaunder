@@ -1,14 +1,31 @@
 //! The site's user-registration access policy — a wire+DB string enum shared by
-//! `storage` (persists it as `site.registration_policy`) and `web` (returns it
-//! typed from `get_registration_policy`). Rides the `StrEnum` trailer (#562).
-
-use macros::StrEnum;
+//! `storage` (persists it as `site.registration_policy`, read typed via
+//! `SiteConfigStorage::get_registration_policy`) and `web` (returns it typed from
+//! `get_registration_policy`). A `strum` string enum (ADR-0075).
 
 /// The site's user-registration access policy.
 ///
-/// Wire/DB tokens: `"open"` / `"invite_only"` / `"closed"`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, StrEnum)]
-#[str_enum(serde)]
+/// A `strum` string enum: `serialize_all = "snake_case"` gives the wire/DB
+/// tokens `"open"` / `"invite_only"` / `"closed"`, with a named
+/// `InvalidRegistrationPolicy` parse error via `parse_err_ty`/`parse_err_fn`.
+/// serde routes through an owned-`String` proxy (`into`/`try_from`) so a bad
+/// wire value surfaces the domain error rather than serde's generic message.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+    strum::AsRefStr,
+    strum::Display,
+    strum::EnumString,
+)]
+#[serde(into = "String", try_from = "String")]
+#[strum(serialize_all = "snake_case")]
+#[strum(parse_err_ty = InvalidRegistrationPolicy, parse_err_fn = registration_policy_parse_err)]
 pub enum RegistrationPolicy {
     /// Anyone may register without a code.
     Open,
@@ -16,6 +33,31 @@ pub enum RegistrationPolicy {
     InviteOnly,
     /// Registration is disabled; no new accounts can be created.
     Closed,
+}
+
+/// Error returned when a string matches no [`RegistrationPolicy`] variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("registration policy must be \"open\", \"invite_only\", or \"closed\"")]
+pub struct InvalidRegistrationPolicy;
+
+fn registration_policy_parse_err(_: &str) -> InvalidRegistrationPolicy {
+    InvalidRegistrationPolicy
+}
+
+// serde `into`/`try_from` proxy: serialize the wire token, deserialize an owned
+// `String` through `FromStr` so the domain `InvalidRegistrationPolicy` message surfaces.
+impl From<RegistrationPolicy> for String {
+    fn from(policy: RegistrationPolicy) -> Self {
+        policy.as_ref().to_owned()
+    }
+}
+
+impl TryFrom<String> for RegistrationPolicy {
+    type Error = InvalidRegistrationPolicy;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
+    }
 }
 
 #[cfg(test)]
@@ -40,9 +82,14 @@ mod tests {
 
     #[test]
     fn unknown_token_is_error() {
-        assert!("unknown".parse::<RegistrationPolicy>().is_err());
         // The camelCase default would be "inviteonly"; the rename must reject it.
         assert!("inviteonly".parse::<RegistrationPolicy>().is_err());
+        // An unknown token surfaces the named error with its specific message.
+        let err = "unknown".parse::<RegistrationPolicy>().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "registration policy must be \"open\", \"invite_only\", or \"closed\""
+        );
     }
 
     #[test]
@@ -61,8 +108,8 @@ mod tests {
 
     #[test]
     fn invite_only_wire_token_is_snake_case() {
-        // Guards the StrEnum snake_case default: the DB value is `invite_only`, not `inviteonly`.
-        assert_eq!(RegistrationPolicy::InviteOnly.as_str(), "invite_only");
+        // Guards the snake_case token: the DB value is `invite_only`, not `inviteonly`.
+        assert_eq!(RegistrationPolicy::InviteOnly.as_ref(), "invite_only");
         assert_eq!(
             serde_json::to_string(&RegistrationPolicy::InviteOnly).unwrap(),
             "\"invite_only\""

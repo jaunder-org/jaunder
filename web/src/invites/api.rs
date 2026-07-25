@@ -9,7 +9,7 @@ use {
     common::absolute_url::compose,
     common::mailer::{EmailMessage, MailSender},
     std::sync::Arc,
-    storage::{load_registration_policy, InviteStorage, RegistrationPolicy, SiteConfigStorage},
+    storage::{InviteStorage, RegistrationPolicy, SiteConfigStorage},
 };
 
 use crate::error::WebResult;
@@ -93,7 +93,7 @@ pub async fn list_invites() -> WebResult<Vec<InviteInfo>> {
         let _auth = require_auth().await?;
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
         let invites = expect_context::<Arc<dyn InviteStorage>>();
-        let policy = load_registration_policy(&*site_config).await;
+        let policy = site_config.get_registration_policy().await?;
         if policy != RegistrationPolicy::InviteOnly {
             return Err(InternalError::not_found("invites"));
         }

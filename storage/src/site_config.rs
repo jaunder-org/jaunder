@@ -8,6 +8,9 @@ use common::absolute_url::AbsoluteUrl;
 use common::backup::{BackupConfig, BackupMode, BackupSchedule, DestinationPath, RetentionCount};
 use common::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
 use common::media::{MaxFileSize, UserQuota};
+// Re-exported so `storage::RegistrationPolicy` keeps resolving for call sites, and
+// used by `get_registration_policy` below (the typed config accessor, #607).
+pub use common::registration::RegistrationPolicy;
 use common::site::{SiteIdentity, SiteTitle};
 use common::smtp_password::SmtpPassword;
 use common::smtp_username::SmtpUsername;
@@ -105,6 +108,20 @@ pub trait SiteConfigStorage: Send + Sync {
             retention_count,
             mode,
         })
+    }
+
+    /// Returns the site's user-registration policy, falling back to
+    /// [`RegistrationPolicy::Closed`] when the value is unset or unparseable — the
+    /// safe default that prevents unintended open registration on a freshly
+    /// initialised instance. Like [`get_backup_config`](Self::get_backup_config), a
+    /// genuine DB read error propagates (only the absent/garbage value defaults).
+    async fn get_registration_policy(&self) -> sqlx::Result<RegistrationPolicy> {
+        Ok(self
+            .get(SITE_REGISTRATION_POLICY_KEY)
+            .await?
+            .as_deref()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(RegistrationPolicy::Closed))
     }
 
     /// Returns the configured `feeds.min_items` value, falling back to the
@@ -280,6 +297,11 @@ pub const FEEDS_WEBSUB_HUB_URL_KEY: &str = "feeds.websub_hub_url";
 /// unset) is read back as [`AudienceTarget::Public`].
 pub const POSTS_DEFAULT_AUDIENCE_KEY: &str = "posts.default_audience";
 
+/// Key for the site's user-registration access policy
+/// (`open`/`invite_only`/`closed`). Unset or unparseable reads back as
+/// [`RegistrationPolicy::Closed`] via [`SiteConfigStorage::get_registration_policy`].
+pub const SITE_REGISTRATION_POLICY_KEY: &str = "site.registration_policy";
+
 /// Key for the human-facing site title used in feed metadata and similar.
 pub const SITE_TITLE_KEY: &str = "site.title";
 /// Key for the public-facing base URL of the site (scheme + host, no
@@ -402,10 +424,12 @@ where
 
 #[cfg(test)]
 mod tests {
+    use super::SITE_REGISTRATION_POLICY_KEY;
     use crate::test_support::{backends, Backend};
     use common::backup::{BackupConfig, BackupMode, RetentionCount};
     use common::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
     use common::media::{MaxFileSize, UserQuota};
+    use common::registration::RegistrationPolicy;
     use common::test_support::{
         parse_absolute_url, parse_destination_path, parse_feed_min_days, parse_feed_min_items,
         parse_max_file_size, parse_retention_count, parse_site_title, parse_smtp_username,
@@ -991,6 +1015,54 @@ mod tests {
         assert_eq!(
             storage.get_default_audience().await.unwrap(),
             common::visibility::AudienceTarget::Public
+        );
+    }
+
+    // --- get_registration_policy (typed config accessor, #607) ---
+    // (type-behavior tests — FromStr / Display / serde — live with the type in
+    // `common::registration`.)
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn registration_policy_defaults_to_closed_when_absent(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
+        assert_eq!(
+            storage.get_registration_policy().await.unwrap(),
+            RegistrationPolicy::Closed
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn registration_policy_round_trips_each_token(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
+        for (token, expected) in [
+            ("open", RegistrationPolicy::Open),
+            ("invite_only", RegistrationPolicy::InviteOnly),
+            ("closed", RegistrationPolicy::Closed),
+        ] {
+            storage
+                .set(SITE_REGISTRATION_POLICY_KEY, token)
+                .await
+                .unwrap();
+            assert_eq!(storage.get_registration_policy().await.unwrap(), expected);
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn registration_policy_falls_back_to_closed_when_garbage(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
+        storage
+            .set(SITE_REGISTRATION_POLICY_KEY, "garbage")
+            .await
+            .unwrap();
+        assert_eq!(
+            storage.get_registration_policy().await.unwrap(),
+            RegistrationPolicy::Closed
         );
     }
 }
