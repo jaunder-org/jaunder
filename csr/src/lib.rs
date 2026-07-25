@@ -1,11 +1,11 @@
 #![cfg(target_arch = "wasm32")]
-// web::App's ParentRoute generates a wide route tuple; raise the recursion limit
+// web::app::App's ParentRoute generates a wide route tuple; raise the recursion limit
 // to monomorphize it (mirrors web/src/lib.rs).
 #![recursion_limit = "512"]
 
 use common::seed::PageSeed;
 use leptos::prelude::*;
-use web::App;
+use web::app::App;
 
 // The e2e suite waits on `body[data-hydrated]` (end2end/tests/hydration.ts) as the
 // "app is mounted and interactive" signal. CSR has no hydration, but the same marker
@@ -37,10 +37,7 @@ fn mount() {
     // Drop the projector-painted discovery <link>s so the reactive FeedDiscovery/
     // RsdDiscovery mounted below produce the ONLY set (no invisible duplicate). Crawlers/
     // no-JS never run this, so their head is unchanged (#198).
-    client::dom::remove_elements_by_selector(&format!(
-        "link[{}]",
-        web::render::DISCOVERY_MARKER_ATTR
-    ));
+    client::dom::remove_elements_by_selector(&format!("link[{}]", web::app::DISCOVERY_MARKER_ATTR));
     leptos::mount::mount_to_body(move || {
         provide_context(seed.clone());
         view! { <App /> }

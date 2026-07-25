@@ -30,7 +30,7 @@ pub(crate) fn format_post_time(ts: UtcInstant) -> String {
 
 /// The `<main class="j-main">` inner content for a route — mirrors each reactive
 /// page's markup (Topbar + wrappers + posts + load-more) so the seeded first paint
-/// coincides. Split from [`crate::render::render_shell`] so the permalink Suspense
+/// coincides. Split from [`crate::app::render_shell`] so the permalink Suspense
 /// fallback can reuse just [`permalink_article`].
 pub(crate) fn render_body(seed: &PageSeed) -> String {
     match seed {

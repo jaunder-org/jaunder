@@ -1,4 +1,4 @@
-// The ParentRoute wrapping all routes in web::App generates a wide tuple of
+// The ParentRoute wrapping all routes in web::app::App generates a wide tuple of
 // route types; the compiler needs a higher recursion limit to monomorphize it,
 // particularly under llvm-cov instrumentation. Root cause under investigation.
 #![recursion_limit = "512"]
@@ -117,7 +117,7 @@ pub fn create_router(
         // public discoverability routes (the projector, #178) sits ahead of this
         // fallback; everything else boots the CSR client via the shell.
         let app =
-            crate::projector::register(app, crate::projector::Shell(web::render::SPA_SHELL.into()));
+            crate::projector::register(app, crate::projector::Shell(web::app::SPA_SHELL.into()));
         app.fallback(site::serve_site)
     };
 

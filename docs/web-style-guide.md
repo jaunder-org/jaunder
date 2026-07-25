@@ -122,7 +122,7 @@ button).
 Always reach for an existing shared helper before writing a new layout primitive
 — leaf primitives live in their own **top-level modules**
 (`web/src/{avatar,icon,taglist,topbar}/`, exposing `Avatar`, `Icon`, `TagList`,
-`Topbar`); the rest still sit in `web/src/pages/ui.rs` while #312 dissolves it:
+`Topbar`); the rest are co-located in their owning verticals (ADR-0070):
 
 | Helper                            | Purpose                                             |
 | --------------------------------- | --------------------------------------------------- |
