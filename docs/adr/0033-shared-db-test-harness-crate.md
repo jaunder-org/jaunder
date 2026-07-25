@@ -43,10 +43,10 @@ and `storage`'s tests must dev-depend on _it_ — a dev-dependency cycle. Buildi
 `storage`'s **own** unit-test target then produces **two distinct instances of
 `storage`** (the `#[cfg(test)]` instance the tests live in, and the plain-lib
 instance the harness links). `env.state.<handle>` is the lib instance; the
-tests' crate-local functions/structs (`load_registration_policy`,
-`perform_post_creation`, `PostCreation`, …) are the cfg-test instance — crossing
-them yields `E0308: multiple different versions of crate storage`. Only tests
-that stay entirely on the lib side (trait-method calls + `common` types, e.g.
+tests' crate-local functions/structs (`perform_post_creation`, `PostCreation`,
+…) are the cfg-test instance — crossing them yields
+`E0308: multiple different versions of crate storage`. Only tests that stay
+entirely on the lib side (trait-method calls + `common` types, e.g.
 `site_config`) compiled, which masked the problem in #125. **No separate crate
 can avoid this**, because any crate returning `AppState` must depend on
 `storage`. Hosting the harness _in_ `storage` makes `storage`'s tests and the
