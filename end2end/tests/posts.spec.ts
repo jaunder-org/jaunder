@@ -785,7 +785,7 @@ test("tag chip on permalink navigates to site tag listing", async ({
   await waitForSelector(page, '.j-topbar:has-text("#rustlang")');
 
   // Post should appear in the listing
-  await expect(page.locator(".j-page")).toContainText("Chip Nav Post");
+  await expect(page.locator(".j-scroll")).toContainText("Chip Nav Post");
 });
 
 test("editing a post updates tag chips and tag listing pages", async ({
@@ -849,8 +849,8 @@ test("editing a post updates tag chips and tag listing pages", async ({
 
   // /tags/xeditc should no longer list the post
   await goto(page, "/tags/xeditc");
-  await waitForSelector(page, ".j-page");
-  await expect(page.locator(".j-page")).toContainText(
+  await waitForSelector(page, ".j-scroll");
+  await expect(page.locator(".j-scroll")).toContainText(
     "No posts with this tag yet.",
   );
 

@@ -21,8 +21,8 @@ use crate::posts::{
     default_audience_selection, draft_row_display, get_post, get_post_preview, list_drafts,
     list_posts_by_tag, list_user_posts, list_user_posts_by_tag, parse_permalink_params,
     post_audience_selection, CreatePost, CreatePostArgs, CreatePostResult, DeletePost,
-    DraftRowDisplay, DraftSummary, ListPostsByTag, ListUserPostsByTag, PublishPost,
-    PublishPostResult, UnpublishPost, UpdatePost, UpdatePostArgs, UpdatePostResult,
+    DraftRowDisplay, DraftSummary, ListUserPostsByTag, PublishPost, PublishPostResult,
+    UnpublishPost, UpdatePost, UpdatePostArgs, UpdatePostResult,
 };
 use crate::render::TagCtx as TagContext;
 use crate::subscriptions::SubscribeButton;
@@ -1597,12 +1597,12 @@ pub fn SiteTagPage() -> impl IntoView {
         },
     );
 
-    let timeline = RwSignal::new(Vec::<TimelinePostSummary>::new());
-    let next_cursor_created_at = RwSignal::new(None::<UtcInstant>);
-    let next_cursor_post_id = RwSignal::new(None::<PostId>);
-    let has_more = RwSignal::new(false);
-    let error = RwSignal::new(None::<String>);
-    let initial_loaded = RwSignal::new(false);
+    let state = TimelineState::default();
+    // CSR loading gate (see `UserTimelinePage`): the shared `TimelineState` has no
+    // "never-loaded" state, and this page gets `tag` from the route param
+    // immediately and is not always seeded, so gate the empty-state flash on an
+    // unseeded client-nav first load.
+    let loaded = RwSignal::new(false);
 
     // Public projector seed (#178/#179): adopt the seeded posts for a matching
     // tag so first paint shows content (guarded so a client-side nav to a
@@ -1613,75 +1613,40 @@ pub fn SiteTagPage() -> impl IntoView {
     }) = use_context::<Option<PageSeed>>().flatten()
     {
         if tag.get_untracked().as_ref() == Some(&seed_tag) {
-            next_cursor_created_at.set(page.next_cursor_created_at);
-            next_cursor_post_id.set(page.next_cursor_post_id);
-            has_more.set(page.has_more);
-            timeline.set(page.posts);
-            initial_loaded.set(true);
+            state.adopt(page);
+            loaded.set(true);
         }
     }
 
-    let load_more_action = ServerAction::<ListPostsByTag>::new();
-
+    // The initial-page fetch resolves on the client; seed the shared timeline once
+    // it arrives (load-more appends via `spawn_load_more`). Canonical CSR, mirroring
+    // home.rs / the user timeline.
     Effect::new(move |_| {
         if let Some(result) = initial_page.try_get().flatten() {
             match result {
-                Ok(page) => {
-                    timeline.set(page.posts);
-                    next_cursor_created_at.set(page.next_cursor_created_at);
-                    next_cursor_post_id.set(page.next_cursor_post_id);
-                    has_more.set(page.has_more);
-                    error.set(None);
-                    initial_loaded.set(true);
-                }
-                Err(err) => {
-                    error.set(Some(err.to_string()));
-                    timeline.set(Vec::new());
-                    has_more.set(false);
-                    initial_loaded.set(true);
-                }
+                Ok(page) => state.resolve(page),
+                Err(err) => state.fail(err.to_string()),
             }
+            loaded.set(true);
         }
     });
 
-    Effect::new(move |_| {
-        if let Some(result) = load_more_action.value().get() {
-            match result {
-                Ok(page) => {
-                    timeline.update(|rows| rows.extend(page.posts));
-                    next_cursor_created_at.set(page.next_cursor_created_at);
-                    next_cursor_post_id.set(page.next_cursor_post_id);
-                    has_more.set(page.has_more);
-                    error.set(None);
-                }
-                Err(err) => error.set(Some(err.to_string())),
-            }
-        }
-    });
-
-    let on_load_more = move |_| {
+    let on_load_more = Callback::new(move |()| {
         let Some(tag_value) = tag.get_untracked() else {
             return;
         };
-        if !has_more.get_untracked() {
-            return;
-        }
-        load_more_action.dispatch(ListPostsByTag {
-            tag: tag_value,
-            cursor_created_at: next_cursor_created_at.get_untracked(),
-            cursor_post_id: next_cursor_post_id.get_untracked(),
-            limit: Some(PageSize::default()),
+        spawn_load_more(state, move |created_at, post_id, limit| {
+            list_posts_by_tag(tag_value, created_at, post_id, limit)
         });
-    };
+    });
+
+    // A `Memo` so the outer view closure re-runs only on a real failure transition,
+    // mirroring home.rs.
+    let read_error = Memo::new(move |_| state.status.get().into_failure());
 
     // The canonical tag for the heading (a newtype is not `IntoRender`), or empty
     // for an unparseable segment — the page renders a validation error anyway.
     let read_tag = move || tag.get().map(|t| t.to_string()).unwrap_or_default();
-    let read_error = move || error.get();
-    let read_initial_loaded = move || initial_loaded.get();
-    let read_timeline = move || timeline.get();
-    let read_has_more = move || has_more.get();
-    let read_pending = move || load_more_action.pending().get();
 
     view! {
         {move || {
@@ -1692,45 +1657,23 @@ pub fn SiteTagPage() -> impl IntoView {
             }
         }}
         <Topbar title=move || format!("#{}", read_tag()) sub="Posts on this instance" />
-        <div class="j-scroll">
-            <div class="j-page">
-                {move || {
-                    if let Some(err) = read_error() {
-                        return view! { <p class="error">{err}</p> }.into_any();
-                    }
-                    if !read_initial_loaded() {
-                        return view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any();
-                    }
-                    let rows = read_timeline();
-                    if rows.is_empty() {
-                        return view! { <p>"No posts with this tag yet."</p> }.into_any();
-                    }
-                    view! {
-                        <div>
-                            {rows
-                                .into_iter()
-                                .map(|post| {
-                                    view! { <PostCard post=post banner=None on_mutate=on_mutate /> }
-                                })
-                                .collect::<Vec<_>>()}
-                        </div>
-                        {move || {
-                            read_has_more()
-                                .then(|| {
-                                    view! {
-                                        <button on:click=on_load_more disabled=read_pending>
-                                            {move || {
-                                                if read_pending() { "Loading\u{2026}" } else { "Load more" }
-                                            }}
-                                        </button>
-                                    }
-                                })
-                        }}
-                    }
-                        .into_any()
-                }}
-            </div>
-        </div>
+        {move || {
+            if let Some(err) = read_error.get() {
+                return view! { <p class="error">{err}</p> }.into_any();
+            }
+            if !loaded.get() {
+                return view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any();
+            }
+            view! {
+                <TimelineRows
+                    state=state
+                    on_mutate=on_mutate
+                    on_load_more=on_load_more
+                    empty_text="No posts with this tag yet."
+                />
+            }
+                .into_any()
+        }}
     }
 }
 
