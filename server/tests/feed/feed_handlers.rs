@@ -1,12 +1,8 @@
-use common::visibility::AudienceTarget;
-
 use axum::{
     body::Body,
     http::{header, Request, StatusCode},
 };
 use chrono::{Timelike, Utc};
-use common::slug::Slug;
-use common::tag::TagLabel;
 use common::test_support::{parse_content_type, parse_etag};
 use tower::ServiceExt;
 
@@ -14,10 +10,9 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{make_app, setup_with_base_url};
-use storage::test_support::{backends, backends_matrix, fp, Backend, SeedUser, TestEnv};
-use storage::CreatePostInput;
-use storage::PostFormat;
-use storage::RenderedHtml;
+use storage::test_support::{
+    backends, backends_matrix, fp, Backend, SeedRawPost, SeedUser, TestEnv,
+};
 
 #[apply(backends)]
 #[tokio::test]
@@ -29,23 +24,7 @@ async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_typ
 
     let user = SeedUser::new().seed(&state).await;
 
-    let now = Utc::now();
-    state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user.user_id,
-            title: Some("Test Post".into()),
-            slug: "test-post".parse::<Slug>().expect("valid slug"),
-            body: "Test body".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Test body</p>"),
-            published_at: Some(now),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("create post");
+    SeedRawPost::new(user.user_id).seed(&state).await;
 
     let req = Request::builder()
         .method("GET")
@@ -104,28 +83,7 @@ async fn handler_serves_site_tag_feed_with_200(#[case] backend: Backend) {
 
     // A tagged, published post so the site-tag surface has content.
     let user_id = SeedUser::new().seed(&state).await.user_id;
-    let now = Utc::now();
-    let post_id = state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id,
-            title: Some("Tagged Post".into()),
-            slug: "tagged-post".parse::<Slug>().expect("valid slug"),
-            body: "Test body".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Test body</p>"),
-            published_at: Some(now),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("create post");
-    state
-        .posts
-        .tag_post(post_id, &"rust".parse::<TagLabel>().unwrap())
-        .await
-        .expect("tag post");
+    SeedRawPost::new(user_id).tags(["rust"]).seed(&state).await;
 
     // The valid site-tag route exercises feed_site_tag's happy path: parse the
     // tag, then serve/regenerate the SiteTag surface.
@@ -295,23 +253,7 @@ async fn handler_returns_correct_content_type_per_format(#[case] backend: Backen
 
     let user = SeedUser::new().seed(&state).await;
 
-    let now = Utc::now();
-    state
-        .posts
-        .create_post(&CreatePostInput {
-            user_id: user.user_id,
-            title: Some("Test Post".into()),
-            slug: "test-post".parse::<Slug>().expect("valid slug"),
-            body: "Test body".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Test body</p>"),
-            published_at: Some(now),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        })
-        .await
-        .expect("create post");
+    SeedRawPost::new(user.user_id).seed(&state).await;
 
     let test_cases = [
         ("rss", "application/rss+xml; charset=utf-8"),

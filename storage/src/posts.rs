@@ -2250,10 +2250,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, Backend, CloseablePool, SeedUser};
+    use crate::test_support::{backends, Backend, CloseablePool, SeedRawPost, SeedUser};
     use common::test_support::{
-        parse_post_summary, parse_post_title, parse_slug, parse_tag, parse_tag_label,
-        parse_username,
+        parse_post_summary, parse_slug, parse_tag, parse_tag_label, parse_username,
     };
     use rstest::*;
     use rstest_reuse::*;
@@ -2429,20 +2428,12 @@ mod tests {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let posts = &*env.state.posts;
-        let input = CreatePostInput {
-            user_id,
-            title: Some("Test Title".into()),
-            slug: parse_slug("test-slug"),
-            body: "Test body".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Test body</p>"),
-            published_at: None,
-            summary: Some(parse_post_summary("the summary")),
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        };
-
-        let post_id = posts.create_post(&input).await.unwrap();
+        let post_id = SeedRawPost::new(user_id)
+            .draft()
+            .summary(parse_post_summary("the summary"))
+            .seed(&env.state)
+            .await
+            .post_id;
         let post = posts
             .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
             .await
@@ -2462,21 +2453,14 @@ mod tests {
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let posts = &*env.state.posts;
 
-        let post_id = posts
-            .create_post(&CreatePostInput {
-                user_id,
-                title: Some("Test Title".into()),
-                slug: parse_slug("summary-edit"),
-                body: "Test body".into(),
-                format: PostFormat::Markdown,
-                rendered_html: RenderedHtml::from_trusted("<p>Test body</p>"),
-                published_at: None,
-                summary: Some(parse_post_summary("original summary")),
-                audiences: vec![AudienceTarget::Public],
-                idempotency_key: None,
-            })
+        // Seed with an initial summary so the first edit exercises replace-an-existing
+        // value (not set-from-none); the second edit then clears it.
+        let post_id = SeedRawPost::new(user_id)
+            .draft()
+            .summary(parse_post_summary("original summary"))
+            .seed(&env.state)
             .await
-            .unwrap();
+            .post_id;
 
         let update = |summary| UpdatePostInput {
             title: Some("Test Title".into()),
@@ -2521,19 +2505,11 @@ mod tests {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let posts = &*env.state.posts;
-        let input = CreatePostInput {
-            user_id,
-            title: Some("Test Title".into()),
-            slug: parse_slug("overlong-summary"),
-            body: "Test body".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Test body</p>"),
-            published_at: None,
-            summary: Some(parse_post_summary("valid summary")),
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        };
-        let post_id = posts.create_post(&input).await.unwrap();
+        let post_id = SeedRawPost::new(user_id)
+            .draft()
+            .seed(&env.state)
+            .await
+            .post_id;
 
         let overlong = "a".repeat(common::post_summary::MAX_POST_SUMMARY_CHARS + 1);
         let sql = format!(
@@ -2553,19 +2529,10 @@ mod tests {
     async fn create_post_with_closed_pool_returns_error(#[case] backend: Backend) {
         let env = backend.setup().await;
         env.base.close_pool().await;
-        let input = CreatePostInput {
-            user_id: UserId::from(1),
-            title: Some("Test".into()),
-            slug: parse_slug("test-post"),
-            body: "body".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
-            published_at: None,
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
-        };
-        let result = env.state.posts.create_post(&input).await;
+        let result = SeedRawPost::new(UserId::from(1))
+            .draft()
+            .create(&env.state)
+            .await;
         assert!(result.is_err());
     }
 
@@ -2600,23 +2567,7 @@ mod tests {
     async fn tag_post_insert_error_returns_internal(#[case] backend: Backend) {
         let env = backend.setup().await;
         let uid = SeedUser::new().seed(&env.state).await.user_id;
-        let post_id = env
-            .state
-            .posts
-            .create_post(&CreatePostInput {
-                user_id: uid,
-                title: Some("Post".into()),
-                slug: parse_slug("post"),
-                body: "body".into(),
-                format: PostFormat::Markdown,
-                rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
-                published_at: None,
-                summary: None,
-                audiences: vec![AudienceTarget::Public],
-                idempotency_key: None,
-            })
-            .await
-            .unwrap();
+        let post_id = SeedRawPost::new(uid).draft().seed(&env.state).await.post_id;
 
         // Break the post_tags INSERT (but not the existence check or tag insert) so it
         // returns a non-unique Database error: exercises the catch-all Internal arm and
@@ -2644,38 +2595,19 @@ mod tests {
         let uid = SeedUser::new().seed(&env.state).await.user_id;
         let now = Utc::now();
 
-        let mk = |slug: &str, published: bool| CreatePostInput {
-            user_id: uid,
-            title: Some(format!("Post {slug}").into()),
-            slug: parse_slug(slug),
-            body: "body".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
-            published_at: published.then_some(now - chrono::Duration::minutes(30)),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            idempotency_key: None,
+        let mk = |slug: &str, published: bool| {
+            let builder = SeedRawPost::new(uid).slug(slug);
+            if published {
+                builder.published_at(now - chrono::Duration::minutes(30))
+            } else {
+                builder.draft()
+            }
         };
 
         // Post 1: draft. Post 2: published. Post 3: soft-deleted (excluded).
-        let post1_id = env
-            .state
-            .posts
-            .create_post(&mk("draft-post", false))
-            .await
-            .unwrap();
-        let post2_id = env
-            .state
-            .posts
-            .create_post(&mk("published-post", true))
-            .await
-            .unwrap();
-        let post3_id = env
-            .state
-            .posts
-            .create_post(&mk("deleted-post", true))
-            .await
-            .unwrap();
+        let post1_id = mk("draft-post", false).seed(&env.state).await.post_id;
+        let post2_id = mk("published-post", true).seed(&env.state).await.post_id;
+        let post3_id = mk("deleted-post", true).seed(&env.state).await.post_id;
 
         // Give distinct updated_at (post2 more recent than post1) and soft-delete post3.
         // ISO-8601 literals inlined so both backends accept the raw statement.
@@ -2875,21 +2807,11 @@ mod tests {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let posts = &*env.state.posts;
-        let post_id = posts
-            .create_post(&CreatePostInput {
-                user_id,
-                title: Some("Post".into()),
-                slug: parse_slug("post"),
-                body: "body".into(),
-                format: PostFormat::Markdown,
-                rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
-                published_at: None,
-                summary: None,
-                audiences: vec![AudienceTarget::Public],
-                idempotency_key: None,
-            })
+        let post_id = SeedRawPost::new(user_id)
+            .draft()
+            .seed(&env.state)
             .await
-            .unwrap();
+            .post_id;
 
         // Adding two tags then reading back yields both slugs.
         apply_post_tag_diff(
@@ -2929,21 +2851,11 @@ mod tests {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let posts = &*env.state.posts;
-        let post_id = posts
-            .create_post(&CreatePostInput {
-                user_id,
-                title: Some("Post".into()),
-                slug: parse_slug("post"),
-                body: "body".into(),
-                format: PostFormat::Markdown,
-                rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
-                published_at: None,
-                summary: None,
-                audiences: vec![AudienceTarget::Public],
-                idempotency_key: None,
-            })
+        let post_id = SeedRawPost::new(user_id)
+            .draft()
+            .seed(&env.state)
             .await
-            .unwrap();
+            .post_id;
 
         // Tagging with a case-preserving label stores the canonical slug and the
         // author's casing; both read back intact on either backend.
@@ -2972,24 +2884,13 @@ mod tests {
         // `tag_post` binds a `TagLabel`. The read decodes the `slug`/`title`/`body`/
         // author-`username` columns and the JSON `tag_slug`/`tag_display` straight
         // back into their newtypes — exercising both bridge directions (#438).
-        let slug: Slug = parse_slug("round-trip");
-        let title = parse_post_title("A Round-Trip Title");
         let body: PostBody = "the round-trip body".into();
-        let post_id = posts
-            .create_post(&CreatePostInput {
-                user_id,
-                title: Some(title.clone()),
-                slug: slug.clone(),
-                body: body.clone(),
-                format: PostFormat::Markdown,
-                rendered_html: RenderedHtml::from_trusted("<p>the round-trip body</p>"),
-                published_at: None,
-                summary: None,
-                audiences: vec![AudienceTarget::Public],
-                idempotency_key: None,
-            })
-            .await
-            .unwrap();
+        let post = SeedRawPost::new(user_id)
+            .draft()
+            .body(body.clone())
+            .seed(&env.state)
+            .await;
+        let post_id = post.post_id;
         posts
             .tag_post(post_id, &parse_tag_label("Rust"))
             .await
@@ -3000,8 +2901,8 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(record.slug, slug);
-        assert_eq!(record.title, Some(title));
+        assert_eq!(record.slug, post.slug);
+        assert_eq!(record.title, Some(post.title));
         assert_eq!(record.body, body);
         assert_eq!(record.author_username, user.username);
         assert_eq!(record.tags.len(), 1);
@@ -3039,21 +2940,11 @@ mod tests {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let posts = &*env.state.posts;
-        let post_id = posts
-            .create_post(&CreatePostInput {
-                user_id,
-                title: None,
-                slug: parse_slug("good-slug"),
-                body: "body".into(),
-                format: PostFormat::Markdown,
-                rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
-                published_at: None,
-                summary: None,
-                audiences: vec![AudienceTarget::Public],
-                idempotency_key: None,
-            })
+        let post_id = SeedRawPost::new(user_id)
+            .draft()
+            .seed(&env.state)
             .await
-            .unwrap();
+            .post_id;
 
         // Overwrite the `slug` column with a value `Slug::from_str` rejects (a space
         // is not a valid slug character), binding it as a raw `&str` so the bad
@@ -3102,22 +2993,13 @@ mod tests {
 
         // Org and Html exercise the `PostFormat` bridge Encode (write) + Decode (read)
         // for the non-default variants; Markdown is covered by the round-trip tests.
-        for (i, fmt) in [PostFormat::Org, PostFormat::Html].into_iter().enumerate() {
-            let post_id = posts
-                .create_post(&CreatePostInput {
-                    user_id,
-                    title: None,
-                    slug: parse_slug(&format!("fmt-{i}")),
-                    body: "body".into(),
-                    format: fmt,
-                    rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
-                    published_at: None,
-                    summary: None,
-                    audiences: vec![AudienceTarget::Public],
-                    idempotency_key: None,
-                })
+        for fmt in [PostFormat::Org, PostFormat::Html] {
+            let post_id = SeedRawPost::new(user_id)
+                .draft()
+                .format(fmt)
+                .seed(&env.state)
                 .await
-                .unwrap();
+                .post_id;
             let record = posts
                 .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
                 .await
@@ -3133,21 +3015,11 @@ mod tests {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let posts = &*env.state.posts;
-        let post_id = posts
-            .create_post(&CreatePostInput {
-                user_id,
-                title: None,
-                slug: parse_slug("good"),
-                body: "body".into(),
-                format: PostFormat::Markdown,
-                rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
-                published_at: None,
-                summary: None,
-                audiences: vec![AudienceTarget::Public],
-                idempotency_key: None,
-            })
+        let post_id = SeedRawPost::new(user_id)
+            .draft()
+            .seed(&env.state)
             .await
-            .unwrap();
+            .post_id;
 
         // Land a bogus token in `format` via a raw bind (the typed bind could not
         // produce it), then assert the read fails at column-decode — the bridge's
