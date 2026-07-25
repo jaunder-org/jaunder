@@ -2,12 +2,13 @@
 //! the viewer identity, and the subscription-admission seam. See ADR-0020.
 
 use crate::ids::{AudienceId, ChannelId, UserId};
-use macros::StrEnum;
 
-// String-backed enums ride the `StrEnum` trailer: `as_str`/`Display`/`FromStr`/
-// `TryFrom<&str>` + a generated `Invalid<Name>` error, with the wire token defaulting to the
-// lowercased variant name. Wire-facing enums add `#[str_enum(serde)]`; std derives (incl.
-// `Default` via `#[default]`) stay in each enum's own list.
+// String-backed enums use the `strum` stack (`AsRefStr`/`Display`/`EnumString`) with
+// the wire token as the snake_case variant name, plus a named `thiserror` parse error
+// via `parse_err_ty`/`parse_err_fn`. Wire-facing enums add serde (`into`/`try_from`
+// String) so a bad wire value surfaces the named error; DB-bound enums that are stored
+// as their token adopt `crate::db_enum::impl_text_column_enum!`, while FK-normalized
+// enums bind their name as a typed `&'static str` (`IntoStaticStr`).
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Hash, strum::AsRefStr, strum::Display, strum::EnumString,
 )]
@@ -88,13 +89,53 @@ fn target_kind_parse_err(_: &str) -> InvalidTargetKind {
 // typed form of the audience-picker's `base`. Composes with named audiences by
 // union except for `Private` (author-only), which is the safe, non-widening
 // `Default` (faithful to the prior empty-string -> author-only fall-through). #499.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, StrEnum)]
-#[str_enum(serde)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    strum::AsRefStr,
+    strum::Display,
+    strum::EnumString,
+)]
+#[serde(into = "String", try_from = "String")]
+#[strum(serialize_all = "snake_case")]
+#[strum(parse_err_ty = InvalidAudienceBase, parse_err_fn = audience_base_parse_err)]
 pub enum AudienceBase {
     #[default]
     Private,
     Public,
     Subscribers,
+}
+
+/// Error returned when a string matches no [`AudienceBase`] variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("audience must be \"private\", \"public\", or \"subscribers\"")]
+pub struct InvalidAudienceBase;
+
+fn audience_base_parse_err(_: &str) -> InvalidAudienceBase {
+    InvalidAudienceBase
+}
+
+// serde `into`/`try_from` proxy: serialize the wire token, deserialize an owned
+// `String` through `FromStr` so the domain `InvalidAudienceBase` message surfaces.
+impl From<AudienceBase> for String {
+    fn from(base: AudienceBase) -> Self {
+        base.as_ref().to_owned()
+    }
+}
+
+impl TryFrom<String> for AudienceBase {
+    type Error = InvalidAudienceBase;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
+    }
 }
 
 /// Who is reading. Wider than Layer A needs (only `Anonymous` and the local
@@ -295,8 +336,8 @@ mod tests {
             AudienceBase::Subscribers,
             AudienceBase::Private,
         ] {
-            assert_eq!(b.to_string(), b.as_str());
-            assert_eq!(AudienceBase::try_from(b.as_str()), Ok(b));
+            assert_eq!(b.to_string(), b.as_ref());
+            assert_eq!(AudienceBase::try_from(b.as_ref()), Ok(b));
         }
     }
 
@@ -346,6 +387,15 @@ mod tests {
     #[test]
     fn audience_base_deserialize_rejects_unknown() {
         assert!(serde_json::from_str::<AudienceBase>("\"bogus\"").is_err());
+    }
+
+    #[test]
+    fn audience_base_rejects_unknown_with_named_error() {
+        let err = "bogus".parse::<AudienceBase>().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "audience must be \"private\", \"public\", or \"subscribers\""
+        );
     }
 
     #[test]
