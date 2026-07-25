@@ -26,7 +26,7 @@ async fn service_document_returns_200_with_app_password(#[case] backend: Backend
         .tag_post(post.post_id, &"rust".parse::<TagLabel>().unwrap())
         .await
         .unwrap();
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     let response = app
         .oneshot(
@@ -69,7 +69,7 @@ async fn service_document_returns_200_with_app_password(#[case] backend: Backend
 async fn service_document_rejects_basic_username_mismatch(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     // Correct token, but the Basic username does not match the session's user.
     let response = app
@@ -90,7 +90,7 @@ async fn service_document_rejects_basic_username_mismatch(#[case] backend: Backe
 #[tokio::test]
 async fn service_document_requires_authentication(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     let response = app
         .oneshot(

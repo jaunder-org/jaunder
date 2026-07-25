@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use axum::{
     body::Body,
     http::{header, StatusCode},
@@ -32,7 +30,7 @@ async fn upload_returns_201_and_media_link_entry(#[case] backend: Backend) {
     let session = create_user_and_session(&state).await;
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage);
+    let app = make_app(&state, &storage);
 
     let response = app
         .oneshot(atompub_upload(&session, "pic.png", PNG))
@@ -70,7 +68,7 @@ async fn reupload_identical_returns_200(#[case] backend: Backend) {
     let session = create_user_and_session(&state).await;
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage);
+    let app = make_app(&state, &storage);
 
     let _resp1 = app
         .clone()
@@ -94,7 +92,7 @@ async fn get_media_member_returns_entry(#[case] backend: Backend) {
     let session = create_user_and_session(&state).await;
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage);
+    let app = make_app(&state, &storage);
 
     let resp = app
         .clone()
@@ -131,7 +129,7 @@ async fn get_unknown_media_returns_404(#[case] backend: Backend) {
     let session = create_user_and_session(&state).await;
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage);
+    let app = make_app(&state, &storage);
 
     let response = app
         .oneshot(atompub_get(
@@ -154,7 +152,7 @@ async fn delete_media_member_returns_204_then_404(#[case] backend: Backend) {
     let session = create_user_and_session(&state).await;
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage);
+    let app = make_app(&state, &storage);
 
     let resp = app
         .clone()
@@ -202,7 +200,7 @@ async fn upload_forbids_other_user(#[case] backend: Backend) {
     let session = create_user_and_session(&state).await;
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage);
+    let app = make_app(&state, &storage);
 
     let response = app
         .oneshot(
@@ -224,7 +222,7 @@ async fn upload_rejects_empty_slug(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let storage = TempDir::new().unwrap();
-    let app = make_app(state, &storage);
+    let app = make_app(&state, &storage);
 
     // ".." sanitizes to an empty filename.
     let response = app
@@ -252,7 +250,7 @@ async fn member_forbids_other_user(backend: Backend, #[case] method: &str) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let storage = TempDir::new().unwrap();
-    let app = make_app(state, &storage);
+    let app = make_app(&state, &storage);
 
     let response = app
         .oneshot(
@@ -282,7 +280,7 @@ async fn member_rejects_malformed_segment_returns_400(#[case] backend: Backend) 
     let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage);
+    let app = make_app(&state, &storage);
 
     // Malformed hash segment (`deadbeef` is not 64 hex) → ContentHash parse fails → 400.
     let bad_hash = app

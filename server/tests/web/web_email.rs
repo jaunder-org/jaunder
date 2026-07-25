@@ -26,8 +26,8 @@ async fn request_email_verification_creates_row_and_sends_email(#[case] backend:
     let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, _body) = post_form_with_mailer(
-        Arc::clone(&state),
-        mailer.clone() as Arc<dyn common::mailer::MailSender>,
+        &state,
+        &mailer,
         "/api/request_email_verification",
         "email=alice%40example.com",
         Some(&cookie),
@@ -49,8 +49,8 @@ async fn request_email_verification_without_base_url_returns_error(#[case] backe
     let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, _body) = post_form_with_mailer(
-        Arc::clone(&state),
-        mailer.clone() as Arc<dyn common::mailer::MailSender>,
+        &state,
+        &mailer,
         "/api/request_email_verification",
         "email=alice%40example.com",
         Some(&cookie),
@@ -79,8 +79,8 @@ async fn verify_email_with_valid_token_sets_email_verified(#[case] backend: Back
         .unwrap();
 
     let (status, _body) = post_form_with_mailer(
-        Arc::clone(&state),
-        mailer.clone() as Arc<dyn common::mailer::MailSender>,
+        &state,
+        &mailer,
         "/api/verify_email",
         format!("token={raw_token}"),
         None,
@@ -111,8 +111,8 @@ async fn verify_email_with_expired_token_returns_error(#[case] backend: Backend)
         .unwrap();
 
     let (status, _body) = post_form_with_mailer(
-        Arc::clone(&state),
-        mailer.clone() as Arc<dyn common::mailer::MailSender>,
+        &state,
+        &mailer,
         "/api/verify_email",
         format!("token={raw_token}"),
         None,
@@ -130,8 +130,8 @@ async fn verify_email_with_unknown_token_returns_error(#[case] backend: Backend)
     let mailer = Arc::new(CapturingMailSender::new());
 
     let (status, _body) = post_form_with_mailer(
-        Arc::clone(&state),
-        mailer.clone() as Arc<dyn common::mailer::MailSender>,
+        &state,
+        &mailer,
         "/api/verify_email",
         "token=this_token_does_not_exist",
         None,
@@ -150,8 +150,8 @@ async fn verify_email_with_malformed_token_returns_error(#[case] backend: Backen
     // `bad!token` is not valid base64url shape, so `RawToken` rejects it — in-body today,
     // at wire-decode once `token` is typed. Either way a non-OK response.
     let (status, _body) = post_form_with_mailer(
-        Arc::clone(&state),
-        mailer.clone() as Arc<dyn common::mailer::MailSender>,
+        &state,
+        &mailer,
         "/api/verify_email",
         "token=bad!token",
         None,
@@ -172,8 +172,8 @@ async fn request_email_verification_unauthorized_returns_error(#[case] backend: 
     let mailer = Arc::new(CapturingMailSender::new());
 
     let (status, _) = post_form_with_mailer(
-        state,
-        mailer.clone() as Arc<dyn common::mailer::MailSender>,
+        &state,
+        &mailer,
         "/api/request_email_verification",
         "email=alice@example.com",
         None,
@@ -193,8 +193,8 @@ async fn request_email_verification_invalid_email_returns_error(#[case] backend:
     let cookie_header = create_user_and_session(&state).await.cookie();
 
     let (status, _) = post_form_with_mailer(
-        state,
-        mailer.clone() as Arc<dyn common::mailer::MailSender>,
+        &state,
+        &mailer,
         "/api/request_email_verification",
         "email=invalid",
         Some(&cookie_header),

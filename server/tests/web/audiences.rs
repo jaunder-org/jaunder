@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use axum::http::StatusCode;
 use common::ids::AudienceId;
 use common::test_support::parse_audience_name;
@@ -24,7 +22,7 @@ async fn audience_crud_round_trips(#[case] backend: Backend) {
     let cookie = author.cookie();
 
     let (status, body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/create_audience",
         "name=Friends",
         Some(&cookie),
@@ -33,13 +31,7 @@ async fn audience_crud_round_trips(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::OK, "create failed: {body}");
     let id = parse_id(&body);
 
-    let (status, body) = post_form(
-        Arc::clone(&state),
-        "/api/list_my_audiences",
-        "",
-        Some(&cookie),
-    )
-    .await;
+    let (status, body) = post_form(&state, "/api/list_my_audiences", "", Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(
         body.contains("Friends"),
@@ -47,24 +39,18 @@ async fn audience_crud_round_trips(#[case] backend: Backend) {
     );
 
     let (status, body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/rename_audience",
         &format!("audience_id={id}&name=BestFriends"),
         Some(&cookie),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "rename failed: {body}");
-    let (_status, body) = post_form(
-        Arc::clone(&state),
-        "/api/list_my_audiences",
-        "",
-        Some(&cookie),
-    )
-    .await;
+    let (_status, body) = post_form(&state, "/api/list_my_audiences", "", Some(&cookie)).await;
     assert!(body.contains("BestFriends"), "rename not reflected: {body}");
 
     let (status, body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/delete_audience",
         &format!("audience_id={id}"),
         Some(&cookie),
@@ -87,7 +73,7 @@ async fn duplicate_audience_name_is_user_error(#[case] backend: Backend) {
     let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, _) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/create_audience",
         "name=Friends",
         Some(&cookie),
@@ -96,7 +82,7 @@ async fn duplicate_audience_name_is_user_error(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::OK);
 
     let (status, body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/create_audience",
         "name=Friends",
         Some(&cookie),
@@ -118,13 +104,8 @@ async fn create_audience_empty_name_is_rejected(#[case] backend: Backend) {
     let author = create_user_and_session(&state).await;
     let cookie = author.cookie();
 
-    let (status, _body) = post_form(
-        Arc::clone(&state),
-        "/api/create_audience",
-        "name=%20%20",
-        Some(&cookie),
-    )
-    .await;
+    let (status, _body) =
+        post_form(&state, "/api/create_audience", "name=%20%20", Some(&cookie)).await;
     assert_ne!(status, StatusCode::OK, "empty name must be rejected");
     assert!(
         state
@@ -147,7 +128,7 @@ async fn rename_audience_empty_name_is_rejected(#[case] backend: Backend) {
     let cookie = author.cookie();
 
     let (_status, body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/create_audience",
         "name=Friends",
         Some(&cookie),
@@ -156,7 +137,7 @@ async fn rename_audience_empty_name_is_rejected(#[case] backend: Backend) {
     let aud_id = parse_id(&body);
 
     let (status, _body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/rename_audience",
         &format!("audience_id={aud_id}&name=%20%20"),
         Some(&cookie),
@@ -200,7 +181,7 @@ async fn list_audience_members_returns_members(#[case] backend: Backend) {
         .unwrap();
 
     let (status, body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/list_audience_members",
         &format!("audience_id={aud_id}"),
         Some(&cookie),
@@ -233,7 +214,7 @@ async fn audience_membership_round_trips(#[case] backend: Backend) {
         .unwrap();
 
     let (_s, body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/create_audience",
         "name=Friends",
         Some(&cookie),
@@ -242,7 +223,7 @@ async fn audience_membership_round_trips(#[case] backend: Backend) {
     let aud_id = AudienceId::from(parse_id(&body));
 
     let (status, body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/add_subscriber_to_audience",
         &format!("audience_id={aud_id}&subscription_id={sub_id}"),
         Some(&cookie),
@@ -260,7 +241,7 @@ async fn audience_membership_round_trips(#[case] backend: Backend) {
 
     // Adding the same subscriber again is idempotent through the boundary.
     let (status, body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/add_subscriber_to_audience",
         &format!("audience_id={aud_id}&subscription_id={sub_id}"),
         Some(&cookie),
@@ -278,7 +259,7 @@ async fn audience_membership_round_trips(#[case] backend: Backend) {
     );
 
     let (status, body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/remove_subscriber_from_audience",
         &format!("audience_id={aud_id}&subscription_id={sub_id}"),
         Some(&cookie),
@@ -294,7 +275,7 @@ async fn audience_membership_round_trips(#[case] backend: Backend) {
 
     // Removing a subscriber who is no longer a member is a no-op, not an error.
     let (status, body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/remove_subscriber_from_audience",
         &format!("audience_id={aud_id}&subscription_id={sub_id}"),
         Some(&cookie),
@@ -345,7 +326,7 @@ async fn cross_author_audience_id_is_scoped_away(#[case] backend: Backend) {
 
     // Bob lists Alice's audience members → succeeds, but sees nothing of hers.
     let (status, body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/list_audience_members",
         &format!("audience_id={alice_aud}"),
         Some(&bob_cookie),
@@ -360,7 +341,7 @@ async fn cross_author_audience_id_is_scoped_away(#[case] backend: Backend) {
 
     // Bob removes from Alice's audience → succeeds, but changes nothing.
     let (status, body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/remove_subscriber_from_audience",
         &format!("audience_id={alice_aud}&subscription_id={alice_sub}"),
         Some(&bob_cookie),
@@ -397,13 +378,7 @@ async fn list_my_subscribers_resolves_usernames(#[case] backend: Backend) {
         .await
         .unwrap();
 
-    let (status, body) = post_form(
-        Arc::clone(&state),
-        "/api/list_my_subscribers",
-        "",
-        Some(&cookie),
-    )
-    .await;
+    let (status, body) = post_form(&state, "/api/list_my_subscribers", "", Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(
         body.contains(&*subscriber.username),
@@ -436,7 +411,7 @@ async fn audience_endpoints_require_authentication(#[case] backend: Backend) {
         ("/api/list_audience_members", "audience_id=1"),
     ];
     for (uri, body) in endpoints {
-        let (status, _body) = post_form(Arc::clone(&state), uri, body, None).await;
+        let (status, _body) = post_form(&state, uri, body, None).await;
         assert_eq!(
             status,
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -472,7 +447,7 @@ async fn cross_author_add_member_is_rejected(#[case] backend: Backend) {
 
     // Bob tries to inject Alice's subscription into Alice's audience.
     let (status, body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/add_subscriber_to_audience",
         &format!("audience_id={alice_aud}&subscription_id={alice_sub}"),
         Some(&bob_cookie),
@@ -514,7 +489,7 @@ async fn cross_author_rename_and_delete_are_scoped(#[case] backend: Backend) {
 
     // Bob renames Alice's audience → refused (store NotFound); name unchanged.
     let (status, body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/rename_audience",
         &format!("audience_id={alice_aud}&name=Hijacked"),
         Some(&bob_cookie),
@@ -528,7 +503,7 @@ async fn cross_author_rename_and_delete_are_scoped(#[case] backend: Backend) {
 
     // Bob deletes Alice's audience → author-scoped no-op (OK), still present.
     let (status, body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/delete_audience",
         &format!("audience_id={alice_aud}"),
         Some(&bob_cookie),

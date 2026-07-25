@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use axum::http::StatusCode;
 use chrono::Utc;
 use common::token::RawToken;
@@ -53,7 +51,7 @@ async fn register_open_creates_user_sets_cookie_returns_token(#[case] backend: B
         .unwrap();
 
     let (status, set_cookie, body) = post_form_with_secure_flag(
-        Arc::clone(&state),
+        &state,
         "/api/register",
         "username=alice&password=password123",
         None,
@@ -88,7 +86,7 @@ async fn register_duplicate_username_returns_error(#[case] backend: Backend) {
 
     // Register alice once.
     post_form_with_secure_flag(
-        Arc::clone(&state),
+        &state,
         "/api/register",
         "username=alice&password=password123",
         None,
@@ -98,7 +96,7 @@ async fn register_duplicate_username_returns_error(#[case] backend: Backend) {
 
     // Register alice again.
     let (status, _, _) = post_form_with_secure_flag(
-        Arc::clone(&state),
+        &state,
         "/api/register",
         "username=alice&password=otherpassword",
         None,
@@ -123,7 +121,7 @@ async fn register_invite_only_valid_code_creates_user_marks_invite_used(#[case] 
     let code = state.invites.create_invite(expires_at).await.unwrap();
 
     let (status, _set_cookie, body) = post_form_with_secure_flag(
-        Arc::clone(&state),
+        &state,
         "/api/register",
         format!(
             "username=bob&password=password123&invite_code={}",
@@ -168,7 +166,7 @@ async fn register_invite_only_missing_code_returns_error(#[case] backend: Backen
         .unwrap();
 
     let (status, _set_cookie, _body) = post_form_with_secure_flag(
-        Arc::clone(&state),
+        &state,
         "/api/register",
         "username=carol&password=password123",
         None,
@@ -201,7 +199,7 @@ async fn register_invite_only_invalid_code_returns_error(#[case] backend: Backen
         .unwrap();
 
     let (status, _, _) = post_form_with_secure_flag(
-        Arc::clone(&state),
+        &state,
         "/api/register",
         "username=alice&password=password123&invite_code=invalid-code",
         None,
@@ -228,7 +226,7 @@ async fn register_invite_only_expired_code_returns_error(#[case] backend: Backen
     let code = state.invites.create_invite(expires_at).await.unwrap();
 
     let (status, _, _) = post_form_with_secure_flag(
-        Arc::clone(&state),
+        &state,
         "/api/register",
         format!(
             "username=alice&password=password123&invite_code={}",
@@ -250,7 +248,7 @@ async fn register_closed_policy_returns_error(#[case] backend: Backend) {
     // Default policy is Closed; no need to set it explicitly.
 
     let (status, _set_cookie, _body) = post_form_with_secure_flag(
-        Arc::clone(&state),
+        &state,
         "/api/register",
         "username=dave&password=password123",
         None,
@@ -282,7 +280,7 @@ async fn login_correct_password_sets_cookie_and_returns_token(#[case] backend: B
         .await
         .unwrap();
     post_form_with_secure_flag(
-        Arc::clone(&state),
+        &state,
         "/api/register",
         "username=eve&password=password123",
         None,
@@ -291,7 +289,7 @@ async fn login_correct_password_sets_cookie_and_returns_token(#[case] backend: B
     .await;
 
     let (status, set_cookie, body) = post_form_with_secure_flag(
-        Arc::clone(&state),
+        &state,
         "/api/login",
         "username=eve&password=password123",
         None,
@@ -318,7 +316,7 @@ async fn login_returns_is_operator_flag(#[case] backend: Backend) {
         .await
         .unwrap();
     post_form_with_secure_flag(
-        Arc::clone(&state),
+        &state,
         "/api/register",
         "username=alice&password=password123",
         None,
@@ -327,7 +325,7 @@ async fn login_returns_is_operator_flag(#[case] backend: Backend) {
     .await;
 
     let (status, _cookie, body) = post_form_with_secure_flag(
-        Arc::clone(&state),
+        &state,
         "/api/login",
         "username=alice&password=password123",
         None,
@@ -352,7 +350,7 @@ async fn login_unknown_user_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, _, _) = post_form_with_secure_flag(
-        Arc::clone(&state),
+        &state,
         "/api/login",
         "username=nobody&password=password123",
         None,
@@ -373,7 +371,7 @@ async fn login_with_label_creates_session_with_label(#[case] backend: Backend) {
         .await
         .unwrap();
     post_form_with_secure_flag(
-        Arc::clone(&state),
+        &state,
         "/api/register",
         "username=alice&password=password123",
         None,
@@ -382,7 +380,7 @@ async fn login_with_label_creates_session_with_label(#[case] backend: Backend) {
     .await;
 
     let (status, _, body) = post_form_with_secure_flag(
-        Arc::clone(&state),
+        &state,
         "/api/login",
         "username=alice&password=password123&label=my-device",
         None,
@@ -406,7 +404,7 @@ async fn login_with_empty_label_creates_session_without_label(#[case] backend: B
         .await
         .unwrap();
     post_form_with_secure_flag(
-        Arc::clone(&state),
+        &state,
         "/api/register",
         "username=alice&password=password123",
         None,
@@ -415,7 +413,7 @@ async fn login_with_empty_label_creates_session_without_label(#[case] backend: B
     .await;
 
     let (status, _, body) = post_form_with_secure_flag(
-        Arc::clone(&state),
+        &state,
         "/api/login",
         "username=alice&password=password123&label=",
         None,
@@ -441,7 +439,7 @@ async fn login_truncates_long_user_agent(#[case] backend: Backend) {
         .await
         .unwrap();
     post_form_with_secure_flag(
-        Arc::clone(&state),
+        &state,
         "/api/register",
         "username=alice&password=password123",
         None,
@@ -453,7 +451,7 @@ async fn login_truncates_long_user_agent(#[case] backend: Backend) {
     let long_ua = "a".repeat(250);
 
     let (status, _, body) = post_form_with_ua(
-        Arc::clone(&state),
+        &state,
         "/api/login",
         "username=alice&password=password123",
         None,
@@ -481,7 +479,7 @@ async fn login_wrong_password_returns_error(#[case] backend: Backend) {
         .await
         .unwrap();
     post_form_with_secure_flag(
-        Arc::clone(&state),
+        &state,
         "/api/register",
         "username=frank&password=correctpassword",
         None,
@@ -490,7 +488,7 @@ async fn login_wrong_password_returns_error(#[case] backend: Backend) {
     .await;
 
     let (status, _set_cookie, _body) = post_form_with_secure_flag(
-        Arc::clone(&state),
+        &state,
         "/api/login",
         "username=frank&password=wrongpassword",
         None,
@@ -518,14 +516,8 @@ async fn logout_revokes_session_and_clears_cookie(#[case] backend: Backend) {
     );
 
     let cookie_header = session.cookie();
-    let (status, set_cookie, _body) = post_form_with_secure_flag(
-        Arc::clone(&state),
-        "/api/logout",
-        "",
-        Some(&cookie_header),
-        true,
-    )
-    .await;
+    let (status, set_cookie, _body) =
+        post_form_with_secure_flag(&state, "/api/logout", "", Some(&cookie_header), true).await;
 
     assert_eq!(status, StatusCode::OK);
 
@@ -556,7 +548,7 @@ async fn register_invalid_username_returns_error(#[case] backend: Backend) {
     // "alice doe" lowercases to "alice doe" which fails Username parse
     // because Username only allows [a-z0-9_-]+.
     let (status, _set_cookie, _body) = post_form_with_secure_flag(
-        Arc::clone(&state),
+        &state,
         "/api/register",
         "username=alice%20doe&password=password123",
         None,
@@ -583,7 +575,7 @@ async fn register_short_password_returns_error(#[case] backend: Backend) {
         .expect("failed to set registration policy");
 
     let (status, _set_cookie, _body) = post_form_with_secure_flag(
-        Arc::clone(&state),
+        &state,
         "/api/register",
         "username=alice&password=short",
         None,
@@ -615,7 +607,7 @@ async fn login_invalid_username_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, _set_cookie, _body) = post_form_with_secure_flag(
-        Arc::clone(&state),
+        &state,
         "/api/login",
         "username=alice%20doe&password=password123",
         None,
@@ -651,13 +643,8 @@ async fn logout_with_bearer_token_revokes_session(#[case] backend: Backend) {
     );
 
     // POST to /api/logout with Bearer token instead of a cookie.
-    let (status, set_cookie, _body) = post_form_with_bearer(
-        Arc::clone(&state),
-        "/api/logout",
-        "",
-        session.token.as_ref(),
-    )
-    .await;
+    let (status, set_cookie, _body) =
+        post_form_with_bearer(&state, "/api/logout", "", session.token.as_ref()).await;
 
     assert_eq!(
         status,
@@ -689,7 +676,7 @@ async fn logout_without_session_still_clears_cookie(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, set_cookie, _body) =
-        post_form_with_secure_flag(Arc::clone(&state), "/api/logout", "", None, true).await;
+        post_form_with_secure_flag(&state, "/api/logout", "", None, true).await;
 
     assert_eq!(status, StatusCode::OK);
     let clear_cookie = set_cookie.expect("Set-Cookie header should be present on logout");
@@ -706,8 +693,7 @@ async fn debug_api_routes_exist(#[case] backend: Backend) {
 
     // Send a request with no body to /api/register — if route exists we get
     // something other than 404 (probably a 400/422 for missing fields).
-    let (status, _, _) =
-        post_form_with_secure_flag(Arc::clone(&state), "/api/register", "", None, true).await;
+    let (status, _, _) = post_form_with_secure_flag(&state, "/api/register", "", None, true).await;
     assert_ne!(
         status,
         StatusCode::NOT_FOUND,
@@ -726,14 +712,8 @@ async fn get_registration_policy_returns_correct_value(#[case] backend: Backend)
         .unwrap();
 
     // Server functions are POST by default.
-    let (status, _, body) = post_form_with_secure_flag(
-        Arc::clone(&state),
-        "/api/get_registration_policy",
-        "",
-        None,
-        true,
-    )
-    .await;
+    let (status, _, body) =
+        post_form_with_secure_flag(&state, "/api/get_registration_policy", "", None, true).await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body.trim(), "\"invite_only\"");
@@ -750,7 +730,7 @@ async fn auth_user_extraction_fails(backend: Backend, #[case] cookie: Option<&st
     let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, _, _) =
-        post_form_with_secure_flag(Arc::clone(&state), "/api/get_profile", "", cookie, true).await;
+        post_form_with_secure_flag(&state, "/api/get_profile", "", cookie, true).await;
 
     // Leptos server functions return 500 for ServerFnError.
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
@@ -761,14 +741,8 @@ async fn auth_user_extraction_fails(backend: Backend, #[case] cookie: Option<&st
 async fn logout_clears_cookie_without_secure_attribute_when_disabled(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie_header = create_user_and_session(&state).await.cookie();
-    let (status, set_cookie, _) = post_form_with_secure_flag(
-        Arc::clone(&state),
-        "/api/logout",
-        "",
-        Some(&cookie_header),
-        false,
-    )
-    .await;
+    let (status, set_cookie, _) =
+        post_form_with_secure_flag(&state, "/api/logout", "", Some(&cookie_header), false).await;
 
     assert_eq!(status, StatusCode::OK);
     let clear_cookie = set_cookie.expect("Set-Cookie header should be present");
@@ -790,7 +764,7 @@ async fn register_sets_cookie_without_secure_attribute_when_disabled(#[case] bac
         .unwrap();
 
     let (status, set_cookie, _) = post_form_with_secure_flag(
-        Arc::clone(&state),
+        &state,
         "/api/register",
         "username=insecure&password=password123",
         None,

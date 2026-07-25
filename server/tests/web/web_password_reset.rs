@@ -38,8 +38,8 @@ async fn request_password_reset_sends_email_for_verified_user(#[case] backend: B
     let session = create_user_with_verified_email(&state, "alice@example.com").await;
 
     let (status, _body) = post_form_with_mailer(
-        Arc::clone(&state),
-        mailer.clone() as Arc<dyn common::mailer::MailSender>,
+        &state,
+        &mailer,
         "/api/request_password_reset",
         format!("username={}", session.username),
         None,
@@ -62,8 +62,8 @@ async fn request_password_reset_without_base_url_returns_error(#[case] backend: 
     let session = create_user_with_verified_email(&state, "alice@example.com").await;
 
     let (status, _body) = post_form_with_mailer(
-        Arc::clone(&state),
-        mailer.clone() as Arc<dyn common::mailer::MailSender>,
+        &state,
+        &mailer,
         "/api/request_password_reset",
         format!("username={}", session.username),
         None,
@@ -86,8 +86,8 @@ async fn request_password_reset_returns_error_for_user_without_verified_email(
     let user = SeedUser::new().seed(&state).await;
 
     let (status, _body) = post_form_with_mailer(
-        Arc::clone(&state),
-        mailer.clone() as Arc<dyn common::mailer::MailSender>,
+        &state,
+        &mailer,
         "/api/request_password_reset",
         format!("username={}", user.username),
         None,
@@ -104,8 +104,8 @@ async fn request_password_reset_invalid_username_returns_error(#[case] backend: 
     let mailer = Arc::new(CapturingMailSender::new());
 
     let (status, _) = post_form_with_mailer(
-        state,
-        mailer.clone() as Arc<dyn common::mailer::MailSender>,
+        &state,
+        &mailer,
         "/api/request_password_reset",
         "username=invalid username",
         None,
@@ -122,8 +122,8 @@ async fn request_password_reset_returns_error_for_unknown_username(#[case] backe
     let mailer = Arc::new(CapturingMailSender::new());
 
     let (status, _body) = post_form_with_mailer(
-        Arc::clone(&state),
-        mailer.clone() as Arc<dyn common::mailer::MailSender>,
+        &state,
+        &mailer,
         "/api/request_password_reset",
         "username=nobody",
         None,
@@ -153,14 +153,8 @@ async fn confirm_password_reset_sets_password_and_revokes_sessions(#[case] backe
         .unwrap();
 
     let body = format!("token={raw_token}&new_password=newpassword456");
-    let (status, _body) = post_form_with_mailer(
-        Arc::clone(&state),
-        mailer.clone() as Arc<dyn common::mailer::MailSender>,
-        "/api/confirm_password_reset",
-        body,
-        None,
-    )
-    .await;
+    let (status, _body) =
+        post_form_with_mailer(&state, &mailer, "/api/confirm_password_reset", body, None).await;
 
     assert_eq!(status, StatusCode::OK);
 
@@ -202,14 +196,8 @@ async fn confirm_password_reset_with_expired_token_returns_error(#[case] backend
         .unwrap();
 
     let body = format!("token={raw_token}&new_password=newpassword456");
-    let (status, _body) = post_form_with_mailer(
-        Arc::clone(&state),
-        mailer.clone() as Arc<dyn common::mailer::MailSender>,
-        "/api/confirm_password_reset",
-        body,
-        None,
-    )
-    .await;
+    let (status, _body) =
+        post_form_with_mailer(&state, &mailer, "/api/confirm_password_reset", body, None).await;
 
     assert_ne!(status, StatusCode::OK);
 }
@@ -222,8 +210,8 @@ async fn confirm_password_reset_with_invalid_token_returns_error(#[case] backend
     let mailer = Arc::new(CapturingMailSender::new());
 
     let (status, _body) = post_form_with_mailer(
-        Arc::clone(&state),
-        mailer.clone() as Arc<dyn common::mailer::MailSender>,
+        &state,
+        &mailer,
         "/api/confirm_password_reset",
         "token=not-a-real-token&new_password=newpassword456",
         None,
@@ -243,8 +231,8 @@ async fn confirm_password_reset_with_malformed_token_returns_error(#[case] backe
     // `token` is typed). `new_password` is valid-length, so the failure isolates to the
     // token.
     let (status, _body) = post_form_with_mailer(
-        Arc::clone(&state),
-        mailer.clone() as Arc<dyn common::mailer::MailSender>,
+        &state,
+        &mailer,
         "/api/confirm_password_reset",
         "token=bad!token&new_password=newpassword456",
         None,
@@ -280,8 +268,8 @@ async fn confirm_password_reset_with_used_token_returns_error(#[case] backend: B
 
     // Use it once — should succeed
     let (status, _) = post_form_with_mailer(
-        Arc::clone(&state),
-        mailer.clone() as Arc<dyn common::mailer::MailSender>,
+        &state,
+        &mailer,
         "/api/confirm_password_reset",
         body.clone(),
         None,
@@ -290,14 +278,8 @@ async fn confirm_password_reset_with_used_token_returns_error(#[case] backend: B
     assert_eq!(status, StatusCode::OK);
 
     // Use it again — should fail
-    let (status, _) = post_form_with_mailer(
-        Arc::clone(&state),
-        mailer.clone() as Arc<dyn common::mailer::MailSender>,
-        "/api/confirm_password_reset",
-        body,
-        None,
-    )
-    .await;
+    let (status, _) =
+        post_form_with_mailer(&state, &mailer, "/api/confirm_password_reset", body, None).await;
     assert_ne!(status, StatusCode::OK);
 }
 
@@ -320,14 +302,8 @@ async fn confirm_password_reset_with_short_password_returns_error(#[case] backen
         .unwrap();
 
     let body = format!("token={raw_token}&new_password=short");
-    let (status, _body) = post_form_with_mailer(
-        Arc::clone(&state),
-        mailer.clone() as Arc<dyn common::mailer::MailSender>,
-        "/api/confirm_password_reset",
-        body,
-        None,
-    )
-    .await;
+    let (status, _body) =
+        post_form_with_mailer(&state, &mailer, "/api/confirm_password_reset", body, None).await;
 
     assert_ne!(status, StatusCode::OK);
 

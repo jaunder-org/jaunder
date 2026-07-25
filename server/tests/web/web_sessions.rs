@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use axum::http::StatusCode;
 
 use rstest::*;
@@ -23,8 +21,7 @@ async fn list_sessions_returns_sessions_for_authenticated_user(#[case] backend: 
         .await
         .unwrap();
 
-    let (status, body) =
-        post_form(Arc::clone(&state), "/api/list_sessions", "", Some(&cookie)).await;
+    let (status, body) = post_form(&state, "/api/list_sessions", "", Some(&cookie)).await;
 
     assert_eq!(status, StatusCode::OK);
     // The body is a JSON array of SessionInfo objects; verify both sessions are present.
@@ -43,8 +40,7 @@ async fn list_sessions_marks_current_session(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
 
-    let (status, body) =
-        post_form(Arc::clone(&state), "/api/list_sessions", "", Some(&cookie)).await;
+    let (status, body) = post_form(&state, "/api/list_sessions", "", Some(&cookie)).await;
 
     assert_eq!(status, StatusCode::OK);
     assert!(
@@ -58,7 +54,7 @@ async fn list_sessions_marks_current_session(#[case] backend: Backend) {
 async fn list_sessions_requires_authentication(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, _) = post_form(Arc::clone(&state), "/api/list_sessions", "", None).await;
+    let (status, _) = post_form(&state, "/api/list_sessions", "", None).await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
@@ -79,13 +75,7 @@ async fn revoke_session_removes_session_for_authenticated_user(#[case] backend: 
         .token_hash;
 
     let body = format!("token_hash={token_hash2}");
-    let (status, _) = post_form(
-        Arc::clone(&state),
-        "/api/revoke_session",
-        body,
-        Some(&cookie1),
-    )
-    .await;
+    let (status, _) = post_form(&state, "/api/revoke_session", body, Some(&cookie1)).await;
 
     assert_eq!(status, StatusCode::OK);
 
@@ -118,13 +108,7 @@ async fn revoke_session_rejects_session_belonging_to_another_user(#[case] backen
 
     // Alice tries to revoke Bob's session.
     let body = format!("token_hash={bob_token_hash}");
-    let (status, _) = post_form(
-        Arc::clone(&state),
-        "/api/revoke_session",
-        body,
-        Some(&alice_cookie),
-    )
-    .await;
+    let (status, _) = post_form(&state, "/api/revoke_session", body, Some(&alice_cookie)).await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 
@@ -141,13 +125,7 @@ async fn revoke_session_rejects_session_belonging_to_another_user(#[case] backen
 async fn revoke_session_requires_authentication(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, _) = post_form(
-        Arc::clone(&state),
-        "/api/revoke_session",
-        "token_hash=somehash",
-        None,
-    )
-    .await;
+    let (status, _) = post_form(&state, "/api/revoke_session", "token_hash=somehash", None).await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
@@ -160,7 +138,7 @@ async fn create_app_password_mints_labelled_session(#[case] backend: Backend) {
     let cookie = session.cookie();
 
     let (status, body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/create_app_password",
         "label=MarsEdit",
         Some(&cookie),
@@ -183,7 +161,7 @@ async fn create_app_password_rejects_blank_label(#[case] backend: Backend) {
     let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, _body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/create_app_password",
         "label=%20%20",
         Some(&cookie),
@@ -206,7 +184,7 @@ async fn create_app_password_rejects_overlong_label(#[case] backend: Backend) {
     // decode — coverage the cap makes possible.
     let overlong = "a".repeat(256);
     let (status, _body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/create_app_password",
         format!("label={overlong}"),
         Some(&cookie),
@@ -221,13 +199,8 @@ async fn create_app_password_rejects_overlong_label(#[case] backend: Backend) {
 async fn create_app_password_requires_authentication(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, _body) = post_form(
-        Arc::clone(&state),
-        "/api/create_app_password",
-        "label=MarsEdit",
-        None,
-    )
-    .await;
+    let (status, _body) =
+        post_form(&state, "/api/create_app_password", "label=MarsEdit", None).await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }

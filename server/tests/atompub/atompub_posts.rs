@@ -24,7 +24,7 @@ async fn collection_get_without_base_url_returns_500(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
     // Deliberately do NOT seed_base_url.
     let session = create_user_and_session(&state).await;
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     let response = app.oneshot(atompub_get(&session, "posts")).await.unwrap();
 
@@ -49,7 +49,7 @@ async fn collection_lists_user_posts(#[case] backend: Backend) {
         .seed(&state)
         .await;
 
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     let response = app.oneshot(atompub_get(&session, "posts")).await.unwrap();
 
@@ -92,7 +92,7 @@ async fn member_returns_native_source_with_etag(#[case] backend: Backend) {
         .seed(&state)
         .await;
 
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     let response = app
         .oneshot(atompub_get(&session, &format!("posts/{}", post.post_id)))
@@ -122,7 +122,7 @@ async fn member_get_unknown_returns_404(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
 
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     let response = app
         .oneshot(atompub_get(&session, "posts/999999"))
@@ -140,7 +140,7 @@ async fn delete_then_get_is_404(#[case] backend: Backend) {
 
     let post = session.seed_post().seed(&state).await;
 
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     // First, delete the post
     let delete_response = app
@@ -174,7 +174,7 @@ async fn collection_paging_emits_next_link(#[case] backend: Backend) {
         session.seed_post().seed(&state).await;
     }
 
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     // Page size 1 with 2 posts -> a next link must be present.
     let response = app
@@ -207,7 +207,7 @@ async fn collection_clamps_out_of_range_limit(#[case] backend: Backend) {
         session.seed_post().seed(&state).await;
     }
 
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     // `?limit=999` clamps to PageSize::MAX (50), not 51.
     let over = app
@@ -264,7 +264,7 @@ async fn collection_cursor_validation(
     if seed_post {
         session.seed_post().seed(&state).await;
     }
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     let response = app
         .oneshot(atompub_get(&session, &format!("posts?{query}")))
@@ -279,7 +279,7 @@ async fn collection_cursor_validation(
 async fn collection_empty_returns_feed_without_entries(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     let response = app.oneshot(atompub_get(&session, "posts")).await.unwrap();
 
@@ -360,7 +360,7 @@ impl ForbiddenRequest {
 async fn forbids_other_user(backend: Backend, #[case] request: ForbiddenRequest) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     let response = app.oneshot(request.build(&session)).await.unwrap();
 
@@ -376,7 +376,7 @@ async fn forbids_other_user(backend: Backend, #[case] request: ForbiddenRequest)
 async fn malformed_username_path_returns_400(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     let response = app
         .oneshot(
@@ -403,7 +403,7 @@ async fn create_post_returns_201_and_is_retrievable(#[case] backend: Backend) {
     )
     .await
     .unwrap();
-    let app = make_app(state.clone(), &base);
+    let app = make_app(&state, &base);
 
     let xml = entry_xml("Hello", "text", "the body");
     let response = app
@@ -423,7 +423,7 @@ async fn create_post_returns_201_and_is_retrievable(#[case] backend: Backend) {
         "response should have Location header: {loc:?}"
     );
 
-    let app2 = make_app(state, &base);
+    let app2 = make_app(&state, &base);
     let loc_path = loc.unwrap();
     let get_response = app2
         .oneshot(
@@ -451,7 +451,7 @@ async fn create_post_returns_201_and_is_retrievable(#[case] backend: Backend) {
 async fn create_post_applies_categories(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     let xml = entry_xml("Hello", "text", "the body");
     let response = app
@@ -472,7 +472,7 @@ async fn create_post_applies_categories(#[case] backend: Backend) {
 async fn create_html_entry_is_stored_as_html(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     let xml = entry_xml("H", "html", "&lt;p&gt;hi&lt;/p&gt;");
     let response = app
@@ -503,7 +503,7 @@ async fn create_format_media_type_round_trips(
 ) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
-    let app = make_app(state.clone(), &base);
+    let app = make_app(&state, &base);
 
     let xml = entry_xml("Formatted", content_type, content);
     let response = app
@@ -522,7 +522,7 @@ async fn create_format_media_type_round_trips(
         .to_string();
 
     // GET the member back: it must echo the same content media type.
-    let get = make_app(state, &base)
+    let get = make_app(&state, &base)
         .oneshot(
             atompub_at(&session, "GET", &location)
                 .body(Body::empty())
@@ -547,7 +547,7 @@ async fn update_replaces_post_body(#[case] backend: Backend) {
 
     let post = session.seed_post().seed(&state).await;
 
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     let xml = entry_xml("New", "text", "new body");
     let response = app
@@ -575,7 +575,7 @@ async fn update_with_stale_if_match_returns_412(#[case] backend: Backend) {
 
     let post = session.seed_post().seed(&state).await;
 
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     let xml = entry_xml("New", "text", "new body");
     let response = app
@@ -597,7 +597,7 @@ async fn update_with_stale_if_match_returns_412(#[case] backend: Backend) {
 async fn create_rejects_malformed_entry(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     let response = app
         .oneshot(atompub_post_xml(&session, "posts", "not xml"))
@@ -621,7 +621,7 @@ async fn update_removes_categories_not_in_new_entry(#[case] backend: Backend) {
         .await
         .unwrap();
 
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     // Update without the tag
     let xml = entry_xml("Title", "text", "new body");
@@ -648,7 +648,7 @@ async fn update_with_put_returns_200_and_etag(#[case] backend: Backend) {
 
     let post = session.seed_post().seed(&state).await;
 
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     let xml = entry_xml("Updated", "text", "updated body");
     let response = app
@@ -706,7 +706,7 @@ async fn empty_entry_returns_400(backend: Backend, #[case] op: EmptyEntryOp) {
         }
     };
 
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     let response = app.oneshot(request).await.unwrap();
 
@@ -718,7 +718,7 @@ async fn empty_entry_returns_400(backend: Backend, #[case] op: EmptyEntryOp) {
 async fn create_draft_entry_is_unpublished(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     let xml = r#"<?xml version="1.0"?>
 <entry xmlns="http://www.w3.org/2005/Atom" xmlns:app="http://www.w3.org/2007/app">
@@ -772,7 +772,7 @@ async fn member_carries_read_only_j_slug(#[case] backend: Backend) {
 
     let post = session.seed_post().title("My Post").seed(&state).await;
 
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     let response = app
         .oneshot(atompub_get(&session, &format!("posts/{}", post.post_id)))
@@ -796,7 +796,7 @@ async fn member_carries_read_only_j_slug(#[case] backend: Backend) {
 async fn incoming_j_slug_is_ignored(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
-    let app = make_app(state.clone(), &base);
+    let app = make_app(&state, &base);
 
     // A client-supplied <j:slug> must NOT determine the stored slug — the server
     // derives its own from the title (ADR-0023: j:slug is read-only).
@@ -834,7 +834,7 @@ async fn incoming_j_slug_is_ignored(#[case] backend: Backend) {
 async fn create_skips_invalid_category(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     let xml = r#"<?xml version="1.0"?>
 <entry xmlns="http://www.w3.org/2005/Atom">
@@ -862,7 +862,7 @@ async fn create_skips_invalid_category(#[case] backend: Backend) {
 async fn update_keeps_unchanged_category(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     let with_rust = r#"<?xml version="1.0"?>
 <entry xmlns="http://www.w3.org/2005/Atom">
@@ -905,7 +905,7 @@ async fn update_keeps_unchanged_category(#[case] backend: Backend) {
 async fn update_with_matching_if_match_succeeds(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     let xml = r#"<?xml version="1.0"?>
 <entry xmlns="http://www.w3.org/2005/Atom">
@@ -1021,7 +1021,7 @@ async fn delete_if_match_precondition(
 ) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
     let (location, etag) = create_location_etag(app.clone(), &session).await;
 
     let builder = atompub_at(&session, "DELETE", &location);
@@ -1051,7 +1051,7 @@ async fn editing_content_via_put_changes_etag(#[case] backend: Backend) {
     // AC4 (HTTP): a PUT that changes the body changes the ETag end-to-end.
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
     let (location, e1) = create_location_etag(app.clone(), &session).await;
 
     let edited = r#"<?xml version="1.0"?>
@@ -1087,7 +1087,7 @@ async fn etag_is_content_hash_format(#[case] backend: Backend) {
     // AC1: the emitted ETag is a strong, quoted "sha256-<64 lowercase hex>" token.
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     let etag = create_etag(app, &session).await;
     let hex = etag
@@ -1107,7 +1107,7 @@ async fn identical_posts_share_etag(#[case] backend: Backend) {
     // per-post id / tag ids / slug are excluded from the hash.
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     let e1 = create_etag(app.clone(), &session).await;
     let e2 = create_etag(app, &session).await;
@@ -1121,7 +1121,7 @@ async fn idempotent_reput_keeps_etag(#[case] backend: Backend) {
     // timestamp ETag would have bumped on the write).
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     let created = app
         .clone()
@@ -1181,7 +1181,7 @@ async fn update_preserves_non_public_targeting(#[case] backend: Backend) {
         .seed(&state)
         .await;
 
-    let app = make_app(state.clone(), &base);
+    let app = make_app(&state, &base);
 
     let xml = entry_xml("New", "text", "new body");
     let response = app
@@ -1222,7 +1222,7 @@ async fn member_get_serves_owner_non_public_post(#[case] backend: Backend) {
         .seed(&state)
         .await;
 
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     let response = app
         .oneshot(atompub_get(&session, &format!("posts/{}", post.post_id)))
@@ -1252,7 +1252,7 @@ async fn create_adopts_default_audience(#[case] backend: Backend) {
         .await
         .unwrap();
 
-    let app = make_app(state.clone(), &base);
+    let app = make_app(&state, &base);
 
     let xml = entry_xml("Hello", "text", "the body");
     let response = app
@@ -1297,7 +1297,7 @@ fn location_post_id(response: &axum::response::Response) -> i64 {
 async fn create_with_future_published_is_scheduled(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
-    let app = make_app(state.clone(), &base);
+    let app = make_app(&state, &base);
 
     // A non-draft entry whose <published> is in the far future schedules the post.
     let xml = entry_xml_with_published("Future post", "body", Some("2099-01-01T00:00:00Z"));
@@ -1349,7 +1349,7 @@ async fn create_with_future_published_is_scheduled(#[case] backend: Backend) {
 async fn create_with_past_published_is_live_backdated(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
-    let app = make_app(state.clone(), &base);
+    let app = make_app(&state, &base);
 
     // A non-draft entry whose <published> is in the past is live, backdated.
     let xml = entry_xml_with_published("Old post", "body", Some("2000-01-01T00:00:00Z"));
@@ -1384,7 +1384,7 @@ async fn update_with_future_published_schedules_post(#[case] backend: Backend) {
     // <published>: it must become scheduled (future published_at, hidden).
     let post = session.seed_post().seed(&state).await;
 
-    let app = make_app(state.clone(), &base);
+    let app = make_app(&state, &base);
 
     let xml = entry_xml_with_published("Rescheduled", "new body", Some("2099-06-01T00:00:00Z"));
     let response = app
@@ -1444,7 +1444,7 @@ async fn create_with_same_idempotency_key_dedups(#[case] backend: Backend) {
     // AC-S1: the same key creates one post; the retry returns it as 200.
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
     let xml = entry_xml("Hello", "text", "the body");
 
     let first = create_post_keyed(app.clone(), &session, &xml, Some("idem-1")).await;
@@ -1483,7 +1483,7 @@ async fn create_with_fresh_idempotency_key_is_201(#[case] backend: Backend) {
     // AC-S2: distinct keys create distinct posts.
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
     let xml = entry_xml("Hello", "text", "the body");
 
     let first = create_post_keyed(app.clone(), &session, &xml, Some("k-a")).await;
@@ -1499,7 +1499,7 @@ async fn create_without_idempotency_key_is_201(#[case] backend: Backend) {
     // AC-S3: no header → create as today.
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
     let xml = entry_xml("Hello", "text", "the body");
 
     let response = create_post_keyed(app, &session, &xml, None).await;

@@ -20,7 +20,7 @@ use storage::test_support::{
 };
 
 async fn unpublish_post_form(
-    state: Arc<storage::AppState>,
+    state: &Arc<storage::AppState>,
     post_id: PostId,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
@@ -34,7 +34,7 @@ async fn unpublish_post_form(
 }
 
 async fn create_post_json(
-    state: Arc<storage::AppState>,
+    state: &Arc<storage::AppState>,
     body: &str,
     format: &str,
     slug_override: Option<&str>,
@@ -53,7 +53,7 @@ async fn create_post_json(
 }
 
 async fn update_post_json(
-    state: Arc<storage::AppState>,
+    state: &Arc<storage::AppState>,
     post_id: PostId,
     body: &str,
     format: &str,
@@ -74,7 +74,7 @@ async fn update_post_json(
 }
 
 async fn get_post_form(
-    state: Arc<storage::AppState>,
+    state: &Arc<storage::AppState>,
     username: &str,
     year: i32,
     month: u32,
@@ -87,7 +87,7 @@ async fn get_post_form(
 }
 
 async fn get_post_preview_form(
-    state: Arc<storage::AppState>,
+    state: &Arc<storage::AppState>,
     post_id: PostId,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
@@ -104,7 +104,7 @@ async fn create_post_persists_rendered_published_post(#[case] backend: Backend) 
 
     // Title embedded as # heading in the body (verbatim storage)
     let (status, body) = create_post_json(
-        Arc::clone(&state),
+        &state,
         "# Hello World
 
 **bold**",
@@ -161,7 +161,7 @@ async fn create_post_retries_slug_conflicts_for_same_user_and_date(#[case] backe
 
     // Title embedded as # heading; two posts with same heading produce conflicting slugs
     let (first_status, first_body) = create_post_json(
-        Arc::clone(&state),
+        &state,
         "# Repeated Title
 
 first",
@@ -174,7 +174,7 @@ first",
     assert_eq!(first_status, StatusCode::OK, "body: {first_body}");
 
     let (second_status, second_body) = create_post_json(
-        Arc::clone(&state),
+        &state,
         "# Repeated Title
 
 second",
@@ -203,7 +203,7 @@ enum UnauthEndpoint {
 }
 
 async fn unauthenticated_request(
-    state: Arc<storage::AppState>,
+    state: &Arc<storage::AppState>,
     endpoint: UnauthEndpoint,
 ) -> (StatusCode, String) {
     match endpoint {
@@ -241,7 +241,7 @@ async fn unauthenticated_request(
 async fn endpoint_rejects_unauthenticated(backend: Backend, #[case] endpoint: UnauthEndpoint) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, body) = unauthenticated_request(state, endpoint).await;
+    let (status, body) = unauthenticated_request(&state, endpoint).await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("unauthorized"), "body: {body}");
@@ -255,7 +255,7 @@ async fn create_post_accepts_slug_override_and_saves_draft(#[case] backend: Back
     let cookie = session.cookie();
 
     let (status, body) = create_post_json(
-        Arc::clone(&state),
+        &state,
         "*bold*",
         "org",
         Some("Custom-Slug"),
@@ -301,7 +301,7 @@ async fn create_post_accepts_titleless_body(#[case] backend: Backend) {
     let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = create_post_json(
-        Arc::clone(&state),
+        &state,
         "Titleless note",
         "markdown",
         None,
@@ -333,7 +333,7 @@ async fn create_post_extracts_markdown_heading_title(#[case] backend: Backend) {
     let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = create_post_json(
-        Arc::clone(&state),
+        &state,
         "# Extracted Title
 
 Body text",
@@ -388,7 +388,7 @@ async fn create_post_rejects(
     let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = create_post_json(
-        Arc::clone(&state),
+        &state,
         request_body,
         format,
         slug_override,
@@ -409,7 +409,7 @@ async fn get_post_returns_published_post(#[case] backend: Backend) {
     let cookie = session.cookie();
 
     let (status, body) = create_post_json(
-        Arc::clone(&state),
+        &state,
         "# Permalink
 
 **bold**",
@@ -435,7 +435,7 @@ async fn get_post_returns_published_post(#[case] backend: Backend) {
         .published_at
         .expect("published post should have published_at");
     let (status, body) = get_post_form(
-        Arc::clone(&state),
+        &state,
         &session.username,
         published_at.year(),
         published_at.month(),
@@ -459,7 +459,7 @@ async fn get_post_returns_draft_to_author_only(#[case] backend: Backend) {
     let stranger_cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = create_post_json(
-        Arc::clone(&state),
+        &state,
         "# Draft
 
 draft",
@@ -482,7 +482,7 @@ draft",
         .unwrap();
 
     let (status, body) = get_post_form(
-        Arc::clone(&state),
+        &state,
         &author.username,
         record.created_at.year(),
         record.created_at.month(),
@@ -495,7 +495,7 @@ draft",
     assert!(body.contains("Post not found"), "body: {body}");
 
     let (status, body) = get_post_form(
-        Arc::clone(&state),
+        &state,
         &author.username,
         record.created_at.year(),
         record.created_at.month(),
@@ -508,7 +508,7 @@ draft",
     assert!(body.contains("Post not found"), "body: {body}");
 
     let (status, body) = get_post_form(
-        Arc::clone(&state),
+        &state,
         &author.username,
         record.created_at.year(),
         record.created_at.month(),
@@ -521,8 +521,7 @@ draft",
     assert!(body.contains("\"is_draft\":true"), "body: {body}");
     assert!(body.contains("Draft"), "body: {body}");
 
-    let (status, body) =
-        get_post_preview_form(Arc::clone(&state), created.post_id, Some(&author_cookie)).await;
+    let (status, body) = get_post_preview_form(&state, created.post_id, Some(&author_cookie)).await;
     assert_eq!(
         status,
         StatusCode::OK,
@@ -539,7 +538,7 @@ async fn get_post_preview_shows_draft_to_author_only(#[case] backend: Backend) {
     let stranger_cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = create_post_json(
-        Arc::clone(&state),
+        &state,
         "# Preview Draft
 
 draft",
@@ -552,17 +551,16 @@ draft",
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
 
-    let (status, body) =
-        get_post_preview_form(Arc::clone(&state), created.post_id, Some(&author_cookie)).await;
+    let (status, body) = get_post_preview_form(&state, created.post_id, Some(&author_cookie)).await;
     assert_eq!(status, StatusCode::OK, "author preview failed: {body}");
     assert!(body.contains("Preview Draft"), "body: {body}");
 
     let (status, body) =
-        get_post_preview_form(Arc::clone(&state), created.post_id, Some(&stranger_cookie)).await;
+        get_post_preview_form(&state, created.post_id, Some(&stranger_cookie)).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 
-    let (status, body) = get_post_preview_form(state, created.post_id, None).await;
+    let (status, body) = get_post_preview_form(&state, created.post_id, None).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 }
@@ -575,7 +573,7 @@ async fn get_post_hides_drafts_from_guests(#[case] backend: Backend) {
     let author_cookie = author.cookie();
 
     let (status, body) = create_post_json(
-        Arc::clone(&state),
+        &state,
         "draft",
         "markdown",
         None,
@@ -596,7 +594,7 @@ async fn get_post_hides_drafts_from_guests(#[case] backend: Backend) {
         .unwrap();
 
     let (status, body) = get_post_form(
-        Arc::clone(&state),
+        &state,
         &author.username,
         record.created_at.year(),
         record.created_at.month(),
@@ -614,7 +612,7 @@ async fn get_post_hides_drafts_from_guests(#[case] backend: Backend) {
 async fn get_post_rejects_invalid_username(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, body) = get_post_form(state, "Invalid Name", 2024, 1, 1, "missing", None).await;
+    let (status, body) = get_post_form(&state, "Invalid Name", 2024, 1, 1, "missing", None).await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("username"), "body: {body}");
@@ -625,7 +623,7 @@ async fn get_post_rejects_invalid_username(#[case] backend: Backend) {
 async fn get_post_rejects_invalid_slug(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, body) = get_post_form(state, "author", 2024, 1, 1, "Invalid Slug", None).await;
+    let (status, body) = get_post_form(&state, "author", 2024, 1, 1, "Invalid Slug", None).await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("slug"), "body: {body}");
@@ -636,14 +634,14 @@ async fn get_post_rejects_invalid_slug(#[case] backend: Backend) {
 async fn get_post_returns_not_found_for_missing_post(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, body) = get_post_form(state, "author", 2024, 1, 1, "missing", None).await;
+    let (status, body) = get_post_form(&state, "author", 2024, 1, 1, "missing", None).await;
 
     assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 }
 
 async fn list_drafts_form(
-    state: Arc<storage::AppState>,
+    state: &Arc<storage::AppState>,
     cursor_created_at: Option<UtcInstant>,
     cursor_post_id: Option<PostId>,
     limit: u32,
@@ -658,7 +656,7 @@ async fn list_drafts_form(
 }
 
 async fn publish_post_form(
-    state: Arc<storage::AppState>,
+    state: &Arc<storage::AppState>,
     post_id: PostId,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
@@ -672,7 +670,7 @@ async fn publish_post_form(
 }
 
 async fn list_user_posts_form(
-    state: Arc<storage::AppState>,
+    state: &Arc<storage::AppState>,
     username: &str,
     cursor_created_at: Option<UtcInstant>,
     cursor_post_id: Option<PostId>,
@@ -688,7 +686,7 @@ async fn list_user_posts_form(
 }
 
 async fn list_posts_by_tag_form(
-    state: Arc<storage::AppState>,
+    state: &Arc<storage::AppState>,
     tag: &str,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
@@ -697,7 +695,7 @@ async fn list_posts_by_tag_form(
 }
 
 async fn list_user_posts_by_tag_form(
-    state: Arc<storage::AppState>,
+    state: &Arc<storage::AppState>,
     username: &str,
     tag: &str,
     cookie: Option<&str>,
@@ -707,7 +705,7 @@ async fn list_user_posts_by_tag_form(
 }
 
 async fn list_local_timeline_form(
-    state: Arc<storage::AppState>,
+    state: &Arc<storage::AppState>,
     cursor_created_at: Option<UtcInstant>,
     cursor_post_id: Option<PostId>,
     limit: u32,
@@ -722,7 +720,7 @@ async fn list_local_timeline_form(
 }
 
 async fn list_home_feed_form(
-    state: Arc<storage::AppState>,
+    state: &Arc<storage::AppState>,
     cursor_created_at: Option<UtcInstant>,
     cursor_post_id: Option<PostId>,
     limit: u32,
@@ -742,22 +740,15 @@ async fn update_post_updates_draft_content_and_slug(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
 
-    let (status, body) = create_post_json(
-        Arc::clone(&state),
-        "original",
-        "markdown",
-        None,
-        false,
-        Some(&cookie),
-    )
-    .await;
+    let (status, body) =
+        create_post_json(&state, "original", "markdown", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
     let post_id = created.post_id;
 
     // Title embedded as # heading; slug_override takes precedence over the derived slug
     let (status, body) = update_post_json(
-        Arc::clone(&state),
+        &state,
         post_id,
         "# Updated Title
 
@@ -794,22 +785,15 @@ async fn update_post_freezes_slug_when_published(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
 
-    let (status, body) = create_post_json(
-        Arc::clone(&state),
-        "body",
-        "markdown",
-        None,
-        true,
-        Some(&cookie),
-    )
-    .await;
+    let (status, body) =
+        create_post_json(&state, "body", "markdown", None, true, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
     let post_id = created.post_id;
     let original_slug = created.slug.clone();
 
     let (status, body) = update_post_json(
-        Arc::clone(&state),
+        &state,
         post_id,
         "new body",
         "markdown",
@@ -834,22 +818,15 @@ async fn update_post_publishes_draft(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
 
-    let (status, body) = create_post_json(
-        Arc::clone(&state),
-        "draft body",
-        "markdown",
-        None,
-        false,
-        Some(&cookie),
-    )
-    .await;
+    let (status, body) =
+        create_post_json(&state, "draft body", "markdown", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
     assert!(created.published_at.is_none());
     let post_id = created.post_id;
 
     let (status, body) = update_post_json(
-        Arc::clone(&state),
+        &state,
         post_id,
         "draft body",
         "markdown",
@@ -873,7 +850,7 @@ async fn update_post_rejects_non_author(#[case] backend: Backend) {
     let stranger_cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = create_post_json(
-        Arc::clone(&state),
+        &state,
         "body",
         "markdown",
         None,
@@ -885,7 +862,7 @@ async fn update_post_rejects_non_author(#[case] backend: Backend) {
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
 
     let (status, body) = update_post_json(
-        Arc::clone(&state),
+        &state,
         created.post_id,
         "hacked",
         "markdown",
@@ -916,20 +893,13 @@ async fn update_post_rejects(
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
 
-    let (status, body) = create_post_json(
-        Arc::clone(&state),
-        "original",
-        "markdown",
-        None,
-        false,
-        Some(&cookie),
-    )
-    .await;
+    let (status, body) =
+        create_post_json(&state, "original", "markdown", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
 
     let (status, body) = update_post_json(
-        Arc::clone(&state),
+        &state,
         created.post_id,
         update_body,
         update_format,
@@ -950,7 +920,7 @@ async fn update_post_returns_not_found_for_missing_post(#[case] backend: Backend
     let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = update_post_json(
-        Arc::clone(&state),
+        &state,
         PostId::from(99999),
         "body",
         "markdown",
@@ -970,22 +940,15 @@ async fn update_post_returns_not_found_for_deleted_post(#[case] backend: Backend
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
 
-    let (status, body) = create_post_json(
-        Arc::clone(&state),
-        "body",
-        "markdown",
-        None,
-        false,
-        Some(&cookie),
-    )
-    .await;
+    let (status, body) =
+        create_post_json(&state, "body", "markdown", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
 
     state.posts.soft_delete_post(created.post_id).await.unwrap();
 
     let (status, body) = update_post_json(
-        Arc::clone(&state),
+        &state,
         created.post_id,
         "body",
         "markdown",
@@ -1007,7 +970,7 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
     let stranger_cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = create_post_json(
-        Arc::clone(&state),
+        &state,
         "first",
         "markdown",
         None,
@@ -1019,7 +982,7 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
     let first_draft: CreatePostResult = serde_json::from_str(&body).unwrap();
 
     let (status, body) = create_post_json(
-        Arc::clone(&state),
+        &state,
         "second",
         "markdown",
         None,
@@ -1031,7 +994,7 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
     let second_draft: CreatePostResult = serde_json::from_str(&body).unwrap();
 
     let (status, body) = create_post_json(
-        Arc::clone(&state),
+        &state,
         "visible",
         "markdown",
         None,
@@ -1042,7 +1005,7 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
     assert_eq!(status, StatusCode::OK, "create body: {body}");
 
     let (status, body) = create_post_json(
-        Arc::clone(&state),
+        &state,
         "private",
         "markdown",
         None,
@@ -1052,8 +1015,7 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
 
-    let (status, body) =
-        list_drafts_form(Arc::clone(&state), None, None, 1, Some(&author_cookie)).await;
+    let (status, body) = list_drafts_form(&state, None, None, 1, Some(&author_cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let first_page: Vec<DraftSummary> = serde_json::from_str(&body).unwrap();
     assert_eq!(first_page.len(), 1, "body: {body}");
@@ -1064,7 +1026,7 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
     );
 
     let (status, body) = list_drafts_form(
-        Arc::clone(&state),
+        &state,
         Some(first_entry.created_at),
         Some(first_entry.post_id),
         10,
@@ -1106,8 +1068,7 @@ async fn list_drafts_surfaces_scheduled_with_marker_excludes_live(#[case] backen
         .await
         .post_id;
 
-    let (status, body) =
-        list_drafts_form(Arc::clone(&state), None, None, 50, Some(&author.cookie())).await;
+    let (status, body) = list_drafts_form(&state, None, None, 50, Some(&author.cookie())).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let drafts: Vec<DraftSummary> = serde_json::from_str(&body).unwrap();
 
@@ -1143,13 +1104,7 @@ async fn create_post_with_future_publish_at_is_scheduled(#[case] backend: Backen
             "publish_at": future.to_rfc3339(),
         }
     });
-    let (status, body) = post_json(
-        Arc::clone(&state),
-        "/api/create_post",
-        payload,
-        Some(&cookie),
-    )
-    .await;
+    let (status, body) = post_json(&state, "/api/create_post", payload, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
 
@@ -1190,7 +1145,7 @@ async fn create_post_publish_without_publish_at_is_live_now(#[case] backend: Bac
     let cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = create_post_json(
-        Arc::clone(&state),
+        &state,
         "live now body",
         "markdown",
         None,
@@ -1242,21 +1197,13 @@ async fn publish_post_publishes_draft_and_returns_permalink(#[case] backend: Bac
     let session = create_user_and_session(&state).await;
     let cookie = session.cookie();
 
-    let (status, body) = create_post_json(
-        Arc::clone(&state),
-        "draft body",
-        "markdown",
-        None,
-        false,
-        Some(&cookie),
-    )
-    .await;
+    let (status, body) =
+        create_post_json(&state, "draft body", "markdown", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
     assert!(created.published_at.is_none());
 
-    let (status, body) =
-        publish_post_form(Arc::clone(&state), created.post_id, Some(&cookie)).await;
+    let (status, body) = publish_post_form(&state, created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "publish body: {body}");
     let published: PublishPostResult = serde_json::from_str(&body).unwrap();
     assert_eq!(published.post_id, created.post_id);
@@ -1284,7 +1231,7 @@ async fn publish_post_rejects_non_author(#[case] backend: Backend) {
     let stranger_cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = create_post_json(
-        Arc::clone(&state),
+        &state,
         "secret",
         "markdown",
         None,
@@ -1295,7 +1242,7 @@ async fn publish_post_rejects_non_author(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
 
-    let (status, body) = publish_post_form(state, created.post_id, Some(&stranger_cookie)).await;
+    let (status, body) = publish_post_form(&state, created.post_id, Some(&stranger_cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 }
@@ -1342,17 +1289,11 @@ async fn list_rejects_invalid_cursor_inputs(
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
 
-    let (status, body) = post_form(
-        Arc::clone(&state),
-        uri,
-        half_cursor_body.to_string(),
-        Some(&cookie),
-    )
-    .await;
+    let (status, body) = post_form(&state, uri, half_cursor_body.to_string(), Some(&cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("must be provided together"), "body: {body}");
 
-    let (status, body) = post_form(state, uri, bad_time_body.to_string(), Some(&cookie)).await;
+    let (status, body) = post_form(&state, uri, bad_time_body.to_string(), Some(&cookie)).await;
     // An unparseable instant is rejected at typed-arg decode (ADR-0065), before
     // the handler runs — a hard decode error, not the handler's validation
     // message. Assert the request fails rather than pinning the decode-layer text.
@@ -1365,25 +1306,17 @@ async fn publish_post_returns_not_found_for_missing_or_deleted_posts(#[case] bac
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
 
-    let (status, body) =
-        publish_post_form(Arc::clone(&state), PostId::from(999_999), Some(&cookie)).await;
+    let (status, body) = publish_post_form(&state, PostId::from(999_999), Some(&cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 
-    let (status, body) = create_post_json(
-        Arc::clone(&state),
-        "body",
-        "markdown",
-        None,
-        false,
-        Some(&cookie),
-    )
-    .await;
+    let (status, body) =
+        create_post_json(&state, "body", "markdown", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
     state.posts.soft_delete_post(created.post_id).await.unwrap();
 
-    let (status, body) = publish_post_form(state, created.post_id, Some(&cookie)).await;
+    let (status, body) = publish_post_form(&state, created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 }
@@ -1407,7 +1340,7 @@ async fn get_post_finds_author_draft_across_multiple_pages(#[case] backend: Back
         .expect("first draft should exist");
 
     let (status, body) = get_post_form(
-        state,
+        &state,
         &session.username,
         record.created_at.year(),
         record.created_at.month(),
@@ -1432,7 +1365,7 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination(#[case] 
     storage::test_support::seed_posts(&state, author.user_id, 51, true).await;
 
     let (status, body) = create_post_json(
-        Arc::clone(&state),
+        &state,
         "private",
         "markdown",
         None,
@@ -1442,19 +1375,11 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination(#[case] 
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
 
-    let (status, body) = create_post_json(
-        Arc::clone(&state),
-        "body",
-        "markdown",
-        None,
-        true,
-        Some(&other_cookie),
-    )
-    .await;
+    let (status, body) =
+        create_post_json(&state, "body", "markdown", None, true, Some(&other_cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
 
-    let (status, body) =
-        list_user_posts_form(Arc::clone(&state), &author.username, None, None, 50, None).await;
+    let (status, body) = list_user_posts_form(&state, &author.username, None, None, 50, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let first_page: TimelinePage = serde_json::from_str(&body).unwrap();
     assert_eq!(first_page.posts.len(), 50, "body: {body}");
@@ -1477,7 +1402,7 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination(#[case] 
     );
 
     let (status, body) = list_user_posts_form(
-        Arc::clone(&state),
+        &state,
         &author.username,
         first_page.next_cursor_created_at,
         first_page.next_cursor_post_id,
@@ -1496,7 +1421,7 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination(#[case] 
 async fn list_user_posts_rejects_invalid_username(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, body) = list_user_posts_form(state, "Invalid Name", None, None, 50, None).await;
+    let (status, body) = list_user_posts_form(&state, "Invalid Name", None, None, 50, None).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("username"), "body: {body}");
 }
@@ -1514,7 +1439,7 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
     storage::test_support::seed_posts(&state, other.user_id, 26, true).await;
 
     let (status, body) = create_post_json(
-        Arc::clone(&state),
+        &state,
         "private",
         "markdown",
         None,
@@ -1524,20 +1449,13 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
 
-    let (status, body) = create_post_json(
-        Arc::clone(&state),
-        "gone",
-        "markdown",
-        None,
-        true,
-        Some(&author_cookie),
-    )
-    .await;
+    let (status, body) =
+        create_post_json(&state, "gone", "markdown", None, true, Some(&author_cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let deleted: CreatePostResult = serde_json::from_str(&body).unwrap();
     state.posts.soft_delete_post(deleted.post_id).await.unwrap();
 
-    let (status, body) = list_local_timeline_form(Arc::clone(&state), None, None, 50, None).await;
+    let (status, body) = list_local_timeline_form(&state, None, None, 50, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let first_page: TimelinePage = serde_json::from_str(&body).unwrap();
     assert_eq!(first_page.posts.len(), 50, "body: {body}");
@@ -1574,7 +1492,7 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
     );
 
     let (status, body) = list_local_timeline_form(
-        Arc::clone(&state),
+        &state,
         first_page.next_cursor_created_at,
         first_page.next_cursor_post_id,
         50,
@@ -1598,7 +1516,7 @@ async fn list_home_feed_returns_authenticated_users_published_posts_only(#[case]
     storage::test_support::seed_posts(&state, author.user_id, 51, true).await;
 
     let (status, body) = create_post_json(
-        Arc::clone(&state),
+        &state,
         "private",
         "markdown",
         None,
@@ -1611,7 +1529,7 @@ async fn list_home_feed_returns_authenticated_users_published_posts_only(#[case]
     for i in 0..3 {
         let request_body = format!("# Post {i}\n\nbody");
         let (status, body) = create_post_json(
-            Arc::clone(&state),
+            &state,
             &request_body,
             "markdown",
             None,
@@ -1622,8 +1540,7 @@ async fn list_home_feed_returns_authenticated_users_published_posts_only(#[case]
         assert_eq!(status, StatusCode::OK, "create body: {body}");
     }
 
-    let (status, body) =
-        list_home_feed_form(Arc::clone(&state), None, None, 50, Some(&author_cookie)).await;
+    let (status, body) = list_home_feed_form(&state, None, None, 50, Some(&author_cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let first_page: TimelinePage = serde_json::from_str(&body).unwrap();
     assert_eq!(first_page.posts.len(), 50, "body: {body}");
@@ -1646,7 +1563,7 @@ async fn list_home_feed_returns_authenticated_users_published_posts_only(#[case]
     );
 
     let (status, body) = list_home_feed_form(
-        Arc::clone(&state),
+        &state,
         first_page.next_cursor_created_at,
         first_page.next_cursor_post_id,
         50,
@@ -1660,7 +1577,7 @@ async fn list_home_feed_returns_authenticated_users_published_posts_only(#[case]
 }
 
 async fn delete_post_form(
-    state: Arc<storage::AppState>,
+    state: &Arc<storage::AppState>,
     post_id: PostId,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
@@ -1679,19 +1596,12 @@ async fn delete_post_soft_deletes_post(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
 
-    let (status, body) = create_post_json(
-        Arc::clone(&state),
-        "gone",
-        "markdown",
-        None,
-        true,
-        Some(&cookie),
-    )
-    .await;
+    let (status, body) =
+        create_post_json(&state, "gone", "markdown", None, true, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
 
-    let (status, body) = delete_post_form(Arc::clone(&state), created.post_id, Some(&cookie)).await;
+    let (status, body) = delete_post_form(&state, created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
 
     // The post should now be gone from storage (deleted_at is set)
@@ -1714,20 +1624,12 @@ async fn delete_post_rejects_non_author(#[case] backend: Backend) {
     let author_cookie = create_user_and_session(&state).await.cookie();
     let stranger_cookie = create_user_and_session(&state).await.cookie();
 
-    let (status, body) = create_post_json(
-        Arc::clone(&state),
-        "mine",
-        "markdown",
-        None,
-        true,
-        Some(&author_cookie),
-    )
-    .await;
+    let (status, body) =
+        create_post_json(&state, "mine", "markdown", None, true, Some(&author_cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
 
-    let (status, body) =
-        delete_post_form(Arc::clone(&state), created.post_id, Some(&stranger_cookie)).await;
+    let (status, body) = delete_post_form(&state, created.post_id, Some(&stranger_cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 }
@@ -1738,19 +1640,12 @@ async fn delete_post_rejects_unauthenticated(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
 
-    let (status, body) = create_post_json(
-        Arc::clone(&state),
-        "body",
-        "markdown",
-        None,
-        true,
-        Some(&cookie),
-    )
-    .await;
+    let (status, body) =
+        create_post_json(&state, "body", "markdown", None, true, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
 
-    let (status, body) = delete_post_form(state, created.post_id, None).await;
+    let (status, body) = delete_post_form(&state, created.post_id, None).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("unauthorized"), "body: {body}");
 }
@@ -1761,22 +1656,15 @@ async fn delete_post_returns_not_found_for_already_deleted_post(#[case] backend:
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
 
-    let (status, body) = create_post_json(
-        Arc::clone(&state),
-        "body",
-        "markdown",
-        None,
-        true,
-        Some(&cookie),
-    )
-    .await;
+    let (status, body) =
+        create_post_json(&state, "body", "markdown", None, true, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
 
-    let (status, body) = delete_post_form(Arc::clone(&state), created.post_id, Some(&cookie)).await;
+    let (status, body) = delete_post_form(&state, created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "first delete body: {body}");
 
-    let (status, body) = delete_post_form(state, created.post_id, Some(&cookie)).await;
+    let (status, body) = delete_post_form(&state, created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 }
@@ -1791,7 +1679,7 @@ async fn deleted_post_excluded_from_timelines_and_returns_404_at_permalink(
     let cookie = session.cookie();
 
     let (status, body) = create_post_json(
-        Arc::clone(&state),
+        &state,
         "# Deletable Post
 
 body",
@@ -1807,16 +1695,16 @@ body",
 
     // Verify post appears in user timeline before deletion
     let (status, body) =
-        list_user_posts_form(Arc::clone(&state), &session.username, None, None, 10, None).await;
+        list_user_posts_form(&state, &session.username, None, None, 10, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(body.contains("Deletable Post"), "expected post in timeline");
 
-    let (status, body) = delete_post_form(Arc::clone(&state), created.post_id, Some(&cookie)).await;
+    let (status, body) = delete_post_form(&state, created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "delete body: {body}");
 
     // Verify excluded from user timeline
     let (status, body) =
-        list_user_posts_form(Arc::clone(&state), &session.username, None, None, 10, None).await;
+        list_user_posts_form(&state, &session.username, None, None, 10, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(
         !body.contains("Deletable Post"),
@@ -1824,7 +1712,7 @@ body",
     );
 
     // Verify excluded from local timeline
-    let (status, body) = list_local_timeline_form(Arc::clone(&state), None, None, 10, None).await;
+    let (status, body) = list_local_timeline_form(&state, None, None, 10, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(
         !body.contains("Deletable Post"),
@@ -1840,16 +1728,8 @@ body",
     let day: u32 = parts[3].parse().unwrap();
     let slug = parts[4];
 
-    let (status, body) = get_post_form(
-        Arc::clone(&state),
-        &session.username,
-        year,
-        month,
-        day,
-        slug,
-        None,
-    )
-    .await;
+    let (status, body) =
+        get_post_form(&state, &session.username, year, month, day, slug, None).await;
     assert_eq!(StatusCode::NOT_FOUND, status, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 }
@@ -1862,7 +1742,7 @@ async fn unpublish_post_reverts_published_post_to_draft(#[case] backend: Backend
     let cookie = session.cookie();
 
     let (status, body) = create_post_json(
-        Arc::clone(&state),
+        &state,
         "# Unpublish Me
 
 body",
@@ -1876,13 +1756,12 @@ body",
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
     assert!(created.published_at.is_some(), "should be published");
 
-    let (status, body) =
-        unpublish_post_form(Arc::clone(&state), created.post_id, Some(&cookie)).await;
+    let (status, body) = unpublish_post_form(&state, created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "unpublish body: {body}");
 
     // Should no longer appear in the user timeline
     let (status, body) =
-        list_user_posts_form(Arc::clone(&state), &session.username, None, None, 10, None).await;
+        list_user_posts_form(&state, &session.username, None, None, 10, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(
         !body.contains("Unpublish Me"),
@@ -1890,7 +1769,7 @@ body",
     );
 
     // Should appear in drafts
-    let (status, body) = list_drafts_form(Arc::clone(&state), None, None, 50, Some(&cookie)).await;
+    let (status, body) = list_drafts_form(&state, None, None, 50, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(
         body.contains("unpublish-me"),
@@ -1906,7 +1785,7 @@ async fn unpublish_post_rejects_non_author(#[case] backend: Backend) {
     let other_cookie = create_user_and_session(&state).await.cookie();
 
     let (status, body) = create_post_json(
-        Arc::clone(&state),
+        &state,
         "# Others Post
 
 body",
@@ -1919,7 +1798,7 @@ body",
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
 
-    let (status, body) = unpublish_post_form(state, created.post_id, Some(&other_cookie)).await;
+    let (status, body) = unpublish_post_form(&state, created.post_id, Some(&other_cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 }
@@ -1932,7 +1811,7 @@ async fn list_user_posts_carries_tags_per_post(#[case] backend: Backend) {
     let cookie = session.cookie();
 
     let (status, body) = create_post_json(
-        Arc::clone(&state),
+        &state,
         "# Tagged Post\n\nbody",
         "markdown",
         None,
@@ -1957,15 +1836,8 @@ async fn list_user_posts_carries_tags_per_post(#[case] backend: Backend) {
         .await
         .unwrap();
 
-    let (status, body) = list_user_posts_form(
-        Arc::clone(&state),
-        &session.username,
-        None,
-        None,
-        50,
-        Some(&cookie),
-    )
-    .await;
+    let (status, body) =
+        list_user_posts_form(&state, &session.username, None, None, 50, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "list body: {body}");
     let page: TimelinePage = serde_json::from_str(&body).unwrap();
     assert_eq!(page.posts.len(), 1);
@@ -1986,7 +1858,7 @@ async fn get_post_carries_tags(#[case] backend: Backend) {
     let cookie = session.cookie();
 
     let (status, body) = create_post_json(
-        Arc::clone(&state),
+        &state,
         "# Tagged Post\n\nbody",
         "markdown",
         None,
@@ -2016,7 +1888,7 @@ async fn get_post_carries_tags(#[case] backend: Backend) {
         .unwrap();
 
     let (status, body) = get_post_form(
-        Arc::clone(&state),
+        &state,
         &session.username,
         published_at.year(),
         published_at.month(),
@@ -2052,13 +1924,7 @@ async fn create_post_applies_tags_from_param(#[case] backend: Backend) {
             "tags": ["Rust", "web-dev"],
         }
     });
-    let (status, body) = post_json(
-        Arc::clone(&state),
-        "/api/create_post",
-        payload,
-        Some(&cookie),
-    )
-    .await;
+    let (status, body) = post_json(&state, "/api/create_post", payload, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
 
@@ -2086,7 +1952,7 @@ async fn create_post_rejects_invalid_tag_token(#[case] backend: Backend) {
             "tags": ["rust", "not a valid tag!"],
         }
     });
-    let (status, body) = post_json(state, "/api/create_post", payload, Some(&cookie)).await;
+    let (status, body) = post_json(&state, "/api/create_post", payload, Some(&cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     // The invalid token is now rejected at the wire→TagLabel parse, surfacing
     // InvalidTagLabel's own message (the single validation source) rather than the
@@ -2109,7 +1975,7 @@ async fn create_post_rejects_more_than_25_tags(#[case] backend: Backend) {
             "tags": many,
         }
     });
-    let (status, body) = post_json(state, "/api/create_post", payload, Some(&cookie)).await;
+    let (status, body) = post_json(&state, "/api/create_post", payload, Some(&cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("too many tags"), "body: {body}");
 }
@@ -2129,13 +1995,7 @@ async fn update_post_applies_tag_set_diff(#[case] backend: Backend) {
             "tags": ["rust", "old-tag"],
         }
     });
-    let (status, body) = post_json(
-        Arc::clone(&state),
-        "/api/create_post",
-        create_payload,
-        Some(&cookie),
-    )
-    .await;
+    let (status, body) = post_json(&state, "/api/create_post", create_payload, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
 
@@ -2150,13 +2010,7 @@ async fn update_post_applies_tag_set_diff(#[case] backend: Backend) {
             "tags": ["rust", "new-tag"],
         }
     });
-    let (status, body) = post_json(
-        Arc::clone(&state),
-        "/api/update_post",
-        update_payload,
-        Some(&cookie),
-    )
-    .await;
+    let (status, body) = post_json(&state, "/api/update_post", update_payload, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "update body: {body}");
 
     let stored = state
@@ -2191,7 +2045,8 @@ async fn list_posts_by_tag_returns_matching_posts_from_all_users(#[case] backend
                     "tags": tags,
                 }
             });
-            let (status, body) = post_json(state, "/api/create_post", payload, Some(&cookie)).await;
+            let (status, body) =
+                post_json(&state, "/api/create_post", payload, Some(&cookie)).await;
             assert_eq!(status, StatusCode::OK, "create body: {body}");
             serde_json::from_str::<CreatePostResult>(&body).unwrap()
         }
@@ -2222,7 +2077,7 @@ async fn list_posts_by_tag_returns_matching_posts_from_all_users(#[case] backend
     )
     .await;
 
-    let (status, body) = list_posts_by_tag_form(Arc::clone(&state), "rust", None).await;
+    let (status, body) = list_posts_by_tag_form(&state, "rust", None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let page: TimelinePage = serde_json::from_str(&body).unwrap();
     // Three posts carry the "rust" tag, across both authors.
@@ -2238,7 +2093,7 @@ async fn list_posts_by_tag_returns_matching_posts_from_all_users(#[case] backend
 async fn list_posts_by_tag_returns_empty_for_unknown_tag(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, body) = list_posts_by_tag_form(state, "rust", None).await;
+    let (status, body) = list_posts_by_tag_form(&state, "rust", None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let page: TimelinePage = serde_json::from_str(&body).unwrap();
     assert!(page.posts.is_empty());
@@ -2266,7 +2121,8 @@ async fn list_user_posts_by_tag_scopes_to_user(#[case] backend: Backend) {
                     "tags": ["shared"],
                 }
             });
-            let (status, body) = post_json(state, "/api/create_post", payload, Some(&cookie)).await;
+            let (status, body) =
+                post_json(&state, "/api/create_post", payload, Some(&cookie)).await;
             assert_eq!(status, StatusCode::OK, "create body: {body}");
         }
     };
@@ -2274,7 +2130,7 @@ async fn list_user_posts_by_tag_scopes_to_user(#[case] backend: Backend) {
     create(bob_cookie, "# Bob Post\n\nbody").await;
 
     let (status, body) =
-        list_user_posts_by_tag_form(Arc::clone(&state), &author.username, "shared", None).await;
+        list_user_posts_by_tag_form(&state, &author.username, "shared", None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let page: TimelinePage = serde_json::from_str(&body).unwrap();
     assert_eq!(page.posts.len(), 1);
@@ -2286,7 +2142,7 @@ async fn list_user_posts_by_tag_scopes_to_user(#[case] backend: Backend) {
 async fn list_user_posts_by_tag_unknown_user_returns_not_found(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, body) = list_user_posts_by_tag_form(state, "nobody", "rust", None).await;
+    let (status, body) = list_user_posts_by_tag_form(&state, "nobody", "rust", None).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("user"), "body: {body}");
 }
@@ -2306,13 +2162,7 @@ async fn update_post_with_tags_unset_leaves_existing_tags_alone(#[case] backend:
             "tags": ["keep"],
         }
     });
-    let (status, body) = post_json(
-        Arc::clone(&state),
-        "/api/create_post",
-        create_payload,
-        Some(&cookie),
-    )
-    .await;
+    let (status, body) = post_json(&state, "/api/create_post", create_payload, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
 
@@ -2326,13 +2176,7 @@ async fn update_post_with_tags_unset_leaves_existing_tags_alone(#[case] backend:
             "publish": false,
         }
     });
-    let (status, body) = post_json(
-        Arc::clone(&state),
-        "/api/update_post",
-        update_payload,
-        Some(&cookie),
-    )
-    .await;
+    let (status, body) = post_json(&state, "/api/update_post", update_payload, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "update body: {body}");
 
     let stored = state
@@ -2349,13 +2193,7 @@ async fn update_post_with_tags_unset_leaves_existing_tags_alone(#[case] backend:
 async fn get_default_post_format_returns_markdown_by_default(#[case] backend: Backend) {
     let (_base, state, cookie) = login_and_state(backend).await;
 
-    let (status, body) = post_form(
-        Arc::clone(&state),
-        "/api/get_default_post_format",
-        "",
-        Some(&cookie),
-    )
-    .await;
+    let (status, body) = post_form(&state, "/api/get_default_post_format", "", Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "get body: {body}");
     assert_eq!(
         body, "\"markdown\"",
@@ -2369,7 +2207,7 @@ async fn set_default_post_format_persists_and_retrieves_markdown(#[case] backend
     let (_base, state, cookie) = login_and_state(backend).await;
 
     let (status, body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/set_default_post_format",
         "format=markdown",
         Some(&cookie),
@@ -2377,13 +2215,7 @@ async fn set_default_post_format_persists_and_retrieves_markdown(#[case] backend
     .await;
     assert_eq!(status, StatusCode::OK, "set body: {body}");
 
-    let (status, body) = post_form(
-        Arc::clone(&state),
-        "/api/get_default_post_format",
-        "",
-        Some(&cookie),
-    )
-    .await;
+    let (status, body) = post_form(&state, "/api/get_default_post_format", "", Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "get body: {body}");
     assert_eq!(
         body, "\"markdown\"",
@@ -2458,7 +2290,7 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     let stranger_cookie = create_session_for(&state, stranger).await.cookie();
 
     // Anonymous viewer: only the Public post.
-    let (status, body) = list_local_timeline_form(Arc::clone(&state), None, None, 50, None).await;
+    let (status, body) = list_local_timeline_form(&state, None, None, 50, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let anon: TimelinePage = serde_json::from_str(&body).unwrap();
     assert_eq!(
@@ -2469,7 +2301,7 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
 
     // Author: sees all of their own posts, including the private one.
     let (status, body) =
-        list_local_timeline_form(Arc::clone(&state), None, None, 50, Some(&author_cookie)).await;
+        list_local_timeline_form(&state, None, None, 50, Some(&author_cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let authored: TimelinePage = serde_json::from_str(&body).unwrap();
     assert_eq!(
@@ -2487,8 +2319,7 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
 
     // Active subscriber + named member: Public + Subscribers + Named (not Private).
     let (status, body) =
-        list_local_timeline_form(Arc::clone(&state), None, None, 50, Some(&subscriber_cookie))
-            .await;
+        list_local_timeline_form(&state, None, None, 50, Some(&subscriber_cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let sub: TimelinePage = serde_json::from_str(&body).unwrap();
     assert_eq!(
@@ -2511,7 +2342,7 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     // proving viewer_identity yields a Channel viewer that is correctly *not*
     // admitted to subscriber/named content).
     let (status, body) =
-        list_local_timeline_form(Arc::clone(&state), None, None, 50, Some(&stranger_cookie)).await;
+        list_local_timeline_form(&state, None, None, 50, Some(&stranger_cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let stranger_page: TimelinePage = serde_json::from_str(&body).unwrap();
     assert_eq!(
@@ -2553,7 +2384,7 @@ async fn single_post_permalink_hides_subscribers_post_from_anonymous(#[case] bac
 
     // Anonymous → 404 (the resolution filter hides the subscribers-only post).
     let (status, _body) = get_post_form(
-        Arc::clone(&state),
+        &state,
         &author.username,
         y,
         m,
@@ -2571,7 +2402,7 @@ async fn single_post_permalink_hides_subscribers_post_from_anonymous(#[case] bac
     // Active subscriber → 200.
     let subscriber_cookie = create_session_for(&state, subscriber).await.cookie();
     let (status, body) = get_post_form(
-        Arc::clone(&state),
+        &state,
         &author.username,
         y,
         m,
@@ -2606,7 +2437,7 @@ async fn default_audience_selection_returns_public_by_default(#[case] backend: B
     let cookie = author_with_cookie(&state).await;
 
     let (status, body) = post_json(
-        Arc::clone(&state),
+        &state,
         "/api/default_audience_selection",
         serde_json::json!({}),
         Some(&cookie),
@@ -2625,7 +2456,7 @@ async fn default_audience_selection_rejects_unauthenticated(#[case] backend: Bac
     let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, body) = post_json(
-        Arc::clone(&state),
+        &state,
         "/api/default_audience_selection",
         serde_json::json!({}),
         None,
@@ -2642,20 +2473,13 @@ async fn post_audience_selection_returns_public_for_new_post(#[case] backend: Ba
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = author_with_cookie(&state).await;
 
-    let (status, body) = create_post_json(
-        Arc::clone(&state),
-        "Hello",
-        "markdown",
-        None,
-        true,
-        Some(&cookie),
-    )
-    .await;
+    let (status, body) =
+        create_post_json(&state, "Hello", "markdown", None, true, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: CreatePostResult = serde_json::from_str(&body).unwrap();
 
     let (status, body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/post_audience_selection",
         format!("post_id={}", created.post_id),
         Some(&cookie),
@@ -2676,7 +2500,7 @@ async fn post_audience_selection_rejects_missing_post(#[case] backend: Backend) 
     let cookie = author_with_cookie(&state).await;
 
     let (status, body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/post_audience_selection",
         "post_id=99999".to_string(),
         Some(&cookie),
@@ -2695,7 +2519,7 @@ async fn post_audience_selection_rejects_non_owner(#[case] backend: Backend) {
     let other_cookie = user_with_cookie(&state).await;
 
     let (status, body) = create_post_json(
-        Arc::clone(&state),
+        &state,
         "Hello",
         "markdown",
         None,
@@ -2708,7 +2532,7 @@ async fn post_audience_selection_rejects_non_owner(#[case] backend: Backend) {
 
     // A different user must not learn another author's targeting.
     let (status, body) = post_form(
-        Arc::clone(&state),
+        &state,
         "/api/post_audience_selection",
         format!("post_id={}", created.post_id),
         Some(&other_cookie),

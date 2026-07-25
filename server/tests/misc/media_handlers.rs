@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use axum::{
     body::Body,
     http::{header, Request, StatusCode},
@@ -33,7 +31,7 @@ async fn serve_returns_200_with_cache_headers(#[case] backend: Backend) {
     // Upload via the `upload_media` server fn so a file lands on `storage`'s disk;
     // the fn returns 200 with the bare `UploadResponse` JSON.
     let (status, body) = post_multipart(
-        Arc::clone(&state),
+        &state,
         &storage,
         "/api/upload_media",
         MultipartFile {
@@ -50,7 +48,7 @@ async fn serve_returns_200_with_cache_headers(#[case] backend: Backend) {
     let url = upload_json["url"].as_str().unwrap().to_owned();
 
     // A fresh app over the SAME storage serves the persisted file.
-    let app = make_app(Arc::clone(&state), &storage);
+    let app = make_app(&state, &storage);
 
     let serve_response = app
         .oneshot(
@@ -87,7 +85,7 @@ async fn serve_returns_404(backend: Backend, #[case] uri: &str) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage);
+    let app = make_app(&state, &storage);
 
     let response = app
         .oneshot(
@@ -114,7 +112,7 @@ async fn serve_returns_304_on_if_none_match(#[case] backend: Backend) {
 
     // Upload via the `upload_media` server fn so a file lands on `storage`'s disk.
     let (status, body) = post_multipart(
-        Arc::clone(&state),
+        &state,
         &storage,
         "/api/upload_media",
         MultipartFile {
@@ -134,7 +132,7 @@ async fn serve_returns_304_on_if_none_match(#[case] backend: Backend) {
     // expectation tracks the producer.
     let etag = ETag::from_content_hash(&parse_content_hash(&sha256));
 
-    let app = make_app(Arc::clone(&state), &storage);
+    let app = make_app(&state, &storage);
     let resp = app
         .oneshot(
             Request::builder()
@@ -159,7 +157,7 @@ async fn proxy_requires_auth(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage);
+    let app = make_app(&state, &storage);
 
     let response = app
         .oneshot(
@@ -184,7 +182,7 @@ async fn proxy_redirects_authenticated(#[case] backend: Backend) {
     let cookie = session.cookie();
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage);
+    let app = make_app(&state, &storage);
 
     let url = format!(
         "/media/proxy?url=http%3A%2F%2Fexample.com%2Fimage.jpg&user_id={}",
@@ -223,7 +221,7 @@ async fn proxy_rejects_mismatched_user_id(#[case] backend: Backend) {
     let cookie = session.cookie();
 
     let storage = TempDir::new().unwrap();
-    let app = make_app(Arc::clone(&state), &storage);
+    let app = make_app(&state, &storage);
 
     // Pass a different user_id in query params.
     let wrong_user_id = UserId::from(i64::from(user_id) + 999);

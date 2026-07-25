@@ -41,7 +41,7 @@ async fn rsd_document_advertises_service_url(#[case] backend: Backend) {
         })
         .await
         .unwrap();
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     // RSD is public — no authentication required.
     let response = app
@@ -89,7 +89,7 @@ async fn user_page_includes_rsd_autodiscovery_link(
 ) {
     let TestEnv { state, base } = backend.setup().await;
     create_user_and_session(&state).await;
-    let app = make_app(state, &base);
+    let app = make_app(&state, &base);
 
     // Rendering the user page (server-side) hoists the EditURI autodiscovery
     // link into the document head.
