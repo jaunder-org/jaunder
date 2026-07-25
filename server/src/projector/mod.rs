@@ -51,8 +51,8 @@ pub struct Shell(pub Arc<str>);
 
 /// Register the public projector routes. Generic over the router state because
 /// the handlers extract only request `Extension`s (the storage traits + the
-/// shell), never `State`, so they compose onto the live `Router<LeptosOptions>`
-/// in `create_router` and a bare `Router<()>` in tests alike.
+/// shell), never `State`, so they compose onto the bare `Router<()>` in
+/// `create_router` and in tests alike.
 ///
 /// Only the permalink route lands here for now; the profile / timeline / tag
 /// routes arrive with their verticals. Until then those URLs keep hitting the

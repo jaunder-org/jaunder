@@ -14,9 +14,7 @@ use storage::{CreateMediaError, MediaRecord};
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{
-    create_user_and_session, make_app, post_form, post_multipart, test_options, MultipartFile,
-};
+use crate::helpers::{create_user_and_session, make_app, post_form, post_multipart, MultipartFile};
 use common::media::{MaxFileSize, MediaSource, UploadResponse, UserQuota};
 use common::test_support::{
     parse_byte_size, parse_content_hash, parse_content_type, parse_filename,
@@ -466,7 +464,6 @@ async fn media_serve_get(state: &Arc<storage::AppState>, uri: &str) -> StatusCod
         .expect("failed to build request");
 
     let app = jaunder::create_router(
-        test_options(),
         Arc::clone(state),
         noop_mailer(),
         true,

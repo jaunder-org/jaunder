@@ -32,7 +32,6 @@ use crate::assets::StaticAssets;
 use ::storage::AppState;
 
 pub fn create_router(
-    leptos_options: LeptosOptions,
     state: Arc<AppState>,
     mailer: Arc<dyn common::mailer::MailSender>,
     secure_cookies: bool,
@@ -131,5 +130,5 @@ pub fn create_router(
         .layer(axum::Extension(feed_cache_ext))
         .layer(axum::Extension(subscriptions_ext))
         .layer(axum::Extension(sessions_ext));
-    crate::observability::with_http_observability(app).with_state(leptos_options)
+    crate::observability::with_http_observability(app)
 }

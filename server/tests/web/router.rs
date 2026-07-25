@@ -15,13 +15,12 @@ use axum::{
     body::Body,
     http::{header::CONTENT_TYPE, Request, StatusCode},
 };
-use leptos::prelude::LeptosOptions;
 use tower::ServiceExt;
 
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{ensure_server_fns_registered, test_options, tmp_storage_path};
+use crate::helpers::{ensure_server_fns_registered, tmp_storage_path};
 use storage::test_support::{backends, noop_mailer, Backend, TestEnv};
 
 #[apply(backends)]
@@ -32,13 +31,7 @@ async fn home_route_returns_ok(#[case] backend: Backend) {
     local
         .run_until(async {
             ensure_server_fns_registered();
-            let app = jaunder::create_router(
-                test_options(),
-                state,
-                noop_mailer(),
-                true,
-                tmp_storage_path(),
-            );
+            let app = jaunder::create_router(state, noop_mailer(), true, tmp_storage_path());
             let response = app
                 .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
                 .await
@@ -52,18 +45,14 @@ async fn home_route_returns_ok(#[case] backend: Backend) {
 #[tokio::test]
 async fn spa_fallback_serves_embedded_shell_without_disk_index_html(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    // A site_root with no index.html on disk (the host reality, #239). The SPA
-    // fallback must still serve the embedded shell — 200, text/html, boots wasm.
-    let options = LeptosOptions::builder()
-        .output_name("test")
-        .site_root("/tmp/jaunder-nonexistent-site-239")
-        .build();
+    // No index.html exists on disk (the host reality, #239); the server owns the
+    // embedded shell. The SPA fallback must still serve it — 200, text/html,
+    // boots wasm.
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async {
             ensure_server_fns_registered();
-            let app =
-                jaunder::create_router(options, state, noop_mailer(), true, tmp_storage_path());
+            let app = jaunder::create_router(state, noop_mailer(), true, tmp_storage_path());
             // `/login` is a client route → not a projector route → SPA fallback.
             let response = app
                 .oneshot(
@@ -98,13 +87,7 @@ async fn home_response_contains_app_content(#[case] backend: Backend) {
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async {
-            let app = jaunder::create_router(
-                test_options(),
-                state,
-                noop_mailer(),
-                true,
-                tmp_storage_path(),
-            );
+            let app = jaunder::create_router(state, noop_mailer(), true, tmp_storage_path());
             let response = app
                 .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
                 .await
@@ -126,13 +109,7 @@ async fn session_api_route_returns_ok(#[case] backend: Backend) {
     local
         .run_until(async {
             ensure_server_fns_registered();
-            let app = jaunder::create_router(
-                test_options(),
-                state,
-                noop_mailer(),
-                true,
-                tmp_storage_path(),
-            );
+            let app = jaunder::create_router(state, noop_mailer(), true, tmp_storage_path());
             let response = app
                 .oneshot(
                     Request::builder()
