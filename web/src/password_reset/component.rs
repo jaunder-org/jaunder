@@ -68,12 +68,12 @@ pub fn ForgotPasswordPage() -> impl IntoView {
 pub fn ResetPasswordPage() -> impl IntoView {
     use leptos_router::hooks::use_query_map;
 
-    // Read the token once, non-reactively, at component-initialization time.
-    // Using a reactive `prop:value` closure here creates a race: the closure
-    // can fire with an empty query map during WASM hydration (before the
-    // router has finished parsing the URL), resetting the hidden input to ""
-    // and causing the reset submission to fail silently.
-    let token = use_query_map().with_untracked(|q| q.get("token").unwrap_or_default());
+    // The reset token arrives in the URL (`?token=…`) from the emailed reset link,
+    // not typed by hand. Read it once at mount — a plain read is safe here because
+    // the app is CSR (no SSR-hydration race; see the spec/#433) — and feed it to the
+    // hidden input as a fixed value, not a reactive closure that would re-read the
+    // query map for a param that never changes on this page.
+    let token = use_query_map().read().get("token").unwrap_or_default();
 
     let confirm_action = ServerAction::<ConfirmPasswordReset>::new();
     let new_password = Field::<Password>::new();
