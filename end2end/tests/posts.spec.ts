@@ -860,6 +860,19 @@ test("editing a post updates tag chips and tag listing pages", async ({
   await expect(page.locator(".j-post-body")).toContainText("Tag Edit Post");
 });
 
+test("user tag page lists that user's tagged posts", async ({
+  registeredPage: page,
+}) => {
+  const { permalink } = await createPostViaApi(page, {
+    body: "# User Tag Post\n\ncontent",
+    tags: ["utaga"],
+  });
+  const userPath = permalink.match(/^(\/~[^/]+)\//)![1];
+  await goto(page, `${userPath}/tags/utaga`);
+  await waitForSelector(page, ".j-post-body");
+  await expect(page.locator(".j-scroll")).toContainText("User Tag Post");
+});
+
 test("TagInput autocomplete suggests existing tags", async ({
   registeredPage: page,
 }) => {
