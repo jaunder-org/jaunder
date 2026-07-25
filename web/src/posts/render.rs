@@ -39,22 +39,15 @@ pub(crate) fn render_body(seed: &PageSeed) -> String {
             "<div class=\"j-scroll\"><div class=\"j-page\">{}</div></div>",
             permalink_article(post),
         ),
-        // Home (anonymous "Local" mode): the shared masthead + a bare `j-scroll`.
-        PageSeed::SiteTimeline(page) => {
-            let scroll = if page.posts.is_empty() {
-                "<p>No posts yet.</p>".to_string()
-            } else {
-                format!(
-                    "{}{}",
-                    render_posts(&page.posts, &TagCtx::SiteWide),
-                    render_load_more(page.has_more),
-                )
-            };
-            format!(
-                "{masthead}<div class=\"j-scroll\">{scroll}</div>",
-                masthead = crate::render::render_home_masthead(),
-            )
-        }
+        // Home (anonymous "Local" mode): the shared masthead as the leading chrome,
+        // then the same flush timeline body as the profile/tag pages.
+        PageSeed::SiteTimeline(page) => render_timeline_page(
+            &crate::render::render_home_masthead(),
+            &page.posts,
+            page.has_more,
+            &TagCtx::SiteWide,
+            "No posts yet.",
+        ),
         PageSeed::Profile { username, page } => render_timeline_page(
             &topbar::render(&format!("Posts by {username}"), Some("User timeline"), ""),
             &page.posts,
@@ -222,13 +215,15 @@ pub(crate) fn render_post_content(view: &PostView) -> String {
     )
 }
 
-/// A profile / tag timeline page's `<main>` content: the given `topbar`, then
-/// `j-scroll` > `j-page` holding either the empty placeholder or a `<div>` of
-/// posts followed by the load-more button — mirroring `UserTimelinePage` /
-/// `SiteTagPage` / `UserTagPage` (the anonymous `SubscribeButton` renders nothing).
+/// A timeline page's `<main>` content: the given leading `chrome` (a `Topbar`, or
+/// home's masthead), then a bare `j-scroll` holding either the empty placeholder
+/// or the posts followed by the load-more button — the same flush, wrapper-free
+/// structure the shared `TimelineRows` renders, so the projector paint and the
+/// reactive `HomePage` / `UserTimelinePage` / `SiteTagPage` / `UserTagPage`
+/// coincide (the anonymous `SubscribeButton` renders nothing).
 #[must_use]
 fn render_timeline_page(
-    topbar: &str,
+    chrome: &str,
     posts: &[TimelinePostSummary],
     has_more: bool,
     tag_ctx: &TagCtx,
@@ -238,12 +233,12 @@ fn render_timeline_page(
         format!("<p>{}</p>", escape_html(empty_text))
     } else {
         format!(
-            "<div>{}</div>{}",
+            "{}{}",
             render_posts(posts, tag_ctx),
-            render_load_more(has_more),
+            render_load_more(has_more)
         )
     };
-    format!("{topbar}<div class=\"j-scroll\"><div class=\"j-page\">{inner}</div></div>")
+    format!("{chrome}<div class=\"j-scroll\">{inner}</div>")
 }
 
 /// Shared coincidence-test fixtures. Both this module's tests and the projector's
@@ -428,11 +423,12 @@ mod tests {
             tag: "rust".parse().unwrap(),
             page: one_post_page(),
         });
-        // Tag pages render the Topbar (h1 + sub), then j-scroll > j-page > posts.
+        // Tag pages render the Topbar (h1 + sub), then a bare j-scroll > posts (flush,
+        // no j-page — matches TimelineRows and the home test below).
         assert!(site.contains("<h1>#rust</h1>"), "{site}");
         assert!(site.contains("Posts on this instance"), "{site}");
         assert!(
-            site.contains("<div class=\"j-scroll\"><div class=\"j-page\">"),
+            site.contains("<div class=\"j-scroll\"><article class=\"j-post\">"),
             "{site}"
         );
         assert!(site.contains("First"), "expected post rendered: {site}");

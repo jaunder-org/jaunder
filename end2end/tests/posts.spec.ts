@@ -785,7 +785,7 @@ test("tag chip on permalink navigates to site tag listing", async ({
   await waitForSelector(page, '.j-topbar:has-text("#rustlang")');
 
   // Post should appear in the listing
-  await expect(page.locator(".j-page")).toContainText("Chip Nav Post");
+  await expect(page.locator(".j-scroll")).toContainText("Chip Nav Post");
 });
 
 test("editing a post updates tag chips and tag listing pages", async ({
@@ -849,8 +849,8 @@ test("editing a post updates tag chips and tag listing pages", async ({
 
   // /tags/xeditc should no longer list the post
   await goto(page, "/tags/xeditc");
-  await waitForSelector(page, ".j-page");
-  await expect(page.locator(".j-page")).toContainText(
+  await waitForSelector(page, ".j-scroll");
+  await expect(page.locator(".j-scroll")).toContainText(
     "No posts with this tag yet.",
   );
 
@@ -858,6 +858,19 @@ test("editing a post updates tag chips and tag listing pages", async ({
   await goto(page, "/tags/xeditd");
   await waitForSelector(page, ".j-post-body");
   await expect(page.locator(".j-post-body")).toContainText("Tag Edit Post");
+});
+
+test("user tag page lists that user's tagged posts", async ({
+  registeredPage: page,
+}) => {
+  const { permalink } = await createPostViaApi(page, {
+    body: "# User Tag Post\n\ncontent",
+    tags: ["utaga"],
+  });
+  const userPath = permalink.match(/^(\/~[^/]+)\//)![1];
+  await goto(page, `${userPath}/tags/utaga`);
+  await waitForSelector(page, ".j-post-body");
+  await expect(page.locator(".j-scroll")).toContainText("User Tag Post");
 });
 
 test("TagInput autocomplete suggests existing tags", async ({

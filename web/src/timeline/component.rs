@@ -105,6 +105,10 @@ pub fn TimelineRows(
     /// `ForUser` so chips also render the "· here" per-author link.
     #[prop(default = TagContext::SiteWide)]
     tag_context: TagContext,
+    /// Empty-state message when there are no rows. Defaults to the generic
+    /// "No posts yet."; the tag pages pass "No posts with this tag yet.".
+    #[prop(default = "No posts yet.")]
+    empty_text: &'static str,
 ) -> impl IntoView {
     let read_rows = move || state.rows.get();
     let read_has_more = move || state.has_more.get();
@@ -114,7 +118,7 @@ pub fn TimelineRows(
             {move || {
                 let rows = read_rows();
                 if rows.is_empty() {
-                    view! { <p>"No posts yet."</p> }.into_any()
+                    view! { <p>{empty_text}</p> }.into_any()
                 } else {
                     rows.into_iter()
                         .map(|p| {
