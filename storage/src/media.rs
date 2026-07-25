@@ -186,7 +186,7 @@ where
         .bind(i64::from(record.user_id))
         .bind(&record.sha256)
         .bind(&record.filename)
-        .bind(record.source.as_str())
+        .bind(record.source)
         .bind(&record.content_type)
         .bind(i64::from(record.size_bytes))
         .bind(record.source_url.clone())
@@ -226,7 +226,7 @@ where
         .bind(i64::from(user_id))
         .bind(sha256)
         .bind(filename)
-        .bind(source.as_str())
+        .bind(*source)
         .fetch_optional(&self.pool)
         .await?;
 
@@ -259,7 +259,7 @@ where
                  LIMIT $3 OFFSET $4",
             )
             .bind(i64::from(user_id))
-            .bind(src.as_str())
+            .bind(*src)
             .bind(i64::from(limit))
             .bind(i64::from(offset.value()))
             .fetch_all(&self.pool)
@@ -344,7 +344,7 @@ where
              LIMIT 1",
         )
         .bind(sha256)
-        .bind(source.as_str())
+        .bind(*source)
         .fetch_optional(&self.pool)
         .await?;
 
@@ -439,6 +439,14 @@ mod tests {
             "expected a column-decode error, got: {err:?}"
         );
     }
+
+    // No `list_media`/`find_by_hash` invalid-`source` decode-error test: the `media`
+    // table's `source TEXT NOT NULL CHECK (source IN ('upload', 'cached'))` constraint
+    // makes a non-token value structurally unstorable (an INSERT is rejected), so the
+    // `MediaSource` text-enum bridge `Decode` error branch is unreachable at the DB layer.
+    // That branch is shared with `PostFormat`'s `impl_text_column_enum!` instantiation and
+    // is covered by its parse-error tests; the unknown-token rejection itself is asserted
+    // in `common::media`'s `media_source_unknown_token_is_rejected_with_message`.
 
     #[apply(backends)]
     #[tokio::test]

@@ -35,7 +35,7 @@
 use std::path::Path;
 use std::str::FromStr;
 
-use macros::{NumNewtype, StrEnum, StrNewtype};
+use macros::{NumNewtype, StrNewtype};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -213,17 +213,64 @@ pub fn is_valid_content_hash(hash: &str) -> bool {
 }
 
 /// Source of a media record — the provenance segment of the storage layout
-/// (`upload` vs a remote `cached` file). Rides the [`StrEnum`] trailer (#562):
-/// `as_str`/`Display`/`FromStr`/`TryFrom` + the generated `InvalidMediaSource`
-/// error, with the `serde` bridge for the `#[server]` media DTO/wire args (#577).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, StrEnum)]
-#[str_enum(serde, error = "media source must be \"upload\" or \"cached\"")]
+/// (`upload` vs a remote `cached` file). A `strum` string enum (ADR-0075):
+/// `serialize_all = "snake_case"` gives the wire/DB token
+/// (`upload`/`cached`), with a named `InvalidMediaSource` parse error via
+/// `parse_err_ty`/`parse_err_fn`. serde routes through an owned-`String` proxy
+/// (`into`/`try_from`) so a bad wire value surfaces the domain error (the
+/// `#[server]` media DTO/wire args, #577); `impl_text_column_enum!` gives the
+/// typed `sqlx` bind/decode for the stored TEXT token.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+    strum::AsRefStr,
+    strum::Display,
+    strum::EnumString,
+)]
+#[serde(into = "String", try_from = "String")]
+#[strum(serialize_all = "snake_case")]
+#[strum(parse_err_ty = InvalidMediaSource, parse_err_fn = media_source_parse_err)]
 pub enum MediaSource {
     /// File uploaded directly by a local user.
     Upload,
     /// Remote file cached locally by the system.
     Cached,
 }
+
+/// Error returned when a string matches no [`MediaSource`] variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("media source must be \"upload\" or \"cached\"")]
+pub struct InvalidMediaSource;
+
+fn media_source_parse_err(_: &str) -> InvalidMediaSource {
+    InvalidMediaSource
+}
+
+// serde `into`/`try_from` proxy: serialize the wire token, deserialize an owned
+// `String` through `FromStr` so the domain `InvalidMediaSource` message surfaces.
+impl From<MediaSource> for String {
+    fn from(source: MediaSource) -> Self {
+        source.as_ref().to_owned()
+    }
+}
+
+impl TryFrom<String> for MediaSource {
+    type Error = InvalidMediaSource;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
+    }
+}
+
+// Typed `sqlx` bind/decode (feature = "sqlx"): stores/loads the TEXT token as a
+// `MediaSource` value, not a stringly `.as_str()`/`.parse()` strip.
+crate::db_enum::impl_text_column_enum!(MediaSource);
 
 /// Returns `"<source>/<p1>/<p2>/<full-sha256>/<filename>"`, the content-
 /// addressed layout described in the module docs.
@@ -898,7 +945,7 @@ mod tests {
             "cached".parse::<MediaSource>().unwrap(),
             MediaSource::Cached
         );
-        assert_eq!(MediaSource::Upload.as_str(), "upload");
+        assert_eq!(MediaSource::Upload.as_ref(), "upload");
         assert_eq!(MediaSource::Cached.to_string(), "cached");
     }
 
