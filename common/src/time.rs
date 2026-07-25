@@ -81,7 +81,7 @@ impl fmt::Display for UtcInstant {
 /// assembled from the permalink URL's three `/YYYY/MM/DD/` segments via
 /// [`from_ymd`](PermalinkDate::from_ymd). `chrono` is compiled into the CSR/wasm bundle via
 /// `common`, so the type is expressible on both server and wasm client.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PermalinkDate(NaiveDate);
 
 impl PermalinkDate {

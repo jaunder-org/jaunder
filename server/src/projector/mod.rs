@@ -31,6 +31,7 @@ use common::pagination::PageSize;
 use common::seed::{PageSeed, TimelinePage};
 use common::slug::Slug;
 use common::tag::Tag;
+use common::time::PermalinkDate;
 use common::username::Username;
 use common::visibility::ViewerIdentity;
 
@@ -141,7 +142,13 @@ fn shell_response(shell: &Shell) -> Response {
 /// 404) rather than axum's pre-handler 400 — the projector-vs-atompub boundary split (ADR-0063
 /// §4): atompub handlers are strictly typed (400-on-malformed API); the public projector
 /// serves the shell.
-type PermalinkPath = (SoftPath<Username>, i32, u32, u32, SoftPath<Slug>);
+type PermalinkPath = (
+    SoftPath<Username>,
+    SoftPath<i32>,
+    SoftPath<u32>,
+    SoftPath<u32>,
+    SoftPath<Slug>,
+);
 
 async fn permalink(
     Extension(posts): Extension<Arc<dyn PostStorage>>,
@@ -149,18 +156,23 @@ async fn permalink(
     headers: HeaderMap,
     Path((username, year, month, day, slug)): Path<PermalinkPath>,
 ) -> Response {
-    let (Some(username), Some(slug)) = (username.into(), slug.into()) else {
-        // An unparseable segment is never public content — let the client route
-        // it (it may be a server URL the SPA reloads for).
+    // The three `SoftPath` date segments are already `Option`s (soft-deserialized);
+    // present + a real date, else `None` → the shell (soft-404) below.
+    let date = Option::<i32>::from(year)
+        .zip(Option::<u32>::from(month))
+        .zip(Option::<u32>::from(day))
+        .and_then(|((y, m), d)| PermalinkDate::from_ymd(y, m, d));
+    let (Some(username), Some(date), Some(slug)) = (username.into(), date, slug.into()) else {
+        // An unparseable segment — or an impossible date (e.g. month 13) — is never
+        // public content: let the client route it (it may be a server URL the SPA
+        // reloads for), a uniform soft-404 (#583).
         return shell_response(&shell);
     };
     let result = fetch_post_record(
         posts.as_ref(),
         &ViewerIdentity::Anonymous,
         &username,
-        year,
-        month,
-        day,
+        date,
         &slug,
     )
     .await;

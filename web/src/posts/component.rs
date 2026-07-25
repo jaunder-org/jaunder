@@ -38,6 +38,7 @@ use common::seed::{PageSeed, PostResponse, TagSummary, TimelinePostSummary};
 use common::slug::Slug;
 use common::tag::Tag;
 use common::time::utc_instant_from_local;
+use common::time::PermalinkDate;
 use common::username::Username;
 use common::visibility::{AudienceBase, AudienceSelection};
 
@@ -901,7 +902,7 @@ fn permalink_first_paint(seed_post: Option<PostResponse>) -> AnyView {
 /// is folded into the key (not merely tracked) so an in-place publish — same URL, so the
 /// params are unchanged — still changes the key and forces a re-fetch (#592). Named to
 /// keep the fetcher signature clear of `clippy::type_complexity`.
-type PermalinkFetchKey = (Option<Username>, i32, u32, u32, Option<Slug>, u32);
+type PermalinkFetchKey = (Option<Username>, Option<PermalinkDate>, Option<Slug>, u32);
 
 #[component]
 pub fn PostPage() -> impl IntoView {
@@ -937,10 +938,10 @@ pub fn PostPage() -> impl IntoView {
     let refetch = RwSignal::new(0u32);
     let post = Resource::new(
         move || {
-            let (username, year, month, day, slug) = post_data();
-            (username, year, month, day, slug, refetch.get())
+            let (username, date, slug) = post_data();
+            (username, date, slug, refetch.get())
         },
-        |(username, year, month, day, slug, _): PermalinkFetchKey| async move {
+        |(username, date, slug, _): PermalinkFetchKey| async move {
             let Some(username) = username else {
                 // A `~`-prefixed but unparseable username is a malformed permalink, so
                 // 404 client-side without a round-trip — matching the invalid-slug arm
@@ -949,13 +950,18 @@ pub fn PostPage() -> impl IntoView {
                 // old reload escape hatch is gone (#592).
                 return Err(WebError::validation("Invalid permalink"));
             };
+            // An absent, non-numeric, or impossible date names no post: 404
+            // client-side without a round-trip, beside the username/slug arms.
+            let Some(date) = date else {
+                return Err(WebError::validation("Invalid permalink"));
+            };
             // A '~'-prefixed permalink with an unparseable slug is a malformed
             // permalink (not a server URL): 404 client-side without calling the
             // server, matching the pre-typing behavior where get_post rejected it.
             let Some(slug) = slug else {
                 return Err(WebError::validation("Invalid permalink"));
             };
-            get_post(username, year, month, day, slug).await
+            get_post(username, date, slug).await
         },
     );
 

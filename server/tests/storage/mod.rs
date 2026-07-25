@@ -6,7 +6,7 @@ use common::tag::{Tag, TagLabel};
 use common::test_support::{
     parse_audience_name, parse_bio, parse_byte_size, parse_content_hash, parse_content_type,
     parse_display_name, parse_email, parse_etag, parse_filename, parse_page_offset,
-    parse_raw_token, parse_session_label, parse_slug,
+    parse_raw_token, parse_session_label, parse_slug, permalink_date,
 };
 use common::username::Username;
 use common::visibility::{
@@ -18,7 +18,7 @@ use std::sync::Arc;
 use storage::{
     create_rendered_post, open_database, perform_post_update, update_rendered_post, AppState,
     AudienceError, ConfirmPasswordResetError, CreatePostError, CreateUserError, DbConnectOptions,
-    FeedCacheRow, GoLivePost, ListByTagError, PermalinkDate, PostCursor, PostFormat, PostUpdate,
+    FeedCacheRow, GoLivePost, ListByTagError, PostCursor, PostFormat, PostUpdate,
     PostgresSubscriptionStorage, ProfileUpdate, PublishUpdate, RegisterWithInviteError,
     RenderedHtml, RenderedPostContent, RenderedPostUpdate, SessionAuthError,
     SqliteSubscriptionStorage, SubscriptionStorage, TaggingError, UpdatePostError, UpdatePostInput,
@@ -1869,11 +1869,7 @@ async fn permalink_hides_scheduled_until_due(#[case] backend: Backend) {
         .posts
         .get_post_by_permalink(
             &user.username,
-            PermalinkDate {
-                year: 2026,
-                month: 6,
-                day: 26,
-            },
+            permalink_date(2026, 6, 26),
             &"live-one".parse().unwrap(),
             &ViewerIdentity::Anonymous,
             now,
@@ -1885,11 +1881,7 @@ async fn permalink_hides_scheduled_until_due(#[case] backend: Backend) {
         .posts
         .get_post_by_permalink(
             &user.username,
-            PermalinkDate {
-                year: 2026,
-                month: 6,
-                day: 26,
-            },
+            permalink_date(2026, 6, 26),
             &"sched-one".parse().unwrap(),
             &ViewerIdentity::Anonymous,
             now,
@@ -1907,11 +1899,7 @@ async fn permalink_hides_scheduled_until_due(#[case] backend: Backend) {
         .posts
         .get_post_by_permalink(
             &user.username,
-            PermalinkDate {
-                year: 2026,
-                month: 6,
-                day: 26,
-            },
+            permalink_date(2026, 6, 26),
             &"sched-one".parse().unwrap(),
             &ViewerIdentity::Anonymous,
             after,
@@ -4567,11 +4555,7 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
         .posts
         .get_post_by_permalink(
             &user.username,
-            PermalinkDate {
-                year: created_at.year(),
-                month: created_at.month(),
-                day: created_at.day(),
-            },
+            permalink_date(created_at.year(), created_at.month(), created_at.day()),
             &seeded.slug,
             &ViewerIdentity::Anonymous,
             Utc::now(),
@@ -4590,11 +4574,7 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
         .posts
         .get_post_by_permalink(
             &user.username,
-            PermalinkDate {
-                year: created_at.year(),
-                month: created_at.month(),
-                day: created_at.day(),
-            },
+            permalink_date(created_at.year(), created_at.month(), created_at.day()),
             &seeded.slug,
             &ViewerIdentity::Anonymous,
             Utc::now(),

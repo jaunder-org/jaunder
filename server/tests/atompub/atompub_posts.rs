@@ -4,6 +4,7 @@ use axum::{
 };
 use common::ids::PostId;
 use common::tag::TagLabel;
+use common::test_support::permalink_date;
 use tower::ServiceExt;
 
 use rstest::*;
@@ -1327,11 +1328,7 @@ async fn create_with_future_published_is_scheduled(#[case] backend: Backend) {
         .posts
         .get_post_by_permalink(
             &session.username,
-            storage::PermalinkDate {
-                year: 2099,
-                month: 1,
-                day: 1,
-            },
+            permalink_date(2099, 1, 1),
             &rec.slug,
             &viewer,
             chrono::Utc::now(),
