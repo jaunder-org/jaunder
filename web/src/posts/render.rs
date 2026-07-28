@@ -14,8 +14,8 @@
 //! tests that protect the byte-identical output.
 
 use crate::html::escape_html;
-use crate::render::render_load_more;
 use crate::taglist::TagCtx;
+use crate::timeline::render::render_load_more;
 use crate::{avatar, taglist, topbar};
 use common::render::RenderedHtml;
 use common::seed::{PageSeed, PostResponse, TagSummary, TimelinePostSummary};

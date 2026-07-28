@@ -14,18 +14,6 @@
 //! (#330); the remaining primitives here are dissolved onto their co-located homes
 //! by #658.
 
-/// The non-functional "Load more" button the projector paints so the reactive
-/// button (which replaces it on boot) doesn't reflow. Rendered only when there is
-/// a next page, matching the reactive `has_more` guard.
-#[must_use]
-pub(crate) fn render_load_more(has_more: bool) -> String {
-    if has_more {
-        "<button>Load more</button>".to_string()
-    } else {
-        String::new()
-    }
-}
-
 /// Formats a byte count as a human-readable size (`B` / `KB` / `MB` / `GB`, one
 /// decimal). Shared display formatter, host-tested here.
 #[expect(

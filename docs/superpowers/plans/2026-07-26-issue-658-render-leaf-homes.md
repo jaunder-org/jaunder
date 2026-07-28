@@ -425,7 +425,7 @@ Commit via `jaunder-commit` with message:
 - Produces:
   `crate::timeline::render::render_load_more(has_more: bool) -> String`.
 
-- [ ] **Step 1: Create destination tests and wiring first.**
+- [x] **Step 1: Create destination tests and wiring first.**
 
 In `web/src/timeline/mod.rs`, add `pub(crate) mod render;`.
 
@@ -448,13 +448,13 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail.**
+- [x] **Step 2: Run the tests, verify they fail.**
 
 Run: `devtool run -- cargo nextest run -p web load_more_placeholder`
 
 Expected: FAIL — `render_load_more` is not defined yet.
 
-- [ ] **Step 3: Move implementation and repoint callers.**
+- [x] **Step 3: Move implementation and repoint callers.**
 
 Move the existing `render_load_more` body from `web/src/render/mod.rs` to
 `web/src/timeline/render.rs` above the tests with signature:
@@ -469,14 +469,18 @@ Update `web/src/posts/render.rs` to call/import
 Delete the old function from `web/src/render/mod.rs`. Keep the existing
 `posts::render` composed body test that asserts the button appears/disappears.
 
-- [ ] **Step 4: Run focused checks, verify pass.**
+- [x] **Step 4: Run focused checks, verify pass.**
 
 Run: `devtool run -- cargo nextest run -p web load_more_placeholder`
 
 Expected: PASS.
 
 Run:
-`devtool run -- cargo nextest run -p web load_more_button_matches_has_more_state`
+`devtool run -- cargo nextest run -p web load_more_button_rendered_only_when_has_more`
+
+(The plan originally named this test `load_more_button_matches_has_more_state`,
+which matches nothing — an empty nextest filter still exits 0, so that step
+would have passed vacuously. Corrected to the real name in `posts::render`.)
 
 Expected: PASS.
 
@@ -484,7 +488,7 @@ Run: `devtool run -- cargo xtask check --no-test`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 Commit via `jaunder-commit` with message:
 `refactor(web): move load more renderer to timeline leaf (#658)`.
