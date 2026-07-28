@@ -327,7 +327,7 @@ Commit via `jaunder-commit` with message:
 - Produces: `crate::home::render::render_masthead() -> String`.
   `render_hero() -> String` remains private inside `home::render`.
 
-- [ ] **Step 1: Create destination test and wiring first.**
+- [x] **Step 1: Create destination test and wiring first.**
 
 In `web/src/home/mod.rs`, add `pub(crate) mod render;` beside the existing
 component module declaration.
@@ -358,14 +358,14 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run the test, verify it fails.**
+- [x] **Step 2: Run the test, verify it fails.**
 
 Run:
 `devtool run -- cargo nextest run -p web home_masthead_has_topbar_hero_and_anon_only_cta`
 
 Expected: FAIL — `render_masthead` is not defined yet.
 
-- [ ] **Step 3: Move implementation and repoint callers.**
+- [x] **Step 3: Move implementation and repoint callers.**
 
 Move `render_hero` and `render_home_masthead` from `web/src/render/mod.rs` to
 `web/src/home/render.rs` above the tests.
@@ -388,7 +388,7 @@ Repoint callers:
 Delete the old home masthead functions and old test from
 `web/src/render/mod.rs`.
 
-- [ ] **Step 4: Run focused checks, verify pass.**
+- [x] **Step 4: Run focused checks, verify pass.**
 
 Run:
 `devtool run -- cargo nextest run -p web home_masthead_has_topbar_hero_and_anon_only_cta`
@@ -403,7 +403,7 @@ Run: `devtool run -- cargo xtask check --no-test`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 Commit via `jaunder-commit` with message:
 `refactor(web): move home masthead renderer to home leaf (#658)`.
