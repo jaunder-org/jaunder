@@ -1,7 +1,7 @@
 //! The pure post-render twins (ADR-0070 extra host-compiled leaf).
 //!
 //! These non-reactive, plain-string HTML builders are shared by BOTH the
-//! server-side projector (`crate::render`, via `render_shell`/`render_body`) and
+//! server-side projector (`crate::app::render`, via `render_shell`) and
 //! the reactive `PostDisplay` component (`crate::posts::component`): both call the SAME
 //! function on the SAME data, so the projector's server-painted post markup and
 //! the client's reactive first paint coincide byte-for-byte (flash-free, #181 /
@@ -244,7 +244,7 @@ fn render_timeline_page(
 }
 
 /// Shared coincidence-test fixtures. Both this module's tests and the projector's
-/// tests in `crate::render` build their expectations from these SAME values, so the
+/// tests in `crate::app::render` build their expectations from these SAME values, so the
 /// projector↔reactive byte-coincidence is checked against one definition (a divergent
 /// copy would silently make the two suites assert on different posts).
 #[cfg(test)]

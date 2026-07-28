@@ -615,13 +615,13 @@ Commit via `jaunder-commit` with message:
 - Consumes: all task outputs above.
 - Produces: no `web::render` module; live callsites use co-located homes only.
 
-- [ ] **Step 1: Remove the module and root export.**
+- [x] **Step 1: Remove the module and root export.**
 
 Delete `web/src/render/mod.rs` and the now-empty `web/src/render/` directory.
 
 Remove `pub mod render;` from `web/src/lib.rs`.
 
-- [ ] **Step 2: Search for stale live references and update comments.**
+- [x] **Step 2: Search for stale live references and update comments.**
 
 Run source searches with the Grep tool, not shell pipelines:
 
@@ -636,7 +636,7 @@ Expected: no live code references to the deleted module. Remaining source
 `crate::posts::render`, `crate::app::render`, `crate::home::render`, or
 `crate::timeline::render`.
 
-- [ ] **Step 3: Run static gate.**
+- [x] **Step 3: Run static gate.**
 
 Run: `devtool run -- cargo xtask check --no-test`
 
@@ -649,7 +649,7 @@ Run: `devtool run -- cargo xtask validate`
 Expected: PASS, including the e2e matrix that renders projector
 shell/home/timeline/sidebar/post/tag/media surfaces.
 
-- [ ] **Step 5: Final conformance check.**
+- [x] **Step 5: Final conformance check.**
 
 Confirm each acceptance criterion from
 `docs/superpowers/specs/2026-07-26-issue-658-render-leaf-homes.md`:
@@ -660,7 +660,7 @@ Confirm each acceptance criterion from
 - no `web::render` shim exists.
 - tests that moved with helpers are present at their new homes.
 
-- [ ] **Step 6: Commit final deletion if Task 7 changed files after Task 6.**
+- [x] **Step 6: Commit final deletion if Task 7 changed files after Task 6.**
 
 Run: `devtool run -- cargo xtask check --no-test`
 

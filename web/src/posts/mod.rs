@@ -18,7 +18,7 @@ mod server;
 mod component;
 
 // The pure post-render twins (host-compiled leaf, ADR-0070): plain-string HTML
-// builders shared by the projector (`crate::render`) and the reactive
+// builders shared by the projector (`crate::app::render`) and the reactive
 // `PostDisplay`, reachable crate-wide as `crate::posts::render::…`.
 pub(crate) mod render;
 

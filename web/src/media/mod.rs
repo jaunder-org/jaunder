@@ -12,9 +12,9 @@ mod format;
 #[cfg(target_arch = "wasm32")]
 mod component;
 
-// Exported (as `web::render::format_bytes` was) rather than `pub(crate)`: its only
-// caller is the wasm-only `component`, so a crate-internal item would read as dead
-// code on the host build, where that leaf is compiled out.
+// Exported rather than `pub(crate)`: its only caller is the wasm-only `component`,
+// so a crate-internal item would read as dead code on the host build, where that
+// leaf is compiled out.
 pub use format::format_bytes;
 
 pub use api::{
