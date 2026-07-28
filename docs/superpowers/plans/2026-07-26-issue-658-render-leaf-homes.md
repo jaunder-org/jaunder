@@ -525,8 +525,10 @@ In `web/src/media/mod.rs`, add:
 
 ```rust
 mod format;
-pub(crate) use format::format_bytes;
+pub use format::format_bytes;
 ```
+
+(Amended from `pub(crate)` — see the deviation note under **Interfaces** above.)
 
 Create `web/src/media/format.rs` with only these tests:
 
@@ -574,7 +576,7 @@ Move `format_bytes` and its existing
 signature:
 
 ```rust
-pub(crate) fn format_bytes(bytes: impl Into<i64>) -> String
+pub fn format_bytes(bytes: impl Into<i64>) -> String
 ```
 
 Update `web/src/media/component.rs` to import/use `super::format_bytes` instead
@@ -642,12 +644,19 @@ Run: `devtool run -- cargo xtask check --no-test`
 
 Expected: PASS.
 
-- [ ] **Step 4: Run full local gate.**
+- [x] **Step 4: Run full local gate.**
 
 Run: `devtool run -- cargo xtask validate`
 
 Expected: PASS, including the e2e matrix that renders projector
 shell/home/timeline/sidebar/post/tag/media surfaces.
+
+**What actually ran:** `validate --no-e2e` (green) plus a single e2e combo,
+`cargo xtask e2e sqlite chromium` (green) — not all four `{backend}×{browser}`
+combos. A full local `validate` runs the four e2e VMs concurrently, which
+starves and dies under host contention here; CI is the authoritative matrix
+(ADR-0034) and runs each combo on its own runner. The remaining three combos are
+covered by the PR's `e2e gate` job, which must be green before merge.
 
 - [x] **Step 5: Final conformance check.**
 

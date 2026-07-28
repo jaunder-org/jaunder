@@ -45,7 +45,7 @@ feed/RSD links are `<head>` `<link>`s, never clicked; media files are 6-segment
    allowlist: the only remaining document loads are inherent and outside the
    scan — cold entry (typing a URL, external links, hard refresh, crawlers), the
    browser fetching a server-owned non-HTML resource (a media file, a feed), and
-   the pre-paint `/`→`/app` redirect (`web/src/render/mod.rs`, a JS _string_ the
+   the pre-paint `/`→`/app` redirect (`web/src/app/render.rs`, a JS _string_ the
    AST scan never sees).
 
 2. **The SPA user namespace is `~`-prefixed.** The permalink route's leading

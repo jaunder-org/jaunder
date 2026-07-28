@@ -1195,7 +1195,7 @@
                       (pkgs.lib.hasSuffix ".sql" path)
                       || (pkgs.lib.hasSuffix ".css" path)
                       || (builtins.match "scripts/.*" path != null)
-                      # web/src/render/mod.rs `include_str!`s csr/index.html
+                      # web/src/app/render.rs `include_str!`s csr/index.html
                       # inside a #[test], so the instrumented coverage BUILD needs
                       # it at compile time. filterCargoSources drops .html, so
                       # re-admit it explicitly or the build fails to compile.

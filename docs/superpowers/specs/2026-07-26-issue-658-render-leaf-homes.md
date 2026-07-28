@@ -114,7 +114,12 @@ Create `web/src/media/format.rs`:
 - Keep the existing `#[expect(clippy::cast_precision_loss, …)]` with the same
   reason.
 - Update `media/mod.rs` to declare `mod format;` and
-  `pub(crate) use format::format_bytes;`.
+  `pub use format::format_bytes;` — amended from the drafted `pub(crate)`, which
+  does not compile: `format_bytes`'s only caller is the wasm-only
+  `media::component`, so on the host build a crate-internal item is unreachable
+  and clippy fails with `dead_code` + `unused_imports` under `-D warnings`.
+  `pub` is the visibility the item already had as `web::render::format_bytes`,
+  so reachability is unchanged and no suppression is needed.
 - Update `media/component.rs` to use `super::format_bytes`.
 
 Rationale: byte-size formatting is media display logic, not a renderer
