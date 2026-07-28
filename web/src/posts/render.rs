@@ -13,7 +13,8 @@
 //! coverage-measured; the `#[cfg(test)] mod tests` below are the coincidence
 //! tests that protect the byte-identical output.
 
-use crate::render::{escape_html, render_load_more, TagCtx};
+use crate::html::escape_html;
+use crate::render::{render_load_more, TagCtx};
 use crate::{avatar, taglist, topbar};
 use common::render::RenderedHtml;
 use common::seed::{PageSeed, PostResponse, TagSummary, TimelinePostSummary};

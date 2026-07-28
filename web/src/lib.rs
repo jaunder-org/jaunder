@@ -31,6 +31,9 @@ pub mod feed_discovery;
 pub mod feed_events;
 pub mod forms;
 pub mod home;
+/// HTML text escaping — the shared low-level markup primitive every pure builder
+/// interpolates untrusted text through. Crate-internal.
+mod html;
 pub mod icon;
 pub mod invites;
 #[cfg(feature = "server")]

@@ -2,7 +2,8 @@ use std::fmt::Write;
 
 use common::seed::TagSummary;
 
-use crate::render::{escape_html, TagCtx};
+use crate::html::escape_html;
+use crate::render::TagCtx;
 
 /// The footer tag chips: a `<span class="j-tag-list">` of `<span class="j-tag-cell">`
 /// chips, each a `#display` link to `/tags/:slug`, plus the "· here" link under
