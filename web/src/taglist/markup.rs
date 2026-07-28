@@ -3,7 +3,7 @@ use std::fmt::Write;
 use common::seed::TagSummary;
 
 use crate::html::escape_html;
-use crate::render::TagCtx;
+use crate::taglist::TagCtx;
 
 /// The footer tag chips: a `<span class="j-tag-list">` of `<span class="j-tag-cell">`
 /// chips, each a `#display` link to `/tags/:slug`, plus the "· here" link under
@@ -41,7 +41,7 @@ mod tests {
     use common::seed::TagSummary;
     use common::test_support::parse_username;
 
-    use crate::render::TagCtx;
+    use crate::taglist::TagCtx;
 
     #[test]
     fn tag_list_site_wide_has_hash_chip_and_no_here_link() {

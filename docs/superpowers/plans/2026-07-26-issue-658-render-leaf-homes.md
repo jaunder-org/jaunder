@@ -245,7 +245,7 @@ pub enum TagCtx {
 }
 ```
 
-- [ ] **Step 1: Check references before moving the exported symbol.**
+- [x] **Step 1: Check references before moving the exported symbol.**
 
 Run LSP `references` for `TagCtx` at `web/src/render/mod.rs` on the
 `pub enum TagCtx` line.
@@ -253,7 +253,7 @@ Run LSP `references` for `TagCtx` at `web/src/render/mod.rs` on the
 Expected: references include `posts::{component,render}`, `timeline::component`,
 `taglist::{component,markup}`, and taglist/posts tests.
 
-- [ ] **Step 2: Create destination wiring that fails before the type moves.**
+- [x] **Step 2: Create destination wiring that fails before the type moves.**
 
 In `web/src/taglist/mod.rs`, add:
 
@@ -264,7 +264,7 @@ pub use context::TagCtx;
 
 Create `web/src/taglist/context.rs` with no `TagCtx` definition yet.
 
-- [ ] **Step 3: Run a taglist test, verify it fails.**
+- [x] **Step 3: Run a taglist test, verify it fails.**
 
 Run:
 `devtool run -- cargo nextest run -p web tag_list_site_wide_has_hash_chip_and_no_here_link`
@@ -272,7 +272,7 @@ Run:
 Expected: FAIL — unresolved import `context::TagCtx` or unresolved
 `crate::taglist::TagCtx` after repointing the test import.
 
-- [ ] **Step 4: Move the enum and repoint callers.**
+- [x] **Step 4: Move the enum and repoint callers.**
 
 Move the `TagCtx` enum and its `use common::username::Username;` dependency from
 `web/src/render/mod.rs` to `web/src/taglist/context.rs`.
@@ -289,7 +289,7 @@ Repoint imports:
 
 Delete the old enum from `web/src/render/mod.rs`.
 
-- [ ] **Step 5: Run focused checks, verify pass.**
+- [x] **Step 5: Run focused checks, verify pass.**
 
 Run: `devtool run -- cargo nextest run -p web tag_list`
 
@@ -303,7 +303,7 @@ Run: `devtool run -- cargo xtask check --no-test`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 Commit via `jaunder-commit` with message:
 `refactor(web): move tag list context to taglist leaf (#658)`.

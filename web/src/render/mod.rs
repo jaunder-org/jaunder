@@ -14,18 +14,6 @@
 //! (#330); the remaining primitives here are dissolved onto their co-located homes
 //! by #658.
 
-use common::username::Username;
-
-/// Linking context for a post's footer tag chips — imported by the reactive post
-/// view (`crate::posts`) as `TagContext`. `SiteWide` links each
-/// chip to `/tags/:slug` only; `ForUser` also renders the "· here" link to
-/// `/~:username/tags/:slug`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum TagCtx {
-    SiteWide,
-    ForUser(Username),
-}
-
 /// The home page hero block (constant copy). Composed into
 /// [`render_home_masthead`] — the one source the projector and the reactive
 /// `home::HomePage` both render (ADR-0041 §2), so there is no `view!` twin.
