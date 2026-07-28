@@ -15,7 +15,7 @@ pub(crate) fn render(path: &str, size: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::render;
-    use crate::render::Icons;
+    use crate::icon::Icons;
 
     #[test]
     fn icon_matches_reactive_component_markup() {

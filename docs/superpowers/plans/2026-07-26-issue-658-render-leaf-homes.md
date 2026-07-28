@@ -73,7 +73,7 @@ host/wasm file split.
 - Produces: `crate::html::escape_html<S: AsRef<str>>(input: S) -> String` with
   identical escaping for `&`, `<`, `>`, `"`, and `'`.
 
-- [ ] **Step 1: Write the destination test and module wiring first.**
+- [x] **Step 1: Write the destination test and module wiring first.**
 
 In `web/src/html.rs`, add only the test module and the intended signature
 reference:
@@ -92,7 +92,7 @@ mod tests {
 
 In `web/src/lib.rs`, add `mod html;` near the other root module declarations.
 
-- [ ] **Step 2: Run the test, verify it fails.**
+- [x] **Step 2: Run the test, verify it fails.**
 
 Run:
 `devtool run -- cargo nextest run -p web escape_replaces_markup_metacharacters`
@@ -100,7 +100,7 @@ Run:
 Expected: FAIL — `crate::html::escape_html` / `super::escape_html` is not
 defined yet.
 
-- [ ] **Step 3: Move the implementation and repoint callers.**
+- [x] **Step 3: Move the implementation and repoint callers.**
 
 Move the current `escape_html` body from `web/src/render/mod.rs` into
 `web/src/html.rs` above the test module:
@@ -123,7 +123,7 @@ Repoint callers:
 Delete the old `escape_html` function and its old test from
 `web/src/render/mod.rs`.
 
-- [ ] **Step 4: Run focused checks, verify pass.**
+- [x] **Step 4: Run focused checks, verify pass.**
 
 Run:
 `devtool run -- cargo nextest run -p web escape_replaces_markup_metacharacters`
@@ -135,7 +135,7 @@ Run:
 
 Expected: PASS for the affected escaping consumers that have matching tests.
 
-- [ ] **Step 5: Gate and commit.**
+- [x] **Step 5: Gate and commit.**
 
 Run: `devtool run -- cargo xtask check --no-test`
 
@@ -162,7 +162,7 @@ Commit via `jaunder-commit` with message:
   `&'static str` glyph constants.
 - Produces: public `crate::icon::Icons` type with the same constants and values.
 
-- [ ] **Step 1: Check references before moving the exported symbol.**
+- [x] **Step 1: Check references before moving the exported symbol.**
 
 Run LSP `references` for `Icons` at `web/src/render/mod.rs` on the
 `pub struct Icons;` line.
@@ -170,7 +170,7 @@ Run LSP `references` for `Icons` at `web/src/render/mod.rs` on the
 Expected: references include at least `icon`, `audiences`, and `sidebar`
 consumers; no caller outside `web/src` depends on `crate::render::Icons`.
 
-- [ ] **Step 2: Create destination wiring that fails before the type moves.**
+- [x] **Step 2: Create destination wiring that fails before the type moves.**
 
 In `web/src/icon/mod.rs`, replace `pub use crate::render::Icons;` with:
 
@@ -181,14 +181,14 @@ pub use paths::Icons;
 
 Create `web/src/icon/paths.rs` with an empty file or module comment only.
 
-- [ ] **Step 3: Run the icon test, verify it fails.**
+- [x] **Step 3: Run the icon test, verify it fails.**
 
 Run:
 `devtool run -- cargo nextest run -p web icon_matches_reactive_component_markup`
 
 Expected: FAIL — unresolved import `paths::Icons`.
 
-- [ ] **Step 4: Move the `Icons` implementation and repoint direct imports.**
+- [x] **Step 4: Move the `Icons` implementation and repoint direct imports.**
 
 Move `pub struct Icons;` and the entire `impl Icons` block from
 `web/src/render/mod.rs` to `web/src/icon/paths.rs`.
@@ -201,7 +201,7 @@ Update imports:
 Existing sidebar imports already use `crate::icon::{Icon, Icons}` and should
 compile unchanged.
 
-- [ ] **Step 5: Run focused checks, verify pass.**
+- [x] **Step 5: Run focused checks, verify pass.**
 
 Run:
 `devtool run -- cargo nextest run -p web icon_matches_reactive_component_markup`
@@ -212,7 +212,7 @@ Run: `devtool run -- cargo xtask check --no-test`
 
 Expected: PASS, including wasm-clippy for `audiences`/`sidebar` icon callsites.
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 Commit via `jaunder-commit` with message:
 `refactor(web): move icon paths to icon leaf (#658)`.
