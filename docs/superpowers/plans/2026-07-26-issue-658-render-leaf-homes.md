@@ -509,9 +509,17 @@ Commit via `jaunder-commit` with message:
 - Consumes: current
   `crate::render::format_bytes(bytes: impl Into<i64>) -> String`.
 - Produces: `crate::media::format_bytes(bytes: impl Into<i64>) -> String`,
-  re-exported crate-internally from `media/mod.rs`.
+  re-exported from `media/mod.rs`.
 
-- [ ] **Step 1: Create destination tests and wiring first.**
+**Deviation from the drafted interface:** the plan called for `pub(crate)` here.
+That does not compile — `format_bytes`'s only caller is the wasm-only
+`media::component`, so on the host build a crate-internal item is unreachable
+and clippy fails with `dead_code` + `unused_imports` under `-D warnings`.
+Keeping the `pub` visibility the item already had as `web::render::format_bytes`
+fixes it with no change in reachability and no suppression (which the
+constraints forbid).
+
+- [x] **Step 1: Create destination tests and wiring first.**
 
 In `web/src/media/mod.rs`, add:
 
@@ -552,13 +560,13 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail.**
+- [x] **Step 2: Run the tests, verify they fail.**
 
 Run: `devtool run -- cargo nextest run -p web format_bytes`
 
 Expected: FAIL — `format_bytes` is not defined in `media::format` yet.
 
-- [ ] **Step 3: Move implementation and repoint callers.**
+- [x] **Step 3: Move implementation and repoint callers.**
 
 Move `format_bytes` and its existing
 `#[expect(clippy::cast_precision_loss, reason = ...)]` from
@@ -574,7 +582,7 @@ of `crate::render::format_bytes`.
 
 Delete the old function and old tests from `web/src/render/mod.rs`.
 
-- [ ] **Step 4: Run focused checks, verify pass.**
+- [x] **Step 4: Run focused checks, verify pass.**
 
 Run: `devtool run -- cargo nextest run -p web format_bytes`
 
@@ -584,7 +592,7 @@ Run: `devtool run -- cargo xtask check --no-test`
 
 Expected: PASS, including clippy preserving the existing cast-expect reason.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 Commit via `jaunder-commit` with message:
 `refactor(web): move byte formatter to media leaf (#658)`.

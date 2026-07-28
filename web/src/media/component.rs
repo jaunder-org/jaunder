@@ -8,9 +8,9 @@ use leptos::prelude::*;
 
 use common::pagination::{PageOffset, PageSize};
 
+use super::format_bytes;
 use super::{list_my_media, media_usage, upload_media, DeleteMedia, DeleteMediaResult, MediaItem};
 use crate::error::WebError;
-use crate::render::format_bytes;
 use crate::topbar::Topbar;
 
 /// A media upload control: a button that opens the file picker and immediately
