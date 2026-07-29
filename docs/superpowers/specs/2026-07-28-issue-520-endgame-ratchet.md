@@ -249,8 +249,21 @@ standing decision.
 ### D. Retirement
 
 - **D1** `macros::client_only` and `macros/tests/identity.rs` are deleted.
-- **D2** `rg client_only web/src macros/src xtask/src` is empty, and
-  `rg '#\[component\]' xtask/src/coverage/` is empty.
+- **D2** No live recognition of either attribute survives:
+  `rg 'is_ident\("client_only"\)|is_ident\("component"\)' xtask/src` is empty,
+  and `rg client_only web/src macros/src client/src` is empty.
+
+  > **Criterion amended during execution.** As originally written this required
+  > `rg client_only … xtask/src` and `rg '#\[component\]' xtask/src/coverage/`
+  > to be literally empty. Both now match inside `xtask/src/coverage/exempt.rs`
+  > — in the dated retirement note, and in the fixture of a new test
+  > (`does_not_exempt_component_or_client_only_marked_fns`) that feeds both
+  > attributes to `exempt_lines` and asserts nothing is exempted. That test
+  > serves the criterion's _intent_ — proving the machinery is gone — better
+  > than its absence would, since it fails loudly if anyone reintroduces the
+  > attribute rule. The check is therefore restated against recognition rather
+  > than the bare string.
+
 - **D3** The A1 guard retains its `unreachable!` arm; its diagnostics no longer
   name `#[component]`/`#[client_only]`.
 - **D4** The two inert markers at `web/src/backup/component.rs:50,184` are

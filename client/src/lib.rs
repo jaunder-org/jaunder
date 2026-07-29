@@ -8,7 +8,7 @@
 //! Wasm-only: the crate-level `#![cfg(target_arch = "wasm32")]` below makes it
 //! an empty rlib on the host target (zero coverage-measured lines) and active
 //! only on wasm. Every module relocated here inherits that gate, so it needs no
-//! per-item `#[cfg]` and no `#[client_only]` marker.
+//! per-item `#[cfg]`.
 //!
 //! See docs/adr/0069-client-crate-wasm-only-home.md.
 #![cfg(target_arch = "wasm32")]

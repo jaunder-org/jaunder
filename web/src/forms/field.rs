@@ -196,8 +196,8 @@ mod tests {
     }
 
     // `Field<T>`'s methods are signal-only (no `Effect`/`Resource`), so — like
-    // `Invalidator::{new, notify, track}` — they are host-tested under an `Owner`, not
-    // `#[client_only]`-exempted.
+    // `Invalidator::{new, notify, track}` — they are host-tested under an `Owner`
+    // rather than left to e2e.
 
     #[test]
     fn post_summary_field_error_reports_over_cap_and_allows_empty_when_optional() {

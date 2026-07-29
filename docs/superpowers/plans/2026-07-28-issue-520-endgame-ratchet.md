@@ -870,7 +870,7 @@ Spec criteria D2–D6. The retirement the spec's sequencing constraint puts last
   `pub fn exempt_lines(src: &str) -> syn::Result<BTreeSet<u32>>`; only the
   `unreachable!("msg")` rule remains behind it.
 
-- [ ] **Step 1: Delete the exemption arms**
+- [x] **Step 1: Delete the exemption arms**
 
 From `xtask/src/coverage/exempt.rs` remove: `visit_item_fn` (`:56-59`),
 `visit_impl_item_fn` (`:61-68`), `has_exempt_attr` (`:87-94`), and
@@ -885,7 +885,7 @@ or `client_only`, including `exempts_plain_component_body` (`:129`),
 and `does_not_exempt_non_ident_client_only_path` (`:408`). Keep every
 `unreachable!` test.
 
-- [ ] **Step 2: Update the gate's diagnostics**
+- [x] **Step 2: Update the gate's diagnostics**
 
 `xtask/src/coverage/mod.rs` — the messages must stop naming removed machinery:
 
@@ -899,7 +899,7 @@ and `does_not_exempt_non_ident_client_only_path` (`:408`). Keep every
 The A1 guard itself is **retained** (criterion D3) — it still guards the
 `unreachable!` exemption.
 
-- [ ] **Step 3: Delete the inert markers and the stale prose**
+- [x] **Step 3: Delete the inert markers and the stale prose**
 
 `web/src/backup/component.rs`: delete the `// cov:ignore-start` (`:50`) and
 `// cov:ignore-stop` (`:184`) lines. They are inert — the file is wasm-only by
@@ -913,7 +913,7 @@ stays.
 `client/src/lib.rs:11`: "needs no per-item `#[cfg]` and no `#[client_only]`
 marker" — drop the second clause; the per-item-`#[cfg]` point stands.
 
-- [ ] **Step 4: Verify the retirement is complete**
+- [x] **Step 4: Verify the retirement is complete**
 
 Run: `rg client_only web/src macros/src xtask/src client/src` Expected: **no
 matches** (criterion D2, plus the `client` prose).
@@ -923,7 +923,7 @@ Run: `rg '#\[component\]' xtask/src/coverage/` Expected: **no matches**
 
 Run: `rg 'cov:ignore' web/src` Expected: **no matches** (criterion D4).
 
-- [ ] **Step 5: Verify xtask's own tests and the coverage gate**
+- [x] **Step 5: Verify xtask's own tests and the coverage gate**
 
 Run: `cargo nextest run --manifest-path xtask/Cargo.toml coverage` Expected:
 PASS — the surviving `unreachable!` and `cov:ignore` tests.
@@ -933,7 +933,7 @@ this is criterion D5, the empirical proof the exemption was dead machinery. A
 failure here means some `#[component]` body _was_ host-compiled after all; stop
 and report rather than re-adding the exemption.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add xtask/src/coverage/ web/src/backup/component.rs web/src/forms/field.rs client/src/lib.rs

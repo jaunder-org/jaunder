@@ -2,12 +2,10 @@
 //! CRAP report the Nix `coverage` check emits, then apply the **stateless** gate.
 //!
 //! The gate is history-free: an executable line FAILS iff it is uncovered AND not
-//! structurally exempt (inside a `#[component]`/`#[client_only]` body or a
-//! message-carrying `unreachable!` invocation, see [`exempt`]) AND not marked
-//! `cov:ignore` (stripped in [`report`]). A *covered* line inside an exempt span
-//! trips the A1 guard (a `#[component]`/`#[client_only]` body exercised natively, or
-//! an `unreachable!` assertion actually reached — either way the exemption's premise
-//! is violated). CRAP is
+//! structurally exempt (inside a message-carrying `unreachable!` invocation, see
+//! [`exempt`]) AND not marked `cov:ignore` (stripped in [`report`]). A *covered*
+//! line inside an exempt span trips the A1 guard (an `unreachable!` assertion was
+//! actually reached, so the exemption's premise is violated). CRAP is
 //! gated against a fixed threshold (see [`crap`]), minus in-source `crap:allow`
 //! overrides. There is no baseline, anchor, or manifest.
 
@@ -46,8 +44,7 @@ pub struct FileCoverage {
 pub struct CoverageReport {
     /// Uncovered, unexempt, un-ignored executable lines (each FAILS the gate).
     pub failures: usize,
-    /// Covered lines inside an exempt (`#[component]`/`#[client_only]` or
-    /// `unreachable!`) span (the A1-guard tripwire).
+    /// Covered lines inside an exempt (`unreachable!`) span (the A1-guard tripwire).
     pub guard_violations: usize,
     /// Functions whose CRAP exceeds the threshold with no `crap:allow` override.
     pub crap_fails: usize,
@@ -93,7 +90,7 @@ fn run_inner(out_dir: &str) -> Result<(StepResult, Option<CoverageReport>)> {
     let current = report::parse_text_report(&report, &repo_root)?;
 
     // The stateless coverage gate (#231): an executable line fails iff uncovered,
-    // not structurally exempt (`#[component]`/`#[client_only]` or an `unreachable!("msg")`), and not
+    // not structurally exempt (an `unreachable!("msg")`), and not
     // `cov:ignore`'d (the latter is already stripped by `parse_text_report`). A
     // covered line inside an exempt span trips the A1 guard. `exempt_of` reads each
     // repo-relative source file
@@ -175,9 +172,7 @@ fn failure_report(verdict: &gate::Verdict, crap_fails: &[crap::CrapFail]) -> Str
         crap_fails.len(),
     );
     if !verdict.failures.is_empty() {
-        s.push_str(
-            "\n  uncovered (not #[component]/#[client_only]-exempt, not an unreachable!(\"msg\"), not cov:ignore'd):",
-        );
+        s.push_str("\n  uncovered (not an unreachable!(\"msg\"), not cov:ignore'd):");
         for f in verdict.failures.iter().take(MAX) {
             let _ = write!(s, "\n    {}:{}: {}", f.file, f.line, f.text.trim());
         }
@@ -186,9 +181,7 @@ fn failure_report(verdict: &gate::Verdict, crap_fails: &[crap::CrapFail]) -> Str
         }
     }
     if !verdict.guard_violations.is_empty() {
-        s.push_str(
-            "\n  A1-guard — covered line inside a #[component]/#[client_only] or unreachable! span:",
-        );
+        s.push_str("\n  A1-guard — covered line inside an unreachable! span:");
         for g in verdict.guard_violations.iter().take(MAX) {
             let _ = write!(s, "\n    {}:{}: {}", g.file, g.line, g.text.trim());
         }
@@ -217,9 +210,8 @@ fn failure_report(verdict: &gate::Verdict, crap_fails: &[crap::CrapFail]) -> Str
     }
     if !verdict.guard_violations.is_empty() {
         s.push_str(
-            "\n  → a #[component]/#[client_only] body is being exercised natively (the blanket\
-             \n    exemption then discards REAL coverage), or an `unreachable!` assertion was\
-             \n    actually reached — either way, revisit the exemption (spec §A1-guard).",
+            "\n  → an `unreachable!` assertion was actually reached, so its premise is\
+             \n    violated — revisit the exemption (spec §A1-guard).",
         );
     }
     if !crap_fails.is_empty() {
