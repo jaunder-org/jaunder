@@ -4,14 +4,11 @@
 #[must_use]
 pub(crate) fn render(title: &str, sub: Option<&str>, right: &str) -> String {
     let sub_html = sub.map_or_else(String::new, |s| {
-        format!(
-            "<div class=\"j-sub\">{}</div>",
-            crate::render::escape_html(s)
-        )
+        format!("<div class=\"j-sub\">{}</div>", crate::html::escape_html(s))
     });
     format!(
         "<div class=\"j-topbar\"><div><h1>{title}</h1>{sub_html}</div><div class=\"j-topbar-right\">{right}</div></div>",
-        title = crate::render::escape_html(title),
+        title = crate::html::escape_html(title),
     )
 }
 

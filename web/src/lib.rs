@@ -31,6 +31,9 @@ pub mod feed_discovery;
 pub mod feed_events;
 pub mod forms;
 pub mod home;
+/// HTML text escaping — the shared low-level markup primitive every pure builder
+/// interpolates untrusted text through. Crate-internal.
+mod html;
 pub mod icon;
 pub mod invites;
 #[cfg(feature = "server")]
@@ -41,7 +44,6 @@ pub mod posts;
 pub mod profile;
 pub mod reactive;
 pub mod registration;
-pub mod render;
 /// The `~`-only permalink route segment (#592). Pure `leptos_router` matching logic
 /// (no `web_sys`), so it lives at the crate root — host-compiled and host-tested —
 /// rather than under the wasm-only `app` module that consumes it.

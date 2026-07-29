@@ -5,10 +5,11 @@
 #[cfg(target_arch = "wasm32")]
 mod component;
 mod markup;
+mod paths;
 
-/// SVG path `d` strings — re-exported from the pure `render` layer so the reactive
-/// [`Icon`] component and the pure [`render`] twin share one source of truth.
-pub use crate::render::Icons;
 #[cfg(target_arch = "wasm32")]
 pub use component::Icon;
 pub(crate) use markup::render;
+/// SVG path `d` strings — the one source of truth the reactive [`Icon`] component
+/// and the pure [`render`] twin share.
+pub use paths::Icons;

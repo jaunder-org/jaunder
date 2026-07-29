@@ -4,10 +4,11 @@
 //!
 //! A server-less vertical — no `#[server]` fns or wire types of its own (it
 //! re-uses `crate::posts::{TimelinePage, TimelinePostSummary, PostCard}`), so
-//! there is no `api.rs`/`server.rs`: only the pure host-tested `state` and the
-//! wasm-only reactive `component`. The `pub use` keeps the pure items reachable
-//! on the host build, where `component` is compiled out.
+//! there is no `api.rs`/`server.rs`: only the pure host-tested `state` and
+//! `render` leaves and the wasm-only reactive `component`. The `pub use` keeps the
+//! pure items reachable on the host build, where `component` is compiled out.
 
+pub(crate) mod render;
 mod state;
 pub use state::{LoadStatus, TimelineCursor};
 

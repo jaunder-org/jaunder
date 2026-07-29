@@ -17,7 +17,7 @@ use common::time::UtcInstant;
 use super::state::{LoadStatus, TimelineCursor};
 use crate::error::WebResult;
 use crate::posts::PostCard;
-use crate::render::TagCtx as TagContext;
+use crate::taglist::TagCtx as TagContext;
 
 /// The reactive state of a cursor-paginated timeline, shared by the public Local
 /// timeline (`home.rs`) and the authed `/app` cockpit (`cockpit.rs`).

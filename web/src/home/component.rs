@@ -1,5 +1,5 @@
 //! The home vertical's wasm-only UI (ADR-0070): the routed `/` public
-//! Local-timeline landing page. Renders the shared `crate::render` masthead via
+//! Local-timeline landing page. Renders the co-located `crate::home::render` masthead via
 //! `inner_html` (coincidence with the projector, ADR-0041) + the reactive
 //! `crate::timeline` rows. No cfgs of its own (wasm-only via its `mod` line).
 
@@ -66,7 +66,7 @@ pub fn HomePage() -> impl IntoView {
     // and shown for the anonymous visitor. Single-mode Local (#181, D10): `/` is
     // always the enhanced public timeline; the owner's own posts gain the
     // client-side action column reactively via `TimelineRows`/`PostCard`.
-    let masthead = crate::render::render_home_masthead();
+    let masthead = super::render::render_masthead();
 
     view! {
         <FeedDiscovery surface=FeedSurface::Site />

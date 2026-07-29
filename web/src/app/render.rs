@@ -19,7 +19,7 @@
 use common::seed::PageSeed;
 use std::fmt::Write as _;
 
-use crate::render::escape_html;
+use crate::html::escape_html;
 
 /// The default theme applied to `<div class="j-root" data-theme=…>`. Lives here
 /// (the shell-rendering layer) so the projector's server-painted shell and the

@@ -1,4 +1,4 @@
-use crate::render::escape_html;
+use crate::html::escape_html;
 
 /// Derives `(initials, hue)` from a display name. `initials`: first character of
 /// each of the first two whitespace-separated words, uppercased. `hue`: sum of all

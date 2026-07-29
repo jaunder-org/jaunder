@@ -5,8 +5,10 @@
 
 #[cfg(target_arch = "wasm32")]
 mod component;
+mod context;
 mod markup;
 
 #[cfg(target_arch = "wasm32")]
 pub use component::TagList;
+pub use context::TagCtx;
 pub(crate) use markup::render;

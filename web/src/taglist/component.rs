@@ -2,7 +2,7 @@ use leptos::prelude::*;
 
 use common::seed::TagSummary;
 
-use crate::render::TagCtx;
+use crate::taglist::TagCtx;
 
 /// The reactive half of the twin: a post's tags as clickable chips for the
 /// authored post view. Twins [`render`] — keep their markup coincident. See
