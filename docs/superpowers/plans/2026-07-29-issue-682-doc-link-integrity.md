@@ -834,7 +834,7 @@ git commit -m "feat(xtask): warn when a promoted ADR still has dead links"
 - Consumes: the `doc-links` step name and `EXCLUDED` list (Task 3).
 - Produces: nothing consumed by later tasks.
 
-- [ ] **Step 1: Add the `CONTRIBUTING.md` bullet**
+- [x] **Step 1: Add the `CONTRIBUTING.md` bullet**
 
 After the `prettier` bullet at `:240-242`. Name both exclusions and say why the
 list differs from `.prettierignore`'s — neither can be derived from the other
@@ -849,7 +849,7 @@ list differs from `.prettierignore`'s — neither can be derived from the other
   are maintained separately on purpose.
 ```
 
-- [ ] **Step 2: Add the sibling-ADR and cross-draft link rules**
+- [x] **Step 2: Add the sibling-ADR and cross-draft link rules**
 
 In `docs/adr/drafts/README.md`, add after the existing rule 3 (:22-24). Rule 5
 is the workflow landmine from "Key risks" — without it, following rule 3 for a
@@ -871,7 +871,7 @@ cross-draft reference produces an ADR that hard-fails `doc-links` at ship:
    _outside_ `docs/adr/`.
 ```
 
-- [ ] **Step 3: Amend the "Gate invisibility" section**
+- [x] **Step 3: Amend the "Gate invisibility" section**
 
 `docs/adr/drafts/README.md:44-49` claims all the ADR gates share one `read_dir`
 enumeration. `doc-links` does not. Replace the paragraph with:
@@ -887,13 +887,13 @@ Everything here except this `README.md` is gitignored, so drafts stay invisible
 to it too, by a stronger rule: an uncommitted draft is not a tracked file.
 ```
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 Run: `cargo xtask check --no-test` Expected: PASS, `doc-links` ok — proving the
 backticked link examples added above are correctly skipped as code spans
 (**D10**).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Prettier will reflow these Markdown edits during the gate; re-check
 `git status --porcelain` and stage the rewrite.
