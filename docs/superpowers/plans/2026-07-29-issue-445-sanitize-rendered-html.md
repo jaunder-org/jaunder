@@ -554,18 +554,42 @@ Grep `from_trusted` across `common/src`, `storage/src`, `server/src`, `web/src`,
 excluding `#[cfg(test)]` sites. Expected: only `deserialize_rendered_html` (AC5,
 AC4).
 
-- [ ] **Step 3: Full local gate.**
+- [x] **Step 3: Full local gate.** — run **split**, both green, after a rebase
+      onto `origin/main` (the branch was 7 commits behind, including #520's
+      xtask gate changes; gating against the stale base would have proved
+      nothing about what CI sees).
 
-Run: `devtool run -- cargo xtask validate`
+`devtool run -- cargo xtask validate --no-e2e` → PASS (481s), then
+`devtool run -- cargo xtask e2e sqlite chromium` → PASS. The split was
+pre-emptive rather than a fallback from an exit-124: eleven worktrees are live
+on this host, which is exactly the contention that starves the four concurrent
+e2e VMs. The remaining three combos (`sqlite×firefox`,
+`postgres×{chromium, firefox}`) are left to CI's matrix, which is authoritative
+per ADR-0034.
 
-Expected: PASS. Per the milestone-11 experience, the four concurrent e2e VMs can
-starve under host load — on an exit-124 timeout, fall back to a single
-`cargo xtask e2e sqlite chromium` and let CI's matrix be authoritative
-(ADR-0034).
+Post-rebase check for the silent-duplicate hazard (a clean auto-merge can double
+an append-list entry): `ammonia` appears exactly once in each of the workspace,
+`common`, and `storage` manifests, and all 8 commits replayed.
 
-- [ ] **Step 4: Conformance check.**
+- [x] **Step 4: Conformance check.** All ten met; one test carries a different
+      name than the plan predicted.
 
-Walk AC1–AC10 in the spec and confirm each. Note any not literally met and why.
+| AC   | Verdict | Evidence                                                                                                                           |
+| ---- | ------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| AC1  | ✅      | `render_markdown_strips_embedded_script`, `render_org_strips_embedded_script`, `render_html_strips_embedded_script`                |
+| AC2  | ✅      | `perform_post_creation_sanitizes_stored_rendered_html`, dual-backend, asserts on the **stored** column                             |
+| AC3  | ✅      | `pub struct RenderedHtml(String)` — field private; `sanitize` the only door minting from outside data                              |
+| AC4  | ✅      | `an_inbound_shaped_fn_using_from_trusted_is_flagged`; `ALLOWED_FNS == ["deserialize_rendered_html"]`                               |
+| AC5  | ✅      | `PostRow.rendered_html: RenderedHtml`; every remaining `from_trusted` in `helpers.rs` is a `#[cfg(test)]` fixture                  |
+| AC6  | ✅      | `sanitize_preserves_formatting_markup`, `sanitize_keeps_only_language_classes_on_code`, `sanitize_preserves_safe_links_and_images` |
+| AC7  | ✅      | `cargo tree -p csr --target wasm32-unknown-unknown` — 0 matches for `ammonia\|html5ever`, **re-run after the rebase**              |
+| AC8  | ✅      | `from_trusted` doc, the `Decode` rationale, and both `posts.rs` field docs now state the guarantee                                 |
+| AC9  | ✅      | `docs/adr/drafts/rendered-html-sanitization.md` (numberless, gitignored)                                                           |
+| AC10 | ✅      | see Step 3                                                                                                                         |
+
+**AC1 naming note:** the third test is `render_html_strips_embedded_script`, not
+the plan's predicted `render_html_passthrough_is_sanitized` — same body, same
+coverage, named to match its two siblings. Recorded rather than renamed.
 
 - [ ] **Step 5: Handoff.**
 
