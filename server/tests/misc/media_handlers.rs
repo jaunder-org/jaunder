@@ -11,6 +11,7 @@ use rstest_reuse::*;
 use common::etag::ETag;
 use common::ids::UserId;
 use common::test_support::parse_content_hash;
+use server_fn::ServerFn;
 use storage::test_support::{backends, backends_matrix, Backend, TestEnv};
 
 use crate::helpers::{create_user_and_session, make_app, post_multipart, MultipartFile};
@@ -33,7 +34,7 @@ async fn serve_returns_200_with_cache_headers(#[case] backend: Backend) {
     let (status, body) = post_multipart(
         &state,
         &storage,
-        "/api/upload_media",
+        <web::media::UploadMedia as ServerFn>::PATH,
         MultipartFile {
             filename: "serve_test.png",
             content_type: "image/png",
@@ -114,7 +115,7 @@ async fn serve_returns_304_on_if_none_match(#[case] backend: Backend) {
     let (status, body) = post_multipart(
         &state,
         &storage,
-        "/api/upload_media",
+        <web::media::UploadMedia as ServerFn>::PATH,
         MultipartFile {
             filename: "etag_test.png",
             content_type: "image/png",

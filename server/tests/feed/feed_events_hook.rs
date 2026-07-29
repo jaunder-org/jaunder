@@ -1,5 +1,6 @@
 use axum::http::StatusCode;
 use serde_json::json;
+use server_fn::ServerFn;
 
 use rstest::*;
 use rstest_reuse::*;
@@ -33,8 +34,13 @@ async fn create_published_post_enqueues_expected_feeds(
         }
     });
 
-    let (status, _response) =
-        post_json(&state, "/api/create_post", body, Some(&session.cookie())).await;
+    let (status, _response) = post_json(
+        &state,
+        <web::posts::CreatePost as ServerFn>::PATH,
+        body,
+        Some(&session.cookie()),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK);
 
@@ -69,8 +75,13 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
         }
     });
 
-    let (status, create_response) =
-        post_json(&state, "/api/create_post", create_body, Some(&cookie)).await;
+    let (status, create_response) = post_json(
+        &state,
+        <web::posts::CreatePost as ServerFn>::PATH,
+        create_body,
+        Some(&cookie),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK);
 
@@ -100,7 +111,13 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
         }
     });
 
-    let (status, _) = post_json(&state, "/api/update_post", update_body, Some(&cookie)).await;
+    let (status, _) = post_json(
+        &state,
+        <web::posts::UpdatePost as ServerFn>::PATH,
+        update_body,
+        Some(&cookie),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK);
 
@@ -136,8 +153,13 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend
         }
     });
 
-    let (status, create_response) =
-        post_json(&state, "/api/create_post", create_body, Some(&cookie)).await;
+    let (status, create_response) = post_json(
+        &state,
+        <web::posts::CreatePost as ServerFn>::PATH,
+        create_body,
+        Some(&cookie),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK);
 
@@ -156,7 +178,13 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend
         .expect("claim batch");
 
     let unpublish_body = format!("post_id={post_id}");
-    let (status, _) = post_form(&state, "/api/unpublish_post", unpublish_body, Some(&cookie)).await;
+    let (status, _) = post_form(
+        &state,
+        <web::posts::UnpublishPost as ServerFn>::PATH,
+        unpublish_body,
+        Some(&cookie),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK);
 
@@ -192,8 +220,13 @@ async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
         }
     });
 
-    let (status, create_response) =
-        post_json(&state, "/api/create_post", create_body, Some(&cookie)).await;
+    let (status, create_response) = post_json(
+        &state,
+        <web::posts::CreatePost as ServerFn>::PATH,
+        create_body,
+        Some(&cookie),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK);
 
@@ -212,7 +245,13 @@ async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
         .expect("claim batch");
 
     let delete_body = format!("post_id={post_id}");
-    let (status, _) = post_form(&state, "/api/delete_post", delete_body, Some(&cookie)).await;
+    let (status, _) = post_form(
+        &state,
+        <web::posts::DeletePost as ServerFn>::PATH,
+        delete_body,
+        Some(&cookie),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK);
 
@@ -248,8 +287,13 @@ async fn delete_draft_post_enqueues_nothing(#[case] backend: Backend) {
         }
     });
 
-    let (status, create_response) =
-        post_json(&state, "/api/create_post", create_body, Some(&cookie)).await;
+    let (status, create_response) = post_json(
+        &state,
+        <web::posts::CreatePost as ServerFn>::PATH,
+        create_body,
+        Some(&cookie),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK);
 
@@ -268,7 +312,13 @@ async fn delete_draft_post_enqueues_nothing(#[case] backend: Backend) {
         .expect("claim batch");
 
     let delete_body = format!("post_id={post_id}");
-    let (status, _) = post_form(&state, "/api/delete_post", delete_body, Some(&cookie)).await;
+    let (status, _) = post_form(
+        &state,
+        <web::posts::DeletePost as ServerFn>::PATH,
+        delete_body,
+        Some(&cookie),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK);
 

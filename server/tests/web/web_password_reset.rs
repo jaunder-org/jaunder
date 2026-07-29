@@ -4,6 +4,7 @@ use axum::http::StatusCode;
 use chrono::Utc;
 use common::mailer::test_utils::CapturingMailSender;
 use common::test_support::parse_email;
+use server_fn::ServerFn;
 use storage::AppState;
 
 use crate::helpers::{
@@ -40,7 +41,7 @@ async fn request_password_reset_sends_email_for_verified_user(#[case] backend: B
     let (status, _body) = post_form_with_mailer(
         &state,
         &mailer,
-        "/api/request_password_reset",
+        <web::password_reset::RequestPasswordReset as ServerFn>::PATH,
         format!("username={}", session.username),
         None,
     )
@@ -64,7 +65,7 @@ async fn request_password_reset_without_base_url_returns_error(#[case] backend: 
     let (status, _body) = post_form_with_mailer(
         &state,
         &mailer,
-        "/api/request_password_reset",
+        <web::password_reset::RequestPasswordReset as ServerFn>::PATH,
         format!("username={}", session.username),
         None,
     )
@@ -88,7 +89,7 @@ async fn request_password_reset_returns_error_for_user_without_verified_email(
     let (status, _body) = post_form_with_mailer(
         &state,
         &mailer,
-        "/api/request_password_reset",
+        <web::password_reset::RequestPasswordReset as ServerFn>::PATH,
         format!("username={}", user.username),
         None,
     )
@@ -106,7 +107,7 @@ async fn request_password_reset_invalid_username_returns_error(#[case] backend: 
     let (status, _) = post_form_with_mailer(
         &state,
         &mailer,
-        "/api/request_password_reset",
+        <web::password_reset::RequestPasswordReset as ServerFn>::PATH,
         "username=invalid username",
         None,
     )
@@ -124,7 +125,7 @@ async fn request_password_reset_returns_error_for_unknown_username(#[case] backe
     let (status, _body) = post_form_with_mailer(
         &state,
         &mailer,
-        "/api/request_password_reset",
+        <web::password_reset::RequestPasswordReset as ServerFn>::PATH,
         "username=nobody",
         None,
     )
@@ -153,8 +154,14 @@ async fn confirm_password_reset_sets_password_and_revokes_sessions(#[case] backe
         .unwrap();
 
     let body = format!("token={raw_token}&new_password=newpassword456");
-    let (status, _body) =
-        post_form_with_mailer(&state, &mailer, "/api/confirm_password_reset", body, None).await;
+    let (status, _body) = post_form_with_mailer(
+        &state,
+        &mailer,
+        <web::password_reset::ConfirmPasswordReset as ServerFn>::PATH,
+        body,
+        None,
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK);
 
@@ -196,8 +203,14 @@ async fn confirm_password_reset_with_expired_token_returns_error(#[case] backend
         .unwrap();
 
     let body = format!("token={raw_token}&new_password=newpassword456");
-    let (status, _body) =
-        post_form_with_mailer(&state, &mailer, "/api/confirm_password_reset", body, None).await;
+    let (status, _body) = post_form_with_mailer(
+        &state,
+        &mailer,
+        <web::password_reset::ConfirmPasswordReset as ServerFn>::PATH,
+        body,
+        None,
+    )
+    .await;
 
     assert_ne!(status, StatusCode::OK);
 }
@@ -212,7 +225,7 @@ async fn confirm_password_reset_with_invalid_token_returns_error(#[case] backend
     let (status, _body) = post_form_with_mailer(
         &state,
         &mailer,
-        "/api/confirm_password_reset",
+        <web::password_reset::ConfirmPasswordReset as ServerFn>::PATH,
         "token=not-a-real-token&new_password=newpassword456",
         None,
     )
@@ -233,7 +246,7 @@ async fn confirm_password_reset_with_malformed_token_returns_error(#[case] backe
     let (status, _body) = post_form_with_mailer(
         &state,
         &mailer,
-        "/api/confirm_password_reset",
+        <web::password_reset::ConfirmPasswordReset as ServerFn>::PATH,
         "token=bad!token&new_password=newpassword456",
         None,
     )
@@ -270,7 +283,7 @@ async fn confirm_password_reset_with_used_token_returns_error(#[case] backend: B
     let (status, _) = post_form_with_mailer(
         &state,
         &mailer,
-        "/api/confirm_password_reset",
+        <web::password_reset::ConfirmPasswordReset as ServerFn>::PATH,
         body.clone(),
         None,
     )
@@ -278,8 +291,14 @@ async fn confirm_password_reset_with_used_token_returns_error(#[case] backend: B
     assert_eq!(status, StatusCode::OK);
 
     // Use it again — should fail
-    let (status, _) =
-        post_form_with_mailer(&state, &mailer, "/api/confirm_password_reset", body, None).await;
+    let (status, _) = post_form_with_mailer(
+        &state,
+        &mailer,
+        <web::password_reset::ConfirmPasswordReset as ServerFn>::PATH,
+        body,
+        None,
+    )
+    .await;
     assert_ne!(status, StatusCode::OK);
 }
 
@@ -302,8 +321,14 @@ async fn confirm_password_reset_with_short_password_returns_error(#[case] backen
         .unwrap();
 
     let body = format!("token={raw_token}&new_password=short");
-    let (status, _body) =
-        post_form_with_mailer(&state, &mailer, "/api/confirm_password_reset", body, None).await;
+    let (status, _body) = post_form_with_mailer(
+        &state,
+        &mailer,
+        <web::password_reset::ConfirmPasswordReset as ServerFn>::PATH,
+        body,
+        None,
+    )
+    .await;
 
     assert_ne!(status, StatusCode::OK);
 

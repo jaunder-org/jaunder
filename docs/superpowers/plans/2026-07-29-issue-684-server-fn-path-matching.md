@@ -540,7 +540,7 @@ Run: `devtool run -- cargo xtask check --no-test` Expected: PASS — all 55 fns
 still register, and today's 55 registrar entries are already
 `web::<vertical>::<Leaf>`, so the re-key is a no-op on the current tree.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit** — `1feac14c`
 
 ```bash
 git add xtask/src/steps/server_fn_registrar_check.rs
@@ -567,7 +567,7 @@ purely removing the hardcoding so Task 7 need not touch these files.
 - Produces: no new API. After this task, `rg '"/api/' server/tests` returns
   nothing (AC21).
 
-- [ ] **Step 1: Replace every literal with the constant**
+- [x] **Step 1: Replace every literal with the constant** — 228 across 15 files
 
 Each `"/api/<endpoint>"` becomes `<web::<vertical>::<Leaf> as ServerFn>::PATH`,
 e.g.
@@ -587,15 +587,29 @@ that no test logic, assertion, or comment changes (D10). The 3 prose mentions at
 `server/tests/web/web_auth.rs:645,694` are comments describing the route and
 stay factually correct until Task 7 — leave them.
 
-- [ ] **Step 2: Verify no literal survives**
+- [x] **Step 2: Verify no literal survives**
 
-Run: `rg '"/api/' server/tests` Expected: no output.
+Run: `rg '"/api/[a-z_]+"' server/tests` Expected: no output.
 
-- [ ] **Step 3: Run the server integration suite**
+**Note the pattern includes the closing quote.** The looser `rg '"/api/'` cannot
+return nothing: `server/tests/web/web_auth.rs` has an assert _message_ —
+`"/api/register route not registered (got 404)"` — which is prose naming a
+route, not a URL expression. It is deliberately left alone here (converting it
+would mean restructuring the assertion into a format arg, i.e. editing test
+logic) and is handled with the other prose mentions in Task 7b. Spec AC21 is
+worded for the precise pattern for the same reason.
 
-Run: `devtool run -- cargo nextest run -p jaunder --test integration` Expected:
-PASS — the constants resolve to exactly today's URLs, so behavior is unchanged.
-A failure here means a wrong type was named for an endpoint.
+- [x] **Step 3: Run the server integration suite**
+
+Run: `devtool run -- cargo xtask check` Expected: PASS — the constants resolve
+to exactly today's URLs, so behavior is unchanged. A failure means a wrong type
+was named for an endpoint.
+
+**Do not use `cargo nextest run -p jaunder --test integration` here.** A bare
+nextest run has no PostgreSQL listening, so every `*_postgres` case fails with
+`Io(Os { code: 111, ConnectionRefused })` and nextest cancels after ~16 of 1061
+tests — a false red that never reaches the changed files. `cargo xtask check`
+runs the Nix-instrumented tests **with** PostgreSQL and is the honest signal.
 
 - [ ] **Step 4: Commit**
 
@@ -1062,7 +1076,11 @@ forbids. (Spec AC22 counts it among the 11 `/api/…` lines; that count is of
 
 `docs/observability.md:326` (`POST /api/posts/create`), `docs/adr/0046:10,23`,
 `docs/adr/0016:272` (`POST /api/{fn}` → `POST /api/{vertical}/{fn}`), and
-`server/tests/web/web_auth.rs:645,694`. Identifier/URL only — no rewording.
+**four** Rust prose mentions in `server/tests/web/web_auth.rs`: the two route
+comments at `:645,694` plus the assert message
+`"/api/register route not registered (got 404)"` (near `:701` after Task 4's
+reflow) — Task 4 deliberately left that one because rewriting it means
+restructuring the assertion. Identifier/URL only — no rewording.
 
 - [ ] **Step 3: Run the e2e suite**
 

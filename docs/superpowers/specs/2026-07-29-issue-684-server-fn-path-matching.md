@@ -230,9 +230,14 @@ Explicitly **not** renamed (not wire types): `auth::AuthUser`,
 
 - **AC20** All 55 endpoints are `/<vertical>/<ident>`; `server-fn-endpoint`
   passes.
-- **AC21** `rg '"/api/' server/tests` returns **nothing** — every such literal
-  today is a server-fn path, so this is mechanical, not a judgement call. Each
-  call site names `<web::…::Type as ServerFn>::PATH`.
+- **AC21** `rg '"/api/[a-z_]+"' server/tests` returns **nothing** — every
+  _complete quoted URL literal_ is replaced by
+  `<web::…::Type as ServerFn>::PATH`. The pattern is anchored on the closing
+  quote deliberately: `server/tests/web/web_auth.rs` also carries an assert
+  _message_, `"/api/register route not registered (got 404)"`, which names a
+  route in prose rather than passing a URL. That one is not a `::PATH` candidate
+  — converting it would mean restructuring the assertion — so it is updated with
+  the other prose mentions (AC24).
 - **AC22** All 15 `end2end/tests/**` edit points are updated across 7 files: 11
   lines carrying an `/api/…` literal — `media.spec.ts` (2), `feeds.spec.ts` (1),
   `backup.spec.ts` (2), `posts.ts` (1 + doc comment), `audiences.spec.ts` (2),

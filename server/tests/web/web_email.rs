@@ -4,6 +4,7 @@ use axum::http::StatusCode;
 use chrono::Utc;
 use common::mailer::test_utils::CapturingMailSender;
 use common::test_support::parse_email;
+use server_fn::ServerFn;
 
 use crate::helpers::{
     assert_no_email, assert_one_absolute_link_email, create_user_and_session,
@@ -28,7 +29,7 @@ async fn request_email_verification_creates_row_and_sends_email(#[case] backend:
     let (status, _body) = post_form_with_mailer(
         &state,
         &mailer,
-        "/api/request_email_verification",
+        <web::email::RequestEmailVerification as ServerFn>::PATH,
         "email=alice%40example.com",
         Some(&cookie),
     )
@@ -51,7 +52,7 @@ async fn request_email_verification_without_base_url_returns_error(#[case] backe
     let (status, _body) = post_form_with_mailer(
         &state,
         &mailer,
-        "/api/request_email_verification",
+        <web::email::RequestEmailVerification as ServerFn>::PATH,
         "email=alice%40example.com",
         Some(&cookie),
     )
@@ -81,7 +82,7 @@ async fn verify_email_with_valid_token_sets_email_verified(#[case] backend: Back
     let (status, _body) = post_form_with_mailer(
         &state,
         &mailer,
-        "/api/verify_email",
+        <web::email::VerifyEmail as ServerFn>::PATH,
         format!("token={raw_token}"),
         None,
     )
@@ -113,7 +114,7 @@ async fn verify_email_with_expired_token_returns_error(#[case] backend: Backend)
     let (status, _body) = post_form_with_mailer(
         &state,
         &mailer,
-        "/api/verify_email",
+        <web::email::VerifyEmail as ServerFn>::PATH,
         format!("token={raw_token}"),
         None,
     )
@@ -132,7 +133,7 @@ async fn verify_email_with_unknown_token_returns_error(#[case] backend: Backend)
     let (status, _body) = post_form_with_mailer(
         &state,
         &mailer,
-        "/api/verify_email",
+        <web::email::VerifyEmail as ServerFn>::PATH,
         "token=this_token_does_not_exist",
         None,
     )
@@ -152,7 +153,7 @@ async fn verify_email_with_malformed_token_returns_error(#[case] backend: Backen
     let (status, _body) = post_form_with_mailer(
         &state,
         &mailer,
-        "/api/verify_email",
+        <web::email::VerifyEmail as ServerFn>::PATH,
         "token=bad!token",
         None,
     )
@@ -174,7 +175,7 @@ async fn request_email_verification_unauthorized_returns_error(#[case] backend: 
     let (status, _) = post_form_with_mailer(
         &state,
         &mailer,
-        "/api/request_email_verification",
+        <web::email::RequestEmailVerification as ServerFn>::PATH,
         "email=alice@example.com",
         None,
     )
@@ -195,7 +196,7 @@ async fn request_email_verification_invalid_email_returns_error(#[case] backend:
     let (status, _) = post_form_with_mailer(
         &state,
         &mailer,
-        "/api/request_email_verification",
+        <web::email::RequestEmailVerification as ServerFn>::PATH,
         "email=invalid",
         Some(&cookie_header),
     )

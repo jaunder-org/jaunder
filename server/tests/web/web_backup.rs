@@ -1,5 +1,6 @@
 use axum::http::StatusCode;
 use common::backup::{BackupConfig, BackupMode};
+use server_fn::ServerFn;
 use storage::{
     BACKUP_DESTINATION_PATH_KEY, BACKUP_MODE_KEY, BACKUP_RETENTION_COUNT_KEY, BACKUP_SCHEDULE_KEY,
 };
@@ -16,7 +17,13 @@ async fn operator_gets_default_backup_settings(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_operator_and_session(&state).await.cookie();
 
-    let (status, body) = post_form(&state, "/api/get_backup_settings", "", Some(&cookie)).await;
+    let (status, body) = post_form(
+        &state,
+        <web::backup::GetBackupSettings as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let settings: BackupConfig = serde_json::from_str(&body).unwrap();
@@ -52,7 +59,13 @@ async fn operator_gets_configured_backup_settings(#[case] backend: Backend) {
         .await
         .unwrap();
 
-    let (status, body) = post_form(&state, "/api/get_backup_settings", "", Some(&cookie)).await;
+    let (status, body) = post_form(
+        &state,
+        <web::backup::GetBackupSettings as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let settings: BackupConfig = serde_json::from_str(&body).unwrap();
@@ -88,7 +101,13 @@ async fn operator_gets_defaults_for_invalid_backup_settings(#[case] backend: Bac
         .await
         .unwrap();
 
-    let (status, body) = post_form(&state, "/api/get_backup_settings", "", Some(&cookie)).await;
+    let (status, body) = post_form(
+        &state,
+        <web::backup::GetBackupSettings as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let settings: BackupConfig = serde_json::from_str(&body).unwrap();
@@ -106,7 +125,7 @@ async fn operator_can_update_backup_settings(#[case] backend: Backend) {
 
     let (status, body) = post_form(
         &state,
-        "/api/update_backup_settings",
+        <web::backup::UpdateBackupSettings as ServerFn>::PATH,
         "destination_path=%2Fsrv%2Fbackups&schedule=0+0+0+*+*+*&retention_count=5&mode=directory",
         Some(&cookie),
     )
@@ -159,7 +178,7 @@ async fn operator_can_update_backup_settings_to_archive_mode(#[case] backend: Ba
 
     let (status, body) = post_form(
         &state,
-        "/api/update_backup_settings",
+        <web::backup::UpdateBackupSettings as ServerFn>::PATH,
         "destination_path=%2Fsrv%2Fbackups&schedule=0+0+0+*+*+*&retention_count=5&mode=archive",
         Some(&cookie),
     )
@@ -209,8 +228,13 @@ async fn operator_update_backup_settings_rejects_invalid_typed_arg(
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_operator_and_session(&state).await.cookie();
 
-    let (status, body) =
-        post_form(&state, "/api/update_backup_settings", form, Some(&cookie)).await;
+    let (status, body) = post_form(
+        &state,
+        <web::backup::UpdateBackupSettings as ServerFn>::PATH,
+        form,
+        Some(&cookie),
+    )
+    .await;
 
     assert_ne!(status, StatusCode::OK, "body: {body}");
 }
@@ -223,7 +247,7 @@ async fn non_operator_cannot_update_backup_settings(#[case] backend: Backend) {
 
     let (status, body) = post_form(
         &state,
-        "/api/update_backup_settings",
+        <web::backup::UpdateBackupSettings as ServerFn>::PATH,
         "destination_path=%2Fsrv%2Fbackups&schedule=0+0+0+*+*+*&retention_count=5&mode=directory",
         Some(&cookie),
     )
@@ -239,7 +263,13 @@ async fn backup_warning_visible_for_operator_without_destination(#[case] backend
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_operator_and_session(&state).await.cookie();
 
-    let (status, body) = post_form(&state, "/api/backup_warning_visible", "", Some(&cookie)).await;
+    let (status, body) = post_form(
+        &state,
+        <web::backup::BackupWarningVisible as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert_eq!(body, "true");
@@ -256,7 +286,13 @@ async fn backup_warning_hidden_when_destination_configured(#[case] backend: Back
         .await
         .unwrap();
 
-    let (status, body) = post_form(&state, "/api/backup_warning_visible", "", Some(&cookie)).await;
+    let (status, body) = post_form(
+        &state,
+        <web::backup::BackupWarningVisible as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert_eq!(body, "false");
@@ -278,7 +314,13 @@ async fn backup_warning_visible_when_configured_schedule_is_invalid(#[case] back
         .await
         .unwrap();
 
-    let (status, body) = post_form(&state, "/api/backup_warning_visible", "", Some(&cookie)).await;
+    let (status, body) = post_form(
+        &state,
+        <web::backup::BackupWarningVisible as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     // When the schedule is invalid, get_backup_config() returns defaults (no destination)
@@ -291,7 +333,13 @@ async fn backup_warning_hidden_for_non_operator(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
 
-    let (status, body) = post_form(&state, "/api/backup_warning_visible", "", Some(&cookie)).await;
+    let (status, body) = post_form(
+        &state,
+        <web::backup::BackupWarningVisible as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert_eq!(body, "false");
@@ -302,7 +350,13 @@ async fn backup_warning_hidden_for_non_operator(#[case] backend: Backend) {
 async fn backup_warning_hidden_without_authentication(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, body) = post_form(&state, "/api/backup_warning_visible", "", None).await;
+    let (status, body) = post_form(
+        &state,
+        <web::backup::BackupWarningVisible as ServerFn>::PATH,
+        "",
+        None,
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert_eq!(body, "false");
@@ -321,14 +375,20 @@ async fn operator_can_update_backup_settings_omits_destination_as_none(#[case] b
 
     let (status, body) = post_form(
         &state,
-        "/api/update_backup_settings",
+        <web::backup::UpdateBackupSettings as ServerFn>::PATH,
         "schedule=0+0+0+*+*+*&retention_count=5&mode=directory",
         Some(&cookie),
     )
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let settings = post_form(&state, "/api/get_backup_settings", "", Some(&cookie)).await;
+    let settings = post_form(
+        &state,
+        <web::backup::GetBackupSettings as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(settings.0, StatusCode::OK);
     let config: BackupConfig = serde_json::from_str(&settings.1).unwrap();
     assert_eq!(config.destination_path, None);
@@ -347,15 +407,20 @@ async fn operator_can_update_backup_settings_clears_via_empty_destination(
 
     let (status, body) = post_form(
         &state,
-        "/api/update_backup_settings",
+        <web::backup::UpdateBackupSettings as ServerFn>::PATH,
         "destination_path=&schedule=0+0+0+*+*+*&retention_count=5&mode=directory",
         Some(&cookie),
     )
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let (get_status, get_body) =
-        post_form(&state, "/api/get_backup_settings", "", Some(&cookie)).await;
+    let (get_status, get_body) = post_form(
+        &state,
+        <web::backup::GetBackupSettings as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(get_status, StatusCode::OK);
     let config: BackupConfig = serde_json::from_str(&get_body).unwrap();
     assert_eq!(config.destination_path, None);
@@ -371,7 +436,13 @@ async fn backup_warning_visible_propagates_storage_error_during_auth(#[case] bac
 
     base.close_pool().await;
 
-    let (status, _body) = post_form(&state, "/api/backup_warning_visible", "", Some(&cookie)).await;
+    let (status, _body) = post_form(
+        &state,
+        <web::backup::BackupWarningVisible as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
@@ -388,7 +459,13 @@ async fn session_reports_username_and_operator(#[case] backend: Backend) {
     let operator_cookie = operator.cookie();
     let member_cookie = member.cookie();
 
-    let (status, body) = post_form(&state, "/api/session", "", Some(&operator_cookie)).await;
+    let (status, body) = post_form(
+        &state,
+        <web::auth::Session as ServerFn>::PATH,
+        "",
+        Some(&operator_cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(
         body.contains(&format!(r#""username":"{}""#, operator.username)),
@@ -396,7 +473,13 @@ async fn session_reports_username_and_operator(#[case] backend: Backend) {
     );
     assert!(body.contains(r#""is_operator":true"#), "body: {body}");
 
-    let (status, body) = post_form(&state, "/api/session", "", Some(&member_cookie)).await;
+    let (status, body) = post_form(
+        &state,
+        <web::auth::Session as ServerFn>::PATH,
+        "",
+        Some(&member_cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(
         body.contains(&format!(r#""username":"{}""#, member.username)),
@@ -404,7 +487,7 @@ async fn session_reports_username_and_operator(#[case] backend: Backend) {
     );
     assert!(body.contains(r#""is_operator":false"#), "body: {body}");
 
-    let (status, body) = post_form(&state, "/api/session", "", None).await;
+    let (status, body) = post_form(&state, <web::auth::Session as ServerFn>::PATH, "", None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert_eq!(body.trim(), "null"); // Ok(None) serializes to JSON null
 }
@@ -419,7 +502,13 @@ async fn session_propagates_storage_error_during_auth(#[case] backend: Backend) 
 
     base.close_pool().await;
 
-    let (status, _body) = post_form(&state, "/api/session", "", Some(&cookie)).await;
+    let (status, _body) = post_form(
+        &state,
+        <web::auth::Session as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }

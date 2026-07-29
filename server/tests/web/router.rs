@@ -15,6 +15,7 @@ use axum::{
     body::Body,
     http::{header::CONTENT_TYPE, Request, StatusCode},
 };
+use server_fn::ServerFn;
 use tower::ServiceExt;
 
 use rstest::*;
@@ -80,7 +81,7 @@ async fn session_api_route_returns_ok(#[case] backend: Backend) {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/session")
+                .uri(<web::auth::Session as ServerFn>::PATH)
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header(
                     "traceparent",

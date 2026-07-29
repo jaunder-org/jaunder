@@ -4,6 +4,7 @@ use axum::{
     body::Body,
     http::{header, Request, StatusCode},
 };
+use server_fn::ServerFn;
 use tempfile::TempDir;
 use tower::ServiceExt;
 use web::media::{DeleteMediaResult, MediaItem, MediaUsageData};
@@ -31,7 +32,13 @@ async fn media_usage_returns_defaults_for_authenticated_user(#[case] backend: Ba
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
 
-    let (status, body) = post_form(&state, "/api/media_usage", "", Some(&cookie)).await;
+    let (status, body) = post_form(
+        &state,
+        <web::media::MediaUsage as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let usage: MediaUsageData = serde_json::from_str(&body).expect("response should be valid JSON");
@@ -46,9 +53,9 @@ async fn media_usage_returns_defaults_for_authenticated_user(#[case] backend: Ba
 // way (Leptos server fn → INTERNAL_SERVER_ERROR + "unauthorized"); only the
 // endpoint and request body vary.
 #[apply(backends_matrix)]
-#[case::media_usage("/api/media_usage", "")]
-#[case::list_my_media("/api/list_my_media", "")]
-#[case::delete_media("/api/delete_media", "sha256=deadbeef00000000000000000000000000000000000000000000000000000000&filename=test.png&source=upload")]
+#[case::media_usage(<web::media::MediaUsage as ServerFn>::PATH, "")]
+#[case::list_my_media(<web::media::ListMyMedia as ServerFn>::PATH, "")]
+#[case::delete_media(<web::media::DeleteMedia as ServerFn>::PATH, "sha256=deadbeef00000000000000000000000000000000000000000000000000000000&filename=test.png&source=upload")]
 #[tokio::test]
 async fn media_endpoint_rejects_unauthenticated_request(
     backend: Backend,
@@ -71,7 +78,13 @@ async fn list_my_media_returns_empty_for_new_user(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
 
-    let (status, body) = post_form(&state, "/api/list_my_media", "", Some(&cookie)).await;
+    let (status, body) = post_form(
+        &state,
+        <web::media::ListMyMedia as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let items: Vec<MediaItem> = serde_json::from_str(&body).expect("response should be valid JSON");
@@ -86,7 +99,13 @@ async fn list_my_media_rejects_out_of_range_limit(#[case] backend: Backend) {
 
     // `limit=999` is outside PageSize's `1..=50`; the typed wire arg rejects it on
     // deserialization instead of fetching an unbounded page.
-    let (status, _body) = post_form(&state, "/api/list_my_media", "limit=999", Some(&cookie)).await;
+    let (status, _body) = post_form(
+        &state,
+        <web::media::ListMyMedia as ServerFn>::PATH,
+        "limit=999",
+        Some(&cookie),
+    )
+    .await;
 
     assert_ne!(
         status,
@@ -120,7 +139,13 @@ async fn list_my_media_returns_inserted_item(#[case] backend: Backend) {
 
     let cookie = session.cookie();
 
-    let (status, body) = post_form(&state, "/api/list_my_media", "", Some(&cookie)).await;
+    let (status, body) = post_form(
+        &state,
+        <web::media::ListMyMedia as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let items: Vec<MediaItem> = serde_json::from_str(&body).expect("response should be valid JSON");
@@ -158,8 +183,13 @@ async fn list_my_media_with_source_filter(#[case] backend: Backend) {
 
     let cookie = session.cookie();
 
-    let (status, body) =
-        post_form(&state, "/api/list_my_media", "source=upload", Some(&cookie)).await;
+    let (status, body) = post_form(
+        &state,
+        <web::media::ListMyMedia as ServerFn>::PATH,
+        "source=upload",
+        Some(&cookie),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let items: Vec<MediaItem> = serde_json::from_str(&body).expect("response should be valid JSON");
@@ -196,7 +226,13 @@ async fn delete_media_succeeds_for_existing_item(#[case] backend: Backend) {
     let cookie = session.cookie();
 
     let body = "sha256=deadbeef01234567000000000000000000000000000000000000000000000000&filename=test.png&source=upload&force=false";
-    let (status, body_str) = post_form(&state, "/api/delete_media", body, Some(&cookie)).await;
+    let (status, body_str) = post_form(
+        &state,
+        <web::media::DeleteMedia as ServerFn>::PATH,
+        body,
+        Some(&cookie),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body_str}");
     let result: DeleteMediaResult =
@@ -248,7 +284,13 @@ async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend:
     let cookie = session.cookie();
 
     let body = "sha256=deadbeef99999999000000000000000000000000000000000000000000000000&filename=inline.png&source=upload&force=false";
-    let (status, body_str) = post_form(&state, "/api/delete_media", body, Some(&cookie)).await;
+    let (status, body_str) = post_form(
+        &state,
+        <web::media::DeleteMedia as ServerFn>::PATH,
+        body,
+        Some(&cookie),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body_str}");
     let result: DeleteMediaResult =
@@ -277,7 +319,7 @@ async fn upload_media_stores_file_and_returns_metadata(#[case] backend: Backend)
     let (status, body) = post_multipart(
         &state,
         &storage,
-        "/api/upload_media",
+        <web::media::UploadMedia as ServerFn>::PATH,
         MultipartFile {
             filename: "photo.jpg",
             content_type: "image/jpeg",
@@ -400,7 +442,7 @@ async fn upload_media_rejects_unauthenticated_request(#[case] backend: Backend) 
     let (status, body) = post_multipart(
         &state,
         &storage,
-        "/api/upload_media",
+        <web::media::UploadMedia as ServerFn>::PATH,
         MultipartFile {
             filename: "photo.jpg",
             content_type: "image/jpeg",
@@ -428,7 +470,7 @@ async fn upload_media_rejects_invalid_filename(#[case] backend: Backend) {
     let (status, body) = post_multipart(
         &state,
         &storage,
-        "/api/upload_media",
+        <web::media::UploadMedia as ServerFn>::PATH,
         MultipartFile {
             filename: "..",
             content_type: "image/jpeg",
@@ -462,7 +504,7 @@ async fn upload_media_rejects_oversized_file(#[case] backend: Backend) {
     let (status, body) = post_multipart(
         &state,
         &storage,
-        "/api/upload_media",
+        <web::media::UploadMedia as ServerFn>::PATH,
         MultipartFile {
             filename: "big.jpg",
             content_type: "image/jpeg",
@@ -496,7 +538,7 @@ async fn upload_media_rejects_over_quota_file(#[case] backend: Backend) {
     let (status, body) = post_multipart(
         &state,
         &storage,
-        "/api/upload_media",
+        <web::media::UploadMedia as ServerFn>::PATH,
         MultipartFile {
             filename: "big.jpg",
             content_type: "image/jpeg",
@@ -530,7 +572,7 @@ async fn upload_media_rejects_missing_file_field(#[case] backend: Backend) {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/upload_media")
+                .uri(<web::media::UploadMedia as ServerFn>::PATH)
                 .header(
                     header::CONTENT_TYPE,
                     format!("multipart/form-data; boundary={boundary}"),
