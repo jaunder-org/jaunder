@@ -388,17 +388,28 @@ same reason the rest of this issue exists.
 **Runs after task 6** — otherwise `cargo xtask check` fails on the un-swept
 sites.
 
-- [ ] Extend `strips_newtype_in_bind` (`:65`) to also match `i64::from(` in the
+- [x] Extend `strips_newtype_in_bind` (`:65`) to also match `i64::from(` in the
       region after the first `.bind(`
-- [ ] Unit test `i64_from_bind_is_flagged`, alongside the existing
-      `as_ref_strip_is_flagged` (`:175`) and `deref_binds_are_flagged` (`:182`)
-      — RED first
-- [ ] Update the module doc comment and the failure-detail recovery text to name
+- [x] Unit test `i64_from_bind_is_flagged`, alongside the existing
+      `as_ref_strip_is_flagged` and `deref_binds_are_flagged` — plus
+      `i64_from_outside_a_bind_is_ignored` (the widening is policed only at a
+      bind site) and `allowlisted_primitive_widenings_are_clean`
+- [x] Update the module doc comment and the failure-detail recovery text to name
       the new case
-- [ ] Prove it bites: revert one hunk from task 6, confirm the gate fails,
-      restore
-- [ ] `cargo nextest run --manifest-path xtask/Cargo.toml`; `cargo xtask check`
-      → green; commit
+- [x] Prove it bites: `.bind(record.user_id)` in `storage/src/media.rs:186` was
+      temporarily reverted to `.bind(i64::from(record.user_id))`;
+      `cargo xtask check --no-test` failed with
+      `[FAIL] sqlx-newtype-bind — storage/src/media.rs:186: …`, then restored
+- [x] `cargo nextest run --manifest-path xtask/Cargo.toml` (12/12);
+      `cargo xtask check` → green; commit
+
+**Task 6's carve-out is handled by the existing ALLOWLIST, not by weakening the
+rule.** The gate already exempts by bind-expression **substring** (reflow-proof,
+unlike a line number or an inline marker), so the 16 forced `u32 → i64`
+widenings get two entries — `i64::from(limit)` and `i64::from(offset.value())` —
+each carrying its reason and pointing at #696, which should delete them along
+with the underlying `u32`. The rule itself stays absolute: any other
+`i64::from(` in a `.bind(` fails the gate.
 
 ## Task 9 — Amend ADR-0071
 
