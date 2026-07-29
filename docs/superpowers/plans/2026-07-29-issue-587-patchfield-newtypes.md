@@ -200,35 +200,39 @@ Spec criteria: 7, 9. (Criterion 8 — the ADR draft — is already satisfied.)
 
 **Steps**
 
-- [ ] §10 example: update **all three** parts — the row struct (currently
+- [x] §10 example: update **all three** parts — the row struct (currently
       `struct Row { id: i64, name: String }`, line 297), the key attribute
       (currently `#[store(key: i64 = |r| r.id)]`, line 299), **and** the
       `#[patch(|this, new|     *this = new)]` attribute on the newtype leaf
       field, without which the example would not compile. Keep it a **generic
       template** (`Row`/`Rows` with placeholder newtype names), not the real
       `AudienceSummary`.
-- [ ] §10 prose: add a short bullet — a domain-newtype **leaf** field needs
+- [x] §10 prose: add a short bullet — a domain-newtype **leaf** field needs
       `#[patch(|this, new| *this = new)]`; the **key** type does not; cite the
       draft ADR path. Mention that a newtype is not `IntoRender`, so view sites
       stringify (the existing idiom, `web/src/taglist/component.rs:36`).
-- [ ] **Decide** the cross-reference and record the outcome in the commit
-      message: ADR-0063 §5's text is generic and never names reactive stores, so
-      the reactive-store application lived in the #475 spec and the `api.rs`
-      comment (both now handled). Add a pointer to ADR-0061 (which owns the
-      keyed-store idiom) if it helps a reader; leave ADR-0063 §5 untouched
-      unless it actually misleads. Either way, state the reason — this criterion
-      is about deciding, not about editing by default.
-- [ ] If ADR text is edited, reference the draft by **path**, never a number.
+- [x] **Decide** the cross-reference and record the outcome in the commit
+      message. **Decided: pointer added to ADR-0061 only; ADR-0063 left
+      untouched.** ADR-0061 owns the keyed-store idiom, so a reader asking "what
+      may a row hold?" lands there — it gets a header `Note:` in the same style
+      as ADR-0058's `#334` clarification and ADR-0069's `re-scoped by ADR-0070`.
+      ADR-0063 §5's text is generic (it names `atom_syndication`, `rss`,
+      `serde_json::Value`) and never mentions reactive stores, so there is
+      nothing there to correct — and adding a reactive-store exception note
+      would actively mislead, implying store rows are special when the whole
+      point of this change is that they are **not**.
+- [x] If ADR text is edited, reference the draft by **path**, never a number.
 
 **Verify**
 
-- [ ] `rg -n 'id: i64|key: i64' docs/web-style-guide.md` → no hits.
-- [ ] `rg -n '#\[patch\(' docs/web-style-guide.md` → at least one hit. _(The
+- [x] `rg -n 'id: i64|key: i64' docs/web-style-guide.md` → no hits.
+- [x] `rg -n '#\[patch\(' docs/web-style-guide.md` → at least one hit. _(The
       struct and key checks above cannot detect a missing `#[patch]`, which is
       the half of criterion 7 that makes the template actually compile.)_
-- [ ] `prettier -w docs/web-style-guide.md` (and any ADR touched) before staging
+- [x] `prettier -w docs/web-style-guide.md` (and any ADR touched) before staging
       — the pre-commit prettier otherwise restages prose under you.
-- [ ] `cargo xtask check` → green.
+- [x] `cargo xtask check` → green (`--no-test`; the full gate runs in the commit
+      hook).
 
 **Commit** —
 `docs(web): teach the typed keyed-store row shape in style-guide §10 (#587)`

@@ -1,6 +1,10 @@
 # ADR-0061: Web keyed lists render via a reactive Store, patch-fed
 
 - Status: accepted
+- Note: #587 settled what a row's fields may hold — domain newtypes, via the
+  `Patch` derive's `#[patch]` escape hatch, not primitives. See
+  `docs/adr/drafts/reactive-store-domain-newtype-fields.md`; the idiom is in
+  web-style-guide §10.
 - Date: 2026-07-10
 - Issue: [#348](https://github.com/jaunder-org/jaunder/issues/348)
 
