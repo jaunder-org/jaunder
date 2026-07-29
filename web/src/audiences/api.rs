@@ -25,7 +25,7 @@ use {
 /// `#[patch(|this, new| *this = new)]` — the derive's escape hatch, which lets the
 /// fields keep their domain types instead of being flattened to `i64`/`String`.
 /// Rationale and the rejected alternatives:
-/// `docs/adr/drafts/reactive-store-domain-newtype-fields.md`.
+/// `docs/adr/0078-reactive-store-domain-newtype-fields.md`.
 ///
 /// `audience_id`'s attribute is required to compile but is behaviorally inert: it is
 /// the store key, so `patch_field_keyed` has already matched the two rows *by* it

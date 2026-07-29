@@ -347,7 +347,7 @@ let state = list.patched(fetch_rows, move |rows| store.rows().patch(rows)); // S
   field** — its key type only has to satisfy `PatchFieldKeyed`'s bounds, all of
   which `IdNewtype` derives. (The id field's own attribute is inert at runtime:
   rows are matched _by_ that key, so its comparison never fires. It is there to
-  compile.) See `docs/adr/drafts/reactive-store-domain-newtype-fields.md`; the
+  compile.) See `docs/adr/0078-reactive-store-domain-newtype-fields.md`; the
   audiences vertical is the worked example. A newtype is not `IntoRender`, so
   read it out at view sites — `.to_string()` when the row is borrowed,
   `String::from(…)` to move it out of an owned row — as

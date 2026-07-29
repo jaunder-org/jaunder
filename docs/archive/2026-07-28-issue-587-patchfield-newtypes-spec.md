@@ -97,7 +97,7 @@ coupling, and unwinding that is far more expensive than adding a derive.
 
 This reverses the reactive-store carve-out as applied by the #475 spec and the
 `api.rs` doc comment, so it is recorded as an ADR (draft:
-`docs/adr/drafts/reactive-store-domain-newtype-fields.md`).
+`docs/adr/0078-reactive-store-domain-newtype-fields.md`).
 
 ## Acceptance criteria
 
@@ -111,7 +111,7 @@ Each is stated so a conformance review can tell delivered from not.
 3. Each of the two fields carries `#[patch(|this, new| *this = new)]`.
 4. The `AudienceSummary` doc comment no longer describes a `PatchField`
    carve-out; it states the `#[patch]` idiom and cites the ADR by its **draft
-   path**, `docs/adr/drafts/reactive-store-domain-newtype-fields.md`. The
+   path**, `docs/adr/0078-reactive-store-domain-newtype-fields.md`. The
    `drafts/<slug>` segment is load-bearing: `cargo xtask adr promote`
    (`xtask/src/adr.rs`, Pass C) substring-rewrites that stem repo-wide to the
    assigned `NNNN-<slug>` at ship. A bare filename with no `drafts/` segment

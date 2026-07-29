@@ -2,7 +2,7 @@
 
 Spec:
 [`docs/archive/2026-07-28-issue-587-patchfield-newtypes-spec.md`](2026-07-28-issue-587-patchfield-newtypes-spec.md)
-ADR draft: `docs/adr/drafts/reactive-store-domain-newtype-fields.md` (already
+ADR draft: `docs/adr/0078-reactive-store-domain-newtype-fields.md` (already
 written; gitignored until `promote` at ship)
 
 ## Review header
@@ -162,7 +162,7 @@ outstanding work is the doc comment.
       domain-newtype **leaf** field carries `#[patch(|this, new| *this = new)]`
       because `reactive_stores::PatchField` has no blanket impl and the orphan
       rule bars implementing it here; cite the path
-      `docs/adr/drafts/reactive-store-domain-newtype-fields.md`. Add one line
+      `docs/adr/0078-reactive-store-domain-newtype-fields.md`. Add one line
       noting the `audience_id` attribute is compile-required but inert (rows are
       matched by that key, so its comparison never fires).
 
@@ -177,7 +177,7 @@ outstanding work is the doc comment.
 - [x] `rg -n 'carve-out|stays a bare' web/src/` → no hits. _(Deliberately
       **not** matching `PatchField`: the replacement comment names the trait to
       explain why the attribute exists. Matching it would fail correct work.)_
-- [x] `rg -n 'drafts/reactive-store-domain-newtype-fields' web/src/audiences/api.rs`
+- [x] `rg -n '0078-reactive-store-domain-newtype-fields' web/src/audiences/api.rs`
       → one hit, proving criterion 4's citation landed in the path form
       `promote` rewrites.
 - [x] `cargo xtask check` → green; then `git status --porcelain` for fmt fixups.
