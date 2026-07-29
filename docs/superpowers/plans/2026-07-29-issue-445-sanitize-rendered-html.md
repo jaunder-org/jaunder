@@ -228,7 +228,7 @@ was added and why in a comment.
 **Interfaces:** `render()` becomes `#[cfg(feature = "sanitize")]` and returns
 sanitized output. Signature is otherwise unchanged — no new parameter.
 
-- [ ] **Step 1: Write the format-coverage tests first (AC1).**
+- [x] **Step 1: Write the format-coverage tests first (AC1).**
 
 In `common/src/render.rs` tests, gated `#[cfg(feature = "sanitize")]`:
 
@@ -240,14 +240,22 @@ In `common/src/render.rs` tests, gated `#[cfg(feature = "sanitize")]`:
 Each renders a body carrying `<script>alert(1)</script>` and asserts it does not
 survive.
 
-- [ ] **Step 2: Run them, verify they fail.**
+- [x] **Step 2: Run them, verify they fail.** (3/3 red — the hole was real in
+      every format.)
 
 Run: `devtool run -- cargo nextest run -p common render_`
 
 Expected: FAIL on the three new tests — current `render()` passes markup
 through.
 
-- [ ] **Step 3: Gate `render()` and route it.**
+- [x] **Step 3: Gate `render()` and route it.**
+
+**Gating cascades.** `render()` is the only caller of
+`render_markdown`/`render_org` and the only user of the `PostBody` import, so
+all three had to be gated too or the wasm build fails `-D warnings` with
+dead-code/unused-import errors. Also updated `RenderedHtml`'s **type-level** doc
+— a fourth stale comment the plan didn't list, and the clearest statement of the
+old provenance-not-safety model in the tree.
 
 Add `#[cfg(feature = "sanitize")]` to `render()`. Change its tail from
 `RenderedHtml(html)` to `Self::sanitize(&html)` — i.e.
@@ -258,7 +266,14 @@ function does not exist, rather than existing and silently not sanitizing.
 
 Leave `derive_post_metadata` ungated — it uses the parsers but not `ammonia`.
 
-- [ ] **Step 4: Run the full common suite.**
+- [x] **Step 4: Run the full common suite.** (444/444.)
+
+Two pre-existing tests needed adjusting, both genuine consequences rather than
+cosmetic fixes: `render_html_format_is_identity` became
+`render_html_format_preserves_safe_markup`, since `Html` is no longer a verbatim
+passthrough; and the Org case had to switch from `#+begin_export html` to the
+inline `@@html:…@@` form, because orgize escapes the former itself — the first
+draft of that test was asserting on escaped, harmless text.
 
 Run: `devtool run -- cargo nextest run -p common`
 
@@ -266,7 +281,10 @@ Expected: PASS. Pre-existing `render` tests that assert exact HTML may now see
 sanitized output; if any fail, confirm the change is sanitization (not
 corruption) before adjusting the expectation.
 
-- [ ] **Step 5: Confirm call sites still build.**
+- [x] **Step 5: Confirm call sites still build.** (Unchanged, as predicted — the
+      signature did not change.) Note bare `cargo nextest run -p storage`
+      reports false `case_2_postgres` ConnectionRefused failures; only the xtask
+      gate provides the ephemeral Postgres.
 
 `render()`'s three call sites (`post_service.rs:79`, `:169`, `:331`) and two in
 `test_support.rs` (`:1017`, `:1373`) need no change — the signature is unchanged
@@ -276,7 +294,7 @@ Run: `devtool run -- cargo nextest run -p storage`
 
 Expected: PASS.
 
-- [ ] **Step 6: Gate and commit.**
+- [x] **Step 6: Gate and commit.**
 
 `devtool run -- cargo xtask check`, then commit:
 `fix(common): sanitize rendered post HTML in all three formats (#445)`.

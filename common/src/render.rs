@@ -5,6 +5,8 @@
 
 use std::fmt;
 
+// Only `render` takes a `PostBody`, and it is gated on `sanitize`.
+#[cfg(feature = "sanitize")]
 use crate::post_body::PostBody;
 use crate::post_summary::PostSummary;
 use crate::post_title::PostTitle;
@@ -68,16 +70,24 @@ crate::strum_enum::impl_string_serde_proxy!(PostFormat);
 // `PostFormat` value, like the newtypes (#438) — not a stringly `.to_string()` strip.
 crate::db_enum::impl_text_column_enum!(PostFormat);
 
-/// HTML **produced by [`render`]**. This is a *provenance* marker, not a safety
-/// guarantee: `render` does **no** sanitization (see #445), so this type means
-/// "came out of our renderer", NOT "safe / XSS-free". Its value is structural — the
-/// unescaped view sink accepts only `RenderedHtml`, so a raw `String`/body cannot
-/// reach it by accident.
+/// HTML that is **safe to emit unescaped** — the type's invariant is "contains no
+/// active markup", established by scrubbing against an allowlist. Before #445 this
+/// was only a *provenance* marker ("came out of our renderer"), which did not imply
+/// safety because nothing sanitized; it now carries the guarantee its name suggests.
+/// Its structural value is unchanged: the unescaped view sink accepts only
+/// `RenderedHtml`, so a raw `String`/body cannot reach it by accident.
 ///
-/// The only ways to obtain one are [`render`] (mints new HTML) and
-/// [`RenderedHtml::from_trusted`] (rebuilds a value already produced by `render`
-/// and round-tripped through our own storage or wire); the latter is enforced by
-/// the `rendered-html-from-trusted` static check. Reading *out* is convenient —
+/// Two doors, meaning different things:
+///
+/// - [`RenderedHtml::sanitize`] **establishes** the invariant by scrubbing. This is
+///   the door for anything from outside jaunder — a rendered post body (via
+///   [`render`]), an ingested feed entry, any future inbound producer.
+/// - [`RenderedHtml::from_trusted`] **inherits** it, rebuilding a value we already
+///   sanitized and round-tripped through our own storage or wire. Confined to an
+///   allowlist of call sites by the `rendered-html-from-trusted` static check, so a
+///   new inbound path cannot quietly use it in place of `sanitize`.
+///
+/// Reading *out* is convenient —
 /// `Display`, `AsRef<str>`, `Borrow<str>`, `Deref<Target = str>`, `PartialEq<str>`,
 /// and `From<RenderedHtml> for String` (an *outbound* move of the inner) — but there
 /// is deliberately no *inbound constructor*: no `From<String>`/`TryFrom`/`FromStr`/
@@ -272,7 +282,16 @@ const _: () = {
 // ---------------------------------------------------------------------------
 
 /// Renders `body` to HTML based on `format`. Pure, infallible function. The output
-/// is a [`RenderedHtml`] — this is the only door that mints new rendered HTML.
+/// is a [`RenderedHtml`], minted through [`RenderedHtml::sanitize`] — a post body is
+/// author-supplied, so it is outside input and every format's output is scrubbed.
+///
+/// All three formats need that scrub, not just [`PostFormat::Html`]: the Markdown and
+/// Org parsers both pass embedded raw HTML through untouched, so `<script>` in a
+/// Markdown body reaches the output just as readily as in an HTML one (#445).
+///
+/// Host-only: gated on `sanitize`, like the door it mints through. With the feature
+/// off this function does not exist, so there is no build that renders unsanitized.
+#[cfg(feature = "sanitize")]
 #[must_use]
 pub fn render(body: &PostBody, format: &PostFormat) -> RenderedHtml {
     let html = match format {
@@ -280,7 +299,7 @@ pub fn render(body: &PostBody, format: &PostFormat) -> RenderedHtml {
         PostFormat::Org => render_org(body),
         PostFormat::Html => body.to_string(),
     };
-    RenderedHtml(html)
+    RenderedHtml::sanitize(&html)
 }
 
 /// Metadata derived from a post body used for slug generation and display.
@@ -476,6 +495,10 @@ pub fn canonicalize_org_body(body: &str) -> String {
 }
 
 /// Renders Markdown to HTML using pulldown-cmark with common extensions.
+///
+/// Gated with [`render`], its only caller: on a build without `sanitize` there is no
+/// renderer, so this would be dead code.
+#[cfg(feature = "sanitize")]
 fn render_markdown(body: &str) -> String {
     use pulldown_cmark::{html, Options, Parser};
 
@@ -492,6 +515,9 @@ fn render_markdown(body: &str) -> String {
 }
 
 /// Renders Org-mode to HTML using orgize.
+///
+/// Gated with [`render`], its only caller (see [`render_markdown`]).
+#[cfg(feature = "sanitize")]
 fn render_org(body: &str) -> String {
     orgize::Org::parse(body).to_html()
 }
@@ -867,16 +893,62 @@ mod tests {
 
     // -- Cross-format dispatch tests --
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn render_dispatches_markdown() {
         let result = render(&PostBody::from("**bold**"), &PostFormat::Markdown);
         assert!(result.contains("<strong>bold</strong>"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn render_dispatches_org() {
         let result = render(&PostBody::from("*bold*"), &PostFormat::Org);
         assert!(result.contains("<b>bold</b>"));
+    }
+
+    // -- Sanitization at the mint point (#445, AC1) --
+    //
+    // Every format must neutralize active markup. Markdown and Org both pass
+    // embedded raw HTML straight through their parsers, and `Html` is a verbatim
+    // passthrough, so all three need their own assertion rather than one shared one.
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn render_markdown_strips_embedded_script() {
+        let result = render(
+            &PostBody::from("Hello\n\n<script>alert(1)</script>"),
+            &PostFormat::Markdown,
+        );
+        assert!(!result.contains("<script"), "{result}");
+        assert!(!result.contains("alert(1)"), "{result}");
+        assert!(result.contains("Hello"), "{result}");
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn render_org_strips_embedded_script() {
+        // `@@html:…@@` is Org's inline-export escape hatch — the form that actually
+        // reaches the output as raw HTML. (A `#+begin_export html` block is escaped
+        // by orgize itself, so it never needed us.) Assert on the executable form:
+        // the literal text `alert(1)` surviving *escaped* is harmless.
+        let result = render(
+            &PostBody::from("Hello\n\n@@html:<script>alert(1)</script>@@"),
+            &PostFormat::Org,
+        );
+        assert!(!result.contains("<script"), "{result}");
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn render_html_strips_embedded_script() {
+        let result = render(
+            &PostBody::from("<p>hi</p><script>alert(1)</script>"),
+            &PostFormat::Html,
+        );
+        assert!(!result.contains("<script"), "{result}");
+        assert!(!result.contains("alert(1)"), "{result}");
+        assert!(result.contains("<p>hi</p>"), "{result}");
     }
 
     #[test]
@@ -1041,8 +1113,12 @@ mod tests {
         assert_eq!(result, None);
     }
 
+    // Was `render_html_format_is_identity` before #445: the `Html` format used to be
+    // a verbatim passthrough. It is now sanitized like every other format, so the
+    // guarantee is "safe markup survives unchanged", not "the input survives".
+    #[cfg(feature = "sanitize")]
     #[test]
-    fn render_html_format_is_identity() {
+    fn render_html_format_preserves_safe_markup() {
         let body = "<p>hi <b>there</b></p>";
         assert_eq!(
             render(&PostBody::from(body), &PostFormat::Html).as_ref(),
