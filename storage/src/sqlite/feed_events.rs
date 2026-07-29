@@ -110,7 +110,7 @@ impl FeedEventDialect for Sqlite {
         let sql = format!("UPDATE feed_events SET regenerated_at = ? WHERE id IN ({ph})");
         let mut q = sqlx::query(&sql).bind(now);
         for id in ids {
-            q = q.bind(i64::from(*id));
+            q = q.bind(*id);
         }
         q.execute(pool).await?;
         Ok(())
@@ -123,7 +123,7 @@ impl FeedEventDialect for Sqlite {
             format!("UPDATE feed_events SET status = 'done', pinged_at = ? WHERE id IN ({ph})");
         let mut q = sqlx::query(&sql).bind(now);
         for id in ids {
-            q = q.bind(i64::from(*id));
+            q = q.bind(*id);
         }
         q.execute(pool).await?;
         Ok(())
@@ -143,7 +143,7 @@ impl FeedEventDialect for Sqlite {
         );
         let mut q = sqlx::query(&sql).bind(error).bind(next_attempt_at);
         for id in ids {
-            q = q.bind(i64::from(*id));
+            q = q.bind(*id);
         }
         q.execute(pool).await?;
         Ok(())
@@ -159,7 +159,7 @@ impl FeedEventDialect for Sqlite {
             format!("UPDATE feed_events SET status = 'failed', last_error = ? WHERE id IN ({ph})");
         let mut q = sqlx::query(&sql).bind(error);
         for id in ids {
-            q = q.bind(i64::from(*id));
+            q = q.bind(*id);
         }
         q.execute(pool).await?;
         Ok(())

@@ -130,7 +130,7 @@ where
              SET expires_at = created_at
              WHERE user_id = $1 AND used_at IS NULL AND expires_at > $2",
         )
-        .bind(i64::from(user_id))
+        .bind(user_id)
         .bind(now)
         .execute(&mut *tx)
         .await?;
@@ -141,7 +141,7 @@ where
              VALUES ($1, $2, $3, $4, $5)",
         )
         .bind(token_hash)
-        .bind(i64::from(user_id))
+        .bind(user_id)
         .bind(email)
         .bind(now)
         .bind(expires_at)

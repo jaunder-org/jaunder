@@ -99,7 +99,7 @@ where
              VALUES ($1, $2, $3, $4)",
         )
         .bind(token_hash)
-        .bind(i64::from(user_id))
+        .bind(user_id)
         .bind(now)
         .bind(expires_at)
         .execute(&self.pool)

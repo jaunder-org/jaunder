@@ -256,7 +256,7 @@ impl AtomicOps for SqliteAtomicOps {
 
             sqlx::query("UPDATE invites SET used_at = $1, used_by = $2 WHERE code = $3")
                 .bind(now)
-                .bind(i64::from(user_id))
+                .bind(user_id)
                 .bind(invite_code)
                 .execute(&mut *conn)
                 .await?;
@@ -329,12 +329,12 @@ impl AtomicOps for SqliteAtomicOps {
 
         sqlx::query("UPDATE users SET password_hash = $1 WHERE user_id = $2")
             .bind(&password_hash)
-            .bind(i64::from(user_id))
+            .bind(user_id)
             .execute(&mut *tx)
             .await?;
 
         sqlx::query("DELETE FROM sessions WHERE user_id = $1")
-            .bind(i64::from(user_id))
+            .bind(user_id)
             .execute(&mut *tx)
             .await?;
 

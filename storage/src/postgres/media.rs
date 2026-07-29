@@ -17,7 +17,7 @@ impl MediaDialect for Postgres {
         let row = sqlx::query_as::<_, (ByteSize,)>(
             "SELECT COALESCE(SUM(size_bytes), 0)::bigint FROM media WHERE user_id = $1 AND source = 'upload'",
         )
-        .bind(i64::from(user_id))
+        .bind(user_id)
         .fetch_one(pool)
         .await?;
 
@@ -34,7 +34,7 @@ impl MediaDialect for Postgres {
         let result = sqlx::query(
             "DELETE FROM media WHERE user_id = $1 AND sha256 = $2 AND filename = $3 AND source = $4",
         )
-        .bind(i64::from(user_id))
+        .bind(user_id)
         .bind(sha256)
         .bind(filename)
         .bind(*source)

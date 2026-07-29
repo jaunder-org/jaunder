@@ -179,7 +179,7 @@ where
         match sqlx::query_as::<_, (AudienceId,)>(
             "INSERT INTO audiences (author_user_id, name) VALUES ($1, $2) RETURNING audience_id",
         )
-        .bind(i64::from(author_user_id))
+        .bind(author_user_id)
         .bind(name)
         .fetch_one(&self.pool)
         .await
@@ -210,8 +210,8 @@ where
              RETURNING audience_id",
         )
         .bind(name)
-        .bind(i64::from(author_user_id))
-        .bind(i64::from(audience_id))
+        .bind(author_user_id)
+        .bind(audience_id)
         .fetch_optional(&self.pool)
         .await;
         match result {
@@ -236,13 +236,13 @@ where
     ) -> sqlx::Result<()> {
         let mut tx = self.pool.begin().await?;
         sqlx::query("DELETE FROM audience_members WHERE author_user_id = $1 AND audience_id = $2")
-            .bind(i64::from(author_user_id))
-            .bind(i64::from(audience_id))
+            .bind(author_user_id)
+            .bind(audience_id)
             .execute(&mut *tx)
             .await?;
         sqlx::query("DELETE FROM audiences WHERE author_user_id = $1 AND audience_id = $2")
-            .bind(i64::from(author_user_id))
-            .bind(i64::from(audience_id))
+            .bind(author_user_id)
+            .bind(audience_id)
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
@@ -259,7 +259,7 @@ where
             "SELECT audience_id, name, created_at FROM audiences \
              WHERE author_user_id = $1 ORDER BY audience_id",
         )
-        .bind(i64::from(author_user_id))
+        .bind(author_user_id)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
@@ -288,9 +288,9 @@ where
              VALUES ($1, $2, $3) \
              ON CONFLICT (audience_id, subscription_id) DO NOTHING",
         )
-        .bind(i64::from(audience_id))
-        .bind(i64::from(subscription_id))
-        .bind(i64::from(author_user_id))
+        .bind(audience_id)
+        .bind(subscription_id)
+        .bind(author_user_id)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -311,9 +311,9 @@ where
             "DELETE FROM audience_members \
              WHERE author_user_id = $1 AND audience_id = $2 AND subscription_id = $3",
         )
-        .bind(i64::from(author_user_id))
-        .bind(i64::from(audience_id))
-        .bind(i64::from(subscription_id))
+        .bind(author_user_id)
+        .bind(audience_id)
+        .bind(subscription_id)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -333,8 +333,8 @@ where
             "SELECT subscription_id FROM audience_members \
              WHERE author_user_id = $1 AND audience_id = $2 ORDER BY subscription_id",
         )
-        .bind(i64::from(author_user_id))
-        .bind(i64::from(audience_id))
+        .bind(author_user_id)
+        .bind(audience_id)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().map(|(id,)| id).collect())

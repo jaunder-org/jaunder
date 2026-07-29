@@ -170,15 +170,15 @@ where
         // `&'static str` (strum `IntoStaticStr`) — not a stringly `.as_str()` strip.
         let status_name: &'static str = status.into();
         sqlx::query(DB::INSERT_SUBSCRIPTION)
-            .bind(i64::from(author_user_id))
-            .bind(i64::from(channel_id))
+            .bind(author_user_id)
+            .bind(channel_id)
             .bind(subscriber_ref)
             .bind(status_name)
             .execute(&self.pool)
             .await?;
         sqlx::query_as::<_, (SubscriptionId,)>(DB::SELECT_SUBSCRIPTION_ID)
-            .bind(i64::from(author_user_id))
-            .bind(i64::from(channel_id))
+            .bind(author_user_id)
+            .bind(channel_id)
             .bind(subscriber_ref)
             .fetch_one(&self.pool)
             .await
@@ -192,8 +192,8 @@ where
         subscriber_ref: &str,
     ) -> sqlx::Result<()> {
         sqlx::query(DB::DELETE_SUBSCRIPTION)
-            .bind(i64::from(author_user_id))
-            .bind(i64::from(channel_id))
+            .bind(author_user_id)
+            .bind(channel_id)
             .bind(subscriber_ref)
             .execute(&self.pool)
             .await?;
@@ -213,8 +213,8 @@ where
             return Ok(false); // Anonymous short-circuit; no query.
         };
         let (exists,) = sqlx::query_as::<_, (i64,)>(DB::IS_ACTIVE_SUBSCRIBER)
-            .bind(i64::from(author_user_id))
-            .bind(i64::from(*channel_id))
+            .bind(author_user_id)
+            .bind(*channel_id)
             .bind(subscriber_ref.as_str())
             .fetch_one(&self.pool)
             .await?;
@@ -228,7 +228,7 @@ where
         let rows = sqlx::query_as::<_, (SubscriptionId, ChannelId, String, DateTime<Utc>)>(
             DB::LIST_ACTIVE_SUBSCRIBERS,
         )
-        .bind(i64::from(author_user_id))
+        .bind(author_user_id)
         .fetch_all(&self.pool)
         .await?;
         // The query filters to `st.name = 'active'`, so every returned row is an

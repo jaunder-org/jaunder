@@ -299,23 +299,38 @@ twin returned `sqlx::Result<i64>` and `MediaStore` re-ran the bound by hand
 `(ByteSize,)` makes the dialect return `sqlx::Result<ByteSize>` and the wrapper
 a straight delegation — see the task 3 note for the error-variant consequence.
 
-## Task 6 — Retire the 114 bind conversions _(dispatch)_
+## Task 6 — Retire the 114 bind conversions
 
 **Files:** `storage/src/**` (`audiences.rs`, `posts.rs`, `subscriptions.rs`, the
 per-backend dialect files, …).
 
-Mechanical and wide — delegate via **`jaunder-dispatch`** to keep the file bulk
-out of the driving context. The brief must restate: no `ctx_*` MCP calls (they
-hang subagents); worktree absolute paths; `cargo xtask check`, never bare
-`nextest`; no `Co-Authored-By`.
+Mechanical and wide. Planned as a **`jaunder-dispatch`** delegation to keep the
+file bulk out of the driving context; done instead as one scripted rewrite over
+the 17 files, which keeps the bulk out just as effectively and is verified by
+the compiler plus the full gate rather than by a subagent's report.
 
-- [ ] Rewrite every `.bind(i64::from(x))` → `.bind(x)` across `storage/src` (114
-      sites)
-- [ ] Where inference then fails, add an explicit type annotation — **do not**
-      revert to `i64::from`; report any site where that is not possible
-- [ ] Confirm zero remaining matches: `rg -c 'bind\(i64::from\(' storage/src` →
-      no hits
-- [ ] `cargo xtask check` → green; commit
+- [x] Rewrite every `.bind(i64::from(x))` → `.bind(x)` across `storage/src` —
+      **98 of 114**, see the carve-out below
+- [x] Where inference then fails, add an explicit type annotation — **do not**
+      revert to `i64::from`. Not needed at any site: every swept bind resolves
+      through the newtype's own `Encode` impl, so no turbofish was required.
+- [x] Confirm only the carve-out remains:
+      `rg -c 'bind\(i64::from\(' storage/src` → 16 (`posts.rs` 12, `media.rs` 4)
+- [x] `cargo xtask check` → green; commit
+
+**16 sites are NOT newtype strips and must stay** — `.bind(i64::from(limit))`
+(×14) and `.bind(i64::from(offset.value()))` (×2). `limit` is a bare `u32` and
+`PageOffset`'s declared `inner` is `u32`; sqlx has no Postgres `Encode` for
+unsigned types, so both are genuine `u32 → i64` widenings, not conversions the
+bridge can absorb. These are exactly the storage fetch-limit family the spec
+scopes out to **#696**.
+
+**This constrains task 8.** A gate that flags `i64::from(` anywhere inside a
+`.bind(` fires on all 16. It needs to allow the primitive widening — the
+narrowest rule that bites the residue without false positives is to flag
+`i64::from(` only when its argument is not a bare `u32`-typed local, which a
+syntactic gate cannot see. Reconsider the rule when task 8 is written: either
+gate on the newtype-typed spellings, or leave #696 to remove the last 16 first.
 
 ## Task 7 — `ResolutionBinds`: delete the sentinels
 

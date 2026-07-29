@@ -896,7 +896,7 @@ where
         let post_id = sqlx::query_scalar::<_, i64>(
             "SELECT post_id FROM idempotency_keys WHERE user_id = $1 AND key = $2",
         )
-        .bind(i64::from(user_id))
+        .bind(user_id)
         .bind(key)
         .fetch_optional(&self.pool)
         .await?;
@@ -924,7 +924,7 @@ where
                AND {resolution}",
             tags = DB::TAGS_SUBQUERY,
         );
-        let query = sqlx::query_as::<_, PostRow>(&sql).bind(i64::from(post_id));
+        let query = sqlx::query_as::<_, PostRow>(&sql).bind(post_id);
         let row = binds.bind_onto(query).fetch_optional(&self.pool).await?;
         Ok(row.map(post_record_from_row).transpose()?)
     }
@@ -944,7 +944,7 @@ where
              WHERE pa.post_id = $1 \
              ORDER BY tk.name, pa.audience_id",
         )
-        .bind(i64::from(post_id))
+        .bind(post_id)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
@@ -1019,7 +1019,7 @@ where
         let now = Utc::now();
         sqlx::query("UPDATE posts SET deleted_at = $1 WHERE post_id = $2")
             .bind(now)
-            .bind(i64::from(post_id))
+            .bind(post_id)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -1032,7 +1032,7 @@ where
     )]
     async fn unpublish_post(&self, post_id: PostId) -> sqlx::Result<()> {
         sqlx::query("UPDATE posts SET published_at = NULL WHERE post_id = $1")
-            .bind(i64::from(post_id))
+            .bind(post_id)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -1076,7 +1076,7 @@ where
                 .bind(username)
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
-                .bind(i64::from(cursor.post_id))
+                .bind(cursor.post_id)
                 .bind(now);
             binds
                 .bind_onto(query)
@@ -1146,7 +1146,7 @@ where
             let query = sqlx::query_as::<_, PostRow>(&sql)
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
-                .bind(i64::from(cursor.post_id))
+                .bind(cursor.post_id)
                 .bind(now);
             binds
                 .bind_onto(query)
@@ -1210,10 +1210,10 @@ where
                  LIMIT $6"
             );
             sqlx::query_as::<_, PostRow>(&sql)
-                .bind(i64::from(user_id))
+                .bind(user_id)
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
-                .bind(i64::from(cursor.post_id))
+                .bind(cursor.post_id)
                 .bind(now)
                 .bind(i64::from(limit))
                 .fetch_all(&self.pool)
@@ -1234,7 +1234,7 @@ where
                  LIMIT $3"
             );
             sqlx::query_as::<_, PostRow>(&sql)
-                .bind(i64::from(user_id))
+                .bind(user_id)
                 .bind(now)
                 .bind(i64::from(limit))
                 .fetch_all(&self.pool)
@@ -1269,9 +1269,9 @@ where
                  LIMIT $4"
             );
             sqlx::query_as::<_, PostRow>(&sql)
-                .bind(i64::from(user_id))
+                .bind(user_id)
                 .bind(cursor.updated_at)
-                .bind(i64::from(cursor.post_id))
+                .bind(cursor.post_id)
                 .bind(i64::from(limit))
                 .fetch_all(&self.pool)
                 .await?
@@ -1288,7 +1288,7 @@ where
                  LIMIT $2"
             );
             sqlx::query_as::<_, PostRow>(&sql)
-                .bind(i64::from(user_id))
+                .bind(user_id)
                 .bind(i64::from(limit))
                 .fetch_all(&self.pool)
                 .await?
@@ -1331,7 +1331,7 @@ where
              WHERE pt.post_id = $1
              ORDER BY t.tag_slug",
         )
-        .bind(i64::from(post_id))
+        .bind(post_id)
         .fetch_all(&self.pool)
         .await?;
 
@@ -1399,7 +1399,7 @@ where
                 .bind(tag_slug)
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
-                .bind(i64::from(cursor.post_id))
+                .bind(cursor.post_id)
                 .bind(now);
             binds
                 .bind_onto(query)
@@ -1489,11 +1489,11 @@ where
                  LIMIT ${limit_idx}"
             );
             let query = sqlx::query_as::<_, PostRow>(&sql)
-                .bind(i64::from(user_id))
+                .bind(user_id)
                 .bind(tag_slug)
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
-                .bind(i64::from(cursor.post_id))
+                .bind(cursor.post_id)
                 .bind(now);
             binds
                 .bind_onto(query)
@@ -1522,7 +1522,7 @@ where
                  LIMIT ${limit_idx}"
             );
             let query = sqlx::query_as::<_, PostRow>(&sql)
-                .bind(i64::from(user_id))
+                .bind(user_id)
                 .bind(tag_slug)
                 .bind(now);
             binds
@@ -1886,7 +1886,7 @@ where
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          RETURNING post_id",
     )
-    .bind(i64::from(input.user_id))
+    .bind(input.user_id)
     // `Option::as_ref` → `Option<&PostTitle>` (a typed newtype bind, not an
     // `AsRef<str>` strip); the sqlx bridge encodes `Option<&PostTitle>`.
     .bind(input.title.as_ref())
@@ -1918,9 +1918,9 @@ where
     // `map_err` fires, not by inspecting the constraint name.
     if let Some(key) = input.idempotency_key.as_deref() {
         sqlx::query("INSERT INTO idempotency_keys (user_id, key, post_id) VALUES ($1, $2, $3)")
-            .bind(i64::from(input.user_id))
+            .bind(input.user_id)
             .bind(key)
-            .bind(i64::from(post_id))
+            .bind(post_id)
             .execute(&mut *conn)
             .await
             .map_err(map_idempotency_insert_error)?;
@@ -1949,13 +1949,13 @@ where
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     sqlx::query(DB::DELETE_POST_AUDIENCES)
-        .bind(i64::from(post_id))
+        .bind(post_id)
         .execute(&mut *conn)
         .await?;
     for target in audiences {
         if let Some((kind_name, audience_id)) = audience_target_row(target) {
             sqlx::query(DB::INSERT_POST_AUDIENCE)
-                .bind(i64::from(post_id))
+                .bind(post_id)
                 .bind(audience_id)
                 .bind(kind_name)
                 .execute(&mut *conn)
@@ -2927,7 +2927,7 @@ mod tests {
             CloseablePool::Sqlite(pool) => {
                 sqlx::query(sql)
                     .bind("not a slug")
-                    .bind(i64::from(post_id))
+                    .bind(post_id)
                     .execute(pool)
                     .await
                     .unwrap();
@@ -2935,7 +2935,7 @@ mod tests {
             CloseablePool::Postgres(pool) => {
                 sqlx::query(sql)
                     .bind("not a slug")
-                    .bind(i64::from(post_id))
+                    .bind(post_id)
                     .execute(pool)
                     .await
                     .unwrap();
@@ -3002,7 +3002,7 @@ mod tests {
             CloseablePool::Sqlite(pool) => {
                 sqlx::query(sql)
                     .bind("bogus")
-                    .bind(i64::from(post_id))
+                    .bind(post_id)
                     .execute(pool)
                     .await
                     .unwrap();
@@ -3010,7 +3010,7 @@ mod tests {
             CloseablePool::Postgres(pool) => {
                 sqlx::query(sql)
                     .bind("bogus")
-                    .bind(i64::from(post_id))
+                    .bind(post_id)
                     .execute(pool)
                     .await
                     .unwrap();

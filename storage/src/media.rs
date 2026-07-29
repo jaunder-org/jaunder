@@ -183,12 +183,12 @@ where
             "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
-        .bind(i64::from(record.user_id))
+        .bind(record.user_id)
         .bind(&record.sha256)
         .bind(&record.filename)
         .bind(record.source)
         .bind(&record.content_type)
-        .bind(i64::from(record.size_bytes))
+        .bind(record.size_bytes)
         .bind(record.source_url.clone())
         .bind(record.created_at)
         .execute(&self.pool)
@@ -223,7 +223,7 @@ where
              FROM media
              WHERE user_id = $1 AND sha256 = $2 AND filename = $3 AND source = $4",
         )
-        .bind(i64::from(user_id))
+        .bind(user_id)
         .bind(sha256)
         .bind(filename)
         .bind(*source)
@@ -258,7 +258,7 @@ where
                  ORDER BY created_at DESC
                  LIMIT $3 OFFSET $4",
             )
-            .bind(i64::from(user_id))
+            .bind(user_id)
             .bind(*src)
             .bind(i64::from(limit))
             .bind(i64::from(offset.value()))
@@ -272,7 +272,7 @@ where
                  ORDER BY created_at DESC
                  LIMIT $2 OFFSET $3",
             )
-            .bind(i64::from(user_id))
+            .bind(user_id)
             .bind(i64::from(limit))
             .bind(i64::from(offset.value()))
             .fetch_all(&self.pool)
