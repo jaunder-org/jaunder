@@ -30,7 +30,7 @@ use crate::tags::TagInput;
 use crate::timeline::{spawn_load_more, TimelineRows, TimelineState};
 use crate::topbar::Topbar;
 use common::feed::FeedSurface;
-use common::ids::{AudienceId, PostId};
+use common::ids::PostId;
 use common::pagination::PageSize;
 use common::post_summary::PostSummary;
 use common::render::PostFormat;
@@ -412,9 +412,7 @@ fn audience_checkbox(
     audience: AudienceSummary,
     selection: RwSignal<AudienceSelection>,
 ) -> impl IntoView {
-    // `AudienceSummary.audience_id` is a bare `i64` (the reactive-store carve-out); wrap it
-    // into the `AudienceId` that `AudienceSelection.named` holds.
-    let id = AudienceId::from(audience.audience_id);
+    let id = audience.audience_id;
     let input_id = format!("audience-named-{id}");
     let checked = move || selection.get().named.contains(&id);
     let disabled = move || selection.get().base == AudienceBase::Private;
@@ -437,7 +435,7 @@ fn audience_checkbox(
                 }
             />
             " "
-            {audience.name}
+            {String::from(audience.name)}
         </label>
     }
 }

@@ -294,14 +294,17 @@ Render such a list from a `reactive_stores::Store`, wired with
 
 ```rust
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Store, Patch)]
-struct Row { id: i64, name: String }
+struct Row {
+    #[patch(|this, new| *this = new)] id: RowId,     // an IdNewtype
+    #[patch(|this, new| *this = new)] name: RowName, // a StrNewtype
+}
 #[derive(Default, Store, Patch)]
-struct Rows { #[store(key: i64 = |r| r.id)] rows: Vec<Row> }
+struct Rows { #[store(key: RowId = |r| r.id)] rows: Vec<Row> }
 
 let store = Store::new(Rows::default());
 let state = list.patched(fetch_rows, move |rows| store.rows().patch(rows)); // Signal<ListState>
 // <ul><For each=move || store.rows() key=|r| r.key() let:row>
-//   <Row name={move || row.name().get()} /> …
+//   <Row name={move || row.name().get().to_string()} /> …
 // </For></ul>
 // {move || match state.get() { ListState::Loading => …, Empty => …, Error(e) => …, Loaded => () }}
 ```
@@ -328,11 +331,27 @@ let state = list.patched(fetch_rows, move |rows| store.rows().patch(rows)); // S
   tear the whole `<For>` down on a refetch. Render `state` (loading / empty /
   error) in a **sibling** node.
 - Read a row's mutable fields as reactive subfields
-  (`{move || row.name().get()}`) so a rename updates in place. Keep fields bound
-  to editable inputs **uncontrolled** (an initial `row.name().get_untracked()`
-  snapshot), so a background refetch cannot clobber an in-progress edit.
-  `patch`-on-success also doubles as the sticky retention from §9 (never blanks
-  to "Loading…"); the refetch is driven by an `Invalidator` (ADR-0060 / #359).
+  (`{move || row.name().get().to_string()}` — see the newtype bullet below) so a
+  rename updates in place. Keep fields bound to editable inputs **uncontrolled**
+  (an initial `row.name().get_untracked()` snapshot), so a background refetch
+  cannot clobber an in-progress edit. `patch`-on-success also doubles as the
+  sticky retention from §9 (never blanks to "Loading…"); the refetch is driven
+  by an `Invalidator` (ADR-0060 / #359).
+- **A row holds domain newtypes, not primitives** — a store row is not an
+  exception to the ADR-0063 pervasiveness rule. Every **leaf** field of the row
+  struct takes `#[patch(|this, new| *this = new)]`, the id field included:
+  `Patch` otherwise dispatches through `reactive_stores::PatchField`, which is
+  implemented only for a closed set of primitives and which the orphan rule bars
+  us from implementing (it would be coherent only in `common`, which must stay
+  leptos-free). What needs no attribute is the **`#[store(key: …)]` collection
+  field** — its key type only has to satisfy `PatchFieldKeyed`'s bounds, all of
+  which `IdNewtype` derives. (The id field's own attribute is inert at runtime:
+  rows are matched _by_ that key, so its comparison never fires. It is there to
+  compile.) See `docs/adr/0078-reactive-store-domain-newtype-fields.md`; the
+  audiences vertical is the worked example. A newtype is not `IntoRender`, so
+  read it out at view sites — `.to_string()` when the row is borrowed,
+  `String::from(…)` to move it out of an owned row — as
+  `web/src/taglist/component.rs` already does for `TagLabel`.
 
 **Do not** reach for `Store` for a flat, read-only, or stateless list — one with
 no per-row identity that mutates and no nested state to keep (the audiences
