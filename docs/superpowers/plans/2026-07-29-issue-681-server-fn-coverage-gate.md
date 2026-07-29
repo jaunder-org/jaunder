@@ -1220,13 +1220,17 @@ and `e2e_lane_skips_when_the_combo_failed`.
 snapshot — which is the same bootstrap problem, just relocated to the e2e lane.
 Seed first, then wire.
 
-- [ ] **Step 1: Run the authoritative combo**
+- [x] **Step 1: Run the authoritative combo**
 
 Run: `devtool run -- cargo xtask e2e sqlite chromium` Expected: PASS. Run in the
 **foreground** with a long timeout — a backgrounded slow gate gets killed. If
 the host is loaded, run nothing else concurrently.
 
-- [ ] **Step 2: Regenerate and inspect**
+**Actual: PASS**, 574 s cold. (Ran three times in total: the first seeded the
+now-discarded pre-8b numbers, the second proved 8b, the third was a cache hit
+that refreshed the diagnostics copy once 8c landed.)
+
+- [x] **Step 2: Regenerate and inspect**
 
 Run: `devtool run -- cargo xtask server-fn-coverage regenerate` Then read
 `docs/coverage/server-fns.json` and record: how many of the 55 are covered, and
@@ -1235,7 +1239,20 @@ seed.** Confirm the orphan bucket contains only outside-any-test traffic; a
 per-test orphan means Task 4 or 5 is incomplete, and that must be fixed before
 proceeding rather than allowlisted around.
 
-- [ ] **Step 3: Commit the seeding capture, and assert the allowlist against
+**Actual, after 8b and 8c: 53 of 55 covered, 444 orphan hits, zero per-test
+orphans.** The orphan bucket is exactly 111 hits — one per test — across four
+app-shell fns (`session`, `list_local_timeline`, `backup_warning_visible`,
+`base_url_warning_visible`), every one parented to the run-wide traceparent.
+That is the `_autoPerfSpan` **warmup** page load, which applies the per-test
+traceparent only _after_ `warmupPageContext` precisely so warmup traffic stays
+out of attribution. All four are also covered, so nothing is lost. This
+satisfies AC5's "only traffic occurring outside any test".
+
+The uncovered two — **`delete_media`** and **`revoke_session`** — have zero hits
+by _either_ signal. This is the seed. (The pre-8b run's list also named
+`subscribe_to`/`unsubscribe_from`; both were attribution failures, not gaps.)
+
+- [x] **Step 3: Commit the seeding capture, and assert the allowlist against
       it**
 
 Copy the extracted `otel-traces.jsonl` to
@@ -1260,21 +1277,41 @@ fn every_allowlist_entry_is_absent_from_the_seed_captures_hit_set() {
 }
 ```
 
-Also assert the seed fixture reproduces the committed snapshot, which pins the
-extractor against real data rather than only hand-authored spans:
+> **Deviation: the raw capture is 25 MB, and byte-reproduction was dropped.**
+> Committing the capture verbatim is out of the question, and the planned
+> `seed_fixture_reproduces_the_committed_snapshot` test is what forced it to be
+> verbatim — reproducing the snapshot byte-for-byte requires preserving every
+> attributed hit _and_ the exact per-fn orphan counts. Worse, it would make the
+> blob **churn**: any coverage change alters the snapshot, so the multi-MB
+> fixture would have to be re-seeded, adding another copy to git history each
+> time.
+>
+> Neither AC2 nor AC11 asks for byte-reproduction — AC2 wants the extractor
+> exercised against a real capture on both signals, AC11 wants allowlist entries
+> absent from that capture's **hit set**. Both survive reduction. So the fixture
+> is reduced to what the extractor actually reads: one hit-chain per
+> (span-name-or-endpoint, test) pair, ≤2 orphan examples per key, 8 non-`/api/`
+> spans for the negative case, and only the five attributes
+> `parse_spans`/`extract` consume — dropping the per-test `e2e.*_json` perf
+> blobs that dominated the size. **25 MB → 387 KiB**, and it now only needs
+> re-seeding when a _new_ allowlist entry appears.
+>
+> Replaced by `seed_capture_covers_the_committed_snapshots_fns`, which asserts
+> the fixture is still the evidence behind the snapshot (every fn the snapshot
+> calls covered is covered in the reduced capture) without pinning orphan
+> counts. That test **caught a real reduction bug**: the pruning script's own
+> regex required `endpoint` to be `#[server]`'s first argument, so
+> `upload_media`
+> (`#[server(input = MultipartFormData, endpoint = "/upload_media")]`) was
+> dropped. Re-keyed the reduction on the span's own name + URI path so it never
+> depends on reimplementing `identify()`.
+>
+> Also dropped the planned query-string assertion: every server fn this suite
+> drives is a POST, so **none** of the full capture's 2175 `/api/` URIs carries
+> a `?`. Asserting it on real data would pin an absence; query stripping stays
+> pinned on the hand-authored `coverage-sample.jsonl`.
 
-```rust
-#[test]
-fn seed_fixture_reproduces_the_committed_snapshot() {
-    let spans = read_spans(Path::new(SEED_FIXTURE), &Filters::default()).expect("fixture");
-    let inventory = inventory_from_web_src().expect("enumerates");
-    let regenerated = render(&Snapshot::from(extract(&spans, &inventory)));
-    let committed = std::fs::read_to_string("docs/coverage/server-fns.json").expect("snapshot");
-    assert_eq!(regenerated, committed);
-}
-```
-
-- [ ] **Step 4: File one issue per genuine gap**
+- [x] **Step 4: File one issue per genuine gap**
 
 For each uncovered fn, file via **`jaunder-issues`** (`--type Task`, milestone
 _Test infrastructure & E2E_, blocked-by nothing) describing the missing browser
@@ -1282,18 +1319,35 @@ flow. Where a fn has server integration coverage but no browser flow, say so —
 that is the allowlist reason the spec sanctions, not an excuse. Write each issue
 URL into the allowlist entry.
 
-- [ ] **Step 5: Write the allowlist, register the check, verify the gate is
+**Filed** — both have thorough route-level coverage on **both** backends and a
+real UI surface, so "server-tested, browser-untested" is the accurate reason
+rather than an excuse:
+
+- [#706](https://github.com/jaunder-org/jaunder/issues/706) `delete_media` —
+  `/media`'s Delete button sits behind a native `confirm()` dialog, which
+  Playwright auto-dismisses unless the spec registers a handler; that is the
+  likely reason the flow was never written.
+- [#707](https://github.com/jaunder-org/jaunder/issues/707) `revoke_session` —
+  needs a second session in its own browser context.
+
+Both `--type Task`, label `coverage`, milestone _Test infrastructure & E2E_,
+added to Jaunder Backlog (#1). Each names removing its own allowlist entry as
+the done-condition, which AC10 then enforces.
+
+- [x] **Step 5: Write the allowlist, register the check, verify the gate is
       green**
 
 Add `steps::server_fn_coverage_check::run(&mut result);` to
 `xtask/src/lib.rs:296` (Check) and `:328` (Validate), beside
-`server_fn_registrar_check::run`.
+`server_fn_registrar_check::run`. Per the Task 8 scope correction the static
+lane's **code** lands here too, plus `verify_after_combo` in the `Command::E2e`
+arm.
 
-Run: `devtool run -- cargo xtask check --no-test` Expected: PASS — every
-inventory fn is now covered or allowlisted with reason + issue, so the step is
-green the moment it is wired in.
+Run: `devtool run -- cargo xtask check --no-test` Expected: PASS — **actual:
+green,
+`server-fn-coverage — 55 server fn(s) accounted for (53 covered, 2 allowlisted)`.**
 
-- [ ] **Step 6: Observe AC16 — the artifacts do not invalidate the e2e
+- [x] **Step 6: Observe AC16 — the artifacts do not invalidate the e2e
       derivations**
 
 Before staging, capture the baseline; after staging, compare:
@@ -1311,7 +1365,11 @@ neither. Note the `static-checks` derivation's filter (`flake.nix:1134-1139`) is
 exclusion-only, so its cache _does_ bust — cheap (a `runCommand`), and outside
 AC16's claim, but expect it.
 
-- [ ] **Step 7: Commit**
+**Actual: identical** —
+`/nix/store/acwp4vnk5hxlnxwv77rqr1ghxp1kq5h1-vm-test-run-jaunder-e2e-sqlite-chromium.drv`
+before and after `git add`. AC16 observed.
+
+- [x] **Step 7: Commit**
 
 ```bash
 git add docs/coverage xtask/src/server_fn_coverage/testdata xtask/src/lib.rs

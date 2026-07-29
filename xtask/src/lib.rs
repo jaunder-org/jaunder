@@ -337,6 +337,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::test_pattern_check::run(&mut result);
             steps::server_fn_registrar_check::run(&mut result);
             steps::server_fn_tracing_check::run(Mode::Fix, &mut result);
+            steps::server_fn_coverage_check::run(&mut result);
             steps::traced_context_check::run(&mut result);
             steps::proffered_secret_check::run(&mut result);
             steps::no_full_reload_check::run(&mut result);
@@ -373,6 +374,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::test_pattern_check::run(&mut result);
             steps::server_fn_registrar_check::run(&mut result);
             steps::server_fn_tracing_check::run(Mode::Check, &mut result);
+            steps::server_fn_coverage_check::run(&mut result);
             steps::traced_context_check::run(&mut result);
             steps::proffered_secret_check::run(&mut result);
             steps::no_full_reload_check::run(&mut result);
@@ -415,6 +417,14 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             // lifted out of the VM (see steps::flaky). Informational — never fails
             // the combo.
             steps::flaky::collect(&mut result, backend.as_str(), browser.as_str());
+            // #681: the e2e half of the flow-coverage gate. Only this per-combo path
+            // has an uncollided capture (spec D8), and only the authoritative combo's
+            // traces are used (D6) — `verify_after_combo` enforces both.
+            steps::server_fn_coverage_check::verify_after_combo(
+                &mut result,
+                backend.as_str(),
+                browser.as_str(),
+            );
             finalize(&mut result, start);
             Ok(result)
         }
