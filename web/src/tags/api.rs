@@ -29,6 +29,7 @@ pub const MAX_TAG_LIMIT: u32 = 50;
 /// with SQL `LIKE prefix%`, not a complete tag value — typing it `Tag` would
 /// reject valid partials (ADR-0063 §4 boundary policy; #409 Decision 7).
 #[server(endpoint = "/list_tags", input = Json)]
+#[tracing::instrument(name = "web.tags.list_tags", skip(prefix))]
 pub async fn list_tags(prefix: Option<String>, limit: Option<u32>) -> WebResult<Vec<TagSummary>> {
     boundary!("list_tags", {
         let posts = expect_context::<Arc<dyn PostStorage>>();
@@ -71,5 +72,100 @@ mod tests {
         };
         assert_eq!(summary.slug, "rust");
         assert_eq!(summary.display, "Rust");
+    }
+}
+
+#[cfg(all(test, feature = "server"))]
+mod server_tests {
+    // Helper fns in this feature-gated test module aren't covered by clippy's
+    // allow-{unwrap,expect}-in-tests, so allow the test-scaffolding panics.
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::list_tags;
+    use leptos::prelude::provide_context;
+    use leptos::reactive::owner::Owner;
+    use std::sync::{Arc, Mutex};
+    use storage::{MockPostStorage, PostStorage};
+    use tracing::field::{Field, Visit};
+    use tracing_subscriber::layer::{Context, Layer};
+    use tracing_subscriber::prelude::*;
+    use tracing_subscriber::registry::LookupSpan;
+
+    /// Every span created while the layer is installed: its name plus the names
+    /// of the fields actually recorded on it at creation.
+    #[derive(Default)]
+    struct Captured {
+        spans: Vec<(String, Vec<String>)>,
+    }
+
+    struct CaptureLayer(Arc<Mutex<Captured>>);
+
+    /// Collects the *names* of recorded fields. `#[instrument]` records each
+    /// non-skipped argument through its `Debug` impl, so a skipped argument
+    /// never reaches a visitor at all — absence is the assertion.
+    struct FieldNames(Vec<String>);
+
+    impl Visit for FieldNames {
+        fn record_debug(&mut self, field: &Field, _value: &dyn std::fmt::Debug) {
+            self.0.push(field.name().to_string());
+        }
+    }
+
+    impl<S> Layer<S> for CaptureLayer
+    where
+        S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+    {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            _id: &tracing::span::Id,
+            _ctx: Context<'_, S>,
+        ) {
+            let mut names = FieldNames(Vec::new());
+            attrs.record(&mut names);
+            self.0
+                .lock()
+                .unwrap()
+                .spans
+                .push((attrs.metadata().name().to_string(), names.0));
+        }
+    }
+
+    /// #511: the source-static gate cannot tell whether `#[server]`'s expansion
+    /// actually wraps the server-side body, so one site is pinned at runtime —
+    /// the span exists, carries its derived name, and records the recordable
+    /// argument while the skipped one never reaches the subscriber.
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn list_tags_emits_its_derived_span_recording_limit_but_not_prefix() {
+        let captured = Arc::new(Mutex::new(Captured::default()));
+        let subscriber = tracing_subscriber::registry().with(CaptureLayer(Arc::clone(&captured)));
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let owner = Owner::new();
+        owner.set();
+        let mut posts = MockPostStorage::new();
+        posts
+            .expect_list_tags()
+            .returning(|_prefix, _limit| Ok(Vec::new()));
+        provide_context(Arc::new(posts) as Arc<dyn PostStorage>);
+
+        let result = list_tags(Some("secret-fragment".to_string()), Some(5)).await;
+        drop(owner);
+        assert!(result.is_ok(), "list_tags failed: {result:?}");
+
+        let captured = captured.lock().unwrap();
+        let (_, fields) = captured
+            .spans
+            .iter()
+            .find(|(name, _)| name == "web.tags.list_tags")
+            .expect("list_tags must emit a span named web.tags.list_tags");
+        assert!(
+            fields.iter().any(|f| f == "limit"),
+            "limit is recordable and must be recorded; got {fields:?}"
+        );
+        assert!(
+            !fields.iter().any(|f| f == "prefix"),
+            "prefix is an unbounded String and must be skipped; got {fields:?}"
+        );
     }
 }
