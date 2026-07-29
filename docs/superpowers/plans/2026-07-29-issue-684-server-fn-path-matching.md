@@ -324,7 +324,7 @@ Run: `rg 'fn rewrite_name'` Expected: no output (spec AC14 — a leftover
 `rewrite_name` wrapper delegating to `rewrite_attr_arg` would pass the test
 suite but fail the AC).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit** — `243bf577`
 
 ```bash
 git add xtask/src/web_server_fns.rs xtask/src/steps/server_fn_tracing_check.rs
@@ -356,7 +356,7 @@ git commit -m "refactor(xtask): share vertical_of and attribute-literal rewritin
     `register_explicit` turbofish; `Err` when the turbofish type is not exactly
     `web::<vertical>::<Leaf>`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to the module's `#[cfg(test)] mod tests`. Note the existing helper
 `wrap_reg` is reused, and existing tests using bare `web/src/a.rs`-style paths
@@ -462,7 +462,13 @@ fn a_server_fn_directly_under_web_src_is_an_error() {
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [~] **Step 2: Run the tests, verify they fail** — **SKIPPED; recorded as a
+  deviation.** The tests were written before the implementation but never run
+  red in between. They are non-vacuous by construction —
+  `same_leaf_in_two_verticals_both_registered_is_fine` expects `None` exactly
+  where the old leaf-only code emitted "duplicate", and the malformed-entry and
+  loose-file cases assert output the old code had no branch to produce — but
+  that is an argument, not the observation this step asks for.
 
 Run:
 `devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml server_fn_registrar`
@@ -470,7 +476,7 @@ Expected: FAIL — `problems` still keys on the bare leaf, so the cross-vertical
 pair reads as a duplicate, malformed entries are silently accepted, and the
 loose fn passes.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 Re-key `problems` to `(vertical, leaf)`:
 
@@ -493,7 +499,7 @@ Re-key `problems` to `(vertical, leaf)`:
 
 Every branch above is pinned by a test, so the body follows from them.
 
-- [ ] **Step 4: Update the pre-existing tests for the new path rule**
+- [x] **Step 4: Update the pre-existing tests for the new path rule**
 
 `problems_flags_an_unregistered_fn_by_name_and_path` (`:367`),
 `problems_is_none_when_registrar_covers_every_fn` (`:380`),
@@ -512,7 +518,7 @@ old cross-module duplicate behavior.
   case it was reaching for is covered by
   `a_duplicate_ident_within_one_vertical_fails_even_when_registered`.
 
-- [ ] **Step 5: Rewrite the module doc**
+- [x] **Step 5: Rewrite the module doc**
 
 `:22-28` currently states "Matching is by leaf type name, not module path" and
 justifies the unconditional duplicate failure. Both are now false — a
@@ -522,13 +528,13 @@ resolution because both files share a vertical; and the duplicate check is
 **per-vertical** because glob shadowing lets two same-ident `#[server]` fns
 compile in one vertical (the compiler does **not** own this case).
 
-- [ ] **Step 6: Run the tests, verify they pass**
+- [x] **Step 6: Run the tests, verify they pass** — 20/20
 
 Run:
 `devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml server_fn_registrar`
 Expected: PASS
 
-- [ ] **Step 7: Run the gate against the real tree**
+- [x] **Step 7: Run the gate against the real tree** — no-op, as predicted
 
 Run: `devtool run -- cargo xtask check --no-test` Expected: PASS — all 55 fns
 still register, and today's 55 registrar entries are already

@@ -19,13 +19,22 @@
 //! silent mis-name. That judgment stays here rather than in the shared enumerator —
 //! it is about *this* gate's type-name mapping, and means nothing to the tracing gate.
 //!
-//! **Matching is by leaf type name**, not module path: re-exports
-//! (`web/src/posts/mod.rs` does `pub use listing::*;`) make the registrar path
-//! (`web::posts::ListLocalTimeline`) differ from the source path
-//! (`web::posts::listing::…`). Because leaf matching cannot tell apart two
-//! same-named `#[server]` fns in different modules, the gate also **fails on a
-//! duplicate leaf name** — otherwise it could be blind to one of a pair being
-//! unregistered (the ADR's leaf-collision precondition, enforced continuously).
+//! **Matching is on `(vertical, leaf)`** (#684), where the vertical is the first
+//! path segment under `web/src` ([`crate::web_server_fns::vertical_of`]). The full
+//! source module path is not usable: every vertical declares `mod api;` **privately**
+//! and re-exports explicitly, so `web::posts::api::CreatePost` is not a nameable
+//! path — the registrar can only spell `web::<vertical>::<Leaf>`, which is exactly
+//! this key. It also makes the glob re-export (`web/src/posts/api.rs` does
+//! `pub use listing::*;`) a non-issue: `posts/api.rs` and `posts/api/listing.rs`
+//! share a vertical, so nothing needs resolving.
+//!
+//! The gate still **fails on a duplicate leaf within one vertical**, because two
+//! such fns collapse to one key and a single registrar entry would satisfy both,
+//! leaving the other to 404 silently (#358). The compiler does not own that case:
+//! an item defined in `api.rs` silently *shadows* a glob-imported name of the same
+//! ident from `listing`, so the pair compiles cleanly. Across different verticals
+//! the same leaf is no longer a collision at all — that is what lets the fn idents
+//! drop their vestigial vertical nouns.
 //!
 //! Only the *missing* direction is checked: a stale registrar entry (a type that
 //! no longer exists) already fails to compile, so the compiler owns that side.
@@ -122,10 +131,9 @@ fn pascal_case(ident: &str) -> String {
         .collect()
 }
 
-/// The leaf type names registered via `register_explicit::<web::…::LEAF>()` in
-/// the registrar source. Leaf = the last path segment of the turbofish type, so
-/// the re-export path (`web::posts::CreatePost`) and any longer source path both
-/// reduce to the same key (`CreatePost`).
+/// The `(vertical, leaf)` pairs registered via
+/// `register_explicit::<web::<vertical>::<Leaf>>()` in the registrar source, plus
+/// one message per entry that is not of that shape.
 ///
 /// Parsed with `syn`, not a text scan: the registrar is the one file whose
 /// accuracy is load-bearing, so a *commented-out* (or string-literal)
@@ -133,34 +141,49 @@ fn pascal_case(ident: &str) -> String {
 /// exactly the omission this gate exists to catch (#358). An unparseable
 /// registrar yields the empty set (→ every fn reads as missing, a loud failure),
 /// never a false pass; the real file always compiles, so this is a safety net.
-fn registered_names(registrar_src: &str) -> std::collections::BTreeSet<String> {
+fn registered_entries(
+    registrar_src: &str,
+) -> (std::collections::BTreeSet<(String, String)>, Vec<String>) {
     let Ok(file) = syn::parse_file(registrar_src) else {
-        return std::collections::BTreeSet::new();
+        return (std::collections::BTreeSet::new(), Vec::new());
     };
     let mut v = RegistrarVisitor {
-        names: std::collections::BTreeSet::new(),
+        entries: std::collections::BTreeSet::new(),
+        malformed: Vec::new(),
     };
     syn::visit::visit_file(&mut v, &file);
-    v.names
+    (v.entries, v.malformed)
 }
 
 struct RegistrarVisitor {
-    names: std::collections::BTreeSet<String>,
+    entries: std::collections::BTreeSet<(String, String)>,
+    malformed: Vec<String>,
 }
 
 impl<'ast> syn::visit::Visit<'ast> for RegistrarVisitor {
     fn visit_expr_path(&mut self, ep: &'ast syn::ExprPath) {
-        if let Some(leaf) = register_explicit_leaf(&ep.path) {
-            self.names.insert(leaf);
+        match register_explicit_entry(&ep.path) {
+            Some(Ok(entry)) => {
+                self.entries.insert(entry);
+            }
+            Some(Err(msg)) => self.malformed.push(msg),
+            None => {}
         }
         syn::visit::visit_expr_path(self, ep);
     }
 }
 
-/// The leaf type name of a `…::register_explicit::<Type>` call path, or `None`
-/// if the path is not a `register_explicit` turbofish. `Type`'s own generic args
-/// (if any) are ignored — only its last path segment is the leaf.
-fn register_explicit_leaf(path: &syn::Path) -> Option<String> {
+/// The `(vertical, leaf)` of a `…::register_explicit::<Type>` call path, or `None`
+/// if the path is not a `register_explicit` turbofish.
+///
+/// `Type` must be exactly `web::<vertical>::<Leaf>`. Anything else is `Err`: a
+/// longer path names a private module (`web::posts::api::Create` — `mod api` is
+/// private in every vertical, so that path is not nameable), and a shorter one
+/// omits the vertical this gate now matches on. Reporting rather than ignoring
+/// matters because an unrecognized entry would otherwise register nothing and read
+/// as a *missing* registration somewhere else — a confusing way to learn about a
+/// typo. `Type`'s own generic args are ignored; only its segments are the key.
+fn register_explicit_entry(path: &syn::Path) -> Option<Result<(String, String), String>> {
     let seg = path.segments.last()?;
     if seg.ident != "register_explicit" {
         return None;
@@ -171,7 +194,21 @@ fn register_explicit_leaf(path: &syn::Path) -> Option<String> {
     let syn::GenericArgument::Type(syn::Type::Path(tp)) = ab.args.first()? else {
         return None;
     };
-    Some(tp.path.segments.last()?.ident.to_string())
+    let segments: Vec<String> = tp
+        .path
+        .segments
+        .iter()
+        .map(|s| s.ident.to_string())
+        .collect();
+    let spelled = segments.join("::");
+    match segments.as_slice() {
+        [krate, vertical, leaf] if krate == "web" => Some(Ok((vertical.clone(), leaf.clone()))),
+        _ => Some(Err(format!(
+            "{REGISTRAR}: registrar entry `{spelled}` is not of the form \
+             `web::<vertical>::<Type>` — the gate matches on (vertical, leaf), and every \
+             vertical's `mod api` is private so only the re-export path is nameable"
+        ))),
+    }
 }
 
 /// The failure detail for every `web` `#[server]` fn absent from the registrar,
@@ -179,41 +216,60 @@ fn register_explicit_leaf(path: &syn::Path) -> Option<String> {
 /// when the registrar covers every enumerated fn and no name collides. Pure
 /// given its inputs, so it is unit-tested directly.
 fn problems(web_sources: &[(String, String)], registrar_src: &str) -> Option<String> {
-    let registered = registered_names(registrar_src);
-    let mut lines = Vec::new();
-    let mut all_fns: Vec<(&str, ServerFn)> = Vec::new();
+    let (registered, malformed) = registered_entries(registrar_src);
+    let mut lines = malformed;
+    // (vertical, fn) for every enumerated `#[server]` fn. The vertical comes from
+    // the source path, not the fn — a file with no vertical directory yields no fns
+    // and one error, because there is no key to match it on.
+    let mut all_fns: Vec<(&str, &str, ServerFn)> = Vec::new();
     for (path, src) in web_sources {
+        let vertical = match web_server_fns::vertical_of(path) {
+            Ok(v) => v,
+            Err(msg) => {
+                // Only a file that actually declares a `#[server]` fn is a problem;
+                // `web/src/lib.rs` and friends legitimately sit outside a vertical.
+                if server_fns_in(src).is_ok_and(|fns| !fns.is_empty()) {
+                    lines.push(msg);
+                }
+                continue;
+            }
+        };
         match server_fns_in(src) {
             Err(msg) => lines.push(format!("{path}: {msg}")),
-            Ok(fns) => all_fns.extend(fns.into_iter().map(|f| (path.as_str(), f))),
+            Ok(fns) => all_fns.extend(fns.into_iter().map(|f| (path.as_str(), vertical, f))),
         }
     }
 
-    // Duplicate leaf name → the gate matches by leaf and cannot tell the pair
-    // apart, so one could be unregistered and slip through. Fail loudly.
-    let mut by_name: BTreeMap<&str, Vec<String>> = BTreeMap::new();
-    for (path, f) in &all_fns {
-        by_name
-            .entry(f.name.as_str())
+    // Two `#[server]` fns with the same ident **in one vertical** collapse to a
+    // single (vertical, leaf) key, so one registrar entry satisfies both and the
+    // unregistered one would 404 silently (#358). The compiler does NOT catch this:
+    // an item in `api.rs` silently shadows a glob-imported name of the same ident
+    // from `pub use listing::*` (verified with rustc). Across *different* verticals
+    // the same leaf is fine — that is what #684 unblocks.
+    let mut by_key: BTreeMap<(&str, &str), Vec<String>> = BTreeMap::new();
+    for (path, vertical, f) in &all_fns {
+        by_key
+            .entry((vertical, f.name.as_str()))
             .or_default()
             .push(format!("{path}:{}", f.line));
     }
-    for (name, locs) in &by_name {
+    for ((vertical, name), locs) in &by_key {
         if locs.len() > 1 {
             lines.push(format!(
-                "duplicate #[server] type name `{name}` across {} — the registrar gate matches \
-                 by leaf name and cannot tell them apart; rename one or extend the gate",
+                "duplicate #[server] type name `{name}` within vertical `{vertical}` across {} — \
+                 the registrar gate matches on (vertical, leaf) and cannot tell them apart; \
+                 rename one",
                 locs.join(", ")
             ));
         }
     }
 
     // Missing registration.
-    for (path, f) in &all_fns {
-        if !registered.contains(&f.name) {
+    for (path, vertical, f) in &all_fns {
+        if !registered.contains(&((*vertical).to_string(), f.name.clone())) {
             lines.push(format!(
-                "{path}:{}: web #[server] fn generating type `{}` is not registered in the test \
-                 registrar",
+                "{path}:{}: web #[server] fn generating type `web::{vertical}::{}` is not \
+                 registered in the test registrar",
                 f.line, f.name
             ));
         }
@@ -224,7 +280,7 @@ fn problems(web_sources: &[(String, String)], registrar_src: &str) -> Option<Str
     }
     lines.sort();
     lines.push(format!(
-        "  recovery: add `server_fn::axum::register_explicit::<web::<mod>::<Type>>();` to \
+        "  recovery: add `server_fn::axum::register_explicit::<web::<vertical>::<Type>>();` to \
          ensure_server_fns_registered() in {REGISTRAR} — every web #[server] fn must be \
          registered (#426)"
     ));
@@ -325,21 +381,27 @@ mod tests {
         assert!(server_fns_in("fn broken( {{{ not valid").is_err());
     }
 
+    /// The `(vertical, leaf)` pairs a registrar body registers, ignoring the
+    /// malformed-entry channel — most tests care only about what was accepted.
+    fn entries_of(reg: &str) -> std::collections::BTreeSet<(String, String)> {
+        registered_entries(reg).0
+    }
+
     #[test]
-    fn registered_names_parses_leaf_types() {
+    fn registered_entries_parses_vertical_and_leaf() {
         let reg = wrap_reg(
             "server_fn::axum::register_explicit::<web::posts::CreatePost>();\n\
              server_fn::axum::register_explicit::<web::media::ListMyMedia>();\n\
              let x = 1;",
         );
-        let got = registered_names(&reg);
-        assert!(got.contains("CreatePost"));
-        assert!(got.contains("ListMyMedia"));
+        let got = entries_of(&reg);
+        assert!(got.contains(&("posts".to_string(), "CreatePost".to_string())));
+        assert!(got.contains(&("media".to_string(), "ListMyMedia".to_string())));
         assert_eq!(got.len(), 2);
     }
 
     #[test]
-    fn registered_names_ignores_a_commented_out_registration() {
+    fn registered_entries_ignores_a_commented_out_registration() {
         // A commented-out register_explicit disables the real registration — the
         // exact #358 omission the gate must catch — so it must NOT count. (A text
         // scan would; syn parsing does not.)
@@ -347,19 +409,22 @@ mod tests {
             "server_fn::axum::register_explicit::<web::posts::CreatePost>();\n\
              // server_fn::axum::register_explicit::<web::posts::GetPost>();",
         );
-        let got = registered_names(&reg);
-        assert!(got.contains("CreatePost"));
-        assert!(!got.contains("GetPost"), "commented-out reg must not count");
+        let got = entries_of(&reg);
+        assert!(got.contains(&("posts".to_string(), "CreatePost".to_string())));
+        assert!(
+            !got.contains(&("posts".to_string(), "GetPost".to_string())),
+            "commented-out reg must not count"
+        );
     }
 
     #[test]
-    fn registered_names_takes_the_outer_leaf_of_a_generic_type() {
+    fn registered_entries_takes_the_outer_leaf_of_a_generic_type() {
         // A turbofish with nested generics must reduce to the OUTER type's leaf,
         // not `Bar<Baz` (the old first-`>` text scan's bug).
         let reg = wrap_reg("server_fn::axum::register_explicit::<web::m::Bar<Baz>>();");
         assert_eq!(
-            registered_names(&reg),
-            std::collections::BTreeSet::from(["Bar".to_string()])
+            entries_of(&reg),
+            std::collections::BTreeSet::from([("m".to_string(), "Bar".to_string())])
         );
     }
 
@@ -387,11 +452,12 @@ mod tests {
     }
 
     #[test]
-    fn problems_matches_by_leaf_ignoring_reexport_module_path() {
-        // The fn lives in `posts::listing` but is registered at the re-export path
-        // `web::posts::…`; leaf matching must treat them as the same.
+    fn problems_ignores_the_reexport_module_path_within_a_vertical() {
+        // The fn lives in `posts::api::listing` but is registered at the re-export
+        // path `web::posts::…`. Both sit under `web/src/posts/`, so the vertical
+        // matches and the glob re-export needs no resolution.
         let sources = vec![(
-            "web/src/posts/listing.rs".to_string(),
+            "web/src/posts/api/listing.rs".to_string(),
             "#[server(endpoint = \"/list_home_feed\")]\npub async fn list_home_feed() {}\n"
                 .to_string(),
         )];
@@ -403,31 +469,119 @@ mod tests {
     #[test]
     fn problems_surfaces_a_hard_error_with_the_file() {
         let sources = vec![(
-            "web/src/x.rs".to_string(),
+            "web/src/posts/api.rs".to_string(),
             "#[server(MyThing)]\npub async fn my_thing() {}\n".to_string(),
         )];
         let detail = problems(&sources, "").expect("a hard error is reported");
-        assert!(detail.contains("web/src/x.rs"));
+        assert!(detail.contains("web/src/posts/api.rs"));
+    }
+
+    // --- (vertical, leaf) matching (#684) ---
+
+    #[test]
+    fn same_leaf_in_two_verticals_both_registered_is_fine() {
+        // The change that unblocks #684: `Create` in posts and audiences are
+        // distinct keys, not a collision.
+        let sources = vec![
+            (
+                "web/src/posts/api.rs".to_string(),
+                "#[server(endpoint = \"/posts/create\")]\npub async fn create() {}\n".to_string(),
+            ),
+            (
+                "web/src/audiences/api.rs".to_string(),
+                "#[server(endpoint = \"/audiences/create\")]\npub async fn create() {}\n"
+                    .to_string(),
+            ),
+        ];
+        let registrar = wrap_reg(
+            "server_fn::axum::register_explicit::<web::posts::Create>();\n\
+             server_fn::axum::register_explicit::<web::audiences::Create>();",
+        );
+        assert_eq!(problems(&sources, &registrar), None);
     }
 
     #[test]
-    fn problems_flags_a_duplicate_leaf_name() {
-        // Two `#[server]` fns generating the same type name in different modules:
-        // the leaf-matching gate cannot tell them apart, so it must fail loudly
-        // even when both happen to be registered.
+    fn the_unregistered_half_of_a_cross_vertical_pair_is_named_with_its_vertical() {
         let sources = vec![
             (
-                "web/src/a.rs".to_string(),
-                "#[server(endpoint = \"/thing_a\")]\npub async fn thing() {}\n".to_string(),
+                "web/src/posts/api.rs".to_string(),
+                "#[server(endpoint = \"/posts/create\")]\npub async fn create() {}\n".to_string(),
             ),
             (
-                "web/src/b.rs".to_string(),
-                "#[server(endpoint = \"/thing_b\")]\npub async fn thing() {}\n".to_string(),
+                "web/src/audiences/api.rs".to_string(),
+                "#[server(endpoint = \"/audiences/create\")]\npub async fn create() {}\n"
+                    .to_string(),
             ),
         ];
-        let registrar = wrap_reg("server_fn::axum::register_explicit::<web::a::Thing>();");
-        let detail = problems(&sources, &registrar).expect("a duplicate is a problem");
-        assert!(detail.contains("duplicate"));
-        assert!(detail.contains("Thing"));
+        let registrar = wrap_reg("server_fn::axum::register_explicit::<web::audiences::Create>();");
+        let detail = problems(&sources, &registrar).expect("posts::Create is unregistered");
+        assert!(detail.contains("web/src/posts/api.rs"), "{detail}");
+        assert!(
+            detail.contains("posts"),
+            "the vertical is what disambiguates the pair: {detail}"
+        );
+        assert!(!detail.contains("web/src/audiences/api.rs"), "{detail}");
+    }
+
+    #[test]
+    fn a_duplicate_ident_within_one_vertical_fails_even_when_registered() {
+        // Glob shadowing (`pub use listing::*;` at web/src/posts/api.rs:16) makes
+        // this COMPILE — verified with rustc. Both fns collapse to (posts, Create),
+        // one registrar entry satisfies both, and the unregistered one silently
+        // 404s. That is the #358 hole; this gate is the only thing that catches it,
+        // which is why the duplicate check is narrowed rather than deleted.
+        let sources = vec![
+            (
+                "web/src/posts/api.rs".to_string(),
+                "#[server(endpoint = \"/posts/create\")]\npub async fn create() {}\n".to_string(),
+            ),
+            (
+                "web/src/posts/api/listing.rs".to_string(),
+                "#[server(endpoint = \"/posts/create_other\")]\npub async fn create() {}\n"
+                    .to_string(),
+            ),
+        ];
+        let registrar = wrap_reg("server_fn::axum::register_explicit::<web::posts::Create>();");
+        let detail =
+            problems(&sources, &registrar).expect("a within-vertical duplicate is a problem");
+        assert!(detail.contains("duplicate"), "{detail}");
+        assert!(detail.contains("posts"), "{detail}");
+        assert!(detail.contains("web/src/posts/api.rs"), "{detail}");
+        assert!(detail.contains("web/src/posts/api/listing.rs"), "{detail}");
+    }
+
+    #[test]
+    fn a_registrar_entry_that_is_not_web_vertical_leaf_is_reported_as_malformed() {
+        let sources = vec![(
+            "web/src/posts/api.rs".to_string(),
+            "#[server(endpoint = \"/posts/create\")]\npub async fn create() {}\n".to_string(),
+        )];
+        // Four segments — `api` is a private module, so this path is not nameable.
+        let registrar =
+            wrap_reg("server_fn::axum::register_explicit::<web::posts::api::Create>();");
+        let detail = problems(&sources, &registrar).expect("malformed entry is reported");
+        assert!(detail.contains("web::posts::api::Create"), "{detail}");
+    }
+
+    #[test]
+    fn a_two_segment_registrar_entry_is_reported_as_malformed() {
+        let sources = vec![(
+            "web/src/posts/api.rs".to_string(),
+            "#[server(endpoint = \"/posts/create\")]\npub async fn create() {}\n".to_string(),
+        )];
+        let registrar = wrap_reg("server_fn::axum::register_explicit::<posts::Create>();");
+        let detail = problems(&sources, &registrar).expect("malformed entry is reported");
+        assert!(detail.contains("posts::Create"), "{detail}");
+    }
+
+    #[test]
+    fn a_server_fn_directly_under_web_src_is_an_error() {
+        let sources = vec![(
+            "web/src/loose.rs".to_string(),
+            "#[server(endpoint = \"/x\")]\npub async fn x() {}\n".to_string(),
+        )];
+        let detail = problems(&sources, &wrap_reg("")).expect("no vertical is an error");
+        assert!(detail.contains("web/src/loose.rs"), "{detail}");
+        assert!(detail.contains("vertical"), "{detail}");
     }
 }
