@@ -66,6 +66,16 @@ boundary ADR-0056 said could come later.
   `common` when both targets need it) so it keeps its test/coverage obligation;
   the crate is genuinely empty on host, never a fake host substitute.
 
+  **Clarified 2026-07-29 (#520): "never our domain types" means _ours_.** The
+  test is domain-freedom, not "nothing but `web_sys`". Framework **transport**
+  types are admissible on the same footing as the `leptos` dependency the crate
+  already carries behind `csr` — concretely,
+  `client::upload::picked_file_multipart` returns
+  `server_fn::codec::MultipartData`, because the alternative (returning a raw
+  `web_sys::FormData`) would force `web` to name a `web_sys` type and keep a
+  `web-sys` dependency alive purely for one `.into()`. What stays out is _our_
+  vocabulary — `common`'s newtypes, DTOs, and domain enums.
+
 **Coverage position.** Because `client` is wasm-only, the host-run instrumented
 coverage build sees **zero measured lines** in it, and that is **not** a gate
 failure: the Nix coverage source filter auto-admits any new top-level crate, and
@@ -73,6 +83,18 @@ a crate with no host-compiled lines simply contributes nothing to measure.
 `client` is therefore the official, **e2e-verified** home for browser glue,
 replacing the per-site `#[client_only]` / `cov:ignore` coverage exemptions that
 `web` uses today.
+
+**Corrected 2026-07-29 (#520): "zero measured lines" does not mean "exempt from
+the coverage gate".** Line coverage indeed sees nothing here — but **CRAP still
+scores `client` functions**, because the CRAP report is derived from source
+complexity and is not gated on the crate having host-compiled lines. #520 hit
+this for real: the first draft of `client::upload::picked_file_multipart` failed
+the gate at `crap=42.00` against the threshold of 30. The consequence is sharp,
+and worth knowing before you write glue here: **a `client` function's CRAP can
+never be paid down with tests**, since no host test can reach it. The only
+remedies are to keep each function's branch count low (split it) or to
+`crap:allow` it with a reason. Prefer splitting — `picked_file_multipart` was
+split into `picked_file` + the wrapper, which is also the better factoring.
 
 **Gate wiring.** Since `client`'s code exists only under
 `target_arch = "wasm32"`, the **wasm-clippy static-check step is the only place

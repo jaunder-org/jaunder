@@ -9,19 +9,6 @@ mod id_newtype;
 mod num_newtype;
 mod str_newtype;
 
-/// Marks a **client-only reactive helper**: code that runs only in the browser (a
-/// `server_resource` fetch, or an `Effect` that fires only client-side) and is exercised
-/// by e2e, not host tests. It is an **identity** attribute — it expands to the annotated
-/// item unchanged. Its sole purpose is to be a syntactic marker the coverage framework
-/// (`xtask/src/coverage/exempt.rs`) recognizes and exempts, generalizing the `#[component]`
-/// rule to non-component helpers (a macro-backed peer of the `cov:ignore` comment marker).
-///
-/// Interim until wasm-bindgen-test can cover these in a headless browser (Test-infra epic).
-#[proc_macro_attribute]
-pub fn client_only(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    item
-}
-
 /// Derives the ADR-0063 **string-newtype trailer** for a `struct X(String)`: `Display`,
 /// a serde bridge (deserialize routed through `FromStr`, so invalid input is rejected on
 /// the wire), `AsRef`/`Borrow`/`Deref<str>`, `TryFrom<String>`, `From<Self> for String`,

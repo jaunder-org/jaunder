@@ -47,7 +47,6 @@ pub fn BackupSettingsPage() -> impl IntoView {
     }
 }
 
-// cov:ignore-start
 /// The destination path is optional and clearable, so it is a direct-bind `Field` (not a
 /// `ValidatedInput`) — that keeps the placeholder and bespoke classes the shared component
 /// can't yet express (#450). Extracted so `backup_settings_form` stays within the line budget.
@@ -181,7 +180,6 @@ fn backup_settings_form(
         </div>
     }
 }
-// cov:ignore-stop
 
 #[component]
 pub fn BackupBanner() -> impl IntoView {

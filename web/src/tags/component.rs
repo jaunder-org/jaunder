@@ -4,7 +4,8 @@
 //! `#[cfg(target_arch = "wasm32")] mod component;` in `tags/mod.rs`, so this file
 //! is wasm-only by its `mod` declaration and carries no cfg gates of its own. Its
 //! state and dispatch logic live in the host-tested [`super::input_state`]; only the
-//! irreducible `web_sys` event touch stays here, inline in the component.
+//! irreducible event wiring stays here, inline in the component, via leptos's own
+//! helpers — `web` names no `web_sys` type and carries no `web-sys` dependency (#520).
 
 use leptos::prelude::*;
 

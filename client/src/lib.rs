@@ -8,7 +8,7 @@
 //! Wasm-only: the crate-level `#![cfg(target_arch = "wasm32")]` below makes it
 //! an empty rlib on the host target (zero coverage-measured lines) and active
 //! only on wasm. Every module relocated here inherits that gate, so it needs no
-//! per-item `#[cfg]` and no `#[client_only]` marker.
+//! per-item `#[cfg]`.
 //!
 //! See docs/adr/0069-client-crate-wasm-only-home.md.
 #![cfg(target_arch = "wasm32")]
@@ -32,3 +32,8 @@ pub mod dom;
 /// need `leptos`; a host/server build of `client` stays leptos-free.
 #[cfg(feature = "csr")]
 pub mod reactive;
+
+/// Browser file-picker → `MultipartData` glue (#520), relocated from `web::media` so that
+/// crate names no `web_sys` type. Behind `csr` because it needs leptos's `NodeRef`.
+#[cfg(feature = "csr")]
+pub mod upload;

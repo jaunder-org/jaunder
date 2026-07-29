@@ -110,6 +110,19 @@ single crate.
    and now also retires the `#[component]` coverage exemption and the A1 guard's
    component arm — dead machinery once no ungated component remains.
 
+   **Delivered 2026-07-29 (#520), and now machine-enforced.** The
+   `target-arch-placement` xtask check
+   (`xtask/src/steps/target_arch_placement_check.rs`) permits a `target_arch`
+   cfg in exactly three placements: a crate-level inner `#![cfg(…)]` in
+   `lib.rs`; an outer attribute on a `mod` or `use` item in a `mod.rs`/`lib.rs`;
+   nothing else. It polices `web/src`, `client/src`, and `csr/src`, and runs in
+   the static ladder, so a cfg drifting into a leaf file is a gate failure
+   rather than a review catch. Note the rule had to admit gated **re-exports**,
+   not just `mod` declarations — every vertical pairs
+   `#[cfg(target_arch = "wasm32")] mod component;` with a gated
+   `pub use component::{…}`. `web` also lost its `web-sys` and `macros`
+   dependencies outright, making regression a compile error.
+
 ## Consequences
 
 - **Supersedes ADR-0056.** The co-location half survives verbatim; the
@@ -122,6 +135,16 @@ single crate.
   `component.rs` instead of through `#[client_only]` wrappers. Its dependency
   rule (`web`/`csr` → `client`, never the reverse; no domain types; no pure
   logic) stands.
+
+  **Clarified 2026-07-29 (#520):** "**cross-vertical**" describes `client`'s
+  typical tenant, not an admission test. The operative test is domain-freedom
+  (ADR-0069, as clarified there). A single-vertical primitive that is genuinely
+  raw browser glue belongs in `client` — `client::upload::picked_file_multipart`
+  and `client::dom::select_event_target_text` each serve only the media
+  vertical, and keeping them in `web` would have meant keeping a `web-sys`
+  dependency alive for ~20 lines, forfeiting the compile-error gate #520 exists
+  to install.
+
 - **UI type errors surface only on the wasm target.** The `wasm-clippy` step
   (`-p web -p client`, host + Nix mirror) is permanent load-bearing gate
   surface, not the simplifiable residue #330 assumed; the fast iteration loop
