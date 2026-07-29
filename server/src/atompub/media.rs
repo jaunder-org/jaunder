@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 use common::absolute_url::{compose, AbsoluteUrl};
 use common::atompub::{render_media_link_entry, MediaLinkEntry};
 use common::media::{encode_filename_segment, media_url, ContentHash, Filename, MediaSource};
+use common::root_relative_url::RootRelativeUrl;
 use common::username::Username;
 use storage::{MediaRecord, MediaStorage, SiteConfigStorage};
 use web::auth::AuthUser;
@@ -29,15 +30,28 @@ fn media_link_entry(
 ) -> MediaLinkEntry {
     let binary_path = media_url(&MediaSource::Upload, &record.sha256, &record.filename);
     let binary = compose(base, &binary_path);
-    // The filename is percent-encoded here for the same reason `media_path` encodes it: a
-    // legal `Filename` may hold a space (malformed in an `href`) or a `?`/`#` (which would
-    // silently truncate this member URL). This URL is also the entry's `atom:id`, so a
-    // malformed spelling would be the entry's permanent identity.
-    let edit_path = format!(
-        "/atompub/{username}/media/{}/{}",
-        record.sha256,
-        encode_filename_segment(&record.filename)
-    );
+    // The member URL is a *different* layout from the serve path (it is the AtomPub
+    // collection's, not the content-addressed store's), so it is built here rather than by
+    // `media_path` — but it shares the encode set, and for the same reasons: a legal
+    // `Filename` may hold a space (malformed in an `href`) or a `?`/`#` (which would
+    // silently truncate this URL). This one is also the entry's `atom:id`, so a malformed
+    // spelling would be the entry's permanent identity.
+    //
+    // Typed like `binary_path` rather than left a bare `String`: two spellings of the same
+    // concept side by side is how one of them drifts.
+    let edit_path: RootRelativeUrl = {
+        let path = format!(
+            "/atompub/{username}/media/{}/{}",
+            record.sha256,
+            encode_filename_segment(&record.filename)
+        );
+        let Ok(url) = path.parse() else {
+            // Unreachable: a leading `/`, a hex digest, a validated `Username`, and a
+            // percent-encoded filename — no whitespace or delimiter can survive.
+            unreachable!("the AtomPub media member path is a valid root-relative path");
+        };
+        url
+    };
     let edit = compose(base, &edit_path);
     let timestamp = record.created_at.to_rfc3339();
     MediaLinkEntry {
