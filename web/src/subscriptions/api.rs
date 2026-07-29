@@ -19,6 +19,7 @@ use {
 /// Requires an authenticated local account (Layer A). Rejects a self-subscribe
 /// and an unknown author. Idempotent: subscribing twice is a no-op.
 #[server(endpoint = "/subscribe_to")]
+#[tracing::instrument(name = "web.subscriptions.subscribe_to")]
 pub async fn subscribe_to(author_username: Username) -> WebResult<()> {
     boundary!("subscribe_to", {
         let subscriptions = expect_context::<Arc<dyn SubscriptionStorage>>();
@@ -37,6 +38,7 @@ pub async fn subscribe_to(author_username: Username) -> WebResult<()> {
 ///
 /// Mirror of [`subscribe_to`]. A no-op if no subscription exists.
 #[server(endpoint = "/unsubscribe_from")]
+#[tracing::instrument(name = "web.subscriptions.unsubscribe_from")]
 pub async fn unsubscribe_from(author_username: Username) -> WebResult<()> {
     boundary!("unsubscribe_from", {
         let subscriptions = expect_context::<Arc<dyn SubscriptionStorage>>();
@@ -57,6 +59,7 @@ pub async fn unsubscribe_from(author_username: Username) -> WebResult<()> {
 /// Returns `false` for an anonymous viewer or when viewing one's own profile
 /// (self-subscription is impossible), so the caller can hide the control.
 #[server(endpoint = "/is_subscribed_to")]
+#[tracing::instrument(name = "web.subscriptions.is_subscribed_to")]
 pub async fn is_subscribed_to(author_username: Username) -> WebResult<bool> {
     boundary!("is_subscribed_to", {
         let subscriptions = expect_context::<Arc<dyn SubscriptionStorage>>();
