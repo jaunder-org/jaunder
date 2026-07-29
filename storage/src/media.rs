@@ -2,6 +2,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use common::absolute_url::AbsoluteUrl;
 use common::media::{ByteSize, ContentHash, ContentType, Filename, MediaSource};
 use sqlx::{Database, FromRow, Pool};
 use thiserror::Error;
@@ -25,8 +26,16 @@ pub struct MediaRecord {
     pub content_type: ContentType,
     /// Size of the file in bytes.
     pub size_bytes: ByteSize,
-    /// For cached media, the original remote URL.
-    pub source_url: Option<String>,
+    /// For cached media, the original remote URL; `None` for a local upload.
+    ///
+    /// Typed as [`AbsoluteUrl`] ahead of any writer: every construction site currently
+    /// passes `None`, because the remote-caching ingest that would populate it does not
+    /// exist yet. The type is therefore the **contract for that path** — whoever builds it
+    /// must supply a validated, normalized `http(s)` URL rather than whatever a feed handed
+    /// them. An unparseable value would be useless by definition, since caching means
+    /// fetching this URL, so rejecting it at ingest is strictly better than storing
+    /// something no code can act on (#675).
+    pub source_url: Option<AbsoluteUrl>,
     /// When the record was created.
     pub created_at: DateTime<Utc>,
 }
@@ -168,7 +177,11 @@ where
     // their newtypes, and the write/lookup binds encode `&ContentHash`/`&Filename`).
     String: sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
-    for<'q> Option<String>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    // `source_url` binds as `Option<AbsoluteUrl>` (#675). The newtype's own `Type`/`Encode`
+    // follow from the `String` bounds above via the generic `StrNewtype` bridge, but the
+    // `Option` wrapper has to be named explicitly — same reason the `Option<String>` bound
+    // it replaces was spelled out.
+    for<'q> Option<AbsoluteUrl>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
