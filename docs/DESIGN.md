@@ -3,8 +3,8 @@
 ## Operational Model
 
 `Jaunder` ships as a single binary (see
-[ADR-0008](decisions/0008-deployment-model.md)) and takes its basic config from
-the command line or environment variables.
+[ADR-0008](adr/0008-deployment-model.md)) and takes its basic config from the
+command line or environment variables.
 
 Getting an instance up and running is designed to be simple:
 
@@ -31,7 +31,7 @@ termination.
 ### Timelines
 
 Jaunder provides several views for consuming content, all using cursor-based
-pagination (see [ADR-0004](decisions/0004-pagination-strategy.md)):
+pagination (see [ADR-0004](adr/0004-pagination-strategy.md)):
 
 - **Local timeline** (public): Original posts by local users.
 - **User timeline** (public): Original posts by a specific local user.
@@ -41,8 +41,8 @@ pagination (see [ADR-0004](decisions/0004-pagination-strategy.md)):
 #### Read State
 
 Jaunder tracks read/unread state per item in each user's content layer (see
-[ADR-0006](decisions/0006-storage-isolation.md)). Items are marked read
-automatically as they are scrolled past.
+[ADR-0006](adr/0006-storage-isolation.md)). Items are marked read automatically
+as they are scrolled past.
 
 ### Account and Profile Management
 
@@ -60,22 +60,22 @@ area:
 
 Jaunder normalizes data from diverse protocols into a unified core while
 retaining high-fidelity raw payloads (see
-[ADR-0005](decisions/0005-unified-content-model.md)).
+[ADR-0005](adr/0005-unified-content-model.md)).
 
 ### Ingestion & Federation
 
 Jaunder prioritizes real-time delivery via push mechanisms (ActivityPub Inbox,
 WebSub, AT Jetstream) and falls back to adaptive polling for other sources (see
-[ADR-0010](decisions/0010-protocol-integration.md)).
+[ADR-0010](adr/0010-protocol-integration.md)).
 
 ### Retention & History
 
 Consonant with its role as a high-fidelity reader, Jaunder retains an immutable
 history of edits and preserves content locally even if it is deleted from the
-source (see [ADR-0009](decisions/0009-edit-delete-policy.md)).
+source (see [ADR-0009](adr/0009-edit-delete-policy.md)).
 
 ### Media Handling
 
 User-uploaded media is served directly by the binary (see
-[ADR-0003](decisions/0003-asset-management.md)). Media linked in external
-content can be optionally cached per-user to protect against link rot.
+[ADR-0003](adr/0003-asset-management.md)). Media linked in external content can
+be optionally cached per-user to protect against link rot.
