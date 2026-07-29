@@ -168,6 +168,12 @@ pub(crate) fn grep_files(dir: &Path, pattern: &str) -> Result<Vec<String>> {
     })
 }
 
+/// `git ls-files -- *.md` — tracked Markdown, repo-relative. The pathspec glob
+/// matches at any depth, so filtering happens in git rather than in Rust.
+pub(crate) fn ls_files_md(dir: &Path) -> Result<Vec<String>> {
+    lines(dir, &["ls-files", "--", "*.md"])
+}
+
 /// `git mv <from> <to>`.
 pub(crate) fn mv(dir: &Path, from: &str, to: &str) -> Result<()> {
     run(dir, &["mv", from, to])

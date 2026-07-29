@@ -6,6 +6,16 @@
 //! one scanner is what makes those two agree about code spans, URL schemes, and
 //! fragments — a second implementation would drift.
 
+use std::path::Path;
+
+use anyhow::{Context, Result};
+
+/// Trees excluded from the gate. `docs/archive/` is a frozen record — its links are
+/// dead because the docs moved on, and rewriting them would falsify the record.
+/// `docs/superpowers/` holds transient specs and plans, which routinely link files
+/// they only propose to create.
+pub const EXCLUDED: &[&str] = &["docs/archive/", "docs/superpowers/"];
+
 /// An inline Markdown link found outside code spans and fenced blocks. Carries a
 /// byte range rather than a line number so the scanner computes only what its
 /// callers read.
@@ -129,9 +139,113 @@ pub fn is_relative_target(target: &str) -> bool {
         && !target.starts_with("mailto:")
 }
 
+/// 1-based line containing byte `offset`.
+pub fn line_at(body: &str, offset: usize) -> usize {
+    body[..offset].matches('\n').count() + 1
+}
+
+/// A dead relative link in one file.
+pub struct DeadLink {
+    pub line: usize,
+    pub target: String,
+}
+
+/// Relative links in `repo`/`rel` whose target does not exist on disk.
+///
+/// The shared per-file unit: `promote` checks the one file it just wrote, the gate
+/// maps this over the whole corpus. Neither owns a second resolver, so "what counts
+/// as dead" cannot diverge between a warning and a hard failure.
+///
+/// Targets resolve against the file's own directory, and a `#fragment` is dropped
+/// first — anchors within a document are not validated (a link to a real file with a
+/// stale anchor still passes).
+pub fn dead_links_in(repo: &Path, rel: &str) -> Result<Vec<DeadLink>> {
+    let path = repo.join(rel);
+    let body = std::fs::read_to_string(&path).with_context(|| format!("reading {rel}"))?;
+    let dir = path.parent().unwrap_or(repo).to_path_buf();
+    Ok(links_in(&body)
+        .into_iter()
+        .filter(|link| is_relative_target(&link.target))
+        .filter(|link| {
+            let bare = link.target.split('#').next().unwrap_or_default();
+            !bare.is_empty() && !dir.join(bare).exists()
+        })
+        .map(|link| DeadLink {
+            line: line_at(&body, link.span.start),
+            target: link.target,
+        })
+        .collect())
+}
+
+/// Tracked `*.md` under `repo`, minus [`EXCLUDED`] and minus tracked-but-absent
+/// paths.
+///
+/// Tracked, not on-disk: an untracked scratch file is nobody's contract, and a
+/// gitignored draft must stay invisible to the gate. Absent paths are dropped so a
+/// staged deletion fails at its `git rm`, not here.
+pub fn gated_files(repo: &Path) -> Result<Vec<String>> {
+    Ok(crate::git::ls_files_md(repo)?
+        .into_iter()
+        .filter(|rel| !EXCLUDED.iter().any(|tree| rel.starts_with(tree)))
+        .filter(|rel| repo.join(rel).exists())
+        .collect())
+}
+
+/// Every dead link across [`gated_files`], formatted `<file>:<line> -> <target>`.
+pub fn problems(repo: &Path) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    for rel in gated_files(repo)? {
+        for dead in dead_links_in(repo, &rel)? {
+            out.push(format!("{rel}:{} -> {}", dead.line, dead.target));
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
+
+    /// A fresh git repo under a pid-scoped temp dir, identity configured — the
+    /// `git.rs::tests::temp_repo` idiom. `tag` must be unique per test: the tests in
+    /// this module share a process, so the pid alone does not separate them.
+    fn repo(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("jaunder-links-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for args in [
+            &["init", "-q", "-b", "main"][..],
+            &["config", "user.email", "t@t"],
+            &["config", "user.name", "t"],
+        ] {
+            assert!(git(&dir, args).success());
+        }
+        dir
+    }
+
+    /// Run git against `dir` via [`crate::git::at`] — which scrubs `GIT_DIR` and
+    /// friends. Not optional: these tests run under the pre-commit hook, which
+    /// exports them, and a bare `Command::new("git")` would silently retarget every
+    /// call at the real repository.
+    fn git(dir: &Path, args: &[&str]) -> std::process::ExitStatus {
+        crate::git::at(dir).args(args).status().unwrap()
+    }
+
+    /// Write `rel` under `dir`, creating its parent.
+    fn write(dir: &Path, rel: &str, body: &str) {
+        let p = dir.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, body).unwrap();
+    }
+
+    /// [`write`], then track it — `git ls-files` is what the gate enumerates.
+    fn commit(dir: &Path, rel: &str, body: &str) {
+        write(dir, rel, body);
+        assert!(git(dir, &["add", rel]).success());
+        assert!(git(dir, &["commit", "-qm", "c"]).success());
+    }
 
     // --- links_in: what counts as a link ---
 
@@ -199,5 +313,115 @@ mod tests {
         for t in ["a.md", "../a.md", "adr/", "a.md#frag"] {
             assert!(is_relative_target(t), "{t}");
         }
+    }
+
+    // --- line_at ---
+
+    #[test]
+    fn line_at_is_one_based() {
+        assert_eq!(line_at("a\nb\nc", 0), 1);
+        assert_eq!(line_at("a\nb\nc", 2), 2);
+        assert_eq!(line_at("a\nb\nc", 4), 3);
+    }
+
+    // --- dead_links_in ---
+
+    #[test]
+    fn existing_target_is_not_dead() {
+        let d = repo("alive");
+        write(&d, "docs/a.md", "[x](b.md)\n");
+        write(&d, "docs/b.md", "hi\n");
+        assert!(dead_links_in(&d, "docs/a.md").unwrap().is_empty());
+    }
+
+    #[test]
+    fn missing_target_is_dead_with_line_and_target() {
+        let d = repo("dead");
+        write(&d, "docs/a.md", "one\n[x](gone.md)\n");
+        let found = dead_links_in(&d, "docs/a.md").unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].line, 2);
+        assert_eq!(found[0].target, "gone.md");
+    }
+
+    #[test]
+    fn directory_target_resolves() {
+        let d = repo("dir");
+        std::fs::create_dir_all(d.join("docs/adr")).unwrap();
+        write(&d, "docs/a.md", "[x](adr/)\n");
+        assert!(dead_links_in(&d, "docs/a.md").unwrap().is_empty());
+    }
+
+    #[test]
+    fn fragment_is_stripped_before_resolving() {
+        let d = repo("frag");
+        write(&d, "docs/a.md", "[x](b.md#sec)\n");
+        write(&d, "docs/b.md", "hi\n");
+        assert!(dead_links_in(&d, "docs/a.md").unwrap().is_empty());
+    }
+
+    #[test]
+    fn urls_and_anchors_are_ignored() {
+        let d = repo("urls");
+        write(
+            &d,
+            "docs/a.md",
+            "[x](https://e.com) [y](#s) [z](mailto:a@b.c)\n",
+        );
+        assert!(dead_links_in(&d, "docs/a.md").unwrap().is_empty());
+    }
+
+    #[test]
+    fn dead_link_inside_code_is_ignored() {
+        let d = repo("code");
+        write(
+            &d,
+            "docs/a.md",
+            "`[x](gone.md)`\n\n```\n[y](gone.md)\n```\n",
+        );
+        assert!(dead_links_in(&d, "docs/a.md").unwrap().is_empty());
+    }
+
+    // --- gated_files + problems ---
+
+    #[test]
+    fn gate_reports_a_dead_link_in_tracked_markdown() {
+        let d = repo("gate");
+        commit(&d, "docs/a.md", "[x](gone.md)\n");
+        assert_eq!(
+            problems(&d).unwrap(),
+            vec!["docs/a.md:1 -> gone.md".to_string()]
+        );
+    }
+
+    #[test]
+    fn gate_skips_excluded_trees() {
+        let d = repo("excluded");
+        commit(&d, "docs/archive/old.md", "[x](gone.md)\n");
+        commit(&d, "docs/superpowers/plan.md", "[x](gone.md)\n");
+        assert!(problems(&d).unwrap().is_empty());
+    }
+
+    #[test]
+    fn gate_skips_untracked_files() {
+        let d = repo("untracked");
+        write(&d, "docs/loose.md", "[x](gone.md)\n"); // never `git add`ed
+        assert!(problems(&d).unwrap().is_empty());
+    }
+
+    #[test]
+    fn gate_skips_tracked_but_deleted_files() {
+        let d = repo("deleted");
+        commit(&d, "docs/a.md", "[x](gone.md)\n");
+        std::fs::remove_file(d.join("docs/a.md")).unwrap();
+        assert!(problems(&d).unwrap().is_empty());
+    }
+
+    #[test]
+    fn gate_is_clean_when_every_link_resolves() {
+        let d = repo("clean");
+        commit(&d, "docs/b.md", "hi\n");
+        commit(&d, "docs/a.md", "[x](b.md)\n");
+        assert!(problems(&d).unwrap().is_empty());
     }
 }

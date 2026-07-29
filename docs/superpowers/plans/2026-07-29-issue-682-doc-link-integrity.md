@@ -540,7 +540,7 @@ pub fn problems(repo: &Path) -> Result<Vec<String>>;
 pub(crate) fn ls_files_md(dir: &Path) -> Result<Vec<String>>;
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `xtask/src/doc_links.rs`'s test module. Three local helpers, defined once and
 reused by every test below — do not copy-paste them per test:
@@ -627,12 +627,12 @@ reused by every test below — do not copy-paste them per test:
 }
 ````
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run: `cargo test --manifest-path xtask/Cargo.toml doc_links` Expected: FAIL —
 `problems` / `dead_links_in` / `line_at` not defined.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Signatures above; the tests pin every branch. `line_at` counts newlines before
 the offset (`body[..offset].matches('\n').count() + 1`). `dead_links_in` filters
@@ -651,12 +651,12 @@ pub(crate) fn ls_files_md(dir: &Path) -> Result<Vec<String>> {
 }
 ```
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Run: `cargo test --manifest-path xtask/Cargo.toml doc_links` Expected: PASS (12
 new tests).
 
-- [ ] **Step 5: Add the step and wire it**
+- [x] **Step 5: Add the step and wire it**
 
 Create `xtask/src/steps/doc_links.rs`, mirroring `adr_check.rs:33-41`'s shape.
 No `recovery:` line — a dead link has no mechanical fix (spec Scope §3):
@@ -685,7 +685,7 @@ and add `steps::doc_links::run(&mut result);` immediately after
 `steps::adr_check::run(&mut result);` in **both** arms — `:294` (Check) and
 `:326` (Validate).
 
-- [ ] **Step 6: Verify the gate passes, and that it bites**
+- [x] **Step 6: Verify the gate passes, and that it bites**
 
 Run: `cargo xtask check --no-test` Expected: PASS, with a `doc-links` step
 reported ok (**AC10**).
@@ -695,7 +695,7 @@ confirm `doc-links` **fails** naming file, line and target — then restore it a
 re-run green before committing. A gate never observed failing is not known to
 bite.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add xtask/src/doc_links.rs xtask/src/steps/doc_links.rs xtask/src/lib.rs xtask/src/git.rs
