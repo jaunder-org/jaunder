@@ -1,7 +1,7 @@
 # Plan — #686: sqlx bridges for `IdNewtype` / `NumNewtype`
 
 Spec:
-[2026-07-29-issue-686-idnewtype-sqlx-bridge.md](../specs/2026-07-29-issue-686-idnewtype-sqlx-bridge.md)
+[2026-07-29-issue-686-idnewtype-sqlx-bridge-spec.md](2026-07-29-issue-686-idnewtype-sqlx-bridge-spec.md)
 · Issue: [#686](https://github.com/jaunder-org/jaunder/issues/686) · Branch:
 `worktree-issue-686-idnewtype-sqlx-bridge` · Fork point: `wt-base-issue-686`
 (`da17c14a`)

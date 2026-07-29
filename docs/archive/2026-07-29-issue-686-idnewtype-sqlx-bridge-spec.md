@@ -2,9 +2,8 @@
 
 - Issue: [#686](https://github.com/jaunder-org/jaunder/issues/686)
 - Milestone: Domain-value type safety (newtypes)
-- Governing ADR: [ADR-0063](../../adr/0063-domain-value-newtype-convention.md)
-  §2, [ADR-0071](../../adr/0071-sqlx-string-newtype-bridge.md) (amended by this
-  issue)
+- Governing ADR: [ADR-0063](../adr/0063-domain-value-newtype-convention.md) §2,
+  [ADR-0071](../adr/0071-sqlx-string-newtype-bridge.md) (amended by this issue)
 - Blocks: [#697](https://github.com/jaunder-org/jaunder/issues/697) (adoption
   gate)
 - Date: 2026-07-29
