@@ -13,10 +13,17 @@
 //! 1. **Presence and placement** — a `#[tracing::instrument]` after the `#[server]`
 //!    attribute. All the pre-existing sites use that order and build for both
 //!    targets, so it is the arrangement known to produce a server-side span.
-//! 2. **The span name is derived, so it is checked by equality** —
-//!    `web.<vertical>.<fn ident>`, where the vertical is the first path segment
-//!    under `web/src`. Nothing is left to judgment, and when the fn idents later
-//!    shed their vestigial vertical nouns (#684) every span name improves for free.
+//! 2. **The span name is derived, so the gate writes it** — `web.<vertical>.<fn
+//!    ident>`, where the vertical is the first path segment under `web/src`. Because
+//!    the name is a pure function of source path and identifier, asking an author to
+//!    type it would be asking them to restate what the file already says, and to keep
+//!    55 copies in sync by hand. So `cargo xtask check` **fills it in**
+//!    ([`Mode::Fix`], the same contract `fmt` has) and `cargo xtask validate`
+//!    verifies without mutating. Write `#[tracing::instrument(skip_all)]`; the gate
+//!    supplies `name = "web.posts.create_post"`. The literal still lands in the
+//!    source, so an operator reading a span name can grep for it — and when the fn
+//!    idents shed their vestigial vertical nouns (#684), re-running the gate rewrites
+//!    all 55.
 //! 3. **PII discipline is a default-deny type allowlist** — every parameter is
 //!    either skipped or has a type on [`RECORDABLE_TYPES`]. An unlisted type is not
 //!    recordable, so a newly-introduced argument type fails this gate until someone
@@ -33,9 +40,10 @@ use std::path::Path;
 
 use proc_macro2::{TokenStream, TokenTree};
 use syn::punctuated::Punctuated;
+use syn::spanned::Spanned;
 use syn::{Meta, Token};
 
-use crate::result::{CommandResult, StepResult};
+use crate::result::{CommandResult, Mode, StepResult};
 use crate::web_server_fns::{self, WebServerFn, WEB_SRC};
 
 /// Argument types whose values may be recorded on a span, each with the ground
@@ -417,6 +425,142 @@ fn problems_with(f: &WebServerFn, vertical: &str) -> Vec<String> {
     lines
 }
 
+/// Rewrite one `#[tracing::instrument(...)]` attribute's source so its `name`
+/// argument is `desired`, or `None` when it already is.
+///
+/// Textual rather than a token-stream re-emit, because the attribute has already
+/// been parsed and validated by this point and a re-emit would reformat the
+/// author's `skip(...)`/`fields(...)` spelling. Three shapes occur:
+///
+/// - `#[tracing::instrument]`            → `#[tracing::instrument(name = "…")]`
+/// - `#[tracing::instrument(skip_all)]`  → `#[tracing::instrument(name = "…", skip_all)]`
+/// - `#[tracing::instrument(name = "x")]`→ the literal is replaced in place
+fn rewrite_name(attr_src: &str, desired: &str) -> Option<String> {
+    let quoted = format!("\"{desired}\"");
+    // An existing `name = "…"`: replace just the literal, leaving everything else.
+    if let Some(eq) = find_name_eq(attr_src) {
+        let rest = &attr_src[eq..];
+        let open = rest.find('"')?;
+        let close = rest[open + 1..].find('"')? + open + 1;
+        if rest[open..=close] == quoted {
+            return None;
+        }
+        let mut out = String::with_capacity(attr_src.len() + desired.len());
+        out.push_str(&attr_src[..eq + open]);
+        out.push_str(&quoted);
+        out.push_str(&rest[close + 1..]);
+        return Some(out);
+    }
+    // No `name` at all: insert one as the first argument.
+    let instrument = attr_src.find("instrument")? + "instrument".len();
+    let tail = &attr_src[instrument..];
+    if let Some(paren) = tail.find('(') {
+        // `…instrument(args)]` → `…instrument(name = "…", args)]`
+        let at = instrument + paren + 1;
+        let sep = if tail[paren + 1..].trim_start().starts_with(')') {
+            String::new()
+        } else {
+            ", ".to_string()
+        };
+        return Some(format!(
+            "{}name = {quoted}{sep}{}",
+            &attr_src[..at],
+            &attr_src[at..]
+        ));
+    }
+    // Bare `#[…instrument]` → `#[…instrument(name = "…")]`
+    let close = attr_src.rfind(']')?;
+    Some(format!(
+        "{}(name = {quoted}){}",
+        &attr_src[..close],
+        &attr_src[close..]
+    ))
+}
+
+/// Byte offset just past the `=` of an existing `name =` argument, or `None`.
+///
+/// Matched on the identifier boundary so a `fields(name = …)` entry or a
+/// `…_name` argument cannot be mistaken for the span name.
+fn find_name_eq(attr_src: &str) -> Option<usize> {
+    let bytes = attr_src.as_bytes();
+    let mut from = 0;
+    while let Some(rel) = attr_src[from..].find("name") {
+        let start = from + rel;
+        let end = start + "name".len();
+        let before_ok = start
+            .checked_sub(1)
+            .is_none_or(|i| !bytes[i].is_ascii_alphanumeric() && bytes[i] != b'_');
+        let after = attr_src[end..].trim_start();
+        // `fields(...)` is always spelled after `name` in a rewrite target, but a
+        // field could still be *called* `name`; only a top-level `name =` counts,
+        // and `fields(` always precedes its own contents, so stop at it.
+        let is_field_arg = attr_src[..start].contains("fields(");
+        if before_ok && after.starts_with('=') && !is_field_arg {
+            let eq = end + (attr_src[end..].len() - after.len()) + 1;
+            return Some(eq);
+        }
+        from = end;
+    }
+    None
+}
+
+/// One file's pending name rewrites, as (1-based line range of the attribute,
+/// replacement text). Applied bottom-up so earlier ranges stay valid.
+type LineFix = (usize, usize, String);
+
+/// The name rewrites `Mode::Fix` should apply to one source file.
+///
+/// Only fns that are *otherwise* well-formed are rewritten: if a fn has no
+/// instrument attribute, or one this gate refuses to parse, there is nothing to
+/// safely edit and the problem is reported instead.
+fn name_fixes(path: &str, src: &str) -> Vec<LineFix> {
+    let Ok(fns) = web_server_fns::server_fns_in(src) else {
+        return Vec::new();
+    };
+    let Ok(vertical) = vertical_of(path) else {
+        return Vec::new();
+    };
+    let lines: Vec<&str> = src.lines().collect();
+    let mut fixes = Vec::new();
+    for f in &fns {
+        if f.attrs.iter().any(is_cfg_attr_instrument) {
+            continue;
+        }
+        let Some(index) = f.attrs.iter().position(is_instrument) else {
+            continue;
+        };
+        if index < f.server_attr_index || parse_instrument(&f.attrs[index]).is_err() {
+            continue;
+        }
+        let span = f.attrs[index].span();
+        let (start, end) = (span.start().line, span.end().line);
+        if start == 0 || end > lines.len() {
+            continue;
+        }
+        let current = lines[start - 1..end].join("\n");
+        let desired = format!("web.{vertical}.{}", f.ident);
+        if let Some(replacement) = rewrite_name(&current, &desired) {
+            fixes.push((start, end, replacement));
+        }
+    }
+    fixes
+}
+
+/// Apply line-range replacements bottom-up and return the new file text.
+fn apply_fixes(src: &str, mut fixes: Vec<LineFix>) -> String {
+    let mut lines: Vec<String> = src.lines().map(ToString::to_string).collect();
+    fixes.sort_by_key(|(start, _, _)| std::cmp::Reverse(*start));
+    for (start, end, replacement) in fixes {
+        let new: Vec<String> = replacement.lines().map(ToString::to_string).collect();
+        lines.splice(start - 1..end, new);
+    }
+    let mut out = lines.join("\n");
+    if src.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
 /// The failure detail for every non-conforming `#[server]` fn, or `None` when
 /// every one conforms. Pure given its inputs, so it is unit-tested directly.
 fn problems(web_sources: &[(String, String)]) -> Option<String> {
@@ -464,7 +608,7 @@ fn problems(web_sources: &[(String, String)]) -> Option<String> {
 /// Scan every `web/src` Rust file for `#[server]` fns and check each carries a
 /// conforming span. A missing `web/src` tree or an unreadable file is a hard
 /// failure (not a silent pass), so a moved path can never quietly disable the guard.
-pub fn run(result: &mut CommandResult) {
+pub fn run(mode: Mode, result: &mut CommandResult) {
     let web = match web_server_fns::read_web_sources(Path::new(WEB_SRC)) {
         Ok(v) => v,
         Err(e) => {
@@ -473,7 +617,26 @@ pub fn run(result: &mut CommandResult) {
         }
     };
     let mut read_errors = web.read_errors;
-    let step = match (read_errors.is_empty(), problems(&web.sources)) {
+    let mut sources = web.sources;
+
+    // `Mode::Fix` (i.e. `cargo xtask check`) writes the derived span name, the
+    // same contract `fmt` has; `Mode::Check` (`validate`) never mutates the tree.
+    if matches!(mode, Mode::Fix) {
+        for (path, src) in &mut sources {
+            let fixes = name_fixes(path, src);
+            if fixes.is_empty() {
+                continue;
+            }
+            let fixed = apply_fixes(src, fixes);
+            if let Err(e) = std::fs::write(&*path, &fixed) {
+                read_errors.push(format!("{path}: cannot write span-name fix: {e}"));
+                continue;
+            }
+            *src = fixed;
+        }
+    }
+
+    let step = match (read_errors.is_empty(), problems(&sources)) {
         (true, None) => StepResult::ok("server-fn-tracing"),
         (_, prob) => {
             read_errors.extend(prob);
@@ -715,6 +878,122 @@ mod tests {
         let detail = problems(&s).expect("a missing name is a problem");
         assert!(detail.contains("name"), "{detail}");
         assert!(detail.contains("required"), "{detail}");
+    }
+
+    // --- Mode::Fix — the gate writes the derived name ---
+
+    #[test]
+    fn rewrite_adds_a_name_to_a_bare_instrument() {
+        assert_eq!(
+            rewrite_name("#[tracing::instrument]", "web.posts.x").unwrap(),
+            "#[tracing::instrument(name = \"web.posts.x\")]"
+        );
+    }
+
+    #[test]
+    fn rewrite_inserts_the_name_before_existing_arguments() {
+        assert_eq!(
+            rewrite_name("#[tracing::instrument(skip_all)]", "web.posts.create_post").unwrap(),
+            "#[tracing::instrument(name = \"web.posts.create_post\", skip_all)]"
+        );
+    }
+
+    #[test]
+    fn rewrite_replaces_a_wrong_name_leaving_other_arguments_alone() {
+        assert_eq!(
+            rewrite_name(
+                "#[tracing::instrument(name = \"stale\", skip(prefix))]",
+                "web.tags.list_tags"
+            )
+            .unwrap(),
+            "#[tracing::instrument(name = \"web.tags.list_tags\", skip(prefix))]"
+        );
+    }
+
+    #[test]
+    fn rewrite_is_a_no_op_when_the_name_is_already_right() {
+        assert_eq!(
+            rewrite_name(
+                "#[tracing::instrument(name = \"web.tags.list_tags\", skip(prefix))]",
+                "web.tags.list_tags"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn rewrite_does_not_mistake_a_field_called_name_for_the_span_name() {
+        // `fields(name = %username)` must not be rewritten into the span name —
+        // that would silently change what the span records.
+        let src = "#[tracing::instrument(skip_all, fields(name = %username))]";
+        assert_eq!(
+            rewrite_name(src, "web.profile.get_profile").unwrap(),
+            "#[tracing::instrument(name = \"web.profile.get_profile\", skip_all, \
+             fields(name = %username))]"
+        );
+    }
+
+    #[test]
+    fn rewrite_spans_a_multi_line_attribute() {
+        let src = "#[tracing::instrument(\n    name = \"stale\",\n    skip(a, b)\n)]";
+        let got = rewrite_name(src, "web.backup.update_backup_settings").unwrap();
+        assert!(got.contains("web.backup.update_backup_settings"), "{got}");
+        assert!(got.contains("skip(a, b)"), "{got}");
+        assert!(!got.contains("stale"), "{got}");
+    }
+
+    #[test]
+    fn name_fixes_targets_the_attribute_lines_and_apply_splices_them() {
+        let src = "#[server(endpoint = \"/list_tags\")]\n\
+                   #[tracing::instrument(skip(prefix))]\n\
+                   pub async fn list_tags(prefix: Option<String>) -> R {}\n";
+        let fixes = name_fixes("web/src/tags/api.rs", src);
+        assert_eq!(fixes.len(), 1);
+        assert_eq!((fixes[0].0, fixes[0].1), (2, 2));
+        let fixed = apply_fixes(src, fixes);
+        assert!(
+            fixed.contains("name = \"web.tags.list_tags\", skip(prefix)"),
+            "{fixed}"
+        );
+        // Untouched lines survive, and so does the trailing newline.
+        assert!(
+            fixed.starts_with("#[server(endpoint = \"/list_tags\")]\n"),
+            "{fixed}"
+        );
+        assert!(fixed.ends_with("-> R {}\n"), "{fixed}");
+    }
+
+    #[test]
+    fn fixing_a_conforming_tree_is_a_no_op() {
+        let src = "#[server]\n#[tracing::instrument(name = \"web.tags.list_tags\")]\npub async fn list_tags() -> R {}\n";
+        assert!(name_fixes("web/src/tags/api.rs", src).is_empty());
+    }
+
+    #[test]
+    fn nothing_is_rewritten_when_there_is_no_instrument_to_edit() {
+        // A missing span stays a *reported* problem: inserting the attribute would
+        // mean guessing the skip list, which is the one judgment the gate refuses
+        // to make for you.
+        let code = "#[server]\npub async fn create_post(args: CreatePostArgs) -> R {}\n";
+        assert!(name_fixes("web/src/posts/api.rs", code).is_empty());
+        assert!(problems(&src("posts", code)).is_some());
+    }
+
+    #[test]
+    fn nothing_is_rewritten_for_a_file_with_no_vertical_directory() {
+        let src = "#[server]\n#[tracing::instrument]\npub async fn x() -> R {}\n";
+        assert!(name_fixes("web/src/loose.rs", src).is_empty());
+    }
+
+    #[test]
+    fn applying_two_fixes_in_one_file_keeps_both_line_ranges_valid() {
+        let src = "#[server]\n#[tracing::instrument]\npub async fn a() -> R {}\n\
+                   #[server]\n#[tracing::instrument]\npub async fn b() -> R {}\n";
+        let fixes = name_fixes("web/src/posts/api.rs", src);
+        assert_eq!(fixes.len(), 2);
+        let fixed = apply_fixes(src, fixes);
+        assert!(fixed.contains("name = \"web.posts.a\""), "{fixed}");
+        assert!(fixed.contains("name = \"web.posts.b\""), "{fixed}");
     }
 
     // --- fail-loud enumeration (AC 12) ---

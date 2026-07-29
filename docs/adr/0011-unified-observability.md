@@ -207,16 +207,23 @@ known to wrap the server-side body), named:
 web.<first path segment under web/src>.<fn ident verbatim>
 ```
 
-The name is a pure function of source location and identifier, so the gate
-checks it by **equality** — nothing is left to judgment.
-`web/src/posts/api/listing.rs` yields `posts`, not `api`. A `#[server]` fn
-directly under `web/src` has no vertical directory and is a hard error rather
-than a guessed name.
+The name is a pure function of source location and identifier, so **the gate
+writes it**: `cargo xtask check` fills the `name = "…"` in (the same fix-mode
+contract `fmt` has) and `cargo xtask validate` verifies it by equality without
+mutating. An author writes `#[tracing::instrument(skip_all)]` and the derived
+name lands in the source, so nothing is left to judgment and an operator reading
+a span name can still grep for the literal. `web/src/posts/api/listing.rs`
+yields `posts`, not `api`. A `#[server]` fn directly under `web/src` has no
+vertical directory and is a hard error rather than a guessed name.
+
+Only the name is written. A missing `#[tracing::instrument]` stays a _reported_
+failure: inserting one would mean guessing the `skip(...)` list, which is the
+one judgment the gate refuses to make on an author's behalf.
 
 Deriving the name rather than writing it has a payoff: the fn idents still carry
 a vertical noun the module path now restates (`audiences::create_audience`), and
-when #684 sheds those nouns every span name improves with no span-name edit and
-no gate change.
+when #684 sheds those nouns, re-running `check` rewrites all 55 span names with
+no hand edit and no gate change.
 
 Spans use `#[tracing::instrument]`'s default **INFO** level, and no site sets an
 explicit `level`. Stated because it means operator configuration reaches trace

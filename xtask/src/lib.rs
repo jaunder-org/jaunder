@@ -297,7 +297,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::adr_check::run(&mut result);
             steps::test_pattern_check::run(&mut result);
             steps::server_fn_registrar_check::run(&mut result);
-            steps::server_fn_tracing_check::run(&mut result);
+            steps::server_fn_tracing_check::run(Mode::Fix, &mut result);
             steps::proffered_secret_check::run(&mut result);
             steps::no_full_reload_check::run(&mut result);
             steps::target_arch_placement_check::run(&mut result);
@@ -331,7 +331,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::adr_check::run(&mut result);
             steps::test_pattern_check::run(&mut result);
             steps::server_fn_registrar_check::run(&mut result);
-            steps::server_fn_tracing_check::run(&mut result);
+            steps::server_fn_tracing_check::run(Mode::Check, &mut result);
             steps::proffered_secret_check::run(&mut result);
             steps::no_full_reload_check::run(&mut result);
             steps::target_arch_placement_check::run(&mut result);
