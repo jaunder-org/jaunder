@@ -387,7 +387,7 @@ Expected: PASS. A decode-type mismatch surfaces here as a column-decode error.
 **Interfaces:** `ALLOWED_FNS` reduces to `["deserialize_rendered_html"]`; the
 recovery message names `RenderedHtml::sanitize`.
 
-- [ ] **Step 1: Write the negative test first.**
+- [x] **Step 1: Write the negative test first.**
 
 In the check's `#[cfg(test)] mod tests`, add
 `an_inbound_shaped_fn_using_from_trusted_is_flagged`:
@@ -403,7 +403,8 @@ assert!(!violations(src).unwrap().is_empty());
 
 This is AC4 — the gate must demonstrably bite on the #282-shaped mistake.
 
-- [ ] **Step 2: Run it, verify it passes already.**
+- [x] **Step 2: Run it, verify it passes already.** (It did — the gate needed no
+      logic change to catch the #282 shape.)
 
 Run:
 `devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml an_inbound_shaped_fn`
@@ -411,7 +412,15 @@ Run:
 Expected: PASS — the gate already flags non-allowlisted callers. The test pins
 that behavior against future regression rather than driving new code.
 
-- [ ] **Step 3: Shrink the allowlist.**
+- [x] **Step 3: Shrink the allowlist.**
+
+**Three of the gate's own tests used `build_post_record` as their allowlisted
+example and had to be repointed at `deserialize_rendered_html`.** The important
+one is `a_nested_fn_shadowing_an_allowed_name_is_still_flagged`: with the name
+no longer allowlisted it would still have _passed_, but vacuously — flagged for
+the ordinary reason rather than proving nesting cannot borrow an exemption. Left
+unrepointed, the suite would have kept a green test that no longer tested
+anything.
 
 Remove `"build_post_record"` — after Task 4 it no longer calls `from_trusted`.
 Keep `"deserialize_rendered_html"`.
@@ -420,7 +429,9 @@ Fix the stale location comment while here: it says `web/src/posts/mod.rs`, but
 `deserialize_rendered_html` lives in `common/src/render.rs` and is used by
 `common/src/seed.rs`.
 
-- [ ] **Step 4: Point the recovery message at the new door.**
+- [x] **Step 4: Point the recovery message at the new door.** (Also rewrote the
+      module header, which described the type as a provenance newtype with
+      `render()` as its only mint.)
 
 The message currently ends "otherwise obtain the `RenderedHtml` from `render()`
 instead." Reword: data from **outside** must go through
@@ -430,21 +441,21 @@ round-tripping.
 Update the assertion in `problems_reports_file_line_and_recovery` if it pins
 wording.
 
-- [ ] **Step 5: Rewrite `from_trusted`'s doc comment.**
+- [x] **Step 5: Rewrite `from_trusted`'s doc comment.**
 
 `common/src/render.rs:99-102` predates any sanitizer. State that it _inherits_
 safety from our own prior `sanitize` output round-tripping through our store or
 wire, and contrast it with `sanitize`, which _establishes_ safety. Note it is
 the sole remaining door and that the gate enforces this.
 
-- [ ] **Step 6: Run the gate against the real tree.**
+- [x] **Step 6: Run the gate against the real tree.**
 
 Run: `devtool run -- cargo xtask check`
 
 Expected: PASS, including `rendered-html-from-trusted`. A failure here means a
 `from_trusted` call survives somewhere Task 4 was meant to remove it.
 
-- [ ] **Step 7: Commit.**
+- [x] **Step 7: Commit.**
 
 `refactor(xtask): reduce the from_trusted allowlist to one door (#445)`.
 

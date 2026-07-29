@@ -1,17 +1,22 @@
-//! The `rendered-html-from-trusted` static check (#398): pins
-//! `RenderedHtml::from_trusted` — the single trusted-rebuild door for the
-//! `common::render::RenderedHtml` provenance newtype — to an allowlist of
-//! production call sites.
+//! The `rendered-html-from-trusted` static check (#398, extended #445): pins
+//! `RenderedHtml::from_trusted` — the *inheriting* door of the
+//! `common::render::RenderedHtml` newtype — to an allowlist of production call
+//! sites.
 //!
-//! `RenderedHtml` marks HTML that came out of `render()` and is emitted
-//! **unescaped** into the DOM (`inner_html`). Its only mint doors are `render()`
-//! (which builds the private tuple directly, so it is module-restricted and needs
-//! no gate) and the `pub` `from_trusted`, which *asserts* a value is prior
-//! `render()` output round-tripped through our own storage or wire. Because
-//! `from_trusted` is `pub` and cross-crate, Rust visibility cannot confine it; a
-//! future call that laundered a genuinely untrusted string into "trusted" HTML
-//! would compile and open an XSS hole. This gate makes that a host-side failure:
-//! every **non-test** `from_trusted` mention must sit in an allowlisted function.
+//! `RenderedHtml` marks HTML that is safe to emit **unescaped** into the DOM
+//! (`inner_html`). Two doors carry that invariant, and they mean different things:
+//! `sanitize` **establishes** it by scrubbing against an allowlist (the door for
+//! anything from outside jaunder — a rendered post body via `render()`, an ingested
+//! feed entry, any future inbound producer), while `from_trusted` merely
+//! **inherits** it, asserting a value we already sanitized has round-tripped through
+//! our own storage or wire.
+//!
+//! Because `from_trusted` is `pub` and cross-crate, Rust visibility cannot confine
+//! it: a future inbound path could launder a stranger's HTML into "trusted" and
+//! compile clean, reopening the #445 stored-XSS hole. This gate makes that a
+//! host-side failure — every **non-test** `from_trusted` mention must sit in an
+//! allowlisted function, so choosing the wrong door breaks the build instead of
+//! silently shipping. (`sanitize` needs no gate: it is safe wherever it is called.)
 //!
 //! Test/fixture code (anything under a `#[cfg(test)]` module/fn, or a `#[test]`/
 //! `#[rstest]` fn) is exempt — fixtures legitimately mint `RenderedHtml` to stand
@@ -69,11 +74,13 @@ const EXEMPT_QUALIFIERS: &[&str] = &["ContentType"];
 /// trusted round-trip doors. A new site must be added here (visible in review,
 /// with justification) or the gate fails.
 const ALLOWED_FNS: &[&str] = &[
-    // Rebuilds `RenderedHtml` from the `rendered_html` DB column, which is only
-    // ever written from `render()` output. `storage/src/helpers.rs`.
-    "build_post_record",
-    // Rebuilds `RenderedHtml` from a wire DTO field our own server serialized.
-    // `web/src/posts/mod.rs`.
+    // Rebuilds `RenderedHtml` from a wire DTO field our own server serialized and
+    // embedded in the page the client is already executing — inherited trust, and
+    // the one production door left. `common/src/render.rs`, used by the seed DTOs
+    // in `common/src/seed.rs`.
+    //
+    // `build_post_record` was here until #445: the `rendered_html` column now has
+    // its own `sqlx::Decode`, so the DB read no longer rebuilds through this door.
     "deserialize_rendered_html",
 ];
 
@@ -178,8 +185,8 @@ impl<'ast> syn::visit::Visit<'ast> for Scanner {
         if self.test_depth == 0 && is_door(&i.path) {
             // Allowlisted only when the door is the WHOLE enclosing path — a
             // top-level fn with the allowed name — so a *nested* fn shadowing
-            // `build_post_record`/`deserialize_rendered_html` cannot borrow its
-            // exemption (`fn_stack.len() == 1`).
+            // `deserialize_rendered_html` cannot borrow its exemption
+            // (`fn_stack.len() == 1`).
             let allowed =
                 self.fn_stack.len() == 1 && ALLOWED_FNS.contains(&self.fn_stack[0].as_str());
             if !allowed {
@@ -221,10 +228,13 @@ pub fn problems(scanned: &[(String, String)]) -> Option<String> {
     }
     lines.sort();
     lines.push(format!(
-        "  recovery: `from_trusted` may only reconstruct a value already produced by `render()` \
-         (a DB or wire round-trip). If this is a genuine round-trip door, add its fn to \
-         ALLOWED_FNS in xtask/src/steps/rendered_html_from_trusted_check.rs ({}); otherwise obtain \
-         the `RenderedHtml` from `render()` instead.",
+        "  recovery: `from_trusted` only *inherits* safety — it may reconstruct a value we \
+         already sanitized and round-tripped through our own store or wire. If the HTML comes \
+         from OUTSIDE jaunder (an ingested feed entry, a remote channel, any inbound producer), \
+         it must go through `RenderedHtml::sanitize`, which *establishes* safety by scrubbing; \
+         for a rendered post body that means `render()`. Only if this is a genuine round-trip \
+         door, add its fn to ALLOWED_FNS in \
+         xtask/src/steps/rendered_html_from_trusted_check.rs ({}).",
         ALLOWED_FNS.join(", ")
     ));
     Some(lines.join("\n"))
@@ -282,8 +292,8 @@ mod tests {
     #[test]
     fn allowlisted_fn_is_clean() {
         let src = "\
-fn build_post_record(rendered_html: String) -> RenderedHtml {
-    RenderedHtml::from_trusted(rendered_html)
+fn deserialize_rendered_html(wire: String) -> RenderedHtml {
+    RenderedHtml::from_trusted(wire)
 }
 ";
         assert!(violations(src).unwrap().is_empty());
@@ -309,6 +319,24 @@ fn sneaky(raw: String) -> RenderedHtml {
 }
 ";
         assert_eq!(violations(src).unwrap(), vec![(2, "sneaky".to_string())]);
+    }
+
+    #[test]
+    fn an_inbound_shaped_fn_using_from_trusted_is_flagged() {
+        // The #445 shape this guard exists to stop: a future inbound producer
+        // (feed ingestion, #282) reaching for the *inheriting* door on HTML that
+        // came from a stranger's server. `RenderedHtml::sanitize` is the only
+        // correct door for outside data, and this is what makes choosing wrong a
+        // build failure rather than a silent stored-XSS hole.
+        let src = "\
+fn ingest_feed_entry(remote_html: String) -> RenderedHtml {
+    RenderedHtml::from_trusted(remote_html)
+}
+";
+        assert_eq!(
+            violations(src).unwrap(),
+            vec![(2, "ingest_feed_entry".to_string())]
+        );
     }
 
     #[test]
@@ -370,19 +398,20 @@ mod tests {
 
     #[test]
     fn a_nested_fn_shadowing_an_allowed_name_is_still_flagged() {
-        // A nested `build_post_record` inside a non-allowlisted fn must not borrow
-        // the top-level allowlist entry's exemption.
+        // A nested fn shadowing an ALLOWED_FNS name must not borrow the top-level
+        // entry's exemption. Must use a name that IS allowlisted, or the test passes
+        // vacuously — it would be flagged for the ordinary reason.
         let src = "\
 fn outer(raw: String) -> RenderedHtml {
-    fn build_post_record(raw: String) -> RenderedHtml {
+    fn deserialize_rendered_html(raw: String) -> RenderedHtml {
         RenderedHtml::from_trusted(raw)
     }
-    build_post_record(raw)
+    deserialize_rendered_html(raw)
 }
 ";
         assert_eq!(
             violations(src).unwrap(),
-            vec![(3, "build_post_record".to_string())]
+            vec![(3, "deserialize_rendered_html".to_string())]
         );
     }
 
@@ -455,8 +484,8 @@ impl RenderedHtml {
     fn problems_is_none_for_allowlisted_and_test_sites() {
         let scanned = vec![
             (
-                "storage/src/helpers.rs".to_string(),
-                "fn build_post_record(s: String) -> RenderedHtml { RenderedHtml::from_trusted(s) }\n"
+                "common/src/render.rs".to_string(),
+                "fn deserialize_rendered_html(s: String) -> RenderedHtml { RenderedHtml::from_trusted(s) }\n"
                     .to_string(),
             ),
             (

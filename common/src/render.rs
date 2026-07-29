@@ -157,10 +157,18 @@ impl RenderedHtml {
         Self(SANITIZER.clean(raw).to_string())
     }
 
-    /// Rebuild a `RenderedHtml` from a string the caller asserts is prior
-    /// [`render`] output round-tripped through our own store or wire. This is the
-    /// single trusted-rebuild door; grep it to enumerate every rebuild site. Takes
-    /// `impl Into<String>` so callers (esp. fixtures) don't need `.to_string()`.
+    /// Rebuild a `RenderedHtml` we already sanitized, round-tripped through our own
+    /// store or wire. This door **inherits** the invariant rather than establishing
+    /// it — it asserts, it does not check — so it is only correct where the value's
+    /// safety was established earlier by [`RenderedHtml::sanitize`].
+    ///
+    /// **Not for anything from outside jaunder.** Ingested feed content, remote
+    /// channel data, or any future inbound producer must use `sanitize`; reaching
+    /// for this door instead is what the `rendered-html-from-trusted` static check
+    /// fails the build over. Its allowlist is down to a single production call site
+    /// (the seed-DTO wire rebuild), so `grep` still enumerates every rebuild.
+    ///
+    /// Takes `impl Into<String>` so callers (esp. fixtures) don't need `.to_string()`.
     #[must_use]
     pub fn from_trusted(html: impl Into<String>) -> Self {
         Self(html.into())
