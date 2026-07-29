@@ -820,7 +820,7 @@ dependency.
 - Consumes: `web` no longer depends on `macros` (Task 4, Step 5).
 - Produces: nothing. `macros` retains only the three newtype derives.
 
-- [ ] **Step 1: Confirm there are no tenants left**
+- [x] **Step 1: Confirm there are no tenants left**
 
 Run: `rg -n 'client_only' --glob '!docs/**' .` Expected: only
 `macros/src/lib.rs`, `macros/tests/identity.rs`,
@@ -828,7 +828,7 @@ Run: `rg -n 'client_only' --glob '!docs/**' .` Expected: only
 `client/src/lib.rs:11` — all prose or xtask recognition, removed in Task 6. **No
 live attribute use.**
 
-- [ ] **Step 2: Delete the macro and its test**
+- [x] **Step 2: Delete the macro and its test**
 
 Remove `macros/src/lib.rs:12-23` (the doc comment and the `client_only` fn).
 Keep `use proc_macro::TokenStream;` — the three derives still take it.
@@ -837,12 +837,12 @@ Keep `use proc_macro::TokenStream;` — the three derives still take it.
 git rm macros/tests/identity.rs
 ```
 
-- [ ] **Step 3: Verify the crate still builds and its tests pass**
+- [x] **Step 3: Verify the crate still builds and its tests pass**
 
 Run: `cargo nextest run -p macros` Expected: PASS — the ~40 derive tests in
 `macros/src/lib.rs:276-688`, unaffected.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add macros/
