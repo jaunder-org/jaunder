@@ -142,7 +142,7 @@ Run: `devtool run -- cargo xtask check`. Commit:
 `#[cfg(feature = "sanitize")] pub fn RenderedHtml::sanitize(raw: &str) -> Self`
 — the only public door that mints from outside data. Field stays private.
 
-- [ ] **Step 1: Write the tests first.**
+- [x] **Step 1: Write the tests first.**
 
 In `common/src/render.rs`'s `#[cfg(test)] mod tests`, gated
 `#[cfg(feature = "sanitize")]`, add:
@@ -162,13 +162,15 @@ Assert on absence of the dangerous token (`contains("<script")`,
 `contains("onerror")`, `contains("javascript:")`), not on exact output —
 ammonia's escaping details are not our contract.
 
-- [ ] **Step 2: Run the tests, verify they fail.**
+- [x] **Step 2: Run the tests, verify they fail.**
 
 Run: `devtool run -- cargo nextest run -p common sanitize_`
 
-Expected: FAIL — `RenderedHtml::sanitize` is not defined.
+Expected: FAIL — `RenderedHtml::sanitize` is not defined. (Confirmed: 5× E0599.
+Note the run needs `--features sanitize`, since the tests and the door are both
+gated on it.)
 
-- [ ] **Step 3: Implement the door.**
+- [x] **Step 3: Implement the door.**
 
 ```rust
 /// Sanitize untrusted HTML into a `RenderedHtml`. This is the door for anything
@@ -188,7 +190,22 @@ Step 4 shows it stripping legitimate renderer output, switch to an
 `ammonia::Builder` configured once as a module-level constant — one allowlist,
 defined in one place.
 
-- [ ] **Step 4: Run the tests, verify they pass.**
+- [x] **Step 4: Run the tests, verify they pass.**
+
+**Allowlist finding — one deliberate widening, via a `Builder`.**
+`ammonia::clean`'s default preserves everything our renderers emit (headings,
+`em`/`strong`, lists, `pre`/`code`, tables incl. `thead`/`th`/`td`, blockquotes,
+safe `a`/`img`). The one thing it drops is `class` on `<code>`, which loses
+`pulldown-cmark`'s `language-rust` fence marker — so the default is **not**
+sufficient after all, and a `SANITIZER` `Builder` (a module-level `LazyLock`,
+one policy shared by every caller) re-admits it.
+
+Re-admitting `class` via the tag/attribute allowlist alone would permit _any_
+class on attacker-supplied content, letting a post borrow the app's own CSS to
+mimic or hide UI. So an `attribute_filter` narrows the surviving values to
+`language-*` tokens on `pre`/`code` only. Both halves are pinned by tests: the
+language marker survives, `j-anon-only` alongside it does not, and `class` on a
+`<p>` is still dropped entirely.
 
 Run: `devtool run -- cargo nextest run -p common sanitize_`
 
@@ -196,7 +213,7 @@ Expected: PASS. If `sanitize_preserves_formatting_markup` fails, the default
 allowlist is too tight for our renderers — widen via `Builder` and record what
 was added and why in a comment.
 
-- [ ] **Step 5: Gate and commit.**
+- [x] **Step 5: Gate and commit.**
 
 `devtool run -- cargo xtask check`, then commit:
 `feat(common): add RenderedHtml::sanitize, the establishing door (#445)`.

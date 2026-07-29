@@ -95,7 +95,58 @@ crate::db_enum::impl_text_column_enum!(PostFormat);
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RenderedHtml(String);
 
+/// The single allowlist every [`RenderedHtml::sanitize`] call scrubs against —
+/// defined once here so no caller can drift to a different policy.
+///
+/// ammonia's audited default, widened in exactly one place: `class` on `<pre>` and
+/// `<code>`, so a fenced code block keeps the language marker `pulldown-cmark`
+/// emits (`class="language-rust"`). Because the tag/attribute allowlist alone would
+/// permit *any* class on attacker-supplied content — letting a post borrow our app's
+/// CSS to mimic or hide UI — an attribute filter narrows the values to `language-*`
+/// tokens and drops everything else. Widening this list is a security decision;
+/// `sanitize_*` tests pin both halves.
+#[cfg(feature = "sanitize")]
+static SANITIZER: std::sync::LazyLock<ammonia::Builder<'static>> = std::sync::LazyLock::new(|| {
+    let mut builder = ammonia::Builder::default();
+    builder.add_tag_attributes("code", ["class"]);
+    builder.add_tag_attributes("pre", ["class"]);
+    builder.attribute_filter(|_element, attribute, value| {
+        if attribute != "class" {
+            return Some(value.into());
+        }
+        // Only reachable for `pre`/`code`: ammonia runs this filter solely for
+        // (tag, attribute) pairs the allowlist above already permits, and `class`
+        // is permitted nowhere else — a `class` on any other element is dropped
+        // before it gets here.
+        let kept = value
+            .split_whitespace()
+            .filter(|token| token.starts_with("language-"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        (!kept.is_empty()).then_some(kept.into())
+    });
+    builder
+});
+
 impl RenderedHtml {
+    /// Sanitize untrusted HTML into a `RenderedHtml` — the door for anything
+    /// originating **outside** jaunder: an authored post body's rendered output, an
+    /// ingested feed entry (#282), any future inbound producer.
+    ///
+    /// This door *establishes* the type's invariant ("contains no active markup")
+    /// by scrubbing against an allowlist, which is what distinguishes it from
+    /// [`RenderedHtml::from_trusted`] — that one only *inherits* an invariant
+    /// something else already established. Outside data must come through here.
+    ///
+    /// Host-only: gated on the `sanitize` feature, which is never enabled for wasm.
+    /// With the feature off this door does not exist, so there is no build in which
+    /// it silently degrades to a passthrough.
+    #[cfg(feature = "sanitize")]
+    #[must_use]
+    pub fn sanitize(raw: &str) -> Self {
+        Self(SANITIZER.clean(raw).to_string())
+    }
+
     /// Rebuild a `RenderedHtml` from a string the caller asserts is prior
     /// [`render`] output round-tripped through our own store or wire. This is the
     /// single trusted-rebuild door; grep it to enumerate every rebuild site. Takes
@@ -485,6 +536,104 @@ mod tests {
         assert!(h == *"<p>x</p>"); // PartialEq<str>
         assert!(h != "<p>y</p>"); // PartialEq<&str>, unequal
         assert!(h != *"<p>y</p>"); // PartialEq<str>, unequal
+    }
+
+    // `sanitize` is the establishing door (#445): it is what makes the type's
+    // invariant — "contains no active markup" — true rather than asserted. These
+    // assert on the *absence* of the dangerous token rather than exact output,
+    // because ammonia's escaping details are not our contract.
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn sanitize_strips_script_element() {
+        let h = RenderedHtml::sanitize("<p>hi</p><script>alert(1)</script>");
+        assert!(!h.contains("<script"), "{h}");
+        assert!(!h.contains("alert(1)"), "{h}");
+        assert!(h.contains("<p>hi</p>"), "{h}");
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn sanitize_strips_event_handler_attributes() {
+        let h = RenderedHtml::sanitize(r#"<img src="x" onerror="alert(1)">"#);
+        assert!(!h.contains("onerror"), "{h}");
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn sanitize_strips_javascript_urls() {
+        let h = RenderedHtml::sanitize(r#"<a href="javascript:alert(1)">x</a>"#);
+        assert!(!h.contains("javascript:"), "{h}");
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn sanitize_preserves_formatting_markup() {
+        // The shapes `pulldown-cmark` and `orgize` actually emit. If the default
+        // allowlist eats any of these, posts render degraded — widen deliberately
+        // rather than letting it pass.
+        let h = RenderedHtml::sanitize(
+            "<h2>Heading</h2><p><em>em</em> <strong>strong</strong></p>\
+             <ul><li>item</li></ul>\
+             <pre><code class=\"language-rust\">let x = 1;</code></pre>\
+             <table><thead><tr><th>h</th></tr></thead>\
+             <tbody><tr><td>c</td></tr></tbody></table>\
+             <blockquote><p>quoted</p></blockquote>",
+        );
+        for expected in [
+            "<h2>",
+            "<em>",
+            "<strong>",
+            "<ul>",
+            "<li>",
+            "<pre>",
+            "<code",
+            "<table>",
+            "<thead>",
+            "<th>",
+            "<td>",
+            "<blockquote>",
+        ] {
+            assert!(h.contains(expected), "{expected} was stripped from: {h}");
+        }
+        // `pulldown-cmark` puts the fence's language in `class="language-rust"` on
+        // the `<code>`; ammonia's default drops `class` entirely, so `SANITIZER`
+        // re-admits it for `pre`/`code`.
+        assert!(h.contains("language-rust"), "code-block language lost: {h}");
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn sanitize_keeps_only_language_classes_on_code() {
+        // Re-admitting `class` must not become arbitrary class injection: a post
+        // could otherwise borrow the app's own CSS to mimic or hide UI. Only
+        // `language-*` tokens survive, and only on `pre`/`code`.
+        let h = RenderedHtml::sanitize(
+            r#"<pre><code class="language-rust j-anon-only">x</code></pre>"#,
+        );
+        assert!(h.contains("language-rust"), "{h}");
+        assert!(
+            !h.contains("j-anon-only"),
+            "non-language class survived: {h}"
+        );
+
+        // …and `class` stays disallowed everywhere else — dropped by the tag
+        // allowlist before the attribute filter is consulted at all.
+        let other = RenderedHtml::sanitize(r#"<p class="j-anon-only">x</p>"#);
+        assert!(
+            !other.contains("j-anon-only"),
+            "class survived on <p>: {other}"
+        );
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn sanitize_preserves_safe_links_and_images() {
+        let h = RenderedHtml::sanitize(
+            r#"<a href="https://example.com">link</a><img src="https://example.com/a.png">"#,
+        );
+        assert!(h.contains("https://example.com"), "{h}");
+        assert!(h.contains("<a "), "{h}");
+        assert!(h.contains("<img"), "{h}");
     }
 
     #[test]
