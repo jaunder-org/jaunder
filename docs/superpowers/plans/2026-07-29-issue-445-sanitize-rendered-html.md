@@ -503,7 +503,8 @@ the sanitizing `render()`.
 **Files:** `docs/adr/drafts/rendered-html-sanitization.md` (numberless —
 `cargo xtask adr promote` numbers it at ship)
 
-- [ ] **Step 1: Write the draft.**
+- [x] **Step 1: Write the draft.** At
+      `docs/adr/drafts/rendered-html-sanitization.md`, `Status: accepted`.
 
 Follow `docs/adr/template.md`. Record:
 
@@ -522,22 +523,32 @@ Follow `docs/adr/template.md`. Record:
   guarantee it exists to provide); moving `render()` to `host`/`storage`;
   sanitize-on-read.
 
-- [ ] **Step 2: Format and commit.**
+- [x] **Step 2: Format and commit.** — **correction: there is nothing to
+      commit.**
 
-Run `prettier -w` on the draft (the pre-commit hook will otherwise restage it).
-`devtool run -- cargo xtask check`, then commit:
-`docs(adr): draft the rendered-HTML sanitization decision (#445)`.
+`docs/adr/drafts/` is gitignored by design (ADR-0048/#219): a draft stays
+numberless and out of git so its first appearance in history is already
+collision-free. `cargo xtask adr promote` assigns the number, moves the file,
+and stages it during **ship**, after the final rebase — so the ADR lands in the
+ship commit, not here. Prettier was still run on the draft so promotion yields a
+gate-clean file.
 
 ---
 
 ### Task 8: Final verification
 
-- [ ] **Step 1: Re-verify the wasm graph.**
+- [x] **Step 1: Re-verify the wasm graph.** (Still 0 matches — AC7.)
 
 Run: `devtool run -- cargo tree -p csr --target wasm32-unknown-unknown`; grep
 for `ammonia`. Expected: no match (AC7).
 
-- [ ] **Step 2: Confirm one production `from_trusted` door remains.**
+- [x] **Step 2: Confirm one production `from_trusted` door remains.**
+
+Confirmed: every remaining `RenderedHtml::from_trusted` call is a `#[cfg(test)]`
+fixture except `deserialize_rendered_html`. (`ContentType::from_trusted` is a
+separate, gate-exempt door.) The sweep also turned up a **fifth** stale comment
+the plan hadn't listed — `PostRow`'s doc still described the write-only bridge
+and the `from_trusted` rebuild that Task 4 removed. Fixed.
 
 Grep `from_trusted` across `common/src`, `storage/src`, `server/src`, `web/src`,
 excluding `#[cfg(test)]` sites. Expected: only `deserialize_rendered_html` (AC5,

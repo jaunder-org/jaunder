@@ -246,10 +246,10 @@ pub(crate) fn invite_record_from_row(row: InviteRow) -> InviteRecord {
 /// all 21 `query_as::<_, PostRow>` sites without any column aliasing. The `username`/
 /// `title`/`slug`/`body`/`format` columns decode straight into their domain types via
 /// the sqlx bridge (the newtypes via #438, `format` via its text-enum bridge #572).
-/// `rendered_html` (`RenderedHtml`) has a deliberately *write-only* bridge (#502:
-/// `Type`/`Encode`, no `Decode` — a `Decode` would bless any text column as trusted
-/// HTML), so its column decodes as a `String` here and is rebuilt via the gated
-/// `from_trusted` in [`build_post_record`]; `tags` is the JSON aggregate parsed there.
+/// `rendered_html` (`RenderedHtml`) decodes the same way since #445 — its bridge was
+/// write-only (#502: `Type`/`Encode`, no `Decode`) until sanitization moved onto the
+/// type, so it no longer needs the `from_trusted` rebuild it used to get in
+/// [`build_post_record`]. `tags` is the JSON aggregate parsed there.
 #[derive(sqlx::FromRow)]
 pub(crate) struct PostRow {
     post_id: i64,
