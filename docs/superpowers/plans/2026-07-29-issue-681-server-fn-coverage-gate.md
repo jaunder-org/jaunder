@@ -1436,6 +1436,64 @@ git commit -m "docs: record the server-fn flow-coverage gate and its workflow (#
 
 ---
 
+## Review findings and fixes (post-implementation)
+
+A two-axis review (Standards + Spec) ran on the finished branch. It surfaced
+real defects that the implementation and this plan had both missed.
+
+### AC5 was only half-satisfied — orphans are now self-diagnosing
+
+The Spec reviewer's inference was wrong in one respect and right in another.
+
+**Wrong:** it argued the 111-per-fn orphans must be _in-test_ traffic the walk
+failed to attribute, reasoning "global setup runs once, so ~1 orphan per test is
+in-test." Walking the raw capture disproves that — every one of those spans is
+parented to `1111111111111111`, the run-wide traceparent, and
+`warmupPageContext` runs **once per test**. So 111 is exactly what per-test
+warmup predicts, and the walk is not broken.
+
+**Right, and it mattered:** AC5 sanctions only "traffic occurring outside any
+test **(global setup/seeding)**" — and per-test warmup is neither. More
+importantly, `attribute()` returned `None` identically for "legitimately outside
+a test" and "chain broken / depth exceeded", and
+`orphans: BTreeMap<String, usize>` recorded a bare count. So a genuine
+attribution break would have been **invisible**, hiding among hundreds of
+look-alike hits — the exact failure this gate exists to catch, reproduced inside
+the gate's own reporting.
+
+Fixed by making an orphan say _why_: `attribute` returns
+`Result<String, OrphanReason>` with `UnknownParent(span_id)` / `NoParent` /
+`DepthExceeded`, and `orphans` is now `fn ident → reason → count`. The committed
+snapshot reads:
+
+```json
+"session": { "unknown-parent:1111111111111111": 111 }
+```
+
+which names its own cause. Warmup is now positively classified rather than
+inferred from a failure, "each entry enumerated" is satisfied, and a real break
+shows a different reason key or an unfamiliar parent id. That all four fns carry
+a **single, identical** reason is itself the evidence warmup is the sole source
+— a scattergun of broken chains would show mixed reasons and varied ids.
+
+### Other findings
+
+Standards (10) and Spec (3 partials) — the shared directory walker duplicated
+three times, a dead `BTreeSet` built only for `.is_empty()`, repeated step-name
+literals, `render()` failing **open** by emitting an empty snapshot in a
+fail-closed gate, `traced_context_check` silently skipping an unreadable spec,
+`nix.rs` still hiding copy failures, `applyTestTraceparent` exported with no
+consumer (inviting the bypass the gate forbids) and taking transposable hex
+strings, AC2's seed test never calling `extract`, AC11's reduction script
+missing from the repo, and AC16 guarded only by prose.
+
+The best catch was a hole next door to the one Task 8b closed: **nothing gated
+`import { test } from "@playwright/test"`.** A spec importing the raw `test`
+emits no `e2e.test` span at all, so everything it drives is unattributable — the
+same silent under-reporting, by a different route.
+
+---
+
 ## Self-review
 
 **Spec coverage.** AC1→T1 · AC2→T6+T9 Step 3 · AC3→T2 · AC4→T7 · AC5→T6+T9 ·

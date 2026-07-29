@@ -38,10 +38,10 @@ already exports OTLP traces (`capture/otel-traces.jsonl`, #332) and
 ### D2 — The derived span name is the primary signal; `uri` covers what is not yet instrumented
 
 **The span name is the better identity and is the primary signal**, because once
-derived it _is_ the fn ident — no URL parsing, no `/api/` prefix assumption, no
-endpoint indirection, and immune to any future path change. What made it
-unusable was never the signal; it was that the names are currently retyped by
-hand:
+derived it is mechanically tied to the fn ident — no URL parsing, no `/api/`
+prefix assumption, no endpoint indirection, and immune to any future path
+change. What made it unusable was never the signal; it was that the names are
+currently retyped by hand:
 
 | span name                    | actual fn                |
 | ---------------------------- | ------------------------ |
@@ -62,10 +62,34 @@ verified that nothing reads the old names: no reference in
 archived plan documents. Deriving is what makes the primary signal correct _by
 construction_ rather than by a convention a gate has to police.
 
-To identify a span as a server fn, both must hold: the span's name is in the
-syn-derived inventory, **and** its module matches that fn's declared module.
-That module check is what stops a same-named non-`#[server]` fn elsewhere in
-`web` from registering as a hit.
+> **Correction, found during implementation.** "The derived name _is_ the fn
+> ident" is **false**, and this spec asserted it in several places. `#[server]`
+> relocates the annotated body — carrying its `#[tracing::instrument]` — into a
+> generated fn named `__server_<ident>` (`server_fn_macro`'s `to_dummy_ident`),
+> so the emitted span is `__server_login`, not `login`. Measured against a real
+> 21,372-span capture: **zero** span names equal an inventory ident; exactly
+> **eleven** are `__server_<ident>`.
+>
+> The consequence was worse than a wrong sentence. The extractor compared the
+> bare ident, so the primary signal matched **nothing** — and it failed
+> _silently_, because `uri` went on carrying every hit and the totals still
+> looked plausible. The union was a union of one, and the resilience this
+> decision is built on (the span-name signal surviving #698 dropping explicit
+> endpoints) was not actually attached. Worse, the hand-authored test fixture
+> fabricated bare-ident spans, so the signal's unit tests pinned a shape that
+> never occurs.
+>
+> Fixed by requiring the `__server_` prefix — required rather than merely
+> tolerated, since the bare form occurs nowhere, so a match can only have come
+> from a server fn's generated body. `code.namespace` needed no change: it holds
+> the plain declaring module (`web::auth::api` for `session`), verified across
+> all eleven. AC2's test now measures each signal **in isolation** so neither
+> can go dead unnoticed again.
+
+To identify a span as a server fn, both must hold: the span's name is
+`__server_<ident>` for an ident in the syn-derived inventory, **and** its module
+matches that fn's declared module. That module check is what stops a same-named
+non-`#[server]` fn elsewhere in `web` from registering as a hit.
 
 **The module attribute is `code.namespace`, not `target`.**
 `tracing-opentelemetry` attaches the module path to a _span_ as `code.namespace`
@@ -233,10 +257,14 @@ and documented in the failure message either way.
    but whose `target` is a different module is **not** counted.
 3. **AC3 — span names are derived, and cannot regress.** The eleven
    `#[tracing::instrument(name = "…")]` arguments in `web/src` are removed so
-   the span name is the fn ident. A check fails if any `#[server]` fn in
+   the span name is derived from the fn — which, per the correction under D2, is
+   `__server_<ident>` rather than the bare ident, because `#[server]` relocates
+   the body into a generated fn. A check fails if any `#[server]` fn in
    `web/src` carries an explicit `name =` on its instrument attribute, so the
    second source of truth cannot be reintroduced. Existing behaviour is
-   otherwise untouched: no `skip(...)` argument is altered.
+   otherwise untouched: no `skip(...)` argument is altered. (Twelve arguments
+   were in fact removed: the twelfth, `web.auth.require_auth`, sits on a fn that
+   is not a `#[server]` fn — noted under D2.)
 4. **AC4 — inventory drift fails loudly.** A server fn whose `endpoint` does not
    match its fn name fails the gate with a message naming it. A **bare
    `#[server]`** with no `endpoint` (which the shared enumerator accepts,
