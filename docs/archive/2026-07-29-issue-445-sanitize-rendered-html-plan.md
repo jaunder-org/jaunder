@@ -500,11 +500,11 @@ the sanitizing `render()`.
 
 ### Task 7: Draft the ADR
 
-**Files:** `docs/adr/drafts/rendered-html-sanitization.md` (numberless —
+**Files:** `docs/adr/0079-rendered-html-sanitization.md` (numberless —
 `cargo xtask adr promote` numbers it at ship)
 
 - [x] **Step 1: Write the draft.** At
-      `docs/adr/drafts/rendered-html-sanitization.md`, `Status: accepted`.
+      `docs/adr/0079-rendered-html-sanitization.md`, `Status: accepted`.
 
 Follow `docs/adr/template.md`. Record:
 
@@ -584,7 +584,7 @@ an append-list entry): `ammonia` appears exactly once in each of the workspace,
 | AC6  | ✅      | `sanitize_preserves_formatting_markup`, `sanitize_keeps_only_language_classes_on_code`, `sanitize_preserves_safe_links_and_images` |
 | AC7  | ✅      | `cargo tree -p csr --target wasm32-unknown-unknown` — 0 matches for `ammonia\|html5ever`, **re-run after the rebase**              |
 | AC8  | ✅      | `from_trusted` doc, the `Decode` rationale, and both `posts.rs` field docs now state the guarantee                                 |
-| AC9  | ✅      | `docs/adr/drafts/rendered-html-sanitization.md` (numberless, gitignored)                                                           |
+| AC9  | ✅      | `docs/adr/0079-rendered-html-sanitization.md` (numberless, gitignored)                                                           |
 | AC10 | ✅      | see Step 3                                                                                                                         |
 
 **AC1 naming note:** the third test is `render_html_strips_embedded_script`, not
