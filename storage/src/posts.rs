@@ -818,8 +818,8 @@ where
     PostRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     (i64,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (bool,): for<'r> sqlx::FromRow<'r, DB::Row>,
-    (i64, i64, Tag, TagLabel): for<'r> sqlx::FromRow<'r, DB::Row>,
-    (i64, Tag): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (PostId, TagId, Tag, TagLabel): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (TagId, Tag): for<'r> sqlx::FromRow<'r, DB::Row>,
     (String, Option<i64>): for<'r> sqlx::FromRow<'r, DB::Row>,
     (DateTime<Utc>,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (String, DateTime<Utc>): for<'r> sqlx::FromRow<'r, DB::Row>,
@@ -1314,13 +1314,17 @@ where
         DB::untag_post(&self.pool, post_id, tag_slug).await
     }
 
+    /// The row tuple's first two positions are `post_id` and `tag_id` — adjacent
+    /// ids of the same width. Typing them as `PostId`/`TagId` rather than `i64`
+    /// is what stops a swapped destructuring from compiling (ADR-0063 §2); the
+    /// SELECT's column order is the only thing that pairs them otherwise.
     #[tracing::instrument(
         name = "storage.posts.get_tags_for_post",
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn get_tags_for_post(&self, post_id: PostId) -> sqlx::Result<Vec<PostTag>> {
-        let rows = sqlx::query_as::<_, (i64, i64, Tag, TagLabel)>(
+        let rows = sqlx::query_as::<_, (PostId, TagId, Tag, TagLabel)>(
             "SELECT pt.post_id, pt.tag_id, t.tag_slug, pt.tag_display
              FROM post_tags pt
              JOIN tags t ON pt.tag_id = t.tag_id
@@ -1337,8 +1341,8 @@ where
         Ok(rows
             .into_iter()
             .map(|(post_id, tag_id, tag_slug, tag_display)| PostTag {
-                post_id: PostId::from(post_id),
-                tag_id: TagId::from(tag_id),
+                post_id,
+                tag_id,
                 tag_slug,
                 tag_display,
             })
@@ -1553,7 +1557,7 @@ where
 
         let rows = match pattern {
             Some(ref like) => {
-                sqlx::query_as::<_, (i64, Tag)>(
+                sqlx::query_as::<_, (TagId, Tag)>(
                     "SELECT tag_id, tag_slug FROM tags
                      WHERE tag_slug LIKE $1
                      ORDER BY tag_slug
@@ -1565,7 +1569,7 @@ where
                 .await?
             }
             None => {
-                sqlx::query_as::<_, (i64, Tag)>(
+                sqlx::query_as::<_, (TagId, Tag)>(
                     "SELECT tag_id, tag_slug FROM tags
                      ORDER BY tag_slug
                      LIMIT $1",
@@ -1580,10 +1584,7 @@ where
         // malformed stored value is rejected as a column-decode error above.
         Ok(rows
             .into_iter()
-            .map(|(tag_id, tag_slug)| TagRecord {
-                tag_id: TagId::from(tag_id),
-                tag_slug,
-            })
+            .map(|(tag_id, tag_slug)| TagRecord { tag_id, tag_slug })
             .collect())
     }
 

@@ -213,16 +213,19 @@ the serde bridge already enforces (spec §1).
       declared `inner` type rather than a hardcoded `i64` (RED)
 - [x] Emit the bridge via a new `sqlx_impls(name, inner)`; update the module doc
       comment (GREEN)
-- [ ] Verify the existing `ByteSize` decode-rejection tests still pass
-      **unchanged** — `storage/src/media.rs:453`
-      (`find_by_hash_surfaces_a_column_decode_error_for_a_negative_size`) and
-      `:484`
-      (`get_user_upload_usage_surfaces_a_decode_error_for_a_negative_sum`). They
-      are the behavioural contract for this task.
-- [ ] `cargo xtask check` → green; commit
+- [x] Verify the existing `ByteSize` decode-rejection tests still pass —
+      `find_by_hash_surfaces_a_column_decode_error_for_a_negative_size` passes
+      **unchanged**. The `get_user_upload_usage` twin needed its _assertion_
+      updated, in task 5: moving the bound from a hand `ByteSize::try_from` on
+      the returned `i64` to the column's `Decode` changes the error from
+      `sqlx::Error::Decode` to `sqlx::Error::ColumnDecode`. The contract this
+      task cares about — an out-of-range column is rejected, not silently
+      accepted — holds, and the two `ByteSize` sites now agree on one variant
+      instead of two. Renamed to `…_surfaces_a_column_decode_error_for_a_…`.
+- [x] `cargo xtask check` → green; commit
 
 **Done when:** `ByteSize` decodes through the bridge and out-of-range columns
-still error.
+still error. ✅
 
 ## Task 4 — Type `PostRow` and `build_session_record`
 
@@ -254,27 +257,47 @@ the five aliases — work the spec's two residue tables as the checklist, and
 split this into two commits (aliases, then inline tuples) to keep the diff
 reviewable.
 
-- [ ] `UserRecordParts:0` (`:31`) → `UserId`; delete `UserId::from(user_id)` in
+- [x] `UserRecordParts:0` (`:31`) → `UserId`; delete `UserId::from(user_id)` in
       `build_user_record` (`:61`)
-- [ ] `UserRow:0` (`:187`) → `UserId`
-- [ ] `SessionRow:1` (`:203`) → `UserId`
-- [ ] `InviteRow:4` (`:229`) → `Option<UserId>`; delete the re-wrap in
+- [x] `UserRow:0` (`:187`) → `UserId`
+- [x] `SessionRow:1` (`:203`) → `UserId` _(pulled forward into task 4)_
+- [x] `InviteRow:4` (`:229`) → `Option<UserId>`; delete the re-wrap in
       `invite_record_from_row`
-- [ ] `MediaRow:0` (`:275`) → `UserId` and `MediaRow:5` → `ByteSize`; delete the
+- [x] `MediaRow:0` (`:275`) → `UserId` and `MediaRow:5` → `ByteSize`; delete the
       `ByteSize::try_from` re-wrap in `media_record_from_row` — the bridge now
       does it
-- [ ] Leave the documented rejects: `SessionRow:3` (`String`, repaired via
+- [x] Leave the documented rejects: `SessionRow:3` (`String`, repaired via
       `SessionLabel::from_lossy`, `:214-218`), `MediaRow:6` (`source_url`,
       #675), `UserRecordParts:7,8` / `UserRow:7,8` (`bool`)
-- [ ] `cargo xtask check` → green; commit (aliases)
-- [ ] Type the 18 inline-tuple sites from the spec's second residue table;
+- [x] `cargo xtask check` → green; commit (aliases) — `8b79b452`
+- [x] Type the 18 inline-tuple sites from the spec's second residue table;
       delete each accompanying `XId::from(id)` re-wrap
-- [ ] `posts.rs:1323` — type both `post_id`/`tag_id` positions; this closes a
+- [x] `posts.rs:1323` — type both `post_id`/`tag_id` positions; this closes a
       live transposition hazard, so add a note to the fn's doc comment
-- [ ] Leave the inline-tuple rejects: `subscriptions.rs:212` (existence flag),
+- [x] Leave the inline-tuple rejects: `subscriptions.rs:212` (existence flag),
       `subscriptions.rs:226` position 2 (`subscriber_ref`, polymorphic per
       ADR-0020), and the `site_config`/`user_config` key/value strings (#687)
-- [ ] `cargo xtask check` → green; commit (inline tuples)
+- [x] `cargo xtask check` → green; commit (inline tuples)
+
+**The generic-impl where-clause trap, again.** Every generic
+`impl<DB> …Storage for …Store<DB>` restates its row tuples as `FromRow` bounds
+(`ADR-0019`, "supertrait where-clauses don't propagate"), so each retyped tuple
+had to change in **two** places — the `query_as` turbofish and the bound. This
+is the same trap `users.rs::authenticate` sprang in task 5a; here it hit
+`audiences.rs:154`, `email.rs:101`, `password.rs:78`, `posts.rs:821-822` and
+`subscriptions.rs:149-150`. Changing only the turbofish removes the `FromRow`
+impl for the new shape, and the error surfaces as unrelated
+"`String`/`DateTime`: `Decode` not satisfied" noise on the _other_ columns
+rather than at the id. Two bounds also had to **split**: `audiences.rs`'s single
+`(i64,)` served both an `AudienceId` and a `SubscriptionId` query, and
+`subscriptions.rs` keeps a bare `(i64,)` for the existence flag alongside the
+two new id shapes.
+
+**`get_user_upload_usage` went further than a turbofish.** The `MediaDialect`
+twin returned `sqlx::Result<i64>` and `MediaStore` re-ran the bound by hand
+(`ByteSize::try_from(sum).map_err(sqlx::Error::Decode)`). Typing the tuple
+`(ByteSize,)` makes the dialect return `sqlx::Result<ByteSize>` and the wrapper
+a straight delegation — see the task 3 note for the error-variant consequence.
 
 ## Task 6 — Retire the 114 bind conversions _(dispatch)_
 

@@ -166,7 +166,7 @@ impl AtomicOps for PostgresAtomicOps {
         // exists, is unused, and is unexpired, so concurrent confirmations cannot
         // both win (ADR-0021). On a miss we re-read to classify the failure into a
         // precise NotFound / AlreadyUsed / Expired error.
-        let claimed = sqlx::query_as::<_, (i64,)>(
+        let claimed = sqlx::query_as::<_, (UserId,)>(
             "UPDATE password_resets SET used_at = $1
              WHERE token_hash = $2 AND used_at IS NULL AND expires_at > $3
              RETURNING user_id",
@@ -195,7 +195,6 @@ impl AtomicOps for PostgresAtomicOps {
                 Some((None, _)) => Err(ConfirmPasswordResetError::Expired),
             };
         };
-        let user_id = UserId::from(user_id);
 
         // ADR-0022: hash only after the token claim succeeds, so a bogus/used/expired
         // token is rejected above without paying the Argon2 cost. A hash failure here

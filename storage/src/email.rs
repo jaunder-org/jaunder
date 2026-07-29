@@ -98,7 +98,7 @@ impl<DB: Database> EmailVerificationStore<DB> {
 impl<DB> EmailVerificationStorage for EmailVerificationStore<DB>
 where
     DB: Backend,
-    (i64, Email): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (UserId, Email): for<'r> sqlx::FromRow<'r, DB::Row>,
     (Option<DateTime<Utc>>, DateTime<Utc>): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `TokenHash` binds and `Email` binds/decodes as themselves via the sqlx
@@ -173,7 +173,7 @@ where
         // `email` value is a data-integrity fault, so its `ColumnDecode` error is
         // surfaced as `Internal` — mirroring the pre-bridge hand-parse, which also
         // reported a corrupt value as an internal decode error.
-        let claimed = sqlx::query_as::<_, (i64, Email)>(
+        let claimed = sqlx::query_as::<_, (UserId, Email)>(
             "UPDATE email_verifications SET used_at = $1
              WHERE token_hash = $2 AND used_at IS NULL AND expires_at > $3
              RETURNING user_id, email",
@@ -189,7 +189,7 @@ where
         })?;
 
         if let Some((user_id, email)) = claimed {
-            return Ok((UserId::from(user_id), email));
+            return Ok((user_id, email));
         }
 
         // Zero rows affected — inspect the row to return the right error.

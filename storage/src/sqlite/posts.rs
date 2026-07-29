@@ -39,7 +39,7 @@ impl PostDialect for Sqlite {
         let now = Utc::now();
 
         let result: Result<PostRow, UpdatePostError> = async {
-            let existing = sqlx::query_as::<_, (i64, Option<DateTime<Utc>>)>(
+            let existing = sqlx::query_as::<_, (UserId, Option<DateTime<Utc>>)>(
                 "SELECT user_id, deleted_at FROM posts WHERE post_id = $1",
             )
             .bind(i64::from(post_id))
@@ -48,9 +48,7 @@ impl PostDialect for Sqlite {
 
             match existing {
                 None => return Err(UpdatePostError::NotFound),
-                Some((owner_id, deleted_at))
-                    if UserId::from(owner_id) != editor_user_id || deleted_at.is_some() =>
-                {
+                Some((owner_id, deleted_at)) if owner_id != editor_user_id || deleted_at.is_some() => {
                     return Err(UpdatePostError::Unauthorized);
                 }
                 Some(_) => {}

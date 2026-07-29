@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use common::media::{ContentHash, Filename, MediaSource};
+use common::media::{ByteSize, ContentHash, Filename, MediaSource};
 use sqlx::{Pool, Sqlite};
 
 use crate::media::{DeleteMediaError, MediaDialect, MediaStore};
@@ -10,8 +10,8 @@ pub type SqliteMediaStorage = MediaStore<Sqlite>;
 
 #[async_trait]
 impl MediaDialect for Sqlite {
-    async fn get_user_upload_usage(pool: &Pool<Sqlite>, user_id: UserId) -> sqlx::Result<i64> {
-        let row = sqlx::query_as::<_, (i64,)>(
+    async fn get_user_upload_usage(pool: &Pool<Sqlite>, user_id: UserId) -> sqlx::Result<ByteSize> {
+        let row = sqlx::query_as::<_, (ByteSize,)>(
             "SELECT COALESCE(SUM(size_bytes), 0) FROM media WHERE user_id = $1 AND source = 'upload'",
         )
         .bind(i64::from(user_id))

@@ -37,7 +37,7 @@ impl PostDialect for Postgres {
         // edit from slipping between this ownership/liveness check and the UPDATE
         // below (ADR-0021 / #52). SQLite needs no equivalent — its transaction
         // already serializes writers.
-        let existing = sqlx::query_as::<_, (i64, Option<DateTime<Utc>>)>(
+        let existing = sqlx::query_as::<_, (UserId, Option<DateTime<Utc>>)>(
             "SELECT user_id, deleted_at FROM posts WHERE post_id = $1 FOR UPDATE",
         )
         .bind(i64::from(post_id))
@@ -49,9 +49,7 @@ impl PostDialect for Postgres {
                 tx.rollback().await.ok();
                 return Err(UpdatePostError::NotFound);
             }
-            Some((owner_id, deleted_at))
-                if UserId::from(owner_id) != editor_user_id || deleted_at.is_some() =>
-            {
+            Some((owner_id, deleted_at)) if owner_id != editor_user_id || deleted_at.is_some() => {
                 tx.rollback().await.ok();
                 return Err(UpdatePostError::Unauthorized);
             }

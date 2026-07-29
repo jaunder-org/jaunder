@@ -146,8 +146,11 @@ impl<DB: Database> SubscriptionStore<DB> {
 impl<DB> SubscriptionStorage for SubscriptionStore<DB>
 where
     DB: SubscriptionDialect,
+    // `IS_ACTIVE_SUBSCRIBER` yields an existence flag, not an id — it stays `i64`.
     (i64,): for<'r> sqlx::FromRow<'r, DB::Row>,
-    (i64, i64, String, DateTime<Utc>): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (SubscriptionId,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (ChannelId,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (SubscriptionId, ChannelId, String, DateTime<Utc>): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
@@ -173,13 +176,13 @@ where
             .bind(status_name)
             .execute(&self.pool)
             .await?;
-        sqlx::query_as::<_, (i64,)>(DB::SELECT_SUBSCRIPTION_ID)
+        sqlx::query_as::<_, (SubscriptionId,)>(DB::SELECT_SUBSCRIPTION_ID)
             .bind(i64::from(author_user_id))
             .bind(i64::from(channel_id))
             .bind(subscriber_ref)
             .fetch_one(&self.pool)
             .await
-            .map(|(id,)| SubscriptionId::from(id))
+            .map(|(id,)| id)
     }
 
     async fn unsubscribe(
@@ -222,19 +225,20 @@ where
         &self,
         author_user_id: UserId,
     ) -> sqlx::Result<Vec<SubscriptionRecord>> {
-        let rows =
-            sqlx::query_as::<_, (i64, i64, String, DateTime<Utc>)>(DB::LIST_ACTIVE_SUBSCRIBERS)
-                .bind(i64::from(author_user_id))
-                .fetch_all(&self.pool)
-                .await?;
+        let rows = sqlx::query_as::<_, (SubscriptionId, ChannelId, String, DateTime<Utc>)>(
+            DB::LIST_ACTIVE_SUBSCRIBERS,
+        )
+        .bind(i64::from(author_user_id))
+        .fetch_all(&self.pool)
+        .await?;
         // The query filters to `st.name = 'active'`, so every returned row is an
         // active subscription — no per-row status decoding needed.
         Ok(rows
             .into_iter()
             .map(
                 |(subscription_id, channel_id, subscriber_ref, created_at)| SubscriptionRecord {
-                    subscription_id: SubscriptionId::from(subscription_id),
-                    channel_id: ChannelId::from(channel_id),
+                    subscription_id,
+                    channel_id,
                     subscriber_ref,
                     status: SubscriptionStatus::Active,
                     created_at,
@@ -244,10 +248,10 @@ where
     }
 
     async fn local_channel_id(&self) -> sqlx::Result<ChannelId> {
-        sqlx::query_as::<_, (i64,)>(DB::SELECT_LOCAL_CHANNEL_ID)
+        sqlx::query_as::<_, (ChannelId,)>(DB::SELECT_LOCAL_CHANNEL_ID)
             .fetch_one(&self.pool)
             .await
-            .map(|(id,)| ChannelId::from(id))
+            .map(|(id,)| id)
     }
 }
 

@@ -75,7 +75,7 @@ impl<DB: Database> PasswordResetStore<DB> {
 impl<DB> PasswordResetStorage for PasswordResetStore<DB>
 where
     DB: Backend,
-    (i64,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (UserId,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (Option<DateTime<Utc>>, DateTime<Utc>): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `TokenHash` binds as itself via the sqlx bridge (#438), which delegates to
@@ -121,7 +121,7 @@ where
         // when it exists, is unused, and is unexpired, so two concurrent requests
         // cannot both succeed and no read-then-write lock upgrade is needed
         // (ADR-0021). A miss falls through to a read that classifies the failure.
-        let claimed = sqlx::query_as::<_, (i64,)>(
+        let claimed = sqlx::query_as::<_, (UserId,)>(
             "UPDATE password_resets SET used_at = $1
              WHERE token_hash = $2 AND used_at IS NULL AND expires_at > $3
              RETURNING user_id",
@@ -133,7 +133,7 @@ where
         .await?;
 
         if let Some((user_id,)) = claimed {
-            return Ok(UserId::from(user_id));
+            return Ok(user_id);
         }
 
         let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
