@@ -228,12 +228,19 @@ still error.
 
 **Files:** `storage/src/helpers.rs`.
 
-- [ ] `PostRow.post_id: i64` → `PostId`, `.user_id: i64` → `UserId` (`:255-256`)
-- [ ] `build_session_record(user_id: i64)` → `UserId` (`:79`); drop the now-dead
-      conversion at its call site
-- [ ] Update `PostRow`'s doc comment (`:242-252`) so its stated exceptions are
-      exactly `rendered_html` (#502) and `tags`
-- [ ] `cargo xtask check` → green; commit
+- [x] `PostRow.post_id: i64` → `PostId`, `.user_id: i64` → `UserId`
+- [x] `build_session_record(user_id: i64)` → `UserId`; dropped the now-dead
+      `UserId::from(user_id)` inside it
+- [x] Update `PostRow`'s doc comment so its stated exceptions are exactly
+      `rendered_html` (#502) and `tags`
+- [x] **Pulled forward from task 5:** `SessionRow:1` → `UserId`.
+      `session_record_from_row` feeds `build_session_record` directly, so
+      leaving it `i64` would have meant adding a `UserId::from(…)` wrapper
+      purely to delete it in the next commit.
+- [x] `cargo xtask check --no-test` → green; commit
+
+**Note:** the 21 `query_as::<_, PostRow>` sites needed no changes — `FromRow`
+plus the new bridge decode the typed columns transparently.
 
 ## Task 5 — Type the tuple row aliases and inline tuples
 

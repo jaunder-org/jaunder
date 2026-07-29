@@ -76,19 +76,19 @@ pub(crate) fn build_user_record(
 
 pub(crate) fn build_session_record(
     token_hash: TokenHash,
-    user_id: i64,
+    user_id: UserId,
     username: Username,
     label: SessionLabel,
     created_at: DateTime<Utc>,
     last_used_at: DateTime<Utc>,
 ) -> SessionRecord {
-    // The `token_hash` and `username` columns decode straight into their domain
-    // newtypes via the sqlx bridge (#438), which validates through `FromStr`, so a
+    // Every column arrives as its domain type — `token_hash`/`username` through the
+    // validating string bridge (#438), `user_id` through the id bridge (#686) — so a
     // corrupt/migrated value is rejected as a column-decode error before we ever
-    // get here — this build step is now infallible.
+    // get here, and this build step is infallible.
     SessionRecord {
         token_hash,
-        user_id: UserId::from(user_id),
+        user_id,
         username,
         label,
         created_at,
@@ -153,18 +153,17 @@ fn parse_post_tags_json(json: &str, post_id: PostId) -> sqlx::Result<Vec<PostTag
 }
 
 pub(crate) fn build_post_record(row: PostRow) -> sqlx::Result<PostRecord> {
-    // `username`, `title`, `slug`, `body`, `format`, and `rendered_html` already arrived
-    // as their domain types — the sqlx bridge decoded each column (the newtypes via #438,
-    // `format` via its `PostFormat` text-enum bridge, #572, `rendered_html` via its own
-    // `Decode` since #445), so a corrupt/migrated value is rejected as a column-decode
-    // error before we get here. The JSON `tags` still parse here, so this step stays
-    // fallible.
-    let post_id = PostId::from(row.post_id);
+    // Every column except `tags` already arrived as its domain type — the sqlx bridge
+    // decoded each one (the string newtypes via #438, the ids via #686, `format` via its
+    // `PostFormat` text-enum bridge, #572, `rendered_html` via its own `Decode` since
+    // #445), so a corrupt/migrated value is rejected as a column-decode error before we
+    // get here. The JSON `tags` still parse here, so this step stays fallible.
+    let post_id = row.post_id;
     let tags = parse_post_tags_json(&row.tags, post_id)?;
 
     Ok(PostRecord {
         post_id,
-        user_id: UserId::from(row.user_id),
+        user_id: row.user_id,
         author_username: row.username,
         title: row.title,
         slug: row.slug,
@@ -202,7 +201,7 @@ pub(crate) fn user_record_from_row(row: UserRow) -> UserRecord {
 
 pub(crate) type SessionRow = (
     TokenHash,
-    i64,
+    UserId,
     Username,
     String,
     DateTime<Utc>,
@@ -243,17 +242,18 @@ pub(crate) fn invite_record_from_row(row: InviteRow) -> InviteRecord {
 ///
 /// Field names are the SELECT *column* names (`username` from `u.username`, `tags` from
 /// the `… AS tags` JSON aggregate), so `#[derive(FromRow)]` binds them by name across
-/// all 21 `query_as::<_, PostRow>` sites without any column aliasing. The `username`/
-/// `title`/`slug`/`body`/`format` columns decode straight into their domain types via
-/// the sqlx bridge (the newtypes via #438, `format` via its text-enum bridge #572).
-/// `rendered_html` (`RenderedHtml`) decodes the same way since #445 — its bridge was
-/// write-only (#502: `Type`/`Encode`, no `Decode`) until sanitization moved onto the
-/// type, so it no longer needs the `from_trusted` rebuild it used to get in
-/// [`build_post_record`]. `tags` is the JSON aggregate parsed there.
+/// all 21 `query_as::<_, PostRow>` sites without any column aliasing. The `post_id`/
+/// `user_id`/`username`/`title`/`slug`/`body`/`format` columns decode straight into their
+/// domain types via the sqlx bridge (the string newtypes via #438, the ids via #686,
+/// `format` via its text-enum bridge #572). `rendered_html` (`RenderedHtml`) decodes the
+/// same way since #445 — its bridge was write-only (#502: `Type`/`Encode`, no `Decode`)
+/// until sanitization moved onto the type, so it no longer needs the `from_trusted`
+/// rebuild it used to get in [`build_post_record`]. The **only** column that is not a
+/// decoded domain type is `tags`, the JSON aggregate parsed there.
 #[derive(sqlx::FromRow)]
 pub(crate) struct PostRow {
-    post_id: i64,
-    user_id: i64,
+    post_id: PostId,
+    user_id: UserId,
     username: Username,
     title: Option<PostTitle>,
     slug: Slug,
@@ -439,7 +439,7 @@ mod tests {
         let now = Utc::now();
         let record = build_session_record(
             parse_token_hash("hash"),
-            1,
+            UserId::from(1),
             parse_username("alice"),
             parse_session_label("label"),
             now,
@@ -473,8 +473,8 @@ mod tests {
     fn test_build_post_record() {
         let now = Utc::now();
         let record = build_post_record(PostRow {
-            post_id: 10,
-            user_id: 20,
+            post_id: PostId::from(10),
+            user_id: UserId::from(20),
             username: parse_username("alice"),
             title: Some("Hello".into()),
             slug: parse_slug("hello-world"),
@@ -546,8 +546,8 @@ mod tests {
         let now = Utc::now();
         let tags_json = r#"[{"tag_id": 1, "tag_slug": "rust", "tag_display": "Rust"}]"#;
         let record = build_post_record(PostRow {
-            post_id: 10,
-            user_id: 20,
+            post_id: PostId::from(10),
+            user_id: UserId::from(20),
             username: parse_username("alice"),
             title: None,
             slug: parse_slug("hello-world"),
@@ -572,8 +572,8 @@ mod tests {
     fn build_post_record_rejects_invalid_tags_json() {
         let now = Utc::now();
         let err = build_post_record(PostRow {
-            post_id: 10,
-            user_id: 20,
+            post_id: PostId::from(10),
+            user_id: UserId::from(20),
             username: parse_username("alice"),
             title: None,
             slug: parse_slug("hello-world"),
@@ -597,8 +597,8 @@ mod tests {
         let tags_json =
             r#"[{"tag_id": 1, "tag_slug": "Not A Slug", "tag_display": "Bad"}]"#.to_string();
         let err = build_post_record(PostRow {
-            post_id: 10,
-            user_id: 20,
+            post_id: PostId::from(10),
+            user_id: UserId::from(20),
             username: parse_username("alice"),
             title: None,
             slug: parse_slug("hello-world"),
@@ -650,7 +650,7 @@ mod tests {
         let now = Utc::now();
         let session: SessionRow = (
             parse_token_hash("tokenhash"),
-            1,
+            UserId::from(1),
             parse_username("alice"),
             "label".to_string(),
             now,
@@ -686,8 +686,8 @@ mod tests {
     fn post_row_helper_delegates_to_build_post_record() {
         let now = Utc::now();
         let row = PostRow {
-            post_id: 10,
-            user_id: 20,
+            post_id: PostId::from(10),
+            user_id: UserId::from(20),
             username: parse_username("alice"),
             title: None,
             slug: parse_slug("hello-world"),
