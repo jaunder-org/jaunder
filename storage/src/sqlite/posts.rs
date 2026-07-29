@@ -39,18 +39,16 @@ impl PostDialect for Sqlite {
         let now = Utc::now();
 
         let result: Result<PostRow, UpdatePostError> = async {
-            let existing = sqlx::query_as::<_, (i64, Option<DateTime<Utc>>)>(
+            let existing = sqlx::query_as::<_, (UserId, Option<DateTime<Utc>>)>(
                 "SELECT user_id, deleted_at FROM posts WHERE post_id = $1",
             )
-            .bind(i64::from(post_id))
+            .bind(post_id)
             .fetch_optional(&mut *conn)
             .await?;
 
             match existing {
                 None => return Err(UpdatePostError::NotFound),
-                Some((owner_id, deleted_at))
-                    if UserId::from(owner_id) != editor_user_id || deleted_at.is_some() =>
-                {
+                Some((owner_id, deleted_at)) if owner_id != editor_user_id || deleted_at.is_some() => {
                     return Err(UpdatePostError::Unauthorized);
                 }
                 Some(_) => {}
@@ -62,7 +60,7 @@ impl PostDialect for Sqlite {
                  FROM posts WHERE post_id = $2",
             )
             .bind(now)
-            .bind(i64::from(post_id))
+            .bind(post_id)
             .execute(&mut *conn)
             .await?;
 
@@ -107,7 +105,7 @@ impl PostDialect for Sqlite {
             // edit/clear — the column was previously omitted from the SET clause, so
             // an edited summary was silently dropped (surfaced by #545's clear e2e).
             .bind(input.summary.as_ref())
-            .bind(i64::from(post_id))
+            .bind(post_id)
             .fetch_one(&mut *conn)
             .await?;
 
@@ -149,7 +147,7 @@ impl PostDialect for Sqlite {
         let result: Result<(), TaggingError> = async {
             let post_exists: bool =
                 sqlx::query_scalar("SELECT COUNT(*) > 0 FROM posts WHERE post_id = $1")
-                    .bind(i64::from(post_id))
+                    .bind(post_id)
                     .fetch_one(&mut *conn)
                     .await?;
 
@@ -171,7 +169,7 @@ impl PostDialect for Sqlite {
             match sqlx::query(
                 "INSERT INTO post_tags (post_id, tag_id, tag_display) VALUES ($1, $2, $3)",
             )
-            .bind(i64::from(post_id))
+            .bind(post_id)
             .bind(tag_id)
             .bind(tag)
             .execute(&mut *conn)
@@ -207,7 +205,7 @@ impl PostDialect for Sqlite {
             "DELETE FROM post_tags
              WHERE post_id = $1 AND tag_id = (SELECT tag_id FROM tags WHERE tag_slug = $2)",
         )
-        .bind(i64::from(post_id))
+        .bind(post_id)
         .bind(tag_slug)
         .execute(pool)
         .await?

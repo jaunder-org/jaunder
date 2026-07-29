@@ -101,7 +101,7 @@ where
         let row = sqlx::query_as::<_, (String,)>(
             "SELECT value FROM user_config WHERE user_id = $1 AND key = $2",
         )
-        .bind(i64::from(user_id))
+        .bind(user_id)
         .bind(key)
         .fetch_optional(&self.pool)
         .await?;
@@ -119,7 +119,7 @@ where
             "INSERT INTO user_config (user_id, key, value) VALUES ($1, $2, $3)
              ON CONFLICT (user_id, key) DO UPDATE SET value = excluded.value",
         )
-        .bind(i64::from(user_id))
+        .bind(user_id)
         .bind(key)
         .bind(value)
         .execute(&self.pool)
@@ -134,7 +134,7 @@ where
     )]
     async fn delete(&self, user_id: UserId, key: &str) -> sqlx::Result<()> {
         sqlx::query("DELETE FROM user_config WHERE user_id = $1 AND key = $2")
-            .bind(i64::from(user_id))
+            .bind(user_id)
             .bind(key)
             .execute(&self.pool)
             .await?;

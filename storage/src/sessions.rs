@@ -165,7 +165,7 @@ where
              VALUES ($1, $2, $3, $4, $5)",
         )
         .bind(token_hash)
-        .bind(i64::from(user_id))
+        .bind(user_id)
         .bind(label)
         .bind(now)
         .bind(now)
@@ -213,7 +213,7 @@ where
              FROM sessions s JOIN users u ON s.user_id = u.user_id
              WHERE s.user_id = $1",
         )
-        .bind(i64::from(user_id))
+        .bind(user_id)
         .fetch_all(&self.pool)
         .await?;
 

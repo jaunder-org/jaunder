@@ -128,7 +128,7 @@ pub trait MediaStorage: Send + Sync {
 #[async_trait]
 pub trait MediaDialect: Backend {
     /// Returns the total upload bytes for `user_id` using backend-appropriate SQL.
-    async fn get_user_upload_usage(pool: &Pool<Self>, user_id: UserId) -> sqlx::Result<i64>;
+    async fn get_user_upload_usage(pool: &Pool<Self>, user_id: UserId) -> sqlx::Result<ByteSize>;
 
     /// Deletes a media record; returns `NotFound` when no row was matched.
     async fn delete_media_row(
@@ -183,12 +183,12 @@ where
             "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
-        .bind(i64::from(record.user_id))
+        .bind(record.user_id)
         .bind(&record.sha256)
         .bind(&record.filename)
         .bind(record.source)
         .bind(&record.content_type)
-        .bind(i64::from(record.size_bytes))
+        .bind(record.size_bytes)
         .bind(record.source_url.clone())
         .bind(record.created_at)
         .execute(&self.pool)
@@ -223,14 +223,14 @@ where
              FROM media
              WHERE user_id = $1 AND sha256 = $2 AND filename = $3 AND source = $4",
         )
-        .bind(i64::from(user_id))
+        .bind(user_id)
         .bind(sha256)
         .bind(filename)
         .bind(*source)
         .fetch_optional(&self.pool)
         .await?;
 
-        row.map(crate::helpers::media_record_from_row).transpose()
+        Ok(row.map(crate::helpers::media_record_from_row))
     }
 
     #[tracing::instrument(
@@ -258,7 +258,7 @@ where
                  ORDER BY created_at DESC
                  LIMIT $3 OFFSET $4",
             )
-            .bind(i64::from(user_id))
+            .bind(user_id)
             .bind(*src)
             .bind(i64::from(limit))
             .bind(i64::from(offset.value()))
@@ -272,7 +272,7 @@ where
                  ORDER BY created_at DESC
                  LIMIT $2 OFFSET $3",
             )
-            .bind(i64::from(user_id))
+            .bind(user_id)
             .bind(i64::from(limit))
             .bind(i64::from(offset.value()))
             .fetch_all(&self.pool)
@@ -288,7 +288,7 @@ where
             .iter()
             .filter_map(|row| {
                 match crate::helpers::MediaRow::from_row(row)
-                    .and_then(crate::helpers::media_record_from_row)
+                    .map(crate::helpers::media_record_from_row)
                 {
                     Ok(record) => Some(record),
                     Err(error) => {
@@ -321,10 +321,9 @@ where
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn get_user_upload_usage(&self, user_id: UserId) -> sqlx::Result<ByteSize> {
-        // The dialect twin returns the raw `COALESCE(SUM(…), 0)` as `i64` (always ≥ 0),
-        // so route it through the checked door to land a typed `ByteSize`.
-        let sum = DB::get_user_upload_usage(&self.pool, user_id).await?;
-        ByteSize::try_from(sum).map_err(|e| sqlx::Error::Decode(Box::new(e)))
+        // The dialect twin decodes `COALESCE(SUM(…), 0)` straight into `ByteSize`; the
+        // bridge's bound-checking `Decode` rejects a negative total at the column.
+        DB::get_user_upload_usage(&self.pool, user_id).await
     }
 
     #[tracing::instrument(
@@ -348,7 +347,7 @@ where
         .fetch_optional(&self.pool)
         .await?;
 
-        row.map(crate::helpers::media_record_from_row).transpose()
+        Ok(row.map(crate::helpers::media_record_from_row))
     }
 }
 
@@ -481,14 +480,14 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn get_user_upload_usage_surfaces_a_decode_error_for_a_negative_sum(
+    async fn get_user_upload_usage_surfaces_a_column_decode_error_for_a_negative_sum(
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         // A negative `size_bytes` upload row (DB tampering) makes `SUM(size_bytes)` negative;
-        // `get_user_upload_usage` routes the sum through the validating `ByteSize::try_from`,
-        // which rejects the negative total as a decode error.
+        // the sum decodes into `ByteSize`, whose bound-checking `Decode` rejects the negative
+        // total as a column-decode error.
         env.base
             .pool()
             .execute(&format!(
@@ -505,8 +504,8 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(err, sqlx::Error::Decode(_)),
-            "expected a decode error, got: {err:?}"
+            matches!(err, sqlx::Error::ColumnDecode { .. }),
+            "expected a column-decode error, got: {err:?}"
         );
     }
 

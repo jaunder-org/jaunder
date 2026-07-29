@@ -119,7 +119,7 @@ where
              RETURNING code, created_at, expires_at, used_at, used_by",
         )
         .bind(now)
-        .bind(i64::from(user_id))
+        .bind(user_id)
         .bind(code)
         .bind(now)
         .fetch_optional(&self.pool)

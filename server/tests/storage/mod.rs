@@ -6068,3 +6068,62 @@ async fn resolution_matrix(#[case] backend: Backend) {
         }
     }
 }
+
+// An anonymous viewer must not be admitted by a subscription row whose
+// `subscriber_ref` is the empty string (#686).
+//
+// `subscriptions.subscriber_ref` is `TEXT NOT NULL` with no non-empty CHECK, so
+// `''` is schema-legal even though the sole writer (`subscribe_to`) binds an
+// authenticated user id. The anonymous read path used to bind the sentinel pair
+// `(channel_id = -1, subscriber_ref = '')`, which made this row's admission turn
+// on `channel_id = -1` being unstorable — true only because `channels` hands out
+// positive autoincrement keys. The binds are NULL now, so admission is unknown
+// on both columns and cannot depend on that schema accident. The row is forced
+// in with raw SQL because the store's own `subscribe` cannot produce it.
+#[apply(backends)]
+#[tokio::test]
+async fn anonymous_is_not_admitted_by_an_empty_subscriber_ref(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let [a] = seed_users(state).await;
+
+    raw_exec(
+        backend,
+        &env,
+        &format!(
+            "INSERT INTO subscriptions (author_user_id, channel_id, subscriber_ref, status_id) \
+             VALUES ({a}, (SELECT channel_id FROM channels WHERE name='local'), '', \
+                     (SELECT status_id FROM subscription_statuses WHERE name='active'))"
+        ),
+    )
+    .await;
+
+    let subscribers_only = SeedRawPost::new(a)
+        .audiences(vec![AudienceTarget::Subscribers])
+        .seed(state)
+        .await
+        .post_id;
+
+    let anon = ViewerIdentity::Anonymous;
+    assert!(
+        state
+            .posts
+            .get_post_by_id(subscribers_only, &anon)
+            .await
+            .unwrap()
+            .is_none(),
+        "get_post_by_id: an empty subscriber_ref must not admit an anonymous viewer"
+    );
+    let listed: std::collections::HashSet<PostId> = state
+        .posts
+        .list_published(None, 100, &anon, Utc::now())
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|p| p.post_id)
+        .collect();
+    assert!(
+        !listed.contains(&subscribers_only),
+        "list_published: an empty subscriber_ref must not admit an anonymous viewer"
+    );
+}

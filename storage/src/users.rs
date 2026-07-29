@@ -213,7 +213,7 @@ where
     DB: Backend,
     UserRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     (
-        i64,
+        UserId,
         Username,
         Option<DisplayName>,
         Option<Bio>,
@@ -303,7 +303,7 @@ where
         let row = sqlx::query_as::<
             _,
             (
-                i64,
+                UserId,
                 Username,
                 Option<DisplayName>,
                 Option<Bio>,
@@ -396,7 +396,7 @@ where
                     email, email_verified, is_operator
              FROM users WHERE user_id = $1",
         )
-        .bind(i64::from(user_id))
+        .bind(user_id)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(user_record_from_row))
@@ -422,7 +422,7 @@ where
         sqlx::query("UPDATE users SET display_name = $1, bio = $2 WHERE user_id = $3")
             .bind(update.display_name)
             .bind(update.bio)
-            .bind(i64::from(user_id))
+            .bind(user_id)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -437,7 +437,7 @@ where
         sqlx::query("UPDATE users SET email = $1, email_verified = $2 WHERE user_id = $3")
             .bind(email)
             .bind(verified)
-            .bind(i64::from(user_id))
+            .bind(user_id)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -450,7 +450,7 @@ where
 
         sqlx::query("UPDATE users SET password_hash = $1 WHERE user_id = $2")
             .bind(password_hash.as_str())
-            .bind(i64::from(user_id))
+            .bind(user_id)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -549,7 +549,7 @@ mod tests {
             CloseablePool::Sqlite(pool) => {
                 sqlx::query(sql)
                     .bind("bad name")
-                    .bind(i64::from(user_id))
+                    .bind(user_id)
                     .execute(pool)
                     .await
                     .unwrap();
@@ -557,7 +557,7 @@ mod tests {
             CloseablePool::Postgres(pool) => {
                 sqlx::query(sql)
                     .bind("bad name")
-                    .bind(i64::from(user_id))
+                    .bind(user_id)
                     .execute(pool)
                     .await
                     .unwrap();

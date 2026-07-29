@@ -164,7 +164,10 @@ delegates to `i64`'s parse and wraps — the inverse of `Display`, for the few
 sites that carry an id as a _string_ (a Leptos route param, whose `ParamsMap`
 yields `String`; a `subscriber_ref`), so `"42".parse::<UserId>()` works. It is
 **not** a validating chokepoint like a string newtype's `FromStr` (an id has no
-invariant beyond "is an integer"); no other `str` traits are provided.
+invariant beyond "is an integer"); no other `str` traits are provided. The
+trailer also carries a **transparent-i64 sqlx bridge** (ADR-0071), so an id is a
+first-class DB column type; its `Decode` is an infallible wrap for the same
+reason its `FromStr` does not validate.
 
 **Numeric values** are the third case: a scalar integer config value with a
 **bound** — a retention count (`>= 1`), a feed's minimum item/day window
@@ -178,18 +181,20 @@ idiomatic extraction, mirroring the ID trailer's `From<Self> for i64`);
 `Display`; a **compile-checked `Default`**; and a **validating**
 transparent-integer serde bridge (deserialize re-runs the bound, so an
 out-of-range value is rejected on the wire, exactly as a string newtype's serde
-rejects a malformed string). The inner integer type (`u32`/`usize`/`i64`/…) and
-the bounds are per-type, so — unlike the ID trailer, which is fixed — the
-numeric-value trailer is **parameterized** (see §3). The range case (`min` +
-`max`) may additionally opt into **`clamp`**, which emits `MIN`/`MAX` associated
-consts and an infallible `const fn clamped(inner) -> Self` that coerces its
-argument into range. `clamped` is a **validated** door — it cannot yield an
-out-of-range value, so it does not weaken the invariant — and it is **opt-in**,
-so non-range or non-clamping numeric newtypes don't silently gain coercion. Its
-use case is a public bound that should **coerce** an out-of-range request rather
-than reject it on the wire (the AtomPub `?limit=` page size). First users:
-`RetentionCount` (#455), `FeedMinItems`/`FeedMinDays` (#535); `PageSize` (#537,
-the first `clamp` adopter).
+rejects a malformed string) — and, on the same principle, a **validating sqlx
+bridge** (ADR-0071) whose `Decode` re-runs the bound at the column. The inner
+integer type (`u32`/`usize`/`i64`/…) and the bounds are per-type, so — unlike
+the ID trailer, which is fixed — the numeric-value trailer is **parameterized**
+(see §3). The range case (`min` + `max`) may additionally opt into **`clamp`**,
+which emits `MIN`/`MAX` associated consts and an infallible
+`const fn clamped(inner) -> Self` that coerces its argument into range.
+`clamped` is a **validated** door — it cannot yield an out-of-range value, so it
+does not weaken the invariant — and it is **opt-in**, so non-range or
+non-clamping numeric newtypes don't silently gain coercion. Its use case is a
+public bound that should **coerce** an out-of-range request rather than reject
+it on the wire (the AtomPub `?limit=` page size). First users: `RetentionCount`
+(#455), `FeedMinItems`/`FeedMinDays` (#535); `PageSize` (#537, the first `clamp`
+adopter).
 
 **String truncating door.** The string analog of `clamped` is a **hand-written**
 `truncated(&str) -> Self` on a length-bounded `str`-newtype: it trims and

@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use common::media::{ContentHash, Filename, MediaSource};
+use common::media::{ByteSize, ContentHash, Filename, MediaSource};
 use sqlx::{Pool, Postgres};
 
 use crate::media::{DeleteMediaError, MediaDialect, MediaStore};
@@ -10,11 +10,14 @@ pub type PostgresMediaStorage = MediaStore<Postgres>;
 
 #[async_trait]
 impl MediaDialect for Postgres {
-    async fn get_user_upload_usage(pool: &Pool<Postgres>, user_id: UserId) -> sqlx::Result<i64> {
-        let row = sqlx::query_as::<_, (i64,)>(
+    async fn get_user_upload_usage(
+        pool: &Pool<Postgres>,
+        user_id: UserId,
+    ) -> sqlx::Result<ByteSize> {
+        let row = sqlx::query_as::<_, (ByteSize,)>(
             "SELECT COALESCE(SUM(size_bytes), 0)::bigint FROM media WHERE user_id = $1 AND source = 'upload'",
         )
-        .bind(i64::from(user_id))
+        .bind(user_id)
         .fetch_one(pool)
         .await?;
 
@@ -31,7 +34,7 @@ impl MediaDialect for Postgres {
         let result = sqlx::query(
             "DELETE FROM media WHERE user_id = $1 AND sha256 = $2 AND filename = $3 AND source = $4",
         )
-        .bind(i64::from(user_id))
+        .bind(user_id)
         .bind(sha256)
         .bind(filename)
         .bind(*source)

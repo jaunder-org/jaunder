@@ -151,8 +151,9 @@ impl<DB> AudienceStorage for AudienceStore<DB>
 where
     DB: Backend,
     // Restated from `Backend` (supertrait where-clauses don't propagate; ADR-0019).
-    (i64,): for<'r> sqlx::FromRow<'r, DB::Row>,
-    (i64, AudienceName, DateTime<Utc>): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (AudienceId,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (SubscriptionId,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (AudienceId, AudienceName, DateTime<Utc>): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `AudienceName` binds and decodes as itself via the sqlx bridge (#438), which
@@ -175,15 +176,15 @@ where
         author_user_id: UserId,
         name: &AudienceName,
     ) -> Result<AudienceId, AudienceError> {
-        match sqlx::query_as::<_, (i64,)>(
+        match sqlx::query_as::<_, (AudienceId,)>(
             "INSERT INTO audiences (author_user_id, name) VALUES ($1, $2) RETURNING audience_id",
         )
-        .bind(i64::from(author_user_id))
+        .bind(author_user_id)
         .bind(name)
         .fetch_one(&self.pool)
         .await
         {
-            Ok((id,)) => Ok(AudienceId::from(id)),
+            Ok((id,)) => Ok(id),
             Err(sqlx::Error::Database(error)) if error.is_unique_violation() => {
                 Err(AudienceError::DuplicateName)
             }
@@ -204,13 +205,13 @@ where
     ) -> Result<(), AudienceError> {
         // `RETURNING` so a no-match is detected generically (via `fetch_optional`)
         // without `rows_affected()`, which sqlx exposes only on concrete results.
-        let result = sqlx::query_as::<_, (i64,)>(
+        let result = sqlx::query_as::<_, (AudienceId,)>(
             "UPDATE audiences SET name = $1 WHERE author_user_id = $2 AND audience_id = $3 \
              RETURNING audience_id",
         )
         .bind(name)
-        .bind(i64::from(author_user_id))
-        .bind(i64::from(audience_id))
+        .bind(author_user_id)
+        .bind(audience_id)
         .fetch_optional(&self.pool)
         .await;
         match result {
@@ -235,13 +236,13 @@ where
     ) -> sqlx::Result<()> {
         let mut tx = self.pool.begin().await?;
         sqlx::query("DELETE FROM audience_members WHERE author_user_id = $1 AND audience_id = $2")
-            .bind(i64::from(author_user_id))
-            .bind(i64::from(audience_id))
+            .bind(author_user_id)
+            .bind(audience_id)
             .execute(&mut *tx)
             .await?;
         sqlx::query("DELETE FROM audiences WHERE author_user_id = $1 AND audience_id = $2")
-            .bind(i64::from(author_user_id))
-            .bind(i64::from(audience_id))
+            .bind(author_user_id)
+            .bind(audience_id)
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
@@ -254,17 +255,17 @@ where
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn list_audiences(&self, author_user_id: UserId) -> sqlx::Result<Vec<AudienceRecord>> {
-        let rows = sqlx::query_as::<_, (i64, AudienceName, DateTime<Utc>)>(
+        let rows = sqlx::query_as::<_, (AudienceId, AudienceName, DateTime<Utc>)>(
             "SELECT audience_id, name, created_at FROM audiences \
              WHERE author_user_id = $1 ORDER BY audience_id",
         )
-        .bind(i64::from(author_user_id))
+        .bind(author_user_id)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
             .into_iter()
             .map(|(audience_id, name, created_at)| AudienceRecord {
-                audience_id: AudienceId::from(audience_id),
+                audience_id,
                 name,
                 created_at,
             })
@@ -287,9 +288,9 @@ where
              VALUES ($1, $2, $3) \
              ON CONFLICT (audience_id, subscription_id) DO NOTHING",
         )
-        .bind(i64::from(audience_id))
-        .bind(i64::from(subscription_id))
-        .bind(i64::from(author_user_id))
+        .bind(audience_id)
+        .bind(subscription_id)
+        .bind(author_user_id)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -310,9 +311,9 @@ where
             "DELETE FROM audience_members \
              WHERE author_user_id = $1 AND audience_id = $2 AND subscription_id = $3",
         )
-        .bind(i64::from(author_user_id))
-        .bind(i64::from(audience_id))
-        .bind(i64::from(subscription_id))
+        .bind(author_user_id)
+        .bind(audience_id)
+        .bind(subscription_id)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -328,18 +329,15 @@ where
         author_user_id: UserId,
         audience_id: AudienceId,
     ) -> sqlx::Result<Vec<SubscriptionId>> {
-        let rows = sqlx::query_as::<_, (i64,)>(
+        let rows = sqlx::query_as::<_, (SubscriptionId,)>(
             "SELECT subscription_id FROM audience_members \
              WHERE author_user_id = $1 AND audience_id = $2 ORDER BY subscription_id",
         )
-        .bind(i64::from(author_user_id))
-        .bind(i64::from(audience_id))
+        .bind(author_user_id)
+        .bind(audience_id)
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows
-            .into_iter()
-            .map(|(id,)| SubscriptionId::from(id))
-            .collect())
+        Ok(rows.into_iter().map(|(id,)| id).collect())
     }
 }
 

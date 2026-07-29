@@ -29,7 +29,7 @@ use host::invite::InviteCode;
 // ---------------------------------------------------------------------------
 
 pub(crate) type UserRecordParts = (
-    i64,
+    UserId,
     Username,
     Option<DisplayName>,
     Option<Bio>,
@@ -58,7 +58,7 @@ pub(crate) fn build_user_record(
     // `FromStr`, so a corrupt/migrated value is rejected as a column-decode error
     // before we ever get here — this build step is now infallible.
     UserRecord {
-        user_id: UserId::from(user_id),
+        user_id,
         username,
         display_name,
         bio,
@@ -76,19 +76,19 @@ pub(crate) fn build_user_record(
 
 pub(crate) fn build_session_record(
     token_hash: TokenHash,
-    user_id: i64,
+    user_id: UserId,
     username: Username,
     label: SessionLabel,
     created_at: DateTime<Utc>,
     last_used_at: DateTime<Utc>,
 ) -> SessionRecord {
-    // The `token_hash` and `username` columns decode straight into their domain
-    // newtypes via the sqlx bridge (#438), which validates through `FromStr`, so a
+    // Every column arrives as its domain type — `token_hash`/`username` through the
+    // validating string bridge (#438), `user_id` through the id bridge (#686) — so a
     // corrupt/migrated value is rejected as a column-decode error before we ever
-    // get here — this build step is now infallible.
+    // get here, and this build step is infallible.
     SessionRecord {
         token_hash,
-        user_id: UserId::from(user_id),
+        user_id,
         username,
         label,
         created_at,
@@ -105,17 +105,18 @@ pub(crate) fn build_invite_record(
     created_at: DateTime<Utc>,
     expires_at: DateTime<Utc>,
     used_at: Option<DateTime<Utc>>,
-    used_by: Option<i64>,
+    used_by: Option<UserId>,
 ) -> InviteRecord {
     // The `code` column decodes straight into `InviteCode` via the sqlx bridge (#438),
-    // which validates through `FromStr`, so a corrupt/migrated value is rejected as a
-    // decode error before we ever get here — this build step is now infallible.
+    // which validates through `FromStr`, and `used_by` through the id bridge (#686), so a
+    // corrupt/migrated value is rejected as a decode error before we ever get here — this
+    // build step is infallible.
     InviteRecord {
         code,
         created_at,
         expires_at,
         used_at,
-        used_by: used_by.map(UserId::from),
+        used_by,
     }
 }
 
@@ -153,18 +154,17 @@ fn parse_post_tags_json(json: &str, post_id: PostId) -> sqlx::Result<Vec<PostTag
 }
 
 pub(crate) fn build_post_record(row: PostRow) -> sqlx::Result<PostRecord> {
-    // `username`, `title`, `slug`, `body`, `format`, and `rendered_html` already arrived
-    // as their domain types — the sqlx bridge decoded each column (the newtypes via #438,
-    // `format` via its `PostFormat` text-enum bridge, #572, `rendered_html` via its own
-    // `Decode` since #445), so a corrupt/migrated value is rejected as a column-decode
-    // error before we get here. The JSON `tags` still parse here, so this step stays
-    // fallible.
-    let post_id = PostId::from(row.post_id);
+    // Every column except `tags` already arrived as its domain type — the sqlx bridge
+    // decoded each one (the string newtypes via #438, the ids via #686, `format` via its
+    // `PostFormat` text-enum bridge, #572, `rendered_html` via its own `Decode` since
+    // #445), so a corrupt/migrated value is rejected as a column-decode error before we
+    // get here. The JSON `tags` still parse here, so this step stays fallible.
+    let post_id = row.post_id;
     let tags = parse_post_tags_json(&row.tags, post_id)?;
 
     Ok(PostRecord {
         post_id,
-        user_id: UserId::from(row.user_id),
+        user_id: row.user_id,
         author_username: row.username,
         title: row.title,
         slug: row.slug,
@@ -185,7 +185,7 @@ pub(crate) fn build_post_record(row: PostRow) -> sqlx::Result<PostRecord> {
 // ---------------------------------------------------------------------------
 
 pub(crate) type UserRow = (
-    i64,
+    UserId,
     Username,
     Option<DisplayName>,
     Option<Bio>,
@@ -202,7 +202,7 @@ pub(crate) fn user_record_from_row(row: UserRow) -> UserRecord {
 
 pub(crate) type SessionRow = (
     TokenHash,
-    i64,
+    UserId,
     Username,
     String,
     DateTime<Utc>,
@@ -231,7 +231,7 @@ pub(crate) type InviteRow = (
     DateTime<Utc>,
     DateTime<Utc>,
     Option<DateTime<Utc>>,
-    Option<i64>,
+    Option<UserId>,
 );
 
 pub(crate) fn invite_record_from_row(row: InviteRow) -> InviteRecord {
@@ -243,17 +243,18 @@ pub(crate) fn invite_record_from_row(row: InviteRow) -> InviteRecord {
 ///
 /// Field names are the SELECT *column* names (`username` from `u.username`, `tags` from
 /// the `… AS tags` JSON aggregate), so `#[derive(FromRow)]` binds them by name across
-/// all 21 `query_as::<_, PostRow>` sites without any column aliasing. The `username`/
-/// `title`/`slug`/`body`/`format` columns decode straight into their domain types via
-/// the sqlx bridge (the newtypes via #438, `format` via its text-enum bridge #572).
-/// `rendered_html` (`RenderedHtml`) decodes the same way since #445 — its bridge was
-/// write-only (#502: `Type`/`Encode`, no `Decode`) until sanitization moved onto the
-/// type, so it no longer needs the `from_trusted` rebuild it used to get in
-/// [`build_post_record`]. `tags` is the JSON aggregate parsed there.
+/// all 21 `query_as::<_, PostRow>` sites without any column aliasing. The `post_id`/
+/// `user_id`/`username`/`title`/`slug`/`body`/`format` columns decode straight into their
+/// domain types via the sqlx bridge (the string newtypes via #438, the ids via #686,
+/// `format` via its text-enum bridge #572). `rendered_html` (`RenderedHtml`) decodes the
+/// same way since #445 — its bridge was write-only (#502: `Type`/`Encode`, no `Decode`)
+/// until sanitization moved onto the type, so it no longer needs the `from_trusted`
+/// rebuild it used to get in [`build_post_record`]. The **only** column that is not a
+/// decoded domain type is `tags`, the JSON aggregate parsed there.
 #[derive(sqlx::FromRow)]
 pub(crate) struct PostRow {
-    post_id: i64,
-    user_id: i64,
+    post_id: PostId,
+    user_id: UserId,
     username: Username,
     title: Option<PostTitle>,
     slug: Slug,
@@ -273,31 +274,26 @@ pub(crate) fn post_record_from_row(row: PostRow) -> sqlx::Result<PostRecord> {
 }
 
 pub(crate) type MediaRow = (
-    i64,
+    UserId,
     ContentHash,
     Filename,
     MediaSource,
     ContentType,
-    i64,
+    ByteSize,
     Option<String>,
     DateTime<Utc>,
 );
 
-pub(crate) fn media_record_from_row(row: MediaRow) -> sqlx::Result<MediaRecord> {
+pub(crate) fn media_record_from_row(row: MediaRow) -> MediaRecord {
     let (user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at) = row;
-    // `sha256`, `filename`, and `source` already arrived as their domain types — the
-    // sqlx bridge decoded each column through its validating `FromStr` (the newtypes
-    // via #438, `source` via its `MediaSource` text-enum bridge, #607), so a corrupt
-    // or hand-edited value is rejected as a column-decode error before we get here.
-    // `size_bytes` arrives as the raw `i64` column; route it through the checked
-    // door so a negative stored value is rejected as a column-decode error (mirrors
-    // the `source` parse above).
-    let size_bytes = ByteSize::try_from(size_bytes).map_err(|e| sqlx::Error::ColumnDecode {
-        index: "size_bytes".into(),
-        source: Box::new(e),
-    })?;
-    Ok(MediaRecord {
-        user_id: UserId::from(user_id),
+    // Every column arrives as its domain type — `sha256`/`filename` through the validating
+    // string bridge (#438), `source` through its `MediaSource` text-enum bridge (#607),
+    // `user_id` through the id bridge and `size_bytes` through the *bound-checking* numeric
+    // bridge (#686), whose `Decode` re-runs `ByteSize`'s `min` so a negative stored value is
+    // still rejected as a column-decode error. Nothing is left to convert, so this build
+    // step is infallible.
+    MediaRecord {
+        user_id,
         sha256,
         filename,
         source,
@@ -305,7 +301,7 @@ pub(crate) fn media_record_from_row(row: MediaRow) -> sqlx::Result<MediaRecord> 
         size_bytes,
         source_url,
         created_at,
-    })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -409,16 +405,16 @@ mod tests {
     use crate::test_support::parse_invite_code;
     use chrono::Utc;
     use common::test_support::{
-        parse_bio, parse_content_hash, parse_content_type, parse_display_name, parse_email,
-        parse_filename, parse_password, parse_session_label, parse_slug, parse_token_hash,
-        parse_username,
+        parse_bio, parse_byte_size, parse_content_hash, parse_content_type, parse_display_name,
+        parse_email, parse_filename, parse_password, parse_session_label, parse_slug,
+        parse_token_hash, parse_username,
     };
 
     #[test]
     fn test_build_user_record() {
         let now = Utc::now();
         let parts: UserRecordParts = (
-            1,
+            UserId::from(1),
             parse_username("alice"),
             Some(parse_display_name("Alice")),
             Some(parse_bio("Bio")),
@@ -439,7 +435,7 @@ mod tests {
         let now = Utc::now();
         let record = build_session_record(
             parse_token_hash("hash"),
-            1,
+            UserId::from(1),
             parse_username("alice"),
             parse_session_label("label"),
             now,
@@ -459,7 +455,7 @@ mod tests {
             created_at,
             expires_at,
             Some(used_at),
-            Some(7),
+            Some(UserId::from(7)),
         );
 
         assert_eq!(record.code.as_ref(), "invite-code");
@@ -473,8 +469,8 @@ mod tests {
     fn test_build_post_record() {
         let now = Utc::now();
         let record = build_post_record(PostRow {
-            post_id: 10,
-            user_id: 20,
+            post_id: PostId::from(10),
+            user_id: UserId::from(20),
             username: parse_username("alice"),
             title: Some("Hello".into()),
             slug: parse_slug("hello-world"),
@@ -546,8 +542,8 @@ mod tests {
         let now = Utc::now();
         let tags_json = r#"[{"tag_id": 1, "tag_slug": "rust", "tag_display": "Rust"}]"#;
         let record = build_post_record(PostRow {
-            post_id: 10,
-            user_id: 20,
+            post_id: PostId::from(10),
+            user_id: UserId::from(20),
             username: parse_username("alice"),
             title: None,
             slug: parse_slug("hello-world"),
@@ -572,8 +568,8 @@ mod tests {
     fn build_post_record_rejects_invalid_tags_json() {
         let now = Utc::now();
         let err = build_post_record(PostRow {
-            post_id: 10,
-            user_id: 20,
+            post_id: PostId::from(10),
+            user_id: UserId::from(20),
             username: parse_username("alice"),
             title: None,
             slug: parse_slug("hello-world"),
@@ -597,8 +593,8 @@ mod tests {
         let tags_json =
             r#"[{"tag_id": 1, "tag_slug": "Not A Slug", "tag_display": "Bad"}]"#.to_string();
         let err = build_post_record(PostRow {
-            post_id: 10,
-            user_id: 20,
+            post_id: PostId::from(10),
+            user_id: UserId::from(20),
             username: parse_username("alice"),
             title: None,
             slug: parse_slug("hello-world"),
@@ -629,16 +625,16 @@ mod tests {
     #[test]
     fn media_record_from_row_accepts_valid_source() {
         let row: MediaRow = (
-            1,
+            UserId::from(1),
             parse_content_hash(ROW_HASH),
             parse_filename("file.png"),
             MediaSource::Upload,
             parse_content_type("image/png"),
-            42,
+            parse_byte_size("42"),
             None,
             Utc::now(),
         );
-        let record = media_record_from_row(row).unwrap();
+        let record = media_record_from_row(row);
         assert_eq!(record.user_id, UserId::from(1));
         assert_eq!(record.source, MediaSource::Upload);
         assert_eq!(record.sha256, ROW_HASH);
@@ -650,7 +646,7 @@ mod tests {
         let now = Utc::now();
         let session: SessionRow = (
             parse_token_hash("tokenhash"),
-            1,
+            UserId::from(1),
             parse_username("alice"),
             "label".to_string(),
             now,
@@ -668,7 +664,7 @@ mod tests {
     fn user_row_helper_delegates_to_build_user_record() {
         let now = Utc::now();
         let row: UserRow = (
-            1,
+            UserId::from(1),
             parse_username("alice"),
             None,
             None,
@@ -686,8 +682,8 @@ mod tests {
     fn post_row_helper_delegates_to_build_post_record() {
         let now = Utc::now();
         let row = PostRow {
-            post_id: 10,
-            user_id: 20,
+            post_id: PostId::from(10),
+            user_id: UserId::from(20),
             username: parse_username("alice"),
             title: None,
             slug: parse_slug("hello-world"),
@@ -770,7 +766,7 @@ mod tests {
     fn user_record_from_row_maps_some_fields() {
         let now = Utc::now();
         let row: UserRow = (
-            1,
+            UserId::from(1),
             parse_username("alice"),
             Some(parse_display_name("Alice")),
             Some(parse_bio("Bio")),
@@ -794,7 +790,13 @@ mod tests {
     #[test]
     fn invite_record_from_row_maps_some_fields() {
         let now = Utc::now();
-        let row: InviteRow = (parse_invite_code("code"), now, now, Some(now), Some(1));
+        let row: InviteRow = (
+            parse_invite_code("code"),
+            now,
+            now,
+            Some(now),
+            Some(UserId::from(1)),
+        );
         let record = invite_record_from_row(row);
         assert_eq!(record.code.as_ref(), "code");
         assert_eq!(record.created_at, now);

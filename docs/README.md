@@ -98,7 +98,7 @@ convention). See the Status column below for each ADR's current status.
 | [0068](adr/0068-tag-identity-label-split.md)                       | A domain value with a canonical identity and a preserved label is two newtypes, not one                      | proposed   |
 | [0069](adr/0069-client-crate-wasm-only-home.md)                    | `client` crate — the wasm-only browser-infrastructure home                                                   | accepted   |
 | [0070](adr/0070-web-vertical-wasm-only-component-files.md)         | web verticals split host/wasm at the file level — wasm-only `component.rs`                                   | accepted   |
-| [0071](adr/0071-sqlx-string-newtype-bridge.md)                     | Transparent sqlx bridge for string newtypes                                                                  | accepted   |
+| [0071](adr/0071-sqlx-string-newtype-bridge.md)                     | Transparent sqlx bridge for domain newtypes                                                                  | accepted   |
 | [0072](adr/0072-timestamps-cross-boundary-as-utcinstant.md)        | Timestamps cross the web boundary as a `UtcInstant` newtype (chrono is already in the wasm bundle)           | proposed   |
 | [0073](adr/0073-url-crate-for-absolute-url-normalization.md)       | The `url` crate is the sanctioned absolute-URL normalizer, and it enters the `common`/wasm graph             | proposed   |
 | [0074](adr/0074-str-enum-trailer.md)                               | `StrEnum` derive — the standard string-enum trailer                                                          | superseded |

@@ -1,8 +1,10 @@
-# ADR-0071: Transparent sqlx bridge for string newtypes
+# ADR-0071: Transparent sqlx bridge for domain newtypes
 
 - Status: accepted
 - Date: 2026-07-20
-- Issue: [#438](https://github.com/jaunder-org/jaunder/issues/438)
+- Issue: [#438](https://github.com/jaunder-org/jaunder/issues/438),
+  [#686](https://github.com/jaunder-org/jaunder/issues/686) (extended to
+  `IdNewtype`/`NumNewtype`)
 
 ## Context
 
@@ -18,6 +20,18 @@ reconstructed, a place for the newtype invariant to silently drift.
 ADR-0063 already solved the analogous problem for numeric id newtypes with a
 transparent `serde` bridge emitted by the `StrNewtype`/id derives. The DB
 boundary is the same shape of problem, one layer down.
+
+**#686 extended the decision to the other two families**, which this ADR
+originally left out. `IdNewtype` and `NumNewtype` had no bridge, so ids and
+bounded numerics were stuck in exactly the pre-#438 shape: ~29 row/tuple
+positions declared as bare `i64` and re-wrapped by hand after the read, and 114
+`.bind(i64::from(x))` strips before the write. For an **id** that is worse than
+for a string: an id newtype's whole purpose is the transposition guarantee
+(ADR-0063 §2), and a query returning adjacent bare `i64` `post_id`/`tag_id`
+columns hands that guarantee straight back — the SELECT's column order becomes
+the only thing pairing them. Nothing about the original reasoning was
+string-specific; the bridge was simply written for the family that needed it
+first.
 
 Two constraints shape the solution:
 
@@ -62,34 +76,83 @@ default-on, `secret` drops it, a secret re-adds it explicitly.
   `#[cfg(all(target_arch = "wasm32", feature = "sqlx"))] compile_error!` in
   `common` makes any future violation fail loudly.
 - **An `xtask` enforcement gate (`sqlx-newtype-bind`)** scans `storage/src` and
-  fails on the stringly-bind idioms (`.bind(_.as_ref())`, `.bind(&*_)`,
-  `.bind(&**_)`), so a newtype cannot silently be bound as a bare string again.
-  It carries a small, substring-matched allowlist for the one legitimate
-  `.as_ref()` bind (a typed `Option<PostTitle>::as_ref()`). (#502 retired the
-  second entry, `RenderedHtml`, by giving that type a hand-written write-only
+  fails on the newtype-stripping bind idioms — the stringly ones
+  (`.bind(_.as_ref())`, `.bind(&*_)`, `.bind(&**_)`) and, since #686, the
+  numeric one (`.bind(i64::from(_))`) — so a newtype cannot silently be bound as
+  a bare primitive again. It carries a small, substring-matched allowlist: the
+  one legitimate `.as_ref()` bind (a typed `Option<PostTitle>::as_ref()`), and
+  two forced `u32 → i64` widenings that are not strips at all (see below). (#502
+  retired the `RenderedHtml` entry by giving that type a hand-written write-only
   bridge — see Consequences.)
+
+**The `IdNewtype` and `NumNewtype` bridges (#686)** have the same
+`Type`/`Encode` shape, delegating to the declared inner integer rather than
+`String`, and differ from the string bridge — and from each other — only in
+`Decode`:
+
+- **`IdNewtype`'s `Decode` is an infallible wrap.** An id has no value invariant
+  beyond "is an integer" (ADR-0063 §2), so there is nothing to validate; it
+  deliberately does **not** route through the generated `FromStr`, which is a
+  non-validating delegate rather than a chokepoint.
+- **`NumNewtype`'s `Decode` re-runs the bound**, via the generated
+  `TryFrom<inner>` — the same chokepoint `FromStr` and the serde bridge use.
+  Skipping it would leave the column a hole in an invariant enforced everywhere
+  else. This is a **behaviour change**: an out-of-range stored value is now a
+  `ColumnDecode` error rather than a silently-admitted value. The bridge is
+  parameterized on the declared `inner`, not hardcoded to `i64`.
+- **Neither has an opt-out.** `StrNewtype` needs `secret`/`no_sqlx`/`sqlx`
+  because `Encode` carries a storability semantic that genuinely differs per
+  type (a plaintext `Password` is never stored; a `RawToken` must be hashed
+  first). No id or bounded numeric has such a value — an id is not a credential.
+  Add a flag when one appears, not before.
+
+**The residue this leaves** is two `.bind(i64::from(…))` shapes that are **not**
+newtype strips: `limit` is a bare `u32`, and `PageOffset`'s declared `inner` is
+`u32`. sqlx implements no Postgres `Encode` for unsigned types, so the widening
+to `i64` is forced by the driver, not by a missing bridge. They are the gate's
+two documented allowlist entries and belong to #696, which owns the storage
+fetch-limit types.
 
 ## Consequences
 
-- Every derive-based string newtype is a first-class DB column type:
-  `.bind(newtype)` binds directly and `query_as` decodes straight into the
-  newtype. New stored string newtypes are DB-ready with no annotation and
-  **cannot silently miss the bridge** — the gate enforces it.
+- Every derive-based newtype — string, id, or bounded numeric — is a first-class
+  DB column type: `.bind(newtype)` binds directly and `query_as` decodes
+  straight into the newtype. New stored newtypes are DB-ready with no annotation
+  and **cannot silently miss the bridge** — the gate enforces it.
+- A row tuple can name what its positions mean.
+  `query_as::<_, (PostId, TagId, …)>` makes a swapped destructuring a compile
+  error, where two adjacent bare `i64`s made it invisible — the transposition
+  guarantee now reaches the SQL boundary instead of stopping one layer above it.
+- The cost is paid in **where-clauses**. Every generic
+  `impl<DB> …Storage for …Store<DB>` restates its row tuples as `FromRow` bounds
+  (ADR-0019: supertrait where-clauses don't propagate), so retyping a tuple
+  means changing the `query_as` turbofish **and** the bound; changing only one
+  removes the `FromRow` impl for the new shape and the error surfaces on the
+  _other_ columns. The same applies to nullable binds: sqlx implements `Encode`
+  for `Option<T>` per concrete database (`impl_encode_for_option!`), never
+  blanket over a generic `DB`, so each `Option<Newtype>` bind must be restated
+  too.
 - The fallible hand re-parses and their `cov:ignore` debt are retired; several
   record builders became infallible.
 - Type-safety is preserved end-to-end across the storage edge; a corrupt column
-  is a `ColumnDecode` error at read, not a silently-admitted invalid value.
-- `secret` types stay bridge-less by default — the derive is now the single
-  place that decides storability, and a plaintext secret cannot be bound to a
-  query by accident.
+  is a `ColumnDecode` error at read, not a silently-admitted invalid value. For
+  `NumNewtype` that is new behaviour: an out-of-range integer column that was
+  previously admitted (or rejected only where someone remembered a hand
+  `try_from`) is now rejected uniformly, at the column.
+- `secret` **string** types stay bridge-less by default — the derive is now the
+  single place that decides storability, and a plaintext secret cannot be bound
+  to a query by accident. Ids and bounded numerics have no such case, so their
+  bridges are unconditional; the asymmetry is deliberate, not an oversight.
 - Commits us to: the `common` optional-`sqlx`-feature seam (kept off for wasm by
   the `compile_error!` guard and the wasm-clippy gate); the `sqlx-newtype-bind`
   gate and its allowlist (down to one entry after #502).
 - Rules out per-type hand-written sqlx impls (orphan-rule-bound and duplicative)
   and a storage-side wrapper type (second-class, conversion at every edge) — for
   derive-eligible newtypes. The lone sanctioned exception is `RenderedHtml`
-  (#502): a provenance type whose carve-outs (no `FromStr`, and a `Decode` would
-  launder an untrusted column into trusted unescaped HTML) rule the derive out,
-  so it gets a hand-written **write-only** bridge (`Type`+`Encode`, no
-  `Decode`); its column still decodes as `String` and is rebuilt via the gated
-  `from_trusted`.
+  (#502): a provenance type whose carve-outs (no `FromStr`) rule the derive out,
+  so it gets a hand-written bridge. That bridge was **write-only**
+  (`Type`+`Encode`, no `Decode`) for as long as a `Decode` would have laundered
+  an untrusted column into trusted unescaped HTML; **#445 moved sanitization
+  onto the type**, which removed that objection, so it now has a `Decode` too
+  and its column no longer needs the gated `from_trusted` rebuild on read
+  (ADR-0079).

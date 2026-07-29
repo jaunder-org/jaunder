@@ -6,7 +6,7 @@ use sqlx::{Database, Pool};
 use thiserror::Error;
 
 use common::feed::FeedPath;
-use common::ids::{AudienceId, PostId, RevisionId, TagId, UserId};
+use common::ids::{AudienceId, ChannelId, PostId, RevisionId, TagId, UserId};
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
@@ -818,8 +818,8 @@ where
     PostRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     (i64,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (bool,): for<'r> sqlx::FromRow<'r, DB::Row>,
-    (i64, i64, Tag, TagLabel): for<'r> sqlx::FromRow<'r, DB::Row>,
-    (i64, Tag): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (PostId, TagId, Tag, TagLabel): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (TagId, Tag): for<'r> sqlx::FromRow<'r, DB::Row>,
     (String, Option<i64>): for<'r> sqlx::FromRow<'r, DB::Row>,
     (DateTime<Utc>,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (String, DateTime<Utc>): for<'r> sqlx::FromRow<'r, DB::Row>,
@@ -827,6 +827,9 @@ where
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<&'q str>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<String>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    // The viewer-resolution binds are NULL-able (`ResolutionBinds::bind_onto`).
+    for<'q> Option<UserId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<ChannelId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `Slug`/`Tag`/`Username` bind and decode as themselves via the sqlx bridge
     // (#438), which delegates to `String`; this pair makes that bridge available
     // on the generic backend (the reads decode the `slug`/`tag_slug`/`username`
@@ -896,7 +899,7 @@ where
         let post_id = sqlx::query_scalar::<_, i64>(
             "SELECT post_id FROM idempotency_keys WHERE user_id = $1 AND key = $2",
         )
-        .bind(i64::from(user_id))
+        .bind(user_id)
         .bind(key)
         .fetch_optional(&self.pool)
         .await?;
@@ -924,7 +927,7 @@ where
                AND {resolution}",
             tags = DB::TAGS_SUBQUERY,
         );
-        let query = sqlx::query_as::<_, PostRow>(&sql).bind(i64::from(post_id));
+        let query = sqlx::query_as::<_, PostRow>(&sql).bind(post_id);
         let row = binds.bind_onto(query).fetch_optional(&self.pool).await?;
         Ok(row.map(post_record_from_row).transpose()?)
     }
@@ -944,7 +947,7 @@ where
              WHERE pa.post_id = $1 \
              ORDER BY tk.name, pa.audience_id",
         )
-        .bind(i64::from(post_id))
+        .bind(post_id)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
@@ -1019,7 +1022,7 @@ where
         let now = Utc::now();
         sqlx::query("UPDATE posts SET deleted_at = $1 WHERE post_id = $2")
             .bind(now)
-            .bind(i64::from(post_id))
+            .bind(post_id)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -1032,7 +1035,7 @@ where
     )]
     async fn unpublish_post(&self, post_id: PostId) -> sqlx::Result<()> {
         sqlx::query("UPDATE posts SET published_at = NULL WHERE post_id = $1")
-            .bind(i64::from(post_id))
+            .bind(post_id)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -1076,7 +1079,7 @@ where
                 .bind(username)
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
-                .bind(i64::from(cursor.post_id))
+                .bind(cursor.post_id)
                 .bind(now);
             binds
                 .bind_onto(query)
@@ -1146,7 +1149,7 @@ where
             let query = sqlx::query_as::<_, PostRow>(&sql)
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
-                .bind(i64::from(cursor.post_id))
+                .bind(cursor.post_id)
                 .bind(now);
             binds
                 .bind_onto(query)
@@ -1210,10 +1213,10 @@ where
                  LIMIT $6"
             );
             sqlx::query_as::<_, PostRow>(&sql)
-                .bind(i64::from(user_id))
+                .bind(user_id)
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
-                .bind(i64::from(cursor.post_id))
+                .bind(cursor.post_id)
                 .bind(now)
                 .bind(i64::from(limit))
                 .fetch_all(&self.pool)
@@ -1234,7 +1237,7 @@ where
                  LIMIT $3"
             );
             sqlx::query_as::<_, PostRow>(&sql)
-                .bind(i64::from(user_id))
+                .bind(user_id)
                 .bind(now)
                 .bind(i64::from(limit))
                 .fetch_all(&self.pool)
@@ -1269,9 +1272,9 @@ where
                  LIMIT $4"
             );
             sqlx::query_as::<_, PostRow>(&sql)
-                .bind(i64::from(user_id))
+                .bind(user_id)
                 .bind(cursor.updated_at)
-                .bind(i64::from(cursor.post_id))
+                .bind(cursor.post_id)
                 .bind(i64::from(limit))
                 .fetch_all(&self.pool)
                 .await?
@@ -1288,7 +1291,7 @@ where
                  LIMIT $2"
             );
             sqlx::query_as::<_, PostRow>(&sql)
-                .bind(i64::from(user_id))
+                .bind(user_id)
                 .bind(i64::from(limit))
                 .fetch_all(&self.pool)
                 .await?
@@ -1314,20 +1317,24 @@ where
         DB::untag_post(&self.pool, post_id, tag_slug).await
     }
 
+    /// The row tuple's first two positions are `post_id` and `tag_id` — adjacent
+    /// ids of the same width. Typing them as `PostId`/`TagId` rather than `i64`
+    /// is what stops a swapped destructuring from compiling (ADR-0063 §2); the
+    /// SELECT's column order is the only thing that pairs them otherwise.
     #[tracing::instrument(
         name = "storage.posts.get_tags_for_post",
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn get_tags_for_post(&self, post_id: PostId) -> sqlx::Result<Vec<PostTag>> {
-        let rows = sqlx::query_as::<_, (i64, i64, Tag, TagLabel)>(
+        let rows = sqlx::query_as::<_, (PostId, TagId, Tag, TagLabel)>(
             "SELECT pt.post_id, pt.tag_id, t.tag_slug, pt.tag_display
              FROM post_tags pt
              JOIN tags t ON pt.tag_id = t.tag_id
              WHERE pt.post_id = $1
              ORDER BY t.tag_slug",
         )
-        .bind(i64::from(post_id))
+        .bind(post_id)
         .fetch_all(&self.pool)
         .await?;
 
@@ -1337,8 +1344,8 @@ where
         Ok(rows
             .into_iter()
             .map(|(post_id, tag_id, tag_slug, tag_display)| PostTag {
-                post_id: PostId::from(post_id),
-                tag_id: TagId::from(tag_id),
+                post_id,
+                tag_id,
                 tag_slug,
                 tag_display,
             })
@@ -1395,7 +1402,7 @@ where
                 .bind(tag_slug)
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
-                .bind(i64::from(cursor.post_id))
+                .bind(cursor.post_id)
                 .bind(now);
             binds
                 .bind_onto(query)
@@ -1485,11 +1492,11 @@ where
                  LIMIT ${limit_idx}"
             );
             let query = sqlx::query_as::<_, PostRow>(&sql)
-                .bind(i64::from(user_id))
+                .bind(user_id)
                 .bind(tag_slug)
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
-                .bind(i64::from(cursor.post_id))
+                .bind(cursor.post_id)
                 .bind(now);
             binds
                 .bind_onto(query)
@@ -1518,7 +1525,7 @@ where
                  LIMIT ${limit_idx}"
             );
             let query = sqlx::query_as::<_, PostRow>(&sql)
-                .bind(i64::from(user_id))
+                .bind(user_id)
                 .bind(tag_slug)
                 .bind(now);
             binds
@@ -1553,7 +1560,7 @@ where
 
         let rows = match pattern {
             Some(ref like) => {
-                sqlx::query_as::<_, (i64, Tag)>(
+                sqlx::query_as::<_, (TagId, Tag)>(
                     "SELECT tag_id, tag_slug FROM tags
                      WHERE tag_slug LIKE $1
                      ORDER BY tag_slug
@@ -1565,7 +1572,7 @@ where
                 .await?
             }
             None => {
-                sqlx::query_as::<_, (i64, Tag)>(
+                sqlx::query_as::<_, (TagId, Tag)>(
                     "SELECT tag_id, tag_slug FROM tags
                      ORDER BY tag_slug
                      LIMIT $1",
@@ -1580,10 +1587,7 @@ where
         // malformed stored value is rejected as a column-decode error above.
         Ok(rows
             .into_iter()
-            .map(|(tag_id, tag_slug)| TagRecord {
-                tag_id: TagId::from(tag_id),
-                tag_slug,
-            })
+            .map(|(tag_id, tag_slug)| TagRecord { tag_id, tag_slug })
             .collect())
     }
 
@@ -1695,16 +1699,21 @@ where
 /// left-to-right order their placeholders appear in [`resolution_where`]'s
 /// fragment. `channel`/`subref` repeat (subscribers branch, then named branch)
 /// because each occurrence gets its own placeholder — see [`resolution_where`].
+///
+/// Every field is optional and `None` binds SQL NULL, which makes its comparison
+/// unknown rather than true — see [`resolution_where`] for why that is what
+/// "this branch cannot match" means here.
 struct ResolutionBinds {
     /// `p.user_id = $author_id` — the viewer's local user id for the author
-    /// branch, or the sentinel `-1` (no post has `user_id` -1) for `Anonymous`.
-    author_id: i64,
-    /// `s.channel_id` for the subscribers/named `EXISTS` branches; sentinel `-1`
-    /// for `Anonymous` (no subscription has `channel_id` -1).
-    channel: i64,
-    /// `s.subscriber_ref` for the subscribers/named branches; sentinel `""` for
+    /// branch. `None` for `Anonymous`, and for a `Channel` viewer whose
+    /// `subscriber_ref` is not a local user id.
+    author_id: Option<UserId>,
+    /// `s.channel_id` for the subscribers/named `EXISTS` branches. `None` for
     /// `Anonymous`.
-    subref: String,
+    channel: Option<ChannelId>,
+    /// `s.subscriber_ref` for the subscribers/named branches. `None` for
+    /// `Anonymous`.
+    subref: Option<String>,
 }
 
 /// The viewer-resolution predicate and its binds, for folding into a read
@@ -1712,9 +1721,19 @@ struct ResolutionBinds {
 /// author OR some targeted audience admits them. See ADR-0020, Task 13.
 ///
 /// The fragment is emitted in full for every viewer; `Anonymous` is handled by
-/// binding sentinels (`author_id = -1`, `channel = -1`, `subref = ""`) that make
-/// every non-`public` branch dead, so it reduces to "public posts only" without
-/// a second query shape.
+/// binding NULL for all three values, so it reduces to "public posts only"
+/// without a second query shape. A NULL comparison is *unknown*, never true:
+/// `p.user_id = NULL` cannot admit a post, and the `EXISTS` subqueries match no
+/// row, so `EXISTS` is false. The fragment contains no `NOT`, and the caller
+/// `AND`s it into a `WHERE`, where unknown filters the row out exactly as false
+/// would — so NULL kills every non-`public` branch.
+///
+/// This replaces a sentinel scheme (`author_id = -1`, `channel = -1`,
+/// `subref = ""`) that relied on those values being unstorable: `-1` was
+/// unreachable only because `users`/`channels` hand out positive autoincrement
+/// keys, and `subscriber_ref = ''` is schema-legal (`TEXT NOT NULL` with no
+/// non-empty CHECK) — it was unreachable only because the sole writer binds an
+/// authenticated user id. NULL needs neither argument.
 ///
 /// `start` is the next free `$n` index. The fragment uses FIVE distinct
 /// placeholders (`$start`..`$start+4`) — the `channel`/`subref` pair appears once
@@ -1727,17 +1746,17 @@ struct ResolutionBinds {
 /// where `next` is the first free index after the fragment.
 fn resolution_where(viewer: &ViewerIdentity, start: usize) -> (String, ResolutionBinds, usize) {
     let (author_id, channel, subref) = match viewer {
-        ViewerIdentity::Anonymous => (-1_i64, -1_i64, String::new()),
+        ViewerIdentity::Anonymous => (None, None, None),
         ViewerIdentity::Channel {
             channel_id,
             subscriber_ref,
         } => {
             // The author branch fires only for a local viewer whose
             // `subscriber_ref` parses to a real user id (the post's `user_id`).
-            // A non-numeric ref (no local user) falls through to -1, so it never
+            // A non-numeric ref (no local user) yields `None` → NULL, so it never
             // matches `p.user_id`.
-            let author_id = subscriber_ref.parse::<i64>().unwrap_or(-1);
-            (author_id, i64::from(*channel_id), subscriber_ref.clone())
+            let author_id = subscriber_ref.parse::<UserId>().ok();
+            (author_id, Some(*channel_id), Some(subscriber_ref.clone()))
         }
     };
     let author = start;
@@ -1789,13 +1808,20 @@ impl ResolutionBinds {
         DB: Database,
         i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
         &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        // sqlx implements `Encode for Option<T>` per concrete database (the
+        // `impl_encode_for_option!` macro), not blanket over a generic `DB`, so
+        // each NULL-able bind's type has to be restated here — and, per ADR-0019,
+        // again on every caller.
+        Option<UserId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        Option<ChannelId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        Option<&'q str>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     {
         query
             .bind(self.author_id)
             .bind(self.channel)
-            .bind(self.subref.as_str())
+            .bind(self.subref.as_deref())
             .bind(self.channel)
-            .bind(self.subref.as_str())
+            .bind(self.subref.as_deref())
     }
 }
 
@@ -1885,7 +1911,7 @@ where
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          RETURNING post_id",
     )
-    .bind(i64::from(input.user_id))
+    .bind(input.user_id)
     // `Option::as_ref` → `Option<&PostTitle>` (a typed newtype bind, not an
     // `AsRef<str>` strip); the sqlx bridge encodes `Option<&PostTitle>`.
     .bind(input.title.as_ref())
@@ -1917,9 +1943,9 @@ where
     // `map_err` fires, not by inspecting the constraint name.
     if let Some(key) = input.idempotency_key.as_deref() {
         sqlx::query("INSERT INTO idempotency_keys (user_id, key, post_id) VALUES ($1, $2, $3)")
-            .bind(i64::from(input.user_id))
+            .bind(input.user_id)
             .bind(key)
-            .bind(i64::from(post_id))
+            .bind(post_id)
             .execute(&mut *conn)
             .await
             .map_err(map_idempotency_insert_error)?;
@@ -1948,13 +1974,13 @@ where
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     sqlx::query(DB::DELETE_POST_AUDIENCES)
-        .bind(i64::from(post_id))
+        .bind(post_id)
         .execute(&mut *conn)
         .await?;
     for target in audiences {
         if let Some((kind_name, audience_id)) = audience_target_row(target) {
             sqlx::query(DB::INSERT_POST_AUDIENCE)
-                .bind(i64::from(post_id))
+                .bind(post_id)
                 .bind(audience_id)
                 .bind(kind_name)
                 .execute(&mut *conn)
@@ -1983,6 +2009,10 @@ where
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    // The viewer-resolution binds are NULL-able (`ResolutionBinds::bind_onto`).
+    for<'q> Option<UserId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<ChannelId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<&'q str>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `Username`/`Tag` bind as themselves via the sqlx bridge (#438), which
     // delegates to `String`; this pair makes that bridge available on the generic
     // backend for the surface `username`/`tag` binds.
@@ -2926,7 +2956,7 @@ mod tests {
             CloseablePool::Sqlite(pool) => {
                 sqlx::query(sql)
                     .bind("not a slug")
-                    .bind(i64::from(post_id))
+                    .bind(post_id)
                     .execute(pool)
                     .await
                     .unwrap();
@@ -2934,7 +2964,7 @@ mod tests {
             CloseablePool::Postgres(pool) => {
                 sqlx::query(sql)
                     .bind("not a slug")
-                    .bind(i64::from(post_id))
+                    .bind(post_id)
                     .execute(pool)
                     .await
                     .unwrap();
@@ -3001,7 +3031,7 @@ mod tests {
             CloseablePool::Sqlite(pool) => {
                 sqlx::query(sql)
                     .bind("bogus")
-                    .bind(i64::from(post_id))
+                    .bind(post_id)
                     .execute(pool)
                     .await
                     .unwrap();
@@ -3009,7 +3039,7 @@ mod tests {
             CloseablePool::Postgres(pool) => {
                 sqlx::query(sql)
                     .bind("bogus")
-                    .bind(i64::from(post_id))
+                    .bind(post_id)
                     .execute(pool)
                     .await
                     .unwrap();

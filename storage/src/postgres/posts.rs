@@ -37,10 +37,10 @@ impl PostDialect for Postgres {
         // edit from slipping between this ownership/liveness check and the UPDATE
         // below (ADR-0021 / #52). SQLite needs no equivalent — its transaction
         // already serializes writers.
-        let existing = sqlx::query_as::<_, (i64, Option<DateTime<Utc>>)>(
+        let existing = sqlx::query_as::<_, (UserId, Option<DateTime<Utc>>)>(
             "SELECT user_id, deleted_at FROM posts WHERE post_id = $1 FOR UPDATE",
         )
-        .bind(i64::from(post_id))
+        .bind(post_id)
         .fetch_optional(&mut *tx)
         .await?;
 
@@ -49,9 +49,7 @@ impl PostDialect for Postgres {
                 tx.rollback().await.ok();
                 return Err(UpdatePostError::NotFound);
             }
-            Some((owner_id, deleted_at))
-                if UserId::from(owner_id) != editor_user_id || deleted_at.is_some() =>
-            {
+            Some((owner_id, deleted_at)) if owner_id != editor_user_id || deleted_at.is_some() => {
                 tx.rollback().await.ok();
                 return Err(UpdatePostError::Unauthorized);
             }
@@ -64,7 +62,7 @@ impl PostDialect for Postgres {
              FROM posts WHERE post_id = $2",
         )
         .bind(now)
-        .bind(i64::from(post_id))
+        .bind(post_id)
         .execute(&mut *tx)
         .await?;
 
@@ -109,7 +107,7 @@ impl PostDialect for Postgres {
         // edit/clear — the column was previously omitted from the SET clause, so
         // an edited summary was silently dropped (surfaced by #545's clear e2e).
         .bind(input.summary.as_ref())
-        .bind(i64::from(post_id))
+        .bind(post_id)
         .fetch_one(&mut *tx)
         .await?;
 
@@ -132,7 +130,7 @@ impl PostDialect for Postgres {
 
         let post_exists: bool =
             sqlx::query_scalar("SELECT COUNT(*) > 0 FROM posts WHERE post_id = $1")
-                .bind(i64::from(post_id))
+                .bind(post_id)
                 .fetch_one(&mut *tx)
                 .await?;
 
@@ -154,7 +152,7 @@ impl PostDialect for Postgres {
 
         let result =
             sqlx::query("INSERT INTO post_tags (post_id, tag_id, tag_display) VALUES ($1, $2, $3)")
-                .bind(i64::from(post_id))
+                .bind(post_id)
                 .bind(tag_id)
                 .bind(tag)
                 .execute(&mut *tx)
@@ -185,7 +183,7 @@ impl PostDialect for Postgres {
             "DELETE FROM post_tags
              WHERE post_id = $1 AND tag_id = (SELECT tag_id FROM tags WHERE tag_slug = $2)",
         )
-        .bind(i64::from(post_id))
+        .bind(post_id)
         .bind(tag_slug)
         .execute(pool)
         .await?
