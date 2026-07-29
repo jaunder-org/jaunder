@@ -293,10 +293,10 @@ impl Cli {
             Command::Traces(TracesCommand::Run { .. }) => "traces-run",
             Command::Coverage(CoverageCommand::ProbeSource) => "coverage-probe-source",
             Command::ServerFnCoverage(ServerFnCoverageCommand::Regenerate) => {
-                "server-fn-coverage-regenerate"
+                steps::server_fn_coverage_check::REGENERATE_STEP
             }
             Command::ServerFnCoverage(ServerFnCoverageCommand::Verify) => {
-                "server-fn-coverage-verify"
+                steps::server_fn_coverage_check::VERIFY_STEP
             }
             Command::ElispIntegration => "elisp-integration",
         }
@@ -515,13 +515,13 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         }
         Command::ServerFnCoverage(sub) => {
             let start = std::time::Instant::now();
+            use steps::server_fn_coverage_check::{REGENERATE_STEP, VERIFY_STEP};
             let regenerate = matches!(sub, ServerFnCoverageCommand::Regenerate);
-            let name = if regenerate {
-                "server-fn-coverage-regenerate"
+            let mut result = CommandResult::new(if regenerate {
+                REGENERATE_STEP
             } else {
-                "server-fn-coverage-verify"
-            };
-            let mut result = CommandResult::new(name);
+                VERIFY_STEP
+            });
             // A missing/empty/unparseable capture propagates as Err → the exit-2
             // path, never a green run: treating a broken capture as "nothing
             // uncovered" would make the whole gate dishonest.

@@ -30,8 +30,11 @@ use crate::server_fn_coverage::{render, verdict, Snapshot, REGENERATE_CMD};
 
 /// The static lane's step name.
 const STATIC_STEP: &str = "server-fn-coverage";
-const REGENERATE_STEP: &str = "server-fn-coverage-regenerate";
-const VERIFY_STEP: &str = "server-fn-coverage-verify";
+/// The e2e lane's step names. `pub` because `lib.rs` labels the `CommandResult`
+/// and its `command_name()` arm with the same strings — spelling them again there
+/// would let a rename desync the reported command from the step it ran.
+pub const REGENERATE_STEP: &str = "server-fn-coverage-regenerate";
+pub const VERIFY_STEP: &str = "server-fn-coverage-verify";
 
 /// The one combo whose traces are authoritative (spec D6). `chromium` and
 /// `chromium-admin` are exact complements over all spec files and no test is
