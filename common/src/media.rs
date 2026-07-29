@@ -26,7 +26,7 @@
 //! silently truncating the path at the delimiter and addressing a different file).
 //!
 //! The three spellings of a filename (raw in the database, encoded on disk and in URLs) and
-//! why they are what they are: `docs/adr/drafts/media-path-naming-correspondence.md`.
+//! why they are what they are: `docs/adr/0080-media-path-naming-correspondence.md`.
 //!
 //! # Untrusted input
 //!

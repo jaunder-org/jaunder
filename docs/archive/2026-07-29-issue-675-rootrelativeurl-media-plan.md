@@ -433,7 +433,7 @@ encoding, which is finding 8 — the reason the defect survived.
 
 ## T8 — ADR draft: media URL / on-disk / DB naming correspondence
 
-- [x] Done — drafted at `docs/adr/drafts/media-path-naming-correspondence.md`,
+- [x] Done — drafted at `docs/adr/0080-media-path-naming-correspondence.md`,
       referenced from `common/src/media.rs`'s module docs. The draft itself is
       **not committed**: the drafts pen is gitignored so a number is never
       picked by hand; `cargo xtask adr promote` numbers it and rewrites the
