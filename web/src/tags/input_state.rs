@@ -1,8 +1,11 @@
 //! The reactive state of the `TagInput` widget, extracted from the wasm-only
 //! `component` so its dispatch logic is **host-tested under an `Owner`** rather
-//! than hidden behind the `#[component]` coverage exemption (ADR-0070 §6; the same
-//! convention `web::reactive::Invalidator` and `forms::Field` follow). Only the
-//! irreducible event wiring stays inline in the component, via leptos's own helpers.
+//! than left to e2e alone (ADR-0070 §6; the same convention
+//! `web::reactive::Invalidator` and `forms::Field` follow). Extraction is now the
+//! only way this logic gets covered: since #520 there is no `#[component]`
+//! coverage exemption, because a wasm-only component never host-compiles at all.
+//! Only the irreducible event wiring stays inline in the component, via leptos's
+//! own helpers.
 
 use leptos::prelude::*;
 

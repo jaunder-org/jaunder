@@ -962,7 +962,7 @@ records.
 - Consumes: every code change from Tasks 2–6.
 - Produces: nothing consumed by later tasks.
 
-- [ ] **Step 1: Amend ADR-0050**
+- [x] **Step 1: Amend ADR-0050**
 
 Its title (`:1`), the header amendment note (`:6-8`, which counts `unreachable!`
 as "a **third** structural exemption" — arithmetically wrong once Decision 1
@@ -976,7 +976,7 @@ this ("component lines leave the host denominator entirely — not-compiled beat
 measured-but-exempt"). The retained `unreachable!` rule and the A1 guard stay
 described as current.
 
-- [ ] **Step 2: Amend ADR-0062**
+- [x] **Step 2: Amend ADR-0062**
 
 `:17`, `:49` ("Its **first tenant** is `#[client_only]`"), and `:80` describe a
 tenant that no longer exists. Record that it retired in #520 per its own interim
@@ -985,14 +985,14 @@ browser"), and that the crate's remaining tenants are the three newtype derives.
 The ADR's actual decision — a target-agnostic proc-macro crate exists — is
 unchanged.
 
-- [ ] **Step 3: Amend ADR-0069**
+- [x] **Step 3: Amend ADR-0069**
 
 Clarify that "never our domain types" means _ours_: framework transport such as
 `server_fn`'s `MultipartData` is admissible, on the same footing as the `leptos`
 dependency the crate already carries behind `csr`. Cite `client::upload` as the
 instance (criterion E3).
 
-- [ ] **Step 4: Amend ADR-0070**
+- [x] **Step 4: Amend ADR-0070**
 
 Three edits (criterion E2): record that the file-level split is now
 machine-enforced by the `target-arch-placement` check, in the three forms of
@@ -1004,7 +1004,7 @@ rather than an admission test, so a single-vertical primitive that is genuinely
 raw browser glue (`client::upload`) belongs there. The operative test is
 domain-freedom.
 
-- [ ] **Step 5: Update CONTRIBUTING.md**
+- [x] **Step 5: Update CONTRIBUTING.md**
 
 Four precise edits — the ranges matter, because two adjacent bullets have
 opposite fates:
@@ -1021,7 +1021,7 @@ opposite fates:
   `#[component]` bodies are "**structurally exempt** (no marker needed)".
   Reword: they are not-compiled on the host, which is why no marker is needed.
 
-- [ ] **Step 6: Verify no doc describes removed machinery**
+- [x] **Step 6: Verify no doc describes removed machinery**
 
 Run:
 `rg -n 'client_only|structurally exempt|component.*exemption' CONTRIBUTING.md docs/adr/ client/src web/src`
@@ -1031,7 +1031,7 @@ as a statement of current policy. Read each hit to confirm (criterion E5).
 Run: `cargo xtask check` Expected: PASS — `adr_check` validates ADR structure
 and the README table.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add CONTRIBUTING.md docs/adr/

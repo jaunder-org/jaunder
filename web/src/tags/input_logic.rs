@@ -1,7 +1,9 @@
 //! Pure, host-tested logic for the `TagInput` widget (ADR-0070 §6): tag-list
 //! dedup, autocomplete keyboard navigation, and typed-tag parsing — extracted
 //! out of the wasm-only `component` so it stays host-compiled and
-//! coverage-measured rather than hiding behind the `#[component]` exemption.
+//! coverage-measured. (Before #520 the alternative was the `#[component]`
+//! coverage exemption; that is retired — a wasm-only component simply never
+//! host-compiles, so extraction is the only route to coverage.)
 
 use common::seed::TagSummary;
 use common::tag::TagLabel;

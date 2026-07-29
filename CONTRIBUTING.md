@@ -417,22 +417,17 @@ The gate is **stateless**: its verdict is a pure function of
 `(coverage report, source tree)` — there is no committed baseline, anchor, or
 manifest. Each run builds a fresh `cargo llvm-cov` report inside the Nix
 `coverage` check and classifies every executable source line. An **uncovered
-line fails the gate** unless one of three things exempts it:
+line fails the gate** unless one of two things exempts it:
 
-- **Structural exemption — `#[component]` functions (signature + body).** Leptos
-  CSR UI is exercised by the e2e matrix (browser WASM), not by native host
-  tests, so component code is never covered host-side. The gate recognizes the
-  `#[component]` attribute with `syn` (attribute-anchored, **fail-closed** — an
-  unrecognized component form leaves it _measured_ and can FAIL, never silently
-  exempts) and drops both the body **and the signature** lines from the
-  executable set: the `#[component]` macro generates a prop struct/builder from
-  the parameter list whose code is attributed back to the signature lines and is
-  likewise only exercised on render, so the signature must be exempt too (else
-  the prop list needs hand-marking — a `cov:ignore` on a function declaration).
-  The exemption is keyed on the **construct**, not on files or directories, so
-  `#[server]` and plain helper code (incl. non-`#[component]` `-> impl IntoView`
-  view builders) co-located in a vertical (`web/src/<vertical>/`) stays
-  measured.
+> Leptos CSR UI needs no exemption. A `#[component]` lives in a wasm-only
+> `component.rs` behind `#[cfg(target_arch = "wasm32")] mod component;`
+> (ADR-0070), so it is **not compiled for the host at all** and its lines never
+> enter the denominator. The `#[component]` / `#[client_only]` structural
+> exemption that used to cover them was retired in #520 (ADR-0050, amended). To
+> get component-adjacent logic _covered_ rather than merely absent, extract it
+> into an ungated, host-tested file — the ADR-0070 §6 convention that
+> `web::reactive::Invalidator`, `forms::Field`, and `tags::input_state` follow.
+
 - **Structural exemption — `unreachable!("msg")`.** A literal `unreachable!`
   invocation carrying a **non-empty message** is dropped from the executable set
   with **no marker**. It is _self-enforcing_: reaching the line panics ⇒ the
@@ -440,11 +435,11 @@ line fails the gate** unless one of three things exempts it:
   no report — so, unlike a `cov:ignore` on a reachable line, you cannot silently
   cheat coverage on live code. It is _message-required_ (a bare `unreachable!()`
   stays **measured**, forcing an explicit justification, mirroring `crap:allow`)
-  and, like `#[component]`, **fail-closed** — `std::unreachable!`, aliases, and
-  macro-generated forms are not recognized and stay measured. Use it for
-  provably-dead lines (a match arm a domain invariant makes unreachable) in
-  preference to a `cov:ignore`: the marker is a permanent, prose-only promise,
-  whereas an `unreachable!` re-flags itself the moment the line ever goes live.
+  and **fail-closed** — `std::unreachable!`, aliases, and macro-generated forms
+  are not recognized and stay measured. Use it for provably-dead lines (a match
+  arm a domain invariant makes unreachable) in preference to a `cov:ignore`: the
+  marker is a permanent, prose-only promise, whereas an `unreachable!` re-flags
+  itself the moment the line ever goes live.
 - **`// cov:ignore` marker.** A line explicitly marked as an accepted gap.
 
 `cov:ignore` is the **only** manual acceptance path — there is no baseline file
@@ -502,21 +497,14 @@ verify-only.
 
 **Protection tradeoffs (stated honestly — not "stricter").** The stateless gate
 dissolves a class of fragility — the verdict is identical at any checkout depth,
-with no text-identity guessing after a rebase — but on three axes it is
+with no text-identity guessing after a rebase — but on two axes it is
 **equivalent-or-weaker** than the old baseline ratchet, by deliberate design:
 
-1. **Component bodies are weaker.** A _new_ uncovered line inside a component
-   body is blanket-exempt and passes silently, where the ratchet would have
-   forced conscious sign-off. New untested component logic becomes invisible. An
-   invariant tripwire bounds this to _uncovered_ component code: if any
-   _covered_ line ever falls inside a `#[component]` span (e.g. someone adds
-   native SSR render tests), the gate fails loudly, forcing a deliberate
-   decision — but it does not re-introduce sign-off.
-2. **CRAP is weaker below T.** A per-function threshold is blind to a function
+1. **CRAP is weaker below T.** A per-function threshold is blind to a function
    that worsens but stays under T (e.g. 5 → 29); the old manifest
    regression-check caught that. This argues for keeping T tight (the _Code
    quality improvement_ grind-down).
-3. **`cov:ignore` is permanent.** Unlike the ratchet — which tracked
+2. **`cov:ignore` is permanent.** Unlike the ratchet — which tracked
    covered-state and re-flagged a line that went covered → uncovered — a
    `cov:ignore`'d line that later becomes covered and then regresses is never
    re-flagged. The migrated markers bake in permanent (but in-source, greppable,
@@ -524,15 +512,20 @@ with no text-identity guessing after a rebase — but on three axes it is
 
 These are accepted: component UI is covered by e2e, all non-exempt code still
 fails on any uncovered line, and the deleted machinery's fragility outweighed
-the marginal ratchet protection on already-accepted lines. See
+the marginal ratchet protection on already-accepted lines. (A third tradeoff —
+"component bodies are weaker", where a new uncovered line inside a
+blanket-exempt component body passed silently — was **removed** in #520 rather
+than mitigated: components no longer host-compile, so there is no blanket
+exemption left to be weak.) See
 [the stateless-coverage-gate ADR](docs/adr/0050-stateless-coverage-gate.md).
 
 Some areas are inherently uncovered host-side and are accepted rather than
 force-fitted with artificial tests:
 
 - **Leptos view components** (`web/src/<vertical>/component.rs`): `#[component]`
-  bodies render view trees, validated by the e2e matrix — **structurally
-  exempt** (no marker needed).
+  bodies render view trees, validated by the e2e matrix — **not host-compiled**
+  (the file is wasm-only by its `mod` declaration), so no marker and no
+  exemption are needed.
 - **WASM entry point** (`csr/src/lib.rs`): runs only in the browser WASM context
   — `cov:ignore`'d.
 - **A few PostgreSQL storage error branches** (`storage/src/postgres/*`) and

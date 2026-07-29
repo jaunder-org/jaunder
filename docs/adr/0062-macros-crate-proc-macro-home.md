@@ -46,11 +46,25 @@ footprint. The distinction is load-bearing: a proc-macro must never be mistaken
 for a target-scoped runtime home, and the trio's target-partition reasoning does
 not apply to it.
 
-Its **first tenant** is `#[client_only]` (#370): an **identity** attribute macro
-(item in, item out, unchanged). Its only effect is to be a syntactic marker
-`xtask/src/coverage/exempt.rs` recognizes and exempts — a macro-backed peer of
-the `cov:ignore` / `crap:allow` comment markers, needed as a real crate only
-because a _custom attribute_ (unlike a comment) must be macro-backed.
+Its **first tenant** was `#[client_only]` (#370): an **identity** attribute
+macro (item in, item out, unchanged). Its only effect was to be a syntactic
+marker `xtask/src/coverage/exempt.rs` recognized and exempted — a macro-backed
+peer of the `cov:ignore` / `crap:allow` comment markers, needed as a real crate
+only because a _custom attribute_ (unlike a comment) must be macro-backed.
+
+**Retired 2026-07-29 (#520), per its own interim charter** — the macro's doc
+comment said "interim until wasm-bindgen-test can cover these in a headless
+browser". It was retired earlier and for a better reason: client-only reactive
+helpers moved to the wasm-only `client` crate (ADR-0069) and components to
+wasm-only `component.rs` files (ADR-0070), so none of that code host-compiles
+and there is nothing left to mark. `macros::client_only` and the coverage gate's
+recognition of it are deleted (ADR-0050, amended).
+
+**This does not affect the decision above.** The crate's remaining tenants are
+the three newtype derives — `StrNewtype`, `IdNewtype`, `NumNewtype` (ADR-0063) —
+which are load-bearing codegen, not markers. If anything the rationale is
+stronger: `macros` is justified by real derives rather than by a marker whose
+need was an artifact of interim coverage machinery.
 
 ## Consequences
 

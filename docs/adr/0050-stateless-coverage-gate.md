@@ -1,4 +1,4 @@
-# ADR-0050: Stateless coverage gate — `cov:ignore` + `#[component]` exemption + CRAP threshold
+# ADR-0050: Stateless coverage gate — `cov:ignore` + `unreachable!` exemption + CRAP threshold
 
 - Status: accepted
 - Date: 2026-07-04
@@ -6,6 +6,19 @@
 - Amended: 2026-07-05
   ([#292](https://github.com/jaunder-org/jaunder/issues/292)) — a third
   structural exemption, `unreachable!("msg")` (see Decision 1 and Consequences)
+- Amended: 2026-07-29
+  ([#520](https://github.com/jaunder-org/jaunder/issues/520)) — **Decision 1's
+  `#[component]` / `#[client_only]` structural exemption is retired**, leaving
+  `unreachable!("msg")` as the only structural exemption. The gate's
+  architecture is unchanged (stateless, marker-based, CRAP threshold); the
+  exemption became **unnecessary**, not merely unused. Every `#[component]` now
+  lives in a wasm-only `component.rs` behind
+  `#[cfg(target_arch = "wasm32")] mod component;` (ADR-0070), so component lines
+  never enter the host denominator at all — not-compiled beats
+  measured-but-exempt, as ADR-0070's own Consequences anticipated.
+  `macros::client_only` is deleted. Retiring it changed the gate verdict not at
+  all: the same 21073 executable lines, 0 failures. See the per-section notes
+  below.
 
 ## Context
 
@@ -48,10 +61,14 @@ express that intent in source.
 Replace the stateful ratchet with a **stateless gate** whose verdict is a pure
 function of `(coverage report, source tree)`:
 
-1. **Structural exemption for `#[component]`.** After each `cargo llvm-cov`
-   build, the gate parses each source file with `syn` and drops the body-span
-   lines of any `#[component]` function from the executable set. Recognition is
-   **attribute-anchored** (`component` attribute path, incl.
+1. **Structural exemption for `#[component]`.** _(Retired 2026-07-29, #520 — see
+   the header amendment. The paragraph below is kept as the historical record of
+   why the exemption existed; it no longer describes the gate. Components are
+   wasm-only and never host-compile, so nothing remains to exempt. The
+   `unreachable!("msg")` amendment that follows it is still current.)_ After
+   each `cargo llvm-cov` build, the gate parses each source file with `syn` and
+   drops the body-span lines of any `#[component]` function from the executable
+   set. Recognition is **attribute-anchored** (`component` attribute path, incl.
    `#[component(...)]`) and **fail-closed**: an unrecognized component form
    leaves its body measured → the gate can FAIL, never silently exempts. The key
    is the **construct**, not a file or directory, so co-located
@@ -75,16 +92,17 @@ function of `(coverage report, source tree)`:
    depends on.
 
 2. **A1-guard tripwire.** The gate **fails** if any _covered_ report line falls
-   inside a recognized `#[component]` span. This turns the design's load-bearing
-   assumption — "native tests never render components, so exempting their bodies
-   discards no coverage" — into an enforced invariant; if someone later adds
-   native SSR render tests, the tripwire forces a deliberate decision instead of
-   silently trusting the exemption. Proven green on a real instrumented build
-   before any deletion. (Per #292 the guard treats every exempt line
-   identically, so it also covers a covered `unreachable!("msg")` line —
-   near-dead in practice, since reaching an `unreachable!` panics before any
-   report is produced, but retained rather than special-cased so both exemption
-   kinds share one path.)
+   inside a recognized exempt span. _(#520: with the `#[component]` arm retired,
+   the guard now protects the `unreachable!("msg")` exemption only — a covered
+   `unreachable!` line means the assertion was actually reached, so its premise
+   is violated. The guard itself is retained.)_ It was introduced to turn the
+   original design's load-bearing assumption — "native tests never render
+   components, so exempting their bodies discards no coverage" — into an
+   enforced invariant, and was proven green on a real instrumented build before
+   any deletion. (Per #292 the guard treats every exempt line identically, so it
+   also covers a covered `unreachable!("msg")` line — near-dead in practice,
+   since reaching an `unreachable!` panics before any report is produced, but
+   retained rather than special-cased so both exemption kinds share one path.)
 
 3. **`cov:ignore` as the sole manual acceptance path.** An uncovered, non-exempt
    line fails unless it carries a `// cov:ignore` marker. The matcher is
@@ -120,17 +138,21 @@ function of `(coverage report, source tree)`:
 - **#100 dissolves.** The verdict no longer depends on which baseline was loaded
   or on checkout depth; it is a pure function of report + source. No
   text-identity guessing (#112) survives.
-- **Intent lives in source.** Exemptions are structural (`#[component]` or
-  `unreachable!("msg")`) or an in-source, greppable, reviewable `cov:ignore` /
-  `crap:allow` marker — no out-of-band generated files, no merge-driver, no
+- **Intent lives in source.** Exemptions are structural (`unreachable!("msg")`;
+  `#[component]` until #520) or an in-source, greppable, reviewable `cov:ignore`
+  / `crap:allow` marker — no out-of-band generated files, no merge-driver, no
   candidate-file promotion ritual. A fresh clone needs no coverage-specific git
   config.
 - **Accepted protection tradeoffs (equivalent-or-weaker, not stricter).** Stated
   plainly here and in `CONTRIBUTING.md`:
-  1. **Component bodies: weaker.** A new uncovered line inside a component body
-     is blanket-exempt and passes silently, where the ratchet forced sign-off.
-     The A1-guard bounds this to _uncovered_ component code but does not restore
-     sign-off.
+  1. **Component bodies: weaker.** _(No longer applies as of #520.)_ A new
+     uncovered line inside a component body was blanket-exempt and passed
+     silently, where the ratchet forced sign-off. This tradeoff is now moot
+     rather than merely bounded: components are wasm-only (ADR-0070) and never
+     host-compile, so their lines are not in the host denominator at all — there
+     is no blanket exemption left to be weak. What keeps them honest is the e2e
+     matrix plus the ADR-0070 §6 convention of extracting pure/signal logic into
+     ungated, host-tested files.
   2. **CRAP: weaker below T.** A threshold is blind to a function that worsens
      but stays under T (5 → 29); this argues for keeping T tight.
   3. **`cov:ignore` is permanent.** A marked line that later becomes covered and
@@ -155,12 +177,14 @@ function of `(coverage report, source tree)`:
   pure-text path, accepted because the self-enforcing / message-required /
   no-marker properties are worth it and a parse error is itself caught loudly by
   the same `coverage` build.
-- **Forward-compat to native `#[coverage(off)]`.** The exemption is centralized
-  and construct-keyed. When `coverage_attribute` stabilizes (or the coverage
-  build moves to nightly), the `#[component]` macro (leptos or a thin wrapper)
-  can emit `#[cfg_attr(coverage_nightly, coverage(off))]` and the host-side
-  `syn` recognition is deleted in one place. Inert `cfg_attr` markers are
-  deliberately **not** added to source now — on stable they change nothing.
+- **Forward-compat to native `#[coverage(off)]`.** _(Overtaken by #520 for the
+  component case.)_ The plan was that once `coverage_attribute` stabilized, the
+  `#[component]` macro could emit `#[cfg_attr(coverage_nightly, coverage(off))]`
+  and the host-side `syn` recognition would be deleted in one place. The
+  wasm-only file split (ADR-0070) got there first and more cheaply: components
+  are simply not compiled for the host, so no attribute — ours or the compiler's
+  — is needed. The point still stands for `unreachable!("msg")`, whose
+  recognition remains centralized and construct-keyed.
 
 ## Relationship to prior ADRs
 
