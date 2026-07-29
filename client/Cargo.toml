@@ -14,17 +14,30 @@ web-sys = { workspace = true, features = [
   "Element",
   "Node",
   "NodeList",
+  # The media file-picker + click-to-select glue relocated from `web` (#520).
+  "Event",
+  "EventTarget",
+  "File",
+  "FileList",
+  "FormData",
+  "HtmlInputElement",
 ] }
 common.workspace = true
 serde.workspace = true
 # Optional + behind the `csr` feature so a normal (host / server) build never pulls leptos:
-# an unconditional dep would let workspace feature-unification light `leptos/csr` alongside
-# `web`'s server-build `leptos/ssr`, which leptos forbids. `web`'s `csr` feature forwards
-# `client/csr` (#515).
+# `web`'s server build pulls `leptos_axum`, which hard-requires `leptos/ssr`
+# (leptos_axum-0.8.10/Cargo.toml:74-79), so an unconditional dep here would risk unifying
+# `leptos/csr` into that same build. Whether leptos actually rejects that pair is an open
+# question (#677) — no `compile_error!` for it exists in leptos 0.8.20. `web`'s `csr`
+# feature forwards `client/csr` (#515).
 leptos = { workspace = true, optional = true }
+# `MultipartData` sits behind server_fn's `multipart` feature. `client` names it in
+# `upload::picked_file_multipart`, so it declares the feature itself rather than relying on
+# `web`'s manifest lighting it through feature unification (#520).
+server_fn = { workspace = true, features = ["multipart"], optional = true }
 
 [features]
-csr = ["dep:leptos", "leptos/csr"]
+csr = ["dep:leptos", "leptos/csr", "dep:server_fn"]
 
 [lints]
 workspace = true

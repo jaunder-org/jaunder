@@ -2,7 +2,7 @@
 //! `component` so its dispatch logic is **host-tested under an `Owner`** rather
 //! than hidden behind the `#[component]` coverage exemption (ADR-0070 §6; the same
 //! convention `web::reactive::Invalidator` and `forms::Field` follow). Only the
-//! irreducible `web_sys` event touch stays inline in the component.
+//! irreducible event wiring stays inline in the component, via leptos's own helpers.
 
 use leptos::prelude::*;
 

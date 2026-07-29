@@ -585,7 +585,7 @@ C6.
 `component.rs` headers), the `is_target_arch_cfg` path anchor was dropped — fix
 the predicate, do not add an allowlist.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add xtask/src/steps/target_arch_placement_check.rs xtask/src/lib.rs
@@ -619,7 +619,7 @@ Spec §D1, criteria A1–A6. **The risky task** — see the Review header.
 `NodeRef`, and the second's argument is the closure parameter leptos already
 infers.
 
-- [ ] **Step 1: Add the `server_fn` dependency to `client`**
+- [x] **Step 1: Add the `server_fn` dependency to `client`**
 
 `client/Cargo.toml` — make it explicit rather than inheriting the `multipart`
 feature from `web`'s manifest via cargo feature unification (criterion A4):
@@ -655,7 +655,7 @@ way:
 # is an open question (#677). `web`'s `csr` feature forwards `client/csr` (#515).
 ```
 
-- [ ] **Step 2: Write `client/src/upload.rs`**
+- [x] **Step 2: Write `client/src/upload.rs`**
 
 ```rust
 //! Browser file-picker → multipart upload glue (#520). Raw browser API access plus
@@ -693,7 +693,7 @@ identity cast and is not carried over.
 pub mod upload;
 ```
 
-- [ ] **Step 3: Append the select primitive to `client/src/dom.rs`**
+- [x] **Step 3: Append the select primitive to `client/src/dom.rs`**
 
 Typed `&web_sys::Event`, **not** `leptos::ev::MouseEvent` — that keeps `dom.rs`
 leptos-free and ungated alongside its three existing primitives, and
@@ -716,7 +716,7 @@ pub fn select_event_target_text(ev: &web_sys::Event) {
 Do **not** put `dom` behind `csr` — `csr/src/lib.rs:31,36,40` consume its three
 existing primitives with no feature selection (`csr/Cargo.toml:12`).
 
-- [ ] **Step 4: Rewrite the two `web` call sites**
+- [x] **Step 4: Rewrite the two `web` call sites**
 
 `web/src/media/component.rs:48-70` collapses to:
 
@@ -735,7 +735,7 @@ Note `upload_media(form_data)` — no `.into()`, since the primitive already
 returns `MultipartData`. And `:136-142` collapses to
 `on:click=move |ev| client::dom::select_event_target_text(&ev)`.
 
-- [ ] **Step 5: Drop the dependencies**
+- [x] **Step 5: Drop the dependencies**
 
 `web/Cargo.toml`: delete `macros = { path = "../macros" }` (`:27`) and the whole
 `web-sys = { … }` block (`:36-45`).
@@ -748,7 +748,7 @@ anyway. Removing it stops the manifest implying an SSR mode we don't have
 the line and report, rather than chasing it; actually shedding the SSR stack is
 #677's job.
 
-- [ ] **Step 6: Verify no `web_sys` path survives in `web`**
+- [x] **Step 6: Verify no `web_sys` path survives in `web`**
 
 Run: `rg -n 'web_sys::' web/src` Expected: **no matches** (criterion A2).
 
@@ -758,7 +758,7 @@ Then correct the two now-false prose claims (criterion A2):
 both use leptos's `event_target_value`. `web/src/lib.rs:46`'s "(no `web_sys`)"
 stays — still true.
 
-- [ ] **Step 7: Verify the build, the lints, and the browser**
+- [x] **Step 7: Verify the build, the lints, and the browser**
 
 Run the Global Constraints wasm-clippy command. Expected: PASS. **This is the
 step that settles the plan's key risk** — a failure here naming an unqualified
@@ -776,7 +776,27 @@ not substitute `--all-features` — it would light `leptos/csr` alongside
 Run: `cargo xtask e2e-local media` Expected: PASS — exercises both relocated
 primitives (criterion A6, ~3 min).
 
-- [ ] **Step 8: Commit**
+> **Key risk resolved.** The wasm build compiles with `web-sys` removed from
+> `web`: leptos's `view!`/`NodeRef` expansions resolve through leptos's own
+> re-exports, as the `csr` crate's dependency-free manifest predicted. The only
+> compile error was a missing `leptos::prelude::Get` trait import in
+> `client/src/upload.rs` (`NodeRef::get` is a trait method), fixed in place. The
+> server build (`-p web --features server`) is also clean, which settles **A7**:
+> dropping `"leptos/ssr"` really was a no-op, since `leptos_axum` supplies it.
+> All 6 media e2e specs pass, including both upload-widget tests; the logged 500
+> belongs to the "unauthenticated upload is rejected" case.
+
+> **Correction to a plan assumption.** The Review header claims `client` code is
+> "invisible to coverage". True of _line_ coverage, but **not of CRAP**: the
+> gate computes complexity over `client` source regardless, and the first draft
+> of `picked_file_multipart` — five chained fallible steps — failed at `crap=42`
+> against a threshold of 30. Because `client` is wasm-only, no test can ever pay
+> that down. Fixed by splitting out `picked_file`, a real separation of concerns
+> (read the picker's selection vs. wrap a file for transport), not a
+> `crap:allow` suppression. Also note the manifest changes force a full cold Nix
+> vendor rebuild (~3 min), so the first gate run after Step 5 is slow.
+
+- [x] **Step 8: Commit**
 
 ```bash
 git add client/ web/Cargo.toml web/src/media/component.rs web/src/tags/component.rs web/src/tags/input_state.rs

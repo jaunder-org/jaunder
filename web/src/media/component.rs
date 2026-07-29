@@ -47,35 +47,20 @@ pub fn MediaUpload(
         }
     };
 
-    let on_file_change = move |ev: leptos::ev::Event| {
+    // The event carries nothing we need — the picked file is read from `file_input`.
+    let on_file_change = move |_: leptos::ev::Event| {
         use leptos::task::spawn_local;
-        use leptos::wasm_bindgen::JsCast;
 
-        let _ = ev;
-
-        let Some(input) = file_input.get() else {
+        // The browser glue — reading the picked file and wrapping it as multipart — lives
+        // in `client::upload` so this crate names no `web_sys` type (#520).
+        let Some(form_data) = client::upload::picked_file_multipart(file_input) else {
             return;
         };
-        let input_el: web_sys::HtmlInputElement = input.unchecked_into();
-        let Some(files) = input_el.files() else {
-            return;
-        };
-        let Some(file): Option<web_sys::File> = files.get(0) else {
-            return;
-        };
-
-        let Ok(form_data) = web_sys::FormData::new() else {
-            return;
-        };
-        if form_data.append_with_blob("file", &file).is_err() {
-            return;
-        }
 
         uploading.set(true);
 
         spawn_local(async move {
-            // `MultipartData: From<web_sys::FormData>` on the client.
-            let result = upload_media(form_data.into()).await;
+            let result = upload_media(form_data).await;
             uploading.set(false);
             match result {
                 Ok(resp) => {
@@ -135,13 +120,7 @@ fn uploaded_url_view(url: String) -> impl IntoView {
                 value=url
                 class="j-field-val"
                 style="font-size:12px;cursor:text"
-                on:click=move |ev| {
-                    use leptos::wasm_bindgen::JsCast;
-                    let _ = ev
-                        .target()
-                        .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
-                        .map(|i| i.select());
-                }
+                on:click=move |ev| client::dom::select_event_target_text(&ev)
             />
         </div>
     }

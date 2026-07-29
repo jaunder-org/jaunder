@@ -32,3 +32,8 @@ pub mod dom;
 /// need `leptos`; a host/server build of `client` stays leptos-free.
 #[cfg(feature = "csr")]
 pub mod reactive;
+
+/// Browser file-picker → `MultipartData` glue (#520), relocated from `web::media` so that
+/// crate names no `web_sys` type. Behind `csr` because it needs leptos's `NodeRef`.
+#[cfg(feature = "csr")]
+pub mod upload;

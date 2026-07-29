@@ -500,6 +500,7 @@ dependencies = [
  "common",
  "leptos",
  "serde",
+ "server_fn",
  "wasm-bindgen",
  "web-sys",
 ]
@@ -5165,7 +5166,6 @@ dependencies = [
  "leptos_dom",
  "leptos_meta",
  "leptos_router",
- "macros",
  "reactive_stores",
  "serde",
  "serde_json",
@@ -5178,7 +5178,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "web-sys",
 ]
 
 [[package]]
