@@ -9,7 +9,7 @@ pub enum Mode {
     Check,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct StepResult {
     pub name: String,
     pub ok: bool,

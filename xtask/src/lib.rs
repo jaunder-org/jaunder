@@ -30,6 +30,7 @@ mod steps {
     pub mod proffered_secret_check;
     pub mod rendered_html_from_trusted_check;
     pub mod sequence_check;
+    pub mod server_fn_coverage_check;
     pub mod server_fn_registrar_check;
     pub mod server_fn_tracing_check;
     pub mod sqlx_newtype_bind_check;
@@ -500,10 +501,6 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             Ok(result)
         }
         Command::ServerFnCoverage(sub) => {
-            use server_fn_coverage::io::{
-                coverage_from_capture, inventory, write_snapshot, CAPTURE_PATH, SNAPSHOT_PATH,
-                WEB_SRC,
-            };
             let start = std::time::Instant::now();
             let regenerate = matches!(sub, ServerFnCoverageCommand::Regenerate);
             let name = if regenerate {
@@ -512,38 +509,14 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                 "server-fn-coverage-verify"
             };
             let mut result = CommandResult::new(name);
-
             // A missing/empty/unparseable capture propagates as Err → the exit-2
             // path, never a green run: treating a broken capture as "nothing
             // uncovered" would make the whole gate dishonest.
-            let inventory = inventory(Path::new(WEB_SRC))?;
-            let coverage = coverage_from_capture(Path::new(CAPTURE_PATH), &inventory)?;
-            let snapshot = server_fn_coverage::Snapshot::from(coverage);
-            let rendered = server_fn_coverage::render(&snapshot);
-            let path = Path::new(SNAPSHOT_PATH);
-
-            if regenerate {
-                write_snapshot(path, &snapshot)?;
-                result.push(StepResult::ok(name).detail(format!(
-                    "{} covered, {} orphan hit(s) → {SNAPSHOT_PATH}",
-                    snapshot.covered.len(),
-                    snapshot.orphans.values().sum::<usize>()
-                )));
-            } else {
-                let committed = std::fs::read_to_string(path).unwrap_or_default();
-                if committed == rendered {
-                    result.push(StepResult::ok(name).detail(format!(
-                        "{} covered; snapshot current",
-                        snapshot.covered.len()
-                    )));
-                } else {
-                    result.push(StepResult::fail(name).detail(format!(
-                        "{SNAPSHOT_PATH} is out of date with this run's traces — regenerate it \
-                         with `{}` and commit the result",
-                        server_fn_coverage::REGENERATE_CMD
-                    )));
-                }
-            }
+            let step = steps::server_fn_coverage_check::from_capture(
+                Path::new(server_fn_coverage::io::CAPTURE_PATH),
+                regenerate,
+            )?;
+            result.push(step);
             finalize(&mut result, start);
             Ok(result)
         }
@@ -802,6 +775,30 @@ mod cli_tests {
             }
             _ => panic!("expected traces run"),
         }
+    }
+
+    #[test]
+    fn server_fn_coverage_parses_both_subcommands() {
+        // Both spellings appear verbatim in the gate's failure messages and in
+        // CONTRIBUTING, so a rename must break a test rather than a developer.
+        let cli = Cli::try_parse_from(["xtask", "server-fn-coverage", "regenerate"]).unwrap();
+        assert_eq!(cli.command_name(), "server-fn-coverage-regenerate");
+        assert!(matches!(
+            cli.command,
+            Command::ServerFnCoverage(ServerFnCoverageCommand::Regenerate)
+        ));
+
+        let cli = Cli::try_parse_from(["xtask", "server-fn-coverage", "verify"]).unwrap();
+        assert_eq!(cli.command_name(), "server-fn-coverage-verify");
+        assert!(matches!(
+            cli.command,
+            Command::ServerFnCoverage(ServerFnCoverageCommand::Verify)
+        ));
+    }
+
+    #[test]
+    fn server_fn_coverage_requires_a_subcommand() {
+        assert!(Cli::try_parse_from(["xtask", "server-fn-coverage"]).is_err());
     }
 
     #[test]
