@@ -230,7 +230,7 @@ where
         .fetch_optional(&self.pool)
         .await?;
 
-        row.map(crate::helpers::media_record_from_row).transpose()
+        Ok(row.map(crate::helpers::media_record_from_row))
     }
 
     #[tracing::instrument(
@@ -288,7 +288,7 @@ where
             .iter()
             .filter_map(|row| {
                 match crate::helpers::MediaRow::from_row(row)
-                    .and_then(crate::helpers::media_record_from_row)
+                    .map(crate::helpers::media_record_from_row)
                 {
                     Ok(record) => Some(record),
                     Err(error) => {
@@ -348,7 +348,7 @@ where
         .fetch_optional(&self.pool)
         .await?;
 
-        row.map(crate::helpers::media_record_from_row).transpose()
+        Ok(row.map(crate::helpers::media_record_from_row))
     }
 }
 

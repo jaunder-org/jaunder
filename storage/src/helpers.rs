@@ -29,7 +29,7 @@ use host::invite::InviteCode;
 // ---------------------------------------------------------------------------
 
 pub(crate) type UserRecordParts = (
-    i64,
+    UserId,
     Username,
     Option<DisplayName>,
     Option<Bio>,
@@ -58,7 +58,7 @@ pub(crate) fn build_user_record(
     // `FromStr`, so a corrupt/migrated value is rejected as a column-decode error
     // before we ever get here — this build step is now infallible.
     UserRecord {
-        user_id: UserId::from(user_id),
+        user_id,
         username,
         display_name,
         bio,
@@ -105,17 +105,18 @@ pub(crate) fn build_invite_record(
     created_at: DateTime<Utc>,
     expires_at: DateTime<Utc>,
     used_at: Option<DateTime<Utc>>,
-    used_by: Option<i64>,
+    used_by: Option<UserId>,
 ) -> InviteRecord {
     // The `code` column decodes straight into `InviteCode` via the sqlx bridge (#438),
-    // which validates through `FromStr`, so a corrupt/migrated value is rejected as a
-    // decode error before we ever get here — this build step is now infallible.
+    // which validates through `FromStr`, and `used_by` through the id bridge (#686), so a
+    // corrupt/migrated value is rejected as a decode error before we ever get here — this
+    // build step is infallible.
     InviteRecord {
         code,
         created_at,
         expires_at,
         used_at,
-        used_by: used_by.map(UserId::from),
+        used_by,
     }
 }
 
@@ -184,7 +185,7 @@ pub(crate) fn build_post_record(row: PostRow) -> sqlx::Result<PostRecord> {
 // ---------------------------------------------------------------------------
 
 pub(crate) type UserRow = (
-    i64,
+    UserId,
     Username,
     Option<DisplayName>,
     Option<Bio>,
@@ -230,7 +231,7 @@ pub(crate) type InviteRow = (
     DateTime<Utc>,
     DateTime<Utc>,
     Option<DateTime<Utc>>,
-    Option<i64>,
+    Option<UserId>,
 );
 
 pub(crate) fn invite_record_from_row(row: InviteRow) -> InviteRecord {
@@ -273,31 +274,26 @@ pub(crate) fn post_record_from_row(row: PostRow) -> sqlx::Result<PostRecord> {
 }
 
 pub(crate) type MediaRow = (
-    i64,
+    UserId,
     ContentHash,
     Filename,
     MediaSource,
     ContentType,
-    i64,
+    ByteSize,
     Option<String>,
     DateTime<Utc>,
 );
 
-pub(crate) fn media_record_from_row(row: MediaRow) -> sqlx::Result<MediaRecord> {
+pub(crate) fn media_record_from_row(row: MediaRow) -> MediaRecord {
     let (user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at) = row;
-    // `sha256`, `filename`, and `source` already arrived as their domain types — the
-    // sqlx bridge decoded each column through its validating `FromStr` (the newtypes
-    // via #438, `source` via its `MediaSource` text-enum bridge, #607), so a corrupt
-    // or hand-edited value is rejected as a column-decode error before we get here.
-    // `size_bytes` arrives as the raw `i64` column; route it through the checked
-    // door so a negative stored value is rejected as a column-decode error (mirrors
-    // the `source` parse above).
-    let size_bytes = ByteSize::try_from(size_bytes).map_err(|e| sqlx::Error::ColumnDecode {
-        index: "size_bytes".into(),
-        source: Box::new(e),
-    })?;
-    Ok(MediaRecord {
-        user_id: UserId::from(user_id),
+    // Every column arrives as its domain type — `sha256`/`filename` through the validating
+    // string bridge (#438), `source` through its `MediaSource` text-enum bridge (#607),
+    // `user_id` through the id bridge and `size_bytes` through the *bound-checking* numeric
+    // bridge (#686), whose `Decode` re-runs `ByteSize`'s `min` so a negative stored value is
+    // still rejected as a column-decode error. Nothing is left to convert, so this build
+    // step is infallible.
+    MediaRecord {
+        user_id,
         sha256,
         filename,
         source,
@@ -305,7 +301,7 @@ pub(crate) fn media_record_from_row(row: MediaRow) -> sqlx::Result<MediaRecord> 
         size_bytes,
         source_url,
         created_at,
-    })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -409,16 +405,16 @@ mod tests {
     use crate::test_support::parse_invite_code;
     use chrono::Utc;
     use common::test_support::{
-        parse_bio, parse_content_hash, parse_content_type, parse_display_name, parse_email,
-        parse_filename, parse_password, parse_session_label, parse_slug, parse_token_hash,
-        parse_username,
+        parse_bio, parse_byte_size, parse_content_hash, parse_content_type, parse_display_name,
+        parse_email, parse_filename, parse_password, parse_session_label, parse_slug,
+        parse_token_hash, parse_username,
     };
 
     #[test]
     fn test_build_user_record() {
         let now = Utc::now();
         let parts: UserRecordParts = (
-            1,
+            UserId::from(1),
             parse_username("alice"),
             Some(parse_display_name("Alice")),
             Some(parse_bio("Bio")),
@@ -459,7 +455,7 @@ mod tests {
             created_at,
             expires_at,
             Some(used_at),
-            Some(7),
+            Some(UserId::from(7)),
         );
 
         assert_eq!(record.code.as_ref(), "invite-code");
@@ -629,16 +625,16 @@ mod tests {
     #[test]
     fn media_record_from_row_accepts_valid_source() {
         let row: MediaRow = (
-            1,
+            UserId::from(1),
             parse_content_hash(ROW_HASH),
             parse_filename("file.png"),
             MediaSource::Upload,
             parse_content_type("image/png"),
-            42,
+            parse_byte_size("42"),
             None,
             Utc::now(),
         );
-        let record = media_record_from_row(row).unwrap();
+        let record = media_record_from_row(row);
         assert_eq!(record.user_id, UserId::from(1));
         assert_eq!(record.source, MediaSource::Upload);
         assert_eq!(record.sha256, ROW_HASH);
@@ -668,7 +664,7 @@ mod tests {
     fn user_row_helper_delegates_to_build_user_record() {
         let now = Utc::now();
         let row: UserRow = (
-            1,
+            UserId::from(1),
             parse_username("alice"),
             None,
             None,
@@ -770,7 +766,7 @@ mod tests {
     fn user_record_from_row_maps_some_fields() {
         let now = Utc::now();
         let row: UserRow = (
-            1,
+            UserId::from(1),
             parse_username("alice"),
             Some(parse_display_name("Alice")),
             Some(parse_bio("Bio")),
@@ -794,7 +790,13 @@ mod tests {
     #[test]
     fn invite_record_from_row_maps_some_fields() {
         let now = Utc::now();
-        let row: InviteRow = (parse_invite_code("code"), now, now, Some(now), Some(1));
+        let row: InviteRow = (
+            parse_invite_code("code"),
+            now,
+            now,
+            Some(now),
+            Some(UserId::from(1)),
+        );
         let record = invite_record_from_row(row);
         assert_eq!(record.code.as_ref(), "code");
         assert_eq!(record.created_at, now);

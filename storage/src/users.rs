@@ -213,7 +213,7 @@ where
     DB: Backend,
     UserRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     (
-        i64,
+        UserId,
         Username,
         Option<DisplayName>,
         Option<Bio>,
@@ -303,7 +303,7 @@ where
         let row = sqlx::query_as::<
             _,
             (
-                i64,
+                UserId,
                 Username,
                 Option<DisplayName>,
                 Option<Bio>,
