@@ -12,6 +12,19 @@
 //! hex digest — a two-level fan-out that keeps any single directory small.
 //! `source` distinguishes provenance (e.g. `upload` vs a remote cache).
 //!
+//! The `<filename>` segment is **percent-encoded** ([`MEDIA_SEGMENT`]), so the URL path
+//! and the on-disk path are byte-identical: paste the tail of a serve URL and you have the
+//! path to the file. Both come from [`media_path`], which is the only place the layout is
+//! spelled — so a new consumer must call it rather than re-deriving, or the two spellings
+//! drift apart (#675).
+//!
+//! The database `filename` column keeps the **raw** name — it is the display name shown in
+//! the media list — so DB → disk is a derivation, while URL → disk is identity.
+//!
+//! Encoding is not cosmetic. A `Filename` may legally contain a space (which
+//! [`crate::root_relative_url::RootRelativeUrl`] rejects) or a `?`/`#` (which it *accepts*,
+//! silently truncating the path at the delimiter and addressing a different file).
+//!
 //! # Untrusted input
 //!
 //! Filenames and hashes round-trip through URLs, so they are attacker-
@@ -36,6 +49,7 @@ use std::path::Path;
 use std::str::FromStr;
 
 use macros::{NumNewtype, StrNewtype};
+use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -257,23 +271,59 @@ impl_string_serde_proxy!(MediaSource);
 // `MediaSource` value, not a stringly `.as_str()`/`.parse()` strip.
 crate::db_enum::impl_text_column_enum!(MediaSource);
 
+/// The percent-encode set for the filename segment of a media path: everything
+/// [`NON_ALPHANUMERIC`] encodes, minus the RFC 3986 *unreserved* marks `-._~`.
+///
+/// Keeping those four unencoded is what makes an ordinary name round-trip byte-identical —
+/// `photo.jpg` stays `photo.jpg` — which is the point of encoding here at all: the on-disk
+/// name has to stay greppable and paste-able from a URL. Bare [`NON_ALPHANUMERIC`] would
+/// yield `my%2Dphoto%2Ejpg` and make every stored file unreadable. (`content_disposition`
+/// in the `server` crate *does* use the bare set; correct there, wrong here.)
+const MEDIA_SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
+
+/// Percent-encodes `filename` for use as a single URL or filesystem path segment, via
+/// [`MEDIA_SEGMENT`].
+///
+/// Public because the media serve path is not the only place a [`Filename`] becomes a path
+/// segment — the `AtomPub` media member URL does it too — and both must use the *same* set
+/// or the two spellings of one file diverge. Returns a `Display`-able borrow, so callers
+/// interpolate it directly and no intermediate `String` is allocated for the common
+/// nothing-to-encode case.
+#[must_use]
+pub fn encode_filename_segment(filename: &Filename) -> impl std::fmt::Display + '_ {
+    utf8_percent_encode(filename, MEDIA_SEGMENT)
+}
+
 /// Returns `"<source>/<p1>/<p2>/<full-sha256>/<filename>"`, the content-
-/// addressed layout described in the module docs.
+/// addressed layout described in the module docs — the **single** definition of that
+/// layout, for both the on-disk path and the serve URL.
+///
+/// The filename segment is percent-encoded ([`MEDIA_SEGMENT`]), so this is what the file is
+/// named on disk, not just what appears in a URL. Callers must not re-derive the layout:
+/// the read path and the write path agreeing is exactly what makes the encoding safe.
 ///
 /// Takes a [`ContentHash`] rather than a bare `&str`, so the `sha256[..2]`/`[2..4]`
 /// slicing below can never see a short or non-`UTF-8`-boundary value — the type is
 /// the guard (its `FromStr`/`from_digest` are the only ways to build one). `p1`/`p2`
-/// index through `Deref<Target = str>`.
+/// index through `Deref<Target = str>`. [`MediaSource`] and [`Filename`] are typed rather
+/// than `&str` because two adjacent string parameters are silently transposable.
 #[must_use]
-pub fn media_path(source: &str, sha256: &ContentHash, filename: &str) -> String {
+pub fn media_path(source: &MediaSource, sha256: &ContentHash, filename: &Filename) -> String {
     let p1 = &sha256[..2];
     let p2 = &sha256[2..4];
+    let source = source.as_ref();
+    let filename = encode_filename_segment(filename);
     format!("{source}/{p1}/{p2}/{sha256}/{filename}")
 }
 
-/// Returns `"/media/<source>/<2-hex-p1>/<2-hex-p2>/<full-sha256>/<filename>"`.
+/// Returns `"/media/<source>/<2-hex-p1>/<2-hex-p2>/<full-sha256>/<filename>"` — the
+/// [`media_path`] layout under the serve prefix, filename segment percent-encoded.
 #[must_use]
-pub fn media_url(source: &str, sha256: &ContentHash, filename: &str) -> String {
+pub fn media_url(source: &MediaSource, sha256: &ContentHash, filename: &Filename) -> String {
     format!("/media/{}", media_path(source, sha256, filename))
 }
 
@@ -581,18 +631,63 @@ mod tests {
         assert!(sanitize_filename("..").is_empty());
     }
 
+    /// The canonical hash and a parsed [`Filename`], the two typed arguments every
+    /// layout test needs. Panic-free (`Result`-mapped), so it needs no lint exception.
+    fn layout_args(name: &str) -> (ContentHash, Filename) {
+        let hash: ContentHash = CANONICAL.parse().expect("CANONICAL is a valid hash");
+        let filename: Filename = name.parse().expect("test names are canonical leaves");
+        (hash, filename)
+    }
+
     #[test]
     fn media_path_computation() {
-        let hash: ContentHash = CANONICAL.parse().unwrap();
-        let path = media_path("upload", &hash, "photo.jpg");
+        let (hash, filename) = layout_args("photo.jpg");
+        let path = media_path(&MediaSource::Upload, &hash, &filename);
         assert_eq!(path, format!("upload/e3/b0/{CANONICAL}/photo.jpg"));
     }
 
     #[test]
     fn media_url_computation() {
-        let hash: ContentHash = CANONICAL.parse().unwrap();
-        let url = media_url("upload", &hash, "photo.jpg");
+        let (hash, filename) = layout_args("photo.jpg");
+        let url = media_url(&MediaSource::Upload, &hash, &filename);
         assert_eq!(url, format!("/media/upload/e3/b0/{CANONICAL}/photo.jpg"));
+    }
+
+    #[test]
+    fn media_path_leaves_ordinary_names_byte_identical() {
+        // Pins `MEDIA_SEGMENT`'s unreserved-mark carve-out. With bare NON_ALPHANUMERIC
+        // these become `my%2Dphoto%2Ejpg` and every file on disk is unreadable.
+        for name in ["photo.jpg", "my-photo_2.png", "a~b.txt", "IMG1234.JPEG"] {
+            let (hash, filename) = layout_args(name);
+            let path = media_path(&MediaSource::Upload, &hash, &filename);
+            assert_eq!(
+                path,
+                format!("upload/e3/b0/{CANONICAL}/{name}"),
+                "{name} must survive encoding unchanged"
+            );
+        }
+    }
+
+    #[test]
+    fn media_path_encodes_whitespace_and_url_structural_characters() {
+        // A space makes the URL unrepresentable as `RootRelativeUrl`; `?`/`#` are worse —
+        // they pass its validation while truncating the path, addressing another file.
+        // `%` must encode too, or a pre-existing escape is double-decoded on the way back.
+        for (raw, encoded) in [
+            ("a b.txt", "a%20b.txt"),
+            ("what?.png", "what%3F.png"),
+            ("a#b.png", "a%23b.png"),
+            ("50%.png", "50%25.png"),
+            ("café.png", "caf%C3%A9.png"),
+        ] {
+            let (hash, filename) = layout_args(raw);
+            let path = media_path(&MediaSource::Upload, &hash, &filename);
+            assert_eq!(
+                path,
+                format!("upload/e3/b0/{CANONICAL}/{encoded}"),
+                "{raw} must encode to {encoded}"
+            );
+        }
     }
 
     #[test]

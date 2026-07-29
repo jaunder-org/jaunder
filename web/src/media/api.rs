@@ -85,7 +85,7 @@ pub async fn list_my_media(
         Ok(records
             .into_iter()
             .map(|r| {
-                let url = common::media::media_url(r.source.as_ref(), &r.sha256, &r.filename);
+                let url = common::media::media_url(&r.source, &r.sha256, &r.filename);
                 MediaItem {
                     sha256: r.sha256,
                     filename: r.filename,
@@ -138,7 +138,7 @@ pub async fn delete_media(
         let media = expect_context::<Arc<dyn MediaStorage>>();
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
-        let url = common::media::media_url(source.as_ref(), &sha256, &filename);
+        let url = common::media::media_url(&source, &sha256, &filename);
 
         let published = posts
             .list_published_by_user(

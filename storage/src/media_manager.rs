@@ -280,7 +280,11 @@ impl MediaManager {
             let _ = fs::remove_file(tmp_path).await;
             return Err(e);
         }
-        let relative_path = media_path("upload", &metadata.sha256_hex, &metadata.filename);
+        let relative_path = media_path(
+            &MediaSource::Upload,
+            &metadata.sha256_hex,
+            &metadata.filename,
+        );
         let target_path = self.storage_path.join("media").join(&relative_path);
         // `target_path` is built by joining `media`/`relative_path` onto the storage
         // root, so it always ends in a filename component and has a parent; surface a
@@ -311,7 +315,11 @@ impl MediaManager {
         } else {
             host::metrics::UploadOutcome::Stored
         });
-        let url = media_url("upload", &metadata.sha256_hex, &metadata.filename);
+        let url = media_url(
+            &MediaSource::Upload,
+            &metadata.sha256_hex,
+            &metadata.filename,
+        );
         Ok(UploadResponse {
             sha256: metadata.sha256_hex,
             filename: metadata.filename,
@@ -710,6 +718,9 @@ mod tests {
 
         assert_eq!(resp.sha256, expected);
         assert_eq!(resp.content_type, "image/png");
-        assert_eq!(resp.url, media_url("upload", &expected, &filename));
+        assert_eq!(
+            resp.url,
+            media_url(&MediaSource::Upload, &expected, &filename)
+        );
     }
 }

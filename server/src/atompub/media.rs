@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 
 use common::absolute_url::{compose, AbsoluteUrl};
 use common::atompub::{render_media_link_entry, MediaLinkEntry};
-use common::media::{media_url, ContentHash, Filename, MediaSource};
+use common::media::{encode_filename_segment, media_url, ContentHash, Filename, MediaSource};
 use common::username::Username;
 use storage::{MediaRecord, MediaStorage, SiteConfigStorage};
 use web::auth::AuthUser;
@@ -27,11 +27,16 @@ fn media_link_entry(
     base: &AbsoluteUrl,
     username: &Username,
 ) -> MediaLinkEntry {
-    let binary_path = media_url("upload", &record.sha256, &record.filename);
+    let binary_path = media_url(&MediaSource::Upload, &record.sha256, &record.filename);
     let binary = compose(base, &binary_path);
+    // The filename is percent-encoded here for the same reason `media_path` encodes it: a
+    // legal `Filename` may hold a space (malformed in an `href`) or a `?`/`#` (which would
+    // silently truncate this member URL). This URL is also the entry's `atom:id`, so a
+    // malformed spelling would be the entry's permanent identity.
     let edit_path = format!(
         "/atompub/{username}/media/{}/{}",
-        record.sha256, record.filename
+        record.sha256,
+        encode_filename_segment(&record.filename)
     );
     let edit = compose(base, &edit_path);
     let timestamp = record.created_at.to_rfc3339();

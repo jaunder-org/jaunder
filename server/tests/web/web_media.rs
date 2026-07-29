@@ -219,9 +219,9 @@ async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend:
     let user_id = session.user_id;
 
     let media_url = common::media::media_url(
-        "upload",
+        &MediaSource::Upload,
         &parse_content_hash("deadbeef99999999000000000000000000000000000000000000000000000000"),
-        "inline.png",
+        &parse_filename("inline.png"),
     );
     let record = MediaRecord {
         user_id,
