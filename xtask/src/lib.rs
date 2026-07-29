@@ -25,6 +25,7 @@ mod steps {
     pub mod rendered_html_from_trusted_check;
     pub mod sequence_check;
     pub mod server_fn_registrar_check;
+    pub mod server_fn_tracing_check;
     pub mod sqlx_newtype_bind_check;
     pub mod static_checks;
     pub mod target_arch_placement_check;
@@ -296,6 +297,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::adr_check::run(&mut result);
             steps::test_pattern_check::run(&mut result);
             steps::server_fn_registrar_check::run(&mut result);
+            steps::server_fn_tracing_check::run(&mut result);
             steps::proffered_secret_check::run(&mut result);
             steps::no_full_reload_check::run(&mut result);
             steps::target_arch_placement_check::run(&mut result);
@@ -329,6 +331,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::adr_check::run(&mut result);
             steps::test_pattern_check::run(&mut result);
             steps::server_fn_registrar_check::run(&mut result);
+            steps::server_fn_tracing_check::run(&mut result);
             steps::proffered_secret_check::run(&mut result);
             steps::no_full_reload_check::run(&mut result);
             steps::target_arch_placement_check::run(&mut result);
