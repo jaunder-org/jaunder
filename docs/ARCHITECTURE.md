@@ -52,10 +52,10 @@ graph TD
 
 ## Data Flow & Storage
 
-Persistence is abstracted behind traits defined in the `common` crate
-(`common/src/storage/`). This prevents circular dependencies between the
-`server` and `web` crates and allows the application to remain agnostic of the
-underlying database engine (see [ADR-0001](adr/0001-storage-backends.md)).
+Persistence is abstracted behind traits defined in the `storage` crate
+(`storage/src/`). This prevents circular dependencies between the `server` and
+`web` crates and allows the application to remain agnostic of the underlying
+database engine (see [ADR-0001](adr/0001-storage-backends.md)).
 
 Jaunder uses a tiered storage architecture to isolate user data from shared
 network content (see [ADR-0006](adr/0006-storage-isolation.md)).

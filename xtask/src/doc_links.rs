@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 /// dead because the docs moved on, and rewriting them would falsify the record.
 /// `docs/superpowers/` holds transient specs and plans, which routinely link files
 /// they only propose to create.
-pub const EXCLUDED: &[&str] = &["docs/archive/", "docs/superpowers/"];
+const EXCLUDED: &[&str] = &["docs/archive/", "docs/superpowers/"];
 
 /// An inline Markdown link found outside code spans and fenced blocks. Carries a
 /// byte range rather than a line number so the scanner computes only what its
@@ -178,7 +178,7 @@ pub fn is_relative_target(target: &str) -> bool {
 }
 
 /// 1-based line containing byte `offset`.
-pub fn line_at(body: &str, offset: usize) -> usize {
+fn line_at(body: &str, offset: usize) -> usize {
     body[..offset].matches('\n').count() + 1
 }
 
@@ -221,7 +221,7 @@ pub fn dead_links_in(repo: &Path, rel: &str) -> Result<Vec<DeadLink>> {
 /// Tracked, not on-disk: an untracked scratch file is nobody's contract, and a
 /// gitignored draft must stay invisible to the gate. Absent paths are dropped so a
 /// staged deletion fails at its `git rm`, not here.
-pub fn gated_files(repo: &Path) -> Result<Vec<String>> {
+fn gated_files(repo: &Path) -> Result<Vec<String>> {
     Ok(crate::git::ls_files_md(repo)?
         .into_iter()
         .filter(|rel| !EXCLUDED.iter().any(|tree| rel.starts_with(tree)))
@@ -441,13 +441,16 @@ mod tests {
     }
 
     #[test]
-    fn dead_link_inside_code_is_ignored() {
-        let d = repo("code");
-        write(
-            &d,
-            "docs/a.md",
-            "`[x](gone.md)`\n\n```\n[y](gone.md)\n```\n",
-        );
+    fn dead_link_inside_a_fenced_block_is_ignored() {
+        let d = repo("code-fence");
+        write(&d, "docs/a.md", "```\n[y](gone.md)\n```\n");
+        assert!(dead_links_in(&d, "docs/a.md").unwrap().is_empty());
+    }
+
+    #[test]
+    fn dead_link_inside_an_inline_code_span_is_ignored() {
+        let d = repo("code-span");
+        write(&d, "docs/a.md", "`[x](gone.md)`\n");
         assert!(dead_links_in(&d, "docs/a.md").unwrap().is_empty());
     }
 
@@ -464,9 +467,15 @@ mod tests {
     }
 
     #[test]
-    fn gate_skips_excluded_trees() {
-        let d = repo("excluded");
+    fn gate_skips_the_archive_tree() {
+        let d = repo("excluded-archive");
         commit(&d, "docs/archive/old.md", "[x](gone.md)\n");
+        assert!(problems(&d).unwrap().is_empty());
+    }
+
+    #[test]
+    fn gate_skips_the_superpowers_tree() {
+        let d = repo("excluded-superpowers");
         commit(&d, "docs/superpowers/plan.md", "[x](gone.md)\n");
         assert!(problems(&d).unwrap().is_empty());
     }

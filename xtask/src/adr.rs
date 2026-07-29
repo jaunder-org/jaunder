@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use crate::doc_links;
 use crate::git;
 use crate::ids;
 use crate::result::StepResult;
@@ -64,8 +65,8 @@ pub fn rewrite_stem(content: &str, old_stem: &str, new_stem: &str) -> String {
 pub fn strip_one_level(body: &str) -> String {
     let mut out = String::with_capacity(body.len());
     let mut cursor = 0;
-    for link in crate::doc_links::links_in(body) {
-        if !crate::doc_links::is_relative_target(&link.target) {
+    for link in doc_links::links_in(body) {
+        if !doc_links::is_relative_target(&link.target) {
             continue;
         }
         // `..` has no prefix to strip; `../` would strip to nothing.
@@ -327,7 +328,16 @@ fn run_promote(repo: &Path) -> Result<String> {
     let mut warnings = Vec::new();
     for (_slug, _num, new_name) in &assigned {
         let rel = format!("{ADR_DIR}/{new_name}");
-        let dead = crate::doc_links::dead_links_in(repo, &rel)?;
+        // `?` here would be the very failure the comment above rules out — the file
+        // is unreadable only after promote has already written and staged it, so
+        // bailing would abandon a half-promoted tree. Report it as a warning instead.
+        let dead = match doc_links::dead_links_in(repo, &rel) {
+            Ok(dead) => dead,
+            Err(e) => {
+                warnings.push(format!("{rel}: unreadable ({e:#})"));
+                continue;
+            }
+        };
         if !dead.is_empty() {
             let targets: Vec<String> = dead.into_iter().map(|d| d.target).collect();
             warnings.push(format!("{rel}: {}", targets.join(", ")));
