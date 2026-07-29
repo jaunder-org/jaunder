@@ -174,6 +174,25 @@ test("full AtomPub publishing flow over HTTP with an app password", async ({
   expect(mediaBody).toContain('rel="edit-media"');
   expect(mediaBody).toContain("/media/upload/");
 
+  // 6b. The same upload with a Slug that needs percent-encoding. `Filename::sanitized`
+  // — the Slug intake door — permits spaces, so this is a legal name, and the emitted
+  // entry is where a raw space would have become a malformed `href` (and, for the
+  // member URL, the entry's permanent `atom:id`). #675.
+  const spaced = await request.post(`${BASE_URL}/atompub/${username}/media`, {
+    headers: {
+      authorization: auth,
+      "content-type": "image/png",
+      slug: "e2e spaced.png",
+    },
+    data: PNG,
+  });
+  expect(spaced.status()).toBe(201);
+  const spacedBody = await spaced.text();
+  expect(spacedBody).toContain("e2e%20spaced.png");
+  // `<title>` legitimately carries the raw display name, so only URL-bearing attributes
+  // are asserted — none may contain whitespace.
+  expect(spacedBody).not.toMatch(/(?:href|src)="[^"]*\s[^"]*"/);
+
   // 7. Delete the post; it is then gone.
   const del = await request.delete(memberUrl, {
     headers: { authorization: auth },
