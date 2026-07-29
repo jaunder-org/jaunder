@@ -219,9 +219,9 @@ async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend:
     let user_id = session.user_id;
 
     let media_url = common::media::media_url(
-        "upload",
+        &MediaSource::Upload,
         &parse_content_hash("deadbeef99999999000000000000000000000000000000000000000000000000"),
-        "inline.png",
+        &parse_filename("inline.png"),
     );
     let record = MediaRecord {
         user_id,
@@ -294,6 +294,53 @@ async fn upload_media_stores_file_and_returns_metadata(#[case] backend: Backend)
     assert_eq!(resp.filename, "photo.jpg");
     assert_eq!(resp.content_type, "image/jpeg");
     assert!(resp.url.contains("/media/upload/"), "url: {}", resp.url);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn upload_then_serve_round_trips_a_filename_needing_encoding(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = create_user_and_session(&state).await.cookie();
+    let storage = TempDir::new().unwrap();
+
+    // A space is a *legal* `Filename` — `sanitize_filename` permits it — so this is an
+    // ordinary upload, not a hostile one. Before #675 the derived URL carried the raw
+    // space, which `RootRelativeUrl` cannot even represent.
+    let (status, body) = post_multipart(
+        &state,
+        &storage,
+        "/api/upload_media",
+        MultipartFile {
+            filename: "my photo.jpg",
+            content_type: "image/jpeg",
+            bytes: b"fake jpeg data",
+        },
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let resp: UploadResponse = serde_json::from_str(&body).expect("response should be valid JSON");
+
+    // The display name stays raw; only the URL/disk segment is encoded.
+    assert_eq!(resp.filename, "my photo.jpg");
+    assert!(resp.url.contains("my%20photo.jpg"), "url: {}", resp.url);
+    assert!(!resp.url.contains(' '), "url: {}", resp.url);
+
+    // The property that actually matters, and the one no unit test can reach: fetching the
+    // URL we just handed the client returns the bytes we stored. It fails if the writer's
+    // spelling of the name on disk and the reader's ever diverge again.
+    let app = make_app(&state, &storage);
+    let request = Request::builder()
+        .method("GET")
+        .uri(resp.url.to_string())
+        .body(Body::empty())
+        .expect("failed to build request");
+    let response = app.oneshot(request).await.expect("router oneshot failed");
+    assert_eq!(response.status(), StatusCode::OK, "serving {}", resp.url);
+    let served = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body should be readable");
+    assert_eq!(&served[..], b"fake jpeg data");
 }
 
 #[apply(backends)]

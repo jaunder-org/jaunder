@@ -4,9 +4,9 @@ use common::password::Password;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::test_support::{
-    parse_audience_name, parse_bio, parse_byte_size, parse_content_hash, parse_content_type,
-    parse_display_name, parse_email, parse_etag, parse_filename, parse_page_offset,
-    parse_raw_token, parse_session_label, parse_slug, permalink_date,
+    parse_absolute_url, parse_audience_name, parse_bio, parse_byte_size, parse_content_hash,
+    parse_content_type, parse_display_name, parse_email, parse_etag, parse_filename,
+    parse_page_offset, parse_raw_token, parse_session_label, parse_slug, permalink_date,
 };
 use common::username::Username;
 use common::visibility::{
@@ -5330,6 +5330,80 @@ async fn create_and_get_media(#[case] backend: Backend) {
     assert_eq!(fetched.source, MediaSource::Upload);
     assert_eq!(fetched.content_type, "image/jpeg");
     assert_eq!(fetched.size_bytes, parse_byte_size("12345"));
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn media_source_url_round_trips_through_the_typed_column(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let user_id = SeedUser::new().seed(state).await.user_id;
+
+    let sha256 =
+        parse_content_hash("beef1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234");
+    let mut record = make_media_record(user_id, &sha256, "cached.jpg", MediaSource::Cached);
+    // Spelled non-canonically on the way in: `AbsoluteUrl`'s `FromStr` lowercases the host
+    // and strips the default port, so the value stored is already normalized — asserting the
+    // canonical form on read-back is what shows the column carries the *newtype*, not the
+    // text as typed (#675).
+    record.source_url = Some(parse_absolute_url("https://Example.COM:443/x.png"));
+
+    state.media.create_media(&record).await.unwrap();
+
+    let fetched = state
+        .media
+        .get_media(
+            user_id,
+            &sha256,
+            &parse_filename("cached.jpg"),
+            &MediaSource::Cached,
+        )
+        .await
+        .unwrap()
+        .expect("record should exist");
+    assert_eq!(
+        fetched.source_url.as_deref(),
+        Some("https://example.com/x.png")
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn media_row_with_an_invalid_source_url_fails_to_decode(#[case] backend: Backend) {
+    // This is what makes `Option<AbsoluteUrl>` a contract rather than documentation: a
+    // value that is not a valid absolute `http(s)` URL cannot be read back as one. Nothing
+    // writes `source_url` yet (the remote-caching ingest does not exist), so a hand-edited
+    // or future-buggy writer is exactly the threat, and it is inserted by raw SQL here
+    // because the type makes it unconstructible in Rust.
+    let env = backend.setup().await;
+    let state = &env.state;
+    let user_id = SeedUser::new().seed(state).await.user_id;
+
+    env.base
+        .pool()
+        .execute(&format!(
+            "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes, \
+             source_url) VALUES ({}, \
+             'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', 'c.png', \
+             'cached', 'image/png', 10, 'not a url')",
+            i64::from(user_id),
+        ))
+        .await
+        .expect("raw insert should succeed — the database has no opinion on the text");
+
+    let fetched = state
+        .media
+        .get_media(
+            user_id,
+            &parse_content_hash("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
+            &parse_filename("c.png"),
+            &MediaSource::Cached,
+        )
+        .await;
+    assert!(
+        fetched.is_err(),
+        "a non-URL source_url must be a column-decode error, got {fetched:?}"
+    );
 }
 
 #[apply(backends)]

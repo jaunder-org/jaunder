@@ -12,7 +12,9 @@ use tokio_util::io::ReaderStream;
 
 use common::etag::ETag;
 use common::ids::UserId;
-use common::media::{detect_content_type, should_inline, ContentHash, Filename, MediaSource};
+use common::media::{
+    detect_content_type, media_path, should_inline, ContentHash, Filename, MediaSource,
+};
 use storage::{MediaError, MediaStorage};
 use web::auth::AuthUser;
 
@@ -238,16 +240,19 @@ fn resolve_media_path(
     params: &ServeParams,
 ) -> Result<(MediaSource, ContentHash, Filename, PathBuf), StatusCode> {
     let (source, hash, filename) = validate_serve_params(params)?;
+    // Built via `media_path` — the single definition of the layout — rather than
+    // re-joining the segments here. The write path (`storage::MediaManager::upload`) uses
+    // it too, so the two cannot disagree; a hand-rolled read path would miss the file
+    // whenever the name needs percent-encoding, because axum has already *decoded* the
+    // incoming segment and `media_path` is what re-encodes it. The re-encode looks
+    // redundant and is not (#675).
+    //
+    // The parsed values are used, not the raw `params.*`: `p1`/`p2` are re-derived from
+    // the validated hash, having already been checked against it in
+    // `validate_serve_params`.
     let file_path = storage_path
         .join("media")
-        .join(source.as_ref())
-        .join(&params.p1)
-        .join(&params.p2)
-        // Join the parsed hash and filename, not the raw `params.*`: identical bytes
-        // today (`FromStr` rejects rather than normalizes), but keeps the on-disk path
-        // built from the validated values should that ever change.
-        .join(hash.as_ref())
-        .join(filename.as_ref());
+        .join(media_path(&source, &hash, &filename));
 
     Ok((source, hash, filename, file_path))
 }
@@ -381,6 +386,45 @@ mod tests {
                 .join(hash)
                 .join("photo.jpg")
         );
+    }
+
+    #[test]
+    fn resolve_media_path_encodes_the_filename_like_the_writer_does() {
+        // The read path must spell the name exactly as `storage`'s upload wrote it. axum
+        // hands us the *decoded* segment, so resolving has to re-encode; a hand-rolled
+        // join here would look for `a b.txt` and miss the stored `a%20b.txt` (#675).
+        //
+        // Each case is a distinct hazard: a space is unrepresentable as a `RootRelativeUrl`;
+        // `?`/`#` would truncate the path if unencoded (the failure the newtype cannot
+        // catch); and a literal `%` must survive one encode/decode round without being
+        // read back as the start of an escape.
+        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        for (raw, stored) in [
+            ("a b.txt", "a%20b.txt"),
+            ("what?.png", "what%3F.png"),
+            ("a#b.png", "a%23b.png"),
+            ("50%.png", "50%25.png"),
+        ] {
+            let p = params("upload", "e3", "b0", hash, raw);
+
+            let (_source, _hash, filename, path) = resolve_media_path(Path::new("/data"), &p)
+                .unwrap_or_else(|e| panic!("{raw} is a legal Filename, got {e}"));
+
+            // The typed filename stays raw — it is the display name — while the on-disk
+            // path carries the encoded spelling the writer used.
+            assert_eq!(filename, raw);
+            assert_eq!(
+                path,
+                Path::new("/data")
+                    .join("media")
+                    .join("upload")
+                    .join("e3")
+                    .join("b0")
+                    .join(hash)
+                    .join(stored),
+                "{raw} must resolve to the stored name {stored}"
+            );
+        }
     }
 
     #[test]

@@ -12,6 +12,22 @@
 //! hex digest — a two-level fan-out that keeps any single directory small.
 //! `source` distinguishes provenance (e.g. `upload` vs a remote cache).
 //!
+//! The `<filename>` segment is **percent-encoded** ([`MEDIA_SEGMENT_ENCODE_SET`]), so the URL path
+//! and the on-disk path are byte-identical: paste the tail of a serve URL and you have the
+//! path to the file. Both come from [`media_path`], which is the only place the layout is
+//! spelled — so a new consumer must call it rather than re-deriving, or the two spellings
+//! drift apart (#675).
+//!
+//! The database `filename` column keeps the **raw** name — it is the display name shown in
+//! the media list — so DB → disk is a derivation, while URL → disk is identity.
+//!
+//! Encoding is not cosmetic. A `Filename` may legally contain a space (which
+//! [`crate::root_relative_url::RootRelativeUrl`] rejects) or a `?`/`#` (which it *accepts*,
+//! silently truncating the path at the delimiter and addressing a different file).
+//!
+//! The three spellings of a filename (raw in the database, encoded on disk and in URLs) and
+//! why they are what they are: `docs/adr/0080-media-path-naming-correspondence.md`.
+//!
 //! # Untrusted input
 //!
 //! Filenames and hashes round-trip through URLs, so they are attacker-
@@ -36,9 +52,11 @@ use std::path::Path;
 use std::str::FromStr;
 
 use macros::{NumNewtype, StrNewtype};
+use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::root_relative_url::RootRelativeUrl;
 use crate::strum_enum::{impl_string_serde_proxy, parse_error};
 
 /// A validated media content hash: exactly 64 lowercase hex characters
@@ -257,24 +275,80 @@ impl_string_serde_proxy!(MediaSource);
 // `MediaSource` value, not a stringly `.as_str()`/`.parse()` strip.
 crate::db_enum::impl_text_column_enum!(MediaSource);
 
+/// The percent-encode set for the filename segment of a media path: everything
+/// [`NON_ALPHANUMERIC`] encodes, minus the RFC 3986 *unreserved* marks `-._~`.
+///
+/// Keeping those four unencoded is what makes an ordinary name round-trip byte-identical —
+/// `photo.jpg` stays `photo.jpg` — which is the point of encoding here at all: the on-disk
+/// name has to stay greppable and paste-able from a URL. Bare [`NON_ALPHANUMERIC`] would
+/// yield `my%2Dphoto%2Ejpg` and make every stored file unreadable. (`content_disposition`
+/// in the `server` crate *does* use the bare set; correct there, wrong here.)
+const MEDIA_SEGMENT_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
+
+/// Percent-encodes `filename` for use as a single URL or filesystem path segment, via
+/// [`MEDIA_SEGMENT_ENCODE_SET`].
+///
+/// Public because the media serve path is not the only place a [`Filename`] becomes a path
+/// segment — the `AtomPub` media member URL does it too — and both must use the *same* set
+/// or the two spellings of one file diverge. Returns a `Display`-able borrow, so callers
+/// interpolate it directly and no intermediate `String` is allocated for the common
+/// nothing-to-encode case.
+#[must_use]
+pub fn encode_filename_segment(filename: &Filename) -> impl std::fmt::Display + '_ {
+    utf8_percent_encode(filename, MEDIA_SEGMENT_ENCODE_SET)
+}
+
 /// Returns `"<source>/<p1>/<p2>/<full-sha256>/<filename>"`, the content-
-/// addressed layout described in the module docs.
+/// addressed layout described in the module docs — the **single** definition of that
+/// layout, for both the on-disk path and the serve URL.
+///
+/// The filename segment is percent-encoded ([`MEDIA_SEGMENT_ENCODE_SET`]), so this is what the file is
+/// named on disk, not just what appears in a URL. Callers must not re-derive the layout:
+/// the read path and the write path agreeing is exactly what makes the encoding safe.
 ///
 /// Takes a [`ContentHash`] rather than a bare `&str`, so the `sha256[..2]`/`[2..4]`
 /// slicing below can never see a short or non-`UTF-8`-boundary value — the type is
 /// the guard (its `FromStr`/`from_digest` are the only ways to build one). `p1`/`p2`
-/// index through `Deref<Target = str>`.
+/// index through `Deref<Target = str>`. [`MediaSource`] and [`Filename`] are typed rather
+/// than `&str` because two adjacent string parameters are silently transposable.
 #[must_use]
-pub fn media_path(source: &str, sha256: &ContentHash, filename: &str) -> String {
+pub fn media_path(source: &MediaSource, sha256: &ContentHash, filename: &Filename) -> String {
     let p1 = &sha256[..2];
     let p2 = &sha256[2..4];
+    let source = source.as_ref();
+    let filename = encode_filename_segment(filename);
     format!("{source}/{p1}/{p2}/{sha256}/{filename}")
 }
 
-/// Returns `"/media/<source>/<2-hex-p1>/<2-hex-p2>/<full-sha256>/<filename>"`.
+/// Returns `"/media/<source>/<2-hex-p1>/<2-hex-p2>/<full-sha256>/<filename>"` — the
+/// [`media_path`] layout under the serve prefix.
+///
+/// The filename segment is percent-encoded, and because that encoding lives in
+/// [`media_path`] this URL's tail **is** the path to the file on disk, byte for byte. Do not
+/// re-derive either one; see [`media_path`] for why the two must not drift.
+///
+/// Infallible by construction, so it returns the newtype rather than a `Result`: see the
+/// body for why the parse cannot fail.
 #[must_use]
-pub fn media_url(source: &str, sha256: &ContentHash, filename: &str) -> String {
-    format!("/media/{}", media_path(source, sha256, filename))
+pub fn media_url(
+    source: &MediaSource,
+    sha256: &ContentHash,
+    filename: &Filename,
+) -> RootRelativeUrl {
+    let path = format!("/media/{}", media_path(source, sha256, filename));
+    let Ok(url) = path.parse() else {
+        // Unreachable: the string always starts with a single `/media/`, and
+        // `media_path` percent-encodes the only caller-influenced segment — so no
+        // whitespace, control character, `?` or `#` can survive into it. The hash and
+        // source segments are a hex digest and a bounded enum token. Same shape as
+        // `AbsoluteUrl::compose`, and the reason no trusted door is needed here.
+        unreachable!("media_url builds a valid root-relative path");
+    };
+    url
 }
 
 /// A media `Content-Type` header value — a `type/subtype` media type with optional
@@ -451,16 +525,18 @@ pub struct ByteSize(i64);
 /// The metadata returned on a successful media upload — the server-fn wire response
 /// (#517), moved here from `server` so it is nameable on the wasm client. `storage`'s
 /// `MediaManager` returns it directly; `web`'s `upload_media` fn returns it; `AtomPub`
-/// serializes it. The typed fields (`sha256`/`filename`/`content_type`/`size_bytes`) are
-/// validated `common` newtypes, so each re-validates on deserialize; `url` is a plain
-/// derived string (the serve path), carried verbatim.
+/// serializes it. Every field is a validated `common` newtype, so each re-validates on
+/// deserialize — including `url`, the derived serve path: it is a
+/// [`RootRelativeUrl`][crate::root_relative_url::RootRelativeUrl] because being *derived*
+/// is not a reason to leave it stringly (ADR-0063 §5), and because the derivation is only
+/// well-formed thanks to [`media_path`]'s encoding, which the type is what pins.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UploadResponse {
     pub sha256: ContentHash,
     pub filename: Filename,
     pub content_type: ContentType,
     pub size_bytes: ByteSize,
-    pub url: String,
+    pub url: RootRelativeUrl,
 }
 
 #[cfg(test)]
@@ -581,18 +657,89 @@ mod tests {
         assert!(sanitize_filename("..").is_empty());
     }
 
+    /// The canonical hash and a parsed [`Filename`], the two typed arguments every layout
+    /// test needs. Both go through the shared `test_support` parse doors rather than
+    /// re-spelling the parse here.
+    fn layout_args(name: &str) -> (ContentHash, Filename) {
+        (
+            crate::test_support::parse_content_hash(CANONICAL),
+            crate::test_support::parse_filename(name),
+        )
+    }
+
     #[test]
     fn media_path_computation() {
-        let hash: ContentHash = CANONICAL.parse().unwrap();
-        let path = media_path("upload", &hash, "photo.jpg");
+        let (hash, filename) = layout_args("photo.jpg");
+        let path = media_path(&MediaSource::Upload, &hash, &filename);
         assert_eq!(path, format!("upload/e3/b0/{CANONICAL}/photo.jpg"));
     }
 
     #[test]
     fn media_url_computation() {
-        let hash: ContentHash = CANONICAL.parse().unwrap();
-        let url = media_url("upload", &hash, "photo.jpg");
-        assert_eq!(url, format!("/media/upload/e3/b0/{CANONICAL}/photo.jpg"));
+        let (hash, filename) = layout_args("photo.jpg");
+        let url = media_url(&MediaSource::Upload, &hash, &filename);
+        assert_eq!(
+            url,
+            format!("/media/upload/e3/b0/{CANONICAL}/photo.jpg").as_str()
+        );
+    }
+
+    /// What `media_url` adds over [`media_path`] is the **type**: the exact encoding of each
+    /// name is pinned once, by `media_path`'s own tests. So these assert only that a
+    /// `RootRelativeUrl` exists at all for names that could not be one, and that no URL
+    /// delimiter survives into it.
+    #[test]
+    fn media_url_is_representable_for_names_the_newtype_would_otherwise_reject() {
+        // A space makes the value unrepresentable — `RootRelativeUrl` rejects whitespace —
+        // which is what blocked typing the serve URL in the first place. `?`/`#` are the
+        // failure the newtype *cannot* catch: it accepts a query, so an unencoded
+        // `what?.png` would validate while addressing a different file.
+        for raw in ["a b.txt", "what?.png", "a#b.png"] {
+            let (hash, filename) = layout_args(raw);
+            let url = media_url(&MediaSource::Upload, &hash, &filename);
+            assert!(
+                !url.contains(' ') && !url.contains('?') && !url.contains('#'),
+                "{raw} must not carry whitespace or a URL delimiter: {url}"
+            );
+            assert!(url.starts_with("/media/upload/"), "{raw} → {url}");
+        }
+    }
+
+    #[test]
+    fn media_path_leaves_ordinary_names_byte_identical() {
+        // Pins `MEDIA_SEGMENT_ENCODE_SET`'s unreserved-mark carve-out. With bare NON_ALPHANUMERIC
+        // these become `my%2Dphoto%2Ejpg` and every file on disk is unreadable.
+        for name in ["photo.jpg", "my-photo_2.png", "a~b.txt", "IMG1234.JPEG"] {
+            let (hash, filename) = layout_args(name);
+            let path = media_path(&MediaSource::Upload, &hash, &filename);
+            assert_eq!(
+                path,
+                format!("upload/e3/b0/{CANONICAL}/{name}"),
+                "{name} must survive encoding unchanged"
+            );
+        }
+    }
+
+    #[test]
+    fn media_path_encodes_whitespace_and_url_structural_characters() {
+        // A space makes the URL unrepresentable as `RootRelativeUrl`; `?`/`#` are worse —
+        // they pass its validation while truncating the path, addressing another file.
+        // `%` must encode too, or a pre-existing escape is double-decoded on the way back.
+        for (raw, encoded) in [
+            ("a b.txt", "a%20b.txt"),
+            ("what?.png", "what%3F.png"),
+            ("a#b.png", "a%23b.png"),
+            ("50%.png", "50%25.png"),
+            ("café.png", "caf%C3%A9.png"),
+        ] {
+            let (hash, filename) = layout_args(raw);
+            let path = media_path(&MediaSource::Upload, &hash, &filename);
+            assert_eq!(
+                path,
+                format!("upload/e3/b0/{CANONICAL}/{encoded}"),
+                "{raw} must encode to {encoded}"
+            );
+        }
     }
 
     #[test]

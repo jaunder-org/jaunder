@@ -7,6 +7,7 @@
 use leptos::prelude::*;
 
 use common::pagination::{PageOffset, PageSize};
+use common::root_relative_url::RootRelativeUrl;
 
 use super::{
     format_bytes, list_my_media, media_usage, upload_media, DeleteMedia, DeleteMediaResult,
@@ -28,7 +29,7 @@ use crate::topbar::Topbar;
 pub fn MediaUpload(
     /// Called with the `/media/upload/...` URL when the upload succeeds.
     #[prop(into, optional)]
-    on_uploaded: Option<Callback<String>>,
+    on_uploaded: Option<Callback<RootRelativeUrl>>,
     /// Called with an error message when the upload fails.
     #[prop(into, optional)]
     on_error: Option<Callback<String>>,
@@ -37,7 +38,7 @@ pub fn MediaUpload(
     show_result: bool,
 ) -> impl IntoView {
     let uploading = RwSignal::new(false);
-    let last_media_url = RwSignal::new(Option::<String>::None);
+    let last_media_url = RwSignal::new(Option::<RootRelativeUrl>::None);
     let upload_error = RwSignal::new(Option::<String>::None);
     let file_input = NodeRef::<leptos::html::Input>::new();
 
@@ -110,14 +111,18 @@ pub fn MediaUpload(
 /// The read-only, click-to-select "Uploaded URL" box shown below the button in the
 /// `show_result` mode. Extracted from [`MediaUpload`] to keep that component within
 /// the line budget; a plain view helper (like `render_media_row` in this vertical).
-fn uploaded_url_view(url: String) -> impl IntoView {
+///
+/// Takes the newtype and unwraps it here: a newtype is not `IntoAttributeValue`, so the
+/// `String` view is taken at the view site rather than the value being carried around
+/// stringly. `String::from` moves the inner value out rather than allocating a copy.
+fn uploaded_url_view(url: RootRelativeUrl) -> impl IntoView {
     view! {
         <div style="margin-top:8px">
             <div style="font-size:12px;color:#888;margin-bottom:4px">"Uploaded URL:"</div>
             <input
                 type="text"
                 readonly
-                value=url
+                value=String::from(url)
                 class="j-field-val"
                 style="font-size:12px;cursor:text"
                 on:click=move |ev| client::dom::select_event_target_text(&ev)
@@ -156,7 +161,7 @@ pub fn MediaPage() -> impl IntoView {
             </div>
             <div style="margin-bottom:24px">
                 <MediaUpload
-                    on_uploaded=Callback::new(move |_url: String| {
+                    on_uploaded=Callback::new(move |_url: RootRelativeUrl| {
                         upload_version.update(|v| *v += 1);
                     })
                     on_error=Callback::new(move |msg: String| {
@@ -275,7 +280,9 @@ pub fn MediaPage() -> impl IntoView {
 }
 
 fn render_media_row(item: &MediaItem, delete_action: ServerAction<DeleteMedia>) -> impl IntoView {
-    let url = item.url.clone();
+    // Same reason as `filename` below: `RootRelativeUrl` is not an `IntoAttributeValue`,
+    // so the `href` gets its `str` view here.
+    let url = item.url.to_string();
     // `Filename` implements neither Leptos `IntoView` nor `IntoAttributeValue`, so
     // render it as an owned String for the link text and the hidden form field
     // (mirroring `item.sha256.to_string()` below).

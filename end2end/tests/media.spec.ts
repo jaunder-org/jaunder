@@ -33,6 +33,38 @@ test.describe("Media upload and serving", () => {
     );
   });
 
+  test("a filename needing percent-encoding uploads and serves", async ({
+    page,
+  }, testInfo) => {
+    await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 30000));
+
+    // A space is a legal filename, so this is an ordinary upload. Through a real browser
+    // stack it is also the one place the whole chain is exercised: the URL the server
+    // derives, the name it wrote on disk, and the request the browser sends back for it
+    // (#675). Before the fix the derived URL carried a raw space.
+    const fileContent = Buffer.from("spaced filename content");
+    const response = await page.request.post(BASE_URL + "/api/upload_media", {
+      multipart: {
+        file: {
+          name: "my holiday photo.jpg",
+          mimeType: "image/jpeg",
+          buffer: fileContent,
+        },
+      },
+    });
+    expect(response.status()).toBe(200);
+
+    const json = await response.json();
+    // The display name stays raw; only the URL segment is encoded.
+    expect(json.filename).toBe("my holiday photo.jpg");
+    expect(json.url).toContain("my%20holiday%20photo.jpg");
+    expect(json.url).not.toContain(" ");
+
+    const serveResponse = await page.request.get(BASE_URL + json.url);
+    expect(serveResponse.status()).toBe(200);
+    expect(await serveResponse.text()).toBe("spaced filename content");
+  });
+
   test("unauthenticated upload is rejected", async ({ page }) => {
     // No session: `require_auth()` rejects and the server fn returns a serialized
     // `WebError::Unauthorized` — not necessarily a bare 401 status.
