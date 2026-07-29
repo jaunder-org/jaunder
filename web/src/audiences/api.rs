@@ -50,6 +50,7 @@ pub struct SubscriberSummary {
 
 /// Creates a named audience owned by the authenticated author.
 #[server(endpoint = "/create_audience")]
+#[tracing::instrument(name = "web.audiences.create_audience", skip_all)]
 pub async fn create_audience(name: AudienceName) -> WebResult<AudienceId> {
     boundary!("create_audience", {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
@@ -64,6 +65,7 @@ pub async fn create_audience(name: AudienceName) -> WebResult<AudienceId> {
 
 /// Renames an audience the authenticated author owns.
 #[server(endpoint = "/rename_audience")]
+#[tracing::instrument(name = "web.audiences.rename_audience", skip(name))]
 pub async fn rename_audience(audience_id: AudienceId, name: AudienceName) -> WebResult<()> {
     boundary!("rename_audience", {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
@@ -78,6 +80,7 @@ pub async fn rename_audience(audience_id: AudienceId, name: AudienceName) -> Web
 
 /// Deletes an audience the authenticated author owns (and its memberships).
 #[server(endpoint = "/delete_audience")]
+#[tracing::instrument(name = "web.audiences.delete_audience")]
 pub async fn delete_audience(audience_id: AudienceId) -> WebResult<()> {
     boundary!("delete_audience", {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
@@ -89,6 +92,7 @@ pub async fn delete_audience(audience_id: AudienceId) -> WebResult<()> {
 
 /// Lists the authenticated author's named audiences.
 #[server(endpoint = "/list_my_audiences")]
+#[tracing::instrument(name = "web.audiences.list_my_audiences")]
 pub async fn list_my_audiences() -> WebResult<Vec<AudienceSummary>> {
     boundary!("list_my_audiences", {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
@@ -107,6 +111,7 @@ pub async fn list_my_audiences() -> WebResult<Vec<AudienceSummary>> {
 /// Lists the authenticated author's active subscribers (for the assignment
 /// checklist). Resolves each local `subscriber_ref` to a username for display.
 #[server(endpoint = "/list_my_subscribers")]
+#[tracing::instrument(name = "web.audiences.list_my_subscribers")]
 pub async fn list_my_subscribers() -> WebResult<Vec<SubscriberSummary>> {
     boundary!("list_my_subscribers", {
         let subscriptions = expect_context::<Arc<dyn SubscriptionStorage>>();
@@ -142,6 +147,7 @@ pub async fn list_my_subscribers() -> WebResult<Vec<SubscriberSummary>> {
 /// the composite FKs reject a cross-author pairing), so passing the session's
 /// `user_id` is the authorization.
 #[server(endpoint = "/add_subscriber_to_audience")]
+#[tracing::instrument(name = "web.audiences.add_subscriber_to_audience")]
 pub async fn add_subscriber_to_audience(
     audience_id: AudienceId,
     subscription_id: SubscriptionId,
@@ -159,6 +165,7 @@ pub async fn add_subscriber_to_audience(
 /// Removes a subscription from an audience the authenticated author owns.
 /// `remove_member` is author-scoped, so a cross-author `audience_id` is a no-op.
 #[server(endpoint = "/remove_subscriber_from_audience")]
+#[tracing::instrument(name = "web.audiences.remove_subscriber_from_audience")]
 pub async fn remove_subscriber_from_audience(
     audience_id: AudienceId,
     subscription_id: SubscriptionId,
@@ -176,6 +183,7 @@ pub async fn remove_subscriber_from_audience(
 /// Lists the `subscription_id`s assigned to an audience the author owns.
 /// `list_members` is author-scoped, so a cross-author `audience_id` lists empty.
 #[server(endpoint = "/list_audience_members")]
+#[tracing::instrument(name = "web.audiences.list_audience_members")]
 pub async fn list_audience_members(audience_id: AudienceId) -> WebResult<Vec<SubscriptionId>> {
     boundary!("list_audience_members", {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
