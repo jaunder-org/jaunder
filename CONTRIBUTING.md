@@ -473,6 +473,45 @@ use the override. There is no `crap-manifest.json`. Progressive tightening of T
 is the remit of the _Code quality improvement_ milestone (#232+), not a
 per-commit knob.
 
+**`#[server]` flow coverage is a separate gate** (#681, ADR — _empirical
+server-fn flow coverage_). Line coverage says a fn's body ran under _some_ test;
+this says a real browser session actually drove the endpoint. It is derived from
+the `sqlite × chromium` e2e run's OTLP traces, and the result is committed as
+`docs/coverage/server-fns.json` (generated — do not hand-edit) plus
+`docs/coverage/server-fns-allowlist.json` (hand-maintained).
+
+**Adding a `#[server]` fn therefore requires one of two things**, or the fast
+lane reddens immediately — `server-fn-coverage` runs in `cargo xtask check` and
+`cargo xtask validate --no-e2e`, so you do not wait for the e2e matrix to find
+out:
+
+1. **An e2e flow that drives it**, then regenerate and commit the snapshot:
+
+   ```bash
+   cargo xtask e2e sqlite chromium          # produces the capture
+   cargo xtask server-fn-coverage regenerate
+   ```
+
+2. **An allowlist entry** in `docs/coverage/server-fns-allowlist.json` with a
+   **non-empty `reason` and `issue`** — both are enforced, so an entry cannot be
+   a silent bypass. "Covered by server-side integration tests but no browser
+   flow yet" is a sanctioned reason; file the issue for the missing flow.
+
+Two further properties are worth knowing before you fight the gate:
+
+- **The ratchet cannot loosen.** An allowlist entry for a fn the snapshot shows
+  as **covered** is itself a failure, so entries must be deleted once a flow
+  covers the fn rather than accumulating.
+- **Endpoint drift fails loudly.** A bare `#[server]` (no `endpoint = "…"`) is
+  rejected, because its generated path carries a hash suffix that the URI signal
+  can never match — as is an `endpoint` that does not equal the fn name.
+
+When a test needs a second browser context, use the `tracedContext` fixture,
+never `browser.newContext()`. The `traced-context` check enforces this: a raw
+context does not inherit the config-level `extraHTTPHeaders`, so its traffic
+carries the run-wide traceparent, cannot be attributed to your test, and would
+silently under-report coverage.
+
 **Source contract.** The coverage build measures your **working tree**, bounded
 to cargo sources — there is no stage-first ritual for the normal flow. An
 untracked `.rs` file under an instrumented crate **is** measured (in the normal

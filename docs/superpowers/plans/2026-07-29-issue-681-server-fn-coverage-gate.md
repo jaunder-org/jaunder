@@ -823,7 +823,7 @@ pub fn verdict(
 ) -> Vec<String>;                                       // one message per violation
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```rust
 #[test]
@@ -1390,7 +1390,7 @@ git commit -m "test(xtask): seed server-fn coverage snapshot and allowlist from 
   implementation diverged from the draft; the ADR is numbered at ship by
   `cargo xtask adr promote`)
 
-- [ ] **Step 1: Document the developer obligation**
+- [x] **Step 1: Document the developer obligation**
 
 In `CONTRIBUTING.md`, alongside the existing coverage policy: adding a
 `#[server]` fn requires either an e2e flow plus
@@ -1398,19 +1398,36 @@ In `CONTRIBUTING.md`, alongside the existing coverage policy: adding a
 and a filed issue. Name both commands exactly. Keep it to what the author needs
 at the moment the gate reddens.
 
-- [ ] **Step 2: Note the CI shape**
+- [x] **Step 2: Note the CI shape**
 
 In `docs/observability.md`, record that the snapshot is regenerated only by the
 `sqlite × chromium` combo (D8's `symlinkJoin` collision is the reason — state
 it, or someone will "fix" it by moving the check to the aggregate).
 
-- [ ] **Step 3: Run the full local gate**
+Added a `#[server]` flow coverage section covering the two artifacts, the two
+signals, the two lanes, the per-combo restriction _with_ its reason, the
+regenerate recipe, fail-closed, and how to read the orphan bucket. Also
+**corrected an existing claim**: "Both layers use the same trace context
+(`JAUNDER_E2E_TRACEPARENT`)" was true before Task 4 and is now misleading — the
+trace _id_ is shared, but the parent span id is per test. That sentence would
+otherwise have sent the next reader looking for a run-wide parent.
+
+The ADR draft gained the two things the implementation taught that the design
+did not anticipate: propagation needs a **gate** rather than a documented
+convention (15 of 18 sites ignored it), and capture **freshness** is part of the
+fail-closed contract (8c).
+
+- [x] **Step 3: Run the full local gate**
 
 Run: `devtool run -- cargo xtask validate --no-e2e` Expected: PASS. Then
 `git status --porcelain` — `check` auto-fixes formatting without committing, so
 confirm the tree is clean before the final commit.
 
-- [ ] **Step 4: Commit**
+**Actual: PASS.** First attempt failed `prettier` on the two prose files —
+`validate` is verify-only, so a `check --no-test` pass formatted them and the
+re-run was green.
+
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs CONTRIBUTING.md

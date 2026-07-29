@@ -30,8 +30,22 @@ E2E tracing currently has two complementary layers:
   - opt-in for selected scenarios
   - mark-to-mark phase timing for domain-specific flow analysis
 
-Both layers use the same trace context (`JAUNDER_E2E_TRACEPARENT`) so browser
-and backend spans are correlated in a single trace.
+Both layers share one **trace id** (from `JAUNDER_E2E_TRACEPARENT`) so browser
+and backend spans are correlated in a single trace. Since #681 the **parent span
+id** is per test, not run-wide: `fixtures.ts` mints the `e2e.test` span id
+before the test body and sends `traceparent: 00-<traceId>-<testSpanId>-01` on
+every context the test uses, and the server adopts that as its request span's
+parent. Server request spans therefore carry the id of the test that caused
+them, which is the structural join the flow-coverage gate below walks.
+
+The run-wide `JAUNDER_E2E_TRACEPARENT` value remains installed as
+`playwright.config.ts`'s static `use.extraHTTPHeaders`, so it is still what
+pre-attribution traffic (notably `warmupPageContext`) carries. That traffic is
+deliberately _not_ attributed to any test.
+
+A context built with `browser.newContext()` does **not** inherit config-level
+`extraHTTPHeaders`, so specs must use the `tracedContext` fixture; the
+`traced-context` static check enforces it.
 
 ## Per-test timing report
 
@@ -46,6 +60,62 @@ the Firefox-vs-Chromium analysis in #152). On the
 `cargo xtask e2e <backend> <browser>` path it lands per combo at
 `.xtask/diagnostics/e2e-<backend>-<browser>/playwright-report-<backend>.json`
 and is uploaded as the `e2e-diagnostics-<backend>-<browser>` CI artifact.
+
+## `#[server]` flow coverage (#681)
+
+Which server fns a real browser session actually drives, derived from the traces
+above rather than asserted. Two committed artifacts under `docs/coverage/`:
+
+| File                        | Owner        | Contents                                                          |
+| --------------------------- | ------------ | ----------------------------------------------------------------- |
+| `server-fns.json`           | generated    | server fn → the named tests that drove it, plus an orphan bucket  |
+| `server-fns-allowlist.json` | hand-written | one entry per knowingly-uncovered fn: fn name, reason, issue link |
+
+A fn is identified by the **union** of two signals: a span whose name is the fn
+ident with a matching `code.namespace`, or a request `uri` resolving to the fn's
+declared endpoint. Attribution is an **ancestor walk** up `parent_span_id` to a
+known `e2e.test` span — `uri` hits resolve in one hop, span-name hits in two.
+
+**Two lanes, and neither is sufficient alone.** Traces exist only in the e2e
+lane; fast feedback only in the static one.
+
+- **Static** (`cargo xtask check`, `validate --no-e2e`): committed snapshot +
+  allowlist + `syn` inventory. No capture, so a new `#[server]` fn with no flow
+  reddens the build without an e2e run.
+- **E2e** (`cargo xtask e2e sqlite chromium`): regenerates from that run's
+  capture and fails on any difference from the committed snapshot.
+
+**Regeneration is per-combo only.** `checks.e2e` is a `symlinkJoin` over every
+`e2e-*` check and both sqlite combos emit a file named `capture-sqlite.tar.gz`,
+so in the joined output the two collide unpredictably. Only
+`cargo xtask e2e sqlite chromium` regenerates or verifies; the local aggregate
+`cargo xtask validate` skips it, and the static lane still runs there. In CI the
+`{backend}×{browser}` matrix (ADR-0034) means the `sqlite`/`chromium` job is the
+one that carries the drift check.
+
+`sqlite × chromium` is authoritative because `chromium`'s `testIgnore` and
+`chromium-admin`'s `testMatch` are exact complements over all spec files and no
+test is browser- or backend-conditional — so one combo drops no coverage.
+
+To regenerate after adding a flow:
+
+```bash
+cargo xtask e2e sqlite chromium            # writes .xtask/diagnostics/e2e-sqlite-chromium/capture-sqlite.tar.gz
+cargo xtask server-fn-coverage regenerate  # rewrites docs/coverage/server-fns.json
+cargo xtask server-fn-coverage verify      # what the e2e lane runs: fails on drift
+```
+
+**Everything fails closed.** A missing, empty, or unparseable capture is an
+error, never "no uncovered fns" — otherwise the failure mode the gate guards
+against and the failure mode of its own plumbing would look identical.
+
+**The orphan bucket** counts hits whose walk reached no test. It is reported,
+not failed: a non-empty bucket means attribution stopped somewhere, which is
+worth seeing. Expect roughly one hit per test for the app-shell fns (`session`,
+`list_local_timeline`, the two warning-visibility fns) — that is the
+`_autoPerfSpan` warmup load, which applies the per-test traceparent only _after_
+`warmupPageContext` so warmup traffic stays out of attribution. A _per-test_
+orphan for anything else means a context is missing its traceparent.
 
 ## Server-side scoped diagnostic log — look here first (#144)
 
