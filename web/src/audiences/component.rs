@@ -24,7 +24,7 @@ use reactive_stores::{Field, Patch, Store};
 /// unchanged rows. Distinct from `AudienceList` (#359's invalidator scope).
 #[derive(Default, Store, Patch)]
 struct AudienceListData {
-    #[store(key: i64 = |a| a.audience_id)]
+    #[store(key: AudienceId = |a| a.audience_id)]
     audiences: Vec<super::api::AudienceSummary>,
 }
 
@@ -210,13 +210,11 @@ fn CreateAudienceForm() -> impl IntoView {
 /// a rename updates the `<h3>` name in place (the row is never remounted).
 #[component]
 fn AudienceRow(row: Field<AudienceSummary>) -> impl IntoView {
-    // The store row holds a bare `i64` (see `AudienceSummary`); wrap it into the typed
-    // `AudienceId` the header/checklist components and server fns speak.
-    let audience_id = AudienceId::from(row.audience_id().get_untracked());
+    let audience_id = row.audience_id().get_untracked();
     let initial_name = row.name().get_untracked();
     view! {
         <li class="j-audience-item">
-            <h3 class="j-audience-name">{move || row.name().get()}</h3>
+            <h3 class="j-audience-name">{move || row.name().get().to_string()}</h3>
             <AudienceHeader audience_id=audience_id name=initial_name />
             <MemberChecklist audience_id=audience_id />
         </li>
@@ -226,7 +224,7 @@ fn AudienceRow(row: Field<AudienceSummary>) -> impl IntoView {
 /// The `j-audience-head` controls: rename and delete forms for one audience. Both actions
 /// refetch the audience list on success via the `AudienceList` invalidator.
 #[component]
-fn AudienceHeader(audience_id: AudienceId, name: String) -> impl IntoView {
+fn AudienceHeader(audience_id: AudienceId, name: AudienceName) -> impl IntoView {
     let list = expect_context::<AudienceList>();
     let rename_action = client::reactive::action::<RenameAudience>(move || list.notify());
     let delete_action = client::reactive::action::<DeleteAudience>(move || list.notify());

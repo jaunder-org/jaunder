@@ -21,21 +21,22 @@ use {
 
 /// A named audience as shown in the management screen.
 ///
-/// `audience_id` stays a bare `i64` here (not `AudienceId`): this is a
-/// `reactive_stores` keyed-store row (`Store`/`Patch`), and `Patch` requires the
-/// field to be `PatchField` — a foreign trait implemented only for primitives, with
-/// no blanket impl. Typing it would force `impl PatchField for AudienceId`; that impl
-/// is coherent only in `common` (where `AudienceId` is defined), but that would drag a
-/// leptos-client dependency (`reactive_stores`) into the backend-agnostic crate
-/// (ADR-0055/0058) — and in `web` it is an outright orphan violation. So this one
-/// reactive surface holds the primitive and
-/// converts at its edges (built from `AudienceRecord`; wrapped into `AudienceId`
-/// where it flows into the typed components/server fns) — the ADR-0063
-/// external-non-owned-type carve-out.
+/// A `reactive_stores` keyed-store row (`Store`/`Patch`), so each field carries
+/// `#[patch(|this, new| *this = new)]` — the derive's escape hatch, which lets the
+/// fields keep their domain types instead of being flattened to `i64`/`String`.
+/// Rationale and the rejected alternatives:
+/// `docs/adr/drafts/reactive-store-domain-newtype-fields.md`.
+///
+/// `audience_id`'s attribute is required to compile but is behaviorally inert: it is
+/// the store key, so `patch_field_keyed` has already matched the two rows *by* it
+/// before the closure is reached, and the value can never differ. Only `name`'s
+/// attribute does real work — and it is the one the audiences e2e guards.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Store, Patch)]
 pub struct AudienceSummary {
-    pub audience_id: i64,
-    pub name: String,
+    #[patch(|this, new| *this = new)]
+    pub audience_id: AudienceId,
+    #[patch(|this, new| *this = new)]
+    pub name: AudienceName,
 }
 
 /// One of the author's active subscribers, for the assignment checklist.
@@ -96,11 +97,8 @@ pub async fn list_my_audiences() -> WebResult<Vec<AudienceSummary>> {
         Ok(rows
             .into_iter()
             .map(|a| AudienceSummary {
-                audience_id: i64::from(a.audience_id),
-                // `AudienceSummary` is a `reactive_stores` `Patch` row, so `name` stays a
-                // primitive `String` (the same `PatchField` carve-out as `audience_id`); the
-                // typed `AudienceName` from storage converts at this edge (ADR-0063).
-                name: a.name.into(),
+                audience_id: a.audience_id,
+                name: a.name,
             })
             .collect())
     })
