@@ -11,6 +11,8 @@ pub mod git;
 mod ids;
 mod nix_build;
 mod result;
+mod server_fn_coverage;
+mod server_fns;
 mod sh;
 #[cfg(test)]
 mod test_support;
