@@ -3,12 +3,24 @@
 //! [`Invalidator`] is the canonical revalidation idiom (design record:
 //! `docs/adr/0060-web-invalidator-revalidation-idiom.md`): a committed mutation
 //! `notify()`s an invalidator, and every resource that `track()`s it refetches. This module
-//! owns the host-tested core — `new` / `notify` / `track` and the `invalidator_scope!`
-//! context-scope newtype. The browser-bound helpers built on it
+//! owns the host-tested core — `new` / `notify` / `track`; the `invalidator_scope!`
+//! context-scope newtype lives in the [`scope`] leaf. The browser-bound helpers built on it
 //! (`resource` / `action` / `patched` / `sticky`, the latter two driving ADR-0061's keyed
 //! list and its sticky peer) live in `client::reactive` (#515) — wasm-only and e2e-exercised.
 
 use leptos::prelude::*;
+
+// The macro's consumers are wasm-only `component.rs` files; the `test` arm keeps the
+// generated newtype host-tested. Gating the leaf here (not inside it) is ADR-0070's
+// file-level split — `scope.rs` carries no cfg of its own.
+#[cfg(any(target_arch = "wasm32", test))]
+mod scope;
+// Same gate as the `mod` above, deliberately: the `tests` module below consumes this
+// re-export on a host test build, and it in turn is what consumes `scope.rs`'s own
+// `pub(crate) use`. Gating either one wasm-only would leave the other unconsumed on
+// host and trip `unused_imports` (denied).
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) use scope::invalidator_scope;
 
 /// A revalidation handle. A committed mutation [`notify`](Self::notify)s it; the resources
 /// that [`track`](Self::track) it refetch.
@@ -45,50 +57,31 @@ impl Default for Invalidator {
     }
 }
 
-/// Declares a distinct context-scope newtype over an [`Invalidator`], with `Deref` so the
-/// full `Invalidator` API is available on it. Use one per **cross-component** refetch scope
-/// and `provide_context` / `expect_context` it, so scopes never collide by type (a bare
-/// `Invalidator` in context would). A *local* scope needs no newtype — a bare `Invalidator`
-/// suffices.
-///
-/// ```ignore
-/// invalidator_scope! {
-///     /// The audience-list refetch scope.
-///     struct AudienceList
-/// }
-/// ```
-// Consumers of this macro are wasm-only `component.rs` files (the generated context-scope
-// newtype is browser-bound reactive UI, ADR-0070); the only host build that references it is
-// this module's own `#[cfg(test)]` coverage below. Gating the definition to those targets
-// keeps the plain host-lib build from flagging it as an unused macro.
-#[cfg(any(target_arch = "wasm32", test))]
-macro_rules! invalidator_scope {
-    ($(#[$meta:meta])* $vis:vis struct $name:ident) => {
-        $(#[$meta])*
-        #[derive(Clone, Copy)]
-        $vis struct $name($vis $crate::reactive::Invalidator);
-
-        impl ::core::ops::Deref for $name {
-            type Target = $crate::reactive::Invalidator;
-            fn deref(&self) -> &Self::Target {
-                &self.0
-            }
-        }
-    };
-}
-// The re-export is consumed only by the wasm-only `component.rs` files; this module's own
-// `#[cfg(test)]` use reaches the definition by textual scope, not through the re-export.
-#[cfg(target_arch = "wasm32")]
-pub(crate) use invalidator_scope;
-
 #[cfg(test)]
 mod tests {
-    use super::Invalidator;
+    use super::{invalidator_scope, Invalidator};
     use leptos::reactive::owner::Owner;
 
     invalidator_scope! {
         /// Throwaway scope exercising the macro-generated newtype (`Deref` + `Copy`).
         struct TestScope
+    }
+
+    // The macro-generated newtype is trivial, pure code (`Deref` to the inner
+    // `Invalidator` + `Copy`), so it is covered here rather than exempted. Reaching the
+    // macro through `super::invalidator_scope` — rather than by textual scope — is also
+    // what keeps the `scope.rs` → `mod.rs` re-export chain consumed on the host build.
+    #[test]
+    fn scope_newtype_derefs_to_its_invalidator() {
+        let owner = Owner::new();
+        owner.set();
+        let scope = TestScope(Invalidator::new());
+        let copied = scope; // Copy
+        let v0 = scope.track(); // via Deref
+        copied.notify(); // both wrap the same inner signal
+        let v1 = scope.track();
+        drop(owner);
+        assert_ne!(v1, v0, "Deref reaches the inner Invalidator");
     }
 
     // The load-bearing property: each `notify` changes the value a `Resource` source
@@ -108,20 +101,5 @@ mod tests {
         drop(owner);
         assert_ne!(v1, v0, "notify must change the tracked revision");
         assert_ne!(v2, v1, "each notify must change it again");
-    }
-
-    // The macro-generated newtype is trivial, pure code (`Deref` to the inner `Invalidator`
-    // + `Copy`), so it is covered here rather than exempted.
-    #[test]
-    fn scope_newtype_derefs_to_its_invalidator() {
-        let owner = Owner::new();
-        owner.set();
-        let scope = TestScope(Invalidator::new());
-        let copied = scope; // Copy
-        let v0 = scope.track(); // via Deref
-        copied.notify(); // both wrap the same inner signal
-        let v1 = scope.track();
-        drop(owner);
-        assert_ne!(v1, v0, "Deref reaches the inner Invalidator");
     }
 }
