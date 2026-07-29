@@ -469,7 +469,9 @@ integration suite, following the crate's existing convention.
 **Interfaces:** Consumes `storage::perform_post_creation`; asserts the persisted
 `rendered_html` carries no active markup. This is AC2.
 
-- [ ] **Step 1: Write the test.**
+- [x] **Step 1: Write the test.** In `storage/src/post_service.rs`'s in-file
+      `#[cfg(test)]`, reusing the existing `creation_with_key` fixture and the
+      `#[apply(backends)]` dual-backend template.
 
 Create a post whose body contains `<script>alert(1)</script>` and an
 `<img src=x onerror=alert(1)>` via the real creation path, read the record back,
@@ -480,14 +482,16 @@ bare `#[tokio::test]` here fails the `test-backend-pattern` guard.
 
 Prefer an existing fixture from `storage::test_support` over hand-rolling setup.
 
-- [ ] **Step 2: Run it.**
+- [x] **Step 2: Run it.** Green in the gate (both backends), and separately
+      confirmed the `case_1_sqlite` case actually executes — "1 test run: 1
+      passed" — rather than being silently absent.
 
 Run: `devtool run -- cargo nextest run -p storage rendered_html`
 
 Expected: PASS on both backends. If it fails, the creation path is not reaching
 the sanitizing `render()`.
 
-- [ ] **Step 3: Gate and commit.**
+- [x] **Step 3: Gate and commit.**
 
 `devtool run -- cargo xtask check`, then commit:
 `test(storage): assert malicious post bodies are sanitized end-to-end (#445)`.
