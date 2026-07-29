@@ -358,6 +358,7 @@ fn run_promote(repo: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{git_ok as git, write};
     use std::path::Path;
 
     #[test]
@@ -529,17 +530,6 @@ mod tests {
         assert_eq!(out, "ADR-0035 governs this. Unrelated number 10034 stays.");
     }
 
-    fn git(dir: &Path, args: &[&str]) {
-        let ok = crate::git::at(dir).args(args).status().unwrap().success();
-        assert!(ok, "git {args:?} failed");
-    }
-
-    fn write(dir: &Path, rel: &str, body: &str) {
-        let p = dir.join(rel);
-        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-        std::fs::write(p, body).unwrap();
-    }
-
     /// Trimmed stdout of a git command that must succeed — for asserting index
     /// state (`diff --cached`).
     fn git_stdout(dir: &Path, args: &[&str]) -> String {
@@ -551,13 +541,7 @@ mod tests {
     /// A committed repo with `docs/adr/0001-foo.md` on `main` — the base state the
     /// promote tests graduate a draft on top of.
     fn promote_repo(tag: &str) -> std::path::PathBuf {
-        let tmp =
-            std::env::temp_dir().join(format!("jaunder-adr-promote-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
-        git(&tmp, &["init", "-q", "-b", "main"]);
-        git(&tmp, &["config", "user.email", "t@t"]);
-        git(&tmp, &["config", "user.name", "t"]);
+        let tmp = crate::test_support::temp_repo("adr-promote", tag);
         write(
             &tmp,
             "docs/adr/0001-foo.md",

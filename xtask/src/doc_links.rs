@@ -245,44 +245,10 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::test_support::{commit, write};
 
-    /// A fresh git repo under a pid-scoped temp dir, identity configured — the
-    /// `git.rs::tests::temp_repo` idiom. `tag` must be unique per test: the tests in
-    /// this module share a process, so the pid alone does not separate them.
     fn repo(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("jaunder-links-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        for args in [
-            &["init", "-q", "-b", "main"][..],
-            &["config", "user.email", "t@t"],
-            &["config", "user.name", "t"],
-        ] {
-            assert!(git(&dir, args).success());
-        }
-        dir
-    }
-
-    /// Run git against `dir` via [`crate::git::at`] — which scrubs `GIT_DIR` and
-    /// friends. Not optional: these tests run under the pre-commit hook, which
-    /// exports them, and a bare `Command::new("git")` would silently retarget every
-    /// call at the real repository.
-    fn git(dir: &Path, args: &[&str]) -> std::process::ExitStatus {
-        crate::git::at(dir).args(args).status().unwrap()
-    }
-
-    /// Write `rel` under `dir`, creating its parent.
-    fn write(dir: &Path, rel: &str, body: &str) {
-        let p = dir.join(rel);
-        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-        std::fs::write(p, body).unwrap();
-    }
-
-    /// [`write`], then track it — `git ls-files` is what the gate enumerates.
-    fn commit(dir: &Path, rel: &str, body: &str) {
-        write(dir, rel, body);
-        assert!(git(dir, &["add", rel]).success());
-        assert!(git(dir, &["commit", "-qm", "c"]).success());
+        crate::test_support::temp_repo("links", tag)
     }
 
     // --- links_in: what counts as a link ---

@@ -12,6 +12,8 @@ mod ids;
 mod nix_build;
 mod result;
 mod sh;
+#[cfg(test)]
+mod test_support;
 mod traces;
 mod steps {
     pub mod adr_check;

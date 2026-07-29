@@ -206,32 +206,10 @@ pub(crate) fn config_set(dir: &Path, key: &str, value: &str) -> Result<()> {
 mod tests {
     use super::*;
 
-    /// A fresh git repo under a pid-scoped temp dir, identity configured.
-    fn temp_repo(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("jaunder-git-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        for args in [
-            &["init", "-q", "-b", "main"][..],
-            &["config", "user.email", "t@t"],
-            &["config", "user.name", "t"],
-        ] {
-            assert!(at(&dir).args(args).status().unwrap().success());
-        }
-        dir
-    }
+    use crate::test_support::commit;
 
-    /// Write `rel` under `dir`, then `git add` + `git commit` it.
-    fn commit(dir: &Path, rel: &str, body: &str) {
-        let p = dir.join(rel);
-        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-        std::fs::write(p, body).unwrap();
-        assert!(at(dir).args(["add", rel]).status().unwrap().success());
-        assert!(at(dir)
-            .args(["commit", "-qm", "c"])
-            .status()
-            .unwrap()
-            .success());
+    fn temp_repo(tag: &str) -> std::path::PathBuf {
+        crate::test_support::temp_repo("git", tag)
     }
 
     #[test]
