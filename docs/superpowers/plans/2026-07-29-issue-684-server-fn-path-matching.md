@@ -178,7 +178,7 @@ Add the three numbers to the spec's Out-of-scope bullets (one clause each, e.g.
 Global Constraints carve-out for this cycle's own spec; a factual addition, not
 a reword, so D10-compliant.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit** — `a547f4f0`
 
 ```bash
 git add docs/superpowers/specs/2026-07-29-issue-684-server-fn-path-matching.md
@@ -229,7 +229,7 @@ spelled for `name` only.
     is inert for `endpoint`. Document that limitation on the fn — a future
     attribute with its own nested list would need it parameterized.
 
-- [ ] **Step 1: Move the four items, generalizing two**
+- [x] **Step 1: Move the four items, generalizing two**
 
 Cut `vertical_of`, `rewrite_name`, `find_name_eq`, `LineFix`, `apply_fixes` from
 `server_fn_tracing_check.rs` into `web_server_fns.rs` and make them `pub`. In
@@ -247,7 +247,7 @@ and `vertical_of(path)` / `apply_fixes(...)` / `LineFix` become
 that call sites are not littered with long paths — add the needed names to the
 existing `use crate::web_server_fns::{self, WEB_SRC};` line.
 
-- [ ] **Step 2: Move only the cleanly-movable tests; leave the rest in place**
+- [x] **Step 2: Move only the cleanly-movable tests; leave the rest in place**
 
 **Only the six `rewrite_name` tests (`server_fn_tracing_check.rs:886-943`)
 move.** Relocate them into `web_server_fns.rs`'s test module, updating each call
@@ -306,13 +306,13 @@ fn vertical_of_takes_the_first_segment_under_web_src() {
 The `vertical_of` test is **new**, not moved — it gives the now-shared fn direct
 coverage that does not depend on any one gate.
 
-- [ ] **Step 3: Run the xtask tests, verify they pass**
+- [x] **Step 3: Run the xtask tests, verify they pass** — 337 passed
 
 Run: `devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml`
 Expected: PASS — this task is behavior-preserving, so every pre-existing
 tracing-gate test must still pass unchanged.
 
-- [ ] **Step 4: Run the gate, verify no tree mutation, verify the old symbol is
+- [x] **Step 4: Run the gate, verify no tree mutation, verify the old symbol is
       gone**
 
 Run: `devtool run -- cargo xtask check --no-test` Expected: PASS, and
