@@ -1,7 +1,7 @@
 # Plan — Issue #587: retire the reactive-store primitive carve-outs
 
 Spec:
-[`docs/superpowers/specs/2026-07-28-issue-587-patchfield-newtypes.md`](../specs/2026-07-28-issue-587-patchfield-newtypes.md)
+[`docs/archive/2026-07-28-issue-587-patchfield-newtypes-spec.md`](2026-07-28-issue-587-patchfield-newtypes-spec.md)
 ADR draft: `docs/adr/drafts/reactive-store-domain-newtype-fields.md` (already
 written; gitignored until `promote` at ship)
 
