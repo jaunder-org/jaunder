@@ -218,10 +218,12 @@ a vertical noun the module path now restates (`audiences::create_audience`), and
 when #684 sheds those nouns every span name improves with no span-name edit and
 no gate change.
 
-Spans use `#[tracing::instrument]`'s default **INFO** level. Stated because it
-means operator configuration reaches trace backends at INFO — permitted, since
-that data is the operator's own, but a deliberate choice rather than an
-inherited default.
+Spans use `#[tracing::instrument]`'s default **INFO** level, and no site sets an
+explicit `level`. Stated because it means operator configuration reaches trace
+backends at INFO — permitted, since that data is the operator's own, but a
+deliberate choice rather than an inherited default. This one is a **convention,
+not an invariant**: the gate tolerates an explicit `level`, since level changes
+verbosity rather than what is recorded.
 
 ### What may be recorded
 

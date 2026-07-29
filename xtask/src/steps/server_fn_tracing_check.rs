@@ -86,8 +86,10 @@ const RECORDABLE_TYPES: &[(&str, &str)] = &[
 ];
 
 /// `#[tracing::instrument]` arguments that neither name the span nor decide what is
-/// recorded, so the gate accepts and ignores them.
-const IGNORED_ARGS: &[&str] = &["level", "target", "parent", "follows_from_expr"];
+/// recorded, so the gate accepts and ignores them. Everything not listed here and
+/// not handled explicitly is rejected — including `follows_from`, whose expression
+/// this gate does not inspect.
+const IGNORED_ARGS: &[&str] = &["level", "target", "parent"];
 
 /// Whether a type may be recorded, by its reduced name.
 fn is_recordable(reduced: Option<&str>) -> bool {
@@ -128,14 +130,9 @@ fn reduce_type(ty: &syn::Type) -> Option<String> {
 /// so there is no honest name to derive — that is an error naming the file, not a
 /// guess at `web.foo.rs.…`.
 fn vertical_of(path: &str) -> Result<&str, String> {
-    let normalized = path.replace('\\', "/");
-    let rest = normalized
+    let (_, rest) = path
         .split_once(&format!("{WEB_SRC}/"))
-        .map(|(_, rest)| rest)
         .ok_or_else(|| format!("{path}: not under {WEB_SRC}/"))?;
-    // Borrow from `path` rather than the temporary: find the same offset.
-    let offset = path.len() - rest.len();
-    let rest = &path[offset..];
     match rest.split_once('/') {
         Some((vertical, _)) => Ok(vertical),
         None => Err(format!(
@@ -260,7 +257,7 @@ fn field_value_idents(tokens: &TokenStream) -> BTreeSet<String> {
         // Split on the first top-level `=`; everything after it is the value.
         let mut value = TokenStream::new();
         let mut seen_eq = false;
-        let mut any = Vec::new();
+        let mut name_tokens = Vec::new();
         for tt in entry.clone() {
             if !seen_eq {
                 if let TokenTree::Punct(ref p) = tt {
@@ -269,7 +266,7 @@ fn field_value_idents(tokens: &TokenStream) -> BTreeSet<String> {
                         continue;
                     }
                 }
-                any.push(tt);
+                name_tokens.push(tt);
             } else {
                 value.extend(std::iter::once(tt));
             }
@@ -279,7 +276,7 @@ fn field_value_idents(tokens: &TokenStream) -> BTreeSet<String> {
         } else {
             // A shorthand field (`fields(post_id)`) records the argument itself,
             // so its identifiers are values, not a bare name.
-            let bare: TokenStream = any.into_iter().collect();
+            let bare: TokenStream = name_tokens.into_iter().collect();
             collect_idents(&bare, &mut out);
         }
     }
@@ -384,11 +381,23 @@ fn problems_with(f: &WebServerFn, vertical: &str) -> Vec<String> {
         Some(_) => {}
     }
 
-    for (param, ty) in &f.params {
-        let reduced = reduce_type(ty);
+    for p in &f.params {
+        let reduced = reduce_type(&p.ty);
+        let shown = reduced.as_deref().unwrap_or("<unrecognized type>");
+        // A destructured parameter has no single name to put in `skip(...)`, so it
+        // can be neither skipped nor reasoned about. `skip_all` still covers it.
+        let Some(param) = p.name.as_deref() else {
+            if !parsed.skip_all {
+                lines.push(format!(
+                    "{at}: a parameter of type `{shown}` is bound by a pattern rather than a \
+                     plain identifier, so it cannot be named in skip(...) — bind it to an \
+                     identifier, or use skip_all"
+                ));
+            }
+            continue;
+        };
         let recordable = is_recordable(reduced.as_deref());
         let skipped = parsed.skip_all || parsed.skipped.contains(param);
-        let shown = reduced.as_deref().unwrap_or("<unrecognized type>");
         if !recordable && !skipped {
             lines.push(format!(
                 "{at}: argument `{param}: {shown}` is neither skipped nor recordable — add it to \
@@ -456,24 +465,15 @@ fn problems(web_sources: &[(String, String)]) -> Option<String> {
 /// conforming span. A missing `web/src` tree or an unreadable file is a hard
 /// failure (not a silent pass), so a moved path can never quietly disable the guard.
 pub fn run(result: &mut CommandResult) {
-    let mut files = Vec::new();
-    if let Err(e) = web_server_fns::rust_files(Path::new(WEB_SRC), &mut files) {
-        result.push(
-            StepResult::fail("server-fn-tracing").detail(format!("cannot scan {WEB_SRC}: {e}")),
-        );
-        return;
-    }
-    // A file we listed but cannot READ is surfaced as a failure, not dropped: an
-    // unenumerated source could hide a bare `#[server]` fn (a false pass).
-    let mut sources = Vec::new();
-    let mut read_errors = Vec::new();
-    for p in &files {
-        match std::fs::read_to_string(p) {
-            Ok(s) => sources.push((p.display().to_string(), s)),
-            Err(e) => read_errors.push(format!("{}: cannot read: {e}", p.display())),
+    let web = match web_server_fns::read_web_sources(Path::new(WEB_SRC)) {
+        Ok(v) => v,
+        Err(e) => {
+            result.push(StepResult::fail("server-fn-tracing").detail(e));
+            return;
         }
-    }
-    let step = match (read_errors.is_empty(), problems(&sources)) {
+    };
+    let mut read_errors = web.read_errors;
+    let step = match (read_errors.is_empty(), problems(&web.sources)) {
         (true, None) => StepResult::ok("server-fn-tracing"),
         (_, prob) => {
             read_errors.extend(prob);

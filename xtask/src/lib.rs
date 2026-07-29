@@ -12,7 +12,7 @@ mod nix_build;
 mod result;
 mod sh;
 mod traces;
-pub mod web_server_fns;
+mod web_server_fns;
 mod steps {
     pub mod adr_check;
     pub mod build_csr;

@@ -236,13 +236,17 @@ fn problems(web_sources: &[(String, String)], registrar_src: &str) -> Option<Str
 /// failure (not a silent pass), so a moved/renamed path can never quietly
 /// disable the guard.
 pub fn run(result: &mut CommandResult) {
-    let mut files = Vec::new();
-    if let Err(e) = web_server_fns::rust_files(Path::new(WEB_SRC), &mut files) {
-        result.push(
-            StepResult::fail("server-fn-registrar").detail(format!("cannot scan {WEB_SRC}: {e}")),
-        );
-        return;
-    }
+    // A listed-but-unreadable file is surfaced as a failure, not dropped: an
+    // unenumerated source could hide an unregistered `#[server]` fn (a false pass),
+    // the same fail-loud rule the module doc states.
+    let web = match web_server_fns::read_web_sources(Path::new(WEB_SRC)) {
+        Ok(v) => v,
+        Err(e) => {
+            result.push(StepResult::fail("server-fn-registrar").detail(e));
+            return;
+        }
+    };
+    let mut read_errors = web.read_errors;
     let registrar_src = match std::fs::read_to_string(REGISTRAR) {
         Ok(s) => s,
         Err(e) => {
@@ -253,18 +257,10 @@ pub fn run(result: &mut CommandResult) {
             return;
         }
     };
-    // A file we listed but cannot READ is surfaced as a failure, not dropped:
-    // an unenumerated source could hide an unregistered `#[server]` fn (a false
-    // pass), the same fail-loud rule the module doc states.
-    let mut sources = Vec::new();
-    let mut read_errors = Vec::new();
-    for p in &files {
-        match std::fs::read_to_string(p) {
-            Ok(s) => sources.push((p.display().to_string(), s)),
-            Err(e) => read_errors.push(format!("{}: cannot read: {e}", p.display())),
-        }
-    }
-    let step = match (read_errors.is_empty(), problems(&sources, &registrar_src)) {
+    let step = match (
+        read_errors.is_empty(),
+        problems(&web.sources, &registrar_src),
+    ) {
         (true, None) => StepResult::ok("server-fn-registrar"),
         (_, prob) => {
             read_errors.extend(prob);
