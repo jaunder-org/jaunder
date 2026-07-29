@@ -1100,6 +1100,45 @@ typechecks. The real proof is Task 9's re-run: the orphan bucket must collapse.
 
 ---
 
+### Task 8c: The diagnostics copy silently kept the first run's capture
+
+**Discovered when Task 8b's proof re-run reported byte-identical numbers** (51
+covered / 608 orphans — impossible by chance). The capture in
+`.xtask/diagnostics/` was still the previous run's: its md5 was `016bb8…` while
+the gcroot's was `67d3de…`.
+
+Cause: `copy_e2e_diagnostics_between` does `fs::copy(from, to)`, and every
+lifted artifact comes from the nix store, so the _previous_ copy is on disk
+`0444`. `fs::copy` onto a read-only file fails `EACCES`, and the result was
+discarded (`if …is_ok()`), so re-runs silently kept the first run's artifacts.
+
+This is squarely load-bearing for #681: `verify` reads its capture from that
+directory, so the gate would have compared a new build against **stale traces**
+— green when it should be red, or red for a drift that no longer exists. Exactly
+the dishonest-gate failure the spec exists to prevent.
+
+**Files:** `xtask/src/steps/nix.rs`
+
+- [x] **Step 1: Remove-then-copy, and drop the read-only bit**
+
+`remove_file` before the copy, then `set_permissions(0o644)` after, so a later
+run can overwrite even if the remove fails. Uses an explicit mode rather than
+`set_readonly(false)` (which grants all-user write and trips
+`clippy::permissions_set_readonly_false`).
+
+- [x] **Step 2: Regression test**
+
+`copy_e2e_diagnostics_overwrites_a_read_only_previous_copy` — copy, chmod the
+destination `0444` as the store does, copy a changed source, assert the new
+bytes land.
+
+- [x] **Step 3: Verify against the real artifact**
+
+Re-ran the combo (cache hit, ~6 s); the diagnostics capture now matches the
+gcroot's md5, and regeneration moved to **53 covered / 444 orphans**.
+
+---
+
 ### Task 9: The static lane, seeded from a real run, with the gaps filed
 
 **Files:**

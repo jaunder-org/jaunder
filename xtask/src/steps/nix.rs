@@ -1,5 +1,6 @@
 use std::fs::File;
 use std::io::{self, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -158,7 +159,17 @@ fn copy_e2e_diagnostics_between(src_dir: &std::path::Path, dest_dir: &std::path:
         let to = dest_dir.join(name);
         // Every lifted artifact is a flat file (journals, the Playwright report, and the
         // trace/capture tarballs); the otel trace now rides `capture-*.tar.gz`.
+        //
+        // Remove first: these come from the nix store, so a previously-copied artifact
+        // is on disk read-only (0444) and `fs::copy` onto it fails EACCES. That error
+        // was swallowed, so a second run silently kept the FIRST run's files — and the
+        // flow-coverage gate (#681) reads `capture-*.tar.gz` from here, so it would
+        // have verified today's build against yesterday's traces. Clear the read-only
+        // bit after copying too, so the next run can overwrite even if the remove
+        // fails.
+        let _ = std::fs::remove_file(&to);
         if std::fs::copy(&from, &to).is_ok() {
+            let _ = std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o644));
             copied += 1;
         }
     }
@@ -410,6 +421,8 @@ fn rescue_diagnostics(check: &str) {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
     use super::sentinel_detail;
     use coverage::status::{CoverageStatus, StatusCategory};
 
@@ -605,6 +618,38 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
         assert!(
             !dest.join("capture.tar.gz").exists(),
             "un-suffixed capture.tar.gz must not be lifted"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn copy_e2e_diagnostics_overwrites_a_read_only_previous_copy() {
+        // Artifacts come from the nix store, so the previous run's copy is on disk
+        // read-only and `fs::copy` onto it fails EACCES. That was swallowed, leaving
+        // the FIRST run's capture in place — and the #681 gate reads its capture from
+        // this directory, so it would verify a new build against stale traces.
+        let tmp = std::env::temp_dir().join(format!("xtask-ro-{}", std::process::id()));
+        let src = tmp.join("src");
+        let dest = tmp.join("dest");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+
+        std::fs::write(src.join("capture-sqlite.tar.gz"), b"first").unwrap();
+        assert_eq!(super::copy_e2e_diagnostics_between(&src, &dest), 1);
+        // Reproduce the store's 0444 on the destination.
+        std::fs::set_permissions(
+            dest.join("capture-sqlite.tar.gz"),
+            std::fs::Permissions::from_mode(0o444),
+        )
+        .unwrap();
+
+        std::fs::write(src.join("capture-sqlite.tar.gz"), b"second").unwrap();
+        assert_eq!(super::copy_e2e_diagnostics_between(&src, &dest), 1);
+
+        assert_eq!(
+            std::fs::read(dest.join("capture-sqlite.tar.gz")).unwrap(),
+            b"second",
+            "a re-run must replace the previous capture, not silently keep it"
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }
