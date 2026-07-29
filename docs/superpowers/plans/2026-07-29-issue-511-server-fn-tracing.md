@@ -170,7 +170,7 @@ commit — this task produces no repository change.
   `CaptureLayer` / `Captured` test scaffolding defined here is local to this
   module; later tasks do not reuse it.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `web/src/tags/api.rs`:
 
@@ -268,7 +268,7 @@ mod server_tests {
 }
 ```
 
-- [ ] **Step 2: Run it, verify it fails**
+- [x] **Step 2: Run it, verify it fails**
 
 Run:
 `devtool run -- cargo nextest run -p web --features server list_tags_emits_its_derived_span`
@@ -283,7 +283,7 @@ dev-dependency (`web/Cargo.toml:58`) and the workspace definition
 transitively enables `registry` — which is why `server/src/observability.rs:961`
 compiles `registry().with(layer)` today.
 
-- [ ] **Step 3: Instrument `list_tags`**
+- [x] **Step 3: Instrument `list_tags`**
 
 Insert immediately after the `#[server]` attribute at `web/src/tags/api.rs:31`:
 
@@ -294,7 +294,7 @@ Insert immediately after the `#[server]` attribute at `web/src/tags/api.rs:31`:
 `limit: Option<u32>` reduces to `u32`, which is recordable;
 `prefix: Option<String>` reduces to `String`, which is not (D3).
 
-- [ ] **Step 4: Run the test, verify it passes**
+- [x] **Step 4: Run the test, verify it passes**
 
 Run:
 `devtool run -- cargo nextest run -p web --features server list_tags_emits_its_derived_span`
@@ -306,7 +306,7 @@ expansion does not place the forwarded attribute around the server-side body,
 which invalidates the whole approach — return to the user rather than
 instrumenting 54 more sites the same way.
 
-- [ ] **Step 5: Check the wasm target**
+- [x] **Step 5: Check the wasm target**
 
 Run: `devtool run -- cargo xtask check --no-test` (its `wasm-clippy` step lints
 the wasm target; see Global Constraints)
@@ -316,7 +316,7 @@ is an unconditional `web` dependency (`web/Cargo.toml:47`) so it compiles, but
 wasm clippy is not covered by the default check (see the repo's wasm-clippy
 note).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add web/src/tags/api.rs
@@ -339,7 +339,7 @@ Run `cargo xtask check` first (**jaunder-commit**).
 - Consumes: the D2 naming rule proven in Task 2.
 - Produces: 15 spans under `web.posts.*`. No new symbols.
 
-- [ ] **Step 1: Add the 15 attributes**
+- [x] **Step 1: Add the 15 attributes**
 
 Insert each line immediately after that fn's `#[server]` attribute. Verbatim
 from the spec's per-site table — note the vertical is `posts` for **both**
@@ -376,7 +376,7 @@ argument is `CreatePostArgs`/`UpdatePostArgs`, which carry post bodies. The rest
 record only recordable-typed args (`post_id`, `username`, `date`, `slug`, `tag`,
 `cursor_created_at`, `cursor_post_id`, `limit`) and so need no skip list.
 
-- [ ] **Step 2: Verify it compiles on both targets**
+- [x] **Step 2: Verify it compiles on both targets**
 
 Run: `devtool run -- cargo check -p web --features server --all-targets`
 Expected: PASS.
@@ -389,13 +389,13 @@ position that the spec classified as recordable but which lacks `Debug` — repo
 it rather than adding a `skip`, since it contradicts the spec's verified
 classification.
 
-- [ ] **Step 3: Run the posts tests**
+- [x] **Step 3: Run the posts tests**
 
 Run: `devtool run -- cargo nextest run -p web --features server posts` Expected:
 PASS — no behaviour change; this pins that instrumentation did not disturb the
 existing server-fn tests at `web/src/posts/api.rs:831`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add web/src/posts/api.rs web/src/posts/api/listing.rs
@@ -417,7 +417,7 @@ git commit -m "feat(web): instrument posts server fns (#511)"
 - Produces: 19 spans under `web.audiences.*`, `web.media.*`, `web.profile.*`,
   `web.sessions.*`.
 
-- [ ] **Step 1: Add the 19 attributes**
+- [x] **Step 1: Add the 19 attributes**
 
 `web/src/audiences/api.rs`:
 
@@ -465,7 +465,7 @@ only discoverable once a published post references it (D3). It still records
 #[tracing::instrument(name = "web.sessions.revoke_session", skip_all)]                    // :77
 ```
 
-- [ ] **Step 2: Verify both targets**
+- [x] **Step 2: Verify both targets**
 
 Run: `devtool run -- cargo check -p web --features server --all-targets`
 Expected: PASS.
@@ -473,11 +473,11 @@ Expected: PASS.
 Run: `devtool run -- cargo xtask check --no-test` (its `wasm-clippy` step lints
 the wasm target; see Global Constraints) Expected: clean.
 
-- [ ] **Step 3: Run the affected tests**
+- [x] **Step 3: Run the affected tests**
 
 Run: `devtool run -- cargo nextest run -p web --features server` Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add web/src/audiences/api.rs web/src/media/api.rs web/src/profile/api.rs web/src/sessions/api.rs
@@ -500,7 +500,7 @@ git commit -m "feat(web): instrument audiences, media, profile, sessions server 
 - Consumes: the D2 naming rule.
 - Produces: the final 9 new spans; all 55 sites now conform to D2/D3.
 
-- [ ] **Step 1: Add the 9 new attributes**
+- [x] **Step 1: Add the 9 new attributes**
 
 ```rust
 // web/src/email/api.rs
@@ -525,7 +525,7 @@ git commit -m "feat(web): instrument audiences, media, profile, sessions server 
 `subscriptions` fns record `author_username` on the same ground. `create_invite`
 records `expires_in_hours` and skips `recipient_email`.
 
-- [ ] **Step 2: Apply the 5 renames and 2 skip-list drops**
+- [x] **Step 2: Apply the 5 renames and 2 skip-list drops**
 
 Replace the existing attribute lines (D2's rename table; the attributes sit one
 line below each `#[server]`):
@@ -554,7 +554,7 @@ already-correct name from the spec, `web.site.base_url_warning_visible`, lives
 in `site/api.rs` and is likewise left alone while its two siblings there are
 renamed.
 
-- [ ] **Step 3: Verify every site conforms, by hand, against the spec table**
+- [x] **Step 3: Verify every site conforms, by hand, against the spec table**
 
 Run: `rg -n -A 1 '^#\[server' web/src`
 
@@ -563,7 +563,7 @@ Read the output against the spec's per-site outcome table. Expected: 55
 the table exactly. This is the last checkpoint before the gate exists to do it
 mechanically.
 
-- [ ] **Step 4: Verify both targets and the full suite**
+- [x] **Step 4: Verify both targets and the full suite**
 
 Run: `devtool run -- cargo check -p web --features server --all-targets`
 Expected: PASS.
@@ -573,7 +573,7 @@ the wasm target; see Global Constraints) Expected: clean.
 
 Run: `devtool run -- cargo nextest run -p web --features server` Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/src/email/api.rs web/src/invites/api.rs web/src/password_reset/api.rs web/src/subscriptions/api.rs web/src/backup/api.rs web/src/site/api.rs
@@ -629,7 +629,7 @@ with no `line {n}:` prefix — the registrar produces that string today
 (`server_fn_registrar_check.rs:61`) and it must survive the move verbatim, since
 AC 14 requires the registrar's observable behaviour to be unchanged.
 
-- [ ] **Step 1: Write the failing tests for the new module**
+- [x] **Step 1: Write the failing tests for the new module**
 
 Create `xtask/src/web_server_fns.rs` with the struct/fn signatures above (bodies
 `todo!()`) and this test module:
@@ -689,13 +689,19 @@ mod tests {
 Declare the module in `xtask/src/lib.rs` next to the existing top-level modules
 (`pub mod web_server_fns;`).
 
-- [ ] **Step 2: Run them, verify they fail**
+- [x] **Step 2: Run them, verify they fail**
 
 Run:
 `devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml web_server_fns`
 Expected: FAIL — `todo!()` panics.
 
-- [ ] **Step 3: Implement the enumerator**
+**Deviation — this red phase was not observed.** The module was written with its
+implementation and tests together, so the first run was already green (6/6). The
+regression protection that actually matters for this task is Step 6's untouched
+registrar suite, which did run against the refactor and passed 15/15. Recorded
+rather than back-filled.
+
+- [x] **Step 3: Implement the enumerator**
 
 Write the bodies to the signatures above. Every branch is pinned by Step 1's
 tests — ident/line/params extraction, full attribute capture with the
@@ -714,13 +720,13 @@ case — so implement against them. Three mechanics the tests cannot express:
   the exact string named in this task's Interfaces block, never swallowed,
   because a file we cannot enumerate could hide a bare `#[server]` fn.
 
-- [ ] **Step 4: Run them, verify they pass**
+- [x] **Step 4: Run them, verify they pass**
 
 Run:
 `devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml web_server_fns`
 Expected: PASS.
 
-- [ ] **Step 5: Refactor the registrar gate onto the helper**
+- [x] **Step 5: Refactor the registrar gate onto the helper**
 
 In `xtask/src/steps/server_fn_registrar_check.rs`:
 
@@ -737,7 +743,7 @@ In `xtask/src/steps/server_fn_registrar_check.rs`:
   `ServerFn { name: pascal_case(&f.ident), line: f.line }`.
 - Point `run` at `crate::web_server_fns::{rust_files, WEB_SRC}`.
 
-- [ ] **Step 6: Verify the registrar gate is unchanged**
+- [x] **Step 6: Verify the registrar gate is unchanged**
 
 Run:
 `devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml server_fn_registrar`
@@ -746,7 +752,7 @@ Expected: PASS — all 15 existing tests, unedited.
 Run: `devtool run -- cargo xtask check --no-test` Expected: PASS, with
 `server-fn-registrar` still `ok` in `.xtask/last-result.json`.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add xtask/src/web_server_fns.rs xtask/src/lib.rs xtask/src/steps/server_fn_registrar_check.rs
@@ -788,7 +794,7 @@ fn problems(web_sources: &[(String, String)]) -> Option<String>;
 pub fn run(result: &mut crate::result::CommandResult);
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `xtask/src/steps/server_fn_tracing_check.rs` with the signatures above
 (`problems` as `todo!()`) and this test module. Each test names the acceptance
@@ -1016,13 +1022,13 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run them, verify they fail**
+- [x] **Step 2: Run them, verify they fail**
 
 Run:
 `devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml server_fn_tracing`
 Expected: FAIL — `todo!()` panics on every test.
 
-- [ ] **Step 3: Implement the allowlist and the decision function**
+- [x] **Step 3: Implement the allowlist and the decision function**
 
 Write `RECORDABLE_TYPES` with exactly these 22 entries, each carrying its D3
 ground as the second tuple element (the justification is the point — it is what
@@ -1109,13 +1115,13 @@ Sort the accumulated failure lines and append a recovery line naming both
 remedies (the `skip(...)` list and `RECORDABLE_TYPES` in this file), mirroring
 `server_fn_registrar_check.rs:239-243`.
 
-- [ ] **Step 4: Run the unit tests, verify they pass**
+- [x] **Step 4: Run the unit tests, verify they pass**
 
 Run:
 `devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml server_fn_tracing`
 Expected: PASS — all 21 tests.
 
-- [ ] **Step 5: Write `run` and register the step in both commands**
+- [x] **Step 5: Write `run` and register the step in both commands**
 
 Write `run` to mirror `server_fn_registrar_check.rs:264-301` exactly: walk
 `WEB_SRC` via `crate::web_server_fns::rust_files`, hard-fail on a missing tree,
@@ -1132,7 +1138,7 @@ Add `pub mod server_fn_tracing_check;` to the `steps` module in
 steps::server_fn_tracing_check::run(&mut result);
 ```
 
-- [ ] **Step 6: Verify the gate passes on the swept tree**
+- [x] **Step 6: Verify the gate passes on the swept tree**
 
 Run: `devtool run -- cargo xtask check --no-test` Expected: PASS.
 
@@ -1144,7 +1150,7 @@ entry with `"ok": true` (AC 7).
 If it fails here, the failure names the exact site the sweep got wrong — fix
 that site, not the gate.
 
-- [ ] **Step 7: Prove it bites (AC 8)**
+- [x] **Step 7: Prove it bites (AC 8)**
 
 Temporarily delete the `#[tracing::instrument]` line from
 `web/src/posts/api.rs`'s `publish_post`.
@@ -1159,7 +1165,7 @@ Run: `devtool run -- cargo xtask check --no-test` Expected: PASS.
 Run: `git status --porcelain` Expected: only the two xtask files modified —
 confirming the temporary deletion was fully restored.
 
-- [ ] **Step 8: Prove it bites on the allowlist (AC 10)**
+- [x] **Step 8: Prove it bites on the allowlist (AC 10)**
 
 Temporarily change `web/src/media/api.rs`'s `delete_media` attribute to drop
 `skip(filename)`.
@@ -1170,7 +1176,7 @@ Run: `devtool run -- cargo xtask check --no-test` Expected: FAIL, naming
 Restore `skip(filename)` and re-run; expected PASS, `git status --porcelain`
 again showing only the two xtask files.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add xtask/src/steps/server_fn_tracing_check.rs xtask/src/lib.rs
@@ -1192,7 +1198,7 @@ git commit -m "feat(xtask): enforce web server-fn tracing spans in check and val
   ADR, not a new draft, so `docs/adr/drafts/` and `cargo xtask adr promote` are
   **not** involved.
 
-- [ ] **Step 1: Append the addendum**
+- [x] **Step 1: Append the addendum**
 
 Append to `docs/adr/0011-unified-observability.md`, following the file's
 existing addendum style (`## Addendum (YYYY-MM-DD): <title> (issue #N)`), dated
@@ -1228,7 +1234,7 @@ existing addendum style (`## Addendum (YYYY-MM-DD): <title> (issue #N)`), dated
   `WebError` `Display` chain; reference the Task 1 issues as the filed
   follow-ups.
 
-- [ ] **Step 2: Format and verify**
+- [x] **Step 2: Format and verify**
 
 Run: `devtool run -- prettier -w docs/adr/0011-unified-observability.md`
 
@@ -1239,7 +1245,7 @@ Run: `devtool run -- cargo xtask check --no-test` Expected: PASS — including t
 only the `# ADR-NNNN: <title>` heading and the `- Status:` line, and
 `adr-readme-parity` checks README number/link/status agreement.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add docs/adr/0011-unified-observability.md
