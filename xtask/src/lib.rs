@@ -157,10 +157,34 @@ pub enum Command {
     /// Coverage tooling — the source-filter drift probe (#241).
     #[command(subcommand)]
     Coverage(CoverageCommand),
+    /// Trace-derived `#[server]` fn flow coverage (#681): which server entry
+    /// points the e2e suite actually drives.
+    #[command(subcommand)]
+    ServerFnCoverage(ServerFnCoverageCommand),
     /// Build the hermetic elisp live-integration VM check (ADR-0035) through the
     /// same diagnostic-preserving wrapper. For CI's parallel `elisp-integration`
     /// job; local `validate` realizes it via the `e2e` aggregate. Host only.
     ElispIntegration,
+}
+
+/// `server-fn-coverage` subcommands (#681).
+#[derive(Subcommand)]
+pub enum ServerFnCoverageCommand {
+    /// Re-derive the coverage snapshot from the `sqlite × chromium` e2e capture
+    /// and write it to `docs/coverage/server-fns.json`.
+    ///
+    /// Run after `cargo xtask e2e sqlite chromium`, which lifts the capture this
+    /// reads. That one combo is authoritative (spec D6): neither backend nor
+    /// browser changes which server fns the UI invokes, and running it per-combo
+    /// avoids the aggregate `checks.e2e` join, where both sqlite combos' captures
+    /// collide under the same file name.
+    #[command(after_help = "EXAMPLES:\n  cargo xtask e2e sqlite chromium\n  \
+        cargo xtask server-fn-coverage regenerate")]
+    Regenerate,
+    /// Re-derive the snapshot and fail if it differs from the committed copy.
+    /// The e2e-lane half of the gate.
+    #[command(after_help = "EXAMPLES:\n  cargo xtask server-fn-coverage verify")]
+    Verify,
 }
 
 /// `adr` subcommands.
@@ -266,6 +290,12 @@ impl Cli {
             Command::Traces(TracesCommand::Analyze { .. }) => "traces-analyze",
             Command::Traces(TracesCommand::Run { .. }) => "traces-run",
             Command::Coverage(CoverageCommand::ProbeSource) => "coverage-probe-source",
+            Command::ServerFnCoverage(ServerFnCoverageCommand::Regenerate) => {
+                "server-fn-coverage-regenerate"
+            }
+            Command::ServerFnCoverage(ServerFnCoverageCommand::Verify) => {
+                "server-fn-coverage-verify"
+            }
             Command::ElispIntegration => "elisp-integration",
         }
     }
@@ -466,6 +496,54 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let analysis = traces::analyze::analyze(&files, filters)?;
             result.traces = Some(traces::render::render(&analysis, top as usize));
             result.push(StepResult::ok("traces-run").detail(format!("{n} trace file(s)")));
+            finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::ServerFnCoverage(sub) => {
+            use server_fn_coverage::io::{
+                coverage_from_capture, inventory, write_snapshot, CAPTURE_PATH, SNAPSHOT_PATH,
+                WEB_SRC,
+            };
+            let start = std::time::Instant::now();
+            let regenerate = matches!(sub, ServerFnCoverageCommand::Regenerate);
+            let name = if regenerate {
+                "server-fn-coverage-regenerate"
+            } else {
+                "server-fn-coverage-verify"
+            };
+            let mut result = CommandResult::new(name);
+
+            // A missing/empty/unparseable capture propagates as Err → the exit-2
+            // path, never a green run: treating a broken capture as "nothing
+            // uncovered" would make the whole gate dishonest.
+            let inventory = inventory(Path::new(WEB_SRC))?;
+            let coverage = coverage_from_capture(Path::new(CAPTURE_PATH), &inventory)?;
+            let snapshot = server_fn_coverage::Snapshot::from(coverage);
+            let rendered = server_fn_coverage::render(&snapshot);
+            let path = Path::new(SNAPSHOT_PATH);
+
+            if regenerate {
+                write_snapshot(path, &snapshot)?;
+                result.push(StepResult::ok(name).detail(format!(
+                    "{} covered, {} orphan hit(s) → {SNAPSHOT_PATH}",
+                    snapshot.covered.len(),
+                    snapshot.orphans.values().sum::<usize>()
+                )));
+            } else {
+                let committed = std::fs::read_to_string(path).unwrap_or_default();
+                if committed == rendered {
+                    result.push(StepResult::ok(name).detail(format!(
+                        "{} covered; snapshot current",
+                        snapshot.covered.len()
+                    )));
+                } else {
+                    result.push(StepResult::fail(name).detail(format!(
+                        "{SNAPSHOT_PATH} is out of date with this run's traces — regenerate it \
+                         with `{}` and commit the result",
+                        server_fn_coverage::REGENERATE_CMD
+                    )));
+                }
+            }
             finalize(&mut result, start);
             Ok(result)
         }
