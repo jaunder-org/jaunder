@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use crate::doc_links;
 use crate::git;
 use crate::ids;
 use crate::result::StepResult;
@@ -46,6 +47,41 @@ pub fn replace_number(filename: &str, new: u32) -> String {
 /// would still surface. Worth tightening to a boundary match if that ever bites.
 pub fn rewrite_stem(content: &str, old_stem: &str, new_stem: &str) -> String {
     content.replace(old_stem, new_stem)
+}
+
+/// Rewrite every inline link target in `body`, removing one leading `../`.
+///
+/// A draft moves up exactly one directory at promotion (`docs/adr/drafts/x.md` ->
+/// `docs/adr/NNNN-x.md`), so each of its relative targets is off by exactly one
+/// level. Stating that invariant directly covers more than a sibling-ADR-specific
+/// rewrite would — `../template.md` is the shape `drafts/README.md` models for
+/// authors, and it breaks the same way.
+///
+/// Only targets inside `](...)` are touched, and only outside code spans and fenced
+/// blocks: a draft may legitimately discuss `../` in prose or show it in a shell
+/// snippet, and a blanket string replace would corrupt those. Targets that cannot
+/// lose a level (`..`, `../`, a bare name, a non-initial `../`) and non-relative
+/// targets (URLs, anchors) are left alone.
+pub fn strip_one_level(body: &str) -> String {
+    let mut out = String::with_capacity(body.len());
+    let mut cursor = 0;
+    for link in doc_links::links_in(body) {
+        if !doc_links::is_relative_target(&link.target) {
+            continue;
+        }
+        // `..` has no prefix to strip; `../` would strip to nothing.
+        let Some(rest) = link.target.strip_prefix("../") else {
+            continue;
+        };
+        if rest.is_empty() {
+            continue;
+        }
+        out.push_str(&body[cursor..link.span.start]);
+        out.push_str(rest);
+        cursor = link.span.end;
+    }
+    out.push_str(&body[cursor..]);
+    out
 }
 
 /// Replace bare `ADR-NNNN` references for `old` -> `new`. The padded `ADR-` prefix
@@ -248,7 +284,11 @@ fn run_promote(repo: &Path) -> Result<String> {
         let body = std::fs::read_to_string(repo.join(&draft_rel))
             .with_context(|| format!("reading {draft_rel}"))?;
         let numbered = body.replace("ADR-DRAFT", &format!("ADR-{}", pad(*num)));
-        std::fs::write(repo.join(&new_rel), numbered)
+        // The file moves up one directory here, so its own relative links are
+        // rewritten at the same moment — not after Pass C, which would see targets
+        // that have already been rewritten to their assigned numbers.
+        let relinked = strip_one_level(&numbered);
+        std::fs::write(repo.join(&new_rel), relinked)
             .with_context(|| format!("writing {new_rel}"))?;
         std::fs::remove_file(repo.join(&draft_rel))
             .with_context(|| format!("removing {draft_rel}"))?;
@@ -280,12 +320,45 @@ fn run_promote(repo: &Path) -> Result<String> {
         "README table not synced (no adr-table markers)".to_string()
     };
 
-    Ok(format!("{} — {table_note}; staged", summary.join("; ")))
+    // Check the graduated files in their FINAL form — after Pass C's reference
+    // rewrite and the README sync — so a link Pass C is about to fix is never
+    // reported. Warn rather than fail: the tree is already mutated and staged, so
+    // bailing here would leave a half-promoted checkout. `doc-links` turns the same
+    // condition into a hard failure at the next commit, on a stable re-runnable tree.
+    let mut warnings = Vec::new();
+    for (_slug, _num, new_name) in &assigned {
+        let rel = format!("{ADR_DIR}/{new_name}");
+        // `?` here would be the very failure the comment above rules out — the file
+        // is unreadable only after promote has already written and staged it, so
+        // bailing would abandon a half-promoted tree. Report it as a warning instead.
+        let dead = match doc_links::dead_links_in(repo, &rel) {
+            Ok(dead) => dead,
+            Err(e) => {
+                warnings.push(format!("{rel}: unreadable ({e:#})"));
+                continue;
+            }
+        };
+        if !dead.is_empty() {
+            let targets: Vec<String> = dead.into_iter().map(|d| d.target).collect();
+            warnings.push(format!("{rel}: {}", targets.join(", ")));
+        }
+    }
+    let warn_note = if warnings.is_empty() {
+        String::new()
+    } else {
+        format!("; warning: unresolved link(s) — {}", warnings.join("; "))
+    };
+
+    Ok(format!(
+        "{} — {table_note}; staged{warn_note}",
+        summary.join("; ")
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{git_ok as git, write};
     use std::path::Path;
 
     #[test]
@@ -314,21 +387,147 @@ mod tests {
     }
 
     #[test]
+    fn strip_one_level_drops_a_single_leading_parent() {
+        assert_eq!(strip_one_level("[x](../0001-foo.md)"), "[x](0001-foo.md)");
+    }
+
+    #[test]
+    fn strip_one_level_drops_only_one_of_two() {
+        assert_eq!(
+            strip_one_level("[x](../../CONTRIBUTING.md)"),
+            "[x](../CONTRIBUTING.md)"
+        );
+    }
+
+    #[test]
+    fn strip_one_level_leaves_bare_targets_alone() {
+        assert_eq!(strip_one_level("[x](template.md)"), "[x](template.md)");
+    }
+
+    #[test]
+    fn strip_one_level_leaves_dot_dot_edge_cases_alone() {
+        assert_eq!(strip_one_level("[x](..)"), "[x](..)");
+        assert_eq!(strip_one_level("[x](../)"), "[x](../)");
+        assert_eq!(strip_one_level("[x](a/../b.md)"), "[x](a/../b.md)");
+    }
+
+    #[test]
+    fn strip_one_level_ignores_urls_and_anchors() {
+        let body = "[x](https://e.com/../a) [y](#s)";
+        assert_eq!(strip_one_level(body), body);
+    }
+
+    #[test]
+    fn strip_one_level_spares_links_inside_code() {
+        // Real `](...)` links, so this fails against any implementation that
+        // rewrites targets without honouring the code carve-out.
+        let body = "prose ../foo\n\n```\n[a](../x.md)\n```\n\n`[b](../y.md)`\n";
+        assert_eq!(strip_one_level(body), body);
+    }
+
+    #[test]
+    fn strip_one_level_rewrites_every_link_in_one_pass() {
+        assert_eq!(
+            strip_one_level("[a](../x.md) and [b](../y.md)"),
+            "[a](x.md) and [b](y.md)"
+        );
+    }
+
+    #[test]
+    fn promote_strips_one_level_from_sibling_links() {
+        let tmp = promote_repo("strip-sibling");
+        write(
+            &tmp,
+            "docs/adr/drafts/d.md",
+            "# ADR-DRAFT: D\n\nSee [foo](../0001-foo.md).\n",
+        );
+        run_promote(&tmp).unwrap();
+        let body = std::fs::read_to_string(tmp.join("docs/adr/0002-d.md")).unwrap();
+        assert!(body.contains("](0001-foo.md)"), "body: {body}");
+        assert!(!body.contains("](../0001-foo.md)"), "body: {body}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn promote_strips_one_level_from_non_adr_links() {
+        let tmp = promote_repo("strip-general");
+        write(
+            &tmp,
+            "docs/adr/drafts/d.md",
+            "# ADR-DRAFT: D\n\n[t](../template.md) [c](../../CONTRIBUTING.md)\n",
+        );
+        run_promote(&tmp).unwrap();
+        let body = std::fs::read_to_string(tmp.join("docs/adr/0002-d.md")).unwrap();
+        assert!(body.contains("](template.md)"), "body: {body}");
+        assert!(body.contains("](../CONTRIBUTING.md)"), "body: {body}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // Assert on the `warning:` clause, never on the whole summary: Pass C already
+    // pushes `drafts/<slug>.md -> docs/adr/NNNN-<slug>.md` into it, so
+    // `summary.contains("0002-d.md")` is true no matter what this code does.
+
+    #[test]
+    fn promote_warns_on_a_surviving_dead_link() {
+        let tmp = promote_repo("warn");
+        write(
+            &tmp,
+            "docs/adr/drafts/d.md",
+            "# ADR-DRAFT: D\n\nSee [gone](nonexistent.md).\n",
+        );
+        let summary = run_promote(&tmp).unwrap(); // Ok, not Err — promote still graduates
+        assert!(
+            tmp.join("docs/adr/0002-d.md").exists(),
+            "file still written"
+        );
+        assert!(
+            summary.contains("warning: unresolved link(s) — docs/adr/0002-d.md: nonexistent.md"),
+            "summary: {summary}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn promote_is_silent_when_every_link_resolves() {
+        let tmp = promote_repo("no-warn");
+        write(
+            &tmp,
+            "docs/adr/drafts/d.md",
+            "# ADR-DRAFT: D\n\nSee [foo](../0001-foo.md).\n",
+        );
+        let summary = run_promote(&tmp).unwrap();
+        assert!(!summary.contains("warning"), "summary: {summary}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn promote_checks_links_after_pass_c() {
+        // `../drafts/aaa.md` is the cross-draft form that survives promotion: Pass B
+        // strips it to `drafts/aaa.md`, Pass C rewrites that to `0002-aaa.md`, which
+        // resolves from docs/adr/. So a correctly-ordered check finds nothing.
+        //
+        // This is the discriminating shape. Run the check before Pass C and the
+        // target is still `drafts/aaa.md`, pointing at the draft Pass B already
+        // deleted — a premature check warns and this test fails.
+        let tmp = promote_repo("order");
+        write(&tmp, "docs/adr/drafts/aaa.md", "# ADR-DRAFT: Aaa\n");
+        write(
+            &tmp,
+            "docs/adr/drafts/bbb.md",
+            "# ADR-DRAFT: Bbb\n\nBuilds on [aaa](../drafts/aaa.md).\n",
+        );
+        let summary = run_promote(&tmp).unwrap();
+        assert!(!summary.contains("warning"), "premature check: {summary}");
+        let bbb = std::fs::read_to_string(tmp.join("docs/adr/0003-bbb.md")).unwrap();
+        assert!(bbb.contains("](0002-aaa.md)"), "bbb: {bbb}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
     fn rewrite_bare_replaces_only_the_padded_token() {
         let content = "ADR-0034 governs this. Unrelated number 10034 stays.";
         let out = rewrite_bare(content, 34, 35);
         assert_eq!(out, "ADR-0035 governs this. Unrelated number 10034 stays.");
-    }
-
-    fn git(dir: &Path, args: &[&str]) {
-        let ok = crate::git::at(dir).args(args).status().unwrap().success();
-        assert!(ok, "git {args:?} failed");
-    }
-
-    fn write(dir: &Path, rel: &str, body: &str) {
-        let p = dir.join(rel);
-        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-        std::fs::write(p, body).unwrap();
     }
 
     /// Trimmed stdout of a git command that must succeed — for asserting index
@@ -342,13 +541,7 @@ mod tests {
     /// A committed repo with `docs/adr/0001-foo.md` on `main` — the base state the
     /// promote tests graduate a draft on top of.
     fn promote_repo(tag: &str) -> std::path::PathBuf {
-        let tmp =
-            std::env::temp_dir().join(format!("jaunder-adr-promote-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
-        git(&tmp, &["init", "-q", "-b", "main"]);
-        git(&tmp, &["config", "user.email", "t@t"]);
-        git(&tmp, &["config", "user.name", "t"]);
+        let tmp = crate::test_support::temp_repo("adr-promote", tag);
         write(
             &tmp,
             "docs/adr/0001-foo.md",

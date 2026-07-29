@@ -10,7 +10,7 @@ The server had a growing pile of per-stream "write this diagnostic to a file"
 env vars, each read independently and each wired separately into every e2e
 surface: `JAUNDER_MAIL_CAPTURE_FILE` (mailer), `JAUNDER_WEBSUB_CAPTURE_FILE`
 (websub), and `JAUNDER_DIAG_LOG_FILE` (the scoped diag log,
-[ADR-0049](../0049-app-driven-scoped-server-diagnostics.md)). Every new capture
+[ADR-0049](0049-app-driven-scoped-server-diagnostics.md)). Every new capture
 stream added another `_FILE` var, another `systemd.services.jaunder.environment`
 entry, another line in `flake.nix`'s `e2eRunAndCapture`, and (for diag) a
 copy-out plus a filename-prefix match in the xtask artifact-lift filter.

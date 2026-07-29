@@ -240,6 +240,12 @@ job. Running every combo in parallel across runners cuts e2e wall-clock;
 - `prettier --check end2end '**/*.md'` checks Playwright/frontend test assets
   and all tracked Markdown (`proseWrap: always`; scoped by `.prettierignore`,
   which excludes `docs/archive/`).
+- `doc-links` checks that every relative Markdown link in tracked `*.md`
+  resolves on disk. It excludes `docs/archive/` (a frozen record — its links are
+  dead because the docs moved on) and `docs/superpowers/` (transient specs and
+  plans, which may link files they will create). Note this is a **different**
+  list from `.prettierignore`'s, which excludes only `docs/archive/`; the two
+  are maintained separately on purpose.
 - `elisp-fmt`, `ert`, and `byte-compile` run the elisp subproject's formatter,
   ERT suite, and warnings-as-errors byte-compilation under `emacs --batch` (see
   the Elisp subproject section below).

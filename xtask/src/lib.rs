@@ -6,16 +6,20 @@ mod adr;
 mod adr_readme;
 mod audit_wasm;
 pub mod coverage;
+mod doc_links;
 pub mod git;
 mod ids;
 mod nix_build;
 mod result;
 mod sh;
+#[cfg(test)]
+mod test_support;
 mod traces;
 mod web_server_fns;
 mod steps {
     pub mod adr_check;
     pub mod build_csr;
+    pub mod doc_links;
     pub mod e2e_local;
     pub mod flaky;
     pub mod host_tests;
@@ -295,6 +299,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::static_checks::run(&sh, Mode::Fix, &mut result);
             steps::sequence_check::run(&mut result);
             steps::adr_check::run(&mut result);
+            steps::doc_links::run(&mut result);
             steps::test_pattern_check::run(&mut result);
             steps::server_fn_registrar_check::run(&mut result);
             steps::server_fn_tracing_check::run(Mode::Fix, &mut result);
@@ -329,6 +334,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::static_checks::run(&sh, Mode::Check, &mut result);
             steps::sequence_check::run(&mut result);
             steps::adr_check::run(&mut result);
+            steps::doc_links::run(&mut result);
             steps::test_pattern_check::run(&mut result);
             steps::server_fn_registrar_check::run(&mut result);
             steps::server_fn_tracing_check::run(Mode::Check, &mut result);

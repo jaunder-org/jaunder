@@ -2,9 +2,9 @@
 
 Jaunder is a full-stack Rust application built with the
 [Leptos](https://leptos.dev/) framework (see
-[ADR-0002](decisions/0002-frontend-framework.md)). It follows a single-binary
-deployment model (see [ADR-0008](decisions/0008-deployment-model.md)) with a
-decoupled storage layer (see [ADR-0001](decisions/0001-storage-backends.md)).
+[ADR-0002](adr/0002-frontend-framework.md)). It follows a single-binary
+deployment model (see [ADR-0008](adr/0008-deployment-model.md)) with a decoupled
+storage layer (see [ADR-0001](adr/0001-storage-backends.md)).
 
 ## Crate Responsibilities
 
@@ -52,13 +52,13 @@ graph TD
 
 ## Data Flow & Storage
 
-Persistence is abstracted behind traits defined in the `common` crate
-(`common/src/storage/`). This prevents circular dependencies between the
-`server` and `web` crates and allows the application to remain agnostic of the
-underlying database engine (see [ADR-0001](decisions/0001-storage-backends.md)).
+Persistence is abstracted behind traits defined in the `storage` crate
+(`storage/src/`). This prevents circular dependencies between the `server` and
+`web` crates and allows the application to remain agnostic of the underlying
+database engine (see [ADR-0001](adr/0001-storage-backends.md)).
 
 Jaunder uses a tiered storage architecture to isolate user data from shared
-network content (see [ADR-0006](decisions/0006-storage-isolation.md)).
+network content (see [ADR-0006](adr/0006-storage-isolation.md)).
 
 ### Storage Abstraction
 
@@ -67,9 +67,9 @@ operations on a specific domain (e.g., `UserStorage`, `PostStorage`). These
 traits, along with their associated data models and error types, are the
 definitive interface for persistence in Jaunder.
 
-The [**`common/src/storage/`**](../common/src/storage/) directory is the single
-source of truth for these interfaces. Developers should consult the doc comments
-in that directory for the most up-to-date definitions of:
+The [**`storage/src/`**](../storage/src/) directory is the single source of
+truth for these interfaces. Developers should consult the doc comments in that
+directory for the most up-to-date definitions of:
 
 - **Domain Traits**: Core interfaces for users, posts, sessions, etc.
 - **Atomic Operations**: Cross-table transactions that span multiple traits.
@@ -87,7 +87,7 @@ transactions across trait boundaries.
 ## Authentication
 
 Jaunder supports two authentication mechanisms to accommodate both web and API
-clients (see [ADR-0007](decisions/0007-auth-mechanisms.md)):
+clients (see [ADR-0007](adr/0007-auth-mechanisms.md)):
 
 1.  **Session Cookies**: Primary for the web frontend.
 2.  **Bearer Tokens**: Used by API clients and mobile apps.
@@ -100,7 +100,7 @@ provides a unified way to access the current user.
 
 Jaunder implements a unified observability strategy using OpenTelemetry to
 correlate events across the backend and the end-to-end test runner (see
-[ADR-0011](decisions/0011-unified-observability.md)).
+[ADR-0011](adr/0011-unified-observability.md)).
 
 ### Tracing Layers
 

@@ -9,8 +9,8 @@
 
 ## Context
 
-[ADR-0058](../0058-host-crate-layering.md) chartered a target-scoped
-shared-crate trio and named its third member in advance:
+[ADR-0058](0058-host-crate-layering.md) chartered a target-scoped shared-crate
+trio and named its third member in advance:
 
 - **`common`** — shared code that compiles to _both_ host and wasm.
 - **`host`** — shared code that only makes sense on the host.
@@ -26,13 +26,13 @@ activates the pre-chartered peer; #513 delivers the empty scaffolding.
 
 Two prior decisions constrain the shape:
 
-- **[ADR-0056](../0056-web-canonical-colocated-leptos.md)** rejected the #303
+- **[ADR-0056](0056-web-canonical-colocated-leptos.md)** rejected the #303
   three-crate split and made `web` a canonical single crate whose components are
   co-located and dual-target. It did **not** rule out a leaf crate for raw glue
   — point 4 wanted the two real browser touchpoints "**dual-target-clean, not
   gated**," and it explicitly left the door open: "**if a crate boundary is ever
   wanted later**, the canonical single-crate `web` is the correct base for it."
-- **[ADR-0055](../0055-web-host-wasm-boundary-module-level.md)** (superseded by
+- **[ADR-0055](0055-web-host-wasm-boundary-module-level.md)** (superseded by
   0056, but its **relocate-pure-logic** and **no-fake-stub** principles are
   retained): pure logic lives in host-compiled, coverage-measured homes and is
   relocated _before_ any gating; no wasm-only code is ever given a divergent
