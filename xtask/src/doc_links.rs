@@ -36,8 +36,16 @@ pub struct Link {
 /// bytes are all >= 0x80). So byte-wise scanning never lands mid-character, and the
 /// `from_utf8` below cannot fail.
 ///
+/// Fences and inline spans are matched by backtick-RUN length, not by a fixed
+/// three-character marker: a closer must use the opener's character and be at least
+/// as long, and an inline run of N pairs with the next run of exactly N. Both rules
+/// exist to keep the block that wraps other fenced blocks (a 4-backtick fence) from
+/// being closed by the 3-backtick fences inside it.
+///
 /// An unclosed fence masks to end of file. That yields false negatives (links after
-/// it go unchecked), never false positives — the safe direction for a gate.
+/// it go unchecked), never false positives — the safe direction for a gate. Only
+/// inline `](target)` links are scanned at all, so reference-style definitions
+/// (`[x]: ./a.md`) go unchecked for the same benign reason.
 fn mask_code(body: &str) -> String {
     /// Blank a whole line, keeping its newline.
     fn blank(out: &mut [u8], at: usize, line: &str) {
@@ -47,43 +55,73 @@ fn mask_code(body: &str) -> String {
             }
         }
     }
-    /// Blank paired backtick spans within a single line.
+    /// The fence character and run length this line opens or closes with, if any.
+    /// Leading whitespace is trimmed first — a fence may be indented inside a list
+    /// item. CommonMark requires a run of at least three `` ` `` or `~`.
+    fn fence_run(line: &str) -> Option<(u8, usize)> {
+        let bytes = line.trim_start().as_bytes();
+        let ch = *bytes.first()?;
+        if ch != b'`' && ch != b'~' {
+            return None;
+        }
+        let run = bytes.iter().take_while(|&&b| b == ch).count();
+        (run >= 3).then_some((ch, run))
+    }
+
+    /// Blank paired backtick spans within a single line. A run of N backticks pairs
+    /// with the next run of EXACTLY N — which is how a literal backtick is written
+    /// inline (``` ``a ` b`` ```). Matching a run of 1 against any later backtick
+    /// would end that span early and leave its tail live.
     fn blank_spans(out: &mut [u8], at: usize, line: &str) {
         let b = line.as_bytes();
         let mut i = 0;
         while i < b.len() {
-            if b[i] == b'`' {
-                let mut j = i + 1;
+            if b[i] != b'`' {
+                i += 1;
+                continue;
+            }
+            let open = b[i..].iter().take_while(|&&x| x == b'`').count();
+            let mut j = i + open;
+            let closed = loop {
                 while j < b.len() && b[j] != b'`' {
                     j += 1;
                 }
-                if j < b.len() {
-                    for slot in out.iter_mut().take(at + j + 1).skip(at + i) {
+                if j >= b.len() {
+                    break None;
+                }
+                let run = b[j..].iter().take_while(|&&x| x == b'`').count();
+                if run == open {
+                    break Some(j + run);
+                }
+                j += run;
+            };
+            match closed {
+                Some(end) => {
+                    for slot in out.iter_mut().take(at + end).skip(at + i) {
                         *slot = b' ';
                     }
-                    i = j + 1;
-                    continue;
+                    i = end;
                 }
+                // Unterminated on this line: leave it live rather than masking the
+                // rest of the line on the strength of one stray backtick.
+                None => i += open,
             }
-            i += 1;
         }
     }
 
     let mut out: Vec<u8> = body.bytes().collect();
-    let mut fence: Option<&[u8]> = None;
+    let mut fence: Option<(u8, usize)> = None;
     let mut at = 0usize;
     for line in body.split_inclusive('\n') {
-        // Trim leading whitespace: a fence may be indented inside a list item.
-        let trimmed = line.trim_start();
-        let marker = [&b"```"[..], &b"~~~"[..]]
-            .into_iter()
-            .find(|m| trimmed.as_bytes().starts_with(m));
-        match (fence, marker) {
-            (None, Some(m)) => {
-                fence = Some(m);
+        match (fence, fence_run(line)) {
+            (None, Some(open)) => {
+                fence = Some(open);
                 blank(&mut out, at, line);
             }
-            (Some(open), Some(m)) if open == m => {
+            // A closer must use the same character and be AT LEAST as long as the
+            // opener. Equality would let the 3-backtick fences inside a 4-backtick
+            // block close it, leaving the block's own prose live.
+            (Some((open_ch, open_run)), Some((ch, run))) if ch == open_ch && run >= open_run => {
                 fence = None;
                 blank(&mut out, at, line);
             }
@@ -297,6 +335,37 @@ mod tests {
         let ls = links_in("```\n[a](x.md)\n```\n[b](y.md)");
         assert_eq!(ls.len(), 1);
         assert_eq!(ls[0].target, "y.md");
+    }
+
+    #[test]
+    fn a_longer_fence_is_not_closed_by_a_shorter_one() {
+        // The idiom for showing a fenced block inside a fenced block: a 4-backtick
+        // outer fence wrapping 3-backtick inner ones. Treating the opener as exactly
+        // "```" ends the block at the first inner fence, leaving the text between the
+        // inner fences live — a false POSITIVE, the direction this module's own doc
+        // comment promises never to produce.
+        //
+        // The link sits between the inner fences on purpose: put it after them and a
+        // buggy scanner re-opens on the second inner fence and masks it anyway, so
+        // the test would pass while the bug stood.
+        let body = "````markdown\n```\nSee [x](gone.md).\n```\n````\n";
+        assert!(links_in(body).is_empty(), "found {}", links_in(body).len());
+    }
+
+    #[test]
+    fn a_closing_fence_may_be_longer_than_its_opener() {
+        // CommonMark: the closer must be at LEAST as long as the opener. Guards the
+        // above fix against over-tightening into an equality check.
+        let ls = links_in("```\ncode\n`````\n[y](b.md)\n");
+        assert_eq!(ls.len(), 1);
+        assert_eq!(ls[0].target, "b.md");
+    }
+
+    #[test]
+    fn a_double_backtick_span_containing_a_backtick_is_masked() {
+        // The way you write a literal backtick inline. Pairing single backticks ends
+        // the span at the inner one and leaves the link live.
+        assert!(links_in("write ``[x](a.md) ` here`` ok").is_empty());
     }
 
     // --- is_relative_target ---

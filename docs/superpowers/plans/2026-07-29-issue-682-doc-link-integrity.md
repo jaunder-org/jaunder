@@ -907,14 +907,14 @@ git commit -m "docs: record the doc-links gate and the draft link rules"
 
 ## Final verification
 
-- [ ] Run `cargo xtask validate --no-e2e` — the full local gate short of e2e. No
+- [x] Run `cargo xtask validate --no-e2e` — the full local gate short of e2e. No
       runtime code path is touched, so no e2e combo is affected; the matrix is
       left to CI (ADR-0034). This also satisfies **AC13** — `validate` runs
       `steps::host_tests` → `xtask-tests`, which executes every test above.
-- [ ] **AC11 — no new CLI surface.** Run `cargo xtask --help`; confirm the
+- [x] **AC11 — no new CLI surface.** Run `cargo xtask --help`; confirm the
       subcommand list is unchanged from `main` (no `doc-links` entry), and that
       `doc-links` appears only as a step name in `cargo xtask check` output.
-- [ ] **AC12 — one implementation.** Run `rg -n 'dead_links_in' xtask/src`.
+- [x] **AC12 — one implementation.** Run `rg -n 'dead_links_in' xtask/src`.
       Expect exactly one definition, in `xtask/src/doc_links.rs`; exactly two
       non-test call sites — one in `xtask/src/adr.rs` (promote) and one inside
       `doc_links.rs` itself (from `problems`, which the step calls); plus the
@@ -922,4 +922,4 @@ git commit -m "docs: record the doc-links gate and the draft link rules"
       `rg -n 'fn links_in|\.exists\(\)' xtask/src` and confirm link parsing and
       path resolution appear **only** in `xtask/src/doc_links.rs` — no second
       resolver.
-- [ ] Confirm `git status --porcelain` is clean.
+- [x] Confirm `git status --porcelain` is clean.
