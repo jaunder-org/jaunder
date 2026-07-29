@@ -53,6 +53,7 @@ use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::root_relative_url::RootRelativeUrl;
 use crate::strum_enum::{impl_string_serde_proxy, parse_error};
 
 /// A validated media content hash: exactly 64 lowercase hex characters
@@ -322,9 +323,25 @@ pub fn media_path(source: &MediaSource, sha256: &ContentHash, filename: &Filenam
 
 /// Returns `"/media/<source>/<2-hex-p1>/<2-hex-p2>/<full-sha256>/<filename>"` — the
 /// [`media_path`] layout under the serve prefix, filename segment percent-encoded.
+///
+/// Infallible by construction, so it returns the newtype rather than a `Result`: see the
+/// body for why the parse cannot fail.
 #[must_use]
-pub fn media_url(source: &MediaSource, sha256: &ContentHash, filename: &Filename) -> String {
-    format!("/media/{}", media_path(source, sha256, filename))
+pub fn media_url(
+    source: &MediaSource,
+    sha256: &ContentHash,
+    filename: &Filename,
+) -> RootRelativeUrl {
+    let path = format!("/media/{}", media_path(source, sha256, filename));
+    let Ok(url) = path.parse() else {
+        // Unreachable: the string always starts with a single `/media/`, and
+        // `media_path` percent-encodes the only caller-influenced segment — so no
+        // whitespace, control character, `?` or `#` can survive into it. The hash and
+        // source segments are a hex digest and a bounded enum token. Same shape as
+        // `AbsoluteUrl::compose`, and the reason no trusted door is needed here.
+        unreachable!("media_url builds a valid root-relative path");
+    };
+    url
 }
 
 /// A media `Content-Type` header value — a `type/subtype` media type with optional
@@ -501,16 +518,18 @@ pub struct ByteSize(i64);
 /// The metadata returned on a successful media upload — the server-fn wire response
 /// (#517), moved here from `server` so it is nameable on the wasm client. `storage`'s
 /// `MediaManager` returns it directly; `web`'s `upload_media` fn returns it; `AtomPub`
-/// serializes it. The typed fields (`sha256`/`filename`/`content_type`/`size_bytes`) are
-/// validated `common` newtypes, so each re-validates on deserialize; `url` is a plain
-/// derived string (the serve path), carried verbatim.
+/// serializes it. Every field is a validated `common` newtype, so each re-validates on
+/// deserialize — including `url`, the derived serve path: it is a
+/// [`RootRelativeUrl`][crate::root_relative_url::RootRelativeUrl] because being *derived*
+/// is not a reason to leave it stringly (ADR-0063 §5), and because the derivation is only
+/// well-formed thanks to [`media_path`]'s encoding, which the type is what pins.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UploadResponse {
     pub sha256: ContentHash,
     pub filename: Filename,
     pub content_type: ContentType,
     pub size_bytes: ByteSize,
-    pub url: String,
+    pub url: RootRelativeUrl,
 }
 
 #[cfg(test)]
@@ -650,7 +669,38 @@ mod tests {
     fn media_url_computation() {
         let (hash, filename) = layout_args("photo.jpg");
         let url = media_url(&MediaSource::Upload, &hash, &filename);
-        assert_eq!(url, format!("/media/upload/e3/b0/{CANONICAL}/photo.jpg"));
+        assert_eq!(
+            url,
+            *format!("/media/upload/e3/b0/{CANONICAL}/photo.jpg").as_str()
+        );
+    }
+
+    #[test]
+    fn media_url_is_representable_for_a_filename_containing_a_space() {
+        // Without encoding this is not a `RootRelativeUrl` at all — the type rejects
+        // whitespace — which is what blocked typing the serve URL in the first place.
+        let (hash, filename) = layout_args("a b.txt");
+        let url = media_url(&MediaSource::Upload, &hash, &filename);
+        assert!(!url.contains(' '), "no raw space may survive: {url}");
+        assert_eq!(
+            url,
+            *format!("/media/upload/e3/b0/{CANONICAL}/a%20b.txt").as_str()
+        );
+    }
+
+    #[test]
+    fn media_url_does_not_truncate_at_a_query_or_fragment_character() {
+        // The failure the newtype cannot catch: `RootRelativeUrl` *accepts* `?`, so an
+        // unencoded `what?.png` would validate while addressing a different file.
+        for (raw, encoded) in [("what?.png", "what%3F.png"), ("a#b.png", "a%23b.png")] {
+            let (hash, filename) = layout_args(raw);
+            let url = media_url(&MediaSource::Upload, &hash, &filename);
+            assert!(
+                !url.contains('?') && !url.contains('#'),
+                "{raw} must not keep a URL delimiter: {url}"
+            );
+            assert!(url.ends_with(encoded), "{raw} → {url}");
+        }
     }
 
     #[test]

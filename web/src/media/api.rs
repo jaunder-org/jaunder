@@ -30,6 +30,7 @@ use {
 
 use common::ids::PostId;
 use common::pagination::{PageOffset, PageSize};
+use common::root_relative_url::RootRelativeUrl;
 use common::time::UtcInstant;
 
 use crate::error::WebResult;
@@ -42,7 +43,7 @@ pub struct MediaItem {
     pub source: MediaSource,
     pub content_type: ContentType,
     pub size_bytes: ByteSize,
-    pub url: String,
+    pub url: RootRelativeUrl,
     pub created_at: UtcInstant,
 }
 
@@ -139,6 +140,9 @@ pub async fn delete_media(
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
         let url = common::media::media_url(&source, &sha256, &filename);
+        // `str::contains` wants a `Pattern`, which the newtype is not — take its `str`
+        // view once here rather than at each of the two call sites below.
+        let needle: &str = &url;
 
         let published = posts
             .list_published_by_user(
@@ -157,7 +161,7 @@ pub async fn delete_media(
         let referenced_in_posts: Vec<PostId> = published
             .iter()
             .chain(drafts.iter())
-            .filter(|post| post.body.contains(&url) || post.rendered_html.contains(&url))
+            .filter(|post| post.body.contains(needle) || post.rendered_html.contains(needle))
             .map(|post| post.post_id)
             .collect();
 
