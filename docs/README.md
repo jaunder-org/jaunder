@@ -106,6 +106,7 @@ convention). See the Status column below for each ADR's current status.
 | [0076](adr/0076-no-full-load-spa-navigation.md)                    | No in-app full document loads; `~`-prefixed SPA user namespace                                               | accepted   |
 | [0077](adr/0077-adopt-github-merge-queue.md)                       | Adopt a GitHub merge queue for main                                                                          | accepted   |
 | [0078](adr/0078-reactive-store-domain-newtype-fields.md)           | Domain newtypes in reactive-store rows via the `Patch` derive's `#[patch]` escape hatch                      | accepted   |
+| [0079](adr/0079-rendered-html-sanitization.md)                     | `RenderedHtml` carries a sanitization invariant, via two named doors                                         | accepted   |
 
 <!-- adr-table:end -->
 

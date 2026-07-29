@@ -1147,6 +1147,48 @@ mod tests {
         assert_eq!(posts[0].post_id, first.post_id);
     }
 
+    // -- sanitization (#445) --
+
+    /// A malicious body driven through the real creation path: the persisted
+    /// `rendered_html` must carry no active markup.
+    ///
+    /// Markdown rather than `Html` on purpose — `pulldown-cmark` passes embedded raw
+    /// HTML through untouched, so this is the format where the hole was least
+    /// obvious. Re-reads through `list_collection_by_user` as well as checking the
+    /// returned record, so this covers what is actually *stored* (and therefore what
+    /// every later viewer gets) rather than only what `render()` handed back.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn perform_post_creation_sanitizes_stored_rendered_html(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let storage = &*env.state.posts;
+
+        let record = perform_post_creation(
+            storage,
+            creation_with_key(
+                user_id,
+                "Hello\n\n<script>alert(1)</script>\n\n<img src=\"x\" onerror=\"alert(1)\">",
+                None,
+            ),
+        )
+        .await
+        .unwrap();
+
+        let html = &record.rendered_html;
+        assert!(!html.contains("<script"), "{html}");
+        assert!(!html.contains("onerror"), "{html}");
+        assert!(html.contains("Hello"), "benign content was lost: {html}");
+
+        let posts = storage
+            .list_collection_by_user(user_id, None, 50)
+            .await
+            .unwrap();
+        let stored = &posts[0].rendered_html;
+        assert!(!stored.contains("<script"), "stored: {stored}");
+        assert!(!stored.contains("onerror"), "stored: {stored}");
+    }
+
     #[apply(backends)]
     #[tokio::test]
     async fn post_id_for_idempotency_key_maps(#[case] backend: Backend) {

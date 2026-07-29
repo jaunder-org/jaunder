@@ -5,6 +5,7 @@ edition = "2021"
 license = "GPL-3.0-only"
 
 [dependencies]
+ammonia = { workspace = true, optional = true }
 argon2 = { workspace = true }
 async-trait.workspace = true
 base64.workspace = true
@@ -35,6 +36,14 @@ getrandom = { version = "0.2", features = ["js"] }
 # Decode). Off by default and never enabled for wasm — the CSR/wasm build pulls
 # `common` without it, so `sqlx` is never in the wasm dependency graph.
 sqlx = ["dep:sqlx"]
+# Optional, host-only HTML sanitizer backing `RenderedHtml::sanitize` — the door
+# that mints rendered HTML from untrusted input (#445). Off by default and never
+# enabled for wasm: the CSR build pulls `common` without it, so `ammonia` is never
+# in the wasm dependency graph. Deliberately its own feature rather than riding
+# `sqlx` — rendering is not persistence, and one flag controlling both would make
+# this list misleading. `render()` is gated on it, so with the feature off the fn
+# does not exist rather than existing and silently not sanitizing.
+sanitize = ["dep:ammonia"]
 test-utils = ["cheap-kdf"]
 cheap-kdf = []
 # Compiles `common::test_support` (shared test fixtures) for downstream test crates;

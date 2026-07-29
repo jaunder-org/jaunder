@@ -5,6 +5,8 @@
 
 use std::fmt;
 
+// Only `render` takes a `PostBody`, and it is gated on `sanitize`.
+#[cfg(feature = "sanitize")]
 use crate::post_body::PostBody;
 use crate::post_summary::PostSummary;
 use crate::post_title::PostTitle;
@@ -68,16 +70,24 @@ crate::strum_enum::impl_string_serde_proxy!(PostFormat);
 // `PostFormat` value, like the newtypes (#438) — not a stringly `.to_string()` strip.
 crate::db_enum::impl_text_column_enum!(PostFormat);
 
-/// HTML **produced by [`render`]**. This is a *provenance* marker, not a safety
-/// guarantee: `render` does **no** sanitization (see #445), so this type means
-/// "came out of our renderer", NOT "safe / XSS-free". Its value is structural — the
-/// unescaped view sink accepts only `RenderedHtml`, so a raw `String`/body cannot
-/// reach it by accident.
+/// HTML that is **safe to emit unescaped** — the type's invariant is "contains no
+/// active markup", established by scrubbing against an allowlist. Before #445 this
+/// was only a *provenance* marker ("came out of our renderer"), which did not imply
+/// safety because nothing sanitized; it now carries the guarantee its name suggests.
+/// Its structural value is unchanged: the unescaped view sink accepts only
+/// `RenderedHtml`, so a raw `String`/body cannot reach it by accident.
 ///
-/// The only ways to obtain one are [`render`] (mints new HTML) and
-/// [`RenderedHtml::from_trusted`] (rebuilds a value already produced by `render`
-/// and round-tripped through our own storage or wire); the latter is enforced by
-/// the `rendered-html-from-trusted` static check. Reading *out* is convenient —
+/// Two doors, meaning different things:
+///
+/// - [`RenderedHtml::sanitize`] **establishes** the invariant by scrubbing. This is
+///   the door for anything from outside jaunder — a rendered post body (via
+///   [`render`]), an ingested feed entry, any future inbound producer.
+/// - [`RenderedHtml::from_trusted`] **inherits** it, rebuilding a value we already
+///   sanitized and round-tripped through our own storage or wire. Confined to an
+///   allowlist of call sites by the `rendered-html-from-trusted` static check, so a
+///   new inbound path cannot quietly use it in place of `sanitize`.
+///
+/// Reading *out* is convenient —
 /// `Display`, `AsRef<str>`, `Borrow<str>`, `Deref<Target = str>`, `PartialEq<str>`,
 /// and `From<RenderedHtml> for String` (an *outbound* move of the inner) — but there
 /// is deliberately no *inbound constructor*: no `From<String>`/`TryFrom`/`FromStr`/
@@ -95,11 +105,70 @@ crate::db_enum::impl_text_column_enum!(PostFormat);
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RenderedHtml(String);
 
+/// The single allowlist every [`RenderedHtml::sanitize`] call scrubs against —
+/// defined once here so no caller can drift to a different policy.
+///
+/// ammonia's audited default, widened in exactly one place: `class` on `<pre>` and
+/// `<code>`, so a fenced code block keeps the language marker `pulldown-cmark`
+/// emits (`class="language-rust"`). Because the tag/attribute allowlist alone would
+/// permit *any* class on attacker-supplied content — letting a post borrow our app's
+/// CSS to mimic or hide UI — an attribute filter narrows the values to `language-*`
+/// tokens and drops everything else. Widening this list is a security decision;
+/// `sanitize_*` tests pin both halves.
+#[cfg(feature = "sanitize")]
+static SANITIZER: std::sync::LazyLock<ammonia::Builder<'static>> = std::sync::LazyLock::new(|| {
+    let mut builder = ammonia::Builder::default();
+    builder.add_tag_attributes("code", ["class"]);
+    builder.add_tag_attributes("pre", ["class"]);
+    builder.attribute_filter(|_element, attribute, value| {
+        if attribute != "class" {
+            return Some(value.into());
+        }
+        // Only reachable for `pre`/`code`: ammonia runs this filter solely for
+        // (tag, attribute) pairs the allowlist above already permits, and `class`
+        // is permitted nowhere else — a `class` on any other element is dropped
+        // before it gets here.
+        let kept = value
+            .split_whitespace()
+            .filter(|token| token.starts_with("language-"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        (!kept.is_empty()).then_some(kept.into())
+    });
+    builder
+});
+
 impl RenderedHtml {
-    /// Rebuild a `RenderedHtml` from a string the caller asserts is prior
-    /// [`render`] output round-tripped through our own store or wire. This is the
-    /// single trusted-rebuild door; grep it to enumerate every rebuild site. Takes
-    /// `impl Into<String>` so callers (esp. fixtures) don't need `.to_string()`.
+    /// Sanitize untrusted HTML into a `RenderedHtml` — the door for anything
+    /// originating **outside** jaunder: an authored post body's rendered output, an
+    /// ingested feed entry (#282), any future inbound producer.
+    ///
+    /// This door *establishes* the type's invariant ("contains no active markup")
+    /// by scrubbing against an allowlist, which is what distinguishes it from
+    /// [`RenderedHtml::from_trusted`] — that one only *inherits* an invariant
+    /// something else already established. Outside data must come through here.
+    ///
+    /// Host-only: gated on the `sanitize` feature, which is never enabled for wasm.
+    /// With the feature off this door does not exist, so there is no build in which
+    /// it silently degrades to a passthrough.
+    #[cfg(feature = "sanitize")]
+    #[must_use]
+    pub fn sanitize(raw: &str) -> Self {
+        Self(SANITIZER.clean(raw).to_string())
+    }
+
+    /// Rebuild a `RenderedHtml` we already sanitized, round-tripped through our own
+    /// store or wire. This door **inherits** the invariant rather than establishing
+    /// it — it asserts, it does not check — so it is only correct where the value's
+    /// safety was established earlier by [`RenderedHtml::sanitize`].
+    ///
+    /// **Not for anything from outside jaunder.** Ingested feed content, remote
+    /// channel data, or any future inbound producer must use `sanitize`; reaching
+    /// for this door instead is what the `rendered-html-from-trusted` static check
+    /// fails the build over. Its allowlist is down to a single production call site
+    /// (the seed-DTO wire rebuild), so `grep` still enumerates every rebuild.
+    ///
+    /// Takes `impl Into<String>` so callers (esp. fixtures) don't need `.to_string()`.
     #[must_use]
     pub fn from_trusted(html: impl Into<String>) -> Self {
         Self(html.into())
@@ -182,13 +251,28 @@ impl PartialEq<&str> for RenderedHtml {
 // delegating to the inner `String` — so storage binds it directly (`.bind(&rendered_html)`)
 // rather than via an `.as_ref()` str-strip.
 //
-// Deliberately NO `Decode`: a decode could only route through `from_trusted`
-// (`RenderedHtml` has no validating `FromStr`), which would bless ANY text column decoded
-// into it — e.g. a raw, un-rendered `body` — as trusted, unescaped HTML, invisible to the
-// `rendered-html-from-trusted` gate. Reads stay explicit: the `rendered_html` column
-// decodes as `String` and is rebuilt via the gated `from_trusted` in `build_post_record`.
-// `Type::compatible` is omitted (its trait default suffices) because it is consulted only
-// on that absent decode path.
+// `Decode` (#445) constructs the private field directly — it needs neither door, since
+// this impl lives in the same module as the type. So the `rendered_html` column decodes
+// straight into `RenderedHtml`, like every other domain column (#438/#572), and
+// `build_post_record` no longer rebuilds via `from_trusted`.
+//
+// This reverses the previous "deliberately NO `Decode`" stance, so the reasoning is worth
+// keeping rather than deleting. That stance rested on a decode being able to "bless ANY
+// text column decoded into it — e.g. a raw, un-rendered `body`". **That risk is real and
+// is accepted here**: decoding some other column into this type would still bless it.
+//
+// It rests on one argument only — that typing a column as `RenderedHtml` is a deliberate,
+// reviewable act. Note what does *not* back it: the `rendered-html-from-trusted` gate does
+// **not** catch this. That gate matches `from_trusted` call sites in expression position;
+// a `FromRow` field typed `RenderedHtml` over the wrong column names no door at all and is
+// invisible to it. Widening the gate to flag `RenderedHtml`-typed row fields outside an
+// allowlist would close the hole — filed as #701.
+//
+// A *sanitizing* decode would have removed the risk outright and healed any pre-#445 row
+// on read. It was rejected: no deployed instance holds data, so it would guard only
+// against a write path that forgot to sanitize — which the gate already catches — at the
+// cost of an html5ever parse on every post read, forever. Revisit only if an instance ever
+// accumulates rows written by a pre-#445 build.
 #[cfg(feature = "sqlx")]
 const _: () = {
     impl<DB: sqlx::Database> sqlx::Type<DB> for RenderedHtml
@@ -197,6 +281,28 @@ const _: () = {
     {
         fn type_info() -> <DB as sqlx::Database>::TypeInfo {
             <String as sqlx::Type<DB>>::type_info()
+        }
+        // Delegated like every other newtype bridge (#438/#572). Previously omitted
+        // because `compatible` is consulted only on the decode path, which did not
+        // exist; the trait default would accept only the exact `type_info`, rejecting
+        // an equally-valid `VARCHAR` column.
+        fn compatible(ty: &<DB as sqlx::Database>::TypeInfo) -> bool {
+            <String as sqlx::Type<DB>>::compatible(ty)
+        }
+    }
+
+    impl<'r, DB: sqlx::Database> sqlx::Decode<'r, DB> for RenderedHtml
+    where
+        String: sqlx::Decode<'r, DB>,
+    {
+        fn decode(
+            value: <DB as sqlx::Database>::ValueRef<'r>,
+        ) -> Result<Self, sqlx::error::BoxDynError> {
+            // `Self(..)` — the private constructor, reachable because this impl lives
+            // in the type's own module. Neither door is involved: this is not new
+            // outside data (so not `sanitize`), and routing it through `from_trusted`
+            // would put a gate-policed door on a path the gate cannot inspect.
+            <String as sqlx::Decode<'r, DB>>::decode(value).map(Self)
         }
     }
 
@@ -221,7 +327,16 @@ const _: () = {
 // ---------------------------------------------------------------------------
 
 /// Renders `body` to HTML based on `format`. Pure, infallible function. The output
-/// is a [`RenderedHtml`] — this is the only door that mints new rendered HTML.
+/// is a [`RenderedHtml`], minted through [`RenderedHtml::sanitize`] — a post body is
+/// author-supplied, so it is outside input and every format's output is scrubbed.
+///
+/// All three formats need that scrub, not just [`PostFormat::Html`]: the Markdown and
+/// Org parsers both pass embedded raw HTML through untouched, so `<script>` in a
+/// Markdown body reaches the output just as readily as in an HTML one (#445).
+///
+/// Host-only: gated on `sanitize`, like the door it mints through. With the feature
+/// off this function does not exist, so there is no build that renders unsanitized.
+#[cfg(feature = "sanitize")]
 #[must_use]
 pub fn render(body: &PostBody, format: &PostFormat) -> RenderedHtml {
     let html = match format {
@@ -229,7 +344,7 @@ pub fn render(body: &PostBody, format: &PostFormat) -> RenderedHtml {
         PostFormat::Org => render_org(body),
         PostFormat::Html => body.to_string(),
     };
-    RenderedHtml(html)
+    RenderedHtml::sanitize(&html)
 }
 
 /// Metadata derived from a post body used for slug generation and display.
@@ -425,6 +540,10 @@ pub fn canonicalize_org_body(body: &str) -> String {
 }
 
 /// Renders Markdown to HTML using pulldown-cmark with common extensions.
+///
+/// Gated with [`render`], its only caller: on a build without `sanitize` there is no
+/// renderer, so this would be dead code.
+#[cfg(feature = "sanitize")]
 fn render_markdown(body: &str) -> String {
     use pulldown_cmark::{html, Options, Parser};
 
@@ -441,6 +560,9 @@ fn render_markdown(body: &str) -> String {
 }
 
 /// Renders Org-mode to HTML using orgize.
+///
+/// Gated with [`render`], its only caller (see [`render_markdown`]).
+#[cfg(feature = "sanitize")]
 fn render_org(body: &str) -> String {
     orgize::Org::parse(body).to_html()
 }
@@ -485,6 +607,117 @@ mod tests {
         assert!(h == *"<p>x</p>"); // PartialEq<str>
         assert!(h != "<p>y</p>"); // PartialEq<&str>, unequal
         assert!(h != *"<p>y</p>"); // PartialEq<str>, unequal
+    }
+
+    // `sanitize` is the establishing door (#445): it is what makes the type's
+    // invariant — "contains no active markup" — true rather than asserted. These
+    // assert on the *absence* of the dangerous token rather than exact output,
+    // because ammonia's escaping details are not our contract.
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn sanitize_strips_script_element() {
+        let h = RenderedHtml::sanitize("<p>hi</p><script>alert(1)</script>");
+        assert!(!h.contains("<script"), "{h}");
+        assert!(!h.contains("alert(1)"), "{h}");
+        assert!(h.contains("<p>hi</p>"), "{h}");
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn sanitize_strips_event_handler_attributes() {
+        let h = RenderedHtml::sanitize(r#"<img src="x" onerror="alert(1)">"#);
+        assert!(!h.contains("onerror"), "{h}");
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn sanitize_strips_javascript_urls() {
+        let h = RenderedHtml::sanitize(r#"<a href="javascript:alert(1)">x</a>"#);
+        assert!(!h.contains("javascript:"), "{h}");
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn sanitize_preserves_formatting_markup() {
+        // The shapes `pulldown-cmark` and `orgize` actually emit. If the default
+        // allowlist eats any of these, posts render degraded — widen deliberately
+        // rather than letting it pass.
+        let h = RenderedHtml::sanitize(
+            "<h2>Heading</h2><p><em>em</em> <strong>strong</strong></p>\
+             <ul><li>item</li></ul>\
+             <pre><code class=\"language-rust\">let x = 1;</code></pre>\
+             <table><thead><tr><th>h</th></tr></thead>\
+             <tbody><tr><td>c</td></tr></tbody></table>\
+             <blockquote><p>quoted</p></blockquote>",
+        );
+        for expected in [
+            "<h2>",
+            "<em>",
+            "<strong>",
+            "<ul>",
+            "<li>",
+            "<pre>",
+            "<code",
+            "<table>",
+            "<thead>",
+            "<th>",
+            "<td>",
+            "<blockquote>",
+        ] {
+            assert!(h.contains(expected), "{expected} was stripped from: {h}");
+        }
+        // `pulldown-cmark` puts the fence's language in `class="language-rust"` on
+        // the `<code>`; ammonia's default drops `class` entirely, so `SANITIZER`
+        // re-admits it for `pre`/`code`.
+        assert!(h.contains("language-rust"), "code-block language lost: {h}");
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn sanitize_keeps_only_language_classes_on_code() {
+        // Re-admitting `class` must not become arbitrary class injection: a post
+        // could otherwise borrow the app's own CSS to mimic or hide UI. Only
+        // `language-*` tokens survive, and only on `pre`/`code`.
+        let h = RenderedHtml::sanitize(
+            r#"<pre><code class="language-rust j-anon-only">x</code></pre>"#,
+        );
+        assert!(h.contains("language-rust"), "{h}");
+        assert!(
+            !h.contains("j-anon-only"),
+            "non-language class survived: {h}"
+        );
+
+        // …and `class` stays disallowed everywhere else — dropped by the tag
+        // allowlist before the attribute filter is consulted at all.
+        let other = RenderedHtml::sanitize(r#"<p class="j-anon-only">x</p>"#);
+        assert!(
+            !other.contains("j-anon-only"),
+            "class survived on <p>: {other}"
+        );
+
+        // The filter's drop-entirely branch: on `code`, where `class` *is*
+        // allowlisted, a value with no `language-*` token must lose the attribute
+        // outright rather than surviving as an empty `class=""`.
+        let none_kept = RenderedHtml::sanitize(r#"<code class="j-anon-only">x</code>"#);
+        assert!(
+            !none_kept.contains("j-anon-only"),
+            "non-language class survived on <code>: {none_kept}"
+        );
+        assert!(
+            !none_kept.contains("class"),
+            "empty class attribute left behind: {none_kept}"
+        );
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn sanitize_preserves_safe_links_and_images() {
+        let h = RenderedHtml::sanitize(
+            r#"<a href="https://example.com">link</a><img src="https://example.com/a.png">"#,
+        );
+        assert!(h.contains("https://example.com"), "{h}");
+        assert!(h.contains("<a "), "{h}");
+        assert!(h.contains("<img"), "{h}");
     }
 
     #[test]
@@ -572,6 +805,7 @@ mod tests {
 
     // -- Markdown tests --
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn markdown_headings() {
         let html = render_markdown("# H1\n## H2\n### H3");
@@ -580,12 +814,14 @@ mod tests {
         assert!(html.contains("<h3>H3</h3>"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn markdown_paragraph() {
         let html = render_markdown("Hello, world!");
         assert!(html.contains("<p>Hello, world!</p>"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn markdown_bold_italic_strikethrough() {
         let html = render_markdown("**bold** *italic* ~~strike~~");
@@ -594,6 +830,7 @@ mod tests {
         assert!(html.contains("<del>strike</del>"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn markdown_code_block() {
         let html = render_markdown("```rust\nfn main() {}\n```");
@@ -601,12 +838,14 @@ mod tests {
         assert!(html.contains("fn main()"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn markdown_links() {
         let html = render_markdown("[example](https://example.com)");
         assert!(html.contains("<a href=\"https://example.com\">example</a>"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn markdown_ordered_list() {
         let html = render_markdown("1. first\n2. second\n3. third");
@@ -616,6 +855,7 @@ mod tests {
         assert!(html.contains("<li>third</li>"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn markdown_unordered_list() {
         let html = render_markdown("- alpha\n- beta");
@@ -624,6 +864,7 @@ mod tests {
         assert!(html.contains("<li>beta</li>"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn markdown_table() {
         let input = "| A | B |\n|---|---|\n| 1 | 2 |";
@@ -633,12 +874,14 @@ mod tests {
         assert!(html.contains("<td>1</td>"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn markdown_empty_input() {
         let html = render_markdown("");
         assert!(html.is_empty());
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn markdown_multiple_paragraphs() {
         let html = render_markdown("First paragraph.\n\nSecond paragraph.");
@@ -647,6 +890,7 @@ mod tests {
         assert_eq!(count, 2);
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn markdown_tasklist() {
         let html = render_markdown("- [x] done\n- [ ] todo");
@@ -656,6 +900,7 @@ mod tests {
 
     // -- Org-mode tests --
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn org_headings() {
         let html = render_org("* H1\n** H2");
@@ -663,12 +908,14 @@ mod tests {
         assert!(html.contains("H2"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn org_paragraph() {
         let html = render_org("Hello, org world!");
         assert!(html.contains("Hello, org world!"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn org_bold_italic_code() {
         let html = render_org("*bold* /italic/ ~code~");
@@ -677,6 +924,7 @@ mod tests {
         assert!(html.contains("<code>code</code>"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn org_list() {
         let html = render_org("- alpha\n- beta");
@@ -684,12 +932,14 @@ mod tests {
         assert!(html.contains("beta"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn org_code_block() {
         let html = render_org("#+BEGIN_SRC rust\nfn main() {}\n#+END_SRC");
         assert!(html.contains("fn main()"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn org_link() {
         let html = render_org("[[https://example.com][example]]");
@@ -700,6 +950,7 @@ mod tests {
         assert!(html.contains("example"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn org_empty_input() {
         let html = render_org("");
@@ -716,18 +967,143 @@ mod tests {
         );
     }
 
+    /// AC6/D6 asks that the allowlist strip nothing our renderers *legitimately*
+    /// emit. The `sanitize_preserves_*` tests above feed hand-written HTML, which
+    /// proves the allowlist but not that it matches what `pulldown-cmark` and
+    /// `orgize` actually produce. This one closes that gap by driving real
+    /// renderer output through the real `render()` door.
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn render_preserves_real_renderer_output() {
+        let md = render(
+            &PostBody::from(
+                "# Heading\n\n\
+                 Some **bold** and *emphasis* and a [link](https://example.com).\n\n\
+                 ```rust\nfn main() {}\n```\n\n\
+                 | a | b |\n|---|---|\n| 1 | 2 |\n",
+            ),
+            &PostFormat::Markdown,
+        );
+        for expected in [
+            "<h1>",
+            "<strong>bold</strong>",
+            "<em>emphasis</em>",
+            r#"<a href="https://example.com""#,
+            r#"<pre><code class="language-rust">"#,
+            "<table>",
+            "<thead>",
+            "<th>",
+            "<td>",
+        ] {
+            assert!(md.contains(expected), "markdown lost {expected}: {md}");
+        }
+
+        let org = render(
+            &PostBody::from("* Heading\n\nSome *bold* text and [[https://example.com][a link]].\n"),
+            &PostFormat::Org,
+        );
+        for expected in [
+            "<h1>",
+            "<b>bold</b>",
+            r#"<a href="https://example.com""#,
+            "a link",
+        ] {
+            assert!(org.contains(expected), "org lost {expected}: {org}");
+        }
+
+        // Known and intended: orgize wraps its output in `<main><section>`, and
+        // neither tag is in ammonia's default allowlist, so both are dropped while
+        // their children survive (asserted above). That is not a regression to fix
+        // — the rendered HTML is injected into a page that already has its own
+        // `<main>`, so keeping orgize's would nest a document-level landmark, and
+        // no stylesheet targets either tag. Pinned so the drop stays deliberate.
+        assert!(!org.contains("<main>"), "unexpected <main> wrapper: {org}");
+        assert!(
+            !org.contains("<section>"),
+            "unexpected <section> wrapper: {org}"
+        );
+    }
+
     // -- Cross-format dispatch tests --
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn render_dispatches_markdown() {
         let result = render(&PostBody::from("**bold**"), &PostFormat::Markdown);
         assert!(result.contains("<strong>bold</strong>"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn render_dispatches_org() {
         let result = render(&PostBody::from("*bold*"), &PostFormat::Org);
         assert!(result.contains("<b>bold</b>"));
+    }
+
+    // -- Sanitization at the mint point (#445, AC1) --
+    //
+    // Every format must neutralize active markup. Markdown and Org both pass
+    // embedded raw HTML straight through their parsers, and `Html` is a verbatim
+    // passthrough, so all three need their own assertion rather than one shared one.
+
+    /// AC1's three vectors — a `<script>` element, an event-handler attribute, and
+    /// a `javascript:` URL — asserted as one invariant so every format test covers
+    /// the same ground instead of each restating a subset.
+    #[cfg(feature = "sanitize")]
+    fn assert_no_active_markup(html: &str) {
+        assert!(!html.contains("<script"), "script element survived: {html}");
+        assert!(!html.contains("onerror"), "event handler survived: {html}");
+        assert!(
+            !html.contains("javascript:"),
+            "javascript: URL survived: {html}"
+        );
+    }
+
+    /// The three vectors as raw HTML, for embedding in each format's body.
+    #[cfg(feature = "sanitize")]
+    const ACTIVE_MARKUP: &str = concat!(
+        "<script>alert(1)</script>",
+        r#"<img src=x onerror=alert(1)>"#,
+        r#"<a href="javascript:alert(1)">x</a>"#,
+    );
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn render_markdown_strips_embedded_script() {
+        let result = render(
+            &PostBody::from(format!("Hello\n\n{ACTIVE_MARKUP}").as_str()),
+            &PostFormat::Markdown,
+        );
+        assert_no_active_markup(&result);
+        assert!(!result.contains("alert(1)"), "{result}");
+        assert!(result.contains("Hello"), "{result}");
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn render_org_strips_embedded_script() {
+        // `@@html:…@@` is Org's inline-export escape hatch — the form that actually
+        // reaches the output as raw HTML. (A `#+begin_export html` block is escaped
+        // by orgize itself, so it never needed us.) Assert on the executable form:
+        // the literal text `alert(1)` surviving *escaped* is harmless.
+        let result = render(
+            &PostBody::from(format!("Hello\n\n@@html:{ACTIVE_MARKUP}@@").as_str()),
+            &PostFormat::Org,
+        );
+        assert_no_active_markup(&result);
+        assert!(result.contains("Hello"), "{result}");
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn render_html_strips_embedded_script() {
+        let result = render(
+            &PostBody::from(format!("<p>hi</p>{ACTIVE_MARKUP}").as_str()),
+            &PostFormat::Html,
+        );
+        assert_no_active_markup(&result);
+        assert!(!result.contains("alert(1)"), "{result}");
+        assert!(result.contains("<p>hi</p>"), "{result}");
     }
 
     #[test]
@@ -892,8 +1268,12 @@ mod tests {
         assert_eq!(result, None);
     }
 
+    // Was `render_html_format_is_identity` before #445: the `Html` format used to be
+    // a verbatim passthrough. It is now sanitized like every other format, so the
+    // guarantee is "safe markup survives unchanged", not "the input survives".
+    #[cfg(feature = "sanitize")]
     #[test]
-    fn render_html_format_is_identity() {
+    fn render_html_format_preserves_safe_markup() {
         let body = "<p>hi <b>there</b></p>";
         assert_eq!(
             render(&PostBody::from(body), &PostFormat::Html).as_ref(),
