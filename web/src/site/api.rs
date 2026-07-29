@@ -12,7 +12,7 @@ use {
 };
 
 #[server(endpoint = "/get_site_identity")]
-#[tracing::instrument(name = "web.site.get_identity")]
+#[tracing::instrument(name = "web.site.get_site_identity")]
 pub async fn get_site_identity() -> WebResult<SiteIdentity> {
     boundary!("get_site_identity", {
         require_operator().await?;
@@ -25,7 +25,7 @@ pub async fn get_site_identity() -> WebResult<SiteIdentity> {
 }
 
 #[server(endpoint = "/update_site_identity")]
-#[tracing::instrument(name = "web.site.update_identity", skip(title, base_url))]
+#[tracing::instrument(name = "web.site.update_site_identity")]
 pub async fn update_site_identity(
     title: SiteTitle,
     base_url: Option<AbsoluteUrl>,

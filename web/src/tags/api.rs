@@ -29,6 +29,7 @@ pub const MAX_TAG_LIMIT: u32 = 50;
 /// with SQL `LIKE prefix%`, not a complete tag value — typing it `Tag` would
 /// reject valid partials (ADR-0063 §4 boundary policy; #409 Decision 7).
 #[server(endpoint = "/list_tags", input = Json)]
+#[tracing::instrument(name = "web.tags.list_tags", skip(prefix))]
 pub async fn list_tags(prefix: Option<String>, limit: Option<u32>) -> WebResult<Vec<TagSummary>> {
     boundary!("list_tags", {
         let posts = expect_context::<Arc<dyn PostStorage>>();
@@ -71,5 +72,129 @@ mod tests {
         };
         assert_eq!(summary.slug, "rust");
         assert_eq!(summary.display, "Rust");
+    }
+
+    /// The server-side surface. Gated as a group rather than per item because
+    /// every name below reaches `storage`, a `feature = "server"` dependency —
+    /// and nested here so the file keeps a single `tests` module.
+    #[cfg(feature = "server")]
+    mod server {
+        use super::super::list_tags;
+        use leptos::prelude::provide_context;
+        use leptos::reactive::owner::Owner;
+        use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+        use storage::{MockPostStorage, PostStorage};
+        use tracing::field::{Field, Visit};
+        use tracing_subscriber::layer::{Context, Layer};
+        use tracing_subscriber::prelude::*;
+        use tracing_subscriber::registry::LookupSpan;
+
+        /// One captured span: its name, and each recorded field as `name=value`.
+        ///
+        /// Values are kept, not just names, so the test can assert a skipped
+        /// argument's *value* is absent however it might have been recorded — a
+        /// `fields(x = %prefix)` leak would name the field `x`, not `prefix`.
+        struct CapturedSpan {
+            name: String,
+            fields: Vec<(String, String)>,
+        }
+
+        #[derive(Default)]
+        struct Captured {
+            spans: Vec<CapturedSpan>,
+        }
+
+        struct CaptureLayer(Arc<Mutex<Captured>>);
+
+        /// `#[instrument]` records each non-skipped argument through its `Debug` impl,
+        /// so a skipped argument never reaches a visitor at all.
+        struct FieldPairs(Vec<(String, String)>);
+
+        impl Visit for FieldPairs {
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                self.0
+                    .push((field.name().to_string(), format!("{value:?}")));
+            }
+        }
+
+        impl<S> Layer<S> for CaptureLayer
+        where
+            S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+        {
+            fn on_new_span(
+                &self,
+                attrs: &tracing::span::Attributes<'_>,
+                _id: &tracing::span::Id,
+                _ctx: Context<'_, S>,
+            ) {
+                let mut fields = FieldPairs(Vec::new());
+                attrs.record(&mut fields);
+                lock(&self.0).spans.push(CapturedSpan {
+                    name: attrs.metadata().name().to_string(),
+                    fields: fields.0,
+                });
+            }
+        }
+
+        /// A poisoned lock still holds the captures we want to assert on, and this
+        /// mutex guards a plain `Vec` with no invariant a panic could break.
+        fn lock(captured: &Mutex<Captured>) -> MutexGuard<'_, Captured> {
+            captured.lock().unwrap_or_else(PoisonError::into_inner)
+        }
+
+        /// The value the test feeds as the skipped `prefix`, distinctive enough that
+        /// finding it anywhere in the span's fields proves a leak.
+        const SECRET_PREFIX: &str = "secret-fragment";
+
+        /// #511: the source-static gate cannot tell whether `#[server]`'s expansion
+        /// actually wraps the server-side body, so one site is pinned at runtime —
+        /// the span exists, carries its derived name, records the recordable
+        /// argument, and never carries the skipped one's value.
+        // guard:no-backend — mock store
+        #[tokio::test]
+        async fn list_tags_emits_its_derived_span_recording_limit_but_not_prefix() {
+            let captured = Arc::new(Mutex::new(Captured::default()));
+            let subscriber =
+                tracing_subscriber::registry().with(CaptureLayer(Arc::clone(&captured)));
+            let _guard = tracing::subscriber::set_default(subscriber);
+
+            let owner = Owner::new();
+            owner.set();
+            let mut posts = MockPostStorage::new();
+            posts
+                .expect_list_tags()
+                .returning(|_prefix, _limit| Ok(Vec::new()));
+            provide_context(Arc::new(posts) as Arc<dyn PostStorage>);
+
+            let result = list_tags(Some(SECRET_PREFIX.to_string()), Some(5)).await;
+            drop(owner);
+            assert!(result.is_ok(), "list_tags failed: {result:?}");
+
+            // Asserted over collected values rather than an `expect`/`else panic!`, so
+            // every line here executes on the passing path — a diagnostic-only branch
+            // would read as uncovered to the coverage gate.
+            let captured = lock(&captured);
+            let names: Vec<&str> = captured.spans.iter().map(|s| s.name.as_str()).collect();
+            assert!(
+                names.contains(&"web.tags.list_tags"),
+                "list_tags must emit a span named web.tags.list_tags; saw {names:?}"
+            );
+            let fields: Vec<&(String, String)> = captured
+                .spans
+                .iter()
+                .filter(|s| s.name == "web.tags.list_tags")
+                .flat_map(|s| s.fields.iter())
+                .collect();
+            assert!(
+                fields.iter().any(|(name, _)| name == "limit"),
+                "limit is recordable and must be recorded; got {fields:?}"
+            );
+            assert!(
+                !fields
+                    .iter()
+                    .any(|(name, value)| name == "prefix" || value.contains(SECRET_PREFIX)),
+                "prefix is an unbounded String and must never reach the span; got {fields:?}"
+            );
+        }
     }
 }

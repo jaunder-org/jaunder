@@ -38,6 +38,7 @@ pub struct InviteInfo {
 /// code is never returned to the client (#400) — it is delivered only as the link in
 /// the email (mirrors `request_password_reset`).
 #[server(endpoint = "/create_invite")]
+#[tracing::instrument(name = "web.invites.create_invite", skip(recipient_email))]
 pub async fn create_invite(
     expires_in_hours: Option<InviteTtlHours>,
     recipient_email: Email,
@@ -88,6 +89,7 @@ pub async fn create_invite(
 /// Returns invite metadata (never the raw codes). Requires `invite_only` registration
 /// policy; returns an error otherwise.
 #[server(endpoint = "/list_invites")]
+#[tracing::instrument(name = "web.invites.list_invites")]
 pub async fn list_invites() -> WebResult<Vec<InviteInfo>> {
     boundary!("list_invites", {
         let _auth = require_auth().await?;

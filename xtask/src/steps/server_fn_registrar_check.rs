@@ -10,12 +10,14 @@
 //! route silently 404s in integration until someone remembers to register it
 //! (#358). This gate makes that omission a host-side failure instead.
 //!
-//! **Enumeration** uses `syn` (like [`crate::coverage::exempt`]): parse each
-//! `web/src/**/*.rs`, collect free fns carrying a `#[server]` attribute, and map
-//! the fn ident to its generated type name (`PascalCase(ident)`). The repo uses
-//! only the `#[server(endpoint = "…")]` form, so that mapping is exact; an
-//! unexpected positional-rename form (`#[server(SomeName)]`) is a **hard error**
-//! rather than a silent mis-name.
+//! **Enumeration** is shared with the `server-fn-tracing` gate (#511) via
+//! [`crate::web_server_fns`]: it parses each `web/src/**/*.rs` with `syn` and
+//! collects free fns carrying a `#[server]` attribute. This gate then maps each fn
+//! ident to its generated type name (`PascalCase(ident)`). The repo uses only the
+//! `#[server(endpoint = "…")]` form, so that mapping is exact; an unexpected
+//! positional-rename form (`#[server(SomeName)]`) is a **hard error** rather than a
+//! silent mis-name. That judgment stays here rather than in the shared enumerator —
+//! it is about *this* gate's type-name mapping, and means nothing to the tracing gate.
 //!
 //! **Matching is by leaf type name**, not module path: re-exports
 //! (`web/src/posts/mod.rs` does `pub use listing::*;`) make the registrar path
@@ -32,16 +34,14 @@
 //! unregistered fn (a false pass).
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use syn::punctuated::Punctuated;
-use syn::spanned::Spanned;
 use syn::{Meta, Token};
 
 use crate::result::{CommandResult, StepResult};
+use crate::web_server_fns::{self, WEB_SRC};
 
-/// The `web` crate source root, scanned recursively for `#[server]` fns.
-const WEB_SRC: &str = "web/src";
 /// The single canonical registrar the enumerated fns must appear in.
 const REGISTRAR: &str = "server/tests/helpers/mod.rs";
 
@@ -57,45 +57,32 @@ struct ServerFn {
 /// could not be enumerated. `Err` on a `syn` parse failure, or on the
 /// unsupported `#[server(SomeName)]` positional-rename form — both would let an
 /// unregistered fn slip through, so they fail the gate rather than pass silently.
+///
+/// A thin adapter over the shared [`web_server_fns::server_fns_in`]: the walk is
+/// common to both server-fn gates, the `PascalCase` type-name mapping is this
+/// gate's alone.
 fn server_fns_in(src: &str) -> Result<Vec<ServerFn>, String> {
-    let file = syn::parse_file(src).map_err(|e| format!("cannot parse as Rust: {e}"))?;
-    let mut v = ServerFnVisitor {
-        fns: Vec::new(),
-        errors: Vec::new(),
-    };
-    syn::visit::visit_file(&mut v, &file);
-    if let Some(err) = v.errors.first() {
-        return Err(err.clone());
-    }
-    Ok(v.fns)
-}
-
-struct ServerFnVisitor {
-    fns: Vec<ServerFn>,
-    errors: Vec<String>,
-}
-
-impl<'ast> syn::visit::Visit<'ast> for ServerFnVisitor {
-    fn visit_item_fn(&mut self, f: &'ast syn::ItemFn) {
-        if let Some(attr) = f.attrs.iter().find(|a| a.path().is_ident("server")) {
-            match server_fn_default_named(attr) {
-                Ok(true) => self.fns.push(ServerFn {
-                    name: pascal_case(&f.sig.ident.to_string()),
-                    line: attr.span().start().line,
-                }),
-                Ok(false) => self.errors.push(format!(
+    let found = web_server_fns::server_fns_in(src)?;
+    let mut fns = Vec::with_capacity(found.len());
+    for f in found {
+        let attr = &f.attrs[f.server_attr_index];
+        match server_fn_default_named(attr) {
+            Ok(true) => fns.push(ServerFn {
+                name: pascal_case(&f.ident),
+                line: f.line,
+            }),
+            Ok(false) => {
+                return Err(format!(
                     "line {}: unsupported #[server(...)] form (a positional type rename?) — \
                      the registrar gate assumes endpoint-only naming so the generated type is \
                      PascalCase(fn); rename via `endpoint =` or extend the gate",
-                    attr.span().start().line
-                )),
-                Err(e) => self
-                    .errors
-                    .push(format!("line {}: {e}", attr.span().start().line)),
+                    f.line
+                ))
             }
+            Err(e) => return Err(format!("line {}: {e}", f.line)),
         }
-        syn::visit::visit_item_fn(self, f);
     }
+    Ok(fns)
 }
 
 /// Whether a `#[server]` attribute leaves the generated type at its default name
@@ -244,31 +231,22 @@ fn problems(web_sources: &[(String, String)], registrar_src: &str) -> Option<Str
     Some(lines.join("\n"))
 }
 
-/// Collect every `.rs` file under `dir`, recursively.
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let path = entry?.path();
-        if path.is_dir() {
-            rust_files(&path, out)?;
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
-        }
-    }
-    Ok(())
-}
-
 /// Scan every `web/src` Rust file for `#[server]` fns and check each is
 /// registered. A missing `web/src` tree or unreadable registrar is a hard
 /// failure (not a silent pass), so a moved/renamed path can never quietly
 /// disable the guard.
 pub fn run(result: &mut CommandResult) {
-    let mut files = Vec::new();
-    if let Err(e) = rust_files(Path::new(WEB_SRC), &mut files) {
-        result.push(
-            StepResult::fail("server-fn-registrar").detail(format!("cannot scan {WEB_SRC}: {e}")),
-        );
-        return;
-    }
+    // A listed-but-unreadable file is surfaced as a failure, not dropped: an
+    // unenumerated source could hide an unregistered `#[server]` fn (a false pass),
+    // the same fail-loud rule the module doc states.
+    let web = match web_server_fns::read_web_sources(Path::new(WEB_SRC)) {
+        Ok(v) => v,
+        Err(e) => {
+            result.push(StepResult::fail("server-fn-registrar").detail(e));
+            return;
+        }
+    };
+    let mut read_errors = web.read_errors;
     let registrar_src = match std::fs::read_to_string(REGISTRAR) {
         Ok(s) => s,
         Err(e) => {
@@ -279,18 +257,10 @@ pub fn run(result: &mut CommandResult) {
             return;
         }
     };
-    // A file we listed but cannot READ is surfaced as a failure, not dropped:
-    // an unenumerated source could hide an unregistered `#[server]` fn (a false
-    // pass), the same fail-loud rule the module doc states.
-    let mut sources = Vec::new();
-    let mut read_errors = Vec::new();
-    for p in &files {
-        match std::fs::read_to_string(p) {
-            Ok(s) => sources.push((p.display().to_string(), s)),
-            Err(e) => read_errors.push(format!("{}: cannot read: {e}", p.display())),
-        }
-    }
-    let step = match (read_errors.is_empty(), problems(&sources, &registrar_src)) {
+    let step = match (
+        read_errors.is_empty(),
+        problems(&web.sources, &registrar_src),
+    ) {
         (true, None) => StepResult::ok("server-fn-registrar"),
         (_, prob) => {
             read_errors.extend(prob);

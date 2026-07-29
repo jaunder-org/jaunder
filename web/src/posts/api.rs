@@ -159,6 +159,7 @@ pub struct UpdatePostArgs {
 /// server and the wasm client). The browser converts the author's local
 /// `datetime-local` value to UTC before sending.
 #[server(endpoint = "/create_post", input = Json)]
+#[tracing::instrument(name = "web.posts.create_post", skip_all)]
 pub async fn create_post(args: CreatePostArgs) -> WebResult<CreatePostResult> {
     let CreatePostArgs {
         body,
@@ -241,6 +242,7 @@ pub async fn create_post(args: CreatePostArgs) -> WebResult<CreatePostResult> {
 
 /// Retrieves a post by its permalink.
 #[server(endpoint = "/get_post")]
+#[tracing::instrument(name = "web.posts.get_post")]
 pub async fn get_post(
     username: Username,
     date: PermalinkDate,
@@ -281,6 +283,7 @@ pub async fn get_post(
 
 /// Retrieves a draft preview for the authenticated author.
 #[server(endpoint = "/get_post_preview")]
+#[tracing::instrument(name = "web.posts.get_post_preview")]
 pub async fn get_post_preview(post_id: PostId) -> WebResult<PostResponse> {
     boundary!("get_post_preview", {
         let auth = require_auth()
@@ -306,6 +309,7 @@ pub async fn get_post_preview(post_id: PostId) -> WebResult<PostResponse> {
 /// `publish_at` is an optional UTC instant from the editor's datetime control.
 /// See `create_post` for why it crosses the boundary as a [`UtcInstant`].
 #[server(endpoint = "/update_post", input = Json)]
+#[tracing::instrument(name = "web.posts.update_post", skip_all)]
 pub async fn update_post(args: UpdatePostArgs) -> WebResult<UpdatePostResult> {
     let UpdatePostArgs {
         post_id,
@@ -399,6 +403,7 @@ pub async fn update_post(args: UpdatePostArgs) -> WebResult<UpdatePostResult> {
 /// Returns the audience-picker selection for a new post: the site-wide
 /// default audience. Used to initialize the editor on the create page.
 #[server(endpoint = "/default_audience_selection")]
+#[tracing::instrument(name = "web.posts.default_audience_selection")]
 pub async fn default_audience_selection() -> WebResult<AudienceSelection> {
     boundary!("default_audience_selection", {
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
@@ -413,6 +418,7 @@ pub async fn default_audience_selection() -> WebResult<AudienceSelection> {
 /// Returns the audience-picker selection for an existing post (its current
 /// targeting). Owner-only. Used to pre-select the editor on the edit page.
 #[server(endpoint = "/post_audience_selection")]
+#[tracing::instrument(name = "web.posts.post_audience_selection")]
 pub async fn post_audience_selection(post_id: PostId) -> WebResult<AudienceSelection> {
     boundary!("post_audience_selection", {
         let posts = expect_context::<Arc<dyn PostStorage>>();
@@ -435,6 +441,7 @@ pub async fn post_audience_selection(post_id: PostId) -> WebResult<AudienceSelec
 
 /// Lists drafts for the authenticated user.
 #[server(endpoint = "/list_drafts")]
+#[tracing::instrument(name = "web.posts.list_drafts")]
 pub async fn list_drafts(
     cursor_created_at: Option<UtcInstant>,
     cursor_post_id: Option<PostId>,
@@ -482,6 +489,7 @@ pub async fn list_drafts(
 
 /// Publishes an existing draft owned by the authenticated user.
 #[server(endpoint = "/publish_post")]
+#[tracing::instrument(name = "web.posts.publish_post")]
 pub async fn publish_post(post_id: PostId) -> WebResult<PublishPostResult> {
     boundary!("publish_post", {
         let auth = require_auth().await?;
@@ -540,6 +548,7 @@ pub async fn publish_post(post_id: PostId) -> WebResult<PublishPostResult> {
 
 /// Soft-deletes a post owned by the authenticated user.
 #[server(endpoint = "/delete_post")]
+#[tracing::instrument(name = "web.posts.delete_post")]
 pub async fn delete_post(post_id: PostId) -> WebResult<()> {
     boundary!("delete_post", {
         let auth = require_auth().await?;
@@ -573,6 +582,7 @@ pub async fn delete_post(post_id: PostId) -> WebResult<()> {
 
 /// Reverts a published post owned by the authenticated user back to draft status.
 #[server(endpoint = "/unpublish_post")]
+#[tracing::instrument(name = "web.posts.unpublish_post")]
 pub async fn unpublish_post(post_id: PostId) -> WebResult<()> {
     boundary!("unpublish_post", {
         let auth = require_auth().await?;

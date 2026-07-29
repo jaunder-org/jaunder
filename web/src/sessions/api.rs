@@ -31,6 +31,7 @@ pub struct SessionInfo {
 /// Returns all sessions for the authenticated user.
 /// `is_current` is `true` for the session used to make this request.
 #[server(endpoint = "/list_sessions")]
+#[tracing::instrument(name = "web.sessions.list_sessions")]
 pub async fn list_sessions() -> WebResult<Vec<SessionInfo>> {
     boundary!("list_sessions", {
         let auth = require_auth().await?;
@@ -61,6 +62,7 @@ pub struct AppPassword {
 /// Mints a new app-specific password (a labelled session) for the authenticated
 /// user. The returned raw token is shown only once; only its hash is stored.
 #[server(endpoint = "/create_app_password")]
+#[tracing::instrument(name = "web.sessions.create_app_password", skip_all)]
 pub async fn create_app_password(label: SessionLabel) -> WebResult<AppPassword> {
     boundary!("create_app_password", {
         // `label` is a typed wire arg (ADR-0065): the `SessionLabel` serde bridge
@@ -75,6 +77,7 @@ pub async fn create_app_password(label: SessionLabel) -> WebResult<AppPassword> 
 
 /// Revokes a session belonging to the authenticated user.
 #[server(endpoint = "/revoke_session")]
+#[tracing::instrument(name = "web.sessions.revoke_session", skip_all)]
 pub async fn revoke_session(token_hash: TokenHash) -> WebResult<()> {
     boundary!("revoke_session", {
         let auth = require_auth().await?;

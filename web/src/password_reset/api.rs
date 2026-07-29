@@ -22,6 +22,7 @@ use common::username::Username;
 use leptos::prelude::*;
 
 #[server(endpoint = "/request_password_reset")]
+#[tracing::instrument(name = "web.password_reset.request_password_reset")]
 pub async fn request_password_reset(username: Username) -> WebResult<()> {
     boundary!("request_password_reset", {
         let users = expect_context::<Arc<dyn UserStorage>>();
@@ -84,6 +85,7 @@ pub async fn request_password_reset(username: Username) -> WebResult<()> {
 }
 
 #[server(endpoint = "/confirm_password_reset")]
+#[tracing::instrument(name = "web.password_reset.confirm_password_reset", skip_all)]
 pub async fn confirm_password_reset(
     token: RawToken,
     new_password: ProfferedPassword,

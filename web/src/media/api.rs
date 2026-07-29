@@ -63,6 +63,7 @@ pub struct DeleteMediaResult {
 
 /// Lists media items owned by the authenticated user.
 #[server(endpoint = "/list_my_media")]
+#[tracing::instrument(name = "web.media.list_my_media")]
 pub async fn list_my_media(
     source: Option<MediaSource>,
     limit: Option<PageSize>,
@@ -101,6 +102,7 @@ pub async fn list_my_media(
 
 /// Returns storage usage for the authenticated user.
 #[server(endpoint = "/media_usage")]
+#[tracing::instrument(name = "web.media.media_usage")]
 pub async fn media_usage() -> WebResult<MediaUsageData> {
     boundary!("media_usage", {
         let auth = require_auth().await?;
@@ -124,6 +126,7 @@ pub async fn media_usage() -> WebResult<MediaUsageData> {
 /// If the item is referenced in any posts, it will not be deleted unless
 /// `force` is `Some(true)`.
 #[server(endpoint = "/delete_media")]
+#[tracing::instrument(name = "web.media.delete_media", skip(filename))]
 pub async fn delete_media(
     sha256: ContentHash,
     filename: Filename,
@@ -198,6 +201,7 @@ fn map_media_error(err: &anyhow::Error) -> InternalError {
 /// Streams a multipart file upload to storage and returns its stored URL/metadata.
 /// The multipart `#[server]` fn replacing the old `POST /media/upload` glue (#517).
 #[server(input = MultipartFormData, endpoint = "/upload_media")]
+#[tracing::instrument(name = "web.media.upload_media", skip_all)]
 pub async fn upload_media(data: MultipartData) -> WebResult<UploadResponse> {
     boundary!("upload_media", {
         let auth = require_auth().await?;
