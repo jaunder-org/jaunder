@@ -722,7 +722,7 @@ git commit -m "feat(xtask): gate relative Markdown links with doc-links"
 ; warning: unresolved link(s) — docs/adr/0002-d.md: nonexistent.md
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 > **Assert on the `warning:` clause, never on the whole summary.** Pass C
 > already pushes `docs/adr/drafts/<slug>.md -> docs/adr/NNNN-<slug>.md` into the
@@ -773,12 +773,12 @@ git commit -m "feat(xtask): gate relative Markdown links with doc-links"
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run: `cargo test --manifest-path xtask/Cargo.toml adr::` Expected: FAIL — no
 `warning:` clause in the summary.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `run_promote`, after the `table_note` block (`adr.rs:275-281`) and before the
 final `Ok(format!(...))`:
@@ -806,11 +806,11 @@ let warn_note = if warnings.is_empty() {
 
 Append `{warn_note}` to the returned summary format string.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Run: `cargo test --manifest-path xtask/Cargo.toml adr::` Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add xtask/src/adr.rs

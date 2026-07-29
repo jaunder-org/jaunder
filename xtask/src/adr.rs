@@ -319,7 +319,30 @@ fn run_promote(repo: &Path) -> Result<String> {
         "README table not synced (no adr-table markers)".to_string()
     };
 
-    Ok(format!("{} — {table_note}; staged", summary.join("; ")))
+    // Check the graduated files in their FINAL form — after Pass C's reference
+    // rewrite and the README sync — so a link Pass C is about to fix is never
+    // reported. Warn rather than fail: the tree is already mutated and staged, so
+    // bailing here would leave a half-promoted checkout. `doc-links` turns the same
+    // condition into a hard failure at the next commit, on a stable re-runnable tree.
+    let mut warnings = Vec::new();
+    for (_slug, _num, new_name) in &assigned {
+        let rel = format!("{ADR_DIR}/{new_name}");
+        let dead = crate::doc_links::dead_links_in(repo, &rel)?;
+        if !dead.is_empty() {
+            let targets: Vec<String> = dead.into_iter().map(|d| d.target).collect();
+            warnings.push(format!("{rel}: {}", targets.join(", ")));
+        }
+    }
+    let warn_note = if warnings.is_empty() {
+        String::new()
+    } else {
+        format!("; warning: unresolved link(s) — {}", warnings.join("; "))
+    };
+
+    Ok(format!(
+        "{} — {table_note}; staged{warn_note}",
+        summary.join("; ")
+    ))
 }
 
 #[cfg(test)]
@@ -426,6 +449,66 @@ mod tests {
         let body = std::fs::read_to_string(tmp.join("docs/adr/0002-d.md")).unwrap();
         assert!(body.contains("](template.md)"), "body: {body}");
         assert!(body.contains("](../CONTRIBUTING.md)"), "body: {body}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // Assert on the `warning:` clause, never on the whole summary: Pass C already
+    // pushes `drafts/<slug>.md -> docs/adr/NNNN-<slug>.md` into it, so
+    // `summary.contains("0002-d.md")` is true no matter what this code does.
+
+    #[test]
+    fn promote_warns_on_a_surviving_dead_link() {
+        let tmp = promote_repo("warn");
+        write(
+            &tmp,
+            "docs/adr/drafts/d.md",
+            "# ADR-DRAFT: D\n\nSee [gone](nonexistent.md).\n",
+        );
+        let summary = run_promote(&tmp).unwrap(); // Ok, not Err — promote still graduates
+        assert!(
+            tmp.join("docs/adr/0002-d.md").exists(),
+            "file still written"
+        );
+        assert!(
+            summary.contains("warning: unresolved link(s) — docs/adr/0002-d.md: nonexistent.md"),
+            "summary: {summary}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn promote_is_silent_when_every_link_resolves() {
+        let tmp = promote_repo("no-warn");
+        write(
+            &tmp,
+            "docs/adr/drafts/d.md",
+            "# ADR-DRAFT: D\n\nSee [foo](../0001-foo.md).\n",
+        );
+        let summary = run_promote(&tmp).unwrap();
+        assert!(!summary.contains("warning"), "summary: {summary}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn promote_checks_links_after_pass_c() {
+        // `../drafts/aaa.md` is the cross-draft form that survives promotion: Pass B
+        // strips it to `drafts/aaa.md`, Pass C rewrites that to `0002-aaa.md`, which
+        // resolves from docs/adr/. So a correctly-ordered check finds nothing.
+        //
+        // This is the discriminating shape. Run the check before Pass C and the
+        // target is still `drafts/aaa.md`, pointing at the draft Pass B already
+        // deleted — a premature check warns and this test fails.
+        let tmp = promote_repo("order");
+        write(&tmp, "docs/adr/drafts/aaa.md", "# ADR-DRAFT: Aaa\n");
+        write(
+            &tmp,
+            "docs/adr/drafts/bbb.md",
+            "# ADR-DRAFT: Bbb\n\nBuilds on [aaa](../drafts/aaa.md).\n",
+        );
+        let summary = run_promote(&tmp).unwrap();
+        assert!(!summary.contains("warning"), "premature check: {summary}");
+        let bbb = std::fs::read_to_string(tmp.join("docs/adr/0003-bbb.md")).unwrap();
+        assert!(bbb.contains("](0002-aaa.md)"), "bbb: {bbb}");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
