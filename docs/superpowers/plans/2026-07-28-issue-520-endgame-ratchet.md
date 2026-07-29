@@ -186,7 +186,7 @@ fails on `reactive.rs` and blocks its own commit.
 - Produces: `crate::reactive::Invalidator` (unchanged path) and
   `crate::reactive::invalidator_scope` (unchanged path, now via a re-export).
 
-- [ ] **Step 1: Create `web/src/reactive/scope.rs` with the macro and its test**
+- [x] **Step 1: Create `web/src/reactive/scope.rs` with the macro and its test**
 
 The file carries **no `target_arch` cfg** — its `mod` declaration supplies the
 gate.
@@ -254,7 +254,7 @@ mod tests {
 }
 ````
 
-- [ ] **Step 2: Create `web/src/reactive/mod.rs`**
+- [x] **Step 2: Create `web/src/reactive/mod.rs`**
 
 Carries `Invalidator` verbatim from `reactive.rs:11-46` and
 `notify_changes_the_tracked_revision` verbatim from `reactive.rs:94-111`, plus
@@ -280,7 +280,7 @@ pub(crate) use scope::invalidator_scope;
 Both lines are permitted form 2 under Task 3's rule (a `mod`/`use` item in a
 `mod.rs`).
 
-- [ ] **Step 3: Delete `web/src/reactive.rs`**
+- [x] **Step 3: Delete `web/src/reactive.rs`**
 
 ```bash
 git rm web/src/reactive.rs
@@ -289,7 +289,7 @@ git add web/src/reactive/mod.rs web/src/reactive/scope.rs
 
 Stage the new directory now — the Nix-backed gate ignores untracked files.
 
-- [ ] **Step 4: Verify the consumer is untouched and both tests still run**
+- [x] **Step 4: Verify the consumer is untouched and both tests still run**
 
 Run: `rg -n 'invalidator_scope' web/src/audiences/component.rs` Expected:
 `13:use crate::reactive::{invalidator_scope, Invalidator};` — **unchanged**
@@ -299,12 +299,12 @@ Run: `cargo nextest run -p web reactive` Expected: PASS — both
 `notify_changes_the_tracked_revision` and
 `scope_newtype_derefs_to_its_invalidator` (criterion B3).
 
-- [ ] **Step 5: Verify the wasm target still builds**
+- [x] **Step 5: Verify the wasm target still builds**
 
 Run the Global Constraints wasm-clippy command. Expected: PASS — the macro
 resolves for `audiences/component.rs` through the re-export.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit** → `25f26d81`
 
 Run `cargo xtask check` first; confirm `git status --porcelain` is clean after
 its fmt auto-fix. Stage the spec and plan alongside the code — this is the
@@ -344,7 +344,13 @@ difference. Set-difference is used rather than an inline decision walk because
 it makes "permitted" a positive, independently-testable predicate and cannot
 double-report a line.
 
-- [ ] **Step 1: Write the failing tests**
+> **Note on step order:** the `pub mod target_arch_placement_check;` declaration
+> in `xtask/src/lib.rs` had to move from Step 5 into Step 1 — without it the
+> module is not compiled, so Step 2 would have reported "0 tests run" rather
+> than a real failure. Step 5 therefore only adds the two `run(&mut result)`
+> call sites.
+
+- [x] **Step 1: Write the failing tests**
 
 Add to `xtask/src/steps/target_arch_placement_check.rs`:
 
@@ -481,12 +487,18 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run: `cargo nextest run --manifest-path xtask/Cargo.toml target_arch_placement`
-Expected: FAIL — `violations` / `problems` not defined.
+Expected: FAIL — `violations` / `problems` not defined. Confirmed:
+`E0432 unresolved imports super::problems, super::violations`.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
+
+> **Implementation note:** `xtask` has no `quote` dependency, so
+> `to_token_stream()` is unavailable. `is_target_arch_cfg` instead reads
+> `syn::Meta::List`'s `tokens` via `proc_macro2::TokenStream`'s `Display` — same
+> effect (handles `any`/`all`/`not` nesting), no new dependency.
 
 Write the module to these signatures:
 
@@ -540,12 +552,12 @@ line, and the rule:
 Pass the file's terminal component to `violations` via
 `path.file_name().and_then(|n| n.to_str())`.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Run: `cargo nextest run --manifest-path xtask/Cargo.toml target_arch_placement`
-Expected: PASS — 16 tests.
+Expected: PASS — 16 tests. Confirmed: 16/16.
 
-- [ ] **Step 5: Wire it into the ladder**
+- [x] **Step 5: Wire it into the ladder**
 
 `xtask/src/lib.rs`: add `pub mod target_arch_placement_check;` to the `steps`
 block — alphabetically **last**, after `test_pattern_check` (`:29`) — and
@@ -553,7 +565,16 @@ block — alphabetically **last**, after `test_pattern_check` (`:29`) — and
 `steps::no_full_reload_check::run(&mut result);` at **both** `:298` (Check) and
 `:330` (Validate).
 
-- [ ] **Step 6: Verify it passes on the real tree**
+- [x] **Step 6: Verify it passes on the real tree** —
+      `[ ok ] target-arch-placement`, and no module-doc false positives (the
+      `cfg`-path anchor holds).
+
+**Also proved it bites on the real scan, not just in unit tests.** A check whose
+`rust_files` walk found nothing would report `ok` too, so a throwaway
+`web/src/_tmp_probe.rs` containing a gated `fn` was planted:
+`cargo xtask check --no-test` exited 1 with
+`[FAIL] target-arch-placement — web/src/_tmp_probe.rs:1: …(#520)`. Probe deleted
+and un-staged (the git-add hook had auto-staged it).
 
 Run: `cargo xtask check --no-test` Expected: PASS, with a
 `target-arch-placement` step in `jq '.steps' .xtask/last-result.json`. Criterion
