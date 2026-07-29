@@ -1,7 +1,7 @@
 # Plan — `RootRelativeUrl` for the media serve-URL chain (#675)
 
 Spec:
-[`docs/superpowers/specs/2026-07-29-issue-675-rootrelativeurl-media.md`](../specs/2026-07-29-issue-675-rootrelativeurl-media.md)
+[`docs/archive/2026-07-29-issue-675-rootrelativeurl-media-spec.md`](2026-07-29-issue-675-rootrelativeurl-media-spec.md)
 (approved). The spec is "what/why"; this is "how". Decisions are referenced as
 **D1**–**D9** and not restated.
 
