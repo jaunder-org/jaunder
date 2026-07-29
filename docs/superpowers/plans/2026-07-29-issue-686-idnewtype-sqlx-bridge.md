@@ -54,6 +54,23 @@ adoption gate; `PostRow.rendered_html` (#502) and `.tags`;
 **For agentic workers.** Drive with **`jaunder-iterate`**; delegate task 6 via
 **`jaunder-dispatch`**. Tick checkboxes in this file in real time.
 
+## Base moved during execution — #445 superseded the `rendered_html` carve-out
+
+`origin/main` advanced twice while this branch was in flight; the second move
+brought **#445 (RenderedHtml sanitization, ADR-0079)**, which invalidates a
+premise stated below. This plan and the spec both scope `PostRow.rendered_html`
+out "per #502", on the grounds that its sqlx bridge was deliberately
+**write-only** — a `Decode` would have laundered an untrusted column into
+trusted unescaped HTML. #445 moved sanitization onto the type, which removes
+that objection: `rendered_html` now has a `Decode` and `PostRow.rendered_html`
+is `RenderedHtml`, not `String`.
+
+So the scope-out below is **stale, not wrong**: the column was already typed by
+someone else, for a better reason than this issue had. After the rebase the only
+`PostRow` column that is not a decoded domain type is `tags` (the JSON
+aggregate), and `helpers.rs` plus ADR-0071's Consequences were corrected to say
+so. Read every "#502 / stays `String`" mention below as historical.
+
 ## Global constraints
 
 - **No `Co-Authored-By` trailer** on any commit.
@@ -420,17 +437,23 @@ ADR-0071 is `accepted` and scoped to _string_ newtypes; the bridge now covers
 all three families. Amend in place (the repo convention, as #400 did for
 ADR-0063).
 
-- [ ] Broaden Context/Decision to cover `IdNewtype` (infallible `Decode`) and
+- [x] Broaden Context/Decision to cover `IdNewtype` (infallible `Decode`) and
       `NumNewtype` (bound-checking `Decode` via `TryFrom<inner>`), and record
       the no-opt-out choice
-- [ ] Note the `NumNewtype` behavioural consequence: an out-of-range column is
+- [x] Note the `NumNewtype` behavioural consequence: an out-of-range column is
       now a decode error
-- [ ] If the title changes, update `docs/README.md`'s table and run
-      `prettier -w docs/README.md`
-- [ ] Cross-check ADR-0063 §3 ("the trailer is generated") for wording that
-      still implies only string newtypes get the bridge; update in the same
-      commit
-- [ ] `cargo xtask check` → green; commit
+- [x] Title → "Transparent sqlx bridge for **domain** newtypes";
+      `docs/README.md`'s table cell updated and prettier'd. **Filename left as
+      `0071-sqlx-string-newtype-bridge.md`** — renaming would break links from
+      two archived docs, and `adr-readme-parity` compares the number/link/status
+      mechanically while treating the title cell as hand-curated, so the slug
+      never has to track the title.
+- [x] Cross-check ADR-0063 for wording that implies only string newtypes get the
+      bridge. **Nothing was wrong** — 0063 never mentions sqlx, and every "the
+      bridge" in it means the serde bridge. What it had was an _omission_: §2's
+      id and numeric-value trailers listed their serde bridge and stopped. Both
+      now name the sqlx bridge and point at ADR-0071.
+- [x] `cargo xtask check` → green; commit
 
 ---
 
