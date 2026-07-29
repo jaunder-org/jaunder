@@ -25,7 +25,7 @@ import { goto, click, register, subscribeTo, failServerFn } from "./helpers";
 
 test("Audiences: CRUD + membership toggle re-fetch without list remount or flash", async ({
   page,
-  browser,
+  tracedContext,
 }, testInfo) => {
   setTestBudget(120_000);
   const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
@@ -33,7 +33,7 @@ test("Audiences: CRUD + membership toggle re-fetch without list remount or flash
   const author = await register(page, firstNav);
 
   // A subscriber X so the author has someone to add to an audience.
-  const xCtx = await browser.newContext();
+  const xCtx = await tracedContext();
   const xPage = await xCtx.newPage();
   const userX = await register(xPage, firstNav);
   await subscribeTo(xPage, author);
@@ -213,14 +213,14 @@ test("Audiences: a members fetch error surfaces the error node, not an empty che
 // shared `failServerFn` fault-injection helper (#383, which left this roster branch to #346).
 test("Audiences: a failed subscriber-roster fetch surfaces an error, not an empty roster", async ({
   page,
-  browser,
+  tracedContext,
 }, testInfo) => {
   setTestBudget(120_000);
   const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
   const author = await register(page, firstNav);
 
   // A real subscriber X, so an empty roster would be a lie — the exact #346 bug.
-  const xCtx = await browser.newContext();
+  const xCtx = await tracedContext();
   const xPage = await xCtx.newPage();
   await register(xPage, firstNav);
   await subscribeTo(xPage, author);
@@ -276,7 +276,7 @@ test("Audiences: a genuinely empty roster still shows the empty message", async 
 // in a second context — no fault injection.
 test("Audiences: refresh pulls a mid-session new subscriber into the checklists", async ({
   page,
-  browser,
+  tracedContext,
 }, testInfo) => {
   setTestBudget(120_000);
   const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
@@ -292,7 +292,7 @@ test("Audiences: refresh pulls a mid-session new subscriber into the checklists"
   await expect(friends.getByText("No active subscribers yet.")).toBeVisible();
 
   // A subscriber arrives mid-session (another user's session).
-  const xCtx = await browser.newContext();
+  const xCtx = await tracedContext();
   const xPage = await xCtx.newPage();
   const userX = await register(xPage, firstNav);
   await subscribeTo(xPage, author);

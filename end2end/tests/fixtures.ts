@@ -16,6 +16,7 @@
 import {
   expect,
   test as base,
+  type Browser,
   type BrowserContext,
   type Page,
   type Request,
@@ -249,6 +250,24 @@ export async function applyTestTraceparent(
   });
 }
 
+/**
+ * Mints a browser context already pointed at this test's `e2e.test` span.
+ *
+ * **Use this instead of `browser.newContext()` in specs.** A raw context does not
+ * inherit the config-level `extraHTTPHeaders`, so its traffic carries the run-wide
+ * traceparent from `playwright.config.ts` — indistinguishable across a
+ * `fullyParallel` suite, so every server-fn hit it drives lands in the coverage
+ * gate's orphan bucket instead of being attributed to this test (#681). Calling
+ * `applyTestTraceparent` by hand at each site works too, but it is exactly the
+ * kind of step that gets forgotten; this closes over the ids so it cannot be.
+ *
+ * The caller still owns the context's lifetime (`close()` it as before).
+ * Enforced by the `traced-context` static check.
+ */
+export type NewTracedContext = (
+  options?: Parameters<Browser["newContext"]>[0],
+) => Promise<BrowserContext>;
+
 /** A uniquely-named account provisioned per test. `password` is the literal
  *  `register()` password; `email` is the deterministic unique address this
  *  account uses when it sets/verifies email. */
@@ -265,6 +284,7 @@ const test = base.extend<{
   _autoTestTimeout: void;
   _autoPerfSpan: void;
   testSpanId: string;
+  tracedContext: NewTracedContext;
   firstNav: number;
   registeredPage: Page;
   user: TestUser;
@@ -282,6 +302,18 @@ const test = base.extend<{
   // fixtures, so they cannot read a value minted inside another one.
   testSpanId: async ({}, use) => {
     await use(newSpanId());
+  },
+
+  // The sanctioned way for a spec to open an extra browser context — see
+  // `NewTracedContext`. Closes over this test's trace ids so the traceparent
+  // cannot be omitted at the call site.
+  tracedContext: async ({ browser, testSpanId }, use) => {
+    const { traceId } = traceContextFromEnvironment();
+    await use(async (options) => {
+      const context = await browser.newContext(options);
+      await applyTestTraceparent(context, traceId, testSpanId);
+      return context;
+    });
   },
 
   // Ambient whole-test timeout. `auto`, so it applies to EVERY test; Playwright
@@ -320,13 +352,8 @@ const test = base.extend<{
   // A uniquely-named account, registered in a throwaway context so the test's
   // own `page` stays logged out. Lazy: only provisioned for tests that
   // destructure `user`.
-  user: async ({ browser, testSpanId }, use, testInfo) => {
-    const context = await browser.newContext();
-    await applyTestTraceparent(
-      context,
-      traceContextFromEnvironment().traceId,
-      testSpanId,
-    );
+  user: async ({ tracedContext }, use, testInfo) => {
+    const context = await tracedContext();
     const page = await context.newPage();
     const username = await register(
       page,
@@ -371,21 +398,12 @@ const test = base.extend<{
   // `user` plus the email set-and-verify flow, driven through `mailbox`, all
   // out-of-band so the test's `page` stays logged out. Yields the same
   // credentials; the account now has a verified email.
-  verifiedUser: async (
-    { browser, user, mailbox, testSpanId },
-    use,
-    testInfo,
-  ) => {
+  verifiedUser: async ({ tracedContext, user, mailbox }, use, testInfo) => {
     // The expensive out-of-band setup below (newContext + login + set-email +
     // verify) runs before the test body; the ambient `_autoTestTimeout` auto
     // fixture (which runs before this one) has already scaled the whole-test
     // budget, so this setup is covered without a hand-rolled `setTimeout` here.
-    const context = await browser.newContext();
-    await applyTestTraceparent(
-      context,
-      traceContextFromEnvironment().traceId,
-      testSpanId,
-    );
+    const context = await tracedContext();
     const page = await context.newPage();
     const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 15_000);
     await login(page, user.username, user.password, firstNav);

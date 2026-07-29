@@ -316,7 +316,7 @@ test("editing a published post freezes the slug", async ({
 
 test("draft lifecycle: create, view, edit, and publish", async ({
   page,
-  context,
+  tracedContext,
 }, testInfo) => {
   const firstNavigationTimeoutMs = slowBrowserFirstNavigationTimeoutMs(
     testInfo,
@@ -373,7 +373,7 @@ test("draft lifecycle: create, view, edit, and publish", async ({
     0,
   );
 
-  const guestContext = await context.browser()!.newContext();
+  const guestContext = await tracedContext();
   const guestPage = await guestContext.newPage();
   await goto(guestPage, permalinkUrl, { timeout: firstNavigationTimeoutMs });
   await expect(guestPage.locator("body")).not.toContainText(
@@ -450,7 +450,7 @@ test("per-user timeline lists published posts with pagination", async ({
 
 test("home page shows local timeline for unauthenticated users", async ({
   page,
-  browser,
+  tracedContext,
   firstNav,
 }, testInfo) => {
   const perf = createPerfProbe(testInfo, "home_local_timeline");
@@ -460,14 +460,14 @@ test("home page shows local timeline for unauthenticated users", async ({
     seedPostsViaTool(u1, LOCAL_TIMELINE_AUTHOR_COUNT, "Local Author One");
   });
 
-  const secondContext = await browser.newContext();
+  const secondContext = await tracedContext();
   const secondPage = await secondContext.newPage();
   await perf.timed("seed_author_two", async () => {
     const u2 = await register(secondPage, firstNav);
     seedPostsViaTool(u2, LOCAL_TIMELINE_AUTHOR_COUNT, "Local Author Two");
   });
 
-  const guestContext = await browser.newContext();
+  const guestContext = await tracedContext();
   const guestPage = await guestContext.newPage();
   await goto(guestPage, "/", { timeout: firstNav });
 
@@ -501,7 +501,7 @@ test("home page shows local timeline for unauthenticated users", async ({
 
 test("cockpit /app shows the authenticated home feed with pagination", async ({
   page,
-  browser,
+  tracedContext,
   firstNav,
 }, testInfo) => {
   const perf = createPerfProbe(testInfo, "home_authenticated_feed");
@@ -511,7 +511,7 @@ test("cockpit /app shows the authenticated home feed with pagination", async ({
     seedPostsViaTool(me, HOME_FEED_SELF_COUNT, "Home Feed Mine");
   });
 
-  const secondContext = await browser.newContext();
+  const secondContext = await tracedContext();
   const secondPage = await secondContext.newPage();
   await perf.timed("seed_other", async () => {
     const other = await register(secondPage, firstNav);

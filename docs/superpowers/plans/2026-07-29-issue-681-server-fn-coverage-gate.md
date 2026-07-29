@@ -52,6 +52,7 @@ Task 9) · union aggregation across combos.
 6. Pure coverage extractor (ancestor walk, both signals)
 7. Snapshot + allowlist model, stable serialization, drift compare
 8. The e2e lane — `regenerate`/`verify` a snapshot from a real capture
+   - 8b. Finish Task 4's sweep: trace all 15 spec-level contexts, and gate it
 9. The static lane + registration, seeded by a real run, with the gaps filed
 10. Documentation + CI note
 
@@ -1032,6 +1033,70 @@ the full `cargo xtask check`, so that commit could not land. Under
 `-D dead-code` the _unregistered_ step cannot land either (see the scope
 correction above), so the step's code and its registration both ship in **Task
 9's** commit, atomically with the seeded artifacts that make them green.
+
+---
+
+### Task 8b: Finish Task 4's sweep — every context traced, and gated
+
+**Discovered while executing Task 9 Step 2**, which is exactly where the plan
+said to look ("a per-test orphan means Task 4 or 5 is incomplete, and that must
+be fixed before proceeding rather than allowlisted around").
+
+The first seeding run reported 51/55 covered with **608 orphan hits**, and two
+of the four "uncovered" fns — `subscribe_to`, `unsubscribe_from` — were
+**orphan-only**: hit, but never attributed. Walking the capture, every one of
+those spans had parent span id `1111111111111111` — the _run-wide_ traceparent
+that `flake.nix` builds from `traceDigit` and `playwright.config.ts` installs as
+a static `use.extraHTTPHeaders`. That is the signature of a context created off
+the raw `browser` fixture, which does not inherit config-level headers.
+
+Task 4 shipped `applyTestTraceparent` and its doc even says "Must be called for
+EVERY context a test uses" — but only the two _fixture_ call sites ever called
+it. An enumeration of `newContext(` across `end2end/tests` found **18 sites, 15
+of them untraced**: `audiences.spec.ts` ×3, `visibility.spec.ts` ×7 (two inside
+local `expectPostVisible`/`expectPostHidden` helpers), `posts.spec.ts` ×4 (one
+via `context.browser()!.newContext()`), `invite.spec.ts` ×1.
+
+So the seed would have been wrong in both directions: under-counting coverage,
+and inviting per-gap issues for fns the suite already drives.
+
+**Files:**
+
+- Modify: `end2end/tests/fixtures.ts` — add the `NewTracedContext` type and the
+  `tracedContext` fixture; move `user`/`verifiedUser` onto it
+- Modify: `audiences.spec.ts`, `visibility.spec.ts`, `posts.spec.ts`,
+  `invite.spec.ts` — all 15 sites
+- Create: `xtask/src/steps/traced_context_check.rs`
+- Modify: `xtask/src/lib.rs` — declare and register the check in both arms
+
+- [x] **Step 1: Add the `tracedContext` fixture**
+
+A factory, not another 3-arg helper call: it closes over `traceId`/`testSpanId`
+so the traceparent cannot be omitted at the call site. The caller still owns the
+context's lifetime. `user` and `verifiedUser` move onto it too, so there is one
+implementation rather than three.
+
+- [x] **Step 2: Convert all 15 sites**
+
+`visibility.spec.ts`'s two local helpers took `browser: Browser`; they now take
+`newContext: NewTracedContext`, and the `Browser` type import goes.
+
+- [x] **Step 3: Gate it**
+
+`traced-context` forbids `.newContext(` anywhere under `end2end/tests` except
+`fixtures.ts` (the sanctioned door), keyed on the **method** rather than a
+`browser.` receiver — the `context.browser()!.newContext()` form in
+`posts.spec.ts` would evade a receiver match. Registered in both `check` and
+`validate` arms; unlike the coverage step it is green immediately, so there is
+no dead-code/bootstrap problem.
+
+- [x] **Step 4: Verify**
+
+Run: `devtool run -- cargo xtask check --no-test` Expected: PASS — **actual:
+green, `traced-context — 31 spec file(s) clean`, `tsc` ok**, so the conversion
+typechecks. The real proof is Task 9's re-run: the orphan bucket must collapse.
+
+- [x] **Step 5: Commit**
 
 ---
 

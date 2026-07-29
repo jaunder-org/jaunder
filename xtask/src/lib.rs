@@ -37,6 +37,7 @@ mod steps {
     pub mod static_checks;
     pub mod target_arch_placement_check;
     pub mod test_pattern_check;
+    pub mod traced_context_check;
 }
 pub use result::{CommandResult, Mode, StepResult};
 
@@ -336,6 +337,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::test_pattern_check::run(&mut result);
             steps::server_fn_registrar_check::run(&mut result);
             steps::server_fn_tracing_check::run(Mode::Fix, &mut result);
+            steps::traced_context_check::run(&mut result);
             steps::proffered_secret_check::run(&mut result);
             steps::no_full_reload_check::run(&mut result);
             steps::target_arch_placement_check::run(&mut result);
@@ -371,6 +373,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::test_pattern_check::run(&mut result);
             steps::server_fn_registrar_check::run(&mut result);
             steps::server_fn_tracing_check::run(Mode::Check, &mut result);
+            steps::traced_context_check::run(&mut result);
             steps::proffered_secret_check::run(&mut result);
             steps::no_full_reload_check::run(&mut result);
             steps::target_arch_placement_check::run(&mut result);
