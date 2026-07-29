@@ -17,7 +17,7 @@ link scanner that skips code spans and fenced blocks. Two callers share it:
 `--manifest-path xtask/Cargo.toml`), `anyhow`, `git` via `xtask::git`.
 
 **Spec:**
-[2026-07-29-issue-682-doc-link-integrity.md](../specs/2026-07-29-issue-682-doc-link-integrity.md)
+[2026-07-29-issue-682-doc-link-integrity-spec.md](2026-07-29-issue-682-doc-link-integrity-spec.md)
 — the "what" and "why". This plan is the "how"; decisions are cited as
 **D1**–**D10** and criteria as **AC1**–**AC14** rather than restated.
 
