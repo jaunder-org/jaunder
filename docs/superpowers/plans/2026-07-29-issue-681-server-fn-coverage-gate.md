@@ -590,7 +590,7 @@ git commit -m "feat(e2e): propagate a per-test traceparent to every browser cont
 
 - Consumes: `fixtures.ts`'s exported `test` / `expect` (Task 4).
 
-- [ ] **Step 1: Change the imports**
+- [x] **Step 1: Change the imports**
 
 In both files replace `import { test, expect } from "@playwright/test";` with
 `import { test, expect } from "./fixtures";`. Keep
@@ -610,7 +610,13 @@ the auto fixture was already active: it calls `test.info()` and works under
 either `test` object.) If either spec now exceeds its budget, raise that spec's
 budget rather than reverting the import — the attribution depends on it.
 
-- [ ] **Step 3: Commit**
+**Actual: both green, no budget change needed** — `feeds.spec.ts` 7/7 in 30.4s,
+`atompub.spec.ts` 3/3 in 6.6s. The `page`-fixture/warmup cost the review warned
+about was absorbed by the existing budgets.
+
+- [x] **Step 2: Run both specs**
+
+- [x] **Step 3: Commit**
 
 ```bash
 git add end2end/tests/atompub.spec.ts end2end/tests/feeds.spec.ts
