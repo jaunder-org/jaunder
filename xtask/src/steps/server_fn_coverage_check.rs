@@ -108,7 +108,7 @@ fn regenerate_or_verify(
     let covered = snapshot.covered.len();
 
     if regenerate {
-        let orphans: usize = snapshot.orphans.values().sum();
+        let orphans: usize = snapshot.orphans.values().flat_map(|r| r.values()).sum();
         write_snapshot(snapshot_path, &snapshot)?;
         return Ok(StepResult::ok(name).detail(format!(
             "{covered} covered, {orphans} orphan hit(s) → {}",
@@ -119,7 +119,7 @@ fn regenerate_or_verify(
     // A missing snapshot reads as empty, so it mismatches and fails — the strict
     // reading, not a lenient one.
     let committed = std::fs::read_to_string(snapshot_path).unwrap_or_default();
-    if committed == render(&snapshot) {
+    if committed == render(&snapshot)? {
         return Ok(StepResult::ok(name).detail(format!("{covered} covered; snapshot current")));
     }
     Ok(StepResult::fail(name).detail(format!(
@@ -290,11 +290,15 @@ mod tests {
     // ── Assertions against the real seeding capture (spec AC2/AC11) ──────────
     //
     // The fixture is the `sqlite × chromium` capture the committed allowlist was
-    // derived from, reduced to the spans the extractor actually reads: one hit per
-    // (fn, test) pair, a couple of orphan examples, a few non-`/api/` spans, and
-    // only the handful of attributes `parse_spans`/`extract` consume. That keeps it
-    // ~380 KiB instead of 25 MB while preserving the hit set exactly, which is what
-    // AC11 is about. Per-fn orphan *counts* are therefore NOT preserved — the
+    // derived from, reduced by `testdata/reduce-otel-capture.mjs` to the spans the
+    // extractor actually reads: one hit-chain per (span name + URI path, test)
+    // pair, at most two orphan examples per key, eight non-`/api/` spans, and only
+    // the handful of attributes `parse_spans`/`extract` consume. That keeps it
+    // ~610 KiB instead of 25 MB while preserving the hit set exactly — the same 911
+    // (fn, test) pairs the full capture yields. That preservation is what AC11
+    // rests on, which is why the reduction is committed and re-runnable rather than
+    // described: a reader can regenerate the fixture and diff instead of taking it
+    // on trust. Per-fn orphan *counts* are NOT preserved by the dedup — the
     // committed snapshot's counts come from the full capture.
 
     /// xtask's tests run with the crate dir as cwd, so repo-relative artifact
@@ -305,14 +309,17 @@ mod tests {
 
     const SEED_FIXTURE: &str = "src/server_fn_coverage/testdata/otel-traces-seed.jsonl";
 
-    fn seed_coverage() -> crate::server_fn_coverage::Coverage {
-        let spans = crate::traces::parse::read_spans(
+    fn seed_spans() -> Vec<crate::traces::parse::Span> {
+        crate::traces::parse::read_spans(
             &Path::new(env!("CARGO_MANIFEST_DIR")).join(SEED_FIXTURE),
             &crate::traces::parse::Filters::default(),
         )
-        .expect("the seed fixture parses");
+        .expect("the seed fixture parses")
+    }
+
+    fn seed_coverage() -> crate::server_fn_coverage::Coverage {
         let inv = inventory(&repo_root().join(WEB_SRC)).expect("inventory enumerates");
-        crate::server_fn_coverage::extract(&spans, &inv)
+        crate::server_fn_coverage::extract(&seed_spans(), &inv)
     }
 
     #[test]
@@ -350,43 +357,185 @@ mod tests {
         );
     }
 
+    /// The prefix `#[server]` gives the fn it relocates the annotated body into
+    /// (`server_fn_macro`'s `to_dummy_ident`), and therefore the prefix a derived
+    /// `#[tracing::instrument]` span name carries in a real capture.
+    const DERIVED_SPAN_PREFIX: &str = "__server_";
+
+    /// The eleven `#[server]` fns in `web/src` carrying a `#[tracing::instrument]`,
+    /// and so the only fns the span-name signal can ever find (AC3). Spelled out
+    /// rather than re-derived: this is the *expected* set, and a test that computed
+    /// it the way the extractor does could not disagree with the extractor.
+    const INSTRUMENTED_FNS: &[&str] = &[
+        "backup_warning_visible",
+        "base_url_warning_visible",
+        "get_backup_settings",
+        "get_registration_policy",
+        "get_site_identity",
+        "login",
+        "logout",
+        "register",
+        "session",
+        "update_backup_settings",
+        "update_site_identity",
+    ];
+
+    /// The seed capture with every span's `uri` erased, so whatever `extract` still
+    /// finds got there by the span-name signal alone. Erased rather than dropped:
+    /// removing the request spans would break the ancestor chains an instrument span
+    /// is attributed through, and the lane would look dead for the wrong reason.
+    fn seed_spans_without_uris() -> Vec<crate::traces::parse::Span> {
+        let mut spans = seed_spans();
+        for span in &mut spans {
+            span.uri.clear();
+        }
+        spans
+    }
+
+    /// The seed capture with every non-test span renamed out of `__server_<ident>`
+    /// shape, so whatever `extract` finds got there by the `uri` signal alone.
+    fn seed_spans_without_derived_names() -> Vec<crate::traces::parse::Span> {
+        let mut spans = seed_spans();
+        for span in &mut spans {
+            if span.name != "e2e.test" {
+                span.name = format!("masked.{}", span.name);
+            }
+        }
+        spans
+    }
+
     #[test]
-    fn seed_capture_exercises_both_signals() {
-        // AC2, on real data rather than hand-authored spans: the span-name signal
-        // (only 11 fns carry a derived span) and the `uri` complement must BOTH
-        // contribute, since a silent failure of either would still look plausible.
-        let spans = crate::traces::parse::read_spans(
-            &Path::new(env!("CARGO_MANIFEST_DIR")).join(SEED_FIXTURE),
-            &crate::traces::parse::Filters::default(),
-        )
-        .expect("the seed fixture parses");
+    fn each_signal_finds_fns_on_its_own_in_the_real_capture() {
+        // AC2's "both signals" clause, measured signal-by-signal against real data
+        // instead of inferred from the union. This is the assertion whose absence let
+        // the span-name signal sit dead for the whole cycle: it matched
+        // `<ident>` while every real span is named `__server_<ident>`, and because
+        // `uri` covers the same fns the union looked entirely healthy.
+        let inv = inventory(&repo_root().join(WEB_SRC)).expect("inventory enumerates");
+        let by_name = crate::server_fn_coverage::extract(&seed_spans_without_uris(), &inv);
+        let by_uri = crate::server_fn_coverage::extract(&seed_spans_without_derived_names(), &inv);
 
-        let named = spans
-            .iter()
-            .filter(|s| !crate::traces::parse::get_attr(&s.raw, "code.namespace").is_empty())
-            .count();
-        assert!(
-            named > 0,
-            "no span carries code.namespace — span-name signal is untested"
+        // Signal 1 alone must find exactly the instrumented fns — no more (nothing
+        // else emits a derived span) and no fewer (a module-check or prefix
+        // regression drops them).
+        let found: Vec<&String> = by_name.covered.keys().collect();
+        assert_eq!(
+            found, INSTRUMENTED_FNS,
+            "the span-name signal alone must cover exactly the instrumented fns"
         );
 
-        let api = spans.iter().filter(|s| s.uri.contains("/api/")).count();
-        assert!(
-            api > 0,
-            "no span carries an /api/ uri — uri signal is untested"
-        );
+        // Signal 2 alone must find fns signal 1 structurally cannot: neither
+        // `create_post` nor `upload_media` carries a `#[tracing::instrument]`, so no
+        // span in any capture bears their name. `upload_media` is the sharper case —
+        // it declares `#[server(input = MultipartFormData, endpoint =
+        // "/upload_media")]`, so anything reading `endpoint` as the attribute's first
+        // argument loses it silently.
+        for ident in ["create_post", "upload_media"] {
+            assert!(
+                by_uri.covered.contains_key(ident),
+                "{ident} must be covered by the uri signal alone"
+            );
+            assert!(
+                !by_name.covered.contains_key(ident),
+                "{ident} emits no derived span, so the span-name signal must not \
+                 claim it"
+            );
+        }
 
         // No query-string assertion here: every server fn this suite drives is a
         // POST, so not one of the full capture's 2175 `/api/` URIs carries a `?`.
         // Query stripping stays pinned on the hand-authored `coverage-sample.jsonl`
         // — asserting it against real data would only pin its absence.
+    }
 
-        // Non-`/api/` traffic is present and must not be attributed to any fn.
+    #[test]
+    fn the_derived_span_names_carry_the_module_the_check_compares() {
+        // Guards the reduction as much as the extractor: signal 1 refuses a hit it
+        // cannot place in the right module, so a fixture that kept the
+        // `__server_*` spans but dropped their `code.namespace` would silently
+        // fall back to `uri` for everything.
+        for span in seed_spans()
+            .iter()
+            .filter(|s| s.name.starts_with(DERIVED_SPAN_PREFIX))
+        {
+            let namespace = crate::traces::parse::get_attr(&span.raw, "code.namespace");
+            assert!(
+                namespace.starts_with("web::"),
+                "{} lost its web:: code.namespace: {namespace:?}",
+                span.name
+            );
+        }
+    }
+
+    #[test]
+    fn the_fixture_keeps_non_api_traffic_as_the_negative_case() {
+        // Static assets and feeds must be present and attributed to no fn, or
+        // "nothing spurious is counted" is untested against real traffic.
+        let spans = seed_spans();
         assert!(
             spans
                 .iter()
                 .any(|s| !s.uri.is_empty() && !s.uri.contains("/api/")),
             "no non-/api/ traffic in the fixture — the negative case is untested"
+        );
+    }
+
+    // ── AC16: the committed artifacts must not invalidate the e2e checks ─────────
+
+    /// Every string literal the app source filter (`flake.nix`'s top-level `src`,
+    /// the tree the e2e VM checks build from) matches paths against. Pinned as a
+    /// whole set rather than probed for the absence of "docs": a filter that began
+    /// admitting the coverage artifacts would do it through a *new* literal —
+    /// `".json"`, say — that a search for "docs" would sail straight past.
+    const APP_SRC_FILTER_LITERALS: &[&str] =
+        &["/xtask/", ".sql", ".css", "csr/index.html", "scripts/.*"];
+
+    /// The `flake.nix` block whose filter decides the app source tree, delimited by
+    /// its opening `cleanSourceWith` and the closing brace at that indent.
+    fn app_src_filter_block(flake: &str) -> &str {
+        let (_, rest) = flake
+            .split_once("        src = pkgs.lib.cleanSourceWith {")
+            .expect("flake.nix declares the app source filter");
+        let (block, _) = rest
+            .split_once("\n        };")
+            .expect("the filter block closes at its own indent");
+        block
+    }
+
+    #[test]
+    fn the_e2e_checks_source_filter_still_excludes_the_coverage_artifacts() {
+        // AC16: regenerating `docs/coverage/*.json` must leave the four e2e VM
+        // checks' input hashes untouched. It does because the app source filter is an
+        // ALLOWLIST — a path enters only by matching one of the literals above, and
+        // no `docs/…json` path matches any of them — and because `e2ePackage` roots
+        // at `./end2end`, which cannot contain `docs/`.
+        //
+        // This is a PROXY and does not prove AC16. It asserts the *reason* the drv
+        // hashes are stable, not the hashes: only comparing
+        // `nix eval --raw .#checks.x86_64-linux.e2e-sqlite-chromium.drvPath` across
+        // the change proves that, and a `nix eval` is far too slow for the
+        // per-commit gate. What it does buy is that no filter edit can quietly widen
+        // the admitted set — a new clause reddens here and has to be argued against
+        // AC16 explicitly.
+        let flake = std::fs::read_to_string(repo_root().join("flake.nix")).expect("flake.nix");
+        let block = app_src_filter_block(&flake);
+
+        let literals: Vec<&str> = block
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .filter(|l| !l.is_empty())
+            .collect();
+        assert_eq!(
+            literals, APP_SRC_FILTER_LITERALS,
+            "the app source filter's match literals changed — if the new one can \
+             admit a docs/ path, regenerating the coverage snapshot now rebuilds the \
+             four e2e VMs (AC16)"
+        );
+
+        assert!(
+            flake.contains("src = ./end2end;"),
+            "e2ePackage must stay rooted at ./end2end; a wider root could pull in docs/"
         );
     }
 

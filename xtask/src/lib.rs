@@ -7,6 +7,7 @@ mod adr_readme;
 mod audit_wasm;
 pub mod coverage;
 mod doc_links;
+mod files;
 pub mod git;
 mod ids;
 mod nix_build;

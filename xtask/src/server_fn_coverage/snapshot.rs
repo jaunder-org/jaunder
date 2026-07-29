@@ -13,6 +13,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::Coverage;
@@ -27,10 +28,12 @@ pub const REGENERATE_CMD: &str = "cargo xtask server-fn-coverage regenerate";
 pub struct Snapshot {
     /// fn ident → the tests that drove it, sorted.
     pub covered: BTreeMap<String, Vec<String>>,
-    /// fn ident → hits that reached no test. Reported, not failed: a non-empty
-    /// bucket means the harness stopped attributing, which is worth seeing.
+    /// fn ident → why-unattributed → hit count. Reported, not failed: a non-empty
+    /// bucket means the harness stopped attributing somewhere, which is worth
+    /// seeing — and the reason key is what makes it diagnosable rather than just
+    /// visible (spec AC5). See `OrphanReason`.
     #[serde(default)]
-    pub orphans: BTreeMap<String, usize>,
+    pub orphans: BTreeMap<String, BTreeMap<String, usize>>,
 }
 
 impl From<Coverage> for Snapshot {
@@ -58,13 +61,19 @@ pub struct AllowlistEntry {
 
 /// Render a snapshot to the exact bytes committed: stably-ordered, pretty-printed
 /// JSON with a trailing newline.
-pub fn render(snapshot: &Snapshot) -> String {
+///
+/// Fallible rather than lossy. A serialization failure used to fall back to an empty
+/// `{"covered":{},"orphans":{}}`, which `regenerate` would then *write*: the committed
+/// snapshot would say nothing is covered, and the next `verify` would agree with it.
+/// That is the exact false verdict this gate exists to prevent, so the error
+/// propagates.
+pub fn render(snapshot: &Snapshot) -> Result<String> {
     // BTreeMap serializes in key order, and `to_string_pretty` is deterministic,
     // so equal snapshots render byte-identically.
     let mut out = serde_json::to_string_pretty(snapshot)
-        .unwrap_or_else(|_| "{\"covered\":{},\"orphans\":{}}".to_string());
+        .context("serializing the server-fn coverage snapshot")?;
     out.push('\n');
-    out
+    Ok(out)
 }
 
 /// Every reason the gate should fail, one message per violation, sorted. Empty
@@ -192,7 +201,7 @@ mod tests {
     fn render_is_byte_stable_across_equal_snapshots() {
         let a = covered_with(&["b_fn", "a_fn"]);
         let b = covered_with(&["a_fn", "b_fn"]);
-        assert_eq!(render(&a), render(&b));
+        assert_eq!(render(&a).expect("renders"), render(&b).expect("renders"));
     }
 
     #[test]
@@ -200,14 +209,16 @@ mod tests {
         let mut s = Snapshot::default();
         s.covered.insert("z_fn".into(), vec!["t".into()]);
         s.covered.insert("a_fn".into(), vec!["t".into()]);
-        let out = render(&s);
+        let out = render(&s).expect("renders");
         let (a, z) = (out.find("a_fn"), out.find("z_fn"));
         assert!(a < z, "keys must render in sorted order: {out}");
     }
 
     #[test]
     fn render_ends_with_a_newline() {
-        assert!(render(&Snapshot::default()).ends_with('\n'));
+        assert!(render(&Snapshot::default())
+            .expect("renders")
+            .ends_with('\n'));
     }
 
     #[test]
@@ -310,7 +321,8 @@ mod tests {
     #[test]
     fn snapshot_round_trips_through_json() {
         let s = covered_with(&["a", "b"]);
-        let back: Snapshot = serde_json::from_str(&render(&s)).expect("round-trips");
+        let back: Snapshot =
+            serde_json::from_str(&render(&s).expect("renders")).expect("round-trips");
         assert_eq!(s, back);
     }
 }

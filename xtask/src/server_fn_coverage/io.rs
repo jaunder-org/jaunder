@@ -6,11 +6,12 @@
 //! mechanism dishonest, since the failure mode it is guarding against and the
 //! failure mode of its own plumbing would look identical.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 
 use super::{extract, render, AllowlistEntry, Coverage, Snapshot};
+use crate::files;
 use crate::server_fns::{module_path_of, server_fns_in, ServerFn};
 use crate::traces::parse::{parse_spans, Filters};
 
@@ -27,10 +28,8 @@ pub const CAPTURE_PATH: &str = ".xtask/diagnostics/e2e-sqlite-chromium/capture-s
 /// enumerated is a hard error: a file we cannot read could hide a fn, and an
 /// under-counted inventory is exactly a false pass.
 pub fn inventory(root: &Path) -> Result<Vec<ServerFn>> {
-    let mut files = Vec::new();
-    rust_files(root, &mut files)
+    let files = files::with_extension(root, "rs")
         .with_context(|| format!("scanning {} for #[server] fns", root.display()))?;
-    files.sort();
 
     let mut out = Vec::new();
     for path in &files {
@@ -44,18 +43,6 @@ pub fn inventory(root: &Path) -> Result<Vec<ServerFn>> {
     }
     out.sort_by(|a, b| a.ident.cmp(&b.ident));
     Ok(out)
-}
-
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let path = entry?.path();
-        if path.is_dir() {
-            rust_files(&path, out)?;
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
-        }
-    }
-    Ok(())
 }
 
 /// Derive coverage from raw OTLP JSONL. Empty or unparseable content is an error,
@@ -119,7 +106,7 @@ pub fn write_snapshot(path: &Path, snapshot: &Snapshot) -> Result<()> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
     }
-    std::fs::write(path, render(snapshot)).with_context(|| format!("writing {}", path.display()))
+    std::fs::write(path, render(snapshot)?).with_context(|| format!("writing {}", path.display()))
 }
 
 #[cfg(test)]
