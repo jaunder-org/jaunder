@@ -60,8 +60,15 @@ this file as you go.
 - Run `cargo xtask check` before each commit (the pre-commit hook runs it
   anyway; running it first leaves a clean staged state). See
   **`jaunder-commit`**. **No `Co-Authored-By` trailer.**
-- The media component is wasm-only: after T5, run
-  `cargo clippy -p web --target wasm32-unknown-unknown --all-features -- -D warnings`.
+- The media component is wasm-only, so the host `clippy` never sees it. Lint it
+  with `cargo xtask check --no-test`, whose `wasm-clippy` step carries the right
+  flags. **Corrected mid-execution:** an earlier draft of this line said
+  `cargo clippy -p web --target wasm32-unknown-unknown --all-features`, which
+  fails in `mio` — `--all-features` pulls the server/tokio-net feature set onto
+  the wasm target. The real invocation is
+  `-p web -p client -p csr --features csr --target wasm32-unknown-unknown` (see
+  `xtask/src/steps/static_checks.rs:58-90`); prefer the xtask step over retyping
+  it.
 - Storage tests are dual-backend per ADR-0053 / `CONTRIBUTING.md`; a bare
   `#[tokio::test]` that should be dual-backend fails the `test-backend-pattern`
   guard.
@@ -89,7 +96,12 @@ truncate-vs-reject. Label `type-safety`; milestone #13.
 
 ## T2 — `media_path` percent-encodes the filename; both fns take typed args
 
-- [ ] Done
+- [x] Done — `b8135f95`. Verified the encoding test genuinely goes red first
+      (reverted the encode line, saw `a b.txt must encode to a%20b.txt` FAIL,
+      restored). **Scope added:** `encode_filename_segment` is public, because
+      `server/src/atompub/media.rs` interpolated the filename raw into the media
+      member URL too — the same defect, and that URL is the entry's `atom:id`.
+      Both now share one set.
 
 **Files**
 
@@ -179,7 +191,9 @@ fn media_path_encodes_whitespace_and_url_structural_characters() {
 
 ## T3 — Route `resolve_media_path` through `media_path` (D2a)
 
-- [ ] Done
+- [x] Done — `189bc270`. All eight `resolve_media_path` tests pass, including
+      the pre-existing traversal and `p1`/`p2`-mismatch rejections through the
+      new path.
 
 **Files**
 
@@ -235,7 +249,12 @@ unchanged — `photo.jpg` encodes to itself.
 
 ## T4 — `media_url` → `RootRelativeUrl` and the consumer cascade
 
-- [ ] Done
+- [x] Done — `79bdddcd`, **together with T5**. The plan had them separate; that
+      was wrong. `component.rs` is wasm-only, so the host compiler never
+      type-checks its signal, callback prop, or view helpers — T4 alone would
+      have left the wasm build broken and the host gate green. Only
+      `wasm-clippy` catches it. Coverage needed no `cov:ignore` for the
+      `unreachable!` arm after all.
 
 The type change and its consumers must land together: an intermediate state
 would need `.to_string()` scaffolding at every DTO boundary.
@@ -317,7 +336,10 @@ fn media_url_does_not_truncate_at_a_query_or_fragment_character() {
 
 ## T5 — Web component holds `Option<RootRelativeUrl>`
 
-- [ ] Done
+- [x] Done — folded into `79bdddcd` (see T4). The callback prop became
+      `Callback<RootRelativeUrl>` too: its only caller is in the same file and
+      discards the value, so typing it cost nothing and keeps a future consumer
+      from getting a stringly URL.
 
 **Files**
 
@@ -337,7 +359,14 @@ so stringify at the view site per the existing idiom in
 
 ## T6 — `MediaRecord.source_url` → `Option<AbsoluteUrl>` (D9)
 
-- [ ] Done
+- [x] Done — `73bd38d`. **Two** dual-backend tests, not one: the planned
+      normalization round-trip, plus a raw-SQL-inserted `'not a url'` that must
+      fail to decode. The first alone would not have shown the bridge
+      _validates_ — normalization happens at parse time, so a raw-text column
+      would pass it too. The bind needed an explicit
+      `for<'q> Option<AbsoluteUrl>: Encode + Type` bound (replacing
+      `Option<String>`); the newtype's own impls follow from the existing
+      `String` bounds, but the `Option` wrapper must be named.
 
 **Files**
 
@@ -370,7 +399,13 @@ existing dual-backend macro/template — do not write a bare `#[tokio::test]`.
 
 ## T7 — Write-then-serve and end-to-end coverage
 
-- [ ] Done
+- [x] Done — `dbfa184d`. `media.spec.ts` (7 passed) and `atompub.spec.ts` (3
+      passed) run locally via `cargo xtask e2e-local`. The AtomPub assertion
+      targets `href`/`src` attributes rather than the whole body: `<title>`
+      legitimately carries the raw display name, so a blanket "no whitespace"
+      check would have been wrong. Note: bare `cargo nextest` reports a false
+      `ConnectionRefused` for the postgres cases — it does not provision the
+      database; the xtask gate does.
 
 Unit tests prove the functions agree; this proves the _bytes on disk_ agree with
 the _URL served_, which is the property D2/D2a actually buy.
@@ -398,7 +433,11 @@ encoding, which is finding 8 — the reason the defect survived.
 
 ## T8 — ADR draft: media URL / on-disk / DB naming correspondence
 
-- [ ] Done
+- [x] Done — drafted at `docs/adr/drafts/media-path-naming-correspondence.md`,
+      referenced from `common/src/media.rs`'s module docs. The draft itself is
+      **not committed**: the drafts pen is gitignored so a number is never
+      picked by hand; `cargo xtask adr promote` numbers it and rewrites the
+      reference at ship.
 
 No existing ADR owns the media storage layout — it lives only in
 `common/src/media.rs` module docs, and the three-way correspondence this issue

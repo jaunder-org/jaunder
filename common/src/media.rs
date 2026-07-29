@@ -12,7 +12,7 @@
 //! hex digest — a two-level fan-out that keeps any single directory small.
 //! `source` distinguishes provenance (e.g. `upload` vs a remote cache).
 //!
-//! The `<filename>` segment is **percent-encoded** ([`MEDIA_SEGMENT`]), so the URL path
+//! The `<filename>` segment is **percent-encoded** ([`MEDIA_SEGMENT_ENCODE_SET`]), so the URL path
 //! and the on-disk path are byte-identical: paste the tail of a serve URL and you have the
 //! path to the file. Both come from [`media_path`], which is the only place the layout is
 //! spelled — so a new consumer must call it rather than re-deriving, or the two spellings
@@ -24,6 +24,9 @@
 //! Encoding is not cosmetic. A `Filename` may legally contain a space (which
 //! [`crate::root_relative_url::RootRelativeUrl`] rejects) or a `?`/`#` (which it *accepts*,
 //! silently truncating the path at the delimiter and addressing a different file).
+//!
+//! The three spellings of a filename (raw in the database, encoded on disk and in URLs) and
+//! why they are what they are: `docs/adr/drafts/media-path-naming-correspondence.md`.
 //!
 //! # Untrusted input
 //!
@@ -280,14 +283,14 @@ crate::db_enum::impl_text_column_enum!(MediaSource);
 /// name has to stay greppable and paste-able from a URL. Bare [`NON_ALPHANUMERIC`] would
 /// yield `my%2Dphoto%2Ejpg` and make every stored file unreadable. (`content_disposition`
 /// in the `server` crate *does* use the bare set; correct there, wrong here.)
-const MEDIA_SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
+const MEDIA_SEGMENT_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'-')
     .remove(b'.')
     .remove(b'_')
     .remove(b'~');
 
 /// Percent-encodes `filename` for use as a single URL or filesystem path segment, via
-/// [`MEDIA_SEGMENT`].
+/// [`MEDIA_SEGMENT_ENCODE_SET`].
 ///
 /// Public because the media serve path is not the only place a [`Filename`] becomes a path
 /// segment — the `AtomPub` media member URL does it too — and both must use the *same* set
@@ -296,14 +299,14 @@ const MEDIA_SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
 /// nothing-to-encode case.
 #[must_use]
 pub fn encode_filename_segment(filename: &Filename) -> impl std::fmt::Display + '_ {
-    utf8_percent_encode(filename, MEDIA_SEGMENT)
+    utf8_percent_encode(filename, MEDIA_SEGMENT_ENCODE_SET)
 }
 
 /// Returns `"<source>/<p1>/<p2>/<full-sha256>/<filename>"`, the content-
 /// addressed layout described in the module docs — the **single** definition of that
 /// layout, for both the on-disk path and the serve URL.
 ///
-/// The filename segment is percent-encoded ([`MEDIA_SEGMENT`]), so this is what the file is
+/// The filename segment is percent-encoded ([`MEDIA_SEGMENT_ENCODE_SET`]), so this is what the file is
 /// named on disk, not just what appears in a URL. Callers must not re-derive the layout:
 /// the read path and the write path agreeing is exactly what makes the encoding safe.
 ///
@@ -322,7 +325,11 @@ pub fn media_path(source: &MediaSource, sha256: &ContentHash, filename: &Filenam
 }
 
 /// Returns `"/media/<source>/<2-hex-p1>/<2-hex-p2>/<full-sha256>/<filename>"` — the
-/// [`media_path`] layout under the serve prefix, filename segment percent-encoded.
+/// [`media_path`] layout under the serve prefix.
+///
+/// The filename segment is percent-encoded, and because that encoding lives in
+/// [`media_path`] this URL's tail **is** the path to the file on disk, byte for byte. Do not
+/// re-derive either one; see [`media_path`] for why the two must not drift.
 ///
 /// Infallible by construction, so it returns the newtype rather than a `Result`: see the
 /// body for why the parse cannot fail.
@@ -650,12 +657,14 @@ mod tests {
         assert!(sanitize_filename("..").is_empty());
     }
 
-    /// The canonical hash and a parsed [`Filename`], the two typed arguments every
-    /// layout test needs. Panic-free (`Result`-mapped), so it needs no lint exception.
+    /// The canonical hash and a parsed [`Filename`], the two typed arguments every layout
+    /// test needs. Both go through the shared `test_support` parse doors rather than
+    /// re-spelling the parse here.
     fn layout_args(name: &str) -> (ContentHash, Filename) {
-        let hash: ContentHash = CANONICAL.parse().expect("CANONICAL is a valid hash");
-        let filename: Filename = name.parse().expect("test names are canonical leaves");
-        (hash, filename)
+        (
+            crate::test_support::parse_content_hash(CANONICAL),
+            crate::test_support::parse_filename(name),
+        )
     }
 
     #[test]
@@ -671,41 +680,34 @@ mod tests {
         let url = media_url(&MediaSource::Upload, &hash, &filename);
         assert_eq!(
             url,
-            *format!("/media/upload/e3/b0/{CANONICAL}/photo.jpg").as_str()
+            format!("/media/upload/e3/b0/{CANONICAL}/photo.jpg").as_str()
         );
     }
 
+    /// What `media_url` adds over [`media_path`] is the **type**: the exact encoding of each
+    /// name is pinned once, by `media_path`'s own tests. So these assert only that a
+    /// `RootRelativeUrl` exists at all for names that could not be one, and that no URL
+    /// delimiter survives into it.
     #[test]
-    fn media_url_is_representable_for_a_filename_containing_a_space() {
-        // Without encoding this is not a `RootRelativeUrl` at all — the type rejects
-        // whitespace — which is what blocked typing the serve URL in the first place.
-        let (hash, filename) = layout_args("a b.txt");
-        let url = media_url(&MediaSource::Upload, &hash, &filename);
-        assert!(!url.contains(' '), "no raw space may survive: {url}");
-        assert_eq!(
-            url,
-            *format!("/media/upload/e3/b0/{CANONICAL}/a%20b.txt").as_str()
-        );
-    }
-
-    #[test]
-    fn media_url_does_not_truncate_at_a_query_or_fragment_character() {
-        // The failure the newtype cannot catch: `RootRelativeUrl` *accepts* `?`, so an
-        // unencoded `what?.png` would validate while addressing a different file.
-        for (raw, encoded) in [("what?.png", "what%3F.png"), ("a#b.png", "a%23b.png")] {
+    fn media_url_is_representable_for_names_the_newtype_would_otherwise_reject() {
+        // A space makes the value unrepresentable — `RootRelativeUrl` rejects whitespace —
+        // which is what blocked typing the serve URL in the first place. `?`/`#` are the
+        // failure the newtype *cannot* catch: it accepts a query, so an unencoded
+        // `what?.png` would validate while addressing a different file.
+        for raw in ["a b.txt", "what?.png", "a#b.png"] {
             let (hash, filename) = layout_args(raw);
             let url = media_url(&MediaSource::Upload, &hash, &filename);
             assert!(
-                !url.contains('?') && !url.contains('#'),
-                "{raw} must not keep a URL delimiter: {url}"
+                !url.contains(' ') && !url.contains('?') && !url.contains('#'),
+                "{raw} must not carry whitespace or a URL delimiter: {url}"
             );
-            assert!(url.ends_with(encoded), "{raw} → {url}");
+            assert!(url.starts_with("/media/upload/"), "{raw} → {url}");
         }
     }
 
     #[test]
     fn media_path_leaves_ordinary_names_byte_identical() {
-        // Pins `MEDIA_SEGMENT`'s unreserved-mark carve-out. With bare NON_ALPHANUMERIC
+        // Pins `MEDIA_SEGMENT_ENCODE_SET`'s unreserved-mark carve-out. With bare NON_ALPHANUMERIC
         // these become `my%2Dphoto%2Ejpg` and every file on disk is unreadable.
         for name in ["photo.jpg", "my-photo_2.png", "a~b.txt", "IMG1234.JPEG"] {
             let (hash, filename) = layout_args(name);
