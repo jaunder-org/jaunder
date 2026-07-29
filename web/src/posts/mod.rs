@@ -30,7 +30,7 @@ mod parse;
 // Re-exported at the (public) `crate::posts::…` path so the pure `parse` fns are
 // reachable exported items on the host build too — consumed only by the wasm-only
 // `component`, an unexported `parse` fn would fail the host build as `dead_code`.
-pub use parse::{draft_row_display, parse_permalink_params, DraftRowDisplay};
+pub use parse::{draft_row_display, parse_permalink_route, DraftRowDisplay, PermalinkRoute};
 
 // The API surface — re-exported so external call sites and the server-fn
 // registrar keep the stable `crate::posts::…` paths despite living in `api.rs`.
@@ -61,8 +61,8 @@ pub use server::post_response;
 // The wasm-only reactive UI (ADR-0070): the post widgets and the routed page
 // components (moved from `pages/`, #323). Re-exported so the `pages/` router keeps
 // the stable `crate::posts::…` paths; the private helpers (`marker_matches`,
-// `audience_checkbox`, `permalink_first_paint`, the
-// `render_draft_row` builder) stay unexported.
+// `audience_checkbox`, `permalink_first_paint`, the `render_draft_row` builder) and the
+// private `DraftList` subcomponent stay unexported.
 #[cfg(target_arch = "wasm32")]
 pub use component::{
     AudiencePicker, ComposerFields, CreatePostPage, DraftsPage, EditPostPage, InlineComposer,

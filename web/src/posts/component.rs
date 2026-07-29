@@ -27,9 +27,9 @@ use crate::media::MediaUpload;
 // is named here only so a future author does not add it to the list.
 use crate::posts::{
     draft_row_display, get, get_audience_selection, get_default_audience_selection, get_preview,
-    list_by_tag, list_by_user, list_by_user_and_tag, list_drafts, parse_permalink_params, Create,
-    CreateArgs, CreateResult, Delete, DraftRowDisplay, DraftSummary, Publish, PublishResult,
-    Unpublish, UpdateArgs, UpdateResult,
+    list_by_tag, list_by_user, list_by_user_and_tag, list_drafts, parse_permalink_route, Create,
+    CreateArgs, CreateResult, Delete, DraftRowDisplay, DraftSummary, PermalinkRoute, Publish,
+    PublishResult, Unpublish, UpdateArgs, UpdateResult,
 };
 use crate::subscriptions::SubscribeButton;
 use crate::taglist::TagCtx as TagContext;
@@ -45,9 +45,38 @@ use common::seed::{PageSeed, PostResponse, TagSummary, TimelinePostSummary};
 use common::slug::Slug;
 use common::tag::Tag;
 use common::time::utc_instant_from_local;
-use common::time::PermalinkDate;
 use common::username::Username;
 use common::visibility::{AudienceBase, AudienceSelection};
+
+/// Register an `Effect` that runs `on_ok` with the resolved value each time `resolved`
+/// settles to a success.
+///
+/// Every async lifecycle hook in this vertical spelled out the same shape —
+/// `if let Some(Ok(v)) = <resource-or-action>.get() { … }` — a branch over "not yet"
+/// and "failed" that says nothing about the component it sat in. Taking the read as a
+/// closure serves both `Resource::get` and `ServerAction::value().get()` without naming
+/// either type, and keeps the branch out of the component bodies (#306). The read stays
+/// *inside* the effect, so the reactive dependency is unchanged.
+fn on_settled_ok<T, E, R, F>(resolved: R, on_ok: F)
+where
+    R: Fn() -> Option<Result<T, E>> + 'static,
+    F: Fn(T) + 'static,
+{
+    Effect::new(move |_| {
+        if let Some(value) = resolved().and_then(Result::ok) {
+            on_ok(value);
+        }
+    });
+}
+
+/// Fire an optional parent callback, if the caller supplied one. Hoisted out of the
+/// component bodies for the same reason as [`on_settled_ok`]: the `Option` branch is
+/// caller plumbing, not component logic (#306).
+fn notify(callback: Option<Callback<()>>) {
+    if let Some(cb) = callback {
+        cb.run(());
+    }
+}
 
 /// The `.j-seg` Markdown/Org format toggle, shared by every post editor. Renders one
 /// button per user-selectable `PostFormat` — those carrying a `strum` editor message;
@@ -233,27 +262,24 @@ pub fn PostCard(
     let publish_action = ServerAction::<Publish>::new();
     let deleted = RwSignal::new(false);
 
-    Effect::new(move |_| {
-        if let Some(Ok(())) = delete_action.value().get() {
+    on_settled_ok(
+        move || delete_action.value().get(),
+        move |()| {
             deleted.set(true);
-            if let Some(cb) = on_mutate {
-                cb.run(());
-            }
-        }
-    });
-    Effect::new(move |_| {
-        if let Some(Ok(())) = unpublish_action.value().get() {
-            let cb = on_unpublish.or(on_mutate);
-            if let Some(cb) = cb {
-                cb.run(());
-            }
-        }
-    });
+            notify(on_mutate);
+        },
+    );
+    on_settled_ok(
+        move || unpublish_action.value().get(),
+        // Unpublish prefers its own callback and falls back to the shared mutate one.
+        move |()| notify(on_unpublish.or(on_mutate)),
+    );
     // Client-only navigation side-effect (web-style-guide §9): react to the
     // resolved publish action, mirroring EditPostPage's publish redirect.
     let navigate = use_navigate();
-    Effect::new(move |_| {
-        if let Some(Ok(published)) = publish_action.value().get() {
+    on_settled_ok(
+        move || publish_action.value().get(),
+        move |published: PublishResult| {
             // Publishing can move the permalink (a draft's URL is created_at-based;
             // once published it becomes published_at-based), so navigate client-side to
             // the server-returned canonical permalink rather than the now-stale current
@@ -262,11 +288,9 @@ pub fn PostCard(
             // resource — otherwise a permalink page would keep showing the draft state
             // (#592). The unpublish path navigates to /drafts; this is its mirror.
             navigate(&published.permalink, NavigateOptions::default());
-            if let Some(cb) = on_publish {
-                cb.run(());
-            }
-        }
-    });
+            notify(on_publish);
+        },
+    );
 
     // The primary lifecycle action adapts to draft state (#23): a draft gets
     // Publish (dispatching Publish behind a confirm), a published post keeps
@@ -486,22 +510,23 @@ pub fn PostCreateForm(
     // render immediately (no Suspense), so seed the editable `audience` signal
     // once the Resource resolves, over the Public placeholder above. The author
     // can then edit the selection via `AudiencePicker`.
-    Effect::new(move |_| {
-        if let Some(Ok(default)) = default_audience.get() {
-            audience.set(default);
-        }
-    });
+    on_settled_ok(
+        move || default_audience.get(),
+        move |default| audience.set(default),
+    );
 
-    Effect::new(move |_| {
-        if let Some(Ok(ref created)) = create_action.value().get() {
-            let created = created.clone();
+    // A successful create hands the result to the parent and empties the composer for
+    // the next post.
+    on_settled_ok(
+        move || create_action.value().get(),
+        move |created| {
             on_success.run(created);
             body.set(String::new());
             summary_field.reset();
             publish_at.set(String::new());
             tags.set(Vec::new());
-        }
-    });
+        },
+    );
 
     if compact {
         let dispatch_save = move |_| {
@@ -901,11 +926,11 @@ fn permalink_first_paint(seed_post: Option<PostResponse>) -> AnyView {
     }
 }
 
-/// `PostPage`'s resource key: the decoded permalink params plus a refetch tick. The tick
+/// `PostPage`'s resource key: the decoded permalink route plus a refetch tick. The tick
 /// is folded into the key (not merely tracked) so an in-place publish — same URL, so the
-/// params are unchanged — still changes the key and forces a re-fetch (#592). Named to
-/// keep the fetcher signature clear of `clippy::type_complexity`.
-type PermalinkFetchKey = (Option<Username>, Option<PermalinkDate>, Option<Slug>, u32);
+/// route is unchanged — still changes the key and forces a re-fetch (#592). Named so the
+/// fetcher's parameter reads as one thing.
+type PermalinkFetchKey = (Option<PermalinkRoute>, u32);
 
 #[component]
 pub fn PostPage() -> impl IntoView {
@@ -921,12 +946,12 @@ pub fn PostPage() -> impl IntoView {
 
     let params = use_params_map();
 
-    let post_data = move || {
+    let route = move || {
         let params = params.get();
         // Decode the permalink route params into typed values client-side so
         // `get` takes a typed `Slug`/`Username` (ADR-0063 §4). The pure
-        // decoder is host-tested in `super::parse`.
-        parse_permalink_params(
+        // all-or-nothing decoder is host-tested in `super::parse`.
+        parse_permalink_route(
             params.get("username").as_deref(),
             params.get("year").as_deref(),
             params.get("month").as_deref(),
@@ -937,34 +962,21 @@ pub fn PostPage() -> impl IntoView {
 
     // Bump to force a refetch when the post mutates in place (a same-URL publish, where
     // navigation is a no-op — see the publish effect in `PostCard`). Folded into the
-    // resource key alongside the route params (#592).
+    // resource key alongside the route (#592).
     let refetch = RwSignal::new(0u32);
     let post = Resource::new(
-        move || {
-            let (username, date, slug) = post_data();
-            (username, date, slug, refetch.get())
-        },
-        |(username, date, slug, _): PermalinkFetchKey| async move {
-            let Some(username) = username else {
-                // A `~`-prefixed but unparseable username is a malformed permalink, so
-                // 404 client-side without a round-trip — matching the invalid-slug arm
-                // below. The route's `TildeUsername` segment guarantees the `~`, so a
-                // non-`~` server URL (e.g. /media/…) never reaches this page at all; the
-                // old reload escape hatch is gone (#592).
+        move || (route(), refetch.get()),
+        |(route, _): PermalinkFetchKey| async move {
+            let Some(route) = route else {
+                // A malformed permalink — an unparseable username, an absent/non-numeric/
+                // impossible date, or an unparseable slug — names no post that could
+                // exist, so 404 client-side without a round-trip. The route's
+                // `TildeUsername` segment guarantees the `~`, so a non-`~` server URL
+                // (e.g. /media/…) never reaches this page at all; the old reload escape
+                // hatch is gone (#592).
                 return Err(WebError::validation("Invalid permalink"));
             };
-            // An absent, non-numeric, or impossible date names no post: 404
-            // client-side without a round-trip, beside the username/slug arms.
-            let Some(date) = date else {
-                return Err(WebError::validation("Invalid permalink"));
-            };
-            // A '~'-prefixed permalink with an unparseable slug is a malformed
-            // permalink (not a server URL): 404 client-side without calling the
-            // server, matching the pre-typing behavior where get rejected it.
-            let Some(slug) = slug else {
-                return Err(WebError::validation("Invalid permalink"));
-            };
-            get(username, date, slug).await
+            get(route.username, route.date, route.slug).await
         },
     );
 
@@ -1422,26 +1434,12 @@ pub fn DraftsPage() -> impl IntoView {
                     view! { <p class="j-loading">"Loading\u{2026}"</p> }
                 }>
                     {move || Suspend::new(async move {
-                        match drafts.await {
-                            Ok(list) => {
-                                if list.is_empty() {
-                                    return view! { <p>"You have no drafts."</p> }.into_any();
-                                }
-                                view! {
-                                    <ul class="j-draft-list">
-                                        {list
-                                            .into_iter()
-                                            .map(|draft| render_draft_row(
-                                                draft,
-                                                publish_action,
-                                                delete_action,
-                                            ))
-                                            .collect::<Vec<_>>()}
-                                    </ul>
-                                }
-                                    .into_any()
-                            }
-                            Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
+                        view! {
+                            <DraftList
+                                drafts=drafts.await
+                                publish_action=publish_action
+                                delete_action=delete_action
+                            />
                         }
                     })}
                 </Suspense>
@@ -1473,6 +1471,38 @@ pub fn DraftsPage() -> impl IntoView {
                 }}
             </div>
         </div>
+    }
+}
+
+/// The resolved drafts list: the rows, the empty-state line, or the fetch error.
+///
+/// A **subcomponent** rather than a plain view-returning fn, so the branch on the awaited
+/// result stays measured by the thin-component guard instead of hiding in an unmeasured
+/// helper (#306). It takes the already-awaited result, so [`DraftsPage`]'s `Suspense` still
+/// owns the awaiting.
+#[component]
+fn DraftList(
+    drafts: Result<Vec<DraftSummary>, WebError>,
+    publish_action: ServerAction<Publish>,
+    delete_action: ServerAction<Delete>,
+) -> impl IntoView {
+    match drafts {
+        Ok(list) => {
+            if list.is_empty() {
+                view! { <p>"You have no drafts."</p> }.into_any()
+            } else {
+                view! {
+                    <ul class="j-draft-list">
+                        {list
+                            .into_iter()
+                            .map(|draft| render_draft_row(draft, publish_action, delete_action))
+                            .collect::<Vec<_>>()}
+                    </ul>
+                }
+                .into_any()
+            }
+        }
+        Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
     }
 }
 

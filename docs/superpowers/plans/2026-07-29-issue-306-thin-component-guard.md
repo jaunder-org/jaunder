@@ -424,6 +424,31 @@ git commit -m "feat(xtask): measure #[component] complexity (report-only)"
 
 ---
 
+> ## ⏸ PAUSED after Task 2 — blocked by #671
+>
+> Registered as a native GitHub dependency (**#306 blocked-by #671**), not a
+> body note. Rationale, recorded on #306 itself: `UserTagPage` (setup 8),
+> `UserTimelinePage` (6) and `SiteTagPage` (6) carry **no extractable
+> computation** — every unit is reactive glue (a `Resource` fetch guard,
+> projector-seed adoption, the `Effect` that dispatches
+> `state.resolve`/`state.fail`, an `on_load_more` guard). The remedy is methods
+> on `TimelineState` (`apply`, `adopt_seed`), which collapses four units into
+> two calls — but `TimelineState` lives behind `#[cfg(target_arch = "wasm32")]`,
+> so those methods cannot be host-tested, failing **AC9**. Making it
+> host-testable **is** #671's stated scope ("host-cover `TimelineState`
+> transitions"), so doing it here would silently consume that issue.
+>
+> Budget relief is not an escape: at setup 8, `UserTagPage` would need a budget
+> of ~6, which guts the gate.
+>
+> **Done and committed:** the gate (report-only) + Task 2's four fork-free
+> components. **Remaining on resume:** the three timeline-driven pages +
+> `EditPostPage` (Task 2), Tasks 3–4, then Task 5's flip and Task 6's docs.
+>
+> **#671 is being worked in parallel and touches the same file**
+> (`web/src/posts/component.rs` holds its three timeline pages), so **#671 lands
+> first and this branch rebases onto it.** The edits are to disjoint components.
+
 ## Task 2: Remediate `posts/`
 
 The heaviest vertical, and the one whose real counts most exceed the estimate (9

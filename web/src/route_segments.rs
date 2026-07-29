@@ -3,7 +3,7 @@
 //! SPA permalink route and falls to `<Routes fallback>` instead of mounting `PostPage`
 //! (#592). The server owns `~`-prefixed permalinks by a literal `~` route
 //! (`server/src/projector/mod.rs`); this mirrors that ownership on the client. Capture
-//! keeps the `~` so `crate::posts::parse_permalink_params` strips it exactly as before.
+//! keeps the `~` so `crate::posts::parse_permalink_route` strips it exactly as before.
 
 use leptos_router::{ParamSegment, PartialPathMatch, PathSegment, PossibleRouteMatch};
 

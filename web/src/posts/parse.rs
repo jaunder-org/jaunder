@@ -11,34 +11,52 @@ use common::slug::Slug;
 use common::time::PermalinkDate;
 use common::username::Username;
 
-/// Decode the `~username`/`year`/`month`/`day`/`slug` permalink route params into
-/// typed values, mirroring the client-side parse `PostPage` performs before it
-/// fetches (ADR-0063 §4). A segment that is not a `~username` yields `None` (a
-/// non-permalink URL the caller reloads for the server to handle); a `~`-prefixed
-/// URL whose slug won't parse names no real post, so `slug` is `None` and the
-/// caller 404s client-side without a round-trip. The three date segments are
-/// assembled into one [`PermalinkDate`]; an absent, non-numeric, or impossible
-/// date (e.g. month 13) yields `None`, so the caller 404s client-side rather than
-/// fetching a date that can name no post.
-pub fn parse_permalink_params(
+/// One fully-decoded permalink route: the author, the date, and the slug, all three
+/// present and typed. Produced only by [`parse_permalink_route`], so holding one is
+/// proof the URL names a post that could exist — the caller fetches with it and never
+/// re-checks the parts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermalinkRoute {
+    /// The `~`-stripped author of the permalink.
+    pub username: Username,
+    /// The `year`/`month`/`day` segments as one calendar date.
+    pub date: PermalinkDate,
+    /// The post's slug.
+    pub slug: Slug,
+}
+
+/// Decode the `~username`/`year`/`month`/`day`/`slug` permalink route params into a
+/// typed [`PermalinkRoute`], mirroring the client-side parse `PostPage` performs
+/// before it fetches (ADR-0063 §4).
+///
+/// **All or nothing**: every failure mode names no post that could exist, and the
+/// caller answers all of them identically (404 client-side, no round-trip), so this
+/// returns one `Option` rather than a triple of them — the caller writes a single
+/// guard instead of one per segment (#306). The modes are: a segment that is not a
+/// `~username`, or one whose username won't parse; an absent, non-numeric, or
+/// impossible date (e.g. month 13); and a slug that won't parse.
+pub fn parse_permalink_route(
     username: Option<&str>,
     year: Option<&str>,
     month: Option<&str>,
     day: Option<&str>,
     slug: Option<&str>,
-) -> (Option<Username>, Option<PermalinkDate>, Option<Slug>) {
-    let username = username
-        .unwrap_or_default()
-        .strip_prefix('~')
-        .and_then(|s| s.parse::<Username>().ok());
-    // Present at all three segments, each numeric, and together a real calendar date —
-    // else `None` (the caller 404s client-side). `.parse().ok()?` bridges each segment's
-    // parse to the `Option` `from_ymd` returns; the target int types are inferred from it.
-    let date = year.zip(month).zip(day).and_then(|((y, m), d)| {
-        PermalinkDate::from_ymd(y.parse().ok()?, m.parse().ok()?, d.parse().ok()?)
-    });
-    let slug = slug.and_then(|s| s.parse::<Slug>().ok());
-    (username, date, slug)
+) -> Option<PermalinkRoute> {
+    let username = username?.strip_prefix('~')?.parse::<Username>().ok()?;
+    // Present at all three segments, each numeric, and together a real calendar date.
+    // `.parse().ok()?` bridges each segment's parse to the `Option` `from_ymd` returns;
+    // the target int types are inferred from it.
+    let date = PermalinkDate::from_ymd(
+        year?.parse().ok()?,
+        month?.parse().ok()?,
+        day?.parse().ok()?,
+    )?;
+    let slug = slug?.parse::<Slug>().ok()?;
+    Some(PermalinkRoute {
+        username,
+        date,
+        slug,
+    })
 }
 
 /// Presentational data for one draft row, computed by [`draft_row_display`] so the
@@ -78,61 +96,88 @@ mod tests {
     };
 
     #[test]
-    fn parses_valid_permalink_params() {
-        let (username, date, slug) = parse_permalink_params(
+    fn parses_valid_permalink_route() {
+        let route = parse_permalink_route(
             Some("~alice"),
             Some("2026"),
             Some("01"),
             Some("02"),
             Some("hello"),
+        )
+        .expect("every segment parses");
+        assert_eq!(route.username, parse_username("alice"));
+        assert_eq!(
+            route.date,
+            PermalinkDate::from_ymd(2026, 1, 2).expect("a real date")
         );
-        assert_eq!(username, Some(parse_username("alice")));
-        assert_eq!(date, PermalinkDate::from_ymd(2026, 1, 2));
-        assert_eq!(slug, Some(parse_slug("hello")));
+        assert_eq!(route.slug, parse_slug("hello"));
     }
 
     #[test]
-    fn username_without_tilde_is_none() {
+    fn absent_or_untilded_username_is_no_route() {
         // A segment that isn't a `~username` (e.g. a server-handled URL) is not a
-        // permalink author, so the caller reloads for the server to handle it.
-        let (username, ..) = parse_permalink_params(
-            Some("alice"),
-            Some("2026"),
-            Some("01"),
-            Some("02"),
-            Some("hello"),
+        // permalink author, so the whole route decodes to `None` and the caller 404s.
+        assert_eq!(
+            parse_permalink_route(
+                Some("alice"),
+                Some("2026"),
+                Some("01"),
+                Some("02"),
+                Some("hello")
+            ),
+            None
         );
-        assert_eq!(username, None);
+        // A `~` with nothing parseable after it is no author either.
+        assert_eq!(
+            parse_permalink_route(
+                Some("~not a username"),
+                Some("2026"),
+                Some("01"),
+                Some("02"),
+                Some("hello")
+            ),
+            None
+        );
+        // A missing segment altogether.
+        assert_eq!(
+            parse_permalink_route(None, Some("2026"), Some("01"), Some("02"), Some("hello")),
+            None
+        );
     }
 
     #[test]
-    fn unparseable_or_impossible_date_is_none() {
+    fn unparseable_or_impossible_date_is_no_route() {
         // A non-numeric segment can't form a date.
-        let (_, d1, _) =
-            parse_permalink_params(Some("~a"), Some("x"), Some("01"), Some("02"), Some("s"));
-        assert_eq!(d1, None);
+        assert_eq!(
+            parse_permalink_route(Some("~a"), Some("x"), Some("01"), Some("02"), Some("s")),
+            None
+        );
         // An impossible date (month 13) is rejected by construction.
-        let (_, d2, _) =
-            parse_permalink_params(Some("~a"), Some("2026"), Some("13"), Some("02"), Some("s"));
-        assert_eq!(d2, None);
+        assert_eq!(
+            parse_permalink_route(Some("~a"), Some("2026"), Some("13"), Some("02"), Some("s")),
+            None
+        );
         // A missing segment leaves no date.
-        let (_, d3, _) =
-            parse_permalink_params(Some("~a"), None, Some("01"), Some("02"), Some("s"));
-        assert_eq!(d3, None);
+        assert_eq!(
+            parse_permalink_route(Some("~a"), None, Some("01"), Some("02"), Some("s")),
+            None
+        );
     }
 
     #[test]
-    fn unparseable_slug_is_none() {
-        // A '~'-prefixed permalink with an invalid slug names no real post.
-        let (username, _, slug) = parse_permalink_params(
-            Some("~alice"),
-            Some("2026"),
-            Some("01"),
-            Some("02"),
-            Some("Not A Slug!"),
+    fn unparseable_slug_is_no_route() {
+        // A '~'-prefixed permalink with an invalid slug names no real post, so the
+        // route is `None` even though the username and date decoded fine.
+        assert_eq!(
+            parse_permalink_route(
+                Some("~alice"),
+                Some("2026"),
+                Some("01"),
+                Some("02"),
+                Some("Not A Slug!"),
+            ),
+            None
         );
-        assert_eq!(username, Some(parse_username("alice")));
-        assert_eq!(slug, None);
     }
 
     fn draft(title: Option<&str>, scheduled: Option<&str>) -> DraftSummary {
