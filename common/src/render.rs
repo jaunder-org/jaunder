@@ -243,13 +243,23 @@ impl PartialEq<&str> for RenderedHtml {
 // delegating to the inner `String` — so storage binds it directly (`.bind(&rendered_html)`)
 // rather than via an `.as_ref()` str-strip.
 //
-// Deliberately NO `Decode`: a decode could only route through `from_trusted`
-// (`RenderedHtml` has no validating `FromStr`), which would bless ANY text column decoded
-// into it — e.g. a raw, un-rendered `body` — as trusted, unescaped HTML, invisible to the
-// `rendered-html-from-trusted` gate. Reads stay explicit: the `rendered_html` column
-// decodes as `String` and is rebuilt via the gated `from_trusted` in `build_post_record`.
-// `Type::compatible` is omitted (its trait default suffices) because it is consulted only
-// on that absent decode path.
+// `Decode` (#445) constructs the private field directly — it needs neither door, since
+// this impl lives in the same module as the type. So the `rendered_html` column decodes
+// straight into `RenderedHtml`, like every other domain column (#438/#572), and
+// `build_post_record` no longer rebuilds via `from_trusted`.
+//
+// This reverses the previous "deliberately NO `Decode`" stance, so the reasoning is worth
+// keeping rather than deleting. That stance rested on a decode being able to "bless ANY
+// text column decoded into it — e.g. a raw, un-rendered `body`". **That risk is real and
+// is accepted here**: decoding some other column into this type would still bless it. It
+// is accepted because typing a column as `RenderedHtml` is a deliberate act, and it is the
+// same class of mistake the `rendered-html-from-trusted` gate exists to catch.
+//
+// A *sanitizing* decode would have removed the risk outright and healed any pre-#445 row
+// on read. It was rejected: no deployed instance holds data, so it would guard only
+// against a write path that forgot to sanitize — which the gate already catches — at the
+// cost of an html5ever parse on every post read, forever. Revisit only if an instance ever
+// accumulates rows written by a pre-#445 build.
 #[cfg(feature = "sqlx")]
 const _: () = {
     impl<DB: sqlx::Database> sqlx::Type<DB> for RenderedHtml
@@ -258,6 +268,28 @@ const _: () = {
     {
         fn type_info() -> <DB as sqlx::Database>::TypeInfo {
             <String as sqlx::Type<DB>>::type_info()
+        }
+        // Delegated like every other newtype bridge (#438/#572). Previously omitted
+        // because `compatible` is consulted only on the decode path, which did not
+        // exist; the trait default would accept only the exact `type_info`, rejecting
+        // an equally-valid `VARCHAR` column.
+        fn compatible(ty: &<DB as sqlx::Database>::TypeInfo) -> bool {
+            <String as sqlx::Type<DB>>::compatible(ty)
+        }
+    }
+
+    impl<'r, DB: sqlx::Database> sqlx::Decode<'r, DB> for RenderedHtml
+    where
+        String: sqlx::Decode<'r, DB>,
+    {
+        fn decode(
+            value: <DB as sqlx::Database>::ValueRef<'r>,
+        ) -> Result<Self, sqlx::error::BoxDynError> {
+            // `Self(..)` — the private constructor, reachable because this impl lives
+            // in the type's own module. Neither door is involved: this is not new
+            // outside data (so not `sanitize`), and routing it through `from_trusted`
+            // would put a gate-policed door on a path the gate cannot inspect.
+            <String as sqlx::Decode<'r, DB>>::decode(value).map(Self)
         }
     }
 

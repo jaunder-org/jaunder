@@ -153,11 +153,12 @@ fn parse_post_tags_json(json: &str, post_id: PostId) -> sqlx::Result<Vec<PostTag
 }
 
 pub(crate) fn build_post_record(row: PostRow) -> sqlx::Result<PostRecord> {
-    // `username`, `title`, `slug`, `body`, and `format` already arrived as their domain
-    // types — the sqlx bridge decoded each column (the newtypes via #438, `format` via
-    // its `PostFormat` text-enum bridge, #572), so a corrupt/migrated value is rejected
-    // as a column-decode error before we get here. The JSON `tags` still parse here, so
-    // this step stays fallible.
+    // `username`, `title`, `slug`, `body`, `format`, and `rendered_html` already arrived
+    // as their domain types — the sqlx bridge decoded each column (the newtypes via #438,
+    // `format` via its `PostFormat` text-enum bridge, #572, `rendered_html` via its own
+    // `Decode` since #445), so a corrupt/migrated value is rejected as a column-decode
+    // error before we get here. The JSON `tags` still parse here, so this step stays
+    // fallible.
     let post_id = PostId::from(row.post_id);
     let tags = parse_post_tags_json(&row.tags, post_id)?;
 
@@ -169,8 +170,7 @@ pub(crate) fn build_post_record(row: PostRow) -> sqlx::Result<PostRecord> {
         slug: row.slug,
         body: row.body,
         format: row.format,
-        // Trusted rebuild: this column only ever holds prior `render()` output.
-        rendered_html: RenderedHtml::from_trusted(row.rendered_html),
+        rendered_html: row.rendered_html,
         created_at: row.created_at,
         updated_at: row.updated_at,
         published_at: row.published_at,
@@ -259,7 +259,7 @@ pub(crate) struct PostRow {
     slug: Slug,
     body: PostBody,
     format: PostFormat,
-    rendered_html: String,
+    rendered_html: RenderedHtml,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
     published_at: Option<DateTime<Utc>>,
@@ -480,7 +480,7 @@ mod tests {
             slug: parse_slug("hello-world"),
             body: "Body".into(),
             format: PostFormat::Markdown,
-            rendered_html: "<p>Body</p>".to_string(),
+            rendered_html: RenderedHtml::from_trusted("<p>Body</p>"),
             created_at: now,
             updated_at: now,
             published_at: Some(now),
@@ -553,7 +553,7 @@ mod tests {
             slug: parse_slug("hello-world"),
             body: "Body".into(),
             format: PostFormat::Markdown,
-            rendered_html: "<p>Body</p>".to_string(),
+            rendered_html: RenderedHtml::from_trusted("<p>Body</p>"),
             created_at: now,
             updated_at: now,
             published_at: None,
@@ -579,7 +579,7 @@ mod tests {
             slug: parse_slug("hello-world"),
             body: "Body".into(),
             format: PostFormat::Markdown,
-            rendered_html: "<p>Body</p>".to_string(),
+            rendered_html: RenderedHtml::from_trusted("<p>Body</p>"),
             created_at: now,
             updated_at: now,
             published_at: None,
@@ -604,7 +604,7 @@ mod tests {
             slug: parse_slug("hello-world"),
             body: "Body".into(),
             format: PostFormat::Markdown,
-            rendered_html: "<p>Body</p>".to_string(),
+            rendered_html: RenderedHtml::from_trusted("<p>Body</p>"),
             created_at: now,
             updated_at: now,
             published_at: None,
@@ -693,7 +693,7 @@ mod tests {
             slug: parse_slug("hello-world"),
             body: "Body".into(),
             format: PostFormat::Markdown,
-            rendered_html: "<p>Body</p>".to_string(),
+            rendered_html: RenderedHtml::from_trusted("<p>Body</p>"),
             created_at: now,
             updated_at: now,
             published_at: None,

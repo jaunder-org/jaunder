@@ -50,8 +50,8 @@ pub struct PostRecord {
     pub body: PostBody,
     /// Format of the `body`.
     pub format: PostFormat,
-    /// HTML produced by `render()` from the `body`. A provenance marker, **not**
-    /// a safety guarantee — `render()` does not sanitize (see #445).
+    /// HTML produced by `render()` from the `body`, sanitized at that mint point —
+    /// safe to emit unescaped (#445).
     pub rendered_html: RenderedHtml,
     /// When the post was first created.
     pub created_at: DateTime<Utc>,
@@ -131,8 +131,8 @@ pub struct PostRevisionRecord {
     pub body: PostBody,
     /// Format at the time of this revision.
     pub format: PostFormat,
-    /// HTML produced by `render()` at the time of this revision. A provenance
-    /// marker, **not** a safety guarantee — `render()` does not sanitize (see #445).
+    /// HTML produced by `render()` at the time of this revision, sanitized at that
+    /// mint point — safe to emit unescaped (#445).
     pub rendered_html: RenderedHtml,
     /// When this revision was created.
     pub edited_at: DateTime<Utc>,

@@ -310,7 +310,7 @@ Expected: PASS.
 `sqlx` feature, constructing the private field directly — it uses neither
 `sanitize` nor `from_trusted`.
 
-- [ ] **Step 1: Rewrite the rationale comment.**
+- [x] **Step 1: Rewrite the rationale comment.**
 
 `common/src/render.rs:185-191` currently explains why there is **no** `Decode`.
 Replace it with why there now **is** one, and what that costs: a decode blesses
@@ -319,7 +319,7 @@ the gate enforces it (spec D3). Record that a _sanitizing_ decode was considered
 and rejected — no production data to heal, and it would cost an html5ever parse
 per post per read forever.
 
-- [ ] **Step 2: Implement `Decode` inside the existing
+- [x] **Step 2: Implement `Decode` inside the existing
       `#[cfg(feature = "sqlx")]` block.**
 
 ```rust
@@ -337,7 +337,14 @@ where
 
 `Self(..)` is the private constructor — legal here because this is `common`.
 
-- [ ] **Step 3: Decode the column directly.**
+- [x] **Step 3: Decode the column directly.**
+
+Also had to add `Type::compatible`, delegating to `String`'s like every other
+newtype bridge. It was previously omitted _because_ there was no decode path;
+the trait default accepts only the exact `type_info`, which would reject an
+equally-valid `VARCHAR` column. And five `#[cfg(test)]` `PostRow` fixtures built
+the field from a raw `String` — now `from_trusted`, which is gate-exempt in
+tests.
 
 `storage/src/helpers.rs`: change `PostRow.rendered_html` from `String` to
 `RenderedHtml` (joining every other domain column). In `build_post_record`,
@@ -345,19 +352,27 @@ replace `rendered_html: RenderedHtml::from_trusted(row.rendered_html)` with
 `rendered_html: row.rendered_html`, and update the comment above it — the
 "trusted rebuild" note no longer describes what happens.
 
-- [ ] **Step 4: Correct the aspirational storage comments.**
+- [x] **Step 4: Correct the aspirational storage comments.**
+
+The issue's quoted wording ("Sanitized HTML rendering") no longer exists
+anywhere — it had already been reworded. The current form was two
+`PostRecord`/revision field docs reading "A provenance marker, **not** a safety
+guarantee — `render()` does not sanitize (see #445)", which this change makes
+false. Both now state the guarantee. A tree-wide sweep for
+`provenance marker|does not sanitize` returns nothing.
 
 `storage/src/posts.rs`: the doc comments calling the column "Sanitized HTML
 rendering" are now true. Reword so they state the guarantee and where it comes
 from (`RenderedHtml::sanitize`) rather than reading as an unbacked label.
 
-- [ ] **Step 5: Run the storage suite.**
+- [x] **Step 5: Run the storage suite.** (Via the gate, which supplies
+      Postgres.)
 
 Run: `devtool run -- cargo nextest run -p storage`
 
 Expected: PASS. A decode-type mismatch surfaces here as a column-decode error.
 
-- [ ] **Step 6: Gate and commit.**
+- [x] **Step 6: Gate and commit.**
 
 `devtool run -- cargo xtask check`, then commit:
 `refactor(storage): decode rendered_html directly into RenderedHtml (#445)`.
