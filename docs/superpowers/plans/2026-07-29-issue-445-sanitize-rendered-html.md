@@ -82,7 +82,7 @@ bundle.
 **Interfaces:** Produces a `sanitize` feature on `common` that pulls `ammonia`;
 off by default, enabled by `storage`.
 
-- [ ] **Step 1: Declare the dependency.**
+- [x] **Step 1: Declare the dependency.** (`ammonia = "4"`; registry has 4.1.4)
 
 Workspace `Cargo.toml` `[workspace.dependencies]`: `ammonia = "4"`. Verify the
 resolved major version rather than trusting this literal — if 4.x is not
@@ -107,26 +107,27 @@ sanitize = ["dep:ammonia"]
 `storage/Cargo.toml`: add `"sanitize"` to `common`'s feature list, both the main
 dependency and the `[dev-dependencies]` entry if it names features.
 
-- [ ] **Step 2: Build and pay the cold rebuild.**
+- [x] **Step 2: Build and pay the cold rebuild.**
 
 Run: `devtool run -- cargo build -p common --features sanitize`
 
 Expected: PASS. First run performs a full cold vendor rebuild — allow time.
 
-- [ ] **Step 3: Prove the wasm graph is clean.**
+- [x] **Step 3: Prove the wasm graph is clean.** (0 matches for
+      `ammonia|html5ever`)
 
 Run: `devtool run -- cargo tree -p csr --target wasm32-unknown-unknown`
 
 Then grep the parked output for `ammonia`. Expected: **no match** — this is AC7.
 
-- [ ] **Step 4: Prove the host graph has it.**
+- [x] **Step 4: Prove the host graph has it.** (2 matches)
 
 Run: `devtool run -- cargo tree -p storage`
 
 Grep the parked output for `ammonia`. Expected: **match** — confirms unification
 delivers the feature to `common` in the host suite.
 
-- [ ] **Step 5: Gate and commit.**
+- [x] **Step 5: Gate and commit.**
 
 Run: `devtool run -- cargo xtask check`. Commit:
 `build(common): add ammonia behind a host-only sanitize feature (#445)`.

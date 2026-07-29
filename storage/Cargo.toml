@@ -5,7 +5,10 @@ edition = "2021"
 license = "GPL-3.0-only"
 
 [dependencies]
-common = { workspace = true, features = ["sqlx"] }
+# `sanitize` gates `common::render::render()`, which this crate's post_service is
+# the only caller of — so enabling it here is what puts the sanitizer on the host
+# build (and, via workspace feature unification, in the host test/coverage run).
+common = { workspace = true, features = ["sqlx", "sanitize"] }
 host = { path = "../host" }
 anyhow.workspace = true
 async-trait.workspace = true
