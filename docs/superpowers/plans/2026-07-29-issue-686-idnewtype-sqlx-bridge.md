@@ -166,18 +166,24 @@ const _: () = {
 No opt-out attribute (spec §1) — `id_newtype.rs` parses no options today and
 gains none.
 
-- [ ] Add a derive-expansion test asserting the emitted tokens contain the three
-      impls (RED — `cargo nextest run --manifest-path macros/Cargo.toml`, expect
-      FAIL)
-- [ ] Emit the bridge from `expand`; update the module doc comment (`:1-4`) to
-      list it (GREEN)
-- [ ] Add a dual-backend round-trip test in `storage`: insert and read back a
-      row keyed by a `UserId` bound directly (no `i64::from`), proving
-      `Encode` + `Decode` both work
-- [ ] `cargo xtask check` → green; commit
+- [x] Add a derive-expansion test asserting the emitted tokens contain the three
+      impls (RED — `cargo nextest run -p macros`, 4 new tests failed as
+      expected)
+- [x] Emit the bridge from `expand`; update the module doc comment to list it
+      (GREEN — 56/56 pass)
+- [~] **Dropped as redundant churn.** A bespoke round-trip test was planned
+  here, but tasks 4–6 type the _real_ sites, so the existing dual-backend suite
+  proves `Decode` (typed row structs) and `Encode` (binds without `i64::from`)
+  on live queries. A dedicated test would duplicate that with weaker coverage
+  and be deleted later. Instead, the bridges were verified to compile against
+  real sqlx via
+  `cargo clippy -p common --features sqlx --all-targets -- -D warnings` (exit
+  0), which the default gate does **not** do — the bridge is behind
+  `#[cfg(feature = "sqlx")]` and is otherwise never type-checked.
+- [x] `cargo xtask check --no-test` → green; committed with task 3
 
 **Done when:** a `UserId` binds and decodes with no manual conversion on both
-backends.
+backends. ✅ (bridge landed; exercised on real sites by tasks 4–6)
 
 ## Task 3 — `NumNewtype` sqlx bridge
 
@@ -202,9 +208,11 @@ fn decode(
 A `Decode` that skipped the bound would make the column a hole in an invariant
 the serde bridge already enforces (spec §1).
 
-- [ ] Derive-expansion test for the three impls, plus one asserting `Decode`
-      routes through `TryFrom` (RED)
-- [ ] Emit the bridge; update the module doc comment (GREEN)
+- [x] Derive-expansion test for the three impls, plus one asserting `Decode`
+      routes through `TryFrom`, and one pinning that the bridge uses the
+      declared `inner` type rather than a hardcoded `i64` (RED)
+- [x] Emit the bridge via a new `sqlx_impls(name, inner)`; update the module doc
+      comment (GREEN)
 - [ ] Verify the existing `ByteSize` decode-rejection tests still pass
       **unchanged** — `storage/src/media.rs:453`
       (`find_by_hash_surfaces_a_column_decode_error_for_a_negative_size`) and

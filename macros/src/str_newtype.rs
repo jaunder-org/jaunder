@@ -300,18 +300,21 @@ fn serde_impls_infallible(name: &syn::Ident) -> proc_macro2::TokenStream {
     }
 }
 
-/// The **validating sqlx bridge**: generic `Type`/`Encode`/`Decode` impls that make the
-/// newtype a first-class TEXT column, delegating to the inner `String` (mirroring what
-/// `#[derive(sqlx::Type)] #[sqlx(transparent)]` expands to). `Decode` decodes a `String`
-/// then routes it through `<#name as FromStr>::from_str`, so a corrupted/migrated column
-/// is rejected rather than silently admitted; the `?` folds the `FromStr::Err` (all our
-/// newtype errors derive `thiserror::Error`) into `sqlx::error::BoxDynError`. All items
-/// are stripped when the `sqlx` feature is off — the proc-macro crate never depends on sqlx.
+/// The inner type every string newtype's sqlx bridge delegates to.
+fn sqlx_inner() -> proc_macro2::TokenStream {
+    quote! { ::std::string::String }
+}
+
+/// The **validating sqlx bridge**: makes the newtype a first-class TEXT column via the
+/// shared [`crate::sqlx_bridge`] delegation, with a `Decode` that routes the decoded
+/// `String` through `<#name as FromStr>::from_str`, so a corrupted/migrated column is
+/// rejected rather than silently admitted; the `?` folds the `FromStr::Err` (all our
+/// newtype errors derive `thiserror::Error`) into `sqlx::error::BoxDynError`.
 fn sqlx_impls(name: &syn::Ident) -> proc_macro2::TokenStream {
     let convert = quote! {
-        ::core::result::Result::Ok(<#name as ::core::str::FromStr>::from_str(&s)?)
+        ::core::result::Result::Ok(<#name as ::core::str::FromStr>::from_str(&v)?)
     };
-    sqlx_impls_inner(name, &convert)
+    crate::sqlx_bridge::bridge(name, &sqlx_inner(), &convert)
 }
 
 /// The **infallible sqlx bridge**: as `sqlx_impls`, but `Decode` wraps the decoded
@@ -319,66 +322,10 @@ fn sqlx_impls(name: &syn::Ident) -> proc_macro2::TokenStream {
 fn sqlx_impls_infallible(name: &syn::Ident) -> proc_macro2::TokenStream {
     let convert = quote! {
         ::core::result::Result::Ok(
-            <#name as ::core::convert::From<::std::string::String>>::from(s),
+            <#name as ::core::convert::From<::std::string::String>>::from(v),
         )
     };
-    sqlx_impls_inner(name, &convert)
-}
-
-/// Shared body of the two sqlx bridges: identical `Type`/`Encode` delegation to the inner
-/// `String`, parameterized only by how `Decode` turns the decoded `String` into `Self`
-/// (`convert` names a bound local `s: String` and yields `Result<Self, BoxDynError>`).
-fn sqlx_impls_inner(
-    name: &syn::Ident,
-    convert: &proc_macro2::TokenStream,
-) -> proc_macro2::TokenStream {
-    quote! {
-        #[cfg(feature = "sqlx")]
-        const _: () = {
-            #[automatically_derived]
-            impl<DB: ::sqlx::Database> ::sqlx::Type<DB> for #name
-            where
-                ::std::string::String: ::sqlx::Type<DB>,
-            {
-                fn type_info() -> <DB as ::sqlx::Database>::TypeInfo {
-                    <::std::string::String as ::sqlx::Type<DB>>::type_info()
-                }
-                fn compatible(ty: &<DB as ::sqlx::Database>::TypeInfo) -> bool {
-                    <::std::string::String as ::sqlx::Type<DB>>::compatible(ty)
-                }
-            }
-
-            #[automatically_derived]
-            impl<'q, DB: ::sqlx::Database> ::sqlx::Encode<'q, DB> for #name
-            where
-                ::std::string::String: ::sqlx::Encode<'q, DB>,
-            {
-                fn encode_by_ref(
-                    &self,
-                    buf: &mut <DB as ::sqlx::Database>::ArgumentBuffer<'q>,
-                ) -> ::core::result::Result<::sqlx::encode::IsNull, ::sqlx::error::BoxDynError>
-                {
-                    <::std::string::String as ::sqlx::Encode<'q, DB>>::encode_by_ref(&self.0, buf)
-                }
-                fn size_hint(&self) -> usize {
-                    <::std::string::String as ::sqlx::Encode<'q, DB>>::size_hint(&self.0)
-                }
-            }
-
-            #[automatically_derived]
-            impl<'r, DB: ::sqlx::Database> ::sqlx::Decode<'r, DB> for #name
-            where
-                ::std::string::String: ::sqlx::Decode<'r, DB>,
-            {
-                fn decode(
-                    value: <DB as ::sqlx::Database>::ValueRef<'r>,
-                ) -> ::core::result::Result<Self, ::sqlx::error::BoxDynError> {
-                    let s = <::std::string::String as ::sqlx::Decode<'r, DB>>::decode(value)?;
-                    #convert
-                }
-            }
-        };
-    }
+    crate::sqlx_bridge::bridge(name, &sqlx_inner(), &convert)
 }
 
 /// The **tight secret surface** (ADR-0063 secret exception, as amended by #403): a

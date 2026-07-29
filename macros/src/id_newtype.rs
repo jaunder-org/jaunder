@@ -1,7 +1,11 @@
 //! Codegen for `#[derive(IdNewtype)]` — the ADR-0063 numeric-ID trailer for a
 //! `struct X(i64)`: `From<i64>`, `From<Self> for i64`, `Display`, `FromStr` (delegating to
-//! `i64`'s parse), and a transparent-i64 serde bridge. `Copy` and the other std traits stay
-//! in the user's `#[derive]` list.
+//! `i64`'s parse), a transparent-i64 serde bridge, and the feature-gated sqlx storage bridge
+//! (ADR-0071). `Copy` and the other std traits stay in the user's `#[derive]` list.
+//!
+//! Unlike `StrNewtype`, the sqlx bridge here is **unconditional** — there is no
+//! `no_sqlx`/`sqlx` control, because every id is stored. Add one only if a non-stored id
+//! ever appears.
 
 use quote::quote;
 use syn::DeriveInput;
@@ -13,6 +17,7 @@ pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
         return e.to_compile_error();
     }
     let name = &input.ident;
+    let sqlx = sqlx_impls(name);
 
     quote! {
         #[automatically_derived]
@@ -72,5 +77,21 @@ pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
                 ))
             }
         }
+
+        #sqlx
     }
+}
+
+/// The sqlx storage bridge (ADR-0071) for an id: the shared [`crate::sqlx_bridge`]
+/// delegation to the inner `i64`, so an id binds and decodes as a bare integer column on
+/// every backend.
+///
+/// `Decode` is an **infallible wrap** — an id has no value invariant, only the
+/// transposition guarantee (ADR-0063 §2) — so unlike the string bridge it does not route
+/// through a validating `FromStr`, and unlike `NumNewtype`'s it does not re-run a bound.
+fn sqlx_impls(name: &syn::Ident) -> proc_macro2::TokenStream {
+    let convert = quote! {
+        ::core::result::Result::Ok(#name(v))
+    };
+    crate::sqlx_bridge::bridge(name, &quote! { i64 }, &convert)
 }

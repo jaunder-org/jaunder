@@ -7,6 +7,7 @@ use syn::{parse_macro_input, Data, DeriveInput, Fields};
 
 mod id_newtype;
 mod num_newtype;
+mod sqlx_bridge;
 mod str_newtype;
 
 /// Derives the ADR-0063 **string-newtype trailer** for a `struct X(String)`: `Display`,
@@ -625,6 +626,87 @@ mod tests {
         assert!(str_newtype::expand(&input)
             .to_string()
             .contains("compile_error"));
+    }
+
+    #[test]
+    fn id_newtype_emits_sqlx_bridge() {
+        // Unconditional: every id is stored, so `IdNewtype` has no opt-out attribute
+        // (unlike `StrNewtype`'s `no_sqlx`/`sqlx` controls).
+        let input: DeriveInput = parse_quote! {
+            struct X(i64);
+        };
+        let out = id_newtype::expand(&input).to_string();
+        assert!(has_sqlx_bridge(&out));
+        assert!(out.contains("cfg (feature = \"sqlx\")"));
+    }
+
+    #[test]
+    fn id_newtype_sqlx_decode_is_an_infallible_wrap() {
+        // An id has no invariant beyond "is an integer" (ADR-0063 §2), so `Decode`
+        // wraps directly — it must NOT route through the bound-checking
+        // `TryFrom<inner>` that `NumNewtype`'s bridge uses, which would make an id
+        // decode fallible for no reason.
+        let input: DeriveInput = parse_quote! {
+            struct X(i64);
+        };
+        let out = id_newtype::expand(&input).to_string();
+        assert!(out.contains("sqlx :: Decode"));
+        // Absence assertions are only worth anything against a needle known to be
+        // spelled correctly — a typo'd one is vacuously absent and never bites. This is
+        // the same needle `num_newtype_emits_bound_checking_sqlx_bridge` asserts is
+        // PRESENT, so the pair fails if either family adopts the other's `Decode`.
+        assert!(
+            !out.contains("try_from (v) ?"),
+            "an id's Decode must not re-run a bound it does not have"
+        );
+    }
+
+    #[test]
+    fn num_newtype_emits_bound_checking_sqlx_bridge() {
+        // A numeric value DOES have an invariant, so `Decode` re-runs it via the
+        // generated `TryFrom<inner>` — otherwise the column would be a hole in a
+        // bound the serde bridge already enforces on the wire.
+        //
+        // The assertion must name the bridge's CALL, not just `try_from`: the derive
+        // always emits the `TryFrom<inner>` door itself (`try_from_inner_impl`), whose
+        // signature stringifies as `try_from (v : u32)`. So a bare `contains("try_from")`
+        // holds even when the bridge's `Decode` is an infallible wrap that skips the
+        // bound — i.e. it passes on the very regression it exists to catch. Only the
+        // bridge applies it to the decoded local, as `try_from (v) ?`.
+        let input: DeriveInput = parse_quote! {
+            #[num_newtype(inner = u32, min = 1, max = 50, default = 50)]
+            struct X(u32);
+        };
+        let out = num_newtype::expand(&input).to_string();
+        assert!(has_sqlx_bridge(&out));
+        assert!(out.contains("cfg (feature = \"sqlx\")"));
+        assert!(
+            out.contains("try_from (v) ?"),
+            "bridge Decode must re-run the bound via TryFrom on the decoded value"
+        );
+    }
+
+    #[test]
+    fn num_newtype_sqlx_bridge_uses_the_declared_inner_type() {
+        // The bridge is parameterized on `inner`, not hardcoded to i64. The inner MUST
+        // be a non-i64 type for this to discriminate: with `inner = i64` the assertion
+        // holds whether the bridge is parameterized or hardcoded, so the test would
+        // pass on the very bug it exists to catch. `usize` is also the wrong choice —
+        // it would not distinguish a hardcoded `usize` either, but `u32` here plus the
+        // `i64` absence below pins the delegation to the declared type.
+        let input: DeriveInput = parse_quote! {
+            #[num_newtype(inner = u32, min = 1, default = 1)]
+            struct X(u32);
+        };
+        let out = num_newtype::expand(&input).to_string();
+        assert!(
+            out.contains("u32 as :: sqlx :: Type"),
+            "bridge must delegate to the declared inner type"
+        );
+        assert!(
+            !out.contains("i64 as :: sqlx :: Type"),
+            "bridge must not fall back to a hardcoded i64"
+        );
     }
 
     #[test]

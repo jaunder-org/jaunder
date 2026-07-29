@@ -73,6 +73,7 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
     let default_impl = default_impl(name, &opts);
     let serde = serde_impl(name, &err_name, &opts);
     let clamped = clamped_impl(name, &opts);
+    let sqlx = sqlx_impls(name, &opts.inner);
 
     quote! {
         #error_ty
@@ -83,7 +84,29 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
         #default_impl
         #serde
         #clamped
+        #sqlx
     }
+}
+
+/// The sqlx storage bridge (ADR-0071) for a bounded numeric: the shared
+/// [`crate::sqlx_bridge`] delegation, parameterized on the declared `inner` integer type
+/// (**not** hardcoded to `i64`), so the numeric binds and decodes as a plain integer column
+/// on every backend.
+///
+/// `Decode` **re-runs the declared bound** by routing through the generated
+/// `TryFrom<#inner>` — the same chokepoint `FromStr` and the serde bridge use. A `Decode`
+/// that skipped it would leave the column a hole in an invariant that is enforced everywhere
+/// else, so an out-of-range stored value surfaces as a column-decode error. The generated
+/// error type implements `std::error::Error`, so it boxes straight into `BoxDynError`.
+///
+/// Like `IdNewtype`'s, this bridge is unconditional — there is no opt-out attribute.
+fn sqlx_impls(name: &Ident, inner: &Type) -> TokenStream {
+    let convert = quote! {
+        ::core::result::Result::Ok(
+            <#name as ::core::convert::TryFrom<#inner>>::try_from(v)?,
+        )
+    };
+    crate::sqlx_bridge::bridge(name, &quote! { #inner }, &convert)
 }
 
 /// The self-contained error type: a hand-written `Display` + `Error` (no `thiserror`), so
