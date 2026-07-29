@@ -5,7 +5,7 @@
 > useful). Tick each `- [ ]` in real time.
 
 **Spec:**
-[`docs/superpowers/specs/2026-07-29-issue-445-sanitize-rendered-html.md`](../specs/2026-07-29-issue-445-sanitize-rendered-html.md)
+[`docs/archive/2026-07-29-issue-445-sanitize-rendered-html-spec.md`](2026-07-29-issue-445-sanitize-rendered-html-spec.md)
 — the "what/why". This plan is the "how" and does not restate it.
 
 ## Goal
