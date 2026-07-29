@@ -28,7 +28,7 @@ adoption gate; `PostRow.rendered_html` (#502) and `.tags`;
 4. Type `PostRow` + `build_session_record`
 5. Type the five tuple row aliases **and 18 inline-tuple sites**; delete the
    hand re-wraps
-6. Retire the 114 `.bind(i64::from(x))` conversions _(dispatch)_
+6. Retire the `.bind(i64::from(x))` conversions — 98 of 114; see task 6
 7. `ResolutionBinds`: delete the `-1`/`""` sentinels, bind NULL
 8. Extend `sqlx_newtype_bind_check` to flag `i64::from(` in a `.bind(`
 9. Amend ADR-0071 to cover all three newtype families
@@ -42,11 +42,10 @@ adoption gate; `PostRow.rendered_html` (#502) and `.tags`;
   `ByteSize::try_from`, so those tests are the safety net — they must keep
   passing with the hand conversion removed. Confirm per adopting type before
   extending further.
-- **Task 7 removes a possible visibility hole.** `subscriber_ref` is
-  `TEXT NOT NULL` with no non-empty CHECK, so `subscriber_ref = ''` is
-  schema-legal and today's anonymous bind (`""`) would match it. Task 7 traces
-  the insert path; if such a row is reachable, this is a visibility **bug** and
-  the issue should be re-labelled accordingly.
+- ~~**Task 7 removes a possible visibility hole.**~~ **Refuted — see task 7.**
+  Admission needs both sentinels, and the other one (`channel_id = -1`) is
+  FK-unstorable, so the empty `subscriber_ref` never mattered. Proved by running
+  the new regression test against the old sentinels. No re-labelling.
 - **Task 8 must come after task 6** — adding the gate first makes
   `cargo xtask check` fail on the 114 un-swept sites.
 - Bind-site type inference may need an occasional turbofish once `i64::from(…)`
@@ -339,24 +338,48 @@ gate on the newtype-typed spellings, or leave #696 to remove the last 16 first.
 Per spec §4 — the fragment has no `NOT`, and `EXISTS` yields FALSE rather than
 NULL, so a NULL bind is exactly equivalent to today's sentinels.
 
-- [ ] `ResolutionBinds` → `author_id: Option<UserId>`,
+- [x] `ResolutionBinds` → `author_id: Option<UserId>`,
       `channel: Option<ChannelId>`, `subref: Option<String>`
-- [ ] `resolution_where`: `ViewerIdentity::Anonymous` → `(None, None, None)`;
+- [x] `resolution_where`: `ViewerIdentity::Anonymous` → `(None, None, None)`;
       the `Channel` arm uses `subscriber_ref.parse::<UserId>().ok()` in place of
       `parse::<i64>().unwrap_or(-1)` (`:1739`)
-- [ ] `bind_onto` binds the `Option` values directly (NULL for `None`)
-- [ ] Rewrite the doc comments at `:1699-1707` and `:1714-1717`, which describe
+- [x] `bind_onto` binds the `Option` values directly (NULL for `None`)
+- [x] Rewrite the doc comments at `:1699-1707` and `:1714-1717`, which describe
       the sentinel scheme
-- [ ] **Trace the insert path** for `subscriptions.subscriber_ref` and record
-      whether an empty value is reachable. If it is, note it on #686 — this
-      becomes a visibility bug
-- [ ] Dual-backend test: an anonymous viewer sees exactly the public posts
-      (behaviour unchanged)
-- [ ] Dual-backend regression test: seed a subscription with
-      `subscriber_ref = ''` (raw SQL, as `media.rs:461` does for tampering
-      cases) and assert an anonymous viewer cannot see its posts — this fails
-      before the change and passes after
-- [ ] `cargo xtask check` → green; commit
+- [x] **Trace the insert path** for `subscriptions.subscriber_ref` — see below
+- [x] Dual-backend test: an anonymous viewer sees exactly the public posts —
+      **already covered**, no new test written. `server/tests/storage/mod.rs`'s
+      `resolution_matrix` is exactly this: 5 viewers × 6 audience targetings,
+      asserted through both `get_post_by_id` and `list_published`, dual-backend.
+      A bespoke anonymous-only test would be a strict subset of it.
+- [x] Dual-backend regression test:
+      `anonymous_is_not_admitted_by_an_empty_subscriber_ref`
+- [x] `cargo xtask check` → green; commit
+
+**The visibility hypothesis is refuted — this is not a bug, and #686 does not
+need re-labelling.** The plan reasoned that a schema-legal `subscriber_ref = ''`
+row would be matched by the anonymous `""` bind. It would not: admission needs
+**both** halves of the sentinel pair, and the other half is `channel_id = -1`.
+`subscriptions.channel_id` is `INTEGER NOT NULL REFERENCES channels(channel_id)`
+and `channels` hands out positive autoincrement keys, so no row can carry `-1`
+and the subscribers/named `EXISTS` branches were already dead for `Anonymous`.
+
+Proved rather than argued: with the new test in place, `resolution_where`'s
+`Anonymous` arm was temporarily set back to
+`(Some(UserId::from(-1)), Some(ChannelId::from(-1)), Some(String::new()))` — the
+old sentinels expressed in the new types — and `cargo xtask check` still passed.
+The test does **not** bite on the old code, so it pins a property rather than
+demonstrating a fix.
+
+The insert-path trace agrees: `SubscriptionStorage::subscribe` has exactly one
+caller, `web/src/subscriptions/api.rs:30`, which binds an authenticated
+`auth.user_id`, so `''` is unreachable through the application in the first
+place.
+
+What the change is worth, then, is not a fix but the removal of two unstated
+dependencies: the sentinel scheme was correct only because `-1` is unstorable in
+two different tables. NULL is correct because of what NULL means. That is the
+same reason the rest of this issue exists.
 
 ## Task 8 — Extend the bind gate
 

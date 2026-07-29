@@ -6,7 +6,7 @@ use sqlx::{Database, Pool};
 use thiserror::Error;
 
 use common::feed::FeedPath;
-use common::ids::{AudienceId, PostId, RevisionId, TagId, UserId};
+use common::ids::{AudienceId, ChannelId, PostId, RevisionId, TagId, UserId};
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
@@ -827,6 +827,9 @@ where
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<&'q str>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<String>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    // The viewer-resolution binds are NULL-able (`ResolutionBinds::bind_onto`).
+    for<'q> Option<UserId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<ChannelId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `Slug`/`Tag`/`Username` bind and decode as themselves via the sqlx bridge
     // (#438), which delegates to `String`; this pair makes that bridge available
     // on the generic backend (the reads decode the `slug`/`tag_slug`/`username`
@@ -1696,16 +1699,21 @@ where
 /// left-to-right order their placeholders appear in [`resolution_where`]'s
 /// fragment. `channel`/`subref` repeat (subscribers branch, then named branch)
 /// because each occurrence gets its own placeholder — see [`resolution_where`].
+///
+/// Every field is optional and `None` binds SQL NULL, which makes its comparison
+/// unknown rather than true — see [`resolution_where`] for why that is what
+/// "this branch cannot match" means here.
 struct ResolutionBinds {
     /// `p.user_id = $author_id` — the viewer's local user id for the author
-    /// branch, or the sentinel `-1` (no post has `user_id` -1) for `Anonymous`.
-    author_id: i64,
-    /// `s.channel_id` for the subscribers/named `EXISTS` branches; sentinel `-1`
-    /// for `Anonymous` (no subscription has `channel_id` -1).
-    channel: i64,
-    /// `s.subscriber_ref` for the subscribers/named branches; sentinel `""` for
+    /// branch. `None` for `Anonymous`, and for a `Channel` viewer whose
+    /// `subscriber_ref` is not a local user id.
+    author_id: Option<UserId>,
+    /// `s.channel_id` for the subscribers/named `EXISTS` branches. `None` for
     /// `Anonymous`.
-    subref: String,
+    channel: Option<ChannelId>,
+    /// `s.subscriber_ref` for the subscribers/named branches. `None` for
+    /// `Anonymous`.
+    subref: Option<String>,
 }
 
 /// The viewer-resolution predicate and its binds, for folding into a read
@@ -1713,9 +1721,19 @@ struct ResolutionBinds {
 /// author OR some targeted audience admits them. See ADR-0020, Task 13.
 ///
 /// The fragment is emitted in full for every viewer; `Anonymous` is handled by
-/// binding sentinels (`author_id = -1`, `channel = -1`, `subref = ""`) that make
-/// every non-`public` branch dead, so it reduces to "public posts only" without
-/// a second query shape.
+/// binding NULL for all three values, so it reduces to "public posts only"
+/// without a second query shape. A NULL comparison is *unknown*, never true:
+/// `p.user_id = NULL` cannot admit a post, and the `EXISTS` subqueries match no
+/// row, so `EXISTS` is false. The fragment contains no `NOT`, and the caller
+/// `AND`s it into a `WHERE`, where unknown filters the row out exactly as false
+/// would — so NULL kills every non-`public` branch.
+///
+/// This replaces a sentinel scheme (`author_id = -1`, `channel = -1`,
+/// `subref = ""`) that relied on those values being unstorable: `-1` was
+/// unreachable only because `users`/`channels` hand out positive autoincrement
+/// keys, and `subscriber_ref = ''` is schema-legal (`TEXT NOT NULL` with no
+/// non-empty CHECK) — it was unreachable only because the sole writer binds an
+/// authenticated user id. NULL needs neither argument.
 ///
 /// `start` is the next free `$n` index. The fragment uses FIVE distinct
 /// placeholders (`$start`..`$start+4`) — the `channel`/`subref` pair appears once
@@ -1728,17 +1746,17 @@ struct ResolutionBinds {
 /// where `next` is the first free index after the fragment.
 fn resolution_where(viewer: &ViewerIdentity, start: usize) -> (String, ResolutionBinds, usize) {
     let (author_id, channel, subref) = match viewer {
-        ViewerIdentity::Anonymous => (-1_i64, -1_i64, String::new()),
+        ViewerIdentity::Anonymous => (None, None, None),
         ViewerIdentity::Channel {
             channel_id,
             subscriber_ref,
         } => {
             // The author branch fires only for a local viewer whose
             // `subscriber_ref` parses to a real user id (the post's `user_id`).
-            // A non-numeric ref (no local user) falls through to -1, so it never
+            // A non-numeric ref (no local user) yields `None` → NULL, so it never
             // matches `p.user_id`.
-            let author_id = subscriber_ref.parse::<i64>().unwrap_or(-1);
-            (author_id, i64::from(*channel_id), subscriber_ref.clone())
+            let author_id = subscriber_ref.parse::<UserId>().ok();
+            (author_id, Some(*channel_id), Some(subscriber_ref.clone()))
         }
     };
     let author = start;
@@ -1790,13 +1808,20 @@ impl ResolutionBinds {
         DB: Database,
         i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
         &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        // sqlx implements `Encode for Option<T>` per concrete database (the
+        // `impl_encode_for_option!` macro), not blanket over a generic `DB`, so
+        // each NULL-able bind's type has to be restated here — and, per ADR-0019,
+        // again on every caller.
+        Option<UserId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        Option<ChannelId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        Option<&'q str>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     {
         query
             .bind(self.author_id)
             .bind(self.channel)
-            .bind(self.subref.as_str())
+            .bind(self.subref.as_deref())
             .bind(self.channel)
-            .bind(self.subref.as_str())
+            .bind(self.subref.as_deref())
     }
 }
 
@@ -1984,6 +2009,10 @@ where
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    // The viewer-resolution binds are NULL-able (`ResolutionBinds::bind_onto`).
+    for<'q> Option<UserId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<ChannelId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<&'q str>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `Username`/`Tag` bind as themselves via the sqlx bridge (#438), which
     // delegates to `String`; this pair makes that bridge available on the generic
     // backend for the surface `username`/`tag` binds.
