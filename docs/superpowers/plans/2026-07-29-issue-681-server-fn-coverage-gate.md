@@ -51,8 +51,8 @@ Task 9) · union aggregation across combos.
 5. Convert the two non-fixture spec files
 6. Pure coverage extractor (ancestor walk, both signals)
 7. Snapshot + allowlist model, stable serialization, drift compare
-8. Wire the gate into both lanes, with actionable failures and a bite test
-9. Real run → seed allowlist, file per-gap issues, commit the snapshot
+8. The e2e lane — `regenerate`/`verify` a snapshot from a real capture
+9. The static lane + registration, seeded by a real run, with the gaps filed
 10. Documentation + CI note
 
 **Key risks:** Task 4 touches `fixtures.ts`, which most tests run through — it
@@ -348,7 +348,7 @@ Expected: PASS Run:
 Expected: PASS — wasm clippy before committing web changes, or the slow gate
 fails later.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit** — `8383fba9`
 
 ```bash
 git add web/src xtask/src/steps/span_name_derived_check.rs xtask/src/lib.rs
@@ -598,7 +598,7 @@ In both files replace `import { test, expect } from "@playwright/test";` with
 files already import helpers from `./fixtures`, so merge rather than duplicate
 the specifier.
 
-- [ ] **Step 2: Run both specs**
+- [x] **Step 2: Run both specs**
 
 Run: `devtool run -- cargo xtask e2e-local feeds.spec.ts` Expected: PASS Run:
 `devtool run -- cargo xtask e2e-local atompub.spec.ts` Expected: PASS
@@ -614,9 +614,7 @@ budget rather than reverting the import — the attribution depends on it.
 `atompub.spec.ts` 3/3 in 6.6s. The `page`-fixture/warmup cost the review warned
 about was absorbed by the existing budgets.
 
-- [x] **Step 2: Run both specs**
-
-- [x] **Step 3: Commit**
+- [x] **Step 3: Commit** — `e4b9324f`
 
 ```bash
 git add end2end/tests/atompub.spec.ts end2end/tests/feeds.spec.ts
@@ -652,7 +650,7 @@ pub struct Coverage {
 pub fn extract(spans: &[Span], inventory: &[ServerFn]) -> Coverage;
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Hand-author `coverage-sample.jsonl` containing: an `e2e.test` span (`spanId`
 `t1`, attribute `e2e.test` = `"creates a post"`); a `request` span (`spanId`
@@ -754,13 +752,13 @@ fn a_fn_hit_by_both_signals_is_counted_once_per_test() {
 }
 ```
 
-- [ ] **Step 2: Run, verify fail**
+- [x] **Step 2: Run, verify fail**
 
 Run:
 `devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml server_fn_coverage`
 Expected: FAIL — module not defined.
 
-- [ ] **Step 3: Implement `extract`**
+- [x] **Step 3: Implement `extract`**
 
 Build a `span_id → &Span` map and an `e2e.test` span-id → title map. For each
 span, identify a fn by (a) span name present in the inventory **and**
@@ -773,13 +771,13 @@ on failure. Every branch — both signals, the crate-prefix strip, the module
 mismatch, the missing-namespace case, both URI forms, the query strip, the
 orphan path, dedupe — is pinned above.
 
-- [ ] **Step 4: Run, verify pass**
+- [x] **Step 4: Run, verify pass**
 
 Run:
 `devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml server_fn_coverage`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit** — `b23b18c0`
 
 ```bash
 git add xtask/src/server_fn_coverage xtask/src/lib.rs
@@ -899,25 +897,25 @@ fn bare_server_attr_without_endpoint_is_drift() {
 }
 ```
 
-- [ ] **Step 2: Run, verify fail**
+- [x] **Step 2: Run, verify fail**
 
 Run:
 `devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml snapshot`
 Expected: FAIL — `snapshot` module not defined.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `render` uses `serde_json::to_string_pretty` over `BTreeMap`s plus a trailing
 newline. `verdict` aggregates, in order: endpoint/fn-name drift (including
 `None`), uncovered and unallowlisted, hollow allowlist entries, and stale
 allowlist entries. Messages name the fn and both remedies verbatim (AC14).
 
-- [ ] **Step 4: Run, verify pass**
+- [x] **Step 4: Run, verify pass**
 
 Run: `devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit** — `ebdfc4ba`
 
 ```bash
 git add xtask/src/server_fn_coverage/snapshot.rs
@@ -926,73 +924,76 @@ git commit -m "feat(xtask): server-fn coverage snapshot model and verdict (#681)
 
 ---
 
-### Task 8: Wire the gate into both lanes
+### Task 8: The e2e lane — `regenerate` / `verify` from a capture
 
 **Files:**
 
 - Modify: `xtask/src/lib.rs` (add `Command::ServerFnCoverage { … }` with
   `Regenerate` / `Verify`, and the `command_name()` arm)
-- Create: `xtask/src/steps/server_fn_coverage_check.rs` (the static-lane step)
+- Create: `xtask/src/steps/server_fn_coverage_check.rs` (the e2e-lane step)
 - Modify: `xtask/src/traces/run.rs:97` — bump `extract_trace` to `pub(crate)`.
   It already does exactly what is needed (`tar` + `flate2`, no shelling out),
   but is private.
-- Modify: `xtask/src/steps/nix.rs` (after a passing `sqlite × chromium` combo,
-  regenerate and compare)
 - Test: in-file `#[cfg(test)]`; CLI-parse tests alongside the existing ones in
   `lib.rs:584+`
 
-**Registration is deferred to Task 9.** Do **not** add
-`steps::server_fn_coverage_check::run` to `lib.rs:296`/`:328` in this task — see
-Step 5.
+> **Scope correction (made while executing).** This task originally also carried
+> the **static lane** (`run`/`check`) and the post-combo hook, with registration
+> deferred to Task 9 on the reasoning that "nothing calls the new step yet, so
+> `check --no-test` stays green". **That reasoning is wrong for xtask.**
+> `mod steps` is private, so an unregistered `pub fn run` is not part of the
+> crate's public API and `-D dead-code` rejects it outright — the commit cannot
+> land at all, let alone go red on a missing snapshot. Verified empirically:
+> `xtask-clippy` failed with `constant STATIC_STEP is never used` /
+> `function check is never used` / `function run is never used`.
+>
+> A new pub item and its first consumer must therefore share a commit. So the
+> static lane and the post-combo hook **move wholesale into Task 9**, landing
+> atomically with the artifacts that make them green — which is where the
+> original "why the registration waits" argument pointed anyway. What remains
+> here is the half that is genuinely reachable on its own: the capture-driven
+> core, consumed by the `server-fn-coverage` CLI arm.
 
 **Interfaces:**
 
-- Consumes: `verdict`, `render`, `extract`, `server_fns_in`
+- Consumes: `render`, `extract`, `server_fns_in`
 - Produces: `cargo xtask server-fn-coverage regenerate|verify`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
+
+The capture-side fail-closed tests (`missing_capture_fails_closed`,
+`empty_capture_fails_closed_rather_than_reporting_full_coverage`,
+`unparseable_capture_fails_closed`, `whitespace_only_capture_fails_closed`) live
+with the code they exercise, in `server_fn_coverage/io.rs`. `verdict`'s bite
+test (AC12) is `gate_bites_on_a_newly_added_uncovered_fn` in `snapshot.rs`. The
+step's own tests are the lane-level fail-closed pair:
 
 ```rust
 #[test]
-fn missing_capture_fails_closed() {
-    let err = coverage_from_capture(Path::new("/nonexistent.tar.gz")).unwrap_err();
-    assert!(err.to_string().contains("capture"), "{err}");
+fn verify_from_a_missing_capture_is_an_error() {
+    // Not `Ok(fail)`: a broken capture must reach the exit-2 path.
+    let err = regenerate_or_verify(web_src, Path::new("/nonexistent.tar.gz"), snap, false)
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("capture"), "{err:#}");
 }
 
 #[test]
-fn empty_capture_fails_closed_rather_than_reporting_full_coverage() {
-    let err = coverage_from_jsonl("").unwrap_err();
-    assert!(err.to_string().contains("no spans"), "{err}");
-}
+fn an_unscannable_web_src_is_an_error_not_an_empty_inventory() { … }
 
 #[test]
-fn unparseable_capture_fails_closed() {
-    assert!(coverage_from_jsonl("{not json").is_err());
-}
-
-#[test]
-fn gate_bites_on_an_uncovered_fn() {
-    // AC12 — the enforcement proof lives in the repo, not in PR prose.
-    let inventory = inv(["create_post", "brand_new_uncovered_fn"]);
-    let mut snap = Snapshot::default();
-    snap.covered.insert("create_post".into(), vec!["creates a post".into()]);
-    let v = verdict(&inventory, &snap, &[]);
-    assert!(v.iter().any(|m| m.contains("brand_new_uncovered_fn")));
-}
-
-#[test]
-fn cli_parses_regenerate_and_verify() {
-    assert!(Cli::try_parse_from(["xtask", "server-fn-coverage", "regenerate"]).is_ok());
-    assert!(Cli::try_parse_from(["xtask", "server-fn-coverage", "verify"]).is_ok());
+fn server_fn_coverage_parses_both_subcommands() {
+    let cli = Cli::try_parse_from(["xtask", "server-fn-coverage", "regenerate"]).unwrap();
+    assert_eq!(cli.command_name(), "server-fn-coverage-regenerate");
+    // …and `verify`, plus `server_fn_coverage_requires_a_subcommand`.
 }
 ```
 
-- [ ] **Step 2: Run, verify fail**
+- [x] **Step 2: Run, verify fail**
 
 Run: `devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml`
 Expected: FAIL — subcommand and helpers not defined.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `regenerate` reads
 `.xtask/diagnostics/e2e-sqlite-chromium/capture-sqlite.tar.gz`, extracts
@@ -1001,37 +1002,40 @@ rather than shelling to `tar`), runs `extract`, and writes
 `docs/coverage/server-fns.json` via `render`. `verify` does the same and
 compares to the committed file, failing on any difference.
 
-The **static-lane step** reads only the committed snapshot + allowlist + syn
-inventory and calls `verdict` — no capture, so it runs in `validate --no-e2e`.
-In `nix.rs`, after a passing `sqlite × chromium` combo, run the `verify` path;
-per D8 do **not** run it from the aggregate `checks.e2e` join, where both sqlite
-combos' captures collide.
+Both spellings share one path-parameterized core,
+`regenerate_or_verify(web_src, capture, snapshot_path, regenerate)`, with
+`from_capture` as the thin shell over the repo's real roots — the same
+pure-core/thin-shell seam `server_fn_registrar_check.rs` uses, and what makes
+the lane testable without a checkout. Comparison is on the **rendered bytes**,
+not the parsed value, so a hand-edit that happens to parse equal still counts as
+drift.
 
-- [ ] **Step 4: Run, verify pass**
+`StepResult` gains `#[derive(Debug)]` — `unwrap_err()` requires `T: Debug`, and
+the struct is plain data.
+
+- [x] **Step 4: Run, verify pass**
 
 Run: `devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml`
-Expected: PASS — the step's behavior is proven by its unit tests, since it is
-not yet wired into either lane.
+Expected: PASS — **actual: 333 tests, 333 passed**, and
+`cargo xtask check --no-test` green.
 
-- [ ] **Step 5: Commit — code only, not the registration**
+- [x] **Step 5: Commit**
 
 ```bash
 git add xtask/src
-git commit -m "feat(xtask): server-fn flow-coverage check and regenerate/verify commands (#681)"
+git commit -m "feat(xtask): server-fn coverage regenerate/verify from an e2e capture (#681)"
 ```
 
-**Why the registration waits.** Between this task and Task 9 the snapshot does
-not exist yet, so a registered step would see 55 inventory fns with neither
-snapshot nor allowlist and fail — and pre-commit runs the full
-`cargo xtask check`, so this very commit could not land. The `lib.rs:296`/`:328`
-registration therefore ships in **Task 9's** commit, atomically with the seeded
-artifacts that make it green. Verify before committing that
-`cargo xtask check --no-test` is still green (it will be — nothing calls the new
-step yet).
+**Why the registration waits.** A registered static-lane step would see 55
+inventory fns with neither snapshot nor allowlist and fail — and pre-commit runs
+the full `cargo xtask check`, so that commit could not land. Under
+`-D dead-code` the _unregistered_ step cannot land either (see the scope
+correction above), so the step's code and its registration both ship in **Task
+9's** commit, atomically with the seeded artifacts that make them green.
 
 ---
 
-### Task 9: Seed from a real run, file the gaps, commit the snapshot
+### Task 9: The static lane, seeded from a real run, with the gaps filed
 
 **Files:**
 
@@ -1039,9 +1043,78 @@ step yet).
   `docs/coverage/server-fns-allowlist.json`
 - Create: `xtask/src/server_fn_coverage/testdata/otel-traces-seed.jsonl` (the
   AC2/AC11 fixture)
+- Modify: `xtask/src/steps/server_fn_coverage_check.rs` — add the static lane
+  (`run`/`check`) and the post-combo hook (`verify_after_combo`), moved here
+  from Task 8
 - Modify: `xtask/src/lib.rs:296` and `:328` — register
-  `steps::server_fn_coverage_check::run` in both arms (deferred from Task 8; it
-  becomes green only once this task's artifacts exist)
+  `steps::server_fn_coverage_check::run` in both arms; and the `Command::E2e`
+  arm — call `verify_after_combo` after `flaky::collect`
+
+**The moved-in code** (written and gate-verified during Task 8, then held back
+because `-D dead-code` rejects an unregistered `pub fn`; restore it verbatim
+alongside the registration):
+
+```rust
+const STATIC_STEP: &str = "server-fn-coverage";
+
+/// The one combo whose traces are authoritative (spec D6).
+const AUTHORITATIVE: (&str, &str) = ("sqlite", "chromium");
+
+/// The static-lane check, over explicit paths so it is testable without the repo.
+/// A missing snapshot, an unscannable `web/src`, or an unparseable artifact is a
+/// **failure**, never a pass.
+fn check(web_src: &Path, snapshot_path: &Path, allowlist_path: &Path) -> StepResult {
+    let (inventory, snapshot, allowlist) = match (
+        inventory(web_src), read_snapshot(snapshot_path), read_allowlist(allowlist_path),
+    ) {
+        (Ok(i), Ok(s), Ok(a)) => (i, s, a),
+        (i, s, a) => {
+            let detail = [i.err(), s.err(), a.err()].into_iter().flatten()
+                .map(|e| format!("{e:#}")).collect::<Vec<_>>().join("\n");
+            return StepResult::fail(STATIC_STEP).detail(detail);
+        }
+    };
+    let violations = verdict(&inventory, &snapshot, &allowlist);
+    if violations.is_empty() {
+        return StepResult::ok(STATIC_STEP)
+            .detail(format!("{} server fn(s) accounted for", inventory.len()));
+    }
+    StepResult::fail(STATIC_STEP).detail(violations.join("\n"))
+}
+
+pub fn run(result: &mut CommandResult) {
+    result.push(check(Path::new(WEB_SRC), Path::new(SNAPSHOT_PATH), Path::new(ALLOWLIST_PATH)));
+}
+
+/// After the authoritative combo, confirm the committed snapshot still matches
+/// what the suite exercised. A no-op for every other combo (D8/D6). Skipped when
+/// the combo itself failed: a failed run's capture is partial or absent, so drift
+/// against it would be noise on top of the real failure.
+pub fn verify_after_combo(result: &mut CommandResult, backend: &str, browser: &str) {
+    if (backend, browser) != AUTHORITATIVE { return; }
+    if !result.ok {
+        result.push(StepResult::skip(VERIFY_STEP).detail("combo failed — no trustworthy capture"));
+        return;
+    }
+    let step = from_capture(Path::new(CAPTURE_PATH), false)
+        .unwrap_or_else(|e| StepResult::fail(VERIFY_STEP).detail(format!("{e:#}")));
+    result.push(step);
+}
+```
+
+Its tests, likewise moved: `static_lane_passes_when_every_fn_is_covered`,
+`static_lane_bites_on_an_uncovered_fn` (the wired-up half of AC12),
+`static_lane_accepts_a_substantive_allowlist_entry`,
+`static_lane_fails_closed_on_a_missing_snapshot` (asserts the detail names
+`REGENERATE_CMD`), `static_lane_fails_closed_on_an_unscannable_web_src`,
+`static_lane_fails_closed_on_an_unparseable_snapshot`,
+`e2e_lane_is_a_no_op_for_a_non_authoritative_combo` (all three other combos),
+and `e2e_lane_skips_when_the_combo_failed`.
+
+**Ordering note.** Step 1's seeding run must happen _before_
+`verify_after_combo` is wired, or the combo goes red on the not-yet-existing
+snapshot — which is the same bootstrap problem, just relocated to the e2e lane.
+Seed first, then wire.
 
 - [ ] **Step 1: Run the authoritative combo**
 
