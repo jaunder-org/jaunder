@@ -8,5 +8,7 @@
 //! two-lane gate) is built on top of it.
 
 pub mod extract;
+pub mod snapshot;
 
 pub use extract::{extract, Coverage};
+pub use snapshot::{render, verdict, AllowlistEntry, Snapshot, REGENERATE_CMD};
