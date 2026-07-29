@@ -245,16 +245,18 @@ Spec criteria: 10, 11, 12. No commit unless a fix is needed.
 
 **Steps**
 
-- [ ] `git diff wt-base-issue-587 -- end2end/` → **empty**. Note the single-ref
+- [x] `git diff wt-base-issue-587 -- end2end/` → **empty**. Note the single-ref
       form: it compares the **working tree** against the base, so an uncommitted
       or staged-but-uncommitted edit is caught. `..HEAD` would compare commits
       only and let a dirty edit through — and this file is the evidence for
       criterion 12, so this is the one check that must be airtight. If it shows
       anything, stop and reassess.
-- [ ] `cargo xtask e2e-local audiences` → PASS. The load-bearing assertions: the
+- [x] `cargo xtask e2e-local audiences` → PASS. The load-bearing assertions: the
       renamed row's `<h3>` shows the new name, and both rows' checklist `<ul>`
       element handles remain `isConnected` across create / rename / delete.
-- [ ] `cargo xtask validate --no-e2e` → green. _(This already includes
+      **7/7 passed in 20.6s.** (One test deliberately induces a 500 to assert
+      the error node; the logged `tower_http` 500 is that, not a failure.)
+- [x] `cargo xtask validate --no-e2e` → green. _(This already includes
       wasm-clippy, so it discharges criteria 10 and 11 together.)_
 
 **On failure.** A rename that no longer updates in place, or a detached
