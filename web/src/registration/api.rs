@@ -1,6 +1,6 @@
 //! The **registration** vertical's API surface (ADR-0070, amended #530): the
 //! `#[server]` account-provisioning endpoints (`register`,
-//! `get_registration_policy`) and their wire types, dual-compiled. `mod.rs`
+//! `get_policy`) and their wire types, dual-compiled. `mod.rs`
 //! re-exports these so external call sites and the server-fn registrar keep the
 //! stable `crate::registration::…` paths.
 
@@ -10,7 +10,7 @@ use crate::error::WebResult;
 // client and server builds.
 use common::invite::ProfferedInviteCode;
 use common::password::ProfferedPassword;
-// Ungated: `RegistrationPolicy` is the wire *return* type of `get_registration_policy`,
+// Ungated: `RegistrationPolicy` is the wire *return* type of `get_policy`,
 // and `RawToken` the wire *return* type of `register`, so the `#[server]`-generated
 // signatures reference them on both the client and server builds.
 use common::registration::RegistrationPolicy;
@@ -38,9 +38,9 @@ use {
 /// [`RegistrationPolicy::Open`], [`RegistrationPolicy::InviteOnly`], or
 /// [`RegistrationPolicy::Closed`].
 #[server(endpoint = "/get_registration_policy")]
-#[tracing::instrument(name = "web.registration.get_registration_policy")]
-pub async fn get_registration_policy() -> WebResult<RegistrationPolicy> {
-    boundary!("get_registration_policy", {
+#[tracing::instrument(name = "web.registration.get_policy")]
+pub async fn get_policy() -> WebResult<RegistrationPolicy> {
+    boundary!("get_policy", {
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
         let policy = site_config.get_registration_policy().await?;
         Ok(policy)

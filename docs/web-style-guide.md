@@ -259,7 +259,7 @@ hydration). So a plain client-only `Effect::new` that copies a resolved
    `use_context::<Arc<dyn FooStorage>>().ok_or_else(…)?` over
    `expect_context::<Arc<dyn FooStorage>>()`, returning the `Err` branch instead
    of panicking and wedging the worker. Fetch every handle **before** the first
-   `.await` (mirror `get_registration_policy`; `require_auth` reads its `Parts`
+   `.await` (mirror `registration::get_policy`; `require_auth` reads its `Parts`
    context synchronously before its own await), so a future resumed on another
    worker thread never reads a task-local context that is no longer installed.
 
@@ -273,10 +273,10 @@ then holds the last **result** across every refetch — `Some(Ok(v))` on success
 do **not** swallow it into a default — that silently misrepresents state (e.g.
 an empty member set reading as "nobody is a member", #346), and is inconsistent
 with the list-level resource which shows its error. `MemberChecklist` is the
-reference (`members.sticky(move || list_audience_members(id))`, matched
-three-way `None` / `Some(Err)` / `Some(Ok)`). A **constant-source** resource
-that never refetches needs no retention — use a one-line `Signal::derive`
-instead (the audiences subscriber roster).
+reference (`members.sticky(move || list_members(id))`, matched three-way `None`
+/ `Some(Err)` / `Some(Ok)`). A **constant-source** resource that never refetches
+needs no retention — use a one-line `Signal::derive` instead (the audiences
+subscriber roster).
 
 ## 10. Keyed lists (reactive `Store`)
 

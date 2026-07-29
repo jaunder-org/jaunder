@@ -36,7 +36,7 @@ async fn create_published_post_enqueues_expected_feeds(
 
     let (status, _response) = post_json(
         &state,
-        <web::posts::CreatePost as ServerFn>::PATH,
+        <web::posts::Create as ServerFn>::PATH,
         body,
         Some(&session.cookie()),
     )
@@ -77,7 +77,7 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
 
     let (status, create_response) = post_json(
         &state,
-        <web::posts::CreatePost as ServerFn>::PATH,
+        <web::posts::Create as ServerFn>::PATH,
         create_body,
         Some(&cookie),
     )
@@ -113,7 +113,7 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
 
     let (status, _) = post_json(
         &state,
-        <web::posts::UpdatePost as ServerFn>::PATH,
+        <web::posts::Update as ServerFn>::PATH,
         update_body,
         Some(&cookie),
     )
@@ -155,7 +155,7 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend
 
     let (status, create_response) = post_json(
         &state,
-        <web::posts::CreatePost as ServerFn>::PATH,
+        <web::posts::Create as ServerFn>::PATH,
         create_body,
         Some(&cookie),
     )
@@ -180,7 +180,7 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend
     let unpublish_body = format!("post_id={post_id}");
     let (status, _) = post_form(
         &state,
-        <web::posts::UnpublishPost as ServerFn>::PATH,
+        <web::posts::Unpublish as ServerFn>::PATH,
         unpublish_body,
         Some(&cookie),
     )
@@ -222,7 +222,7 @@ async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
 
     let (status, create_response) = post_json(
         &state,
-        <web::posts::CreatePost as ServerFn>::PATH,
+        <web::posts::Create as ServerFn>::PATH,
         create_body,
         Some(&cookie),
     )
@@ -247,7 +247,7 @@ async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
     let delete_body = format!("post_id={post_id}");
     let (status, _) = post_form(
         &state,
-        <web::posts::DeletePost as ServerFn>::PATH,
+        <web::posts::Delete as ServerFn>::PATH,
         delete_body,
         Some(&cookie),
     )
@@ -289,7 +289,7 @@ async fn delete_draft_post_enqueues_nothing(#[case] backend: Backend) {
 
     let (status, create_response) = post_json(
         &state,
-        <web::posts::CreatePost as ServerFn>::PATH,
+        <web::posts::Create as ServerFn>::PATH,
         create_body,
         Some(&cookie),
     )
@@ -314,7 +314,7 @@ async fn delete_draft_post_enqueues_nothing(#[case] backend: Backend) {
     let delete_body = format!("post_id={post_id}");
     let (status, _) = post_form(
         &state,
-        <web::posts::DeletePost as ServerFn>::PATH,
+        <web::posts::Delete as ServerFn>::PATH,
         delete_body,
         Some(&cookie),
     )

@@ -1,10 +1,10 @@
 //! Email vertical — wasm-only UI (ADR-0070): the email-settings page and the
 //! verify-email landing.
 
-use super::{email_status_line, parse_verification_token, verify_email, RequestEmailVerification};
+use super::{email_status_line, parse_verification_token, verify, RequestVerification};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
-use crate::profile::get_profile;
+use crate::profile;
 use crate::topbar::Topbar;
 use common::email::Email;
 use leptos::prelude::*;
@@ -13,9 +13,9 @@ use leptos::prelude::*;
 /// form to submit a new email address for verification.
 #[component]
 pub fn EmailPage() -> impl IntoView {
-    let request_action = ServerAction::<RequestEmailVerification>::new();
+    let request_action = ServerAction::<RequestVerification>::new();
     let email = Field::<Email>::new();
-    let profile = Resource::new(move || request_action.version().get(), |_| get_profile());
+    let profile = Resource::new(move || request_action.version().get(), |_| profile::get());
 
     view! {
         <Topbar title="Email" sub="Verify your address" />
@@ -72,7 +72,7 @@ pub fn EmailPage() -> impl IntoView {
     }
 }
 
-/// Reads the `token` query parameter and calls `verify_email` on mount.
+/// Reads the `token` query parameter and calls `verify` on mount.
 /// Renders a success message or an appropriate error.
 #[component]
 pub fn VerifyEmailPage() -> impl IntoView {
@@ -80,12 +80,12 @@ pub fn VerifyEmailPage() -> impl IntoView {
 
     let query = use_query_map();
     let token = move || query.with(|q| q.get("token").unwrap_or_default());
-    // `verify_email` takes a typed `RawToken`. Parse the URL's token client-side
+    // `verify` takes a typed `RawToken`. Parse the URL's token client-side
     // (ADR-0065 pre-validation): a malformed token short-circuits to a validation error
     // with no server round-trip; a well-formed one is verified server-side as before.
     let result = Resource::new(token, |raw: String| async move {
         let token = parse_verification_token(&raw)?;
-        verify_email(token).await
+        verify(token).await
     });
 
     view! {

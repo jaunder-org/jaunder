@@ -1,6 +1,6 @@
 //! The **tags** vertical's wasm-only UI (ADR-0070): the `TagInput` tag-entry
 //! widget — a chip list plus a debounced autocomplete field backed by the
-//! [`list_tags`](super::list_tags) endpoint. Declared
+//! [`list`](super::list) endpoint. Declared
 //! `#[cfg(target_arch = "wasm32")] mod component;` in `tags/mod.rs`, so this file
 //! is wasm-only by its `mod` declaration and carries no cfg gates of its own. Its
 //! state and dispatch logic live in the host-tested [`super::input_state`]; only the
@@ -134,7 +134,7 @@ fn TagSuggestions(
 }
 
 /// Debounced autocomplete fetch: after 150 ms, if no later keystroke has
-/// superseded `tick`, query `list_tags(prefix)` and publish the results (opening
+/// superseded `tick`, query `list(prefix)` and publish the results (opening
 /// the dropdown when non-empty). Later keystrokes bump `debounce_tick`, so a stale
 /// timer both skips its fetch and discards a fetch that returns late.
 fn schedule_suggestion_fetch(
@@ -154,7 +154,7 @@ fn schedule_suggestion_fetch(
                 return;
             }
             spawn_local(async move {
-                if let Ok(results) = crate::tags::list_tags(Some(prefix), Some(10)).await {
+                if let Ok(results) = crate::tags::list(Some(prefix), Some(10)).await {
                     if debounce_tick.get_untracked() == tick {
                         let open = !results.is_empty();
                         suggestions.set(results);

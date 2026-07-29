@@ -34,7 +34,7 @@ async fn serve_returns_200_with_cache_headers(#[case] backend: Backend) {
     let (status, body) = post_multipart(
         &state,
         &storage,
-        <web::media::UploadMedia as ServerFn>::PATH,
+        <web::media::Upload as ServerFn>::PATH,
         MultipartFile {
             filename: "serve_test.png",
             content_type: "image/png",
@@ -115,7 +115,7 @@ async fn serve_returns_304_on_if_none_match(#[case] backend: Backend) {
     let (status, body) = post_multipart(
         &state,
         &storage,
-        <web::media::UploadMedia as ServerFn>::PATH,
+        <web::media::Upload as ServerFn>::PATH,
         MultipartFile {
             filename: "etag_test.png",
             content_type: "image/png",

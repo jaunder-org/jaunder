@@ -5,8 +5,6 @@ mod api;
 #[cfg(target_arch = "wasm32")]
 mod component;
 
-pub use api::{
-    confirm_password_reset, request_password_reset, ConfirmPasswordReset, RequestPasswordReset,
-};
+pub use api::{confirm, request, Confirm, Request};
 #[cfg(target_arch = "wasm32")]
 pub use component::{ForgotPasswordPage, ResetPasswordPage};

@@ -20,7 +20,7 @@ use common::time::UtcInstant;
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// Invite metadata returned by [`list_invites`].
+/// Invite metadata returned by [`list`].
 ///
 /// The raw code is deliberately **not** included — a capability token is never sent
 /// server→client (#400). Codes are delivered out-of-band (the `jaunder user invite` CLI
@@ -36,14 +36,14 @@ pub struct InviteInfo {
 /// Creates an invite code expiring in `expires_in_hours` (default 168 = 7 days) and
 /// **emails the invitation link** to `recipient_email`. Requires authentication. The
 /// code is never returned to the client (#400) — it is delivered only as the link in
-/// the email (mirrors `request_password_reset`).
+/// the email (mirrors `password_reset::request`).
 #[server(endpoint = "/create_invite")]
-#[tracing::instrument(name = "web.invites.create_invite", skip(recipient_email))]
-pub async fn create_invite(
+#[tracing::instrument(name = "web.invites.create", skip(recipient_email))]
+pub async fn create(
     expires_in_hours: Option<InviteTtlHours>,
     recipient_email: Email,
 ) -> WebResult<()> {
-    boundary!("create_invite", {
+    boundary!("create", {
         let _auth = require_auth().await?;
         let invites = expect_context::<Arc<dyn InviteStorage>>();
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
@@ -89,9 +89,9 @@ pub async fn create_invite(
 /// Returns invite metadata (never the raw codes). Requires `invite_only` registration
 /// policy; returns an error otherwise.
 #[server(endpoint = "/list_invites")]
-#[tracing::instrument(name = "web.invites.list_invites")]
-pub async fn list_invites() -> WebResult<Vec<InviteInfo>> {
-    boundary!("list_invites", {
+#[tracing::instrument(name = "web.invites.list")]
+pub async fn list() -> WebResult<Vec<InviteInfo>> {
+    boundary!("list", {
         let _auth = require_auth().await?;
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
         let invites = expect_context::<Arc<dyn InviteStorage>>();

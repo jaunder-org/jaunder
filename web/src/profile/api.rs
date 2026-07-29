@@ -1,5 +1,5 @@
 //! Profile wire DTOs + `#[server]` endpoints (ADR-0070, amended #530): the
-//! `ProfileData` payload and the `get_profile` / `update_profile` /
+//! `ProfileData` payload and the `get` / `update` /
 //! `get_default_post_format` / `set_default_post_format` server fns. Dual-compiled
 //! (host + wasm); the vertical's one grouped `#[cfg(feature = "server")]` use-block
 //! lives here. Re-exported from `mod.rs` so `crate::profile::…` paths stay stable.
@@ -27,7 +27,7 @@ use {
     },
 };
 
-/// Profile data returned by [`get_profile`].
+/// Profile data returned by [`get`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileData {
     pub username: Username,
@@ -39,9 +39,9 @@ pub struct ProfileData {
 
 /// Returns the authenticated user's profile.
 #[server(endpoint = "/get_profile")]
-#[tracing::instrument(name = "web.profile.get_profile")]
-pub async fn get_profile() -> WebResult<ProfileData> {
-    boundary!("get_profile", {
+#[tracing::instrument(name = "web.profile.get")]
+pub async fn get() -> WebResult<ProfileData> {
+    boundary!("get", {
         let auth = require_auth().await?;
         let users = expect_context::<Arc<dyn UserStorage>>();
         let user = users
@@ -65,9 +65,9 @@ pub async fn get_profile() -> WebResult<ProfileData> {
 /// trimmed/bounded. Both `Option`s model presence, so no `non_empty` shim is
 /// needed — an empty wire value is rejected at decode, clearing goes via omission.
 #[server(endpoint = "/update_profile")]
-#[tracing::instrument(name = "web.profile.update_profile", skip_all)]
-pub async fn update_profile(display_name: Option<DisplayName>, bio: Option<Bio>) -> WebResult<()> {
-    boundary!("update_profile", {
+#[tracing::instrument(name = "web.profile.update", skip_all)]
+pub async fn update(display_name: Option<DisplayName>, bio: Option<Bio>) -> WebResult<()> {
+    boundary!("update", {
         let auth = require_auth().await?;
         let users = expect_context::<Arc<dyn UserStorage>>();
         users

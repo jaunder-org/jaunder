@@ -33,7 +33,7 @@ async fn list_tags_returns_empty_when_no_tags(#[case] backend: Backend) {
 
     let (status, body) = post_json(
         &state,
-        <web::tags::ListTags as ServerFn>::PATH,
+        <web::tags::List as ServerFn>::PATH,
         serde_json::json!({}),
         None,
     )
@@ -57,7 +57,7 @@ async fn list_tags_returns_all_when_prefix_absent(#[case] backend: Backend) {
 
     let (status, body) = post_json(
         &state,
-        <web::tags::ListTags as ServerFn>::PATH,
+        <web::tags::List as ServerFn>::PATH,
         serde_json::json!({ "prefix": null, "limit": null }),
         None,
     )
@@ -87,7 +87,7 @@ async fn list_tags_filters_by_prefix_case_insensitive(#[case] backend: Backend) 
 
     let (status, body) = post_json(
         &state,
-        <web::tags::ListTags as ServerFn>::PATH,
+        <web::tags::List as ServerFn>::PATH,
         serde_json::json!({ "prefix": "RUST" }),
         None,
     )
@@ -115,7 +115,7 @@ async fn list_tags_clamps_limit_to_max(#[case] backend: Backend) {
 
     let (status, body) = post_json(
         &state,
-        <web::tags::ListTags as ServerFn>::PATH,
+        <web::tags::List as ServerFn>::PATH,
         serde_json::json!({ "limit": 1000 }),
         None,
     )
@@ -141,7 +141,7 @@ async fn list_tags_uses_default_limit_when_unspecified(#[case] backend: Backend)
 
     let (status, body) = post_json(
         &state,
-        <web::tags::ListTags as ServerFn>::PATH,
+        <web::tags::List as ServerFn>::PATH,
         serde_json::json!({}),
         None,
     )

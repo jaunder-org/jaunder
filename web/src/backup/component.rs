@@ -1,4 +1,4 @@
-use crate::backup::{backup_warning_visible, get_backup_settings, UpdateBackupSettings};
+use crate::backup::{get_settings, warning_visible, UpdateSettings};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::topbar::Topbar;
@@ -8,11 +8,8 @@ use strum::VariantArray;
 
 #[component]
 pub fn BackupSettingsPage() -> impl IntoView {
-    let update_action = ServerAction::<UpdateBackupSettings>::new();
-    let settings = Resource::new(
-        move || update_action.version().get(),
-        |_| get_backup_settings(),
-    );
+    let update_action = ServerAction::<UpdateSettings>::new();
+    let settings = Resource::new(move || update_action.version().get(), |_| get_settings());
 
     view! {
         <Topbar title="Backup Settings" sub="Operations" />
@@ -80,7 +77,7 @@ fn backup_destination_field(destination: Field<DestinationPath>) -> impl IntoVie
 
 fn backup_settings_form(
     settings: &BackupConfig,
-    update_action: ServerAction<UpdateBackupSettings>,
+    update_action: ServerAction<UpdateSettings>,
 ) -> impl IntoView {
     // Client-validated fields dispatched directly (no `<ActionForm>`), so the form can carry
     // typed/optional values — the ADR-0065 direct-bind pattern, mirroring
@@ -96,7 +93,7 @@ fn backup_settings_form(
     let submit = move |_| {
         // The disabled button gates the two required fields valid, so `parsed()` is `Some`.
         if let (Some(schedule), Some(retention_count)) = (schedule.parsed(), retention.parsed()) {
-            update_action.dispatch(UpdateBackupSettings {
+            update_action.dispatch(UpdateSettings {
                 // Empty (optional) field → `None`, omitted on the wire → clears the destination;
                 // a non-empty value → `Some(DestinationPath)`.
                 destination_path: destination.parsed(),
@@ -183,7 +180,7 @@ fn backup_settings_form(
 
 #[component]
 pub fn BackupBanner() -> impl IntoView {
-    let visible = Resource::new(|| (), |()| backup_warning_visible());
+    let visible = Resource::new(|| (), |()| warning_visible());
     view! {
         <crate::banner::WarnBanner
             visible=visible

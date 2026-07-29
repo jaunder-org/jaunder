@@ -17,7 +17,7 @@ async fn get_site_identity_requires_operator(#[case] backend: Backend) {
 
     let (anon_status, anon_body) = post_form(
         &state,
-        <web::site::GetSiteIdentity as ServerFn>::PATH,
+        <web::site::GetIdentity as ServerFn>::PATH,
         "",
         anonymous_cookie,
     )
@@ -31,7 +31,7 @@ async fn get_site_identity_requires_operator(#[case] backend: Backend) {
 
     let (member_status, member_body) = post_form(
         &state,
-        <web::site::GetSiteIdentity as ServerFn>::PATH,
+        <web::site::GetIdentity as ServerFn>::PATH,
         "",
         Some(&member_cookie),
     )
@@ -52,7 +52,7 @@ async fn get_site_identity_returns_defaults_when_unconfigured(#[case] backend: B
 
     let (status, body) = post_form(
         &state,
-        <web::site::GetSiteIdentity as ServerFn>::PATH,
+        <web::site::GetIdentity as ServerFn>::PATH,
         "",
         Some(&cookie),
     )
@@ -73,7 +73,7 @@ async fn update_site_identity_round_trips_via_get(#[case] backend: Backend) {
     let update_body = "title=My+Blog&base_url=https%3A%2F%2Fexample.com%2F";
     let (update_status, update_body_resp) = post_form(
         &state,
-        <web::site::UpdateSiteIdentity as ServerFn>::PATH,
+        <web::site::UpdateIdentity as ServerFn>::PATH,
         update_body,
         Some(&cookie),
     )
@@ -82,7 +82,7 @@ async fn update_site_identity_round_trips_via_get(#[case] backend: Backend) {
 
     let (get_status, get_body) = post_form(
         &state,
-        <web::site::GetSiteIdentity as ServerFn>::PATH,
+        <web::site::GetIdentity as ServerFn>::PATH,
         "",
         Some(&cookie),
     )
@@ -106,7 +106,7 @@ async fn update_site_identity_rejects_empty_title(#[case] backend: Backend) {
 
     let (status, body) = post_form(
         &state,
-        <web::site::UpdateSiteIdentity as ServerFn>::PATH,
+        <web::site::UpdateIdentity as ServerFn>::PATH,
         "title=+++&base_url=https%3A%2F%2Fexample.com",
         Some(&cookie),
     )
@@ -128,7 +128,7 @@ async fn update_site_identity_rejects_non_http_base_url(#[case] backend: Backend
 
     let (status, body) = post_form(
         &state,
-        <web::site::UpdateSiteIdentity as ServerFn>::PATH,
+        <web::site::UpdateIdentity as ServerFn>::PATH,
         "title=My+Blog&base_url=ftp%3A%2F%2Fexample.com",
         Some(&cookie),
     )
@@ -151,7 +151,7 @@ async fn update_site_identity_rejects_malformed_base_url(#[case] backend: Backen
 
     let (status, body) = post_form(
         &state,
-        <web::site::UpdateSiteIdentity as ServerFn>::PATH,
+        <web::site::UpdateIdentity as ServerFn>::PATH,
         "title=My+Blog&base_url=not-a-url",
         Some(&cookie),
     )
@@ -175,7 +175,7 @@ async fn update_site_identity_omits_base_url_as_none(#[case] backend: Backend) {
 
     let (update_status, update_body) = post_form(
         &state,
-        <web::site::UpdateSiteIdentity as ServerFn>::PATH,
+        <web::site::UpdateIdentity as ServerFn>::PATH,
         "title=My+Blog",
         Some(&cookie),
     )
@@ -184,7 +184,7 @@ async fn update_site_identity_omits_base_url_as_none(#[case] backend: Backend) {
 
     let (get_status, get_body) = post_form(
         &state,
-        <web::site::GetSiteIdentity as ServerFn>::PATH,
+        <web::site::GetIdentity as ServerFn>::PATH,
         "",
         Some(&cookie),
     )
@@ -205,7 +205,7 @@ async fn update_site_identity_requires_operator(#[case] backend: Backend) {
 
     let (anon_status, anon_body) = post_form(
         &state,
-        <web::site::UpdateSiteIdentity as ServerFn>::PATH,
+        <web::site::UpdateIdentity as ServerFn>::PATH,
         body,
         anonymous_cookie,
     )
@@ -219,7 +219,7 @@ async fn update_site_identity_requires_operator(#[case] backend: Backend) {
 
     let (member_status, member_body) = post_form(
         &state,
-        <web::site::UpdateSiteIdentity as ServerFn>::PATH,
+        <web::site::UpdateIdentity as ServerFn>::PATH,
         body,
         Some(&member_cookie),
     )
@@ -259,7 +259,7 @@ async fn base_url_warning_hidden_when_base_url_configured(#[case] backend: Backe
     let cookie = create_operator_and_session(&state).await.cookie();
     let (up, up_body) = post_form(
         &state,
-        <web::site::UpdateSiteIdentity as ServerFn>::PATH,
+        <web::site::UpdateIdentity as ServerFn>::PATH,
         "title=My+Blog&base_url=https%3A%2F%2Fexample.com%2F",
         Some(&cookie),
     )

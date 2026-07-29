@@ -2,9 +2,8 @@
 //! its child components, plus the keyed reactive store backing the list. Wasm-only.
 
 use super::api::{
-    list_audience_members, list_my_audiences, list_my_subscribers, AddSubscriberToAudience,
-    AudienceSummary, AudienceSummaryStoreFields, CreateAudience, DeleteAudience,
-    RemoveSubscriberFromAudience, RenameAudience, SubscriberSummary,
+    list_members, list_mine, list_my_subscribers, AddSubscriber, AudienceSummary,
+    AudienceSummaryStoreFields, Create, Delete, RemoveSubscriber, Rename, SubscriberSummary,
 };
 use crate::error::WebResult;
 // `crate::forms::Field` (the validated-input field) is aliased to avoid colliding with
@@ -54,7 +53,7 @@ pub fn AudiencesPage() -> impl IntoView {
     let store = Store::new(AudienceListData::default());
     let state = client::reactive::patched(
         move || list.track(),
-        list_my_audiences,
+        list_mine,
         move |rows| store.audiences().patch(rows),
     );
 
@@ -148,7 +147,7 @@ pub fn AudiencesPage() -> impl IntoView {
 #[component]
 fn CreateAudienceForm() -> impl IntoView {
     let list = expect_context::<AudienceList>();
-    let create_action = client::reactive::action::<CreateAudience>(move || list.notify());
+    let create_action = client::reactive::action::<Create>(move || list.notify());
     // Client-side pre-validation (ADR-0065) via direct-bind: the same `AudienceName::from_str`
     // the typed `#[server]` arg decodes through gates submit (disable-until-valid), so a valid
     // name is a precondition of dispatch and the empty-name rejection never round-trips for a
@@ -226,8 +225,8 @@ fn AudienceRow(row: Field<AudienceSummary>) -> impl IntoView {
 #[component]
 fn AudienceHeader(audience_id: AudienceId, name: AudienceName) -> impl IntoView {
     let list = expect_context::<AudienceList>();
-    let rename_action = client::reactive::action::<RenameAudience>(move || list.notify());
-    let delete_action = client::reactive::action::<DeleteAudience>(move || list.notify());
+    let rename_action = client::reactive::action::<Rename>(move || list.notify());
+    let delete_action = client::reactive::action::<Delete>(move || list.notify());
     // Client-side pre-validation (ADR-0065), seeded from the existing name so a pristine
     // row is already valid (submit enabled); clearing it disables Rename and — once
     // touched — shows the newtype's own message inline.
@@ -282,13 +281,10 @@ fn MemberChecklist(audience_id: AudienceId) -> impl IntoView {
     // not every audience's (and never the list). `sticky` retains the last member list across
     // that refetch so a toggle never flashes "Loading members…" (`None` until first resolve).
     let members = Invalidator::new();
-    let add_action = client::reactive::action::<AddSubscriberToAudience>(move || members.notify());
-    let remove_action =
-        client::reactive::action::<RemoveSubscriberFromAudience>(move || members.notify());
-    let member_ids = client::reactive::sticky(
-        move || members.track(),
-        move || list_audience_members(audience_id),
-    );
+    let add_action = client::reactive::action::<AddSubscriber>(move || members.notify());
+    let remove_action = client::reactive::action::<RemoveSubscriber>(move || members.notify());
+    let member_ids =
+        client::reactive::sticky(move || members.track(), move || list_members(audience_id));
 
     view! {
         {move || {

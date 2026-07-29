@@ -1,9 +1,9 @@
 //! Invites vertical — wasm-only UI (ADR-0070): the invite management page.
 
-use super::{list_invites, CreateInvite, InviteInfo};
+use super::{list, Create, InviteInfo};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
-use crate::registration::get_registration_policy;
+use crate::registration::get_policy;
 use crate::topbar::Topbar;
 use common::email::Email;
 use common::invite::InviteTtlHours;
@@ -18,13 +18,13 @@ use leptos::prelude::*;
 /// authed routes are static CSR shells, so there is no SSR 404 (ADR-0040/0041/#180).
 #[component]
 pub fn InvitesPage() -> impl IntoView {
-    let create_action = ServerAction::<CreateInvite>::new();
+    let create_action = ServerAction::<Create>::new();
     let recipient = Field::<Email>::new();
     // Optional TTL: empty ⇒ valid ⇒ server default 168 (#582). A non-empty out-of-range value
     // shows the newtype's message and gates submit.
     let ttl = Field::<InviteTtlHours>::optional();
-    let policy = Resource::new(|| (), |()| get_registration_policy());
-    let invites = Resource::new(move || create_action.version().get(), |_| list_invites());
+    let policy = Resource::new(|| (), |()| get_policy());
+    let invites = Resource::new(move || create_action.version().get(), |_| list());
 
     view! {
         <Topbar title="Invites" sub="Manage codes" />

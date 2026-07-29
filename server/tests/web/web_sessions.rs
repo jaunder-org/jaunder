@@ -24,7 +24,7 @@ async fn list_sessions_returns_sessions_for_authenticated_user(#[case] backend: 
 
     let (status, body) = post_form(
         &state,
-        <web::sessions::ListSessions as ServerFn>::PATH,
+        <web::sessions::List as ServerFn>::PATH,
         "",
         Some(&cookie),
     )
@@ -49,7 +49,7 @@ async fn list_sessions_marks_current_session(#[case] backend: Backend) {
 
     let (status, body) = post_form(
         &state,
-        <web::sessions::ListSessions as ServerFn>::PATH,
+        <web::sessions::List as ServerFn>::PATH,
         "",
         Some(&cookie),
     )
@@ -67,13 +67,7 @@ async fn list_sessions_marks_current_session(#[case] backend: Backend) {
 async fn list_sessions_requires_authentication(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, _) = post_form(
-        &state,
-        <web::sessions::ListSessions as ServerFn>::PATH,
-        "",
-        None,
-    )
-    .await;
+    let (status, _) = post_form(&state, <web::sessions::List as ServerFn>::PATH, "", None).await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
@@ -96,7 +90,7 @@ async fn revoke_session_removes_session_for_authenticated_user(#[case] backend: 
     let body = format!("token_hash={token_hash2}");
     let (status, _) = post_form(
         &state,
-        <web::sessions::RevokeSession as ServerFn>::PATH,
+        <web::sessions::Revoke as ServerFn>::PATH,
         body,
         Some(&cookie1),
     )
@@ -135,7 +129,7 @@ async fn revoke_session_rejects_session_belonging_to_another_user(#[case] backen
     let body = format!("token_hash={bob_token_hash}");
     let (status, _) = post_form(
         &state,
-        <web::sessions::RevokeSession as ServerFn>::PATH,
+        <web::sessions::Revoke as ServerFn>::PATH,
         body,
         Some(&alice_cookie),
     )
@@ -158,7 +152,7 @@ async fn revoke_session_requires_authentication(#[case] backend: Backend) {
 
     let (status, _) = post_form(
         &state,
-        <web::sessions::RevokeSession as ServerFn>::PATH,
+        <web::sessions::Revoke as ServerFn>::PATH,
         "token_hash=somehash",
         None,
     )

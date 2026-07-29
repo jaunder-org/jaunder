@@ -739,7 +739,7 @@ async fn get_registration_policy_returns_correct_value(#[case] backend: Backend)
     // Server functions are POST by default.
     let (status, _, body) = post_form_with_secure_flag(
         &state,
-        <web::registration::GetRegistrationPolicy as ServerFn>::PATH,
+        <web::registration::GetPolicy as ServerFn>::PATH,
         "",
         None,
         true,
@@ -762,7 +762,7 @@ async fn auth_user_extraction_fails(backend: Backend, #[case] cookie: Option<&st
 
     let (status, _, _) = post_form_with_secure_flag(
         &state,
-        <web::profile::GetProfile as ServerFn>::PATH,
+        <web::profile::Get as ServerFn>::PATH,
         "",
         cookie,
         true,

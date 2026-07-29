@@ -1,5 +1,5 @@
 //! The **registration** vertical: account provisioning — the `#[server]` endpoints
-//! `register` and `get_registration_policy` in [`api`], and the co-located
+//! `register` and `get_policy` in [`api`], and the co-located
 //! `RegisterPage` UI (with the invite-guidance view) in [`component`].
 //!
 //! Registration is distinct from authentication: it applies the site's registration
@@ -19,6 +19,6 @@ mod component;
 
 // The API surface — re-exported so external call sites and the server-fn registrar
 // keep the stable `crate::registration::…` paths despite living in `api.rs`.
-pub use api::{get_registration_policy, register, GetRegistrationPolicy, Register};
+pub use api::{get_policy, register, GetPolicy, Register};
 #[cfg(target_arch = "wasm32")]
 pub use component::RegisterPage;

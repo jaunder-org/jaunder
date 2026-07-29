@@ -8,13 +8,13 @@ use common::media::{
     ByteSize, ContentHash, ContentType, Filename, MaxFileSize, MediaSource, UserQuota,
 };
 use leptos::prelude::*;
-// `MultipartData`/`MultipartFormData` are named in the `upload_media` signature,
+// `MultipartData`/`MultipartFormData` are named in the `upload` signature,
 // which compiles for both the wasm client stub and the server build, so this import
 // is ungated. (#517)
 use leptos::server_fn::codec::{MultipartData, MultipartFormData};
 use serde::{Deserialize, Serialize};
 
-// `upload_media`'s return type; ungated so it is nameable on the wasm client stub
+// `upload`'s return type; ungated so it is nameable on the wasm client stub
 // (where `storage` is not compiled). (#517)
 use common::media::UploadResponse;
 
@@ -37,7 +37,7 @@ use common::time::UtcInstant;
 
 use crate::error::WebResult;
 
-/// A media item returned by [`list_my_media`].
+/// A media item returned by [`list_mine`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MediaItem {
     pub sha256: ContentHash,
@@ -49,7 +49,7 @@ pub struct MediaItem {
     pub created_at: UtcInstant,
 }
 
-/// Storage usage returned by [`media_usage`].
+/// Storage usage returned by [`usage`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MediaUsageData {
     pub used_bytes: ByteSize,
@@ -57,7 +57,7 @@ pub struct MediaUsageData {
     pub max_file_size_bytes: MaxFileSize,
 }
 
-/// Result returned by [`delete_media`].
+/// Result returned by [`delete`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeleteMediaResult {
     pub deleted: bool,
@@ -66,13 +66,13 @@ pub struct DeleteMediaResult {
 
 /// Lists media items owned by the authenticated user.
 #[server(endpoint = "/list_my_media")]
-#[tracing::instrument(name = "web.media.list_my_media")]
-pub async fn list_my_media(
+#[tracing::instrument(name = "web.media.list_mine")]
+pub async fn list_mine(
     source: Option<MediaSource>,
     limit: Option<PageSize>,
     offset: Option<PageOffset>,
 ) -> WebResult<Vec<MediaItem>> {
-    boundary!("list_my_media", {
+    boundary!("list_mine", {
         let auth = require_auth().await?;
         let media = expect_context::<Arc<dyn MediaStorage>>();
 
@@ -105,9 +105,9 @@ pub async fn list_my_media(
 
 /// Returns storage usage for the authenticated user.
 #[server(endpoint = "/media_usage")]
-#[tracing::instrument(name = "web.media.media_usage")]
-pub async fn media_usage() -> WebResult<MediaUsageData> {
-    boundary!("media_usage", {
+#[tracing::instrument(name = "web.media.usage")]
+pub async fn usage() -> WebResult<MediaUsageData> {
+    boundary!("usage", {
         let auth = require_auth().await?;
         let media = expect_context::<Arc<dyn MediaStorage>>();
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
@@ -129,14 +129,14 @@ pub async fn media_usage() -> WebResult<MediaUsageData> {
 /// If the item is referenced in any posts, it will not be deleted unless
 /// `force` is `Some(true)`.
 #[server(endpoint = "/delete_media")]
-#[tracing::instrument(name = "web.media.delete_media", skip(filename))]
-pub async fn delete_media(
+#[tracing::instrument(name = "web.media.delete", skip(filename))]
+pub async fn delete(
     sha256: ContentHash,
     filename: Filename,
     source: MediaSource,
     force: Option<bool>,
 ) -> WebResult<DeleteMediaResult> {
-    boundary!("delete_media", {
+    boundary!("delete", {
         let auth = require_auth().await?;
         let media = expect_context::<Arc<dyn MediaStorage>>();
         let posts = expect_context::<Arc<dyn PostStorage>>();
@@ -211,9 +211,9 @@ fn map_media_error(err: &anyhow::Error) -> InternalError {
 /// Streams a multipart file upload to storage and returns its stored URL/metadata.
 /// The multipart `#[server]` fn replacing the old `POST /media/upload` glue (#517).
 #[server(input = MultipartFormData, endpoint = "/upload_media")]
-#[tracing::instrument(name = "web.media.upload_media", skip_all)]
-pub async fn upload_media(data: MultipartData) -> WebResult<UploadResponse> {
-    boundary!("upload_media", {
+#[tracing::instrument(name = "web.media.upload", skip_all)]
+pub async fn upload(data: MultipartData) -> WebResult<UploadResponse> {
+    boundary!("upload", {
         let auth = require_auth().await?;
         let media = expect_context::<Arc<dyn MediaStorage>>();
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();

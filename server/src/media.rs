@@ -21,7 +21,7 @@ use web::auth::AuthUser;
 use crate::soft_path::SoftPath;
 
 /// Builds the media routes (content-addressed serve, remote proxy). Upload moved to
-/// the `web::media::upload_media` `#[server]` fn (#517).
+/// the `web::media::upload` `#[server]` fn (#517).
 ///
 /// The handlers read shared state via `Extension`, so the routes are generic
 /// over the application's router state type.

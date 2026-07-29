@@ -27,7 +27,7 @@ async fn unpublish_post_form(
 ) -> (StatusCode, String) {
     post_form(
         state,
-        <web::posts::UnpublishPost as ServerFn>::PATH,
+        <web::posts::Unpublish as ServerFn>::PATH,
         format!("post_id={post_id}"),
         cookie,
     )
@@ -52,7 +52,7 @@ async fn create_post_json(
     });
     post_json(
         state,
-        <web::posts::CreatePost as ServerFn>::PATH,
+        <web::posts::Create as ServerFn>::PATH,
         payload,
         cookie,
     )
@@ -79,7 +79,7 @@ async fn update_post_json(
     });
     post_json(
         state,
-        <web::posts::UpdatePost as ServerFn>::PATH,
+        <web::posts::Update as ServerFn>::PATH,
         payload,
         cookie,
     )
@@ -98,7 +98,7 @@ async fn get_post_form(
     // `get_post` now takes a single `date: PermalinkDate` wire arg (serde-transparent →
     // the ISO `YYYY-MM-DD` field), replacing the old loose `year/month/day` triple (#583).
     let body = format!("username={username}&date={year:04}-{month:02}-{day:02}&slug={slug}");
-    post_form(state, <web::posts::GetPost as ServerFn>::PATH, body, cookie).await
+    post_form(state, <web::posts::Get as ServerFn>::PATH, body, cookie).await
 }
 
 async fn get_post_preview_form(
@@ -109,7 +109,7 @@ async fn get_post_preview_form(
     let body = format!("post_id={post_id}");
     post_form(
         state,
-        <web::posts::GetPostPreview as ServerFn>::PATH,
+        <web::posts::GetPreview as ServerFn>::PATH,
         body,
         cookie,
     )
@@ -689,7 +689,7 @@ async fn publish_post_form(
 ) -> (StatusCode, String) {
     post_form(
         state,
-        <web::posts::PublishPost as ServerFn>::PATH,
+        <web::posts::Publish as ServerFn>::PATH,
         format!("post_id={post_id}"),
         cookie,
     )
@@ -711,7 +711,7 @@ async fn list_user_posts_form(
     }
     post_form(
         state,
-        <web::posts::ListUserPosts as ServerFn>::PATH,
+        <web::posts::ListByUser as ServerFn>::PATH,
         parts.join("&"),
         cookie,
     )
@@ -726,7 +726,7 @@ async fn list_posts_by_tag_form(
     let body = format!("tag={tag}&limit=50");
     post_form(
         state,
-        <web::posts::ListPostsByTag as ServerFn>::PATH,
+        <web::posts::ListByTag as ServerFn>::PATH,
         body,
         cookie,
     )
@@ -742,7 +742,7 @@ async fn list_user_posts_by_tag_form(
     let body = format!("username={username}&tag={tag}&limit=50");
     post_form(
         state,
-        <web::posts::ListUserPostsByTag as ServerFn>::PATH,
+        <web::posts::ListByUserAndTag as ServerFn>::PATH,
         body,
         cookie,
     )
@@ -1163,7 +1163,7 @@ async fn create_post_with_future_publish_at_is_scheduled(#[case] backend: Backen
     });
     let (status, body) = post_json(
         &state,
-        <web::posts::CreatePost as ServerFn>::PATH,
+        <web::posts::Create as ServerFn>::PATH,
         payload,
         Some(&cookie),
     )
@@ -1328,7 +1328,7 @@ async fn publish_post_rejects_non_author(#[case] backend: Backend) {
     "cursor_created_at=bad-time&cursor_post_id=10&limit=10"
 )]
 #[case::list_user_posts(
-    <web::posts::ListUserPosts as ServerFn>::PATH,
+    <web::posts::ListByUser as ServerFn>::PATH,
     "username=author&cursor_created_at=2026-04-16T10:11:12%2B00:00&limit=10",
     "username=author&cursor_created_at=bad-time&cursor_post_id=12&limit=10"
 )]
@@ -1646,7 +1646,7 @@ async fn delete_post_form(
 ) -> (StatusCode, String) {
     post_form(
         state,
-        <web::posts::DeletePost as ServerFn>::PATH,
+        <web::posts::Delete as ServerFn>::PATH,
         format!("post_id={post_id}"),
         cookie,
     )
@@ -1989,7 +1989,7 @@ async fn create_post_applies_tags_from_param(#[case] backend: Backend) {
     });
     let (status, body) = post_json(
         &state,
-        <web::posts::CreatePost as ServerFn>::PATH,
+        <web::posts::Create as ServerFn>::PATH,
         payload,
         Some(&cookie),
     )
@@ -2023,7 +2023,7 @@ async fn create_post_rejects_invalid_tag_token(#[case] backend: Backend) {
     });
     let (status, body) = post_json(
         &state,
-        <web::posts::CreatePost as ServerFn>::PATH,
+        <web::posts::Create as ServerFn>::PATH,
         payload,
         Some(&cookie),
     )
@@ -2052,7 +2052,7 @@ async fn create_post_rejects_more_than_25_tags(#[case] backend: Backend) {
     });
     let (status, body) = post_json(
         &state,
-        <web::posts::CreatePost as ServerFn>::PATH,
+        <web::posts::Create as ServerFn>::PATH,
         payload,
         Some(&cookie),
     )
@@ -2078,7 +2078,7 @@ async fn update_post_applies_tag_set_diff(#[case] backend: Backend) {
     });
     let (status, body) = post_json(
         &state,
-        <web::posts::CreatePost as ServerFn>::PATH,
+        <web::posts::Create as ServerFn>::PATH,
         create_payload,
         Some(&cookie),
     )
@@ -2099,7 +2099,7 @@ async fn update_post_applies_tag_set_diff(#[case] backend: Backend) {
     });
     let (status, body) = post_json(
         &state,
-        <web::posts::UpdatePost as ServerFn>::PATH,
+        <web::posts::Update as ServerFn>::PATH,
         update_payload,
         Some(&cookie),
     )
@@ -2140,7 +2140,7 @@ async fn list_posts_by_tag_returns_matching_posts_from_all_users(#[case] backend
             });
             let (status, body) = post_json(
                 &state,
-                <web::posts::CreatePost as ServerFn>::PATH,
+                <web::posts::Create as ServerFn>::PATH,
                 payload,
                 Some(&cookie),
             )
@@ -2221,7 +2221,7 @@ async fn list_user_posts_by_tag_scopes_to_user(#[case] backend: Backend) {
             });
             let (status, body) = post_json(
                 &state,
-                <web::posts::CreatePost as ServerFn>::PATH,
+                <web::posts::Create as ServerFn>::PATH,
                 payload,
                 Some(&cookie),
             )
@@ -2267,7 +2267,7 @@ async fn update_post_with_tags_unset_leaves_existing_tags_alone(#[case] backend:
     });
     let (status, body) = post_json(
         &state,
-        <web::posts::CreatePost as ServerFn>::PATH,
+        <web::posts::Create as ServerFn>::PATH,
         create_payload,
         Some(&cookie),
     )
@@ -2287,7 +2287,7 @@ async fn update_post_with_tags_unset_leaves_existing_tags_alone(#[case] backend:
     });
     let (status, body) = post_json(
         &state,
-        <web::posts::UpdatePost as ServerFn>::PATH,
+        <web::posts::Update as ServerFn>::PATH,
         update_payload,
         Some(&cookie),
     )
@@ -2607,7 +2607,7 @@ async fn post_audience_selection_returns_public_for_new_post(#[case] backend: Ba
 
     let (status, body) = post_form(
         &state,
-        <web::posts::PostAudienceSelection as ServerFn>::PATH,
+        <web::posts::AudienceSelection as ServerFn>::PATH,
         format!("post_id={}", created.post_id),
         Some(&cookie),
     )
@@ -2628,7 +2628,7 @@ async fn post_audience_selection_rejects_missing_post(#[case] backend: Backend) 
 
     let (status, body) = post_form(
         &state,
-        <web::posts::PostAudienceSelection as ServerFn>::PATH,
+        <web::posts::AudienceSelection as ServerFn>::PATH,
         "post_id=99999".to_string(),
         Some(&cookie),
     )
@@ -2660,7 +2660,7 @@ async fn post_audience_selection_rejects_non_owner(#[case] backend: Backend) {
     // A different user must not learn another author's targeting.
     let (status, body) = post_form(
         &state,
-        <web::posts::PostAudienceSelection as ServerFn>::PATH,
+        <web::posts::AudienceSelection as ServerFn>::PATH,
         format!("post_id={}", created.post_id),
         Some(&other_cookie),
     )

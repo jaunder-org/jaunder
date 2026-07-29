@@ -34,7 +34,7 @@ async fn media_usage_returns_defaults_for_authenticated_user(#[case] backend: Ba
 
     let (status, body) = post_form(
         &state,
-        <web::media::MediaUsage as ServerFn>::PATH,
+        <web::media::Usage as ServerFn>::PATH,
         "",
         Some(&cookie),
     )
@@ -53,9 +53,9 @@ async fn media_usage_returns_defaults_for_authenticated_user(#[case] backend: Ba
 // way (Leptos server fn → INTERNAL_SERVER_ERROR + "unauthorized"); only the
 // endpoint and request body vary.
 #[apply(backends_matrix)]
-#[case::media_usage(<web::media::MediaUsage as ServerFn>::PATH, "")]
-#[case::list_my_media(<web::media::ListMyMedia as ServerFn>::PATH, "")]
-#[case::delete_media(<web::media::DeleteMedia as ServerFn>::PATH, "sha256=deadbeef00000000000000000000000000000000000000000000000000000000&filename=test.png&source=upload")]
+#[case::media_usage(<web::media::Usage as ServerFn>::PATH, "")]
+#[case::list_my_media(<web::media::ListMine as ServerFn>::PATH, "")]
+#[case::delete_media(<web::media::Delete as ServerFn>::PATH, "sha256=deadbeef00000000000000000000000000000000000000000000000000000000&filename=test.png&source=upload")]
 #[tokio::test]
 async fn media_endpoint_rejects_unauthenticated_request(
     backend: Backend,
@@ -80,7 +80,7 @@ async fn list_my_media_returns_empty_for_new_user(#[case] backend: Backend) {
 
     let (status, body) = post_form(
         &state,
-        <web::media::ListMyMedia as ServerFn>::PATH,
+        <web::media::ListMine as ServerFn>::PATH,
         "",
         Some(&cookie),
     )
@@ -101,7 +101,7 @@ async fn list_my_media_rejects_out_of_range_limit(#[case] backend: Backend) {
     // deserialization instead of fetching an unbounded page.
     let (status, _body) = post_form(
         &state,
-        <web::media::ListMyMedia as ServerFn>::PATH,
+        <web::media::ListMine as ServerFn>::PATH,
         "limit=999",
         Some(&cookie),
     )
@@ -141,7 +141,7 @@ async fn list_my_media_returns_inserted_item(#[case] backend: Backend) {
 
     let (status, body) = post_form(
         &state,
-        <web::media::ListMyMedia as ServerFn>::PATH,
+        <web::media::ListMine as ServerFn>::PATH,
         "",
         Some(&cookie),
     )
@@ -185,7 +185,7 @@ async fn list_my_media_with_source_filter(#[case] backend: Backend) {
 
     let (status, body) = post_form(
         &state,
-        <web::media::ListMyMedia as ServerFn>::PATH,
+        <web::media::ListMine as ServerFn>::PATH,
         "source=upload",
         Some(&cookie),
     )
@@ -228,7 +228,7 @@ async fn delete_media_succeeds_for_existing_item(#[case] backend: Backend) {
     let body = "sha256=deadbeef01234567000000000000000000000000000000000000000000000000&filename=test.png&source=upload&force=false";
     let (status, body_str) = post_form(
         &state,
-        <web::media::DeleteMedia as ServerFn>::PATH,
+        <web::media::Delete as ServerFn>::PATH,
         body,
         Some(&cookie),
     )
@@ -286,7 +286,7 @@ async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend:
     let body = "sha256=deadbeef99999999000000000000000000000000000000000000000000000000&filename=inline.png&source=upload&force=false";
     let (status, body_str) = post_form(
         &state,
-        <web::media::DeleteMedia as ServerFn>::PATH,
+        <web::media::Delete as ServerFn>::PATH,
         body,
         Some(&cookie),
     )
@@ -319,7 +319,7 @@ async fn upload_media_stores_file_and_returns_metadata(#[case] backend: Backend)
     let (status, body) = post_multipart(
         &state,
         &storage,
-        <web::media::UploadMedia as ServerFn>::PATH,
+        <web::media::Upload as ServerFn>::PATH,
         MultipartFile {
             filename: "photo.jpg",
             content_type: "image/jpeg",
@@ -442,7 +442,7 @@ async fn upload_media_rejects_unauthenticated_request(#[case] backend: Backend) 
     let (status, body) = post_multipart(
         &state,
         &storage,
-        <web::media::UploadMedia as ServerFn>::PATH,
+        <web::media::Upload as ServerFn>::PATH,
         MultipartFile {
             filename: "photo.jpg",
             content_type: "image/jpeg",
@@ -470,7 +470,7 @@ async fn upload_media_rejects_invalid_filename(#[case] backend: Backend) {
     let (status, body) = post_multipart(
         &state,
         &storage,
-        <web::media::UploadMedia as ServerFn>::PATH,
+        <web::media::Upload as ServerFn>::PATH,
         MultipartFile {
             filename: "..",
             content_type: "image/jpeg",
@@ -504,7 +504,7 @@ async fn upload_media_rejects_oversized_file(#[case] backend: Backend) {
     let (status, body) = post_multipart(
         &state,
         &storage,
-        <web::media::UploadMedia as ServerFn>::PATH,
+        <web::media::Upload as ServerFn>::PATH,
         MultipartFile {
             filename: "big.jpg",
             content_type: "image/jpeg",
@@ -538,7 +538,7 @@ async fn upload_media_rejects_over_quota_file(#[case] backend: Backend) {
     let (status, body) = post_multipart(
         &state,
         &storage,
-        <web::media::UploadMedia as ServerFn>::PATH,
+        <web::media::Upload as ServerFn>::PATH,
         MultipartFile {
             filename: "big.jpg",
             content_type: "image/jpeg",
@@ -572,7 +572,7 @@ async fn upload_media_rejects_missing_file_field(#[case] backend: Backend) {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(<web::media::UploadMedia as ServerFn>::PATH)
+                .uri(<web::media::Upload as ServerFn>::PATH)
                 .header(
                     header::CONTENT_TYPE,
                     format!("multipart/form-data; boundary={boundary}"),

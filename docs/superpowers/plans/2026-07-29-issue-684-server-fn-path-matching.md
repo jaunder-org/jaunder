@@ -115,6 +115,12 @@ these.
   trailer.**
 - **Gate invocation:** `devtool run -- cargo xtask check` (worktree-aware;
   honest exit code).
+- **Integration tests need a database.** Use
+  `devtool pg run -- cargo nextest run -p jaunder --test integration` — it wraps
+  the command in a throwaway PostgreSQL 16 cluster. A **bare** nextest run has
+  no PostgreSQL listening, so every `*_postgres` case fails `ConnectionRefused`
+  and the run cancels after ~16 of 1061 tests: a false red that never reaches
+  the changed code. (`devtool pg`, not `cargo xtask pg`.)
 
 ---
 
@@ -601,17 +607,25 @@ worded for the precise pattern for the same reason.
 
 - [x] **Step 3: Run the server integration suite**
 
-Run: `devtool run -- cargo xtask check` Expected: PASS — the constants resolve
-to exactly today's URLs, so behavior is unchanged. A failure means a wrong type
-was named for an endpoint.
+Run: `devtool pg run -- cargo nextest run -p jaunder --test integration`
+Expected: PASS — the constants resolve to exactly today's URLs, so behavior is
+unchanged. A failure means a wrong type was named for an endpoint.
 
-**Do not use `cargo nextest run -p jaunder --test integration` here.** A bare
-nextest run has no PostgreSQL listening, so every `*_postgres` case fails with
-`Io(Os { code: 111, ConnectionRefused })` and nextest cancels after ~16 of 1061
-tests — a false red that never reaches the changed files. `cargo xtask check`
-runs the Nix-instrumented tests **with** PostgreSQL and is the honest signal.
+**`devtool pg run --` is load-bearing here.** It wraps the command in a
+throwaway PostgreSQL 16 cluster, injecting `JAUNDER_PG_TEST_URL` and
+`JAUNDER_PG_BOOTSTRAP_TEST_URL`. A **bare**
+`cargo nextest run -p jaunder --test integration` has no PostgreSQL listening,
+so every `*_postgres` case fails with `Io(Os { code: 111, ConnectionRefused })`
+and nextest cancels after ~16 of 1061 tests — a false red that never reaches the
+changed files. (It is `devtool pg`, not `cargo xtask pg`; xtask has no such
+subcommand.)
 
-- [ ] **Step 4: Commit**
+`devtool run -- cargo xtask check` is the heavier alternative — the
+Nix-instrumented suite _with_ PostgreSQL plus coverage — and is the per-commit
+gate regardless. Reach for `devtool pg run` when you want only the integration
+suite.
+
+- [x] **Step 4: Commit** — `bfa49c77`
 
 ```bash
 git add server/tests
@@ -640,7 +654,25 @@ git commit -m "test(server): name server-fn URLs via ServerFn::PATH instead of l
 - Produces: the new fn idents and their `PascalCase` generated type names, which
   Tasks 6 and 7 depend on.
 
-- [ ] **Step 1: Apply the 42 renames — including the `boundary!` label**
+**Outcome — two name collisions the spec's check did not predict.** The spec's
+re-export collision check compared new names against each vertical's `mod.rs`
+exports; it did **not** consider names _imported into_ the api.rs file, nor
+trait names in scope. Both surfaced here and were resolved without renaming any
+generated struct (which would break the `PascalCase(ident)` rule):
+
+1. **`posts::audience_selection` generates `AudienceSelection`**, colliding with
+   `common::visibility::AudienceSelection`, already imported in
+   `web/src/posts/api.rs` and used as that fn's return type and as the
+   `audience` field of `CreateArgs`/`UpdateArgs`. Resolved by importing the
+   domain type aliased as `DomainAudienceSelection` (5 sites, one file).
+2. **`posts::get` / `posts::update` generate `Get` / `Update`**, which shadow
+   the `leptos::prelude::{Get, Update}` traits that `.get()`/`.update()` resolve
+   through. `web/src/posts/component.rs` makes 7 `.update(…)` calls, so
+   importing the structs by name there would have silently broken method
+   resolution. Resolved by keeping both out of that import list and spelling
+   them `super::Get` / `super::Update` at their use sites.
+
+- [x] **Step 1: Apply the 42 renames — including the `boundary!` label**
 
 Rename each fn ident per the spec table, and in the same edit update: the
 vertical's `mod.rs` `pub use api::{…}` list, every in-crate call site, and the
@@ -674,7 +706,8 @@ Bulk work — dispatch via **jaunder-dispatch** (**memory: bulk rename → deleg
 to subagent**). The brief must carry the Global Constraint that `storage/src` is
 never touched: `update_post` and `confirm_password_reset` also name storage fns.
 
-- [ ] **Step 1b: Verify the rename is complete (AC15, AC16)**
+- [x] **Step 1b: Verify the rename is complete (AC15, AC16)** — 0 old idents; 55
+      `boundary!` labels, none stale; 13/13 unchanged present; `storage/` clean
 
 Run:
 `rg -n 'fn (create_audience|rename_audience|delete_audience|list_my_audiences|add_subscriber_to_audience|remove_subscriber_from_audience|list_audience_members|backup_warning_visible|get_backup_settings|update_backup_settings|request_email_verification|verify_email|create_invite|list_invites|list_my_media|media_usage|delete_media|upload_media|request_password_reset|confirm_password_reset|list_user_posts|list_posts_by_tag|list_user_posts_by_tag|create_post|get_post|get_post_preview|update_post|post_audience_selection|publish_post|delete_post|unpublish_post|get_profile|update_profile|get_registration_policy|list_sessions|revoke_session|get_site_identity|update_site_identity|subscribe_to|unsubscribe_from|is_subscribed_to|list_tags)\b' web/src`
@@ -693,7 +726,7 @@ Since Step 1 is dispatched as bulk work, this is the completion check; the
 compiler enforces _call sites_ but would not notice a partially-applied table
 row or a stray old definition.
 
-- [ ] **Step 2: Update the live docs that name a renamed ident**
+- [x] **Step 2: Update the live docs that name a renamed ident**
 
 Six sites across three files. Update the identifier only — D10 forbids rewording
 the surrounding prose.
@@ -725,7 +758,8 @@ Run:
 
 Expected: exactly the five storage-layer lines listed above, and nothing else.
 
-- [ ] **Step 3: Run the gate — spans are rewritten for you**
+- [x] **Step 3: Run the gate — spans are rewritten for you** — 42 span literals
+      rewritten by `Mode::Fix`, none hand-edited
 
 Run: `devtool run -- cargo xtask check --no-test` Expected: PASS.
 `server-fn-tracing`'s `Mode::Fix` rewrites all 42 changed span-name literals
@@ -733,7 +767,7 @@ Run: `devtool run -- cargo xtask check --no-test` Expected: PASS.
 `git diff --stat web/src` that the span edits appear — **do not hand-edit any
 span literal**.
 
-- [ ] **Step 4: Run the full host test suite**
+- [x] **Step 4: Run the full host test suite** — via `cargo xtask check` (green)
 
 Run: `devtool run -- cargo nextest run --workspace` Expected: PASS
 

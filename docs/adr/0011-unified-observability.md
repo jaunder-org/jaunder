@@ -192,10 +192,11 @@ observability decision — hence an amendment here rather than a new ADR.
 
 The PII discipline above told authors what a span field must not carry; nothing
 made them write a span at all. **44 of the 55 `#[server]` fns in `web/src` had
-none** — a request into `create_post` or `create_audience` produced no top-level
-span to correlate, and the 11 that existed disagreed with each other on naming.
-An unenforced convention is what allowed that, so the convention is now a gate:
-`server-fn-tracing`, in `cargo xtask check` and `cargo xtask validate`.
+none** — a request into `posts::create` or `audiences::create` produced no
+top-level span to correlate, and the 11 that existed disagreed with each other
+on naming. An unenforced convention is what allowed that, so the convention is
+now a gate: `server-fn-tracing`, in `cargo xtask check` and
+`cargo xtask validate`.
 
 ### The span
 
@@ -220,10 +221,10 @@ Only the name is written. A missing `#[tracing::instrument]` stays a _reported_
 failure: inserting one would mean guessing the `skip(...)` list, which is the
 one judgment the gate refuses to make on an author's behalf.
 
-Deriving the name rather than writing it has a payoff: the fn idents still carry
-a vertical noun the module path now restates (`audiences::create_audience`), and
-when #684 sheds those nouns, re-running `check` rewrites all 55 span names with
-no hand edit and no gate change.
+Deriving the name rather than writing it has a payoff: the fn idents carried a
+vertical noun the module path restated (`audiences::create_audience`), and when
+#684 shed those nouns, re-running `check` rewrote all 55 span names with no hand
+edit and no gate change.
 
 Spans use `#[tracing::instrument]`'s default **INFO** level, and no site sets an
 explicit `level`. Stated because it means operator configuration reaches trace
@@ -255,7 +256,7 @@ type:
    `PermalinkDate`, `Tag`), so already in any reverse-proxy access log.
 4. **Permitted outright by this ADR** — `Username`, per "usernames are public
    identifiers and acceptable" above. Its own ground rather than part of (3),
-   because `login` and `request_password_reset` take a username in a POST body.
+   because `login` and `password_reset::request` take a username in a POST body.
 
 Everything else is skipped: secrets, `Email`, `Bio`, `DisplayName`,
 `AudienceName`, `SessionLabel`, `Filename`, request-body structs, and bare
@@ -266,7 +267,7 @@ newtypes that validate a value's _shape_ while carrying arbitrary user text;
 `u32` is a primitive that bounds its contents completely. `Filename` in
 particular is skipped despite appearing in `media_url()` — a media item's URL is
 only discoverable once a published post references it, so an
-uploaded-but-unreferenced file's name is published nowhere, and `delete_media`
+uploaded-but-unreferenced file's name is published nowhere, and `media::delete`
 would otherwise record something like `mri-results-2026.pdf`.
 
 This ADR states the rule; **the gate holds the list** (`RECORDABLE_TYPES` in
@@ -283,7 +284,7 @@ its value does not read it.
 ### Two caveats, recorded deliberately
 
 - **`Bio`/`DisplayName` are skipped because nothing publishes them _today_.**
-  They are reachable only through `get_profile`/`update_profile`. If a public
+  They are reachable only through `profile::get`/`profile::update`. If a public
   `/@username` page later renders them, the classification warrants revisiting —
   the gate will not notice on its own.
 - **Allowlisting `u32` leaves a narrow hole**: a numeric OTP or PIN would pass.

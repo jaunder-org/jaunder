@@ -21,11 +21,9 @@ mod component;
 mod server;
 
 pub use api::{
-    add_subscriber_to_audience, create_audience, delete_audience, list_audience_members,
-    list_my_audiences, list_my_subscribers, remove_subscriber_from_audience, rename_audience,
-    AddSubscriberToAudience, AudienceSummary, CreateAudience, DeleteAudience, ListAudienceMembers,
-    ListMyAudiences, ListMySubscribers, RemoveSubscriberFromAudience, RenameAudience,
-    SubscriberSummary,
+    add_subscriber, create, delete, list_members, list_mine, list_my_subscribers,
+    remove_subscriber, rename, AddSubscriber, AudienceSummary, Create, Delete, ListMembers,
+    ListMine, ListMySubscribers, RemoveSubscriber, Rename, SubscriberSummary,
 };
 #[cfg(target_arch = "wasm32")]
 pub use component::AudiencesPage;

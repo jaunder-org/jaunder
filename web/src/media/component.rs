@@ -2,22 +2,19 @@
 //! browser file-picker glue. Declared `#[cfg(target_arch = "wasm32")] mod component;`
 //! in `media/mod.rs`, so this file is wasm-only by its `mod` declaration and
 //! carries no cfg gates of its own; it calls browser APIs directly. The upload
-//! itself goes through the [`super::upload_media`] multipart `#[server]` fn.
+//! itself goes through the [`super::upload`] multipart `#[server]` fn.
 
 use leptos::prelude::*;
 
 use common::pagination::{PageOffset, PageSize};
 use common::root_relative_url::RootRelativeUrl;
 
-use super::{
-    format_bytes, list_my_media, media_usage, upload_media, DeleteMedia, DeleteMediaResult,
-    MediaItem,
-};
+use super::{format_bytes, list_mine, upload, usage, Delete, DeleteMediaResult, MediaItem};
 use crate::error::WebError;
 use crate::topbar::Topbar;
 
 /// A media upload control: a button that opens the file picker and immediately
-/// uploads the chosen file via the [`super::upload_media`] multipart `#[server]`
+/// uploads the chosen file via the [`super::upload`] multipart `#[server]`
 /// fn (no navigation).
 ///
 /// `on_uploaded` / `on_error`, when provided, fire with the media URL or a
@@ -61,7 +58,7 @@ pub fn MediaUpload(
         uploading.set(true);
 
         spawn_local(async move {
-            let result = upload_media(form_data).await;
+            let result = upload(form_data).await;
             uploading.set(false);
             match result {
                 Ok(resp) => {
@@ -138,19 +135,17 @@ fn uploaded_url_view(url: RootRelativeUrl) -> impl IntoView {
 )]
 #[component]
 pub fn MediaPage() -> impl IntoView {
-    let delete_action = ServerAction::<DeleteMedia>::new();
+    let delete_action = ServerAction::<Delete>::new();
     let upload_version = RwSignal::new(0u32);
 
     let usage = Resource::new(
         move || (delete_action.version().get(), upload_version.get()),
-        |_: (usize, u32)| media_usage(),
+        |_: (usize, u32)| usage(),
     );
 
     let media_list = Resource::new(
         move || (delete_action.version().get(), upload_version.get()),
-        |_: (usize, u32)| {
-            list_my_media(None, Some(PageSize::default()), Some(PageOffset::default()))
-        },
+        |_: (usize, u32)| list_mine(None, Some(PageSize::default()), Some(PageOffset::default())),
     );
 
     view! {
@@ -279,7 +274,7 @@ pub fn MediaPage() -> impl IntoView {
     }
 }
 
-fn render_media_row(item: &MediaItem, delete_action: ServerAction<DeleteMedia>) -> impl IntoView {
+fn render_media_row(item: &MediaItem, delete_action: ServerAction<Delete>) -> impl IntoView {
     // Same reason as `filename` below: `RootRelativeUrl` is not an `IntoAttributeValue`,
     // so the `href` gets its `str` view here.
     let url = item.url.to_string();

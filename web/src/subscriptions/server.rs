@@ -30,7 +30,7 @@ mod tests {
     // Helper fns in this feature-gated test module aren't covered by clippy's
     // allow-{unwrap,expect}-in-tests, so allow the test-scaffolding panics.
     #![allow(clippy::unwrap_used, clippy::expect_used)]
-    use super::super::is_subscribed_to;
+    use super::super::is_subscribed;
     use crate::test_support::auth_parts;
     use common::ids::UserId;
     use common::test_support::parse_username;
@@ -57,7 +57,7 @@ mod tests {
 
     // guard:no-backend — mock store
     #[tokio::test]
-    async fn is_subscribed_to_returns_false_when_viewing_own_profile() {
+    async fn is_subscribed_returns_false_when_viewing_own_profile() {
         let owner = Owner::new();
         owner.set();
         provide_context(auth_parts(UserId::from(1), "alice"));
@@ -70,7 +70,7 @@ mod tests {
 
         // `resolve_author` rejects the self-target, so the fn short-circuits to
         // `Ok(false)` without ever consulting the subscription store.
-        let result = is_subscribed_to(parse_username("alice")).await;
+        let result = is_subscribed(parse_username("alice")).await;
         drop(owner);
         assert!(!result.unwrap());
     }

@@ -19,7 +19,7 @@ async fn operator_gets_default_backup_settings(#[case] backend: Backend) {
 
     let (status, body) = post_form(
         &state,
-        <web::backup::GetBackupSettings as ServerFn>::PATH,
+        <web::backup::GetSettings as ServerFn>::PATH,
         "",
         Some(&cookie),
     )
@@ -61,7 +61,7 @@ async fn operator_gets_configured_backup_settings(#[case] backend: Backend) {
 
     let (status, body) = post_form(
         &state,
-        <web::backup::GetBackupSettings as ServerFn>::PATH,
+        <web::backup::GetSettings as ServerFn>::PATH,
         "",
         Some(&cookie),
     )
@@ -103,7 +103,7 @@ async fn operator_gets_defaults_for_invalid_backup_settings(#[case] backend: Bac
 
     let (status, body) = post_form(
         &state,
-        <web::backup::GetBackupSettings as ServerFn>::PATH,
+        <web::backup::GetSettings as ServerFn>::PATH,
         "",
         Some(&cookie),
     )
@@ -125,7 +125,7 @@ async fn operator_can_update_backup_settings(#[case] backend: Backend) {
 
     let (status, body) = post_form(
         &state,
-        <web::backup::UpdateBackupSettings as ServerFn>::PATH,
+        <web::backup::UpdateSettings as ServerFn>::PATH,
         "destination_path=%2Fsrv%2Fbackups&schedule=0+0+0+*+*+*&retention_count=5&mode=directory",
         Some(&cookie),
     )
@@ -178,7 +178,7 @@ async fn operator_can_update_backup_settings_to_archive_mode(#[case] backend: Ba
 
     let (status, body) = post_form(
         &state,
-        <web::backup::UpdateBackupSettings as ServerFn>::PATH,
+        <web::backup::UpdateSettings as ServerFn>::PATH,
         "destination_path=%2Fsrv%2Fbackups&schedule=0+0+0+*+*+*&retention_count=5&mode=archive",
         Some(&cookie),
     )
@@ -230,7 +230,7 @@ async fn operator_update_backup_settings_rejects_invalid_typed_arg(
 
     let (status, body) = post_form(
         &state,
-        <web::backup::UpdateBackupSettings as ServerFn>::PATH,
+        <web::backup::UpdateSettings as ServerFn>::PATH,
         form,
         Some(&cookie),
     )
@@ -247,7 +247,7 @@ async fn non_operator_cannot_update_backup_settings(#[case] backend: Backend) {
 
     let (status, body) = post_form(
         &state,
-        <web::backup::UpdateBackupSettings as ServerFn>::PATH,
+        <web::backup::UpdateSettings as ServerFn>::PATH,
         "destination_path=%2Fsrv%2Fbackups&schedule=0+0+0+*+*+*&retention_count=5&mode=directory",
         Some(&cookie),
     )
@@ -265,7 +265,7 @@ async fn backup_warning_visible_for_operator_without_destination(#[case] backend
 
     let (status, body) = post_form(
         &state,
-        <web::backup::BackupWarningVisible as ServerFn>::PATH,
+        <web::backup::WarningVisible as ServerFn>::PATH,
         "",
         Some(&cookie),
     )
@@ -288,7 +288,7 @@ async fn backup_warning_hidden_when_destination_configured(#[case] backend: Back
 
     let (status, body) = post_form(
         &state,
-        <web::backup::BackupWarningVisible as ServerFn>::PATH,
+        <web::backup::WarningVisible as ServerFn>::PATH,
         "",
         Some(&cookie),
     )
@@ -316,7 +316,7 @@ async fn backup_warning_visible_when_configured_schedule_is_invalid(#[case] back
 
     let (status, body) = post_form(
         &state,
-        <web::backup::BackupWarningVisible as ServerFn>::PATH,
+        <web::backup::WarningVisible as ServerFn>::PATH,
         "",
         Some(&cookie),
     )
@@ -335,7 +335,7 @@ async fn backup_warning_hidden_for_non_operator(#[case] backend: Backend) {
 
     let (status, body) = post_form(
         &state,
-        <web::backup::BackupWarningVisible as ServerFn>::PATH,
+        <web::backup::WarningVisible as ServerFn>::PATH,
         "",
         Some(&cookie),
     )
@@ -352,7 +352,7 @@ async fn backup_warning_hidden_without_authentication(#[case] backend: Backend) 
 
     let (status, body) = post_form(
         &state,
-        <web::backup::BackupWarningVisible as ServerFn>::PATH,
+        <web::backup::WarningVisible as ServerFn>::PATH,
         "",
         None,
     )
@@ -375,7 +375,7 @@ async fn operator_can_update_backup_settings_omits_destination_as_none(#[case] b
 
     let (status, body) = post_form(
         &state,
-        <web::backup::UpdateBackupSettings as ServerFn>::PATH,
+        <web::backup::UpdateSettings as ServerFn>::PATH,
         "schedule=0+0+0+*+*+*&retention_count=5&mode=directory",
         Some(&cookie),
     )
@@ -384,7 +384,7 @@ async fn operator_can_update_backup_settings_omits_destination_as_none(#[case] b
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let settings = post_form(
         &state,
-        <web::backup::GetBackupSettings as ServerFn>::PATH,
+        <web::backup::GetSettings as ServerFn>::PATH,
         "",
         Some(&cookie),
     )
@@ -407,7 +407,7 @@ async fn operator_can_update_backup_settings_clears_via_empty_destination(
 
     let (status, body) = post_form(
         &state,
-        <web::backup::UpdateBackupSettings as ServerFn>::PATH,
+        <web::backup::UpdateSettings as ServerFn>::PATH,
         "destination_path=&schedule=0+0+0+*+*+*&retention_count=5&mode=directory",
         Some(&cookie),
     )
@@ -416,7 +416,7 @@ async fn operator_can_update_backup_settings_clears_via_empty_destination(
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let (get_status, get_body) = post_form(
         &state,
-        <web::backup::GetBackupSettings as ServerFn>::PATH,
+        <web::backup::GetSettings as ServerFn>::PATH,
         "",
         Some(&cookie),
     )
@@ -438,7 +438,7 @@ async fn backup_warning_visible_propagates_storage_error_during_auth(#[case] bac
 
     let (status, _body) = post_form(
         &state,
-        <web::backup::BackupWarningVisible as ServerFn>::PATH,
+        <web::backup::WarningVisible as ServerFn>::PATH,
         "",
         Some(&cookie),
     )

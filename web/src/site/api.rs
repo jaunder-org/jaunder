@@ -12,9 +12,9 @@ use {
 };
 
 #[server(endpoint = "/get_site_identity")]
-#[tracing::instrument(name = "web.site.get_site_identity")]
-pub async fn get_site_identity() -> WebResult<SiteIdentity> {
-    boundary!("get_site_identity", {
+#[tracing::instrument(name = "web.site.get_identity")]
+pub async fn get_identity() -> WebResult<SiteIdentity> {
+    boundary!("get_identity", {
         require_operator().await?;
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
         site_config
@@ -25,12 +25,9 @@ pub async fn get_site_identity() -> WebResult<SiteIdentity> {
 }
 
 #[server(endpoint = "/update_site_identity")]
-#[tracing::instrument(name = "web.site.update_site_identity")]
-pub async fn update_site_identity(
-    title: SiteTitle,
-    base_url: Option<AbsoluteUrl>,
-) -> WebResult<()> {
-    boundary!("update_site_identity", {
+#[tracing::instrument(name = "web.site.update_identity")]
+pub async fn update_identity(title: SiteTitle, base_url: Option<AbsoluteUrl>) -> WebResult<()> {
+    boundary!("update_identity", {
         require_operator().await?;
 
         // `base_url` is a typed `Option<AbsoluteUrl>` wire arg (ADR-0065): the
@@ -48,7 +45,7 @@ pub async fn update_site_identity(
 
 /// Whether to show the "site base URL not configured" warning banner (#575): `true`
 /// only for an operator when `SiteIdentity.base_url` is `None`. Like
-/// `backup_warning_visible`, this is a **soft** check — a non-operator or
+/// `backup::warning_visible`, this is a **soft** check — a non-operator or
 /// unauthenticated caller yields `Ok(false)` (banner hidden), never an error — so the
 /// banner degrades to absent rather than surfacing a failure in the chrome.
 #[server(endpoint = "/base_url_warning_visible")]

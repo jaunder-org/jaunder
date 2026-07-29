@@ -14,7 +14,7 @@ mod input_state;
 #[cfg(target_arch = "wasm32")]
 mod component;
 
-pub use api::{list_tags, ListTags, DEFAULT_TAG_LIMIT, MAX_TAG_LIMIT};
+pub use api::{list, List, DEFAULT_TAG_LIMIT, MAX_TAG_LIMIT};
 
 // Re-exported at the (public) `crate::tags::…` path so the host-lib items consumed
 // only by the wasm-only `component` (which never host-compiles) don't look like

@@ -24,7 +24,7 @@ async fn audience_crud_round_trips(#[case] backend: Backend) {
 
     let (status, body) = post_form(
         &state,
-        <web::audiences::CreateAudience as ServerFn>::PATH,
+        <web::audiences::Create as ServerFn>::PATH,
         "name=Friends",
         Some(&cookie),
     )
@@ -34,7 +34,7 @@ async fn audience_crud_round_trips(#[case] backend: Backend) {
 
     let (status, body) = post_form(
         &state,
-        <web::audiences::ListMyAudiences as ServerFn>::PATH,
+        <web::audiences::ListMine as ServerFn>::PATH,
         "",
         Some(&cookie),
     )
@@ -47,7 +47,7 @@ async fn audience_crud_round_trips(#[case] backend: Backend) {
 
     let (status, body) = post_form(
         &state,
-        <web::audiences::RenameAudience as ServerFn>::PATH,
+        <web::audiences::Rename as ServerFn>::PATH,
         &format!("audience_id={id}&name=BestFriends"),
         Some(&cookie),
     )
@@ -55,7 +55,7 @@ async fn audience_crud_round_trips(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::OK, "rename failed: {body}");
     let (_status, body) = post_form(
         &state,
-        <web::audiences::ListMyAudiences as ServerFn>::PATH,
+        <web::audiences::ListMine as ServerFn>::PATH,
         "",
         Some(&cookie),
     )
@@ -64,7 +64,7 @@ async fn audience_crud_round_trips(#[case] backend: Backend) {
 
     let (status, body) = post_form(
         &state,
-        <web::audiences::DeleteAudience as ServerFn>::PATH,
+        <web::audiences::Delete as ServerFn>::PATH,
         &format!("audience_id={id}"),
         Some(&cookie),
     )
@@ -87,7 +87,7 @@ async fn duplicate_audience_name_is_user_error(#[case] backend: Backend) {
 
     let (status, _) = post_form(
         &state,
-        <web::audiences::CreateAudience as ServerFn>::PATH,
+        <web::audiences::Create as ServerFn>::PATH,
         "name=Friends",
         Some(&cookie),
     )
@@ -96,7 +96,7 @@ async fn duplicate_audience_name_is_user_error(#[case] backend: Backend) {
 
     let (status, body) = post_form(
         &state,
-        <web::audiences::CreateAudience as ServerFn>::PATH,
+        <web::audiences::Create as ServerFn>::PATH,
         "name=Friends",
         Some(&cookie),
     )
@@ -119,7 +119,7 @@ async fn create_audience_empty_name_is_rejected(#[case] backend: Backend) {
 
     let (status, _body) = post_form(
         &state,
-        <web::audiences::CreateAudience as ServerFn>::PATH,
+        <web::audiences::Create as ServerFn>::PATH,
         "name=%20%20",
         Some(&cookie),
     )
@@ -147,7 +147,7 @@ async fn rename_audience_empty_name_is_rejected(#[case] backend: Backend) {
 
     let (_status, body) = post_form(
         &state,
-        <web::audiences::CreateAudience as ServerFn>::PATH,
+        <web::audiences::Create as ServerFn>::PATH,
         "name=Friends",
         Some(&cookie),
     )
@@ -156,7 +156,7 @@ async fn rename_audience_empty_name_is_rejected(#[case] backend: Backend) {
 
     let (status, _body) = post_form(
         &state,
-        <web::audiences::RenameAudience as ServerFn>::PATH,
+        <web::audiences::Rename as ServerFn>::PATH,
         &format!("audience_id={aud_id}&name=%20%20"),
         Some(&cookie),
     )
@@ -200,7 +200,7 @@ async fn list_audience_members_returns_members(#[case] backend: Backend) {
 
     let (status, body) = post_form(
         &state,
-        <web::audiences::ListAudienceMembers as ServerFn>::PATH,
+        <web::audiences::ListMembers as ServerFn>::PATH,
         &format!("audience_id={aud_id}"),
         Some(&cookie),
     )
@@ -233,7 +233,7 @@ async fn audience_membership_round_trips(#[case] backend: Backend) {
 
     let (_s, body) = post_form(
         &state,
-        <web::audiences::CreateAudience as ServerFn>::PATH,
+        <web::audiences::Create as ServerFn>::PATH,
         "name=Friends",
         Some(&cookie),
     )
@@ -242,7 +242,7 @@ async fn audience_membership_round_trips(#[case] backend: Backend) {
 
     let (status, body) = post_form(
         &state,
-        <web::audiences::AddSubscriberToAudience as ServerFn>::PATH,
+        <web::audiences::AddSubscriber as ServerFn>::PATH,
         &format!("audience_id={aud_id}&subscription_id={sub_id}"),
         Some(&cookie),
     )
@@ -260,7 +260,7 @@ async fn audience_membership_round_trips(#[case] backend: Backend) {
     // Adding the same subscriber again is idempotent through the boundary.
     let (status, body) = post_form(
         &state,
-        <web::audiences::AddSubscriberToAudience as ServerFn>::PATH,
+        <web::audiences::AddSubscriber as ServerFn>::PATH,
         &format!("audience_id={aud_id}&subscription_id={sub_id}"),
         Some(&cookie),
     )
@@ -278,7 +278,7 @@ async fn audience_membership_round_trips(#[case] backend: Backend) {
 
     let (status, body) = post_form(
         &state,
-        <web::audiences::RemoveSubscriberFromAudience as ServerFn>::PATH,
+        <web::audiences::RemoveSubscriber as ServerFn>::PATH,
         &format!("audience_id={aud_id}&subscription_id={sub_id}"),
         Some(&cookie),
     )
@@ -294,7 +294,7 @@ async fn audience_membership_round_trips(#[case] backend: Backend) {
     // Removing a subscriber who is no longer a member is a no-op, not an error.
     let (status, body) = post_form(
         &state,
-        <web::audiences::RemoveSubscriberFromAudience as ServerFn>::PATH,
+        <web::audiences::RemoveSubscriber as ServerFn>::PATH,
         &format!("audience_id={aud_id}&subscription_id={sub_id}"),
         Some(&cookie),
     )
@@ -345,7 +345,7 @@ async fn cross_author_audience_id_is_scoped_away(#[case] backend: Backend) {
     // Bob lists Alice's audience members → succeeds, but sees nothing of hers.
     let (status, body) = post_form(
         &state,
-        <web::audiences::ListAudienceMembers as ServerFn>::PATH,
+        <web::audiences::ListMembers as ServerFn>::PATH,
         &format!("audience_id={alice_aud}"),
         Some(&bob_cookie),
     )
@@ -360,7 +360,7 @@ async fn cross_author_audience_id_is_scoped_away(#[case] backend: Backend) {
     // Bob removes from Alice's audience → succeeds, but changes nothing.
     let (status, body) = post_form(
         &state,
-        <web::audiences::RemoveSubscriberFromAudience as ServerFn>::PATH,
+        <web::audiences::RemoveSubscriber as ServerFn>::PATH,
         &format!("audience_id={alice_aud}&subscription_id={alice_sub}"),
         Some(&bob_cookie),
     )
@@ -419,30 +419,24 @@ async fn audience_endpoints_require_authentication(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
     let endpoints = [
+        (<web::audiences::Create as ServerFn>::PATH, "name=Friends"),
         (
-            <web::audiences::CreateAudience as ServerFn>::PATH,
-            "name=Friends",
-        ),
-        (
-            <web::audiences::RenameAudience as ServerFn>::PATH,
+            <web::audiences::Rename as ServerFn>::PATH,
             "audience_id=1&name=X",
         ),
-        (
-            <web::audiences::DeleteAudience as ServerFn>::PATH,
-            "audience_id=1",
-        ),
-        (<web::audiences::ListMyAudiences as ServerFn>::PATH, ""),
+        (<web::audiences::Delete as ServerFn>::PATH, "audience_id=1"),
+        (<web::audiences::ListMine as ServerFn>::PATH, ""),
         (<web::audiences::ListMySubscribers as ServerFn>::PATH, ""),
         (
-            <web::audiences::AddSubscriberToAudience as ServerFn>::PATH,
+            <web::audiences::AddSubscriber as ServerFn>::PATH,
             "audience_id=1&subscription_id=1",
         ),
         (
-            <web::audiences::RemoveSubscriberFromAudience as ServerFn>::PATH,
+            <web::audiences::RemoveSubscriber as ServerFn>::PATH,
             "audience_id=1&subscription_id=1",
         ),
         (
-            <web::audiences::ListAudienceMembers as ServerFn>::PATH,
+            <web::audiences::ListMembers as ServerFn>::PATH,
             "audience_id=1",
         ),
     ];
@@ -484,7 +478,7 @@ async fn cross_author_add_member_is_rejected(#[case] backend: Backend) {
     // Bob tries to inject Alice's subscription into Alice's audience.
     let (status, body) = post_form(
         &state,
-        <web::audiences::AddSubscriberToAudience as ServerFn>::PATH,
+        <web::audiences::AddSubscriber as ServerFn>::PATH,
         &format!("audience_id={alice_aud}&subscription_id={alice_sub}"),
         Some(&bob_cookie),
     )
@@ -526,7 +520,7 @@ async fn cross_author_rename_and_delete_are_scoped(#[case] backend: Backend) {
     // Bob renames Alice's audience → refused (store NotFound); name unchanged.
     let (status, body) = post_form(
         &state,
-        <web::audiences::RenameAudience as ServerFn>::PATH,
+        <web::audiences::Rename as ServerFn>::PATH,
         &format!("audience_id={alice_aud}&name=Hijacked"),
         Some(&bob_cookie),
     )
@@ -540,7 +534,7 @@ async fn cross_author_rename_and_delete_are_scoped(#[case] backend: Backend) {
     // Bob deletes Alice's audience → author-scoped no-op (OK), still present.
     let (status, body) = post_form(
         &state,
-        <web::audiences::DeleteAudience as ServerFn>::PATH,
+        <web::audiences::Delete as ServerFn>::PATH,
         &format!("audience_id={alice_aud}"),
         Some(&bob_cookie),
     )

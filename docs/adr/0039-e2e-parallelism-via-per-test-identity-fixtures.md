@@ -52,7 +52,7 @@ reactive-disposal panics** in the Leptos server (leptos #4590, tracked as #173)
 — was dissolved by the leptos-CSR cutover (#180): there is no SSR to race, so
 the suite hydrates/mounts client-side and runs cleanly in parallel. The
 remaining heavy-timeline-test flake was root-caused and fixed in #210
-(batch-seed via `test-support` instead of sequential `api.create_post`).
+(batch-seed via `test-support` instead of sequential `api.create`).
 
 The landed configuration is **`workers=2`**, chosen over `workers=4` after a
 per-VM-footprint sweep (see `docs/observability.md` → "#155 — flip landed"):

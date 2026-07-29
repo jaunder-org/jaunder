@@ -14,7 +14,7 @@ use {
 
 use crate::error::WebResult;
 // `Username` / `ProfferedPassword` / `RawToken` are ungated: they type the
-// `request_password_reset` / `confirm_password_reset` wire args, so the generated arg
+// `request` / `confirm` wire args, so the generated arg
 // structs reference them on both the client and server builds.
 use common::password::ProfferedPassword;
 use common::token::RawToken;
@@ -22,9 +22,9 @@ use common::username::Username;
 use leptos::prelude::*;
 
 #[server(endpoint = "/request_password_reset")]
-#[tracing::instrument(name = "web.password_reset.request_password_reset")]
-pub async fn request_password_reset(username: Username) -> WebResult<()> {
-    boundary!("request_password_reset", {
+#[tracing::instrument(name = "web.password_reset.request")]
+pub async fn request(username: Username) -> WebResult<()> {
+    boundary!("request", {
         let users = expect_context::<Arc<dyn UserStorage>>();
         let password_resets = expect_context::<Arc<dyn PasswordResetStorage>>();
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
@@ -85,12 +85,9 @@ pub async fn request_password_reset(username: Username) -> WebResult<()> {
 }
 
 #[server(endpoint = "/confirm_password_reset")]
-#[tracing::instrument(name = "web.password_reset.confirm_password_reset", skip_all)]
-pub async fn confirm_password_reset(
-    token: RawToken,
-    new_password: ProfferedPassword,
-) -> WebResult<()> {
-    boundary!("confirm_password_reset", {
+#[tracing::instrument(name = "web.password_reset.confirm", skip_all)]
+pub async fn confirm(token: RawToken, new_password: ProfferedPassword) -> WebResult<()> {
+    boundary!("confirm", {
         let atomic = expect_context::<Arc<dyn AtomicOps>>();
 
         // `new_password` is the inbound-secret twin (ADR-0063); convert into the
