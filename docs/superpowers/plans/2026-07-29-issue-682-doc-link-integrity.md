@@ -116,7 +116,7 @@ Docs-only. Lands first so Task 3's gate is green on arrival.
 - Produces: a tree with zero dead relative links in the gated set, which Task
   3's `doc-links` step depends on to pass (**AC10**).
 
-- [ ] **Step 1: Apply the 14 `decisions/` → `adr/` renames**
+- [x] **Step 1: Apply the 14 `decisions/` → `adr/` renames**
 
 Link target only; the visible text does not name the directory in any of these.
 
@@ -144,7 +144,7 @@ Link target only; the visible text does not name the directory in any of these.
 | 75   | `decisions/0009-edit-delete-policy.md`    | `adr/0009-edit-delete-policy.md`    |
 | 80   | `decisions/0003-asset-management.md`      | `adr/0003-asset-management.md`      |
 
-- [ ] **Step 2: Fix the stale crate-layout link (text and target)**
+- [x] **Step 2: Fix the stale crate-layout link (text and target)**
 
 `docs/ARCHITECTURE.md:70` currently reads:
 
@@ -162,7 +162,7 @@ The [**`storage/src/`**](../storage/src/) directory is the single
 This is the one backfill where the **link text** changes too (the spec's "Out of
 scope" notes why promotion never does this automatically).
 
-- [ ] **Step 3: Drop the `../` from the four ADR sibling links**
+- [x] **Step 3: Drop the `../` from the four ADR sibling links**
 
 `docs/adr/0057-e2e-capture-dir-contract.md:13`:
 `../0049-app-driven-scoped-server-diagnostics.md` →
@@ -176,7 +176,7 @@ scope" notes why promotion never does this automatically).
 | 29   | `../0056-web-canonical-colocated-leptos.md`      | `0056-web-canonical-colocated-leptos.md`      |
 | 35   | `../0055-web-host-wasm-boundary-module-level.md` | `0055-web-host-wasm-boundary-module-level.md` |
 
-- [ ] **Step 4: Verify no dead links remain**
+- [x] **Step 4: Verify no dead links remain**
 
 Run: `rg -n 'decisions/00' docs/ARCHITECTURE.md docs/DESIGN.md` Expected: no
 matches (exit 1).
@@ -187,7 +187,7 @@ Run:
 `ls docs/adr/0049-app-driven-scoped-server-diagnostics.md docs/adr/0058-host-crate-layering.md docs/adr/0056-web-canonical-colocated-leptos.md docs/adr/0055-web-host-wasm-boundary-module-level.md docs/adr/0002-frontend-framework.md storage/src`
 Expected: all listed, no "No such file".
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run `cargo xtask check` first (**`jaunder-commit`**); prettier may reflow the
 Markdown, so re-check `git status --porcelain` and stage any rewrite.
@@ -249,7 +249,7 @@ pub fn is_relative_target(target: &str) -> bool;
 pub fn strip_one_level(body: &str) -> String;
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `xtask/src/doc_links.rs`:
 
@@ -363,12 +363,12 @@ In `xtask/src/adr.rs`'s test module:
 }
 ````
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run: `cargo test --manifest-path xtask/Cargo.toml` Expected: FAIL — `doc_links`
 / `links_in` / `strip_one_level` not defined.
 
-- [ ] **Step 3: Implement the scanner**
+- [x] **Step 3: Implement the scanner**
 
 `links_in` scans `mask_code(body)` for `](`, takes bytes to the matching `)`,
 and reports the target's byte span. `is_relative_target` rejects the three URL
@@ -445,7 +445,7 @@ fn mask_code(body: &str) -> String {
 }
 ````
 
-- [ ] **Step 4: Implement `strip_one_level` and call it in Pass B**
+- [x] **Step 4: Implement `strip_one_level` and call it in Pass B**
 
 Add to `adr.rs`, signature above. Every branch is pinned by Step 1's tests.
 Build the output by walking `doc_links::links_in`'s spans left to right, copying
@@ -469,12 +469,12 @@ Declare the module in `xtask/src/lib.rs` alongside `mod adr;` (:5-14):
 mod doc_links;
 ```
 
-- [ ] **Step 5: Run the tests, verify they pass**
+- [x] **Step 5: Run the tests, verify they pass**
 
 Run: `cargo test --manifest-path xtask/Cargo.toml` Expected: PASS — 19 new
 tests, plus the pre-existing promote tests unchanged.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add xtask/src/doc_links.rs xtask/src/adr.rs xtask/src/lib.rs
