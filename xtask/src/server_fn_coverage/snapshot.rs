@@ -167,7 +167,6 @@ mod tests {
 
     fn fnf(ident: &str) -> ServerFn {
         ServerFn {
-            name: crate::server_fns::pascal_case(ident),
             ident: ident.to_string(),
             endpoint: Some(ident.to_string()),
             module: "x::api".to_string(),

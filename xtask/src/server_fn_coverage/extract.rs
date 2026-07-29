@@ -5,26 +5,30 @@
 //!
 //! **Two signals, unioned.** A span identifies a `#[server]` fn when either:
 //!
-//! 1. its **name** is `__server_<ident>` for an inventory fn ident *and* its
-//!    `code.namespace` is that fn's module (the primary signal — a derived span
-//!    name needs no URL parsing and survives any endpoint rename); or
+//! 1. its **name** is one of that fn's [`candidate_span_names`] *and* its
+//!    `code.namespace` is that fn's module (the primary signal — needs no URL
+//!    parsing and survives any endpoint rename); or
 //! 2. its **`uri`** path resolves to an inventory fn's *declared endpoint* (the
-//!    complement, covering the fns #511 has not instrumented yet).
+//!    complement, and the only signal for a fn carrying no `#[tracing::instrument]`).
 //!
-//! The `__server_` prefix is not decoration: `#[server]` relocates the annotated
-//! body — carrying its `#[tracing::instrument]` — into a generated
-//! `__server_<ident>` fn (`server_fn_macro`'s `to_dummy_ident`), and the attribute
-//! derives its span name from the fn it lands on. Matching the bare ident finds
-//! nothing in a real capture, and finds it *silently*: `uri` goes on carrying
-//! every hit, so the result still looks plausible. That is exactly what happened
-//! here until the union was measured signal-by-signal against a real capture.
+//! **The name is matched forward, never inverted**, because this repo has already
+//! had two naming regimes and could have a third. `server-fn-tracing` writes
+//! `web.<vertical>.<ident>` today (#511); omitting the explicit `name` derives
+//! `__server_<ident>`, since `#[server]` relocates the annotated body into a
+//! generated fn of that name. An earlier version of this module matched only the
+//! bare ident, so signal 1 matched **nothing** — and did so *silently*, because
+//! `uri` kept carrying every hit and the totals still looked plausible. Computing
+//! the candidates from the inventory is what makes a regime change a code update
+//! rather than a silent outage; the per-signal tests are what make it visible.
 //!
-//! The module check is what stops a same-named non-`#[server]` fn elsewhere in
-//! `web` from counting. It reads **`code.namespace`**, which is where
+//! **`code.namespace` is the disambiguator, not the name.**
+//! `web.<vertical>.<ident>` takes the module's *first* segment, so `posts::api` and
+//! `posts::api::listing` both render `web.posts.…` — the name alone cannot separate
+//! a same-named fn in each, while `(module, ident)` cannot collide at all, since
+//! Rust forbids two items of one name in one module. `code.namespace` is where
 //! `tracing-opentelemetry` records a span's module; `target` exists only on
-//! *events*, so matching it would find nothing on any span — and would fail
-//! silently, leaving `uri` to carry everything while the result still looked
-//! plausible.
+//! *events*, so matching that would find nothing on any span — and would fail
+//! silently in the same way.
 //!
 //! **Attribution is an ancestor walk, not a parent check.** Only the *request*
 //! span carries the test's span id as its parent; an instrument span's parent is
@@ -45,12 +49,12 @@ const API_PREFIX: &str = "/api/";
 const MODULE_ATTR: &str = "code.namespace";
 /// The crate prefix `code.namespace` carries but [`ServerFn::module`] does not.
 const CRATE_PREFIX: &str = "web::";
-/// The prefix `#[server]` gives the fn it relocates the annotated body into, and
-/// therefore the prefix on every span that body's `#[tracing::instrument]` derives.
-/// Required, not merely tolerated: the bare-ident form does not occur, and
-/// insisting on the prefix means a match can only have come from a server fn's
-/// generated body.
+/// The prefix `#[server]` gives the fn it relocates the annotated body into, so a
+/// span whose name `#[tracing::instrument]` *derived* carries it.
 const DERIVED_SPAN_PREFIX: &str = "__server_";
+/// The prefix on the span names `server-fn-tracing` writes (#511, ADR-0011):
+/// `web.<vertical>.<ident>`, where the vertical is the module's first segment.
+const EXPLICIT_SPAN_PREFIX: &str = "web.";
 /// The span name the e2e harness gives its per-test span.
 const TEST_SPAN_NAME: &str = "e2e.test";
 /// The attribute on an `e2e.test` span holding the test's title.
@@ -67,21 +71,45 @@ pub struct Coverage {
     pub orphans: BTreeMap<String, BTreeMap<String, usize>>,
 }
 
+/// Every span name that could denote `f`, under any naming regime this repo has
+/// used or could revert to. Deliberately a *set of candidates computed from the
+/// inventory* rather than a pattern inverted out of the span name: inversion has to
+/// know which regime produced the name, and getting that wrong fails silently
+/// (`uri` keeps carrying every hit, so the totals still look right).
+///
+/// - `web.<vertical>.<ident>` — what `server-fn-tracing` writes today (#511,
+///   ADR-0011). The vertical is the module's first segment, so `posts::api::listing`
+///   and `posts::api` both yield `web.posts.…`; that collapse is why the module
+///   check below, not the name, is what actually disambiguates.
+/// - `__server_<ident>` — the name `#[tracing::instrument]` *derives* when no
+///   explicit `name` is given, because `#[server]` relocates the annotated body
+///   into a generated `__server_<ident>` fn (`server_fn_macro`'s `to_dummy_ident`).
+/// - `<ident>` — what derivation would yield if `#[server]` stopped relocating.
+fn candidate_span_names(f: &ServerFn) -> [String; 3] {
+    let vertical = f.module.split("::").next().unwrap_or(&f.module);
+    [
+        format!("{EXPLICIT_SPAN_PREFIX}{vertical}.{}", f.ident),
+        format!("{DERIVED_SPAN_PREFIX}{}", f.ident),
+        f.ident.clone(),
+    ]
+}
+
 /// The fn a span identifies, by either signal, or `None` if it identifies none.
 fn identify<'a>(span: &Span, inventory: &'a [ServerFn]) -> Option<&'a ServerFn> {
-    // Primary: derived span name + module. `code.namespace` on these spans holds
-    // the plain module the fn was declared in (`web::auth::api` for `session`) —
-    // verified against a real capture, not assumed — so the existing comparison
-    // against `ServerFn::module` is the right disambiguator and needs no widening.
-    if let Some(ident) = span.name.strip_prefix(DERIVED_SPAN_PREFIX) {
-        if let Some(f) = inventory.iter().find(|f| f.ident == ident) {
-            let namespace = crate::traces::parse::get_attr(&span.raw, MODULE_ATTR);
-            let relative = namespace.strip_prefix(CRATE_PREFIX).unwrap_or(&namespace);
-            // An empty namespace cannot be confirmed to be the right module, so it
-            // does not count — better to fall through to `uri` than to guess.
-            if !namespace.is_empty() && relative == f.module {
-                return Some(f);
-            }
+    // Primary: span name + module. `code.namespace` holds the plain module the fn
+    // was declared in (`web::auth::api` for `session`) — verified against a real
+    // capture, not assumed — and it is the disambiguator, since the name alone can
+    // collapse two modules of one vertical.
+    let namespace = crate::traces::parse::get_attr(&span.raw, MODULE_ATTR);
+    // An empty namespace cannot be confirmed to be the right module, so it does not
+    // count — better to fall through to `uri` than to guess.
+    if !namespace.is_empty() {
+        let relative = namespace.strip_prefix(CRATE_PREFIX).unwrap_or(&namespace);
+        if let Some(f) = inventory
+            .iter()
+            .find(|f| relative == f.module && candidate_span_names(f).contains(&span.name))
+        {
+            return Some(f);
         }
     }
 
@@ -231,7 +259,6 @@ mod tests {
 
     fn fnf(ident: &str, module: &str) -> ServerFn {
         ServerFn {
-            name: crate::server_fns::pascal_case(ident),
             ident: ident.to_string(),
             endpoint: Some(ident.to_string()),
             module: module.to_string(),
@@ -370,26 +397,68 @@ mod tests {
         assert_eq!(titles(&c, "create_post").len(), 1);
     }
 
+    /// One `e2e.test` span with a single child span of `name`, declaring `namespace`.
+    fn one_named_span(name: &str, namespace: &str) -> Vec<Span> {
+        let line = format!(
+            concat!(
+                r#"{{"resourceSpans":[{{"scopeSpans":[{{"spans":["#,
+                r#"{{"traceId":"aa","spanId":"t1","name":"e2e.test","#,
+                r#""attributes":[{{"key":"e2e.test","value":{{"stringValue":"t"}}}}]}},"#,
+                r#"{{"traceId":"aa","spanId":"i1","parentSpanId":"t1","name":"{name}","#,
+                r#""attributes":[{{"key":"code.namespace","#,
+                r#""value":{{"stringValue":"{namespace}"}}}}]}}"#,
+                r#"]}}]}}]}}"#,
+            ),
+            name = name,
+            namespace = namespace,
+        );
+        parse_spans(&line, &Filters::default(), "t").expect("parses")
+    }
+
     #[test]
-    fn a_bare_ident_span_name_is_not_a_hit() {
-        // The shape `#[server]` never produces. Pinned deliberately: this fixture
-        // once used it, which made the span-name signal *look* exercised while it
-        // matched nothing a real capture contains.
-        let line = concat!(
-            r#"{"resourceSpans":[{"scopeSpans":[{"spans":["#,
-            r#"{"traceId":"aa","spanId":"t1","name":"e2e.test","#,
-            r#""attributes":[{"key":"e2e.test","value":{"stringValue":"t"}}]},"#,
-            r#"{"traceId":"aa","spanId":"i1","parentSpanId":"t1","name":"update_post","#,
-            r#""attributes":[{"key":"code.namespace","#,
-            r#""value":{"stringValue":"web::posts::api"}}]}"#,
-            r#"]}]}]}"#,
-        );
-        let spans = parse_spans(line, &Filters::default(), "t").expect("parses");
-        let c = extract(&spans, &[fnf("update_post", "posts::api")]);
-        assert!(
-            c.covered.is_empty(),
-            "the derived span name is `__server_update_post`, not `update_post`"
-        );
+    fn every_naming_regime_is_a_hit_given_the_right_module() {
+        // The gate must not depend on which naming regime is in force. Today
+        // `server-fn-tracing` writes `web.<vertical>.<ident>` (#511); omitting the
+        // explicit name derives `__server_<ident>`; and were `#[server]` to stop
+        // relocating the body, derivation would yield the bare ident. All three
+        // denote the same fn, so all three count — matching one shape only is how
+        // the signal silently died once already.
+        for name in [
+            "web.posts.update_post",
+            "__server_update_post",
+            "update_post",
+        ] {
+            let c = extract(
+                &one_named_span(name, "web::posts::api"),
+                &[fnf("update_post", "posts::api")],
+            );
+            assert_eq!(
+                titles(&c, "update_post"),
+                vec!["t"],
+                "span name `{name}` must identify the fn"
+            );
+        }
+    }
+
+    #[test]
+    fn the_module_not_the_name_is_what_disambiguates() {
+        // `web.<vertical>.<ident>` collapses every module of a vertical
+        // (`posts::api` and `posts::api::listing` both yield `web.posts.…`), so the
+        // name cannot be the discriminator — `code.namespace` is.
+        for name in [
+            "web.posts.update_post",
+            "__server_update_post",
+            "update_post",
+        ] {
+            let c = extract(
+                &one_named_span(name, "web::elsewhere::api"),
+                &[fnf("update_post", "posts::api")],
+            );
+            assert!(
+                c.covered.is_empty(),
+                "`{name}` in the wrong module must not count"
+            );
+        }
     }
 
     #[test]
@@ -397,7 +466,6 @@ mod tests {
         // The fn is `fetch_post` but its declared endpoint is `get_post`, which is
         // what the URI carries. Assuming "/api/" + ident would miss it.
         let renamed = ServerFn {
-            name: "FetchPost".into(),
             ident: "fetch_post".into(),
             endpoint: Some("get_post".into()),
             module: "posts::api".into(),
@@ -413,7 +481,6 @@ mod tests {
         // the `__server_create_post` span from matching by name, so what is left to
         // observe is purely whether a `None` endpoint can match a URI.
         let bare = ServerFn {
-            name: "CreatePost".into(),
             ident: "create_post".into(),
             endpoint: None,
             module: "elsewhere::api".into(),
