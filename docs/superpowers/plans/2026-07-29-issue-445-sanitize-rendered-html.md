@@ -591,6 +591,52 @@ an append-list entry): `ammonia` appears exactly once in each of the workspace,
 the plan's predicted `render_html_passthrough_is_sanitized` — same body, same
 coverage, named to match its two siblings. Recorded rather than renamed.
 
+- [x] **Step 4a: Ship review corrections.** The whole-branch review (Standards +
+      Spec axes) found five real defects that the green gate did not. All fixed
+      in-branch; none changed the design.
+
+1. **A comment claimed gate coverage that does not exist** (security-relevant).
+   The `Decode` rationale said the "blesses any text column" risk is "the same
+   class of mistake the `rendered-html-from-trusted` gate exists to catch." It
+   is not: `is_door` matches the `from_trusted` **identifier in expression
+   position**, so a `FromRow` field typed `RenderedHtml` over the wrong column
+   names no door and is invisible to the scan. This branch removed the one
+   `from_trusted` call that made such a mistake visible and then cited, in its
+   place, a guard that cannot fire. **Spec D3 carries the same overclaim** — the
+   code faithfully implemented a spec sentence that was itself wrong. Comment
+   and ADR now state the risk rests on deliberate-typing review alone, and name
+   what does not back it. Gate widening filed as **#701**.
+
+2. **The `attribute_filter`'s drop-entirely branch was untested.** The existing
+   test covered partial-keep (`"language-rust j-anon-only"`) and the `<p>`
+   tag-allowlist path, but never `<code class="j-anon-only">` alone — the `None`
+   return, in security-critical code. Case added.
+
+3. **AC1 was only partly met.** The spec asks for `<script>`, `onerror=`,
+   **and** `javascript:` in all three formats; each per-format test asserted
+   only `<script>`. Now all three formats assert all three vectors, via a shared
+   `assert_no_active_markup` helper + `ACTIVE_MARKUP` constant (which also
+   retires the duplicated assertion triple the Standards axis flagged).
+
+4. **AC6 was asserted against synthetic HTML, never real renderer output** — so
+   "strips nothing our renderers emit" was not actually tested.
+   `render_preserves_real_renderer_output` now drives `pulldown-cmark` and
+   `orgize` output through the real `render()`. It found a genuine behavior
+   difference: **orgize's `<main>`/`<section>` wrappers are dropped** (children
+   survive intact). Kept deliberately rather than allowlisted — the HTML is
+   injected into a page that already has its own `<main>`, so preserving it
+   would nest a document-level landmark, and no stylesheet targets either tag
+   (checked `server/assets/jaunder.css`). Markdown survives byte-identical.
+   Pinned by assertion so the drop stays intentional.
+
+5. **`common` no longer built its own tests standalone.** Gating
+   `render_markdown`/`render_org` on `sanitize` left 18 pre-existing tests
+   calling them ungated: `cargo check -p common --tests` failed with 18 ×
+   `E0425`. It passed in CI only because workspace feature unification pulls
+   `sanitize` in via `storage` — the plan flagged that unification as
+   load-bearing, and this is where it silently load-bore. The 18 tests are now
+   gated with the code they exercise.
+
 - [ ] **Step 5: Handoff.**
 
 Invoke `jaunder-ship`: whole-branch review, archive spec + plan, push, PR,

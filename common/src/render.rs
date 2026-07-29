@@ -259,9 +259,14 @@ impl PartialEq<&str> for RenderedHtml {
 // This reverses the previous "deliberately NO `Decode`" stance, so the reasoning is worth
 // keeping rather than deleting. That stance rested on a decode being able to "bless ANY
 // text column decoded into it — e.g. a raw, un-rendered `body`". **That risk is real and
-// is accepted here**: decoding some other column into this type would still bless it. It
-// is accepted because typing a column as `RenderedHtml` is a deliberate act, and it is the
-// same class of mistake the `rendered-html-from-trusted` gate exists to catch.
+// is accepted here**: decoding some other column into this type would still bless it.
+//
+// It rests on one argument only — that typing a column as `RenderedHtml` is a deliberate,
+// reviewable act. Note what does *not* back it: the `rendered-html-from-trusted` gate does
+// **not** catch this. That gate matches `from_trusted` call sites in expression position;
+// a `FromRow` field typed `RenderedHtml` over the wrong column names no door at all and is
+// invisible to it. Widening the gate to flag `RenderedHtml`-typed row fields outside an
+// allowlist would close the hole — filed as #701.
 //
 // A *sanitizing* decode would have removed the risk outright and healed any pre-#445 row
 // on read. It was rejected: no deployed instance holds data, so it would guard only
@@ -689,6 +694,19 @@ mod tests {
             !other.contains("j-anon-only"),
             "class survived on <p>: {other}"
         );
+
+        // The filter's drop-entirely branch: on `code`, where `class` *is*
+        // allowlisted, a value with no `language-*` token must lose the attribute
+        // outright rather than surviving as an empty `class=""`.
+        let none_kept = RenderedHtml::sanitize(r#"<code class="j-anon-only">x</code>"#);
+        assert!(
+            !none_kept.contains("j-anon-only"),
+            "non-language class survived on <code>: {none_kept}"
+        );
+        assert!(
+            !none_kept.contains("class"),
+            "empty class attribute left behind: {none_kept}"
+        );
     }
 
     #[cfg(feature = "sanitize")]
@@ -787,6 +805,7 @@ mod tests {
 
     // -- Markdown tests --
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn markdown_headings() {
         let html = render_markdown("# H1\n## H2\n### H3");
@@ -795,12 +814,14 @@ mod tests {
         assert!(html.contains("<h3>H3</h3>"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn markdown_paragraph() {
         let html = render_markdown("Hello, world!");
         assert!(html.contains("<p>Hello, world!</p>"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn markdown_bold_italic_strikethrough() {
         let html = render_markdown("**bold** *italic* ~~strike~~");
@@ -809,6 +830,7 @@ mod tests {
         assert!(html.contains("<del>strike</del>"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn markdown_code_block() {
         let html = render_markdown("```rust\nfn main() {}\n```");
@@ -816,12 +838,14 @@ mod tests {
         assert!(html.contains("fn main()"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn markdown_links() {
         let html = render_markdown("[example](https://example.com)");
         assert!(html.contains("<a href=\"https://example.com\">example</a>"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn markdown_ordered_list() {
         let html = render_markdown("1. first\n2. second\n3. third");
@@ -831,6 +855,7 @@ mod tests {
         assert!(html.contains("<li>third</li>"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn markdown_unordered_list() {
         let html = render_markdown("- alpha\n- beta");
@@ -839,6 +864,7 @@ mod tests {
         assert!(html.contains("<li>beta</li>"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn markdown_table() {
         let input = "| A | B |\n|---|---|\n| 1 | 2 |";
@@ -848,12 +874,14 @@ mod tests {
         assert!(html.contains("<td>1</td>"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn markdown_empty_input() {
         let html = render_markdown("");
         assert!(html.is_empty());
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn markdown_multiple_paragraphs() {
         let html = render_markdown("First paragraph.\n\nSecond paragraph.");
@@ -862,6 +890,7 @@ mod tests {
         assert_eq!(count, 2);
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn markdown_tasklist() {
         let html = render_markdown("- [x] done\n- [ ] todo");
@@ -871,6 +900,7 @@ mod tests {
 
     // -- Org-mode tests --
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn org_headings() {
         let html = render_org("* H1\n** H2");
@@ -878,12 +908,14 @@ mod tests {
         assert!(html.contains("H2"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn org_paragraph() {
         let html = render_org("Hello, org world!");
         assert!(html.contains("Hello, org world!"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn org_bold_italic_code() {
         let html = render_org("*bold* /italic/ ~code~");
@@ -892,6 +924,7 @@ mod tests {
         assert!(html.contains("<code>code</code>"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn org_list() {
         let html = render_org("- alpha\n- beta");
@@ -899,12 +932,14 @@ mod tests {
         assert!(html.contains("beta"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn org_code_block() {
         let html = render_org("#+BEGIN_SRC rust\nfn main() {}\n#+END_SRC");
         assert!(html.contains("fn main()"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn org_link() {
         let html = render_org("[[https://example.com][example]]");
@@ -915,6 +950,7 @@ mod tests {
         assert!(html.contains("example"));
     }
 
+    #[cfg(feature = "sanitize")]
     #[test]
     fn org_empty_input() {
         let html = render_org("");
@@ -928,6 +964,63 @@ mod tests {
         assert!(
             stripped.trim().is_empty(),
             "expected no visible content, got: {html}"
+        );
+    }
+
+    /// AC6/D6 asks that the allowlist strip nothing our renderers *legitimately*
+    /// emit. The `sanitize_preserves_*` tests above feed hand-written HTML, which
+    /// proves the allowlist but not that it matches what `pulldown-cmark` and
+    /// `orgize` actually produce. This one closes that gap by driving real
+    /// renderer output through the real `render()` door.
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn render_preserves_real_renderer_output() {
+        let md = render(
+            &PostBody::from(
+                "# Heading\n\n\
+                 Some **bold** and *emphasis* and a [link](https://example.com).\n\n\
+                 ```rust\nfn main() {}\n```\n\n\
+                 | a | b |\n|---|---|\n| 1 | 2 |\n",
+            ),
+            &PostFormat::Markdown,
+        );
+        for expected in [
+            "<h1>",
+            "<strong>bold</strong>",
+            "<em>emphasis</em>",
+            r#"<a href="https://example.com""#,
+            r#"<pre><code class="language-rust">"#,
+            "<table>",
+            "<thead>",
+            "<th>",
+            "<td>",
+        ] {
+            assert!(md.contains(expected), "markdown lost {expected}: {md}");
+        }
+
+        let org = render(
+            &PostBody::from("* Heading\n\nSome *bold* text and [[https://example.com][a link]].\n"),
+            &PostFormat::Org,
+        );
+        for expected in [
+            "<h1>",
+            "<b>bold</b>",
+            r#"<a href="https://example.com""#,
+            "a link",
+        ] {
+            assert!(org.contains(expected), "org lost {expected}: {org}");
+        }
+
+        // Known and intended: orgize wraps its output in `<main><section>`, and
+        // neither tag is in ammonia's default allowlist, so both are dropped while
+        // their children survive (asserted above). That is not a regression to fix
+        // — the rendered HTML is injected into a page that already has its own
+        // `<main>`, so keeping orgize's would nest a document-level landmark, and
+        // no stylesheet targets either tag. Pinned so the drop stays deliberate.
+        assert!(!org.contains("<main>"), "unexpected <main> wrapper: {org}");
+        assert!(
+            !org.contains("<section>"),
+            "unexpected <section> wrapper: {org}"
         );
     }
 
@@ -953,14 +1046,35 @@ mod tests {
     // embedded raw HTML straight through their parsers, and `Html` is a verbatim
     // passthrough, so all three need their own assertion rather than one shared one.
 
+    /// AC1's three vectors — a `<script>` element, an event-handler attribute, and
+    /// a `javascript:` URL — asserted as one invariant so every format test covers
+    /// the same ground instead of each restating a subset.
+    #[cfg(feature = "sanitize")]
+    fn assert_no_active_markup(html: &str) {
+        assert!(!html.contains("<script"), "script element survived: {html}");
+        assert!(!html.contains("onerror"), "event handler survived: {html}");
+        assert!(
+            !html.contains("javascript:"),
+            "javascript: URL survived: {html}"
+        );
+    }
+
+    /// The three vectors as raw HTML, for embedding in each format's body.
+    #[cfg(feature = "sanitize")]
+    const ACTIVE_MARKUP: &str = concat!(
+        "<script>alert(1)</script>",
+        r#"<img src=x onerror=alert(1)>"#,
+        r#"<a href="javascript:alert(1)">x</a>"#,
+    );
+
     #[cfg(feature = "sanitize")]
     #[test]
     fn render_markdown_strips_embedded_script() {
         let result = render(
-            &PostBody::from("Hello\n\n<script>alert(1)</script>"),
+            &PostBody::from(format!("Hello\n\n{ACTIVE_MARKUP}").as_str()),
             &PostFormat::Markdown,
         );
-        assert!(!result.contains("<script"), "{result}");
+        assert_no_active_markup(&result);
         assert!(!result.contains("alert(1)"), "{result}");
         assert!(result.contains("Hello"), "{result}");
     }
@@ -973,20 +1087,21 @@ mod tests {
         // by orgize itself, so it never needed us.) Assert on the executable form:
         // the literal text `alert(1)` surviving *escaped* is harmless.
         let result = render(
-            &PostBody::from("Hello\n\n@@html:<script>alert(1)</script>@@"),
+            &PostBody::from(format!("Hello\n\n@@html:{ACTIVE_MARKUP}@@").as_str()),
             &PostFormat::Org,
         );
-        assert!(!result.contains("<script"), "{result}");
+        assert_no_active_markup(&result);
+        assert!(result.contains("Hello"), "{result}");
     }
 
     #[cfg(feature = "sanitize")]
     #[test]
     fn render_html_strips_embedded_script() {
         let result = render(
-            &PostBody::from("<p>hi</p><script>alert(1)</script>"),
+            &PostBody::from(format!("<p>hi</p>{ACTIVE_MARKUP}").as_str()),
             &PostFormat::Html,
         );
-        assert!(!result.contains("<script"), "{result}");
+        assert_no_active_markup(&result);
         assert!(!result.contains("alert(1)"), "{result}");
         assert!(result.contains("<p>hi</p>"), "{result}");
     }
