@@ -378,7 +378,7 @@ the moment the twelve names are gone.)
   (empty string when absent — matches the existing string-typed fields'
   convention).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```rust
 #[test]
@@ -404,24 +404,25 @@ fn missing_parent_span_id_is_empty_not_an_error() {
 }
 ```
 
-- [ ] **Step 2: Run, verify fail**
+- [x] **Step 2: Run, verify fail**
 
 Run:
 `devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml traces::parse`
 Expected: FAIL — no field `span_id`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Add the two fields, populate from `span["spanId"]` / `span["parentSpanId"]` as
 strings, and update the struct doc comment — it currently states these are
 deliberately omitted, which becomes false.
 
-- [ ] **Step 4: Run, verify pass**
+- [x] **Step 4: Run, verify pass**
 
 Run: `devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml`
-Expected: PASS — existing `traces` analyzer tests unaffected.
+Expected: PASS — **actual: 296 tests, 296 passed**; the single construction site
+meant no existing analyzer test needed touching.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit** — `7951d431`
 
 ```bash
 git add xtask/src/traces/parse.rs xtask/src/lib.rs
@@ -510,18 +511,25 @@ test("buildSpan still mints an id when none is supplied", () => {
 });
 ```
 
-- [ ] **Step 2: Run, verify fail**
+- [x] **Step 2: Run, verify fail** — **not done; the unit spec was dropped.**
 
-Run:
-`devtool run -- playwright test --config end2end/playwright.config.ts otel.unit.ts`
-Expected: FAIL — `spanId` not accepted / ignored.
+**Deviation, with reasoning.** `.unit.ts` does not match Playwright's default
+`testMatch` (`**/*.@(spec|test).?(c|m)[jt]s?(x)`), so the file would never be
+collected — passing it as a CLI filter only filters _collected_ files. The
+alternatives were all worse than the thing being tested: name it `.spec.ts` and
+it joins the browser matrix in all four combos (the problem this step was
+written to avoid), or stand up a second test runner for what is literally
+`input.spanId ?? randomHex(8)`.
 
-(The bare `playwright` binary from the devShell PATH, per
-`xtask/src/steps/e2e_local.rs:179-198`. **Not** `npx` — `end2end/node_modules`
-carries type deps only (`flake.nix:1156`), so `npx` resolves nothing locally and
-may reach for the network.)
+Dropped instead, because the invariant is checked where it actually matters: if
+the override silently failed, `buildSpan` would mint a _different_ id from the
+one propagated in the traceparent, every server request span's `parentSpanId`
+would point at an id no `e2e.test` span carries, and **every hit would land in
+the orphan bucket** — which Task 9 Step 3 asserts must contain only
+outside-any-test traffic. That is a stronger, end-to-end check than the unit
+test would have been. `tsc` covers the type surface.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Add the optional `spanId` to `SpanInput` and use `input.spanId ?? randomHex(8)`
 in `buildSpan`. In `fixtures.ts`, add a **`testSpanId` fixture** that mints
@@ -530,22 +538,39 @@ in `buildSpan`. In `fixtures.ts`, add a **`testSpanId` fixture** that mints
 minted inside one is not visible to the others. Call `applyTestTraceparent`
 immediately after each `browser.newContext()` (`:283`, `:333`) and for the
 test's own context, and pass `testSpanId` as `spanId` to the `e2e.test`
-`buildSpan` call so the id the server saw is the id the span carries. Update
+`buildSpan` call so the id the server saw is the id the span carries. ~~Update
 `perf.ts` to use the same fixture rather than reading the env traceparent
-independently.
+independently.~~
 
 Note: `browser.newContext()` does **not** inherit config-level
 `extraHTTPHeaders`, so those two contexts carry no traceparent at all today —
 this is what fixes them.
 
-- [ ] **Step 4: Run, verify pass, then smoke one real spec**
+**`perf.ts` was deliberately left alone — the plan was wrong here.** It builds
+an independent `e2e.flow.<flow>` diagnostic span and merely _records_ the env
+traceparent as an attribute; it is not part of the attribution chain. Giving it
+`testSpanId` would have produced **two spans sharing one span id**, corrupting
+the `span_id → parent_span_id` map the ancestor walk is built on — turning a
+diagnostic nicety into a correctness bug in the thing this cycle exists to
+build.
 
-Run:
-`devtool run -- playwright test --config end2end/playwright.config.ts otel.unit.ts`
-Expected: PASS Run: `devtool run -- cargo xtask e2e-local auth.spec.ts`
-Expected: PASS — the shared fixture still drives a real browser run.
+Also added: `newSpanId()` exported from `otel.ts`, so the fixture mints ids
+through the same helper `buildSpan` uses rather than duplicating `randomHex(8)`.
+`applyTestTraceparent` is applied to the test's own context _after_
+`warmupPageContext`, so optional warmup traffic — which is not part of the test
+— stays out of the attribution.
 
-- [ ] **Step 5: Commit** (own commit — this is R1's blast radius)
+- [x] **Step 4: Run, verify pass, then smoke one real spec**
+
+Run: `devtool run -- cargo xtask check --no-test` (covers `tsc` + lint on the
+harness change) — **PASS**. Run:
+`devtool run -- cargo xtask e2e-local auth.spec.ts` — **PASS, 12/12 in 22.0s**.
+`auth.spec.ts` was chosen because it exercises registration and login through
+the shared fixtures, so it puts the new per-test traceparent on the real path.
+(The `500` in the log is the deliberate "login with wrong password shows error"
+negative-path test — pre-existing masked-error behaviour, not the header.)
+
+- [x] **Step 5: Commit** (own commit — this is R1's blast radius)
 
 ```bash
 git add end2end/tests/otel.ts end2end/tests/otel.unit.ts end2end/tests/fixtures.ts end2end/tests/perf.ts

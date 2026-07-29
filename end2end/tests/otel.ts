@@ -120,7 +120,19 @@ export type SpanInput = {
   endMs: number;
   attributes?: OtlpAttribute[];
   events?: OtlpEvent[];
+  /**
+   * Use this span id instead of minting one. Needed because the per-test span's
+   * id must exist *before* the test runs — it is propagated as the traceparent
+   * parent-span-id so server request spans can be attributed back to the test
+   * (#681) — whereas the span itself is only built at export time, afterwards.
+   */
+  spanId?: string;
 };
+
+/** A 16-hex-char span id, the shape the per-test traceparent requires. */
+export function newSpanId(): string {
+  return randomHex(8);
+}
 
 export function makeEvent(
   name: string,
@@ -137,7 +149,7 @@ export function makeEvent(
 export function buildSpan(input: SpanInput): OtlpSpan {
   const span: OtlpSpan = {
     traceId: input.traceContext.traceId,
-    spanId: randomHex(8),
+    spanId: input.spanId ?? randomHex(8),
     ...(input.parentSpanId || input.traceContext.parentSpanId
       ? { parentSpanId: input.parentSpanId ?? input.traceContext.parentSpanId }
       : {}),

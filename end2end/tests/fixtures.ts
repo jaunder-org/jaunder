@@ -16,6 +16,7 @@
 import {
   expect,
   test as base,
+  type BrowserContext,
   type Page,
   type Request,
   type TestInfo,
@@ -25,6 +26,7 @@ import {
   buildSpan,
   exportSpans,
   makeEvent,
+  newSpanId,
   otlpAttribute,
   traceContextFromEnvironment,
 } from "./otel";
@@ -222,6 +224,31 @@ export function setTestBudget(chromiumBudgetMs: number): void {
   info.setTimeout(slowBrowserTimeoutMs(info, chromiumBudgetMs));
 }
 
+/**
+ * Point every request from `context` at this test's `e2e.test` span, by sending a
+ * W3C `traceparent` whose parent-span-id is `testSpanId`.
+ *
+ * The server adopts an inbound traceparent as its request span's parent
+ * (`make_request_span`), so each server request span ends up carrying this test's
+ * span id — the structural join the flow-coverage gate walks (#681). Without it,
+ * `playwright.config.ts` supplies one run-wide traceparent shared by every test,
+ * and the suite runs `fullyParallel`, so hits could not be attributed to a test at
+ * all.
+ *
+ * Must be called for EVERY context a test uses: `browser.newContext()` does not
+ * inherit the config-level `extraHTTPHeaders`, so a throwaway context would
+ * otherwise send no traceparent whatsoever and its traffic would be orphaned.
+ */
+export async function applyTestTraceparent(
+  context: BrowserContext,
+  traceId: string,
+  testSpanId: string,
+): Promise<void> {
+  await context.setExtraHTTPHeaders({
+    traceparent: `00-${traceId}-${testSpanId}-01`,
+  });
+}
+
 /** A uniquely-named account provisioned per test. `password` is the literal
  *  `register()` password; `email` is the deterministic unique address this
  *  account uses when it sets/verifies email. */
@@ -237,12 +264,26 @@ export type Mailbox = {
 const test = base.extend<{
   _autoTestTimeout: void;
   _autoPerfSpan: void;
+  testSpanId: string;
   firstNav: number;
   registeredPage: Page;
   user: TestUser;
   mailbox: Mailbox;
   verifiedUser: TestUser;
 }>({
+  // The id of this test's `e2e.test` span, minted BEFORE the test body so it can
+  // be propagated as the traceparent parent-span-id on every browser context the
+  // test uses. Server request spans then carry it as `parentSpanId`, which is how
+  // the flow-coverage gate attributes a server-fn hit to the test that caused it
+  // (#681).
+  //
+  // It has to be a fixture, not a local in `_autoPerfSpan`: `user` and
+  // `verifiedUser` build their own throwaway contexts and are independent
+  // fixtures, so they cannot read a value minted inside another one.
+  testSpanId: async ({}, use) => {
+    await use(newSpanId());
+  },
+
   // Ambient whole-test timeout. `auto`, so it applies to EVERY test; Playwright
   // sets up auto fixtures before any requested fixture, so this budget is in
   // force before `user`/`verifiedUser`/`registeredPage` setup runs (covering the
@@ -279,8 +320,13 @@ const test = base.extend<{
   // A uniquely-named account, registered in a throwaway context so the test's
   // own `page` stays logged out. Lazy: only provisioned for tests that
   // destructure `user`.
-  user: async ({ browser }, use, testInfo) => {
+  user: async ({ browser, testSpanId }, use, testInfo) => {
     const context = await browser.newContext();
+    await applyTestTraceparent(
+      context,
+      traceContextFromEnvironment().traceId,
+      testSpanId,
+    );
     const page = await context.newPage();
     const username = await register(
       page,
@@ -325,12 +371,21 @@ const test = base.extend<{
   // `user` plus the email set-and-verify flow, driven through `mailbox`, all
   // out-of-band so the test's `page` stays logged out. Yields the same
   // credentials; the account now has a verified email.
-  verifiedUser: async ({ browser, user, mailbox }, use, testInfo) => {
+  verifiedUser: async (
+    { browser, user, mailbox, testSpanId },
+    use,
+    testInfo,
+  ) => {
     // The expensive out-of-band setup below (newContext + login + set-email +
     // verify) runs before the test body; the ambient `_autoTestTimeout` auto
     // fixture (which runs before this one) has already scaled the whole-test
     // budget, so this setup is covered without a hand-rolled `setTimeout` here.
     const context = await browser.newContext();
+    await applyTestTraceparent(
+      context,
+      traceContextFromEnvironment().traceId,
+      testSpanId,
+    );
     const page = await context.newPage();
     const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 15_000);
     await login(page, user.username, user.password, firstNav);
@@ -347,11 +402,19 @@ const test = base.extend<{
   },
 
   _autoPerfSpan: [
-    async ({ page }, use, testInfo) => {
+    async ({ page, testSpanId }, use, testInfo) => {
       // Optional experiment mode: warm the same browser context before tracing starts.
       await warmupPageContext(page, testInfo);
 
       const traceContext = traceContextFromEnvironment();
+      // The test's own context, so its requests are attributable too. Applied
+      // after the warmup so warmup traffic (which is not part of the test) stays
+      // out of the attribution (#681).
+      await applyTestTraceparent(
+        page.context(),
+        traceContext.traceId,
+        testSpanId,
+      );
       const testStartMs = Date.now();
       const testKey = `${testInfo.file}::${testInfo.title}::${testInfo.project.name}::${testInfo.retry}`;
       const requestStarts = new Map<Request, number>();
@@ -788,6 +851,10 @@ const test = base.extend<{
       const span = buildSpan({
         traceContext,
         name: "e2e.test",
+        // The id the server already saw as the inbound traceparent's
+        // parent-span-id, so the span this test exports is the one its request
+        // spans point at (#681).
+        spanId: testSpanId,
         kind: "client",
         startMs: testStartMs,
         endMs,
