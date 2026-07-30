@@ -509,7 +509,7 @@ Expected: PASS.
 
 ## Task 7 — The `sqlx-newtype-decode` gate (core + allowlist + wiring, one commit)
 
-- [ ] Done
+- [x] Done
 
 **This task is deliberately one commit and must not be split.**
 `xtask/src/lib.rs:22` declares `mod steps` private, so any gate item not

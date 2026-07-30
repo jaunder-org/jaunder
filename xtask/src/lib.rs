@@ -37,6 +37,7 @@ mod steps {
     pub mod server_fn_registrar_check;
     pub mod server_fn_tracing_check;
     pub mod sqlx_newtype_bind_check;
+    pub mod sqlx_newtype_decode_check;
     pub mod static_checks;
     pub mod target_arch_placement_check;
     pub mod test_pattern_check;
@@ -348,6 +349,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::no_full_reload_check::run(&mut result);
             steps::target_arch_placement_check::run(&mut result);
             steps::sqlx_newtype_bind_check::run(&mut result);
+            steps::sqlx_newtype_decode_check::run(&mut result);
             steps::rendered_html_from_trusted_check::run(&mut result);
             steps::host_tests::run(&sh, &mut result);
             if !no_test {
@@ -387,6 +389,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::no_full_reload_check::run(&mut result);
             steps::target_arch_placement_check::run(&mut result);
             steps::sqlx_newtype_bind_check::run(&mut result);
+            steps::sqlx_newtype_decode_check::run(&mut result);
             steps::rendered_html_from_trusted_check::run(&mut result);
             steps::host_tests::run(&sh, &mut result);
             steps::nix::coverage(&mut result);

@@ -755,6 +755,7 @@ dependencies = [
  "coverage",
  "flate2",
  "proc-macro2",
+ "quote",
  "serde",
  "serde_json",
  "syn",
