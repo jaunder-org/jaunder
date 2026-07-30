@@ -112,6 +112,7 @@ convention). See the Status column below for each ADR's current status.
 | [0082](adr/0082-server-fn-wire-namespace.md)                       | Server-fn wire URLs are `/api/<vertical>/<op>`, derived and gate-written                                     | proposed   |
 | [0083](adr/0083-reactive-paint-fold.md)                            | Reactive components paint from a host-tested decision fold                                                   | accepted   |
 | [0084](adr/0084-media-filename-encoded-canonical.md)               | Media filename — the encoded form is canonical, with a proffered inbound twin                                | proposed   |
+| [0085](adr/0085-static-type-safety-gates-enumerate.md)             | Static type-safety gates enumerate, they do not search                                                       | proposed   |
 
 <!-- adr-table:end -->
 

@@ -28,8 +28,24 @@
 //! **What it still cannot see: a strip laundered through a function parameter.** If the
 //! conversion happens in one function and the `.bind` in another, the binding function
 //! sees only an `i64` argument and there is nothing left to detect. That is **#716**,
-//! and it is a real limit of a line-based scan rather than an oversight — two live
-//! instances are recorded there.
+//! and two live instances are recorded there.
+//!
+//! **This gate does not conform to the "enumerate, don't search" decision**
+//! (`docs/adr/0085-static-type-safety-gates-enumerate.md`, #715), on two counts, and
+//! the laundering above is a symptom rather than the disease:
+//!
+//! - It decides a violation by *searching* for three strip spellings (`.as_ref()`,
+//!   `&*`, `i64::from(`). A fourth spelling — including passing the value through a
+//!   parameter — passes green, because the scan recognises nothing and treats that as
+//!   clean. A conforming gate defines its population structurally and denies by
+//!   default, so an unanticipated construct fails.
+//! - Its [`ALLOWLIST`] is **region-scoped**: as the doc below says, a needle exempts
+//!   every matching line under [`POLICED_ROOT`], not one site. A new violation that
+//!   happens to match an existing needle is absorbed silently.
+//!
+//! `sqlx-newtype-decode` is the conforming sibling; rebuilding this one the same way —
+//! deny bare-primitive binds unless an entry names the site and its multiplicity — is
+//! **#716**'s scope.
 
 use std::path::Path;
 

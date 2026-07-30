@@ -117,7 +117,7 @@ impl AtomicOps for PostgresAtomicOps {
             .await
             .map_err(|e| RegisterWithInviteError::Internal(sqlx::Error::Io(e)))?; // cov:ignore
 
-        let result = sqlx::query_scalar::<_, i64>(
+        let result = sqlx::query_scalar::<_, UserId>(
             "INSERT INTO users (username, password_hash, display_name, created_at, is_operator)
              VALUES ($1, $2, $3, $4, $5)
              RETURNING user_id",
@@ -131,7 +131,7 @@ impl AtomicOps for PostgresAtomicOps {
         .await;
 
         let user_id = match result {
-            Ok(id) => UserId::from(id),
+            Ok(id) => id,
             // Let the UNIQUE(username) constraint be the arbiter rather than a
             // pre-INSERT existence check: that closes the check-then-insert race
             // between concurrent registrations.

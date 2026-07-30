@@ -88,8 +88,27 @@ default-on, `secret` drops it, a secret re-adds it explicitly.
 
   **What the gate still cannot see** is a strip laundered through a function
   parameter: the conversion in one function, the `.bind` in another, where
-  nothing remains to detect. That is a real limit of a line-based scan rather
-  than an oversight, and it is tracked as **#716**.
+  nothing remains to detect. It is tracked as **#716**.
+
+  This was originally recorded here as "a real limit of a line-based scan rather
+  than an oversight". **#715 supersedes that framing.** The gate decides a
+  violation by searching for three strip spellings, so anything spelled a fourth
+  way — including via a parameter — passes green; and its substring allowlist
+  exempts every matching line under the root rather than one site. Both are
+  departures from the decision recorded in
+  `docs/adr/0085-static-type-safety-gates-enumerate.md`, and #716 now carries
+  the scope of rebuilding this gate to enumerate.
+
+- **A second `xtask` gate (`sqlx-newtype-decode`, #715)** covers the other
+  direction. The bridges above make a column decode straight into its newtype,
+  but nothing checked that it did, so ids kept arriving as bare `i64` and being
+  re-wrapped by hand. It parses `storage/src` with `syn` and fails on **every**
+  decode target in the `i64` family — across `query_scalar`, `query_as`,
+  `let`-ascription, `row.get`, and declared `FromRow`/tuple-alias targets —
+  unless an allowlist entry names that exact decode, its multiplicity, and a
+  written reason. It inspects no SQL, deliberately: deciding by column name or
+  by `COUNT(` would be the same pattern search that let three earlier audits
+  report done while residue remained.
 
 **The `IdNewtype` and `NumNewtype` bridges (#686)** have the same
 `Type`/`Encode` shape, delegating to the declared inner integer rather than

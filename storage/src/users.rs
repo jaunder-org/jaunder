@@ -224,8 +224,13 @@ where
         bool,
         bool,
     ): for<'r> sqlx::FromRow<'r, DB::Row>,
-    for<'r> i64: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    // `create_user`'s `RETURNING user_id` decodes straight into `UserId` via the
+    // ADR-0071 bridge (#686), so the id never exists as a bare `i64` here (#715).
+    for<'r> UserId: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
     usize: sqlx::ColumnIndex<DB::Row>,
+    // Not residue: the ADR-0071 bridge *delegates* to `i64`, so `i64: Encode`/`Type` is
+    // what makes every id newtype bind on a generic backend. Removing it breaks the
+    // typed binds, not just the untyped ones.
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `Username`/`DisplayName`/`Bio`/`Email` bind/decode as themselves via the sqlx
@@ -264,7 +269,7 @@ where
 
         let now = Utc::now();
 
-        let result = sqlx::query_scalar::<_, i64>(
+        let result = sqlx::query_scalar::<_, UserId>(
             "INSERT INTO users (username, password_hash, display_name, created_at, is_operator)
              VALUES ($1, $2, $3, $4, $5)
              RETURNING user_id",
@@ -282,7 +287,7 @@ where
         .await;
 
         match result {
-            Ok(id) => Ok(UserId::from(id)),
+            Ok(id) => Ok(id),
             Err(sqlx::Error::Database(error)) if error.is_unique_violation() => {
                 Err(CreateUserError::UsernameTaken)
             }

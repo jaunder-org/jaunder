@@ -167,7 +167,7 @@ where
     for<'q> String: sqlx::Encode<'q, DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
-    (i64,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (FeedEventId,): for<'r> sqlx::FromRow<'r, DB::Row>,
 {
     #[tracing::instrument(
         name = "storage.feed_events.enqueue",
@@ -175,12 +175,13 @@ where
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn enqueue(&self, feed_path: &FeedPath) -> Result<FeedEventId, FeedEventError> {
-        let id: i64 =
-            sqlx::query_scalar("INSERT INTO feed_events (feed_url) VALUES ($1) RETURNING id")
-                .bind(feed_path)
-                .fetch_one(&self.pool)
-                .await?;
-        Ok(FeedEventId::from(id))
+        let id = sqlx::query_scalar::<_, FeedEventId>(
+            "INSERT INTO feed_events (feed_url) VALUES ($1) RETURNING id",
+        )
+        .bind(feed_path)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(id)
     }
 
     #[tracing::instrument(

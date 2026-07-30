@@ -822,13 +822,16 @@ impl<DB> PostStorage for PostStore<DB>
 where
     DB: PostDialect,
     PostRow: for<'r> sqlx::FromRow<'r, DB::Row>,
-    (i64,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (PostId,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (bool,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (PostId, TagId, Tag, TagLabel): for<'r> sqlx::FromRow<'r, DB::Row>,
     (TagId, Tag): for<'r> sqlx::FromRow<'r, DB::Row>,
-    (String, Option<i64>): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (String, Option<AudienceId>): for<'r> sqlx::FromRow<'r, DB::Row>,
     (DateTime<Utc>,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (String, DateTime<Utc>): for<'r> sqlx::FromRow<'r, DB::Row>,
+    // Not residue: the ADR-0071 bridge *delegates* to `i64`, so `i64: Encode`/`Type` is
+    // what makes every id newtype bind on a generic backend. Removing it breaks the
+    // typed binds, not just the untyped ones.
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<&'q str>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -848,7 +851,7 @@ where
     // (delegates to `String`) on the create paths, mirroring the
     // `Option<&PostTitle>` bound above.
     for<'q> Option<&'q PostSummary>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> Option<i64>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<AudienceId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `RowLimit` binds as itself via the ADR-0071 sqlx bridge (delegates to `i64`) —
     // every listing's `LIMIT` placeholder (#696).
     for<'q> RowLimit: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -905,14 +908,14 @@ where
         user_id: UserId,
         key: &str,
     ) -> Result<Option<PostId>, sqlx::Error> {
-        let post_id = sqlx::query_scalar::<_, i64>(
+        let post_id = sqlx::query_scalar::<_, PostId>(
             "SELECT post_id FROM idempotency_keys WHERE user_id = $1 AND key = $2",
         )
         .bind(user_id)
         .bind(key)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(post_id.map(PostId::from))
+        Ok(post_id)
     }
 
     #[tracing::instrument(
@@ -949,7 +952,7 @@ where
     async fn get_post_audiences(&self, post_id: PostId) -> sqlx::Result<Vec<AudienceTarget>> {
         // Owner-only: no viewer resolution. `ORDER BY` makes the result
         // deterministic so callers can compare vecs directly.
-        let rows: Vec<(String, Option<i64>)> = sqlx::query_as(
+        let rows: Vec<(String, Option<AudienceId>)> = sqlx::query_as(
             "SELECT tk.name, pa.audience_id \
              FROM post_audiences pa \
              JOIN target_kinds tk ON tk.kind_id = pa.target_kind_id \
@@ -1835,12 +1838,12 @@ impl ResolutionBinds {
 
 /// Maps an [`AudienceTarget`] to its `post_audiences` row shape:
 /// `(target_kind name, audience_id)`. `Private` produces no row.
-fn audience_target_row(target: &AudienceTarget) -> Option<(&'static str, Option<i64>)> {
+fn audience_target_row(target: &AudienceTarget) -> Option<(&'static str, Option<AudienceId>)> {
     use common::visibility::TargetKind;
     match target {
         AudienceTarget::Public => Some((TargetKind::Public.into(), None)),
         AudienceTarget::Subscribers => Some((TargetKind::Subscribers.into(), None)),
-        AudienceTarget::Named(id) => Some((TargetKind::Named.into(), Some(i64::from(*id)))),
+        AudienceTarget::Named(id) => Some((TargetKind::Named.into(), Some(*id))),
         AudienceTarget::Private => None,
     }
 }
@@ -1853,11 +1856,11 @@ fn audience_target_row(target: &AudienceTarget) -> Option<(&'static str, Option<
 /// [`AudienceTarget::Subscribers`], `named` (with an id) →
 /// [`AudienceTarget::Named`]. A `named` row missing its id, or any kind name
 /// the lookup table never holds, yields `None` (the row is dropped).
-fn audience_target_from_row(kind: &str, audience_id: Option<i64>) -> Option<AudienceTarget> {
+fn audience_target_from_row(kind: &str, audience_id: Option<AudienceId>) -> Option<AudienceTarget> {
     match TargetKind::try_from(kind) {
         Ok(TargetKind::Public) => Some(AudienceTarget::Public),
         Ok(TargetKind::Subscribers) => Some(AudienceTarget::Subscribers),
-        Ok(TargetKind::Named) => audience_id.map(|id| AudienceTarget::Named(AudienceId::from(id))),
+        Ok(TargetKind::Named) => audience_id.map(AudienceTarget::Named),
         Err(_) => None,
     }
 }
@@ -1890,7 +1893,7 @@ pub(crate) async fn write_post_in_tx<DB>(
 where
     DB: PostDialect,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> Option<i64>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<AudienceId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<&'q str>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<String>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -1908,13 +1911,13 @@ where
     // (delegates to `String`) on the create paths, mirroring the
     // `Option<&PostTitle>` bound above.
     for<'q> Option<&'q PostSummary>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    (i64,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (PostId,): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     let now = Utc::now();
 
-    let post_id = sqlx::query_scalar::<_, i64>(
+    let post_id = sqlx::query_scalar::<_, PostId>(
         "INSERT INTO posts (user_id, title, slug, body, format, rendered_html, created_at, updated_at, published_at, summary)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          RETURNING post_id",
@@ -1940,7 +1943,6 @@ where
         sqlx::Error::Database(db) if db.is_unique_violation() => CreatePostError::SlugConflict,
         e => CreatePostError::Internal(e),
     })?;
-    let post_id = PostId::from(post_id);
 
     replace_post_audiences::<DB>(conn, post_id, &input.audiences).await?;
 
@@ -1976,7 +1978,7 @@ pub(crate) async fn replace_post_audiences<DB>(
 where
     DB: PostDialect,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> Option<i64>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<AudienceId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
@@ -2296,12 +2298,15 @@ mod tests {
             Some(AudienceTarget::Subscribers)
         );
         assert_eq!(
-            audience_target_from_row("named", Some(7)),
+            audience_target_from_row("named", Some(AudienceId::from(7))),
             Some(AudienceTarget::Named(AudienceId::from(7)))
         );
         // A `named` row missing its id, or an unknown kind name, is dropped.
         assert_eq!(audience_target_from_row("named", None), None);
-        assert_eq!(audience_target_from_row("bogus", Some(1)), None);
+        assert_eq!(
+            audience_target_from_row("bogus", Some(AudienceId::from(1))),
+            None
+        );
     }
 
     fn post_tag(slug: &str, display: &str) -> PostTag {
