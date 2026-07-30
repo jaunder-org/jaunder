@@ -997,7 +997,7 @@ not catch it.** `expectNoShiftAcrossMount` exists for this
   `|Δx|, |Δy| <= tolerancePx`. No timers — parallel-safe under `workers>1`.
 - Produces: nothing consumed by later tasks.
 
-- [ ] **Step 1: Write the four probes**
+- [x] **Step 1: Write the four probes**
 
 One `test` per projector-painted timeline route. `/app` is **excluded** — it is
 `no-store` and never projector-painted (`cockpit/component.rs:3-6`), so there is
@@ -1038,7 +1038,8 @@ Repeat for `/tags/<tag>`, `/~<user>`, and `/~<user>/tags/<tag>`, each with
 `.j-topbar` in place of `.j-hero` (those three paint a `Topbar`, not the
 masthead) and the same `first post` + `afterMount` shape.
 
-- [ ] **Step 2: Run them against the pre-sweep tree, verify they PASS**
+- [x] **Step 2: Run them against the pre-sweep tree, verify they PASS** —
+      _observed: 4 passed (8.5s)._
 
 ```
 cargo xtask e2e-local timeline-cls.spec.ts
