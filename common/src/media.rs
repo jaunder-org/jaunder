@@ -267,6 +267,88 @@ impl Filename {
     }
 }
 
+/// A filename **as proffered by a request** — the third door, for the route segments
+/// axum has already percent-decoded.
+///
+/// Three routes carry a filename path segment (the media serve route, and the `AtomPub`
+/// media member `GET`/`DELETE`), and axum's `Path` extractor percent-*decodes* a
+/// parameter before the handler sees it. There is no un-decoded extractor:
+/// `RawPathParams` is "raw" only in the sense of *undeserialized* — its values are
+/// `PercentDecodedStr` too.
+///
+/// So those doors hold a **decoded** name while [`Filename`] holds the canonical stored
+/// one, and a single [`FromStr`] cannot serve both: percent-encoding is not idempotent,
+/// so a door that encoded its input would double-encode an already-canonical value
+/// (#720). Since these extractors pick their door *purely by the type parameter*, a
+/// second type is the only mechanism that makes the choice compiler-checked rather than
+/// a comment.
+///
+/// `From<ProfferedFilename> for Filename` is **total**, not `TryFrom` — this type
+/// enforces exactly [`Filename`]'s conditions, so the rewrap can never fail and the
+/// three handlers carry no error arm for it.
+///
+/// # A deliberately minimal trailer (ADR-0063 deviation)
+///
+/// Only [`FromStr`], `Deserialize`, `Clone` and `Debug`. The rest of the standard
+/// string-newtype trailer is a hazard rather than an ergonomic win here, because this
+/// type exists for exactly one hop:
+///
+/// - **No `sqlx` bridge.** The default `#[derive(StrNewtype)]` emits one, which would
+///   make this a second *storable* spelling of a filename — a leak the
+///   `proffered-filename-position` gate cannot catch, since it scans type positions, not
+///   query binds.
+/// - **No `Display`/`Serialize`.** Nothing should render or transmit an inbound-only
+///   value, and omitting them means there is no way to feed a canonical value back
+///   through an encoding door:
+/// ```compile_fail
+/// let p: common::media::ProfferedFilename = "a.jpg".parse().unwrap();
+/// let _ = p.to_string(); // no Display: the inbound twin is never rendered
+/// ```
+/// ```compile_fail
+/// let p: common::media::ProfferedFilename = "a.jpg".parse().unwrap();
+/// let _ = serde_json::to_string(&p); // no Serialize: inbound only
+/// ```
+///
+/// `Clone` is load-bearing rather than reflexive: `SoftPath::value()` borrows, so the
+/// serve route needs an owned value to hand to the conversion.
+#[derive(Clone, Debug)]
+pub struct ProfferedFilename(String);
+
+impl FromStr for ProfferedFilename {
+    type Err = InvalidFilename;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // Identical to `Filename`'s strict door for now, deliberately: this lands as a
+        // behaviour-preserving rewire so the encoding flip has somewhere to go without a
+        // red intermediate. #720's flip inserts the encode step here.
+        if s.is_empty() || sanitize_filename(s) != s {
+            return Err(InvalidFilename::NotASafeLeaf);
+        }
+        let encoded = encoded_len(s);
+        if encoded > MAX_FILENAME_ENCODED_BYTES {
+            return Err(InvalidFilename::TooLong { encoded });
+        }
+        Ok(ProfferedFilename(s.to_owned()))
+    }
+}
+
+impl<'de> Deserialize<'de> for ProfferedFilename {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // Routes through the validating door, mirroring `SoftPath`'s approach — a
+        // malformed segment is a parse error, never a silently-accepted value.
+        let raw = String::deserialize(deserializer)?;
+        raw.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+impl From<ProfferedFilename> for Filename {
+    fn from(value: ProfferedFilename) -> Self {
+        // A rewrap with no logic: `ProfferedFilename`'s door already enforced every
+        // condition `Filename` requires, which is what keeps this infallible.
+        Filename(value.0)
+    }
+}
+
 /// Shortens `name` until its percent-encoded form fits [`MAX_FILENAME_ENCODED_BYTES`],
 /// keeping the extension and never splitting a grapheme cluster. A name already within
 /// budget is returned unchanged.
@@ -1398,6 +1480,48 @@ mod tests {
                 "sanitized({raw:?}) = {f:?} must re-parse as Filename"
             );
         }
+    }
+
+    // --- ProfferedFilename: the inbound URL door (#720) ---
+
+    #[test]
+    fn proffered_accepts_a_safe_leaf() {
+        let p: ProfferedFilename = "photo.jpg".parse().expect("a safe leaf");
+        assert_eq!(Filename::from(p), "photo.jpg");
+    }
+
+    #[test]
+    fn proffered_rejects_a_traversal_or_separator_value() {
+        // The decoded segment axum hands us. `a\b.png` is not a leaf, and the member
+        // route answers 400 for it — pinned here so #720's re-encode cannot silently
+        // turn that into a 404.
+        for bad in ["a\\b.png", "a/b.png", "..", ".", "", "a\0b.png"] {
+            assert!(
+                bad.parse::<ProfferedFilename>().is_err(),
+                "must reject {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn proffered_rejects_an_over_long_name_rather_than_truncating() {
+        // Reject, never repair: a shortened lookup key would match the wrong file.
+        let long = format!("{}.jpg", "a".repeat(MAX_FILENAME_ENCODED_BYTES));
+        assert!(long.parse::<ProfferedFilename>().is_err());
+    }
+
+    #[test]
+    fn proffered_converts_into_filename_infallibly() {
+        // A `From`, not a `TryFrom` — this compiles only if the conversion is total.
+        let p: ProfferedFilename = "photo.jpg".parse().expect("a safe leaf");
+        let f: Filename = p.into();
+        assert_eq!(f, "photo.jpg");
+    }
+
+    #[test]
+    fn proffered_deserializes_through_its_validating_door() {
+        assert!(serde_json::from_str::<ProfferedFilename>("\"photo.jpg\"").is_ok());
+        assert!(serde_json::from_str::<ProfferedFilename>("\"a/b.png\"").is_err());
     }
 
     #[test]

@@ -237,7 +237,7 @@ unchanged, so every route behaves exactly as before — including the 400 at
   value to feed `From<ProfferedFilename>`. `Debug` is required by the extractor
   error paths. Everything else in the standard trailer stays off (spec D4a).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `common/src/media.rs`'s test module:
 
@@ -282,12 +282,15 @@ fn proffered_deserializes_through_its_validating_door() {
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run: `devtool run -- cargo nextest run -p common proffered` Expected: FAIL —
 cannot find type `ProfferedFilename` in this scope
 
-- [ ] **Step 3: Implement against the tests**
+Observed: `error[E0425]: cannot find type 'ProfferedFilename' in this scope`,
+×6.
+
+- [x] **Step 3: Implement against the tests**
 
 Define `ProfferedFilename` in `common/src/media.rs`, next to `Filename` so the
 pair reads together. **Do not use `#[derive(StrNewtype)]`** — hand-write
@@ -354,7 +357,9 @@ Return type is unchanged (`(MediaSource, ContentHash, Filename)`), so
 with `let filename = Filename::from(filename);` as the first statement of each
 body, so the rest of both handlers is unchanged.
 
-- [ ] **Step 5: Run the tests, verify they pass**
+Done as specified (Step 4 marked complete with Step 3 above).
+
+- [x] **Step 5: Run the tests, verify they pass**
 
 Run: `devtool run -- cargo nextest run -p common proffered` Expected: PASS — 12
 tests. The filter also matches seven pre-existing `ProfferedInviteCode` /
@@ -364,7 +369,12 @@ tests. The filter also matches seven pre-existing `ProfferedInviteCode` /
 Run: `devtool pg run -- cargo nextest run -p jaunder media` Expected: PASS —
 including `member_rejects_malformed_segment_returns_400`, **unmodified**
 
-- [ ] **Step 6: Commit**
+Observed: `12 tests run: 12 passed` (common) and `117 tests run: 117 passed`
+(jaunder), the latter including `member_rejects_malformed_segment_returns_400`
+and `resolve_media_path_encodes_the_filename_like_the_writer_does` on both
+backends, untouched. Task 3's no-op claim is verified empirically, not asserted.
+
+- [x] **Step 6: Commit**
 
 ```bash
 devtool run -- cargo xtask check

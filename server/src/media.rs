@@ -14,6 +14,7 @@ use common::etag::ETag;
 use common::ids::UserId;
 use common::media::{
     detect_content_type, media_path, should_inline, ContentHash, Filename, MediaSource,
+    ProfferedFilename,
 };
 use storage::{MediaError, MediaStorage};
 use web::auth::AuthUser;
@@ -64,7 +65,10 @@ pub struct ServeParams {
     pub p1: String,
     pub p2: String,
     pub hash: SoftPath<ContentHash>,
-    pub filename: SoftPath<Filename>,
+    /// Typed [`ProfferedFilename`], not [`Filename`]: axum has percent-*decoded* this
+    /// segment before the handler runs, so it is the decoded spelling, and only the
+    /// inbound door knows how to recover the stored one (#720).
+    pub filename: SoftPath<ProfferedFilename>,
 }
 
 /// Serves a stored media file, recording the `jaunder.media.served` outcome.
@@ -229,8 +233,12 @@ fn validate_serve_params(
     let Some(filename) = params.filename.value() else {
         return Err(StatusCode::NOT_FOUND);
     };
+    // `value()` borrows, so clone before the rewrap — this is what `Clone` on
+    // `ProfferedFilename` is for. The conversion is infallible: the proffered door
+    // already enforced every condition `Filename` requires.
+    let filename = Filename::from(filename.clone());
 
-    Ok((*source, hash.clone(), filename.clone()))
+    Ok((*source, hash.clone(), filename))
 }
 
 /// Validates the serve route's path parameters and resolves the on-disk file

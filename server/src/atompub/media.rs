@@ -12,7 +12,9 @@ use sha2::{Digest, Sha256};
 
 use common::absolute_url::{compose, AbsoluteUrl};
 use common::atompub::{render_media_link_entry, MediaLinkEntry};
-use common::media::{encode_filename_segment, media_url, ContentHash, Filename, MediaSource};
+use common::media::{
+    encode_filename_segment, media_url, ContentHash, Filename, MediaSource, ProfferedFilename,
+};
 use common::root_relative_url::RootRelativeUrl;
 use common::username::Username;
 use storage::{MediaRecord, MediaStorage, SiteConfigStorage};
@@ -148,12 +150,16 @@ pub async fn member_get(
     Extension(media): Extension<Arc<dyn MediaStorage>>,
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     auth_user: AuthUser,
-    Path((username, sha, filename)): Path<(Username, ContentHash, Filename)>,
+    Path((username, sha, filename)): Path<(Username, ContentHash, ProfferedFilename)>,
 ) -> Result<Response, HandlerError> {
     super::require_user_match(&auth_user, &username)?;
     // `sha` and `filename` are parsed by the typed extractor: a malformed segment is a
     // pre-handler 400. The URL is one we minted in the media-link entry, so a bad segment
     // is the caller's fault, not a missing resource.
+    //
+    // The filename arrives percent-*decoded* (axum decodes path parameters), so it comes
+    // in through the proffered door and is rewrapped here into the stored spelling (#720).
+    let filename = Filename::from(filename);
     let record = media
         .get_media(auth_user.user_id, &sha, &filename, &MediaSource::Upload)
         .await?
@@ -173,11 +179,13 @@ pub async fn member_get(
 pub async fn member_delete(
     Extension(media): Extension<Arc<dyn MediaStorage>>,
     auth_user: AuthUser,
-    Path((username, sha, filename)): Path<(Username, ContentHash, Filename)>,
+    Path((username, sha, filename)): Path<(Username, ContentHash, ProfferedFilename)>,
 ) -> Result<Response, HandlerError> {
     super::require_user_match(&auth_user, &username)?;
     // `sha` and `filename` are parsed by the typed extractor (a malformed segment is a
     // pre-handler 400); a well-formed but absent record still yields `NotFound` below.
+    // As in `member_get`, the segment arrives decoded and is rewrapped here (#720).
+    let filename = Filename::from(filename);
     media
         .delete_media(auth_user.user_id, &sha, &filename, &MediaSource::Upload)
         .await?;
