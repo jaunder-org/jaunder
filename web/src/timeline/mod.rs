@@ -19,4 +19,4 @@ pub use state::{LoadStatus, NoIdentity, TimelineCursor, TimelinePaint, TimelineS
 #[cfg(target_arch = "wasm32")]
 mod component;
 #[cfg(target_arch = "wasm32")]
-pub use component::{spawn_load_more, TimelineRows};
+pub use component::{spawn_load_more, wire_timeline_resolve, TimelineGate, TimelineRows};

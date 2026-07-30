@@ -904,7 +904,7 @@ contract is the signature plus wasm-clippy; T7–T9's e2e are what exercise it.
   and the `TimelineGate` component to spec §3's exact prop list. Both added to
   the `#[cfg(target_arch = "wasm32")] pub use component::{…}` list.
 
-- [ ] **Step 1: Write both items**
+- [x] **Step 1: Write both items**
 
 Copy spec §3's `wire_timeline_resolve` and `TimelineGate` verbatim, including
 the two-region body. Add `use leptos_router::components::Redirect;` and
@@ -927,7 +927,8 @@ Two doc comments carry invariants no test can express — write them out:
   same moment the status settles, so its subtree _is_ rebuilt across that
   transition — identical to today, and not something this region can prevent.
 
-- [ ] **Step 2: Verify it compiles for both targets**
+- [x] **Step 2: Verify it compiles for both targets** — _both unprecedented
+      patterns compiled first try; no fallback taken._
 
 ```
 devtool run -- cargo xtask check --no-test
