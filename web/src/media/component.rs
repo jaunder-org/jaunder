@@ -283,7 +283,7 @@ fn render_media_row(item: &Item, delete_action: ServerAction<Delete>) -> impl In
     //
     // Two roles, two spellings (#720). The label is cosmetic and decodes to the name the
     // user typed; the hidden field is the *key* that round-trips to
-    // `delete_media(filename: Filename)`, so it must stay canonical. Decoding the key
+    // `media::delete(filename: Filename)`, so it must stay canonical. Decoding the key
     // would make every delete of an encoding-needing name fail at the wire door — loudly,
     // since `Filename`'s `FromStr` rejects a raw value, but fail all the same.
     let display_name = item.filename.decoded().into_owned();

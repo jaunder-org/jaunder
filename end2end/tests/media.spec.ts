@@ -77,7 +77,7 @@ test.describe("Media upload and serving", () => {
     // delete would fail at the wire door.
     await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 30000));
 
-    const response = await page.request.post(BASE_URL + "/api/upload_media", {
+    const response = await page.request.post(BASE_URL + "/api/media/upload", {
       multipart: {
         file: {
           name: "my holiday photo.jpg",

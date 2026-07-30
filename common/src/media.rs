@@ -835,7 +835,7 @@ pub struct ByteSize(i64);
 
 /// The metadata returned on a successful media upload — the server-fn wire response
 /// (#517), moved here from `server` so it is nameable on the wasm client. `storage`'s
-/// `MediaManager` returns it directly; `web`'s `upload_media` fn returns it; `AtomPub`
+/// `MediaManager` returns it directly; `web`'s `media::upload` fn returns it; `AtomPub`
 /// serializes it. Every field is a validated `common` newtype, so each re-validates on
 /// deserialize — including `url`, the derived serve path: it is a
 /// [`RootRelativeUrl`][crate::root_relative_url::RootRelativeUrl] because being *derived*
