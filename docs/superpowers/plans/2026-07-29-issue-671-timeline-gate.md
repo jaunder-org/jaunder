@@ -1085,7 +1085,7 @@ today and stay **siblings** of `<TimelineGate/>`, not children — folding them 
 would drop them from the error and `Unidentified` arms, and for `FeedDiscovery`
 that would break head-level feed autodiscovery.
 
-- [ ] **Step 1: Rewrite `SiteTagPage`** (simplest — no `tag_context`)
+- [x] **Step 1: Rewrite `SiteTagPage`** (simplest — no `tag_context`)
 
 Delete its `#[expect(clippy::too_many_lines)]`, its `loaded` signal, its
 `Effect`, and its `read_error` memo. Keep the `params`/`tag` memo,
@@ -1126,7 +1126,7 @@ are. The seed block and the view become:
 Note the outer `{move || view! { … }}` wrapper around the old `FeedDiscovery`
 fragment (`:1652-1658`) is redundant and collapses to one closure.
 
-- [ ] **Step 2: Rewrite `UserTimelinePage`**
+- [x] **Step 2: Rewrite `UserTimelinePage`**
 
 Same deletions. Its `username` memo, `initial_page`, `on_load_more`,
 `FeedDiscovery`/ `RsdDiscovery`/`Topbar`/`SubscribeButton` chrome and
@@ -1162,7 +1162,7 @@ The `Signal::derive` reproduces the old
 `None` folds to `TimelinePaint::Unidentified`, which the default
 `NoIdentity::Blank` renders as nothing.
 
-- [ ] **Step 3: Rewrite `UserTagPage`**
+- [x] **Step 3: Rewrite `UserTagPage`**
 
 Same deletions; `username`/`tag` memos, `initial_page`, `on_load_more`, chrome,
 `read_username` and `read_tag` unchanged.
@@ -1193,13 +1193,13 @@ and the third view fragment (`:1798-1820`):
         />
 ```
 
-- [ ] **Step 4: Prune the imports**
+- [x] **Step 4: Prune the imports**
 
 `posts/component.rs:30` drops `TimelineRows` and gains `TimelineGate`,
 `wire_timeline_resolve`. If no other component in the file still uses
 `Memo`/`Effect`, let clippy tell you — do not guess.
 
-- [ ] **Step 5: Verify**
+- [x] **Step 5: Verify**
 
 ```
 devtool run -- cargo xtask check --no-test
@@ -1211,7 +1211,7 @@ still over 100 lines would fail `-D warnings`; and had a page dropped under
 threshold with the attribute still present, the unfulfilled expectation would
 fail too.
 
-- [ ] **Step 6: Run the affected e2e, verify behavior is unchanged** (A5)
+- [x] **Step 6: Run the affected e2e, verify behavior is unchanged** (A5)
 
 ```
 cargo xtask e2e-local posts.spec.ts
@@ -1220,12 +1220,13 @@ cargo xtask e2e-local timeline-cls.spec.ts
 ```
 
 Expected: PASS, **with no edits to any spec file**. If a spec needs editing,
-behavior changed — stop and diagnose. `timeline-cls.spec.ts` was green before
-this task (T6); if one of its probes now fails, this sweep moved
-projector-coincident markup on that route — the #653 class. Fix the sweep, never
-the tolerance.
+behavior changed — stop and diagnose. _Observed: CLS 4 passed, posts.spec.ts 34
+passed, profile.spec.ts 7 passed — no spec file edited._ `timeline-cls.spec.ts`
+was green before this task (T6); if one of its probes now fails, this sweep
+moved projector-coincident markup on that route — the #653 class. Fix the sweep,
+never the tolerance.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 devtool run -- cargo xtask check
