@@ -1328,51 +1328,13 @@ pub fn EditPostPage() -> impl IntoView {
                                         <MediaUpload show_result=true />
                                     </div>
                                     <div class="j-edit-form-actions">
-                                        {if is_published {
-                                            view! {
-                                                <button
-                                                    class="j-btn is-primary"
-                                                    type="button"
-                                                    name="publish"
-                                                    value="true"
-                                                    prop:disabled=move || {
-                                                        !slug_field.is_valid() || !summary_field.is_valid()
-                                                    }
-                                                    on:click=move |_| dispatch_update(true)
-                                                >
-                                                    "Save"
-                                                </button>
-                                            }
-                                                .into_any()
-                                        } else {
-                                            view! {
-                                                <button
-                                                    class="j-btn"
-                                                    type="button"
-                                                    name="publish"
-                                                    value="false"
-                                                    prop:disabled=move || {
-                                                        !slug_field.is_valid() || !summary_field.is_valid()
-                                                    }
-                                                    on:click=move |_| dispatch_update(false)
-                                                >
-                                                    "Save draft"
-                                                </button>
-                                                <button
-                                                    class="j-btn is-primary"
-                                                    type="button"
-                                                    name="publish"
-                                                    value="true"
-                                                    prop:disabled=move || {
-                                                        !slug_field.is_valid() || !summary_field.is_valid()
-                                                    }
-                                                    on:click=move |_| dispatch_update(true)
-                                                >
-                                                    "Publish"
-                                                </button>
-                                            }
-                                                .into_any()
-                                        }}
+                                        <EditSaveActions
+                                            is_published=is_published
+                                            disabled=Signal::derive(move || {
+                                                !slug_field.is_valid() || !summary_field.is_valid()
+                                            })
+                                            on_save=Callback::new(dispatch_update)
+                                        />
                                     </div>
                                 </aside>
                             </div>
@@ -1383,8 +1345,79 @@ pub fn EditPostPage() -> impl IntoView {
                 }
             })}
         </Suspense>
+        <EditSaveOutcome action=update_post_action />
+    }
+}
+
+/// The editor's save controls: a lone "Save" once the post is published, "Save draft" +
+/// "Publish" while it is still a draft.
+///
+/// Split out of [`EditPostPage`] (#306) so that page's `view!` carries only the
+/// post-resolved and audience-seeding decisions; the published/draft branch lives here.
+/// `on_save` is a plain data callback (the `publish` flag), not a view closure —
+/// ADR-0083 §3 rules out passing markup as a prop.
+#[component]
+fn EditSaveActions(
+    /// Whether the post being edited is already published.
+    is_published: bool,
+    /// Whether saving is currently blocked by an invalid slug or summary.
+    disabled: Signal<bool>,
+    /// Dispatches the update; the argument is the `publish` flag.
+    on_save: Callback<bool>,
+) -> impl IntoView {
+    view! {
+        {if is_published {
+            view! {
+                <button
+                    class="j-btn is-primary"
+                    type="button"
+                    name="publish"
+                    value="true"
+                    prop:disabled=move || disabled.get()
+                    on:click=move |_| on_save.run(true)
+                >
+                    "Save"
+                </button>
+            }
+                .into_any()
+        } else {
+            view! {
+                <button
+                    class="j-btn"
+                    type="button"
+                    name="publish"
+                    value="false"
+                    prop:disabled=move || disabled.get()
+                    on:click=move |_| on_save.run(false)
+                >
+                    "Save draft"
+                </button>
+                <button
+                    class="j-btn is-primary"
+                    type="button"
+                    name="publish"
+                    value="true"
+                    prop:disabled=move || disabled.get()
+                    on:click=move |_| on_save.run(true)
+                >
+                    "Publish"
+                </button>
+            }
+                .into_any()
+        }}
+    }
+}
+
+/// The save summary under the editor: the draft-saved block (slug + permalink) when the
+/// post stayed unpublished, a "Redirecting…" notice when a publish is about to navigate
+/// away, or the error. Nothing at all until the update action has a value.
+///
+/// Split out of [`EditPostPage`] (#306); this component owns that three-way decision.
+#[component]
+fn EditSaveOutcome(action: ServerAction<super::Update>) -> impl IntoView {
+    view! {
         {move || {
-            update_post_action
+            action
                 .value()
                 .get()
                 .map(|result: Result<UpdateResult, WebError>| match result {

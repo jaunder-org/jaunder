@@ -13,7 +13,7 @@ use crate::icon::Icons;
 use crate::reactive::{invalidator_scope, Invalidator};
 use crate::topbar::Topbar;
 use common::audience::AudienceName;
-use common::ids::AudienceId;
+use common::ids::{AudienceId, SubscriptionId};
 use common::list_state::ListState;
 use leptos::prelude::*;
 use reactive_stores::{Field, Patch, Store};
@@ -312,52 +312,15 @@ fn MemberChecklist(audience_id: AudienceId) -> impl IntoView {
                                 .into_iter()
                                 .map(|sub| {
                                     let is_member = member_ids.contains(&sub.subscription_id);
-                                    let subscription_id = sub.subscription_id;
-                                    let label = sub.label.clone();
-                                    if is_member {
-                                        view! {
-                                            <li>
-                                                <ActionForm action=remove_action>
-                                                    <input
-                                                        type="hidden"
-                                                        name="audience_id"
-                                                        value=i64::from(audience_id)
-                                                    />
-                                                    <input
-                                                        type="hidden"
-                                                        name="subscription_id"
-                                                        value=i64::from(subscription_id)
-                                                    />
-                                                    <span class="j-audience-member is-member">{label}</span>
-                                                    <button type="submit" class="j-btn">
-                                                        "Remove"
-                                                    </button>
-                                                </ActionForm>
-                                            </li>
-                                        }
-                                            .into_any()
-                                    } else {
-                                        view! {
-                                            <li>
-                                                <ActionForm action=add_action>
-                                                    <input
-                                                        type="hidden"
-                                                        name="audience_id"
-                                                        value=i64::from(audience_id)
-                                                    />
-                                                    <input
-                                                        type="hidden"
-                                                        name="subscription_id"
-                                                        value=i64::from(subscription_id)
-                                                    />
-                                                    <span class="j-audience-member">{label}</span>
-                                                    <button type="submit" class="j-btn">
-                                                        "Add"
-                                                    </button>
-                                                </ActionForm>
-                                            </li>
-                                        }
-                                            .into_any()
+                                    view! {
+                                        <MemberToggle
+                                            audience_id=audience_id
+                                            subscription_id=sub.subscription_id
+                                            label=sub.label
+                                            is_member=is_member
+                                            add_action=add_action
+                                            remove_action=remove_action
+                                        />
                                     }
                                 })
                                 .collect::<Vec<_>>()}
@@ -366,6 +329,63 @@ fn MemberChecklist(audience_id: AudienceId) -> impl IntoView {
                         .into_any()
                 }
             }
+        }}
+    }
+}
+
+/// One subscriber row of a [`MemberChecklist`]: a "Remove" form when the subscriber is
+/// already in the audience, an "Add" form when they are not.
+///
+/// Split out (#306) so the checklist's `view!` carries only the loading/error/empty
+/// decisions and this component owns the per-row membership branch.
+#[component]
+fn MemberToggle(
+    audience_id: AudienceId,
+    subscription_id: SubscriptionId,
+    /// The subscriber's display label (username, or the raw reference when unresolved).
+    label: String,
+    /// Whether this subscriber is currently in `audience_id`.
+    is_member: bool,
+    add_action: ServerAction<AddSubscriber>,
+    remove_action: ServerAction<RemoveSubscriber>,
+) -> impl IntoView {
+    view! {
+        {if is_member {
+            view! {
+                <li>
+                    <ActionForm action=remove_action>
+                        <input type="hidden" name="audience_id" value=i64::from(audience_id) />
+                        <input
+                            type="hidden"
+                            name="subscription_id"
+                            value=i64::from(subscription_id)
+                        />
+                        <span class="j-audience-member is-member">{label}</span>
+                        <button type="submit" class="j-btn">
+                            "Remove"
+                        </button>
+                    </ActionForm>
+                </li>
+            }
+                .into_any()
+        } else {
+            view! {
+                <li>
+                    <ActionForm action=add_action>
+                        <input type="hidden" name="audience_id" value=i64::from(audience_id) />
+                        <input
+                            type="hidden"
+                            name="subscription_id"
+                            value=i64::from(subscription_id)
+                        />
+                        <span class="j-audience-member">{label}</span>
+                        <button type="submit" class="j-btn">
+                            "Add"
+                        </button>
+                    </ActionForm>
+                </li>
+            }
+                .into_any()
         }}
     }
 }

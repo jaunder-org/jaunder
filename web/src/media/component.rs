@@ -9,8 +9,8 @@ use leptos::prelude::*;
 use common::pagination::{PageOffset, PageSize};
 use common::root_relative_url::RootRelativeUrl;
 
-use super::{format_bytes, get_usage, list_mine, upload, Delete, DeleteResult, Item};
-use crate::error::WebError;
+use super::{format_bytes, get_usage, list_mine, upload, Delete, DeleteResult, Item, UsageData};
+use crate::error::{WebError, WebResult};
 use crate::topbar::Topbar;
 
 /// A media upload control: a button that opens the file picker and immediately
@@ -128,11 +128,6 @@ fn uploaded_url_view(url: RootRelativeUrl) -> impl IntoView {
     }
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "Leptos view fn; length is inherent to the view! markup — splitting into \
-              sub-components would fragment the page without real benefit"
-)]
 #[component]
 pub fn MediaPage() -> impl IntoView {
     let delete_action = ServerAction::<Delete>::new();
@@ -164,113 +159,146 @@ pub fn MediaPage() -> impl IntoView {
                     })
                 />
             </div>
-            <Suspense fallback=|| {
-                view! { <p class="j-loading">"Loading usage\u{2026}"</p> }
-            }>
-                {move || Suspend::new(async move {
-                    match usage.await {
-                        Ok(u) => {
-                            #[expect(
-                                clippy::cast_precision_loss,
-                                reason = "display-only storage-usage percentage; byte \
-                                          counts < 2^52 are exact in f64 and the result \
-                                          is clamped to 100"
-                            )]
-                            let pct = if u.quota_bytes.value() > 0 {
-                                (u.used_bytes.value() as f64 / u.quota_bytes.value() as f64 * 100.0)
-                                    .min(100.0)
-                            } else {
-                                0.0
-                            };
-                            view! {
-                                <div class="j-sb-head" style="margin-bottom:8px">
-                                    "Storage"
-                                </div>
-                                <p>
-                                    {format!(
-                                        "{} used of {} quota (max file size: {})",
-                                        format_bytes(u.used_bytes),
-                                        format_bytes(u.quota_bytes),
-                                        format_bytes(u.max_file_size_bytes),
-                                    )}
-                                </p>
-                                <div style="background:#eee;border-radius:4px;height:8px;width:300px;margin:8px 0 16px">
-                                    <div style=format!(
-                                        "background:#4a9eff;border-radius:4px;height:8px;width:{pct:.1}%",
-                                    ) />
-                                </div>
-                            }
-                                .into_any()
-                        }
-                        Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
-                    }
-                })}
-            </Suspense>
-
-            <Suspense fallback=|| {
-                view! { <p class="j-loading">"Loading media\u{2026}"</p> }
-            }>
-                {move || Suspend::new(async move {
-                    match media_list.await {
-                        Ok(items) => {
-                            if items.is_empty() {
-                                return view! { <p>"No media uploaded yet."</p> }.into_any();
-                            }
-                            view! {
-                                <table class="j-table">
-                                    <thead>
-                                        <tr>
-                                            <th>"Filename"</th>
-                                            <th>"Type"</th>
-                                            <th>"Size"</th>
-                                            <th>"Source"</th>
-                                            <th>"Uploaded"</th>
-                                            <th></th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {items
-                                            .into_iter()
-                                            .map(|item| render_media_row(&item, delete_action))
-                                            .collect::<Vec<_>>()}
-                                    </tbody>
-                                </table>
-                            }
-                                .into_any()
-                        }
-                        Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
-                    }
-                })}
-            </Suspense>
-
-            {move || {
-                delete_action
-                    .value()
-                    .get()
-                    .map(|result: Result<DeleteResult, WebError>| match result {
-                        Ok(r) if r.deleted => {
-                            view! { <p class="success">"Media deleted."</p> }.into_any()
-                        }
-                        Ok(r) => {
-                            let ids = r
-                                .referenced_in_posts
-                                .iter()
-                                .map(ToString::to_string)
-                                .collect::<Vec<_>>()
-                                .join(", ");
-                            view! {
-                                <p class="error">
-                                    {format!(
-                                        "Cannot delete: referenced in post(s) {ids}. Use force delete to remove anyway.",
-                                    )}
-                                </p>
-                            }
-                                .into_any()
-                        }
-                        Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
-                    })
-            }}
+            <MediaUsagePanel usage=usage />
+            <MediaListPanel media_list=media_list delete_action=delete_action />
+            <MediaDeleteOutcome delete_action=delete_action />
         </div>
+    }
+}
+
+/// The "Storage" section: the used/quota/max-file-size line and the usage bar, or the
+/// fetch error. Split out of [`MediaPage`] (#306) so that page's `view!` holds no
+/// control flow; this component owns the resolved/failed and the divide-by-zero
+/// decisions its `Suspense` body makes.
+#[component]
+fn MediaUsagePanel(usage: Resource<WebResult<UsageData>>) -> impl IntoView {
+    view! {
+        <Suspense fallback=|| {
+            view! { <p class="j-loading">"Loading usage\u{2026}"</p> }
+        }>
+            {move || Suspend::new(async move {
+                match usage.await {
+                    Ok(u) => {
+                        #[expect(
+                            clippy::cast_precision_loss,
+                            reason = "display-only storage-usage percentage; byte \
+                                      counts < 2^52 are exact in f64 and the result \
+                                      is clamped to 100"
+                        )]
+                        let pct = if u.quota_bytes.value() > 0 {
+                            (u.used_bytes.value() as f64 / u.quota_bytes.value() as f64 * 100.0)
+                                .min(100.0)
+                        } else {
+                            0.0
+                        };
+                        view! {
+                            <div class="j-sb-head" style="margin-bottom:8px">
+                                "Storage"
+                            </div>
+                            <p>
+                                {format!(
+                                    "{} used of {} quota (max file size: {})",
+                                    format_bytes(u.used_bytes),
+                                    format_bytes(u.quota_bytes),
+                                    format_bytes(u.max_file_size_bytes),
+                                )}
+                            </p>
+                            <div style="background:#eee;border-radius:4px;height:8px;width:300px;margin:8px 0 16px">
+                                <div style=format!(
+                                    "background:#4a9eff;border-radius:4px;height:8px;width:{pct:.1}%",
+                                ) />
+                            </div>
+                        }
+                            .into_any()
+                    }
+                    Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
+                }
+            })}
+        </Suspense>
+    }
+}
+
+/// The uploads table, its empty state, and the list fetch error. Split out of
+/// [`MediaPage`] (#306); this component owns the resolved/failed and empty/non-empty
+/// decisions its `Suspense` body makes.
+#[component]
+fn MediaListPanel(
+    media_list: Resource<WebResult<Vec<Item>>>,
+    /// Threaded through to each row's delete form.
+    delete_action: ServerAction<Delete>,
+) -> impl IntoView {
+    view! {
+        <Suspense fallback=|| {
+            view! { <p class="j-loading">"Loading media\u{2026}"</p> }
+        }>
+            {move || Suspend::new(async move {
+                match media_list.await {
+                    Ok(items) => {
+                        if items.is_empty() {
+                            return view! { <p>"No media uploaded yet."</p> }.into_any();
+                        }
+                        view! {
+                            <table class="j-table">
+                                <thead>
+                                    <tr>
+                                        <th>"Filename"</th>
+                                        <th>"Type"</th>
+                                        <th>"Size"</th>
+                                        <th>"Source"</th>
+                                        <th>"Uploaded"</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {items
+                                        .into_iter()
+                                        .map(|item| render_media_row(&item, delete_action))
+                                        .collect::<Vec<_>>()}
+                                </tbody>
+                            </table>
+                        }
+                            .into_any()
+                    }
+                    Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
+                }
+            })}
+        </Suspense>
+    }
+}
+
+/// The outcome line for the most recent delete: confirmation, the "still referenced"
+/// refusal naming the posts, or the error. Nothing until the action has a value.
+/// Split out of [`MediaPage`] (#306); this component owns that three-way decision.
+#[component]
+fn MediaDeleteOutcome(delete_action: ServerAction<Delete>) -> impl IntoView {
+    view! {
+        {move || {
+            delete_action
+                .value()
+                .get()
+                .map(|result: Result<DeleteResult, WebError>| match result {
+                    Ok(r) if r.deleted => {
+                        view! { <p class="success">"Media deleted."</p> }.into_any()
+                    }
+                    Ok(r) => {
+                        let ids = r
+                            .referenced_in_posts
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        view! {
+                            <p class="error">
+                                {format!(
+                                    "Cannot delete: referenced in post(s) {ids}. Use force delete to remove anyway.",
+                                )}
+                            </p>
+                        }
+                            .into_any()
+                    }
+                    Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
+                })
+        }}
     }
 }
 
