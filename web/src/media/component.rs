@@ -9,7 +9,10 @@ use leptos::prelude::*;
 use common::pagination::{PageOffset, PageSize};
 use common::root_relative_url::RootRelativeUrl;
 
-use super::{format_bytes, get_usage, list_mine, upload, Delete, DeleteResult, Item, UsageData};
+use super::{
+    format_bytes, get_usage, list_mine, upload, Delete, DeleteResult, Item, UploadCallbacks,
+    UploadState, UsageData,
+};
 use crate::error::{WebError, WebResult};
 use crate::topbar::Topbar;
 
@@ -34,9 +37,15 @@ pub fn MediaUpload(
     #[prop(optional)]
     show_result: bool,
 ) -> impl IntoView {
-    let uploading = RwSignal::new(false);
-    let last_media_url = RwSignal::new(Option::<RootRelativeUrl>::None);
-    let upload_error = RwSignal::new(Option::<String>::None);
+    // The signal bundle, the outcome fold, and the notify/record sequencing are all
+    // host-compiled and host-tested in `super::upload_state` (#306, ADR-0083); what
+    // stays here is the browser wiring that cannot run on the host — the file picker
+    // and `spawn_local`.
+    let state = UploadState::new(show_result);
+    let callbacks = UploadCallbacks {
+        on_uploaded,
+        on_error,
+    };
     let file_input = NodeRef::<leptos::html::Input>::new();
 
     let open_picker = move |_| {
@@ -55,44 +64,27 @@ pub fn MediaUpload(
             return;
         };
 
-        uploading.set(true);
+        state.begin();
 
         spawn_local(async move {
-            let result = upload(form_data).await;
-            uploading.set(false);
-            match result {
-                Ok(resp) => {
-                    let url = resp.url;
-                    if let Some(cb) = on_uploaded {
-                        cb.run(url.clone());
-                    }
-                    if show_result {
-                        last_media_url.set(Some(url));
-                        upload_error.set(None);
-                    }
-                }
-                Err(e) => {
-                    let msg = e.to_string();
-                    if let Some(cb) = on_error {
-                        cb.run(msg.clone());
-                    }
-                    if show_result {
-                        upload_error.set(Some(msg));
-                    }
-                }
-            }
+            state.settle(upload(form_data).await, callbacks);
         });
     };
 
     view! {
         <input type="file" node_ref=file_input style="display:none" on:change=on_file_change />
-        <button type="button" class="j-btn" disabled=move || uploading.get() on:click=open_picker>
-            {move || if uploading.get() { "Uploading\u{2026}" } else { "Attach media" }}
+        <button
+            type="button"
+            class="j-btn"
+            disabled=move || state.uploading.get()
+            on:click=open_picker
+        >
+            {move || if state.uploading.get() { "Uploading\u{2026}" } else { "Attach media" }}
         </button>
-        {move || show_result.then(|| last_media_url.get()).flatten().map(uploaded_url_view)}
+        {move || show_result.then(|| state.last_media_url.get()).flatten().map(uploaded_url_view)}
         {move || {
             show_result
-                .then(|| upload_error.get())
+                .then(|| state.error.get())
                 .flatten()
                 .map(|msg| {
                     view! {

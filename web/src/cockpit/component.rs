@@ -6,17 +6,18 @@
 //! `/login`. This is the former `home.rs` Feed branch moved to its proper home.
 
 use common::pagination::PageSize;
-use common::username::Username;
 use leptos::prelude::*;
 
+use super::{resolve_initial_page, CockpitState};
 use crate::posts::{list_home_feed, InlineComposer};
-use crate::timeline::{NoIdentity, TimelineGate, TimelineState};
+use crate::timeline::{NoIdentity, TimelineGate};
 use crate::topbar::Topbar;
 
 #[component]
 pub fn CockpitPage() -> impl IntoView {
-    let state = TimelineState::default();
-    let username = RwSignal::new(None::<Username>);
+    // The signal bundle and every transition below are host-tested in `super::state`
+    // (#306, ADR-0083); this body keeps only the `Effect` and the `view!`.
+    let state = CockpitState::default();
 
     let refresh_version = RwSignal::new(0u32);
     let on_mutate = Callback::new(move |()| refresh_version.update(|v| *v += 1));
@@ -32,47 +33,30 @@ pub fn CockpitPage() -> impl IntoView {
     let initial_page = Resource::new(
         move || refresh_version.get(),
         move |_| async move {
-            match session.reconcile.await {
-                Ok(Some(user)) => list_home_feed(None, None, Some(PageSize::default()))
-                    .await
-                    .map(|page| Some((user.username, page))),
-                Ok(None) => Ok(None),
-                Err(e) => Err(e),
-            }
+            resolve_initial_page(session.reconcile.await, || {
+                list_home_feed(None, None, Some(PageSize::default()))
+            })
+            .await
         },
     );
 
-    // Copy the resolved Resource into the timeline signals once it loads. This
-    // `Effect` stays page-specific (#671): the payload carries the session-confirmed
-    // identity, which no shared helper can publish. Only the *transitions* it
-    // dispatches to are shared, and those are host-tested.
+    // Copy the resolved Resource into the page's signals once it loads. This `Effect`
+    // stays page-specific (#671): the payload carries the session-confirmed identity,
+    // which no shared helper can publish. Every transition it dispatches to —
+    // including the anonymous/expired bounce (D6), which travels on the timeline
+    // status rather than a separate `bounce` signal — is host-tested in
+    // `super::state`.
     Effect::new(move |_| {
         if let Some(result) = initial_page.try_get().flatten() {
-            match result {
-                Ok(Some((user, page))) => {
-                    // Only set `username` when it actually changes: a spurious set
-                    // would re-run the chrome closure and REMOUNT InlineComposer,
-                    // wiping its publish/draft flash (a re-fetch fires on every
-                    // publish via `refresh_version`).
-                    if username.get_untracked().as_ref() != Some(&user) {
-                        username.set(Some(user));
-                    }
-                    state.adopt(page);
-                }
-                // Anonymous / expired (D6). The status carries the bounce now — no
-                // separate `bounce` signal — and the gate's `no_identity` prop turns
-                // it into the `/login` redirect.
-                Ok(None) => state.unidentified(),
-                Err(err) => state.fail(err),
-            }
+            state.apply(result);
         }
     });
 
     let on_load_more = Callback::new(move |()| {
-        crate::timeline::spawn_load_more(state, list_home_feed);
+        crate::timeline::spawn_load_more(state.timeline, list_home_feed);
     });
 
-    let read_username = move || username.get();
+    let read_username = move || state.username.get();
 
     view! {
         // Only the CHROME goes in `children` — the gate itself owns the loading
@@ -80,7 +64,7 @@ pub fn CockpitPage() -> impl IntoView {
         // over the error banner or the redirect, which reproduces all four of this
         // page's previous outcomes exactly.
         <TimelineGate
-            state=state
+            state=state.timeline
             on_mutate=on_mutate
             on_load_more=on_load_more
             no_identity=NoIdentity::Redirect("/login")
