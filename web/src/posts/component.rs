@@ -27,9 +27,10 @@ use crate::media::MediaUpload;
 // is named here only so a future author does not add it to the list.
 use crate::posts::{
     draft_row_display, get, get_audience_selection, get_default_audience_selection, get_preview,
-    list_by_tag, list_by_user, list_by_user_and_tag, list_drafts, parse_permalink_route, Create,
-    CreateArgs, CreateResult, Delete, DraftRowDisplay, DraftSummary, PermalinkRoute, Publish,
-    PublishResult, Unpublish, UpdateArgs, UpdateResult,
+    list_by_tag, list_by_user, list_by_user_and_tag, list_drafts, parse_permalink_route,
+    publish_redirect, seeded_page, tag_query, user_query, user_tag_query, with_post_id, Create,
+    CreateArgs, CreateResult, Delete, DraftRowDisplay, DraftSummary, ListingRoute, PermalinkRoute,
+    Publish, PublishResult, Unpublish, UpdateArgs, UpdateResult,
 };
 use crate::subscriptions::SubscribeButton;
 use crate::taglist::TagCtx as TagContext;
@@ -1061,34 +1062,29 @@ pub fn UserTimelinePage() -> impl IntoView {
     let initial_page = Resource::new(
         move || (username.get(), mutate_version.get()),
         |(username, _)| async move {
-            let username = username.ok_or_else(|| WebError::validation("Invalid username"))?;
-            list_by_user(username, None, None, Some(PageSize::default())).await
+            list_by_user(user_query(username)?, None, None, Some(PageSize::default())).await
         },
     );
 
     let state = TimelineState::default();
     // Public projector seed (#178/#179): if the server painted this profile,
     // adopt its posts as the initial state so first paint shows content (no
-    // Loading flash). Guarded on the username so a client-side navigation to a
-    // *different* profile ignores the initial URL's seed; the reactive fetch
-    // still runs and takes over.
-    state.adopt_seed(match use_context::<Option<PageSeed>>().flatten() {
-        Some(PageSeed::Profile {
-            username: seed_user,
-            page,
-        }) if username.get_untracked().as_ref() == Some(&seed_user) => Some(page),
-        _ => None,
-    });
+    // Loading flash). The route guard — which keeps a client-side navigation to a
+    // *different* profile from adopting the initial URL's seed — is the host-tested
+    // `seeded_page` (#306); the reactive fetch still runs and takes over.
+    state.adopt_seed(seeded_page(
+        use_context::<Option<PageSeed>>().flatten(),
+        &ListingRoute::Profile(username.get_untracked()),
+    ));
 
     wire_timeline_resolve(state, initial_page);
 
     let on_load_more = Callback::new(move |()| {
-        let Some(username) = username.get_untracked() else {
-            return;
-        };
-        spawn_load_more(state, move |created_at, post_id, limit| {
-            list_by_user(username, created_at, post_id, limit)
-        });
+        if let Ok(username) = user_query(username.get_untracked()) {
+            spawn_load_more(state, move |created_at, post_id, limit| {
+                list_by_user(username, created_at, post_id, limit)
+            });
+        }
     });
 
     // The heading shows the canonical (parsed, lowercased) username, or empty for an
@@ -1145,44 +1141,34 @@ pub fn EditPostPage() -> impl IntoView {
         named: Vec::new(),
     });
     // The redirect-on-publish effect reacts to the client-only ServerAction
-    // dispatch. Editor → permalink is always a route change, so a fresh
-    // `PostPage` mount refetches — no explicit invalidation needed here (#592).
+    // dispatch. Whether a settled update redirects at all, and to where, is the
+    // host-tested `publish_redirect` (#306), leaving this the bare `Effect`
+    // `on_settled_ok` wraps.
     let navigate = use_navigate();
-    Effect::new(move |_| {
-        if let Some(Ok(ref updated)) = update_post_action.value().get() {
-            if updated.published_at.is_some() {
-                navigate(&updated.permalink, NavigateOptions::default());
-            }
-        }
-    });
+    on_settled_ok(
+        move || publish_redirect(update_post_action.value().get()),
+        move |permalink: String| navigate(&permalink, NavigateOptions::default()),
+    );
 
     // A missing or unparseable `post_id` is honest absence, not a real id: derive
-    // `Option<PostId>` and short-circuit `None` to a client-side not-found in each
-    // fetcher, rather than minting a sentinel id and paying a round-trip that only
-    // ever returns not-found (#487).
+    // `Option<PostId>` and let the host-tested `with_post_id` short-circuit `None`
+    // to a client-side not-found, rather than minting a sentinel id and paying a
+    // round-trip that only ever returns not-found (#487).
     let post_id_param = move || {
         params
             .get()
             .get("post_id")
             .and_then(|v| v.parse::<PostId>().ok())
     };
-    let post = Resource::new(post_id_param, |maybe_id| async move {
-        match maybe_id {
-            Some(id) => get_preview(id).await,
-            None => Err(WebError::not_found("Post")),
-        }
-    });
+    let post = Resource::new(post_id_param, |post_id| with_post_id(post_id, get_preview));
     // Seeded into the editable `audience` picker inside the `Suspense` block below
     // (awaited alongside `post`, not via a standalone Effect, since the page
     // already suspends on `post`). On a fetch error the Public default survives
     // (the `Ok`-only guard mirrors the dissolved post-resolve Effect). The intent
     // comment lives here, outside `view!`, because leptosfmt relocates comments
     // inside the macro.
-    let current_audience = Resource::new(post_id_param, |maybe_id| async move {
-        match maybe_id {
-            Some(id) => get_audience_selection(id).await,
-            None => Err(WebError::not_found("Post")),
-        }
+    let current_audience = Resource::new(post_id_param, |post_id| {
+        with_post_id(post_id, get_audience_selection)
     });
 
     view! {
@@ -1608,34 +1594,28 @@ pub fn SiteTagPage() -> impl IntoView {
     let initial_page = Resource::new(
         move || (tag.get(), mutate_version.get()),
         |(tag, _)| async move {
-            let Some(tag) = tag else {
-                return Err(WebError::validation("Invalid tag"));
-            };
-            list_by_tag(tag, None, None, Some(PageSize::default())).await
+            list_by_tag(tag_query(tag)?, None, None, Some(PageSize::default())).await
         },
     );
 
     let state = TimelineState::default();
     // Public projector seed (#178/#179): adopt the seeded posts for a matching
-    // tag so first paint shows content (guarded so a client-side nav to a
-    // different tag ignores the initial URL's seed); the reactive fetch still runs.
-    state.adopt_seed(match use_context::<Option<PageSeed>>().flatten() {
-        Some(PageSeed::SiteTag {
-            tag: seed_tag,
-            page,
-        }) if tag.get_untracked().as_ref() == Some(&seed_tag) => Some(page),
-        _ => None,
-    });
+    // tag so first paint shows content (the host-tested `seeded_page` guard keeps a
+    // client-side nav to a different tag from adopting the initial URL's seed, #306);
+    // the reactive fetch still runs.
+    state.adopt_seed(seeded_page(
+        use_context::<Option<PageSeed>>().flatten(),
+        &ListingRoute::SiteTag(tag.get_untracked()),
+    ));
 
     wire_timeline_resolve(state, initial_page);
 
     let on_load_more = Callback::new(move |()| {
-        let Some(tag_value) = tag.get_untracked() else {
-            return;
-        };
-        spawn_load_more(state, move |created_at, post_id, limit| {
-            list_by_tag(tag_value, created_at, post_id, limit)
-        });
+        if let Ok(tag_value) = tag_query(tag.get_untracked()) {
+            spawn_load_more(state, move |created_at, post_id, limit| {
+                list_by_tag(tag_value, created_at, post_id, limit)
+            });
+        }
     });
 
     // The canonical tag for the heading (a newtype is not `IntoRender`), or empty
@@ -1682,42 +1662,30 @@ pub fn UserTagPage() -> impl IntoView {
     let initial_page = Resource::new(
         move || (username.get(), tag.get(), mutate_version.get()),
         |(username, tag, _)| async move {
-            let username = username.ok_or_else(|| WebError::validation("Invalid username"))?;
-            let Some(tag) = tag else {
-                return Err(WebError::validation("Invalid tag"));
-            };
+            let (username, tag) = user_tag_query(username, tag)?;
             list_by_user_and_tag(username, tag, None, None, Some(PageSize::default())).await
         },
     );
 
     let state = TimelineState::default();
     // Public projector seed (#178/#179): adopt the seeded posts for a matching
-    // username+tag so first paint shows content; the reactive fetch still runs.
-    state.adopt_seed(match use_context::<Option<PageSeed>>().flatten() {
-        Some(PageSeed::UserTag {
-            username: seed_user,
-            tag: seed_tag,
-            page,
-        }) if username.get_untracked().as_ref() == Some(&seed_user)
-            && tag.get_untracked().as_ref() == Some(&seed_tag) =>
-        {
-            Some(page)
-        }
-        _ => None,
-    });
+    // username+tag so first paint shows content; both halves of the match are the
+    // host-tested `seeded_page` (#306), and the reactive fetch still runs.
+    state.adopt_seed(seeded_page(
+        use_context::<Option<PageSeed>>().flatten(),
+        &ListingRoute::UserTag(username.get_untracked(), tag.get_untracked()),
+    ));
 
     wire_timeline_resolve(state, initial_page);
 
     let on_load_more = Callback::new(move |()| {
-        let Some(username_value) = username.get_untracked() else {
-            return;
-        };
-        let Some(tag_value) = tag.get_untracked() else {
-            return;
-        };
-        spawn_load_more(state, move |created_at, post_id, limit| {
-            list_by_user_and_tag(username_value, tag_value, created_at, post_id, limit)
-        });
+        if let Ok((username_value, tag_value)) =
+            user_tag_query(username.get_untracked(), tag.get_untracked())
+        {
+            spawn_load_more(state, move |created_at, post_id, limit| {
+                list_by_user_and_tag(username_value, tag_value, created_at, post_id, limit)
+            });
+        }
     });
 
     // Canonical (parsed, lowercased) username for the heading, or empty for an

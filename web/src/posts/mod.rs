@@ -27,10 +27,23 @@ pub(crate) mod render;
 // out of the wasm-only components so they stay host-compiled and coverage-measured.
 mod parse;
 
+// The listing pages' and the editor's host-tested decision folds (#306, ADR-0083):
+// seed adoption, the route-param guards, and the editor's publish redirect /
+// post-id short-circuit, extracted out of the wasm-only components so the branches
+// they used to carry are assertable and coverage-measured.
+mod page_state;
+
 // Re-exported at the (public) `crate::posts::…` path so the pure `parse` fns are
 // reachable exported items on the host build too — consumed only by the wasm-only
 // `component`, an unexported `parse` fn would fail the host build as `dead_code`.
 pub use parse::{draft_row_display, parse_permalink_route, DraftRowDisplay, PermalinkRoute};
+
+// Same reason as `parse` above: `page_state`'s only caller is the wasm-only
+// `component`, so without these the host build sees every one of them as `dead_code`.
+pub use page_state::{
+    publish_redirect, seeded_page, tag_query, user_query, user_tag_query, with_post_id,
+    ListingRoute,
+};
 
 // The API surface — re-exported so external call sites and the server-fn
 // registrar keep the stable `crate::posts::…` paths despite living in `api.rs`.
