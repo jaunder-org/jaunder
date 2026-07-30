@@ -30,15 +30,36 @@ pub struct PageSize(u32);
 
 /// A pagination offset — the 0-based row offset into a listing.
 ///
-/// Unlike [`PageSize`], there is **no range bound**: the full `u32` domain is valid, so this
-/// carries no `min`/`max`/`clamp`. The type exists to **de-transpose** the `(limit, offset)`
-/// pair on the media-listing path (#588) — two adjacent bare `u32`s can be swapped silently;
-/// one typed argument makes that a compile error — not to validate a range. The `NumNewtype`
-/// trailer still rejects a non-integer or negative value on parse/deserialize (the only error
-/// path); `default()` is `0` (the first page).
+/// The type exists to **de-transpose** the `(limit, offset)` pair on the media-listing
+/// path (#588): two adjacent bare integers can be swapped silently, and one typed
+/// argument makes that a compile error.
+///
+/// **Bounded `>= 0` by a declared `min`, not by an unsigned inner.** It carried `u32`
+/// until #696; the bound moved into `min = 0` because `sqlx` has no Postgres `Encode`
+/// for unsigned types, so a `u32` inner is widened away at every bind and its guarantee
+/// does not survive the boundary — while a declared `min` is re-run by `FromStr`, the
+/// serde bridge, and the sqlx `Decode`. `default()` is `0` (the first page).
+///
+/// **There is deliberately no `max`, and adding one would be a mistake.** An offset's
+/// only meaningful upper bound is *the number of rows that exist*, which is not a
+/// constant; any literal would be an invented number wearing the authority of a
+/// validated invariant. [`PageSize`] can declare `max = 50` because that is a real
+/// policy about what a page may contain — there is no equivalent policy about how far
+/// into a listing a reader may skip.
+///
+/// The consequence, stated so it is not mistaken for an oversight: this is a `#[server]`
+/// wire argument, and an offset between `u32::MAX` and `i64::MAX` is now **accepted**
+/// where the old `u32` inner rejected it. It yields an empty page rather than a
+/// validation error. That is a deliberate trade for removing the widening at the bind
+/// (#696); it is not a hole to be closed by inventing a cap.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, NumNewtype)]
-#[num_newtype(inner = u32, default = 0, error = "page offset must be a whole number")]
-pub struct PageOffset(u32);
+#[num_newtype(
+    inner = i64,
+    min = 0,
+    default = 0,
+    error = "page offset must be a whole number"
+)]
+pub struct PageOffset(i64);
 
 /// How many rows a query fetches — the **storage-side** quantity, distinct from the
 /// [`PageSize`] a reader sees (see the module doc).
@@ -161,14 +182,23 @@ mod tests {
     #[test]
     fn page_offset_surface() {
         use super::PageOffset;
-        // value()/From<Self>, trim, and the full u32 domain is valid (no upper bound).
-        assert_eq!("0".parse::<PageOffset>().map(u32::from).ok(), Some(0));
+        // value()/From<Self>, trim, and no upper bound — including past `u32::MAX`,
+        // which the pre-#696 `u32` inner rejected. See the type's doc: that widening is
+        // deliberate, and `page_offset_rejects_negative` pins the floor that matters.
+        assert_eq!("0".parse::<PageOffset>().map(i64::from).ok(), Some(0));
         assert_eq!(
             "  4294967295  "
                 .parse::<PageOffset>()
                 .map(PageOffset::value)
                 .ok(),
-            Some(u32::MAX)
+            Some(i64::from(u32::MAX))
+        );
+        assert_eq!(
+            "4294967296"
+                .parse::<PageOffset>()
+                .map(PageOffset::value)
+                .ok(),
+            Some(4_294_967_296)
         );
         // FromStr rejects non-integers / negatives (the only error path)...
         for bad in ["abc", "-1", "1.5"] {
@@ -186,14 +216,42 @@ mod tests {
         // serde: bare integer, round-trip, wire-rejection of a non-integer.
         assert_eq!(serde_json::to_string(&d).ok(), Some("0".to_owned()));
         assert_eq!(
-            serde_json::from_str::<PageOffset>("42").map(u32::from).ok(),
+            serde_json::from_str::<PageOffset>("42").map(i64::from).ok(),
             Some(42)
         );
         assert!(serde_json::from_str::<PageOffset>("\"x\"").is_err());
-        // The generated TryFrom<u32> (always-Ok for the unbounded type) — exercise the region.
-        assert_eq!(PageOffset::try_from(7u32).map(u32::from), Ok(7));
+        // The generated TryFrom<i64> — exercise the Ok region; the Err region is
+        // `page_offset_rejects_negative`.
+        assert_eq!(PageOffset::try_from(7_i64).map(i64::from), Ok(7));
         // The shared test-support fixture builds a valid PageOffset (its single door).
         assert_eq!(crate::test_support::parse_page_offset("5").value(), 5);
+    }
+
+    #[test]
+    fn page_offset_rejects_negative() {
+        use super::PageOffset;
+        // The floor survives the move from `inner = u32` to `inner = i64` (#696).
+        //
+        // This is the test for the trap in that change: switching the inner type
+        // WITHOUT declaring `min = 0` makes the sqlx bind gate green while silently
+        // deleting the only guarantee the type carried — `u32` was the whole of it.
+        // With `min = 0` declared, the bound is re-run by `FromStr`, the serde bridge,
+        // and the sqlx `Decode` instead of being implied by a primitive that is widened
+        // away at the boundary.
+        assert!(
+            "-1".parse::<PageOffset>().is_err(),
+            "FromStr must reject -1"
+        );
+        assert!(
+            serde_json::from_str::<PageOffset>("-1").is_err(),
+            "the wire must reject -1"
+        );
+        assert!(
+            PageOffset::try_from(-1_i64).is_err(),
+            "TryFrom must reject -1"
+        );
+        // 0 is the first page and remains valid.
+        assert_eq!(PageOffset::try_from(0_i64).map(i64::from), Ok(0));
     }
 
     #[test]

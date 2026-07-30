@@ -234,28 +234,28 @@ auditing by call-shape. **Test:** existing web tests; plus one new test per spec
 Per spec §4–§5. **Task 1's accessors are dead code until this lands** — see the
 header's first risk.
 
-- [ ] `page_from_rows(rows, page_size: PageSize, …)`; body uses
+- [x] `page_from_rows(rows, page_size: PageSize, …)`; body uses
       `page_size.has_more(rows.len())` and `page_size.page_len()`
-- [ ] Replace the 4 `page_size.value().saturating_add(1)` sites
+- [x] Replace the 4 `page_size.value().saturating_add(1)` sites
       (`listing.rs:74`, `:106`, `:232`, `:273`) with `page_size.fetch_limit()`
-- [ ] `list_home_feed` (`listing.rs:179-205`) calls `page_from_rows` instead of
+- [x] `list_home_feed` (`listing.rs:179-205`) calls `page_from_rows` instead of
       its hand-rolled copy — deletes the 5th derivation site and the 2nd
       `has_more` spelling
-- [ ] `web/src/tags/api.rs:36`:
+- [x] `web/src/tags/api.rs:36`:
       `.unwrap_or(DEFAULT_TAG_LIMIT).clamp(1, MAX_TAG_LIMIT)` →
       `PageSize::clamped(…)`, then `.fetch_limit()`… **decide during the task**
       whether the typeahead wants the `+1` at all (it has no has-more UI). If
       not, it wants a flat cap from the clamped size — record which, and why, in
       the commit.
-- [ ] `server/src/atompub/service.rs:34`:
+- [x] `server/src/atompub/service.rs:34`:
       `list_tags(None, RowLimit::at_most(100))`
-- [ ] `web/src/media/api.rs:77`: pass the media `limit` as a `RowLimit`
-- [ ] New test in `listing.rs`'s test module: a page-sized result reports
+- [x] `web/src/media/api.rs:77`: pass the media `limit` as a `RowLimit`
+- [x] New test in `listing.rs`'s test module: a page-sized result reports
       `has_more == false` and a page-plus-one result reports `true`, driven
       through `page_from_rows` — pins §4's contract at the call site, not just
       on the type
-- [ ] `cargo nextest run -p web listing` → PASS
-- [ ] `cargo xtask check` → green; commit
+- [x] `cargo nextest run -p web listing` → PASS
+- [x] `cargo xtask check` → green; commit
 
 **Note:** `MAX_TAG_LIMIT` is 50 and `DEFAULT_TAG_LIMIT` is 10, so the hand clamp
 is exactly `PageSize`'s range — that is why `PageSize::clamped` replaces it
@@ -269,8 +269,8 @@ media dual-backend tests.
 
 Per spec §3.
 
-- [ ] `#[num_newtype(inner = i64, min = 0, default = 0, error = …)]`
-- [ ] **Rewrite the doc comment.** It currently says _"there is no range bound:
+- [x] `#[num_newtype(inner = i64, min = 0, default = 0, error = …)]`
+- [x] **Rewrite the doc comment.** It currently says _"there is no range bound:
       the full `u32` domain is valid, so this carries no `min`/`max`/`clamp`"_ —
       now false. The replacement must state: the bound is `min = 0`, declared
       rather than implied by the primitive; there is deliberately **no `max`**,
@@ -278,15 +278,18 @@ Per spec §3.
       which is not a constant; and consequently an offset above `u32::MAX`
       yields an empty page rather than a validation error (it is a `#[server]`
       wire arg).
-- [ ] `.bind(i64::from(offset.value()))` → `.bind(offset)` at `media.rs:264`,
+- [x] `.bind(i64::from(offset.value()))` → `.bind(offset)` at `media.rs:264`,
       `:277`
-- [ ] Update the in-file tests that assert through `u32` (`pagination.rs:82`,
+- [x] Update the in-file tests that assert through `u32` (`pagination.rs:82`,
       `:106`, `:111` use `u32::from` / `try_from(7u32)`) to `i64`
-- [ ] Add `page_offset_rejects_negative` — `"-1"` and
+- [x] `PageOffset` also needed its own bind bound in `media.rs`'s `where`-clause
+      (`for<'q> PageOffset: sqlx::Encode<'q, DB> + sqlx::Type<DB>`), same as
+      `RowLimit` — the ADR-0019 restatement tax, once per bound type.
+- [x] Add `page_offset_rejects_negative` — `"-1"` and
       `serde_json::from_str("-1")` both rejected by the declared `min`, proving
       the bound survived the `inner` change. **This is the test that would fail
       if `min = 0` were forgotten.**
-- [ ] `cargo xtask check` → green; commit
+- [x] `cargo xtask check` → green; commit
 
 ## Task 5 — the gate learns the hoisted form
 

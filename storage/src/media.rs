@@ -182,9 +182,10 @@ where
     // `Option` wrapper has to be named explicitly — same reason the `Option<String>` bound
     // it replaces was spelled out.
     for<'q> Option<AbsoluteUrl>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    // `RowLimit` binds as itself via the ADR-0071 sqlx bridge (delegates to `i64`) —
-    // the listing's `LIMIT` placeholder (#696).
+    // `RowLimit`/`PageOffset` bind as themselves via the ADR-0071 sqlx bridge (both
+    // delegate to `i64`) — the listing's `LIMIT`/`OFFSET` placeholders (#696).
     for<'q> RowLimit: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> PageOffset: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
@@ -277,7 +278,7 @@ where
             .bind(user_id)
             .bind(*src)
             .bind(limit)
-            .bind(i64::from(offset.value()))
+            .bind(offset)
             .fetch_all(&self.pool)
             .await?
         } else {
@@ -290,7 +291,7 @@ where
             )
             .bind(user_id)
             .bind(limit)
-            .bind(i64::from(offset.value()))
+            .bind(offset)
             .fetch_all(&self.pool)
             .await?
         };
