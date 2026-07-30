@@ -84,7 +84,17 @@ fn type_index(line: &str) -> Option<usize> {
 /// handlers).
 fn is_wrapped(line: &str, at: usize) -> bool {
     let before = &line[..at];
-    before.ends_with("SoftPath<") || (before.contains("Path<(") && line[at..].contains(")>"))
+    if before.ends_with("SoftPath<") {
+        return true;
+    }
+    // Inside a `Path<(…)>` tuple: the *nearest* preceding `Path<(` must still be open at
+    // the mention, i.e. no `)>` closes it in between. A bare `contains` would accept a bare
+    // mention that merely shares a line with some unrelated extractor — e.g.
+    // `fn f(Path((a,)): Path<(Username,)>, leaked: ProfferedFilename)`.
+    let Some(open) = before.rfind("Path<(") else {
+        return false;
+    };
+    !before[open..].contains(")>") && line[at..].contains(")>")
 }
 
 /// 1-based line numbers of every whole-word mention that is neither an allowed occurrence
@@ -297,6 +307,14 @@ pub fn leak() -> ProfferedFilename {
     #[test]
     fn a_wrapped_import_does_not_swallow_a_later_leak() {
         assert_eq!(violations(WRAPPED_IMPORT_THEN_LEAK), vec![7]);
+    }
+
+    #[test]
+    fn a_bare_mention_sharing_a_line_with_a_closed_extractor_is_a_violation() {
+        // The hole a whole-line `contains("Path<(")` would leave: the tuple closes before
+        // the mention, so this is a bare parameter riding alongside a legitimate extractor.
+        let src = "\nfn f(Path((a,)): Path<(Username,)>, leaked: ProfferedFilename) {}\n";
+        assert_eq!(violations(src), vec![2]);
     }
 
     #[test]

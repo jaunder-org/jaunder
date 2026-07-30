@@ -230,29 +230,25 @@ impl FromStr for Filename {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         // Door A: accept only the canonical stored spelling. The check order below is
         // load-bearing, not incidental — see each step.
-        //
-        // The `is_empty` guard is explicit because `sanitize_filename("")` is `""`, so the
-        // oracle alone would accept the empty string, and a filename is never empty. `.`
-        // and `..` survive percent-encoding unchanged (`.` is unreserved), so they must
-        // still be rejected by name.
-        if s.is_empty() || s == "." || s == ".." {
-            return Err(InvalidFilename::NotASafeLeaf);
-        }
-
         let decoded = percent_decode_str(s).decode_utf8_lossy();
 
-        // The safe-leaf oracle, relocated onto the DECODED form (#720). Canonicity does
-        // *not* imply a safe leaf: `a%2Fb.jpg`, `a%00b.jpg` and `a%0D%0Ab.jpg` are all
-        // canonical yet decode to a separator, a NUL and a CRLF. This is the
-        // path-traversal / header-injection guard the type exists for, so losing it here
-        // would hollow out `Filename` while every other check still looked present.
+        // The safe-leaf rule, applied to the DECODED form (#720). Canonicity does *not*
+        // imply a safe leaf: `a%2Fb.jpg`, `a%00b.jpg` and `a%5Cb.jpg` are all canonical yet
+        // decode to a separator, a NUL and a backslash. This is the path-traversal /
+        // header-injection guard the type exists for, so losing it here would hollow out
+        // `Filename` while every other check still looked present.
         //
         // Run on `decoded`, never on `s`: `sanitize_filename("a%2Fb.jpg")` is
         // `"a%2Fb.jpg"`, so testing the encoded form passes vacuously.
         //
+        // Note what this does *not* catch: `sanitize_filename` has never touched CR/LF, so
+        // a canonical `a%0D%0Ab.jpg` is accepted, exactly as raw `a\r\nb.jpg` was before
+        // #720 — see `from_str_accepts_a_canonical_name_carrying_control_characters` for
+        // why that is safe and deliberate rather than an oversight.
+        //
         // Ordered BEFORE canonicity because a separator value is *both* an unsafe leaf and
         // non-canonical, and the failure a caller needs to hear about is the leaf.
-        if sanitize_filename(&decoded) != decoded {
+        if !is_safe_leaf(&decoded) {
             return Err(InvalidFilename::NotASafeLeaf);
         }
 
@@ -294,10 +290,11 @@ impl Filename {
     pub fn sanitized(raw: &str) -> Result<Self, InvalidFilename> {
         let s = truncate_to_budget(sanitize_filename(raw));
         // Truncation can leave a degenerate leaf (an empty stem with no extension), and
-        // `sanitize_filename` already maps `.`/`..` to empty. Guarded here — before the
+        // `sanitize_filename` already maps `.`/`..` to empty. Re-checked here — before the
         // encode, since `.`/`..` encode to themselves — so this door's output always
-        // satisfies `FromStr`.
-        if s.is_empty() || s == "." || s == ".." {
+        // satisfies `FromStr`. The oracle half is redundant after `sanitize_filename`, but
+        // stating one rule at all three doors is what stops them drifting apart.
+        if !is_safe_leaf(&s) {
             return Err(InvalidFilename::NotASafeLeaf);
         }
         // Encode last (#720). The order `sanitize → truncate → encode` is deliberate:
@@ -393,7 +390,7 @@ impl FromStr for ProfferedFilename {
         // conversion into `Filename` infallible — and it is also why a member-route
         // segment like `a%5Cb.png` (decoding to `a\b.png`) is still a pre-handler 400
         // rather than quietly becoming a 404 lookup miss.
-        if s.is_empty() || s == "." || s == ".." || sanitize_filename(s) != s {
+        if !is_safe_leaf(s) {
             return Err(InvalidFilename::NotASafeLeaf);
         }
 
@@ -482,6 +479,23 @@ fn truncate_to_budget(name: String) -> String {
     };
     out.push_str(&extension);
     out
+}
+
+/// Whether `candidate` is a usable safe leaf: non-empty, not `.` or `..`, and already
+/// exactly what [`sanitize_filename`] would make of it (so no path components and no NUL).
+///
+/// The whole rule in one place. All three of [`Filename`]'s doors need it, and before this
+/// existed each spelled its own share of it — which is how a fourth door would come to
+/// rediscover the rule rather than reuse it.
+///
+/// The `is_empty` check is explicit because `sanitize_filename("")` is `""`, so the oracle
+/// alone would accept the empty string; `.` and `..` are named because they survive
+/// percent-encoding unchanged (`.` is unreserved), so they cannot be caught downstream.
+fn is_safe_leaf(candidate: &str) -> bool {
+    !candidate.is_empty()
+        && candidate != "."
+        && candidate != ".."
+        && sanitize_filename(candidate) == candidate
 }
 
 /// Strip path components, replace null bytes, reject `.`, `..`, and empty results.
@@ -622,9 +636,10 @@ pub fn media_path(source: &MediaSource, sha256: &ContentHash, filename: &Filenam
 /// Returns `"/media/<source>/<2-hex-p1>/<2-hex-p2>/<full-sha256>/<filename>"` — the
 /// [`media_path`] layout under the serve prefix.
 ///
-/// The filename segment is percent-encoded, and because that encoding lives in
-/// [`media_path`] this URL's tail **is** the path to the file on disk, byte for byte. Do not
-/// re-derive either one; see [`media_path`] for why the two must not drift.
+/// The filename segment is already percent-encoded — a [`Filename`] *is* the canonical
+/// segment (#720) — so this URL's tail **is** the path to the file on disk, byte for byte,
+/// with nothing transformed on the way. Do not re-derive either one; see [`media_path`] for
+/// why the two must not drift.
 ///
 /// Infallible by construction, so it returns the newtype rather than a `Result`: see the
 /// body for why the parse cannot fail.
@@ -636,11 +651,12 @@ pub fn media_url(
 ) -> RootRelativeUrl {
     let path = format!("/media/{}", media_path(source, sha256, filename));
     let Ok(url) = path.parse() else {
-        // Unreachable: the string always starts with a single `/media/`, and
-        // `media_path` percent-encodes the only caller-influenced segment — so no
-        // whitespace, control character, `?` or `#` can survive into it. The hash and
-        // source segments are a hex digest and a bounded enum token. Same shape as
-        // `AbsoluteUrl::compose`, and the reason no trusted door is needed here.
+        // Unreachable: the string always starts with a single `/media/`, and the only
+        // caller-influenced segment is a `Filename`, whose invariant is that it is already
+        // percent-encoded — so no whitespace, `?` or `#` can survive into it. (Nothing
+        // encodes here any more; the guarantee comes from the type, not from a transform.)
+        // The hash and source segments are a hex digest and a bounded enum token. Same
+        // shape as `AbsoluteUrl::compose`, and the reason no trusted door is needed here.
         unreachable!("media_url builds a valid root-relative path");
     };
     url
