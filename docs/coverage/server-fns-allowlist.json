@@ -1,10 +1,5 @@
 [
   {
-    "server_fn": "media::delete",
-    "reason": "No browser flow reaches it: zero hits by either signal in the seeding capture. Route-level coverage is thorough on both backends (server/tests/web/web_media.rs covers the happy path, the referencing-posts-when-not-forced path, and auth-required), so this is an untested browser flow, not an untested endpoint. The /media Delete button sits behind a native confirm() dialog, which a Playwright spec has to handle explicitly.",
-    "issue": "https://github.com/jaunder-org/jaunder/issues/706"
-  },
-  {
     "server_fn": "sessions::revoke",
     "reason": "No browser flow reaches it: zero hits by either signal in the seeding capture. Route-level coverage is thorough on both backends (server/tests/web/web_sessions.rs and web_account.rs cover revoking own session, rejecting another user's, requiring auth, and that re-auth with the revoked token fails), so this is an untested browser flow, not an untested endpoint. Covering it needs a second session in its own browser context.",
     "issue": "https://github.com/jaunder-org/jaunder/issues/707"

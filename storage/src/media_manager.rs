@@ -112,7 +112,8 @@ impl MediaManager {
     {
         let (max_file_size, user_quota) = self.get_limits().await?;
 
-        let content_type = Self::get_content_type(content_type, filename)?;
+        // Sniffing reads *inside* the name, so it gets the decoded form (#720).
+        let content_type = Self::get_content_type(content_type, &filename.decoded())?;
 
         let tmp_path = self.create_temp_file().await?;
         let (sha256_hex, size_bytes) = self
@@ -360,7 +361,10 @@ impl MediaManager {
         let (max_file_size, user_quota) = self.get_limits().await?;
         // `filename` is already a validated `Filename` (the caller ran Door B on the
         // client's name), so there is no re-sanitize here.
-        let content_type = Self::get_content_type(Some(content_type), filename)?;
+        // Decoded like `upload`'s caller above. This path always supplies a content type,
+        // so it never reaches the sniffing branch — passed decoded anyway so the two
+        // callers cannot drift.
+        let content_type = Self::get_content_type(Some(content_type), &filename.decoded())?;
 
         let size_bytes = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
         if size_bytes > max_file_size.value() {

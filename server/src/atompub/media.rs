@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 
 use common::absolute_url::{compose, AbsoluteUrl};
 use common::atompub::{render_media_link_entry, MediaLinkEntry};
-use common::media::{encode_filename_segment, media_url, ContentHash, Filename, MediaSource};
+use common::media::{media_url, ContentHash, Filename, MediaSource, ProfferedFilename};
 use common::root_relative_url::RootRelativeUrl;
 use common::username::Username;
 use storage::{MediaRecord, MediaStorage, SiteConfigStorage};
@@ -32,18 +32,17 @@ fn media_link_entry(
     let binary = compose(base, &binary_path);
     // The member URL is a *different* layout from the serve path (it is the AtomPub
     // collection's, not the content-addressed store's), so it is built here rather than by
-    // `media_path` — but it shares the encode set, and for the same reasons: a legal
-    // `Filename` may hold a space (malformed in an `href`) or a `?`/`#` (which would
-    // silently truncate this URL). This one is also the entry's `atom:id`, so a malformed
-    // spelling would be the entry's permanent identity.
+    // `media_path`. Since #720 the filename needs no encoding at either site: a `Filename`
+    // *is* the canonical percent-encoded segment, so this interpolates it verbatim and the
+    // two layouts cannot spell one file differently. This URL is also the entry's
+    // `atom:id`, so a malformed spelling would be the entry's permanent identity.
     //
     // Typed like `binary_path` rather than left a bare `String`: two spellings of the same
     // concept side by side is how one of them drifts.
     let edit_path: RootRelativeUrl = {
         let path = format!(
             "/atompub/{username}/media/{}/{}",
-            record.sha256,
-            encode_filename_segment(&record.filename)
+            record.sha256, record.filename
         );
         let Ok(url) = path.parse() else {
             // Unreachable: a leading `/`, a hex digest, a validated `Username`, and a
@@ -148,12 +147,16 @@ pub async fn member_get(
     Extension(media): Extension<Arc<dyn MediaStorage>>,
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     auth_user: AuthUser,
-    Path((username, sha, filename)): Path<(Username, ContentHash, Filename)>,
+    Path((username, sha, filename)): Path<(Username, ContentHash, ProfferedFilename)>,
 ) -> Result<Response, HandlerError> {
     super::require_user_match(&auth_user, &username)?;
     // `sha` and `filename` are parsed by the typed extractor: a malformed segment is a
     // pre-handler 400. The URL is one we minted in the media-link entry, so a bad segment
     // is the caller's fault, not a missing resource.
+    //
+    // The filename arrives percent-*decoded* (axum decodes path parameters), so it comes
+    // in through the proffered door and is rewrapped here into the stored spelling (#720).
+    let filename = Filename::from(filename);
     let record = media
         .get_media(auth_user.user_id, &sha, &filename, &MediaSource::Upload)
         .await?
@@ -173,11 +176,13 @@ pub async fn member_get(
 pub async fn member_delete(
     Extension(media): Extension<Arc<dyn MediaStorage>>,
     auth_user: AuthUser,
-    Path((username, sha, filename)): Path<(Username, ContentHash, Filename)>,
+    Path((username, sha, filename)): Path<(Username, ContentHash, ProfferedFilename)>,
 ) -> Result<Response, HandlerError> {
     super::require_user_match(&auth_user, &username)?;
     // `sha` and `filename` are parsed by the typed extractor (a malformed segment is a
     // pre-handler 400); a well-formed but absent record still yields `NotFound` below.
+    // As in `member_get`, the segment arrives decoded and is rewrapped here (#720).
+    let filename = Filename::from(filename);
     media
         .delete_media(auth_user.user_id, &sha, &filename, &MediaSource::Upload)
         .await?;

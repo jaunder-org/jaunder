@@ -14,6 +14,7 @@ use common::etag::ETag;
 use common::ids::UserId;
 use common::media::{
     detect_content_type, media_path, should_inline, ContentHash, Filename, MediaSource,
+    ProfferedFilename,
 };
 use storage::{MediaError, MediaStorage};
 use web::auth::AuthUser;
@@ -64,7 +65,10 @@ pub struct ServeParams {
     pub p1: String,
     pub p2: String,
     pub hash: SoftPath<ContentHash>,
-    pub filename: SoftPath<Filename>,
+    /// Typed [`ProfferedFilename`], not [`Filename`]: axum has percent-*decoded* this
+    /// segment before the handler runs, so it is the decoded spelling, and only the
+    /// inbound door knows how to recover the stored one (#720).
+    pub filename: SoftPath<ProfferedFilename>,
 }
 
 /// Serves a stored media file, recording the `jaunder.media.served` outcome.
@@ -129,9 +133,16 @@ async fn serve_response(
         .find_by_hash(&hash, &source)
         .await
         .map_err(serve_internal_error)?
-        .map_or_else(|| detect_content_type(&filename), |r| r.content_type);
+        // Both read *inside* the name rather than using it as a path, so both take the
+        // decoded form (#720). Extension sniffing on the encoded form happens to work
+        // only because `.` is unreserved and every extension in the table is ASCII
+        // alphanumeric — a coincidence of the encode set, not a property to rely on.
+        .map_or_else(
+            || detect_content_type(&filename.decoded()),
+            |r| r.content_type,
+        );
 
-    let disposition = content_disposition(&content_type, &filename);
+    let disposition = content_disposition(&content_type, &filename.decoded());
 
     let file = fs::File::open(&file_path)
         .await
@@ -229,8 +240,12 @@ fn validate_serve_params(
     let Some(filename) = params.filename.value() else {
         return Err(StatusCode::NOT_FOUND);
     };
+    // `value()` borrows, so clone before the rewrap — this is what `Clone` on
+    // `ProfferedFilename` is for. The conversion is infallible: the proffered door
+    // already enforced every condition `Filename` requires.
+    let filename = Filename::from(filename.clone());
 
-    Ok((*source, hash.clone(), filename.clone()))
+    Ok((*source, hash.clone(), filename))
 }
 
 /// Validates the serve route's path parameters and resolves the on-disk file
@@ -243,9 +258,14 @@ fn resolve_media_path(
     // Built via `media_path` — the single definition of the layout — rather than
     // re-joining the segments here. The write path (`storage::MediaManager::upload`) uses
     // it too, so the two cannot disagree; a hand-rolled read path would miss the file
-    // whenever the name needs percent-encoding, because axum has already *decoded* the
-    // incoming segment and `media_path` is what re-encodes it. The re-encode looks
-    // redundant and is not (#675).
+    // whenever the name needs percent-encoding.
+    //
+    // The re-encode still happens and is still not redundant (#675), but since #720 it
+    // lives in `ProfferedFilename`'s door, not here: axum has already *decoded* the
+    // incoming segment, that door re-encodes it to recover the stored spelling, and
+    // `media_path` then merely interpolates a value that already is the path segment.
+    // Deleting that door — or "simplifying" it to `Filename` — breaks serving for every
+    // name needing encoding, and axum offers no un-decoded extractor to avoid it with.
     //
     // The parsed values are used, not the raw `params.*`: `p1`/`p2` are re-derived from
     // the validated hash, having already been checked against it in
@@ -258,6 +278,12 @@ fn resolve_media_path(
 }
 
 /// Builds a header-safe `Content-Disposition` value for serving `filename`.
+///
+/// Takes the **decoded** name — this header is what the user sees and saves as, so it
+/// carries the name they typed (#720). Its internal `NON_ALPHANUMERIC` encode below is the
+/// RFC 5987 one, a deliberately *different* set from the media path segment's (ADR-0080);
+/// passing an already-encoded name here would double-encode into a header that still looks
+/// well-formed.
 ///
 /// The filename is attacker-influenced (it round-trips through the URL), so it
 /// is emitted in two forms: a quote/backslash-escaped, ASCII-only `filename=`
@@ -389,10 +415,12 @@ mod tests {
     }
 
     #[test]
-    fn resolve_media_path_encodes_the_filename_like_the_writer_does() {
+    fn resolve_media_path_recovers_the_stored_spelling_from_a_decoded_segment() {
         // The read path must spell the name exactly as `storage`'s upload wrote it. axum
-        // hands us the *decoded* segment, so resolving has to re-encode; a hand-rolled
-        // join here would look for `a b.txt` and miss the stored `a%20b.txt` (#675).
+        // hands us the *decoded* segment, so `ProfferedFilename`'s door re-encodes it to
+        // recover the stored spelling; `media_path` then only interpolates (#720). A
+        // hand-rolled join here would look for `a b.txt` and miss the stored
+        // `a%20b.txt` (#675). This is the test that proves the door carries the encode.
         //
         // Each case is a distinct hazard: a space is unrepresentable as a `RootRelativeUrl`;
         // `?`/`#` would truncate the path if unencoded (the failure the newtype cannot
@@ -410,9 +438,9 @@ mod tests {
             let (_source, _hash, filename, path) = resolve_media_path(Path::new("/data"), &p)
                 .unwrap_or_else(|e| panic!("{raw} is a legal Filename, got {e}"));
 
-            // The typed filename stays raw — it is the display name — while the on-disk
-            // path carries the encoded spelling the writer used.
-            assert_eq!(filename, raw);
+            // The typed filename IS the stored spelling — one value, no derivation — and
+            // the on-disk path is byte-identical to it.
+            assert_eq!(filename, stored);
             assert_eq!(
                 path,
                 Path::new("/data")
@@ -498,6 +526,26 @@ mod tests {
             resolve_media_path(Path::new("/data"), &p),
             Err(StatusCode::NOT_FOUND)
         );
+    }
+
+    #[test]
+    fn content_disposition_carries_decoded_and_rfc5987_forms() {
+        // The argument is the *decoded* name (#720). The helper's own `NON_ALPHANUMERIC`
+        // encode is the RFC 5987 one and is a different set from the media segment's —
+        // both correct in place. Handing it the already-encoded name would double-encode
+        // into a header that still looks well-formed, which is exactly the failure class
+        // this issue exists to remove, so both parameters are pinned as exact strings.
+        let value = content_disposition("image/png", "my photo.jpg");
+        assert!(value.contains("filename=\"my photo.jpg\""), "{value}");
+        // Note `%2E`, not `.`: the RFC 5987 parameter uses the **bare** `NON_ALPHANUMERIC`
+        // set, which encodes the unreserved marks the media path segment deliberately
+        // keeps. The two sets genuinely differ and are each correct in place (ADR-0080);
+        // pinning the exact string here is what stops one being swapped for the other.
+        assert!(
+            value.contains("filename*=UTF-8''my%20photo%2Ejpg"),
+            "{value}"
+        );
+        assert!(!value.contains("%2520"), "double-encoded: {value}");
     }
 
     #[test]

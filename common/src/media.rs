@@ -12,30 +12,35 @@
 //! hex digest — a two-level fan-out that keeps any single directory small.
 //! `source` distinguishes provenance (e.g. `upload` vs a remote cache).
 //!
-//! The `<filename>` segment is **percent-encoded** ([`MEDIA_SEGMENT_ENCODE_SET`]), so the URL path
-//! and the on-disk path are byte-identical: paste the tail of a serve URL and you have the
-//! path to the file. Both come from [`media_path`], which is the only place the layout is
-//! spelled — so a new consumer must call it rather than re-deriving, or the two spellings
-//! drift apart (#675).
+//! The `<filename>` segment is **percent-encoded**, so the URL path and the on-disk path are
+//! byte-identical: paste the tail of a serve URL and you have the path to the file. Both come
+//! from [`media_path`], which is the only place the layout is spelled — so a new consumer must
+//! call it rather than re-deriving, or the two spellings drift apart (#675).
 //!
-//! The database `filename` column keeps the **raw** name — it is the display name shown in
-//! the media list — so DB → disk is a derivation, while URL → disk is identity.
+//! Since #720 that encoding is not something [`media_path`] *does* — a [`Filename`] already
+//! **is** the canonical encoded segment. The database column, the on-disk name and the URL all
+//! hold the same bytes, and display is the one place anything is transformed
+//! ([`Filename::decoded`]).
 //!
-//! Encoding is not cosmetic. A `Filename` may legally contain a space (which
+//! Encoding is not cosmetic. The name a user types may legally contain a space (which
 //! [`crate::root_relative_url::RootRelativeUrl`] rejects) or a `?`/`#` (which it *accepts*,
 //! silently truncating the path at the delimiter and addressing a different file).
 //!
-//! The three spellings of a filename (raw in the database, encoded on disk and in URLs) and
-//! why they are what they are: `docs/adr/0080-media-path-naming-correspondence.md`.
+//! One canonical spelling plus a decoded display view, and why:
+//! `docs/adr/0080-media-path-naming-correspondence.md` (as amended by
+//! `docs/adr/0084-media-filename-encoded-canonical.md`).
 //!
 //! # Untrusted input
 //!
 //! Filenames and hashes round-trip through URLs, so they are attacker-
 //! influenced. [`sanitize_filename`] reduces a name to a single safe path
 //! component; [`Filename`] is the newtype that holds such a value — its
-//! validating [`FromStr`] admits only an already-safe leaf, and its
-//! [`sanitized`][Filename::sanitized] door normalizes an arbitrary name into one —
-//! so an un-sanitized filename is unrepresentable past the boundary. An externally
+//! validating [`FromStr`] admits only a **canonically encoded** value whose
+//! *decoded* form is a safe leaf, and its [`sanitized`][Filename::sanitized] door
+//! normalizes an arbitrary name into one — so an un-sanitized filename is
+//! unrepresentable past the boundary. A third door, [`ProfferedFilename`], takes the
+//! decoded segment axum hands the three routes that carry a filename in their path,
+//! and re-encodes it to recover the stored spelling. An externally
 //! supplied hash must be parsed into a [`ContentHash`]
 //! (via [`is_valid_content_hash`], its `FromStr`'s validating engine) before it
 //! reaches [`media_path`]: the type is what guarantees the `sha256[..2]`/`[2..4]`
@@ -48,11 +53,12 @@
 //! back to `application/octet-stream`), and [`should_inline`] decides whether a
 //! type is served inline or as an attachment (the `Content-Disposition`).
 
+use std::borrow::Cow;
 use std::path::Path;
 use std::str::FromStr;
 
 use macros::{NumNewtype, StrNewtype};
-use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
+use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -126,33 +132,48 @@ impl ContentHash {
     }
 }
 
-/// A validated media filename: a single safe path leaf — the canonical form
-/// produced by [`sanitize_filename`] (no path components, no `.`/`..`, no `\0`,
-/// non-empty). The newtype makes an un-sanitized filename unrepresentable where a
-/// filename is expected: the value feeds a filesystem path and a
-/// `Content-Disposition` header, so an un-sanitized one is a path-traversal /
-/// header-injection hazard (ADR-0063 §1: invariant + trust/safety boundary).
+/// A media filename in its **canonical spelling**: the percent-encoded safe leaf that is
+/// simultaneously the database value, the on-disk name, and the URL segment — one value, no
+/// derivation between them (#720). [`decoded`][Filename::decoded] is the display view.
 ///
-/// It is also bounded: no `Filename` can exist whose percent-encoded form exceeds
-/// [`MAX_FILENAME_ENCODED_BYTES`], so a value that passes validation can always be written
-/// to disk. The bound is on the *encoded* length because that is what the filesystem sees
-/// (#708) — a 90-character name of non-ASCII characters does not fit.
+/// The newtype makes an un-sanitized filename unrepresentable where a filename is expected:
+/// the value feeds a filesystem path and a `Content-Disposition` header, so an un-sanitized
+/// one is a path-traversal / header-injection hazard (ADR-0063 §1: invariant + trust/safety
+/// boundary).
 ///
-/// Two construction doors, mirroring [`ContentHash`]'s `FromStr` + `from_digest`. They differ
-/// on length deliberately, matching their roles:
-/// - [`FromStr`] **validates** — it accepts a string iff it is already a canonical
-///   leaf (`sanitize_filename(s) == s`, non-empty) **and within budget**, *rejecting* a
-///   non-canonical or over-long name rather than normalizing it. This is the door for
-///   untrusted URL / wire / DB values that must match a stored filename exactly, so silently
-///   shortening one would match the wrong file; `#[derive(StrNewtype)]` routes `Deserialize`
-///   through it, so both failures are rejected on the wire.
-/// - [`sanitized`][Filename::sanitized] **normalizes** — the upload-intake door,
-///   where a client's arbitrary name is meant to be reduced to a safe leaf. It
-///   **truncates** an over-long name (keeping the extension) instead of failing, so an
-///   upload is never lost for a cosmetic reason.
+/// It is also bounded by [`MAX_FILENAME_ENCODED_BYTES`], so a value that passes validation
+/// can always be written to disk. Because the stored value already *is* the encoded form,
+/// that bound is a plain byte length — the encode-set coupling #708 recorded now lives only
+/// in [`sanitized`][Filename::sanitized]'s intake budget.
+///
+/// Three construction doors:
+/// - [`FromStr`] **validates** the canonical spelling — the door for untrusted URL / wire /
+///   DB values that must match a stored filename exactly. It accepts `s` only when, **in
+///   this order**: `s` is non-empty and neither `.` nor `..`; `sanitize_filename` fixes the
+///   *decoded* form; `s` equals the encoder's output for that form; and `s.len()` is within
+///   budget. `#[derive(StrNewtype)]` routes both `Deserialize` and the `sqlx` `Decode`
+///   through it, so every wire value and every column read passes here.
+///
+///   Two subtleties, each load-bearing. The safe-leaf oracle runs on `decode(s)`, **never**
+///   on `s`: `sanitize_filename("a%2Fb.jpg")` is `"a%2Fb.jpg"`, so checking the encoded form
+///   passes vacuously and would admit a separator or a NUL. And the leaf check precedes the
+///   canonicity check because a value like `a/b.txt` fails both — the caller needs to hear
+///   about the leaf.
+///
+///   It *rejects* rather than truncating: a silently shortened value would match the wrong
+///   file, or nothing (#708).
+/// - [`sanitized`][Filename::sanitized] **normalizes** — the upload-intake door, where a
+///   client's arbitrary name is reduced to a safe leaf and then encoded. It **truncates** an
+///   over-long name (keeping the extension) instead of failing, so an upload is never lost
+///   for a cosmetic reason. This is the one intricate step in the whole arrangement;
+///   everything else is dumb by design.
+/// - [`ProfferedFilename`] **re-encodes** — the inbound door for the three route segments
+///   axum has already percent-decoded. It exists because encoding is not idempotent, so one
+///   `FromStr` cannot serve both a decoded and an already-canonical input.
 ///
 /// Their contract: `sanitized`'s output always satisfies `FromStr`, pinned by
-/// `sanitized_output_always_reparses_as_filename`.
+/// `sanitized_output_always_reparses_as_filename`; and `ProfferedFilename`'s does too, which
+/// is what makes `From<ProfferedFilename> for Filename` total.
 ///
 /// The rest of the ADR-0063 string-newtype trailer (`Display`, `AsRef<str>`,
 /// `Borrow<str>`, `Deref<Target = str>`, owned `String` conversions,
@@ -178,6 +199,16 @@ pub enum InvalidFilename {
         "filename must be a non-empty safe path leaf (no path components, `.`/`..`, or null bytes)"
     )]
     NotASafeLeaf,
+    /// A safe leaf, but not in the canonical percent-encoded spelling.
+    ///
+    /// Distinct from [`NotASafeLeaf`][Self::NotASafeLeaf] because the likeliest cause is a
+    /// *raw* name on the wire — a perfectly good leaf that simply was not encoded — and
+    /// telling that caller their filename "is not a safe path leaf" misdirects (#720).
+    #[error(
+        "filename must be in canonical percent-encoded form (this is the stored spelling; \
+         encode it once at the boundary, and decode only for display)"
+    )]
+    NotCanonical,
     /// Longer than the filesystem can hold once percent-encoded.
     ///
     /// The message states the *encoded* length and why it differs from what the user typed:
@@ -197,19 +228,44 @@ impl FromStr for Filename {
     type Err = InvalidFilename;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // Door A: accept only an already-canonical, non-empty leaf. `sanitize_filename`
-        // is the oracle. The `is_empty` guard is explicit because `sanitize_filename("")`
-        // is `""`, so `sanitize_filename(s) == s` alone would accept the empty string —
-        // and a filename is never empty.
-        if s.is_empty() || sanitize_filename(s) != s {
+        // Door A: accept only the canonical stored spelling. The check order below is
+        // load-bearing, not incidental — see each step.
+        let decoded = percent_decode_str(s).decode_utf8_lossy();
+
+        // The safe-leaf rule, applied to the DECODED form (#720). Canonicity does *not*
+        // imply a safe leaf: `a%2Fb.jpg`, `a%00b.jpg` and `a%5Cb.jpg` are all canonical yet
+        // decode to a separator, a NUL and a backslash. This is the path-traversal /
+        // header-injection guard the type exists for, so losing it here would hollow out
+        // `Filename` while every other check still looked present.
+        //
+        // Run on `decoded`, never on `s`: `sanitize_filename("a%2Fb.jpg")` is
+        // `"a%2Fb.jpg"`, so testing the encoded form passes vacuously.
+        //
+        // Note what this does *not* catch: `sanitize_filename` has never touched CR/LF, so
+        // a canonical `a%0D%0Ab.jpg` is accepted, exactly as raw `a\r\nb.jpg` was before
+        // #720 — see `from_str_accepts_a_canonical_name_carrying_control_characters` for
+        // why that is safe and deliberate rather than an oversight.
+        //
+        // Ordered BEFORE canonicity because a separator value is *both* an unsafe leaf and
+        // non-canonical, and the failure a caller needs to hear about is the leaf.
+        if !is_safe_leaf(&decoded) {
             return Err(InvalidFilename::NotASafeLeaf);
         }
-        // The strict door *rejects* an over-long name rather than truncating: it exists for
-        // values that must match a stored name exactly (a URL segment, a DB read), and a
-        // silently-shortened one would match the wrong file — or nothing (#708).
-        let encoded = encoded_len(s);
-        if encoded > MAX_FILENAME_ENCODED_BYTES {
-            return Err(InvalidFilename::TooLong { encoded });
+
+        // Canonicity: the stored spelling is exactly what the encoder produces. This is
+        // what makes "the column holds the encoded form" a checked fact rather than a
+        // convention — a raw name from a hand-edited row, a restored backup or a wire
+        // argument is rejected here, instead of becoming a file no URL can address.
+        if utf8_percent_encode(&decoded, MEDIA_SEGMENT_ENCODE_SET).to_string() != s {
+            return Err(InvalidFilename::NotCanonical);
+        }
+
+        // The value already *is* the encoded form, so the budget is a plain byte length —
+        // no encode-set reference (#708's coupling now lives only in the intake door).
+        // This door *rejects* rather than truncating: its values must match a stored name
+        // exactly, and a silently-shortened one would match the wrong file, or nothing.
+        if s.len() > MAX_FILENAME_ENCODED_BYTES {
+            return Err(InvalidFilename::TooLong { encoded: s.len() });
         }
         Ok(Filename(s.to_owned()))
     }
@@ -234,12 +290,139 @@ impl Filename {
     pub fn sanitized(raw: &str) -> Result<Self, InvalidFilename> {
         let s = truncate_to_budget(sanitize_filename(raw));
         // Truncation can leave a degenerate leaf (an empty stem with no extension), and
-        // `sanitize_filename` already maps `.`/`..` to empty. Guarded here so this door's
-        // output always satisfies `FromStr`.
-        if s.is_empty() || s == "." || s == ".." {
+        // `sanitize_filename` already maps `.`/`..` to empty. Re-checked here — before the
+        // encode, since `.`/`..` encode to themselves — so this door's output always
+        // satisfies `FromStr`. The oracle half is redundant after `sanitize_filename`, but
+        // stating one rule at all three doors is what stops them drifting apart.
+        if !is_safe_leaf(&s) {
             return Err(InvalidFilename::NotASafeLeaf);
         }
-        Ok(Filename(s))
+        // Encode last (#720). The order `sanitize → truncate → encode` is deliberate:
+        // truncating in *encoded* space would mean never splitting a `%XX` escape, never
+        // splitting the escape run of one multi-byte character (`ä` is `%C3%A4`, and a cut
+        // after `%C3` decodes to invalid UTF-8), and still never splitting a grapheme
+        // cluster — strictly harder than measuring raw graphemes by their encoded cost,
+        // for no gain. `truncate_to_budget` already bounds `encoded_len(s) <= MAX`, and
+        // the encoded output's `len()` *is* that number, so the result is in budget by
+        // construction.
+        Ok(Filename(
+            utf8_percent_encode(&s, MEDIA_SEGMENT_ENCODE_SET).to_string(),
+        ))
+    }
+
+    /// The name as a human should read it — the stored value with its percent-escapes
+    /// undone. The **display view**, and the only place a `Filename` is transformed on
+    /// the way out (#720).
+    ///
+    /// Every other consumer — [`media_path`], the URL builders, the `sqlx` bind, a
+    /// reference comparison — wants the stored bytes and gets them from the ADR-0063
+    /// trailer (`Display`, `Deref<str>`, `AsRef<str>`) with no call. That asymmetry is
+    /// deliberate: a missed decode here is cosmetic, whereas a missed *encode* on a path
+    /// would be a 404 or, with a name collision, the wrong file. The fragile direction is
+    /// the one that must not need remembering.
+    ///
+    /// Returns [`Cow`] so the common nothing-to-decode case allocates nothing.
+    ///
+    /// Decoding is **lossy**, and cannot lose anything: a `Filename`'s escapes were
+    /// produced by encoding valid UTF-8, and a lone invalid byte such as `%FF` cannot be
+    /// stored — it fails the canonicity check, since decoding it yields U+FFFD, which
+    /// re-encodes to `%EF%BF%BD` and so differs from the input. The substitution arm is
+    /// therefore unreachable on a value of this type.
+    #[must_use]
+    pub fn decoded(&self) -> Cow<'_, str> {
+        percent_decode_str(&self.0).decode_utf8_lossy()
+    }
+}
+
+/// A filename **as proffered by a request** — the third door, for the route segments
+/// axum has already percent-decoded.
+///
+/// Three routes carry a filename path segment (the media serve route, and the `AtomPub`
+/// media member `GET`/`DELETE`), and axum's `Path` extractor percent-*decodes* a
+/// parameter before the handler sees it. There is no un-decoded extractor:
+/// `RawPathParams` is "raw" only in the sense of *undeserialized* — its values are
+/// `PercentDecodedStr` too.
+///
+/// So those doors hold a **decoded** name while [`Filename`] holds the canonical stored
+/// one, and a single [`FromStr`] cannot serve both: percent-encoding is not idempotent,
+/// so a door that encoded its input would double-encode an already-canonical value
+/// (#720). Since these extractors pick their door *purely by the type parameter*, a
+/// second type is the only mechanism that makes the choice compiler-checked rather than
+/// a comment.
+///
+/// `From<ProfferedFilename> for Filename` is **total**, not `TryFrom` — this type
+/// enforces exactly [`Filename`]'s conditions, so the rewrap can never fail and the
+/// three handlers carry no error arm for it.
+///
+/// # A deliberately minimal trailer (ADR-0063 deviation)
+///
+/// Only [`FromStr`], `Deserialize`, `Clone` and `Debug`. The rest of the standard
+/// string-newtype trailer is a hazard rather than an ergonomic win here, because this
+/// type exists for exactly one hop:
+///
+/// - **No `sqlx` bridge.** The default `#[derive(StrNewtype)]` emits one, which would
+///   make this a second *storable* spelling of a filename — a leak the
+///   `proffered-filename-position` gate cannot catch, since it scans type positions, not
+///   query binds.
+/// - **No `Display`/`Serialize`.** Nothing should render or transmit an inbound-only
+///   value, and omitting them means there is no way to feed a canonical value back
+///   through an encoding door:
+/// ```compile_fail
+/// let p: common::media::ProfferedFilename = "a.jpg".parse().unwrap();
+/// let _ = p.to_string(); // no Display: the inbound twin is never rendered
+/// ```
+/// ```compile_fail
+/// let p: common::media::ProfferedFilename = "a.jpg".parse().unwrap();
+/// let _ = serde_json::to_string(&p); // no Serialize: inbound only
+/// ```
+///
+/// `Clone` is load-bearing rather than reflexive: `SoftPath::value()` borrows, so the
+/// serve route needs an owned value to hand to the conversion.
+#[derive(Clone, Debug)]
+pub struct ProfferedFilename(String);
+
+impl FromStr for ProfferedFilename {
+    type Err = InvalidFilename;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // `s` is the segment axum already percent-decoded, so the safe-leaf oracle applies
+        // to it directly. Running it *here*, before the encode, is what keeps the
+        // conversion into `Filename` infallible — and it is also why a member-route
+        // segment like `a%5Cb.png` (decoding to `a\b.png`) is still a pre-handler 400
+        // rather than quietly becoming a 404 lookup miss.
+        if !is_safe_leaf(s) {
+            return Err(InvalidFilename::NotASafeLeaf);
+        }
+
+        // Encode once, at the outermost door: the stored value is what this produces, so
+        // nothing downstream has to remember to do it. Checks, never repairs — an encoded
+        // name over the budget cannot exist on disk (it is the filesystem's per-component
+        // limit), so rejecting is a provably correct early miss, whereas truncating would
+        // shorten a *lookup key* and could match the wrong file.
+        let encoded = utf8_percent_encode(s, MEDIA_SEGMENT_ENCODE_SET).to_string();
+        if encoded.len() > MAX_FILENAME_ENCODED_BYTES {
+            return Err(InvalidFilename::TooLong {
+                encoded: encoded.len(),
+            });
+        }
+        Ok(ProfferedFilename(encoded))
+    }
+}
+
+impl<'de> Deserialize<'de> for ProfferedFilename {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // Routes through the validating door, mirroring `SoftPath`'s approach — a
+        // malformed segment is a parse error, never a silently-accepted value.
+        let raw = String::deserialize(deserializer)?;
+        raw.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+impl From<ProfferedFilename> for Filename {
+    fn from(value: ProfferedFilename) -> Self {
+        // A rewrap with no logic: `ProfferedFilename`'s door already enforced every
+        // condition `Filename` requires, which is what keeps this infallible.
+        Filename(value.0)
     }
 }
 
@@ -296,6 +479,23 @@ fn truncate_to_budget(name: String) -> String {
     };
     out.push_str(&extension);
     out
+}
+
+/// Whether `candidate` is a usable safe leaf: non-empty, not `.` or `..`, and already
+/// exactly what [`sanitize_filename`] would make of it (so no path components and no NUL).
+///
+/// The whole rule in one place. All three of [`Filename`]'s doors need it, and before this
+/// existed each spelled its own share of it — which is how a fourth door would come to
+/// rediscover the rule rather than reuse it.
+///
+/// The `is_empty` check is explicit because `sanitize_filename("")` is `""`, so the oracle
+/// alone would accept the empty string; `.` and `..` are named because they survive
+/// percent-encoding unchanged (`.` is unreserved), so they cannot be caught downstream.
+fn is_safe_leaf(candidate: &str) -> bool {
+    !candidate.is_empty()
+        && candidate != "."
+        && candidate != ".."
+        && sanitize_filename(candidate) == candidate
 }
 
 /// Strip path components, replace null bytes, reject `.`, `..`, and empty results.
@@ -384,19 +584,6 @@ const MEDIA_SEGMENT_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'_')
     .remove(b'~');
 
-/// Percent-encodes `filename` for use as a single URL or filesystem path segment, via
-/// [`MEDIA_SEGMENT_ENCODE_SET`].
-///
-/// Public because the media serve path is not the only place a [`Filename`] becomes a path
-/// segment — the `AtomPub` media member URL does it too — and both must use the *same* set
-/// or the two spellings of one file diverge. Returns a `Display`-able borrow, so callers
-/// interpolate it directly and no intermediate `String` is allocated for the common
-/// nothing-to-encode case.
-#[must_use]
-pub fn encode_filename_segment(filename: &Filename) -> impl std::fmt::Display + '_ {
-    utf8_percent_encode(filename, MEDIA_SEGMENT_ENCODE_SET)
-}
-
 /// The filesystem's limit on a single path component, in bytes. ext4/XFS/btrfs, APFS and NTFS
 /// all cap one name at 255, and the media layout puts the whole filename in a single
 /// component, so this is the entire budget.
@@ -427,9 +614,11 @@ fn encoded_len(s: &str) -> usize {
 /// addressed layout described in the module docs — the **single** definition of that
 /// layout, for both the on-disk path and the serve URL.
 ///
-/// The filename segment is percent-encoded ([`MEDIA_SEGMENT_ENCODE_SET`]), so this is what the file is
-/// named on disk, not just what appears in a URL. Callers must not re-derive the layout:
-/// the read path and the write path agreeing is exactly what makes the encoding safe.
+/// The filename segment is interpolated verbatim: a [`Filename`] **is** the canonical
+/// percent-encoded path segment (#720), so this is what the file is named on disk, what the
+/// URL carries, and what the database column holds — one spelling, no derivation. Callers
+/// must not re-derive the layout: the read path and the write path agreeing is exactly what
+/// makes the encoding safe.
 ///
 /// Takes a [`ContentHash`] rather than a bare `&str`, so the `sha256[..2]`/`[2..4]`
 /// slicing below can never see a short or non-`UTF-8`-boundary value — the type is
@@ -441,16 +630,16 @@ pub fn media_path(source: &MediaSource, sha256: &ContentHash, filename: &Filenam
     let p1 = &sha256[..2];
     let p2 = &sha256[2..4];
     let source = source.as_ref();
-    let filename = encode_filename_segment(filename);
     format!("{source}/{p1}/{p2}/{sha256}/{filename}")
 }
 
 /// Returns `"/media/<source>/<2-hex-p1>/<2-hex-p2>/<full-sha256>/<filename>"` — the
 /// [`media_path`] layout under the serve prefix.
 ///
-/// The filename segment is percent-encoded, and because that encoding lives in
-/// [`media_path`] this URL's tail **is** the path to the file on disk, byte for byte. Do not
-/// re-derive either one; see [`media_path`] for why the two must not drift.
+/// The filename segment is already percent-encoded — a [`Filename`] *is* the canonical
+/// segment (#720) — so this URL's tail **is** the path to the file on disk, byte for byte,
+/// with nothing transformed on the way. Do not re-derive either one; see [`media_path`] for
+/// why the two must not drift.
 ///
 /// Infallible by construction, so it returns the newtype rather than a `Result`: see the
 /// body for why the parse cannot fail.
@@ -462,11 +651,12 @@ pub fn media_url(
 ) -> RootRelativeUrl {
     let path = format!("/media/{}", media_path(source, sha256, filename));
     let Ok(url) = path.parse() else {
-        // Unreachable: the string always starts with a single `/media/`, and
-        // `media_path` percent-encodes the only caller-influenced segment — so no
-        // whitespace, control character, `?` or `#` can survive into it. The hash and
-        // source segments are a hex digest and a bounded enum token. Same shape as
-        // `AbsoluteUrl::compose`, and the reason no trusted door is needed here.
+        // Unreachable: the string always starts with a single `/media/`, and the only
+        // caller-influenced segment is a `Filename`, whose invariant is that it is already
+        // percent-encoded — so no whitespace, `?` or `#` can survive into it. (Nothing
+        // encodes here any more; the guarantee comes from the type, not from a transform.)
+        // The hash and source segments are a hex digest and a bounded enum token. Same
+        // shape as `AbsoluteUrl::compose`, and the reason no trusted door is needed here.
         unreachable!("media_url builds a valid root-relative path");
     };
     url
@@ -645,7 +835,7 @@ pub struct ByteSize(i64);
 
 /// The metadata returned on a successful media upload — the server-fn wire response
 /// (#517), moved here from `server` so it is nameable on the wasm client. `storage`'s
-/// `MediaManager` returns it directly; `web`'s `upload_media` fn returns it; `AtomPub`
+/// `MediaManager` returns it directly; `web`'s `media::upload` fn returns it; `AtomPub`
 /// serializes it. Every field is a validated `common` newtype, so each re-validates on
 /// deserialize — including `url`, the derived serve path: it is a
 /// [`RootRelativeUrl`][crate::root_relative_url::RootRelativeUrl] because being *derived*
@@ -778,13 +968,15 @@ mod tests {
         assert!(sanitize_filename("..").is_empty());
     }
 
-    /// The canonical hash and a parsed [`Filename`], the two typed arguments every layout
-    /// test needs. Both go through the shared `test_support` parse doors rather than
-    /// re-spelling the parse here.
+    /// The canonical hash and a [`Filename`], the two typed arguments every layout test
+    /// needs. `name` is the name a *user would type*, built through the intake door —
+    /// since #720 the strict door takes the canonical encoded spelling, so parsing a raw
+    /// name here would reject it. Callers keep passing what a person types; the helper
+    /// yields what gets stored.
     fn layout_args(name: &str) -> (ContentHash, Filename) {
         (
             crate::test_support::parse_content_hash(CANONICAL),
-            crate::test_support::parse_filename(name),
+            Filename::sanitized(name).expect("a layout-test name is a valid leaf"),
         )
     }
 
@@ -842,10 +1034,15 @@ mod tests {
     }
 
     #[test]
-    fn media_path_encodes_whitespace_and_url_structural_characters() {
-        // A space makes the URL unrepresentable as `RootRelativeUrl`; `?`/`#` are worse —
-        // they pass its validation while truncating the path, addressing another file.
-        // `%` must encode too, or a pre-existing escape is double-decoded on the way back.
+    fn media_path_interpolates_the_already_encoded_name() {
+        // Since #720 the encoding happens once, at intake — `media_path` only
+        // interpolates. So this pins two things at once: that the intake door produces the
+        // right spelling for each hazard, and that the path is byte-identical to it.
+        //
+        // The hazards are unchanged. A space makes the URL unrepresentable as
+        // `RootRelativeUrl`; `?`/`#` are worse — they pass its validation while truncating
+        // the path, addressing another file. `%` must encode too, or a pre-existing escape
+        // is double-decoded on the way back.
         for (raw, encoded) in [
             ("a b.txt", "a%20b.txt"),
             ("what?.png", "what%3F.png"),
@@ -855,6 +1052,7 @@ mod tests {
         ] {
             let (hash, filename) = layout_args(raw);
             let path = media_path(&MediaSource::Upload, &hash, &filename);
+            assert_eq!(filename, encoded, "{raw} must be stored as {encoded}");
             assert_eq!(
                 path,
                 format!("upload/e3/b0/{CANONICAL}/{encoded}"),
@@ -1123,6 +1321,34 @@ mod tests {
         assert_eq!(&f[..1], "a"); // Deref<Target = str>
     }
 
+    // --- Filename: the display view (#720) ---
+
+    #[test]
+    fn decoded_is_identity_for_a_name_with_nothing_encoded() {
+        let f = Filename::sanitized("photo.jpg").expect("valid leaf");
+        assert_eq!(f.decoded(), "photo.jpg");
+    }
+
+    #[test]
+    fn decoded_borrows_when_there_is_nothing_to_decode() {
+        let f = Filename::sanitized("photo.jpg").expect("valid leaf");
+        assert!(matches!(f.decoded(), std::borrow::Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn decoded_undoes_percent_escapes() {
+        // Constructed through `FromStr` so this states the intended post-#720
+        // relationship directly, independent of what `sanitized` currently stores.
+        let f: Filename = "my%20photo.jpg".parse().expect("a safe leaf today");
+        assert_eq!(f.decoded(), "my photo.jpg");
+    }
+
+    #[test]
+    fn decoded_recovers_a_literal_percent() {
+        let f: Filename = "50%25.jpg".parse().expect("a safe leaf today");
+        assert_eq!(f.decoded(), "50%.jpg");
+    }
+
     // --- Filename: Door B (normalizing producer) ---
 
     #[test]
@@ -1162,24 +1388,11 @@ mod tests {
 
     // --- #708: the length bound is on the ENCODED form ---
 
-    #[test]
-    fn from_str_rejects_a_name_whose_encoded_form_exceeds_the_budget() {
-        // 100 chars, 200 raw bytes, 600 encoded. A char-count bound — the house pattern for
-        // every other bounded newtype here — would accept this and the write would fail.
-        let raw = "ä".repeat(100);
-        let err = raw
-            .parse::<Filename>()
-            .expect_err("an over-budget name must be rejected");
-        assert!(
-            matches!(err, InvalidFilename::TooLong { .. }),
-            "wrong variant: {err}"
-        );
-        // The message must explain the expansion, or "my 100-character name was rejected"
-        // is baffling.
-        let msg = err.to_string();
-        assert!(msg.contains("percent-encoded"), "{msg}");
-        assert!(msg.contains("255"), "{msg}");
-    }
+    // #708's original case now lives at the *proffered* door — see
+    // `proffered_rejects_a_name_whose_encoded_form_exceeds_the_budget`. Since #720 a
+    // `Filename` holds the already-encoded value, so `"ä".repeat(100)` is non-canonical
+    // and fails that check before length is ever reached; the strict door's own bound is
+    // a plain byte count, pinned by `from_str_rejects_an_over_long_canonical_name`.
 
     #[test]
     fn from_str_accepts_a_name_exactly_at_the_budget() {
@@ -1209,7 +1422,7 @@ mod tests {
         let long = format!("{}.jpg", "a".repeat(400));
         let f = Filename::sanitized(&long).expect("the intake door truncates, never fails here");
         assert!(f.ends_with(".jpg"), "extension must survive: {f}");
-        assert!(encoded_len(&f) <= MAX_FILENAME_ENCODED_BYTES, "{f}");
+        assert!(f.len() <= MAX_FILENAME_ENCODED_BYTES, "{f}");
         // The property the extension is kept *for*: the stored content type is unchanged.
         // Asserting merely "ends_with(.jpg)" would pass on a mangled extension.
         assert_eq!(detect_content_type(&f), detect_content_type(&long));
@@ -1221,7 +1434,7 @@ mod tests {
         // still unwritable. This is the assertion that pins D1's choice.
         let long = format!("{}.png", "ä".repeat(300));
         let f = Filename::sanitized(&long).expect("must truncate");
-        assert!(encoded_len(&f) <= MAX_FILENAME_ENCODED_BYTES, "{f}");
+        assert!(f.len() <= MAX_FILENAME_ENCODED_BYTES, "{f}");
         assert!(
             f.chars().count() < 255,
             "must cut well short of 255 chars: {f}"
@@ -1236,7 +1449,7 @@ mod tests {
         // in-budget leaf.
         let long = format!("{}.txt", "कि".repeat(200));
         let f = Filename::sanitized(&long).expect("must truncate");
-        assert!(encoded_len(&f) <= MAX_FILENAME_ENCODED_BYTES, "{f}");
+        assert!(f.len() <= MAX_FILENAME_ENCODED_BYTES, "{f}");
         assert!(f.as_ref().parse::<Filename>().is_ok(), "{f}");
         // No lone combining mark left at the cut.
         assert!(!f.starts_with('\u{093F}'), "{f}");
@@ -1253,13 +1466,13 @@ mod tests {
         let long = format!(".{}", "a".repeat(400));
         let f = Filename::sanitized(&long).expect("must truncate");
         assert!(f.starts_with('.'), "leading dot must survive: {f}");
-        assert!(encoded_len(&f) <= MAX_FILENAME_ENCODED_BYTES, "{f}");
+        assert!(f.len() <= MAX_FILENAME_ENCODED_BYTES, "{f}");
     }
 
     #[test]
     fn sanitized_truncates_the_whole_name_when_the_extension_alone_is_over_budget() {
         let f = Filename::sanitized(&format!("x.{}", "ä".repeat(300))).expect("must truncate");
-        assert!(encoded_len(&f) <= MAX_FILENAME_ENCODED_BYTES, "{f}");
+        assert!(f.len() <= MAX_FILENAME_ENCODED_BYTES, "{f}");
         assert!(f.as_ref().parse::<Filename>().is_ok(), "{f}");
     }
 
@@ -1283,7 +1496,7 @@ mod tests {
         let zalgo = format!("a{}.jpg", "\u{0301}".repeat(80));
         let f = Filename::sanitized(&zalgo).expect("must truncate, not fail");
 
-        assert!(encoded_len(&f) <= MAX_FILENAME_ENCODED_BYTES, "{f}");
+        assert!(f.len() <= MAX_FILENAME_ENCODED_BYTES, "{f}");
         assert!(f.ends_with(".jpg"), "{f}");
         // The property that matters: still detected as an image, not octet-stream.
         assert_eq!(detect_content_type(&f), detect_content_type(&zalgo));
@@ -1346,6 +1559,201 @@ mod tests {
                 "sanitized({raw:?}) = {f:?} must re-parse as Filename"
             );
         }
+    }
+
+    // --- ProfferedFilename: the inbound URL door (#720) ---
+
+    #[test]
+    fn proffered_accepts_a_safe_leaf() {
+        let p: ProfferedFilename = "photo.jpg".parse().expect("a safe leaf");
+        assert_eq!(Filename::from(p), "photo.jpg");
+    }
+
+    #[test]
+    fn proffered_rejects_a_traversal_or_separator_value() {
+        // The decoded segment axum hands us. `a\b.png` is not a leaf, and the member
+        // route answers 400 for it — pinned here so #720's re-encode cannot silently
+        // turn that into a 404.
+        for bad in ["a\\b.png", "a/b.png", "..", ".", "", "a\0b.png"] {
+            assert!(
+                bad.parse::<ProfferedFilename>().is_err(),
+                "must reject {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn proffered_rejects_an_over_long_name_rather_than_truncating() {
+        // Reject, never repair: a shortened lookup key would match the wrong file.
+        let long = format!("{}.jpg", "a".repeat(MAX_FILENAME_ENCODED_BYTES));
+        assert!(long.parse::<ProfferedFilename>().is_err());
+    }
+
+    #[test]
+    fn proffered_converts_into_filename_infallibly() {
+        // A `From`, not a `TryFrom` — this compiles only if the conversion is total.
+        let p: ProfferedFilename = "photo.jpg".parse().expect("a safe leaf");
+        let f: Filename = p.into();
+        assert_eq!(f, "photo.jpg");
+    }
+
+    #[test]
+    fn proffered_deserializes_through_its_validating_door() {
+        assert!(serde_json::from_str::<ProfferedFilename>("\"photo.jpg\"").is_ok());
+        assert!(serde_json::from_str::<ProfferedFilename>("\"a/b.png\"").is_err());
+    }
+
+    // --- #720: the encoded form is canonical ---
+
+    #[test]
+    fn sanitized_stores_the_encoded_form() {
+        let f = Filename::sanitized("my photo.jpg").expect("valid leaf");
+        assert_eq!(f, "my%20photo.jpg");
+        assert_eq!(f.decoded(), "my photo.jpg");
+    }
+
+    #[test]
+    fn from_str_rejects_a_non_canonical_value() {
+        // Raw (unencoded) and a lowercase escape are both non-canonical.
+        assert!("my photo.jpg".parse::<Filename>().is_err());
+        assert!("my%2fphoto.jpg".parse::<Filename>().is_err());
+        assert!("my%20photo.jpg".parse::<Filename>().is_ok());
+    }
+
+    #[test]
+    fn from_str_rejects_canonical_but_unsafe_values() {
+        // The test that fails if the decoded-form safe-leaf guard is dropped. Each of
+        // these is canonical, non-empty, neither `.` nor `..`, and under the length
+        // bound — so only a check run on `decode(s)` rejects it. Running the oracle on
+        // the encoded form would pass vacuously.
+        for bad in ["a%2Fb.jpg", "a%00b.jpg", "a%5Cb.jpg"] {
+            assert!(
+                bad.parse::<Filename>().is_err(),
+                "canonical-but-unsafe value must be rejected: {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn from_str_accepts_a_canonical_name_carrying_control_characters() {
+        // Considered and deliberately unchanged by #720. `sanitize_filename` has never
+        // rejected CR/LF — it normalizes backslashes, strips path components and maps NUL
+        // — so `a\r\nb.jpg` was an acceptable raw name before this change and stays an
+        // acceptable encoded one. Relocating the oracle onto the decoded form neither
+        // widens nor narrows it.
+        //
+        // No live hazard follows: `content_disposition` drops control characters from its
+        // `filename=` fallback and percent-encodes `filename*=`, the stored spelling holds
+        // no literal control byte, and CR/LF are legal XML characters in the Atom
+        // `<title>`. NUL, the one that is *not* legal XML, is caught above.
+        //
+        // Pinned rather than omitted so a later reader can see this was decided, not
+        // missed; tightening it would change what uploads are accepted, which is a
+        // separate decision from this issue's.
+        assert!("a%0D%0Ab.jpg".parse::<Filename>().is_ok());
+    }
+
+    #[test]
+    fn from_str_distinguishes_non_canonical_from_a_bad_leaf() {
+        // Check order matters: `a/b.txt` is BOTH an unsafe leaf and non-canonical, and
+        // must still report the leaf failure. A merely-unencoded name reports the new
+        // variant.
+        assert!(matches!(
+            "a/b.txt".parse::<Filename>().expect_err("not a leaf"),
+            InvalidFilename::NotASafeLeaf
+        ));
+        assert!(matches!(
+            "my photo.jpg"
+                .parse::<Filename>()
+                .expect_err("not canonical"),
+            InvalidFilename::NotCanonical
+        ));
+    }
+
+    #[test]
+    fn media_path_interpolates_without_encoding() {
+        let f = Filename::sanitized("my photo.jpg").expect("valid leaf");
+        let hash = ContentHash::from_digest(Sha256::digest(b"x").into());
+        let path = media_path(&MediaSource::Upload, &hash, &f);
+        assert!(path.ends_with("/my%20photo.jpg"), "{path}");
+        // The stored value IS the path segment — byte identity, not a derivation.
+        assert!(path.ends_with(&format!("/{f}")), "{path}");
+    }
+
+    #[test]
+    fn a_literal_percent_round_trips() {
+        // The case that exposes a double-encode or double-decode.
+        let f = Filename::sanitized("50%.jpg").expect("valid leaf");
+        assert_eq!(f, "50%25.jpg");
+        assert_eq!(f.decoded(), "50%.jpg");
+        assert!(
+            f.as_ref().parse::<Filename>().is_ok(),
+            "a canonical value must re-parse"
+        );
+    }
+
+    #[test]
+    fn a_user_typed_escape_does_not_materialize_a_separator() {
+        // `a%2Fb.jpg` typed literally must store double-encoded, so no `/` appears in
+        // any derived path segment — the traversal this arrangement must never permit.
+        let f = Filename::sanitized("a%2Fb.jpg").expect("valid leaf");
+        assert_eq!(f, "a%252Fb.jpg");
+        assert_eq!(f.decoded(), "a%2Fb.jpg");
+        let hash = ContentHash::from_digest(Sha256::digest(b"x").into());
+        let path = media_path(&MediaSource::Upload, &hash, &f);
+        let segment = path.rsplit('/').next().expect("a trailing segment");
+        assert_eq!(segment, "a%252Fb.jpg");
+    }
+
+    #[test]
+    fn proffered_re_encodes_the_decoded_segment() {
+        // The serve door: axum hands us the decoded name; the stored form must come back.
+        let p: ProfferedFilename = "my photo.jpg".parse().expect("a safe leaf");
+        assert_eq!(Filename::from(p), "my%20photo.jpg");
+    }
+
+    #[test]
+    fn proffered_output_always_satisfies_filename() {
+        // What makes `From<ProfferedFilename> for Filename` total.
+        for raw in [
+            "photo.jpg",
+            "my photo.jpg",
+            "50%.jpg",
+            "résumé.pdf",
+            ".hiddenfile",
+        ] {
+            let p: ProfferedFilename = raw.parse().expect("a safe leaf");
+            let f = Filename::from(p);
+            assert!(
+                f.as_ref().parse::<Filename>().is_ok(),
+                "must re-parse: {raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn from_str_rejects_an_over_long_canonical_name() {
+        // At `FromStr` the value is already encoded, so the bound is a plain byte count.
+        let over = "a".repeat(MAX_FILENAME_ENCODED_BYTES + 1);
+        assert!(matches!(
+            over.parse::<Filename>().expect_err("over budget"),
+            InvalidFilename::TooLong { .. }
+        ));
+    }
+
+    #[test]
+    fn proffered_rejects_a_name_whose_encoded_form_exceeds_the_budget() {
+        // #708's original case, relocated: the *proffered* door receives the decoded
+        // name, so this is where "100 chars, 200 raw bytes, 600 encoded" is still the
+        // hazard a char-count bound would miss.
+        let raw = "ä".repeat(100);
+        let err = raw
+            .parse::<ProfferedFilename>()
+            .expect_err("an over-budget name must be rejected");
+        assert!(matches!(err, InvalidFilename::TooLong { .. }), "{err}");
+        let msg = err.to_string();
+        assert!(msg.contains("percent-encoded"), "{msg}");
+        assert!(msg.contains("255"), "{msg}");
     }
 
     #[test]

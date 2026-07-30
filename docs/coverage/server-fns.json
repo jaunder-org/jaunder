@@ -185,6 +185,7 @@
       "site base URL round-trips, clears via omission, and validates inline",
       "site base URL warning banner shows when unset and hides once configured",
       "tag chip on permalink navigates to site tag listing",
+      "the media row decodes its label but not its delete key",
       "unpublishing from a permalink navigates to /drafts without a full reload",
       "unseeded client-nav to / paints Loading with the masthead intact",
       "upload widget on create-post page uploads file and shows URL",
@@ -336,6 +337,7 @@
       "site base URL round-trips, clears via omission, and validates inline",
       "site base URL warning banner shows when unset and hides once configured",
       "tag chip on permalink navigates to site tag listing",
+      "the media row decodes its label but not its delete key",
       "unpublishing from a permalink navigates to /drafts without a full reload",
       "unseeded client-nav to / paints Loading with the masthead intact",
       "upload widget on create-post page uploads file and shows URL",
@@ -364,15 +366,21 @@
       "invite link registration completes end-to-end",
       "invites page shows not-found fallback when not invite-only"
     ],
+    "media::delete": [
+      "the media row decodes its label but not its delete key"
+    ],
     "media::get_usage": [
-      "media manage page is reachable via nav link"
+      "media manage page is reachable via nav link",
+      "the media row decodes its label but not its delete key"
     ],
     "media::list_mine": [
-      "media manage page is reachable via nav link"
+      "media manage page is reachable via nav link",
+      "the media row decodes its label but not its delete key"
     ],
     "media::upload": [
       "a filename needing percent-encoding uploads and serves",
       "authenticated user can upload and access media",
+      "the media row decodes its label but not its delete key",
       "unauthenticated upload is rejected",
       "upload widget on create-post page uploads file and shows URL",
       "upload widget on the /app cockpit uploads file and shows URL"
@@ -654,6 +662,7 @@
       "site base URL round-trips, clears via omission, and validates inline",
       "site base URL warning banner shows when unset and hides once configured",
       "tag chip on permalink navigates to site tag listing",
+      "the media row decodes its label but not its delete key",
       "unpublishing from a permalink navigates to /drafts without a full reload",
       "unseeded client-nav to / paints Loading with the masthead intact",
       "upload widget on create-post page uploads file and shows URL",
@@ -795,6 +804,7 @@
       "sidebar footer shows Sign out link when logged in",
       "sidebar reverts to signed-out state after logout",
       "tag chip on permalink navigates to site tag listing",
+      "the media row decodes its label but not its delete key",
       "unpublishing from a permalink navigates to /drafts without a full reload",
       "upload widget on create-post page uploads file and shows URL",
       "upload widget on the /app cockpit uploads file and shows URL",
@@ -887,6 +897,7 @@
       "sidebar footer shows Sign out link when logged in",
       "sidebar reverts to signed-out state after logout",
       "tag chip on permalink navigates to site tag listing",
+      "the media row decodes its label but not its delete key",
       "unpublishing from a permalink navigates to /drafts without a full reload",
       "upload widget on create-post page uploads file and shows URL",
       "upload widget on the /app cockpit uploads file and shows URL",
@@ -1014,6 +1025,7 @@
       "site base URL round-trips, clears via omission, and validates inline",
       "site base URL warning banner shows when unset and hides once configured",
       "tag chip on permalink navigates to site tag listing",
+      "the media row decodes its label but not its delete key",
       "unpublishing from a permalink navigates to /drafts without a full reload",
       "unseeded client-nav to / paints Loading with the masthead intact",
       "upload widget on create-post page uploads file and shows URL",

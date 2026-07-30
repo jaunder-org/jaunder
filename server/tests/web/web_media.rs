@@ -363,10 +363,42 @@ async fn upload_then_serve_round_trips_a_filename_needing_encoding(#[case] backe
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let resp: UploadResponse = serde_json::from_str(&body).expect("response should be valid JSON");
 
-    // The display name stays raw; only the URL/disk segment is encoded.
-    assert_eq!(resp.filename, "my photo.jpg");
+    // Since #720 the wire field carries the *canonical* encoded spelling, because it is a
+    // lookup key rather than a display value — `atompub::media::collection_post` passes it
+    // straight to `get_media`. Rendering surfaces decode it; this one does not.
+    assert_eq!(resp.filename, "my%20photo.jpg");
+    assert_eq!(resp.filename.decoded(), "my photo.jpg");
     assert!(resp.url.contains("my%20photo.jpg"), "url: {}", resp.url);
     assert!(!resp.url.contains(' '), "url: {}", resp.url);
+
+    // The third spelling, read straight off the filesystem rather than inferred from a
+    // successful serve (#720). Serving proves the reader and writer agree with each other;
+    // only this proves they agree with the *stored column*. Walk to the leaf so the
+    // assertion is about the directory entry's real name, not a path we reconstructed.
+    let leaf = {
+        let mut dir = storage.path().join("media").join("upload");
+        // `<p1>/<p2>/<sha256>/` — three machine-generated levels, one entry each here.
+        for _ in 0..3 {
+            let entry = std::fs::read_dir(&dir)
+                .expect("media tree should exist")
+                .next()
+                .expect("exactly one entry at each hash level")
+                .expect("readable dir entry");
+            dir = entry.path();
+        }
+        std::fs::read_dir(&dir)
+            .expect("hash directory should exist")
+            .next()
+            .expect("the stored file")
+            .expect("readable dir entry")
+            .file_name()
+    };
+    assert_eq!(leaf.to_string_lossy(), "my%20photo.jpg");
+    assert_eq!(
+        leaf.to_string_lossy(),
+        resp.filename.as_ref(),
+        "the on-disk leaf and the stored column must be byte-identical"
+    );
 
     // The property that actually matters, and the one no unit test can reach: fetching the
     // URL we just handed the client returns the bytes we stored. It fails if the writer's

@@ -55,14 +55,62 @@ test.describe("Media upload and serving", () => {
     expect(response.status()).toBe(200);
 
     const json = await response.json();
-    // The display name stays raw; only the URL segment is encoded.
-    expect(json.filename).toBe("my holiday photo.jpg");
+    // Since #720 the wire field carries the canonical encoded spelling — it is a lookup
+    // key, not a display value, so it matches the URL segment and the on-disk name byte
+    // for byte. Display surfaces decode it.
+    expect(json.filename).toBe("my%20holiday%20photo.jpg");
     expect(json.url).toContain("my%20holiday%20photo.jpg");
     expect(json.url).not.toContain(" ");
 
     const serveResponse = await page.request.get(BASE_URL + json.url);
     expect(serveResponse.status()).toBe(200);
     expect(await serveResponse.text()).toBe("spaced filename content");
+  });
+
+  test("the media row decodes its label but not its delete key", async ({
+    page,
+  }, testInfo) => {
+    // The media library is a CSR view, so this is the only surface that can observe both
+    // spellings of one filename (#720). `component.rs` used to derive a single String for
+    // the link text and the hidden delete field; they diverge now, and getting it wrong is
+    // invisible to type checking — the label would show `my%20holiday%20photo.jpg`, or the
+    // delete would fail at the wire door.
+    await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 30000));
+
+    const response = await page.request.post(BASE_URL + "/api/media/upload", {
+      multipart: {
+        file: {
+          name: "my holiday photo.jpg",
+          mimeType: "image/jpeg",
+          buffer: Buffer.from("spaced filename content"),
+        },
+      },
+    });
+    expect(response.status()).toBe(200);
+
+    // Reached via the nav link and pinned on the page's own landmark, matching the
+    // sibling media-page tests below — a bare `goto` races the CSR shell's hydration.
+    await click(page, "a[href='/media']");
+    await waitForSelector(page, "button:has-text('Attach media')");
+
+    // Wait on the *label*, not the hidden input: `waitForSelector` waits for visibility,
+    // which a `type="hidden"` field never reaches.
+    //
+    // The label is cosmetic and decodes; the hidden field is the lookup key and does not.
+    await expect(
+      page.getByRole("link", { name: "my holiday photo.jpg" }),
+    ).toBeVisible();
+    await expect(page.locator('input[name="filename"]')).toHaveValue(
+      "my%20holiday%20photo.jpg",
+    );
+
+    // And the round-trip: deleting through the form succeeds, which is the end-to-end
+    // check that the key was not decoded — `Filename`'s wire door rejects a raw value.
+    page.on("dialog", (dialog) => dialog.accept());
+    await click(page, 'button:has-text("Delete")');
+    await expect(
+      page.getByRole("link", { name: "my holiday photo.jpg" }),
+    ).toHaveCount(0);
   });
 
   test("unauthenticated upload is rejected", async ({ page }) => {

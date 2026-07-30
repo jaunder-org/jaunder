@@ -138,6 +138,28 @@ the domain type in a server-only crate (never built for wasm) makes "never
 client-side" a compile fact. `ProfferedInviteCode` (#400), paired with the
 domain `InviteCode`, is the first user.
 
+**`Proffered` generalized: inbound twins that are not secrets.** Amended by
+`docs/adr/0084-media-filename-encoded-canonical.md` (#720). The prefix names an
+**untrusted inbound twin of a domain type**, of which the inbound-_secret_
+profile above is one specialization. `ProfferedFilename` is the first non-secret
+user: its concern is _representation_, not secrecy. axum percent-decodes path
+parameters, so the routes carrying a filename hold the decoded spelling while
+`Filename` holds the canonical encoded one — and because encoding is not
+idempotent, one `FromStr` cannot serve both without double-encoding a value that
+is already canonical.
+
+It takes a **hand-written** surface (`FromStr`, `Deserialize`, `Clone`, `Debug`)
+rather than a third `#[str_newtype]` profile, because every other member of the
+standard trailer is a hazard for a type that exists for one hop: the default
+derive emits the `sqlx` bridge, which would make it a second _storable_ spelling
+of a filename, and `Display`/`Serialize` would not round-trip through
+`FromStr`/`Deserialize` as every other `StrNewtype` here does. Omitting them
+makes the double-encode structurally impossible rather than merely gated. The
+enforcement half follows the same pattern as the secret profile: a distinct
+`xtask` gate (`proffered-filename-position`) pins it to axum extractor
+positions, since it must be `pub` for the route declarations and privacy cannot
+contain it.
+
 **Bearer-token profile.** A distinct case is a value that is _transmitted by
 design_ yet must not be logged — the session `RawToken` (#458), which the server
 mints and delivers into `Set-Cookie`, the app-password response, `Bearer`

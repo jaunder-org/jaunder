@@ -28,6 +28,7 @@ mod steps {
     pub mod host_tests;
     pub mod nix;
     pub mod no_full_reload_check;
+    pub mod proffered_filename_check;
     pub mod proffered_secret_check;
     pub mod rendered_html_from_trusted_check;
     pub mod sequence_check;
@@ -343,6 +344,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::server_fn_coverage_check::run(&mut result);
             steps::traced_context_check::run(&mut result);
             steps::proffered_secret_check::run(&mut result);
+            steps::proffered_filename_check::run(&mut result);
             steps::no_full_reload_check::run(&mut result);
             steps::target_arch_placement_check::run(&mut result);
             steps::sqlx_newtype_bind_check::run(&mut result);
@@ -381,6 +383,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::server_fn_coverage_check::run(&mut result);
             steps::traced_context_check::run(&mut result);
             steps::proffered_secret_check::run(&mut result);
+            steps::proffered_filename_check::run(&mut result);
             steps::no_full_reload_check::run(&mut result);
             steps::target_arch_placement_check::run(&mut result);
             steps::sqlx_newtype_bind_check::run(&mut result);

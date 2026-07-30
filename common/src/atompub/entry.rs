@@ -590,7 +590,9 @@ pub fn render_feed(meta: &FeedMeta, entries: &[Entry]) -> String {
 pub struct MediaLinkEntry {
     /// Stable entry id — the absolute member IRI (#560, require-base).
     pub id: AbsoluteUrl,
-    /// The uploaded media's filename (rendered as the entry's human-readable title).
+    /// The uploaded media's filename, in its **canonical** (percent-encoded) spelling —
+    /// the same value the member URLs carry. The renderer decodes it for the entry's
+    /// human-readable `<title>`; it is not stored decoded (#720).
     pub title: Filename,
     /// `rel="edit"` href — the media-link member resource.
     pub edit_uri: AbsoluteUrl,
@@ -619,7 +621,9 @@ pub fn render_media_link_entry(entry: &MediaLinkEntry) -> String {
     let _ = writer.write_event(Event::Start(root));
 
     write_text_element(&mut writer, "id", &entry.id);
-    write_text_element(&mut writer, "title", &entry.title);
+    // The one display surface in this document: the title shows the name the user typed,
+    // while every URL below keeps the canonical stored spelling (#720).
+    write_text_element(&mut writer, "title", &entry.title.decoded());
     write_text_element(&mut writer, "updated", &entry.updated_rfc3339);
     write_text_element(&mut writer, "published", &entry.published_rfc3339);
 
@@ -1055,5 +1059,26 @@ mod tests {
         assert!(out.contains("rel=\"edit-media\""), "out: {out}");
         assert!(out.contains("rel=\"edit\""), "out: {out}");
         assert!(out.contains(">pic.png<"), "out: {out}");
+    }
+
+    #[test]
+    fn media_link_entry_title_is_the_decoded_filename() {
+        // The `<title>` is the entry's human-readable name, so it shows the name the user
+        // typed — not the canonical stored spelling the URLs carry (#720). A missed decode
+        // here is invisible to type checking, which is why it is asserted directly.
+        let out = render_media_link_entry(&MediaLinkEntry {
+            id: parse_absolute_url("https://h/atompub/alice/media/abc/my%20photo.jpg"),
+            title: parse_filename("my%20photo.jpg"),
+            edit_uri: parse_absolute_url("https://h/atompub/alice/media/abc/my%20photo.jpg"),
+            edit_media_uri: parse_absolute_url("https://h/media/upload/ab/c0/abc/my%20photo.jpg"),
+            content_src: parse_absolute_url("https://h/media/upload/ab/c0/abc/my%20photo.jpg"),
+            content_type: parse_content_type("image/jpeg"),
+            published_rfc3339: "2026-06-01T00:00:00Z".to_string(),
+            updated_rfc3339: "2026-06-01T00:00:00Z".to_string(),
+        });
+
+        assert!(out.contains("<title>my photo.jpg</title>"), "out: {out}");
+        // The URLs keep the canonical spelling — one value, two views.
+        assert!(out.contains("/my%20photo.jpg\""), "out: {out}");
     }
 }
