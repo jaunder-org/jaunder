@@ -15,6 +15,8 @@ use common::ids::PostId;
 use common::seed::{TimelinePage, TimelinePostSummary};
 use common::time::UtcInstant;
 
+use crate::error::WebError;
+
 /// A keyset pagination cursor: the `(created_at, post_id)` pair a timeline page
 /// hands back to fetch the next page. Bundling the two — which always move
 /// together — makes "one set, the other not" unrepresentable (they were two
@@ -53,15 +55,20 @@ impl TimelineCursor {
 }
 
 /// The load state of a timeline: idle, a load-more in flight, or a failed fetch
-/// carrying its display message. Replaces the old `loading_more: bool` +
+/// carrying the error itself. Replaces the old `loading_more: bool` +
 /// `error: Option<String>` pair, which admitted the illegal "loading *and*
 /// errored" combination.
+///
+/// `Failed` carries the typed [`WebError`], not a pre-rendered `String` (#671):
+/// failure stays on `Result`'s error axis all the way to the render, which is the
+/// only place that decides how to display it. Stringifying at the producer threw
+/// the error *kind* away for no benefit.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum LoadStatus {
     #[default]
     Idle,
     InFlight,
-    Failed(String),
+    Failed(WebError),
 }
 
 impl LoadStatus {
@@ -71,14 +78,14 @@ impl LoadStatus {
         matches!(self, Self::InFlight)
     }
 
-    /// Consume the status into the failure message to display, if the last load
-    /// failed. Owned (`self`) so the reactive callers — which hold a cloned
-    /// `LoadStatus` from the status signal's `.get()` — can return the `String`
-    /// directly instead of re-matching the `Failed` arm inline.
+    /// Consume the status into the error to display, if the last load failed.
+    /// Owned (`self`) so the reactive callers — which hold a cloned `LoadStatus`
+    /// from the status signal's `.get()` — can return the `WebError` directly
+    /// instead of re-matching the `Failed` arm inline.
     #[must_use]
-    pub fn into_failure(self) -> Option<String> {
+    pub fn into_failure(self) -> Option<WebError> {
         match self {
-            Self::Failed(message) => Some(message),
+            Self::Failed(error) => Some(error),
             Self::Idle | Self::InFlight => None,
         }
     }
@@ -118,11 +125,11 @@ impl TimelineState {
     /// Record a fetch failure: empty the rows (don't show a stale page), clear
     /// the cursor + `has_more` so a failed timeline offers no "Load more", and
     /// mark the failure for display.
-    pub fn fail(&self, message: String) {
+    pub fn fail(&self, error: WebError) {
         self.rows.set(Vec::new());
         self.cursor.set(None);
         self.has_more.set(false);
-        self.status.set(LoadStatus::Failed(message));
+        self.status.set(LoadStatus::Failed(error));
     }
 }
 
@@ -242,7 +249,7 @@ mod tests {
     fn resolve_adopts_and_clears_a_prior_failure() {
         with_owner(|| {
             let state = TimelineState::default();
-            state.fail("boom".to_owned());
+            state.fail(WebError::validation("boom"));
             state.resolve(page_with(vec![sample_summary()], None, None, false));
             assert_eq!(state.rows.get().len(), 1);
             assert_eq!(state.status.get(), LoadStatus::Idle, "failure cleared");
@@ -259,14 +266,17 @@ mod tests {
                 Some(PostId::from(7)),
                 true,
             ));
-            state.fail("boom".to_owned());
+            state.fail(WebError::validation("boom"));
             assert!(state.rows.get().is_empty(), "no stale page");
             assert_eq!(state.cursor.get(), None);
             assert!(
                 !state.has_more.get(),
                 "a failed timeline offers no Load more"
             );
-            assert_eq!(state.status.get(), LoadStatus::Failed("boom".to_owned()));
+            assert_eq!(
+                state.status.get(),
+                LoadStatus::Failed(WebError::validation("boom"))
+            );
         });
     }
 
@@ -274,13 +284,19 @@ mod tests {
     fn load_status_accessors_cover_each_arm() {
         assert!(!LoadStatus::Idle.is_in_flight());
         assert!(LoadStatus::InFlight.is_in_flight());
-        assert!(!LoadStatus::Failed("boom".into()).is_in_flight());
+        assert!(!LoadStatus::Failed(WebError::validation("boom")).is_in_flight());
+    }
 
+    // The payload is the typed `WebError`, not a pre-rendered string: the error KIND
+    // survives the round trip, so the render decides how to display it and nothing
+    // stringifies eagerly at the producer (#671 D3).
+    #[test]
+    fn into_failure_returns_the_typed_error() {
         assert_eq!(LoadStatus::Idle.into_failure(), None);
         assert_eq!(LoadStatus::InFlight.into_failure(), None);
         assert_eq!(
-            LoadStatus::Failed("boom".into()).into_failure(),
-            Some("boom".to_owned())
+            LoadStatus::Failed(WebError::validation("boom")).into_failure(),
+            Some(WebError::validation("boom")),
         );
     }
 }

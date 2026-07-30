@@ -40,7 +40,7 @@ where
                 state.rows.update(|rows| rows.extend(page.posts));
                 state.status.set(LoadStatus::Idle);
             }
-            Err(err) => state.status.set(LoadStatus::Failed(err.to_string())),
+            Err(err) => state.status.set(LoadStatus::Failed(err)),
         }
     });
 }

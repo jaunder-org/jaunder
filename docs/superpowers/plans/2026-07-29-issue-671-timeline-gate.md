@@ -353,7 +353,7 @@ git commit -m "refactor(timeline): host-compile the TimelineState signal bundle 
   `TimelineState::fail(&self, error: WebError)`. Render sites stringify with
   `{err.to_string()}` instead of `{err}`.
 
-- [ ] **Step 1: Update the tests first**
+- [x] **Step 1: Update the tests first**
 
 In `state.rs`'s tests, replace **every** `String` failure payload with
 `WebError::validation("boom")` — the two pre-existing `Failed("boom".into())`
@@ -378,15 +378,17 @@ Delete the old `load_status_accessors_cover_each_arm`'s `into_failure`
 assertions that compared against `Some("boom".to_owned())`; keep its
 `is_in_flight` assertions and update the `Failed` payload there too.
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 ```
 cargo nextest run -p web timeline::state
 ```
 
-Expected: FAIL — mismatched types, `String` vs `WebError`.
+Expected: FAIL — mismatched types, `String` vs `WebError`. _Observed: 6 ×
+`E0433: cannot find type WebError in this scope` — the tests named the typed
+payload before it existed._
 
-- [ ] **Step 3: Change the payload and the five call sites**
+- [x] **Step 3: Change the payload and the five call sites**
 
 `state.rs`: `Failed(WebError)`; `into_failure(self) -> Option<WebError>`;
 `fail(&self, error: WebError)` storing `LoadStatus::Failed(error)`. Add
@@ -404,7 +406,7 @@ are unchanged in shape but now yield `Option<WebError>`, so each
 (`posts/component.rs:1127`, `:1662`, `:1800`; `home/component.rs:75`;
 `cockpit/component.rs:89`).
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass** — _observed: 8 passed._
 
 ```
 cargo nextest run -p web timeline::state

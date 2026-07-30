@@ -44,7 +44,7 @@ pub fn HomePage() -> impl IntoView {
         if let Some(result) = initial_page.try_get().flatten() {
             match result {
                 Ok(page) => state.resolve(page),
-                Err(err) => state.fail(err.to_string()),
+                Err(err) => state.fail(err),
             }
         }
     });
@@ -72,7 +72,7 @@ pub fn HomePage() -> impl IntoView {
         <FeedDiscovery surface=FeedSurface::Site />
         {move || {
             if let Some(err) = read_error.get() {
-                return view! { <p class="error">{err}</p> }.into_any();
+                return view! { <p class="error">{err.to_string()}</p> }.into_any();
             }
             view! {
                 <div style="display:contents" inner_html=masthead.clone()></div>

@@ -1091,7 +1091,7 @@ pub fn UserTimelinePage() -> impl IntoView {
         if let Some(result) = initial_page.try_get().flatten() {
             match result {
                 Ok(page) => state.resolve(page),
-                Err(err) => state.fail(err.to_string()),
+                Err(err) => state.fail(err),
             }
             loaded.set(true);
         }
@@ -1131,7 +1131,7 @@ pub fn UserTimelinePage() -> impl IntoView {
         {move || { username.get().map(|username| view! { <SubscribeButton username=username /> }) }}
         {move || {
             if let Some(err) = read_error.get() {
-                return view! { <p class="error">{err}</p> }.into_any();
+                return view! { <p class="error">{err.to_string()}</p> }.into_any();
             }
             if !loaded.get() {
                 return view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any();
@@ -1632,7 +1632,7 @@ pub fn SiteTagPage() -> impl IntoView {
         if let Some(result) = initial_page.try_get().flatten() {
             match result {
                 Ok(page) => state.resolve(page),
-                Err(err) => state.fail(err.to_string()),
+                Err(err) => state.fail(err),
             }
             loaded.set(true);
         }
@@ -1666,7 +1666,7 @@ pub fn SiteTagPage() -> impl IntoView {
         <Topbar title=move || format!("#{}", read_tag()) sub="Posts on this instance" />
         {move || {
             if let Some(err) = read_error.get() {
-                return view! { <p class="error">{err}</p> }.into_any();
+                return view! { <p class="error">{err.to_string()}</p> }.into_any();
             }
             if !loaded.get() {
                 return view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any();
@@ -1753,7 +1753,7 @@ pub fn UserTagPage() -> impl IntoView {
         if let Some(result) = initial_page.try_get().flatten() {
             match result {
                 Ok(page) => state.resolve(page),
-                Err(err) => state.fail(err.to_string()),
+                Err(err) => state.fail(err),
             }
             loaded.set(true);
         }
@@ -1804,7 +1804,7 @@ pub fn UserTagPage() -> impl IntoView {
         />
         {move || {
             if let Some(err) = read_error.get() {
-                return view! { <p class="error">{err}</p> }.into_any();
+                return view! { <p class="error">{err.to_string()}</p> }.into_any();
             }
             if !loaded.get() {
                 return view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any();

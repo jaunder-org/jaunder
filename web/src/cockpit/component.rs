@@ -59,7 +59,7 @@ pub fn CockpitPage() -> impl IntoView {
                     state.resolve(page);
                 }
                 Ok(None) => bounce.set(true),
-                Err(err) => state.fail(err.to_string()),
+                Err(err) => state.fail(err),
             }
         }
     });
@@ -86,7 +86,7 @@ pub fn CockpitPage() -> impl IntoView {
                 return view! { <Redirect path="/login" /> }.into_any();
             }
             if let Some(err) = read_error.get() {
-                return view! { <p class="error">{err}</p> }.into_any();
+                return view! { <p class="error">{err.to_string()}</p> }.into_any();
             }
             match read_username() {
                 None => {
