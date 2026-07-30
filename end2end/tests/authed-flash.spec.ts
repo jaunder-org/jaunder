@@ -108,7 +108,7 @@ test("operator: admin chrome is seeded flash-free from the marker", async ({
   await login(page, "testoperator", "testpassword123");
 
   // With session() failing, the operator admin nav can only come from the marker.
-  await failServerFn(page, "session");
+  await failServerFn(page, "auth/session");
   await goto(page, "/");
 
   await expect(

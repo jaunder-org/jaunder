@@ -269,7 +269,7 @@ owner), while #124 (SSR `Resource` fetcher) and #138 (page-render SSR root) only
 arose under component SSR.
 
 With no component SSR (#487) and `server_resource` removed (#515), the **sole**
-server-fn invocation path is a browser `POST /api/{fn}` dispatched by
+server-fn invocation path is a browser `POST /api/{vertical}/{fn}` dispatched by
 `leptos_axum::handle_server_fns_with_context`. There, leptos_axum creates one
 **parentless root** `Owner`, runs `additional_context`
 (`provide_app_state_contexts`) and the server-fn body inside it, and holds that

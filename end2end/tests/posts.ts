@@ -12,7 +12,7 @@ import { withTimedAction } from "./actions";
 import { BASE_URL, click, goto, waitForSelector } from "./helpers";
 import { SEL } from "./selectors";
 
-/** Create a post via `POST /api/create_post`. Wraps the request in
+/** Create a post via `POST /api/posts/create`. Wraps the request in
  *  `withTimedAction` so it appears in the OTEL trace, asserts success with a
  *  contextful message, and returns the typed JSON. `publish` defaults to `true`;
  *  `slug` maps to the `slug_override` wire field; `tags` is sent only when
@@ -27,8 +27,8 @@ export async function createPostViaApi(
     slug?: string | null;
   },
 ): Promise<{ post_id: number; permalink: string }> {
-  const res = await withTimedAction(page, "api.create_post", () =>
-    page.request.post(`${BASE_URL}/api/create_post`, {
+  const res = await withTimedAction(page, "api.posts.create", () =>
+    page.request.post(`${BASE_URL}/api/posts/create`, {
       data: {
         args: {
           body: opts.body,
@@ -42,7 +42,7 @@ export async function createPostViaApi(
   );
   expect(
     res.ok(),
-    `create_post failed (${res.status()}): ${await res.text()}`,
+    `posts::create failed (${res.status()}): ${await res.text()}`,
   ).toBeTruthy();
   return (await res.json()) as { post_id: number; permalink: string };
 }

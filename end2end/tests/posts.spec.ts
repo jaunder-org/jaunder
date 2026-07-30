@@ -802,7 +802,7 @@ test("editing a post updates tag chips and tag listing pages", async ({
   // Open the edit page directly
   await goto(page, `/posts/${post_id}/edit`);
 
-  // Wait for pre-populated chips from get_post_preview to appear
+  // Wait for pre-populated chips from posts::get_preview to appear
   await waitForSelector(page, '.j-tag-chip-label:has-text("#xeditc")');
 
   // Remove the "xeditc" chip

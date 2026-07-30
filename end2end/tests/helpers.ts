@@ -94,7 +94,8 @@ export async function waitForSelector(
 // ---------------------------------------------------------------------------
 
 /**
- * Force a server-fn (`#[server(endpoint = "/name")]`, POSTed to `/api/name`) to fail,
+ * Force a server-fn (`#[server(endpoint = "/vertical/op")]`, POSTed to
+ * `/api/vertical/op`) to fail,
  * without touching the backend: Playwright fulfils the request in the browser with a 500,
  * so the client `Resource` resolves `Err` and the component's error branch renders.
  *

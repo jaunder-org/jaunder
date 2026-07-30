@@ -441,7 +441,7 @@ as warm-cache behavior.
 The three heavy timeline tests (`posts.spec.ts` `:305`/`:349`/`:410`) seed their
 paginated fixtures through the `test-support` binary (ADR-0046) — one in-process
 storage write per post — rather than a sequential loop of
-`POST /api/create_post` round-trips. That removes the setup cost `#155`
+`POST /api/posts/create` round-trips. That removes the setup cost `#155`
 mitigated with worker-contention timeout headroom (`workerContentionScale` in
 `end2end/tests/fixtures.ts`), so that headroom is now a candidate for reduction
 once `workers>1` is unblocked (`#173`). The before/after measurement is driven

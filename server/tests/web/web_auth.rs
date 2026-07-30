@@ -649,7 +649,7 @@ async fn logout_with_bearer_token_revokes_session(#[case] backend: Backend) {
         "one session should exist before logout"
     );
 
-    // POST to /api/logout with Bearer token instead of a cookie.
+    // POST to /api/auth/logout with Bearer token instead of a cookie.
     let (status, set_cookie, _body) = post_form_with_bearer(
         &state,
         <web::auth::Logout as ServerFn>::PATH,
@@ -709,7 +709,7 @@ async fn logout_without_session_still_clears_cookie(#[case] backend: Backend) {
 async fn debug_api_routes_exist(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    // Send a request with no body to /api/register — if route exists we get
+    // Send a request with no body to /api/registration/register — if route exists we get
     // something other than 404 (probably a 400/422 for missing fields).
     let (status, _, _) = post_form_with_secure_flag(
         &state,
@@ -722,7 +722,7 @@ async fn debug_api_routes_exist(#[case] backend: Backend) {
     assert_ne!(
         status,
         StatusCode::NOT_FOUND,
-        "/api/register route not registered (got 404)"
+        "/api/registration/register route not registered (got 404)"
     );
 }
 

@@ -103,7 +103,7 @@ test("backup destination round-trips and clears via omission", async ({
   await page.fill('input[name="destination_path"]', "/srv/jaunder/backups");
   await Promise.all([
     page.waitForResponse((r) =>
-      r.url().includes("/api/update_backup_settings"),
+      r.url().includes("/api/backup/update_settings"),
     ),
     saveButton.click(),
   ]);
@@ -119,7 +119,7 @@ test("backup destination round-trips and clears via omission", async ({
   await page.fill('input[name="destination_path"]', "");
   await Promise.all([
     page.waitForResponse((r) =>
-      r.url().includes("/api/update_backup_settings"),
+      r.url().includes("/api/backup/update_settings"),
     ),
     saveButton.click(),
   ]);

@@ -267,7 +267,7 @@ test("publishing and editing a post each trigger a WebSub hub ping", async ({
   await page.waitForTimeout(2_000);
   const beforeEdit = readPingLines().length;
 
-  const editRes = await page.request.post(`${BASE_URL}/api/update_post`, {
+  const editRes = await page.request.post(`${BASE_URL}/api/posts/update`, {
     data: {
       args: {
         post_id,
@@ -278,7 +278,7 @@ test("publishing and editing a post each trigger a WebSub hub ping", async ({
       },
     },
   });
-  expect(editRes.ok(), "update_post").toBeTruthy();
+  expect(editRes.ok(), "posts::update").toBeTruthy();
 
   const secondPing = await waitForPingMatching(beforeEdit, isUserFeed, 40_000);
   expect(secondPing.feed_url).toContain(`/~${username}/feed`);

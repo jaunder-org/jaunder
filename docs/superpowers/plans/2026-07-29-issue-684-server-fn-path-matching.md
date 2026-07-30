@@ -1082,8 +1082,9 @@ hard-fails a dirty tree, and Step 8 (commit) has not run yet, so at this point
 the tree is necessarily dirty. Bare `validate --no-e2e` — the AC29 form, with
 `clean-tree` green — is run **after** Step 8 lands, on the now-clean tree.
 
-- [ ] **Step 8: Commit**, then re-run bare
-      `devtool run -- cargo xtask validate --no-e2e`
+- [x] **Step 8: Commit** — `ddfe4e7a` — then re-ran bare
+      `devtool run -- cargo xtask validate --no-e2e` on the clean tree: exit 0,
+      `clean-tree` green, and `git status --porcelain` empty afterwards (AC29)
 
 AC29 names the bare form. Running it post-commit is the only point in the cycle
 where the tree is clean enough for `clean-tree` to pass.
@@ -1115,7 +1116,28 @@ machine-generated while this one is hand-edited.
 - Consumes: the endpoints as flipped by Task 7a. Read the actual values out of
   `web/src/<vertical>/api.rs` rather than deriving them by hand.
 
-- [ ] **Step 1: Update the 14 e2e edit points**
+**Outcome — the 14-site list was incomplete, and the e2e run is what proved
+it.** Both this plan and spec AC22 enumerated the e2e work by grepping for
+`/api/`. That pattern is too narrow: `end2end/tests/profile.spec.ts` matches
+responses with `response.url().includes("update_profile")` — a **bare fn ident,
+no `/api/` prefix** — in six `waitForResponse` predicates. The first `e2e-local`
+run after the wire moved failed exactly there: 4 specs, all
+`page.waitForResponse: Test timeout of 30000ms exceeded`, because
+`/api/profile/update` does not contain `update_profile`.
+
+The correct sweep is **every renamed ident as a bare word** across `end2end/`,
+not `/api/`-prefixed URLs. That found 6 functional predicates plus 9 stale
+labels/comments (a `withTimedAction` metric label, two assertion messages, six
+comments) — 15 further edit points beyond the 14 originally listed. Note
+`set_default_post_format` predicates keep working, because that ident is one of
+the 13 unchanged; only renamed ones broke.
+
+This is precisely the drift class **#712** was filed for, demonstrated: no gate
+ties these strings to the endpoints, so a red e2e matrix was the only detector —
+and it reported a 30-second timeout rather than naming the drift.
+
+- [x] **Step 1: Update the 14 e2e edit points** — plus the 15 found by the
+      bare-ident sweep above
 
 Per spec AC22. Direct literals: `media.spec.ts:13,39` (`/api/media/upload`),
 `feeds.spec.ts:263` (`/api/posts/update`), `backup.spec.ts:106,122`
@@ -1135,7 +1157,12 @@ matches a two-segment path. Editing it would be a no-op change, which D10
 forbids. (Spec AC22 counts it among the 11 `/api/…` lines; that count is of
 *occurrences\*, not required edits — 14 edit points, not 15.)
 
-- [ ] **Step 2: Update the URL docs and the 3 Rust prose mentions**
+- [x] **Step 2: Update the URL docs and the 3 Rust prose mentions** — 4 in
+      `web_auth.rs` (`:652`, `:712`, `:725`), plus `observability.md:326`,
+      `adr/0046:10`, `adr/0016:272`. Deliberately left: `observability.md:158`'s
+      `/api/current_user` (names a server fn that does not exist — stale prose,
+      out of scope per the spec) and `adr/0046:23`'s `/api/seed_posts` (a
+      _rejected_ alternative, so not a claim about today's tree).
 
 `docs/observability.md:326` (`POST /api/posts/create`), `docs/adr/0046:10,23`,
 `docs/adr/0016:272` (`POST /api/{fn}` → `POST /api/{vertical}/{fn}`), and
@@ -1145,7 +1172,8 @@ comments at `:645,694` plus the assert message
 reflow) — Task 4 deliberately left that one because rewriting it means
 restructuring the assertion. Identifier/URL only — no rewording.
 
-- [ ] **Step 3: Run the e2e suite**
+- [x] **Step 3: Run the e2e suite** — **111 passed (4.5m)**, exit 0. The first
+      attempt failed 4 specs and is what exposed the incomplete sweep above.
 
 Run: `devtool run -- cargo xtask e2e-local` Expected: PASS — the only detector
 of a missed e2e literal (**memory: local e2e runs here**). A 404 in a Playwright

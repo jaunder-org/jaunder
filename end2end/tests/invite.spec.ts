@@ -34,7 +34,7 @@ test("invite link registration completes end-to-end", async ({
   // registration all in one test.
   setTestBudget(45_000);
 
-  // Establish invite-only and a base URL so create_invite can build the link
+  // Establish invite-only and a base URL so invites::create can build the link
   // (`{base_url}/register?invite_code=<code>`); it errors without a base URL.
   seedConfigViaTool("site.registration_policy", "invite_only");
   seedConfigViaTool("site.base_url", "https://example.com");
