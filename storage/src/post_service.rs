@@ -554,7 +554,7 @@ pub async fn perform_post_creation(
 mod tests {
     use super::*;
     use crate::test_support::{backends, Backend, SeedUser};
-    use common::test_support::parse_slug;
+    use common::test_support::{parse_row_limit, parse_slug};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -1140,7 +1140,7 @@ mod tests {
 
         // No second post row committed — the user still has exactly one post.
         let posts = storage
-            .list_collection_by_user(user_id, None, 50)
+            .list_collection_by_user(user_id, None, parse_row_limit("50"))
             .await
             .unwrap();
         assert_eq!(posts.len(), 1);
@@ -1181,7 +1181,7 @@ mod tests {
         assert!(html.contains("Hello"), "benign content was lost: {html}");
 
         let posts = storage
-            .list_collection_by_user(user_id, None, 50)
+            .list_collection_by_user(user_id, None, parse_row_limit("50"))
             .await
             .unwrap();
         let stored = &posts[0].rendered_html;

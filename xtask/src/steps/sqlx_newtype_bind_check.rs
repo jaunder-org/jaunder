@@ -18,6 +18,18 @@
 //! the whole line matches an [`ALLOWLIST`] needle. `String::as_str` (e.g.
 //! `format.as_str()`) is a genuine owned-`String` slice, not a newtype strip, and
 //! is **not** policed.
+//!
+//! **The hoisted form is policed too (#696).** Assigning the conversion to a local and
+//! binding that — `let x = i64::from(y); … .bind(x)` — used to evade the scan entirely,
+//! because it only ever looked at the text *after* `.bind(`. `violations` now also
+//! tracks locals bound to a stripping conversion within the enclosing item, so the
+//! evasion closes. Scope resets at a column-0 `}`.
+//!
+//! **What it still cannot see: a strip laundered through a function parameter.** If the
+//! conversion happens in one function and the `.bind` in another, the binding function
+//! sees only an `i64` argument and there is nothing left to detect. That is **#716**,
+//! and it is a real limit of a line-based scan rather than an oversight — two live
+//! instances are recorded there.
 
 use std::path::Path;
 
@@ -40,17 +52,16 @@ struct Allowed {
 /// and its binds became `.bind(&input.rendered_html)`, so it is now policed like any
 /// newtype.)
 ///
-/// The `i64::from` pair is **not** a newtype strip at all: both arguments are `u32`
-/// (`limit` is a bare `u32`; `PageOffset`'s declared `inner` is `u32`), and sqlx
-/// implements no Postgres `Encode` for unsigned types, so the widening to `i64` is
-/// forced. #696 owns the storage fetch-limit types; when it lands, these two entries
-/// should go with it.
+/// **Nothing numeric is exempt.** #686 added two entries for forced `u32 → i64`
+/// widenings (`i64::from(limit)`, `i64::from(offset.value())`); #696 gave those values
+/// `i64`-backed newtypes with declared bounds, so the widenings — and their exemptions —
+/// are gone. The numeric half of this rule is now absolute, not absolute-with-footnotes.
 ///
 /// **A needle exempts every matching line under [`POLICED_ROOT`], not one site.** That
-/// is what makes it reflow-proof, and it is also the cost: `i64::from(limit)` would
-/// exempt a future *newtype*-typed local that happened to be named `limit`. Keep needles
-/// specific enough that they cannot plausibly collide, and prefer deleting an entry over
-/// broadening one.
+/// is what makes it reflow-proof, and it is also the cost: a needle like
+/// `i64::from(limit)` would exempt any future *newtype*-typed local that happened to be
+/// named `limit`. Keep needles specific enough that they cannot plausibly collide, and
+/// prefer deleting an entry over broadening one.
 const ALLOWLIST: &[Allowed] = &[
     Allowed {
         needle: "input.title.as_ref()",
@@ -63,16 +74,6 @@ const ALLOWLIST: &[Allowed] = &[
         // `summary` is `Option<PostSummary>`, so this is `Option::as_ref()` →
         // `Option<&PostSummary>` (a typed bind), NOT an `AsRef<str>` str-strip.
         reason: "Option<PostSummary>::as_ref() — a typed Option bind, not an AsRef<str> strip",
-    },
-    Allowed {
-        needle: "i64::from(limit)",
-        reason: "`limit` is a bare u32 — a forced u32→i64 widening (no Postgres \
-                 unsigned Encode), not a newtype strip; owned by #696",
-    },
-    Allowed {
-        needle: "i64::from(offset.value())",
-        reason: "`PageOffset`'s inner is u32 — a forced u32→i64 widening (no Postgres \
-                 unsigned Encode), not a newtype strip; owned by #696",
     },
 ];
 
@@ -99,15 +100,83 @@ fn strips_newtype_in_bind(line: &str) -> bool {
     region.contains(".as_ref()") || region.contains("&*") || region.contains("i64::from(")
 }
 
+/// The identifier a line binds a stripping conversion to, if any: the `x` in
+/// `let x = i64::from(y);`.
+///
+/// Deliberately narrow. It matches the **hoist** shape only — a `let` whose
+/// right-hand side is a conversion this gate already policies — because the point is to
+/// close the "assign then bind" evasion, not to track every local. `let x: i64 = …`,
+/// `as i64`, and `i64::try_from(…)` are **not** matched: the first two are not strips
+/// this gate defines, and the third is laundered across a function boundary in the one
+/// place it occurs, which no line scan can see (#716).
+fn hoisted_strip_binding(line: &str) -> Option<&str> {
+    let rest = line.trim_start().strip_prefix("let ")?;
+    let (name, value) = rest.split_once('=')?;
+    if !value.contains("i64::from(") {
+        return None;
+    }
+    // `let mut x` / `let x: T` both reduce to the identifier.
+    let name = name.trim().trim_start_matches("mut ").trim();
+    let name = name.split(':').next()?.trim();
+    (!name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_')).then_some(name)
+}
+
+/// Whether `line` binds `ident` — `.bind(ident)`, exactly, not merely containing it.
+///
+/// The closing paren matters: without it, `.bind(limit)` would match a hoisted
+/// `limit_i64` by prefix and flag an unrelated bind.
+fn binds_ident(line: &str, ident: &str) -> bool {
+    line.contains(&format!(".bind({ident})"))
+}
+
+/// Whether `line` begins a function item — the boundary at which locals go out of scope.
+///
+/// Scoping on braces alone is not enough, and the failure is a **false positive**, which
+/// is the expensive direction for a gate: methods inside an `impl` close at an indented
+/// `}`, so a hoist in one method would still be "in scope" at the next method's
+/// parameter bind. Every storage type is an `impl` block, so that is the common shape.
+fn starts_a_function(line: &str) -> bool {
+    let mut rest = line.trim_start();
+    loop {
+        let Some((word, tail)) = rest.split_once(' ') else {
+            return false;
+        };
+        match word {
+            "fn" => return true,
+            "pub" | "async" | "const" | "unsafe" | "extern" | "default" => rest = tail.trim_start(),
+            w if w.starts_with("pub(") => rest = tail.trim_start(),
+            _ => return false,
+        }
+    }
+}
+
 /// 1-based line numbers of every bind that strips a newtype and is not allowlisted.
+///
+/// Two passes in one walk: the direct form (a conversion inside the `.bind(` itself),
+/// and the **hoisted** form (a conversion assigned to a local earlier in the same
+/// function, then bound by name). Hoisted names are dropped at a top-level `}` so a
+/// strip in one function cannot taint an identically-named bind in the next.
+///
 /// Pure given the source, so it is unit-tested directly.
 fn violations(source: &str) -> Vec<usize> {
-    source
-        .lines()
-        .enumerate()
-        .filter(|(_, line)| strips_newtype_in_bind(line) && !is_allowed(line))
-        .map(|(i, _)| i + 1)
-        .collect()
+    let mut hoisted: Vec<&str> = Vec::new();
+    let mut out = Vec::new();
+
+    for (i, line) in source.lines().enumerate() {
+        // Locals do not outlive their function, so each `fn` starts a fresh scope. A
+        // column-0 `}` clears too, for a free item that ends without another following.
+        if starts_a_function(line) || line.starts_with('}') {
+            hoisted.clear();
+        }
+        if let Some(name) = hoisted_strip_binding(line) {
+            hoisted.push(name);
+        }
+        let hoisted_here = hoisted.iter().any(|name| binds_ident(line, name));
+        if (strips_newtype_in_bind(line) || hoisted_here) && !is_allowed(line) {
+            out.push(i + 1);
+        }
+    }
+    out
 }
 
 /// The failure detail for every offending bind across the scanned files, or `None`
@@ -122,7 +191,8 @@ pub fn problems(scanned: &[(String, String)]) -> Option<String> {
                 "{path}:{ln}: `{offending}` strips a newtype at a sqlx bind — the `StrNewtype` \
                  (#438), `IdNewtype` and `NumNewtype` (#686) derives all emit an `sqlx::Encode`, \
                  so bind the typed value directly (`.bind(x)` / `.bind(&x)`), not \
-                 `.as_ref()`/`&*`/`i64::from(…)`"
+                 `.as_ref()`/`&*`/`i64::from(…)`. This includes hoisting the conversion into \
+                 a local and binding that (#696) — move the type, don't move the strip."
             ));
         }
     }
@@ -130,9 +200,11 @@ pub fn problems(scanned: &[(String, String)]) -> Option<String> {
         return None;
     }
     lines.push(
-        "  recovery: bind the newtype directly. A genuinely non-newtype bind — an owned `String`, \
-         or a primitive widening sqlx forces (e.g. `u32` → `i64`, which has no Postgres `Encode`) \
-         — must be added to this gate's ALLOWLIST with a documented reason. Currently exempt:"
+        "  recovery: bind the newtype directly. If the value is genuinely not a newtype, prefer \
+         giving it one — a `u32` that has to be widened at every bind (sqlx has no Postgres \
+         `Encode` for unsigned types) is a type-design smell, and #696 removed the last two such \
+         exemptions rather than keeping them. Only add an ALLOWLIST entry, with a documented \
+         reason, when that is genuinely wrong. Currently exempt:"
             .to_string(),
     );
     for a in ALLOWLIST {
@@ -222,6 +294,74 @@ mod tests {
     }
 
     #[test]
+    fn hoisted_i64_from_bind_is_flagged() {
+        // The blind spot #696 found: hoisting the conversion into a local made the
+        // strip invisible, because the scan only ever looked after `.bind(`. Both the
+        // assignment and the bind are needed to flag — see the two tests below for the
+        // halves that must NOT flag on their own.
+        let src = "\
+    let limit_i64 = i64::from(limit);
+    sqlx::query(SQL)
+        .bind(limit_i64)
+";
+        assert_eq!(violations(src), vec![3]);
+    }
+
+    #[test]
+    fn hoisted_local_not_from_a_strip_is_clean() {
+        // A local that was never a newtype is an ordinary value; binding it is fine.
+        let src = "\
+    let count = row.count;
+        .bind(count)
+";
+        assert!(violations(src).is_empty());
+    }
+
+    #[test]
+    fn bind_of_an_unrelated_ident_is_clean() {
+        // No assignment in scope at all — the bind names a parameter or field.
+        let src = "        .bind(limit_i64)\n";
+        assert!(violations(src).is_empty());
+    }
+
+    #[test]
+    fn a_hoist_does_not_taint_a_later_method_in_the_same_impl() {
+        // The false-positive case that matters: methods close at an indented `}`, not a
+        // column-0 one, so scoping on top-level braces alone would let a hoist in one
+        // method flag a legitimate parameter bind in the next. Every storage type is an
+        // `impl` block, so this is the common shape, not an exotic one.
+        let src = "\
+impl Store {
+    async fn a(&self) {
+        let limit_i64 = i64::from(limit);
+        q.bind(limit_i64);
+    }
+
+    async fn b(&self, limit_i64: i64) {
+        q.bind(limit_i64);
+    }
+}
+";
+        assert_eq!(violations(src), vec![4]);
+    }
+
+    #[test]
+    fn a_hoist_does_not_taint_a_later_function() {
+        // Scope resets at a top-level `}`: a strip hoisted in one fn must not make an
+        // identically-named bind in the next fn a violation.
+        let src = "\
+fn a() {
+    let limit_i64 = i64::from(limit);
+    q.bind(limit_i64);
+}
+fn b(limit_i64: i64) {
+    q.bind(limit_i64);
+}
+";
+        assert_eq!(violations(src), vec![3]);
+    }
+
+    #[test]
     fn i64_from_outside_a_bind_is_ignored() {
         // The widening is only policed at a bind site; `i64::from` elsewhere (a format
         // argument, a comparison) is ordinary code.
@@ -230,14 +370,16 @@ mod tests {
     }
 
     #[test]
-    fn allowlisted_primitive_widenings_are_clean() {
-        // `limit`/`PageOffset` are `u32`, which sqlx cannot bind on Postgres, so the
-        // widening is forced rather than a newtype strip (#696 owns removing it).
+    fn numeric_widenings_are_no_longer_exempt() {
+        // #686 exempted these two as forced `u32 → i64` widenings. #696 gave `limit` and
+        // the offset `i64`-backed newtypes with declared bounds, so the widenings are
+        // gone and so are their entries — this asserts the exemption was actually
+        // removed, not merely that no site trips it today.
         let src = "\
     .bind(i64::from(limit))
     .bind(i64::from(offset.value()))
 ";
-        assert!(violations(src).is_empty());
+        assert_eq!(violations(src), vec![1, 2]);
     }
 
     #[test]

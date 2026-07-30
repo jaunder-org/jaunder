@@ -31,11 +31,13 @@ use {
 #[cfg(feature = "server")]
 fn page_from_rows(
     mut rows: Vec<PostRecord>,
-    page_size: u32,
+    page_size: PageSize,
     viewer_user_id: Option<UserId>,
 ) -> TimelinePage {
-    let has_more = rows.len() > page_size as usize;
-    rows.truncate(page_size as usize);
+    // The inverse of `PageSize::fetch_limit`: both halves of the has-more rule live on
+    // `PageSize`, so neither is spelled by hand here (#696).
+    let has_more = page_size.has_more(rows.len());
+    rows.truncate(page_size.page_len());
     let next_cursor = has_more.then(|| rows.last().map(to_post_cursor)).flatten();
     let posts = rows
         .into_iter()
@@ -71,16 +73,12 @@ pub async fn fetch_user_posts(
         .list_published_by_user(
             username,
             cursor.as_ref(),
-            page_size.value().saturating_add(1),
+            page_size.fetch_limit(),
             viewer,
             chrono::Utc::now(),
         )
         .await?;
-    Ok(page_from_rows(
-        rows,
-        page_size.value(),
-        viewer_user_id(viewer),
-    ))
+    Ok(page_from_rows(rows, page_size, viewer_user_id(viewer)))
 }
 
 /// The shared site-wide timeline query, used by both the `list_local_timeline`
@@ -103,16 +101,12 @@ pub async fn fetch_local_timeline(
     let rows = posts
         .list_published(
             cursor.as_ref(),
-            page_size.value().saturating_add(1),
+            page_size.fetch_limit(),
             viewer,
             chrono::Utc::now(),
         )
         .await?;
-    Ok(page_from_rows(
-        rows,
-        page_size.value(),
-        viewer_user_id(viewer),
-    ))
+    Ok(page_from_rows(rows, page_size, viewer_user_id(viewer)))
 }
 
 /// Lists published, non-deleted posts for a user using cursor pagination.
@@ -176,33 +170,20 @@ pub async fn list_home_feed(
         let cursor = parse_post_cursor(cursor_created_at.map(UtcInstant::value), cursor_post_id)?;
         let viewer = viewer_identity().await;
         let page_size = limit.unwrap_or_default();
-        let fetch_limit = page_size.value().saturating_add(1);
 
-        let mut rows = posts
+        let rows = posts
             .list_published_by_user(
                 &auth.username,
                 cursor.as_ref(),
-                fetch_limit,
+                page_size.fetch_limit(),
                 &viewer,
                 chrono::Utc::now(),
             )
             .await?;
 
-        let has_more = rows.len() > page_size.value() as usize;
-        rows.truncate(page_size.value() as usize);
-
-        let next_cursor = has_more.then(|| rows.last().map(to_post_cursor)).flatten();
-        let posts = rows
-            .into_iter()
-            .filter_map(|post| timeline_post_summary(post, Some(auth.user_id)))
-            .collect();
-
-        Ok(TimelinePage {
-            posts,
-            next_cursor_created_at: next_cursor.as_ref().map(|c| UtcInstant::from(c.created_at)),
-            next_cursor_post_id: next_cursor.as_ref().map(|c| c.post_id),
-            has_more,
-        })
+        // Was a hand-rolled copy of `page_from_rows` — the second place the has-more
+        // rule was spelled out, and the one that could drift from the shared helper.
+        Ok(page_from_rows(rows, page_size, Some(auth.user_id)))
     })
 }
 
@@ -229,17 +210,13 @@ pub async fn fetch_posts_by_tag(
             .list_posts_by_tag(
                 tag,
                 cursor.as_ref(),
-                page_size.value().saturating_add(1),
+                page_size.fetch_limit(),
                 viewer,
                 chrono::Utc::now(),
             )
             .await,
     )?;
-    Ok(page_from_rows(
-        rows,
-        page_size.value(),
-        viewer_user_id(viewer),
-    ))
+    Ok(page_from_rows(rows, page_size, viewer_user_id(viewer)))
 }
 
 /// The shared "posts by a user carrying a tag" query, used by both the
@@ -270,17 +247,13 @@ pub async fn fetch_user_posts_by_tag(
                 author.user_id,
                 tag,
                 cursor.as_ref(),
-                page_size.value().saturating_add(1),
+                page_size.fetch_limit(),
                 viewer,
                 chrono::Utc::now(),
             )
             .await,
     )?;
-    Ok(page_from_rows(
-        rows,
-        page_size.value(),
-        viewer_user_id(viewer),
-    ))
+    Ok(page_from_rows(rows, page_size, viewer_user_id(viewer)))
 }
 
 /// Lists published, non-deleted posts site-wide carrying `tag`.
@@ -340,12 +313,38 @@ mod tests {
     // Helper fns in this feature-gated test module aren't covered by clippy's
     // allow-{unwrap,expect}-in-tests, so allow the test-scaffolding panics.
     #![allow(clippy::unwrap_used, clippy::expect_used)]
-    use super::{fetch_posts_by_tag, fetch_user_posts_by_tag};
-    use common::ids::UserId;
+    use super::{
+        fetch_local_timeline, fetch_posts_by_tag, fetch_user_posts, fetch_user_posts_by_tag,
+    };
+    use common::ids::{PostId, UserId};
+    use common::pagination::PageSize;
     use common::tag::Tag;
-    use common::test_support::parse_username;
+    use common::test_support::{parse_slug, parse_username};
     use common::visibility::ViewerIdentity;
-    use storage::{ListByTagError, MockPostStorage, MockUserStorage, UserRecord};
+    use storage::{
+        ListByTagError, MockPostStorage, MockUserStorage, PostFormat, PostRecord, RenderedHtml,
+        UserRecord,
+    };
+
+    fn post(post_id: i64) -> PostRecord {
+        let now = chrono::Utc::now();
+        PostRecord {
+            post_id: PostId::from(post_id),
+            user_id: UserId::from(1),
+            author_username: parse_username("alice"),
+            title: None,
+            slug: parse_slug("hello-world"),
+            body: "body".into(),
+            format: PostFormat::Markdown,
+            rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
+            created_at: now,
+            updated_at: now,
+            published_at: Some(now),
+            deleted_at: None,
+            summary: None,
+            tags: vec![],
+        }
+    }
 
     fn user(user_id: UserId, username: &str) -> UserRecord {
         UserRecord {
@@ -359,6 +358,96 @@ mod tests {
             email_verified: false,
             is_operator: false,
         }
+    }
+
+    /// The has-more convention, end to end at a real call site (#696).
+    ///
+    /// Asserts both halves against the same `PageSize`: the limit handed to storage is
+    /// `fetch_limit()` (the page **plus the probing row**), and the page assembled from
+    /// the result reports `has_more` from that row's presence and truncates it away.
+    /// The limit assertion is what would catch a call site reverting to hand-rolled
+    /// arithmetic — the defect this issue exists to remove.
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn fetch_user_posts_over_fetches_by_one_and_reports_has_more() {
+        for (returned, expect_more) in [(5usize, false), (6usize, true)] {
+            let page_size = PageSize::clamped(5);
+            let mut posts = MockPostStorage::new();
+            posts
+                .expect_list_published_by_user()
+                .withf(move |_u, _c, limit, _v, _n| *limit == page_size.fetch_limit())
+                .returning(move |_u, _c, _l, _v, _n| {
+                    // `try_from(...).unwrap_or` rather than an `as` cast: total, and the
+                    // ids only have to be distinct.
+                    Ok((0..returned)
+                        .map(|i| post(i64::try_from(i).unwrap_or(0) + 1))
+                        .collect())
+                });
+
+            let page = fetch_user_posts(
+                &posts,
+                &ViewerIdentity::Anonymous,
+                &parse_username("alice"),
+                None,
+                None,
+                Some(page_size),
+            )
+            .await
+            .expect("listing succeeds");
+
+            assert_eq!(page.has_more, expect_more, "has_more for {returned} rows");
+            // The probing row never reaches the caller.
+            assert_eq!(page.posts.len(), returned.min(page_size.page_len()));
+        }
+    }
+
+    /// Every paginated fetcher over-fetches by one — not just the one that happened to
+    /// get a test.
+    ///
+    /// `fetch_posts_by_tag` shipped briefly with `exact_limit()` here, which caps the
+    /// query at exactly the page and so makes `has_more` permanently `false` — "load
+    /// more" silently dies on the site-wide tag feed. Nothing caught it: the test above
+    /// covers `fetch_user_posts` only, and the tag fetchers had just an
+    /// error-propagation test. Asserting the limit for **each** fetcher is what closes
+    /// that gap, and it is cheap because the assertion is the same one.
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn every_paginated_fetcher_asks_storage_for_the_probing_row() {
+        let page_size = PageSize::clamped(5);
+        let expected = page_size.fetch_limit();
+
+        // `fetch_local_timeline` — site-wide timeline.
+        let mut posts = MockPostStorage::new();
+        posts
+            .expect_list_published()
+            .withf(move |_c, limit, _v, _n| *limit == expected)
+            .returning(|_c, _l, _v, _n| Ok(vec![]));
+        fetch_local_timeline(
+            &posts,
+            &ViewerIdentity::Anonymous,
+            None,
+            None,
+            Some(page_size),
+        )
+        .await
+        .expect("local timeline succeeds");
+
+        // `fetch_posts_by_tag` — site-wide by-tag. This is the site that regressed.
+        let mut posts = MockPostStorage::new();
+        posts
+            .expect_list_posts_by_tag()
+            .withf(move |_t, _c, limit, _v, _n| *limit == expected)
+            .returning(|_t, _c, _l, _v, _n| Ok(vec![]));
+        fetch_posts_by_tag(
+            &posts,
+            &ViewerIdentity::Anonymous,
+            &"rust".parse::<Tag>().expect("valid tag"),
+            None,
+            None,
+            Some(page_size),
+        )
+        .await
+        .expect("by-tag succeeds");
     }
 
     // guard:no-backend — mock store

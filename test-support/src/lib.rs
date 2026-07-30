@@ -189,7 +189,7 @@ mod seed_tests {
             .list_published_by_user(
                 &user.username,
                 None,
-                10,
+                common::test_support::parse_row_limit("10"),
                 &common::visibility::ViewerIdentity::Anonymous,
                 chrono::Utc::now(),
             )

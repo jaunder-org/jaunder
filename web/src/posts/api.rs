@@ -458,7 +458,7 @@ pub async fn list_drafts(
             .list_drafts_by_user(
                 auth.user_id,
                 parsed_cursor.as_ref(),
-                page_size.value(),
+                page_size.exact_limit(),
                 chrono::Utc::now(),
             )
             .await?;

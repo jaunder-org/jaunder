@@ -153,14 +153,17 @@ pub async fn collection_get(
         _ => None,
     };
 
-    // Fetch one extra row to detect whether a next page exists.
+    // `fetch_limit` over-fetches one row and `has_more` reads that row back — the two
+    // halves of the rule, both from `PageSize` so neither is spelled here (#696). This
+    // was a third hand-rolled copy of the convention, in a crate the audit for #696 did
+    // not sweep; it also dropped two `usize::try_from(...).unwrap_or(usize::MAX)` casts.
     let mut records = posts
-        .list_collection_by_user(auth_user.user_id, cursor.as_ref(), limit.value() + 1)
+        .list_collection_by_user(auth_user.user_id, cursor.as_ref(), limit.fetch_limit())
         .await?;
 
-    let has_more = usize::try_from(limit.value()).unwrap_or(usize::MAX) < records.len();
+    let has_more = limit.has_more(records.len());
     if has_more {
-        records.truncate(usize::try_from(limit.value()).unwrap_or(usize::MAX));
+        records.truncate(limit.page_len());
     }
 
     let base = required_base_url(site_config.as_ref()).await?;

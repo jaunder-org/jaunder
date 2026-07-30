@@ -7,6 +7,7 @@ use thiserror::Error;
 
 use common::feed::FeedPath;
 use common::ids::{AudienceId, ChannelId, PostId, RevisionId, TagId, UserId};
+use common::pagination::RowLimit;
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
@@ -470,7 +471,12 @@ pub async fn find_draft_by_permalink_for_user(
     // while still being large enough for almost any user's draft list.
     for _ in 0..200 {
         let drafts = posts
-            .list_drafts_by_user(user_id, cursor.as_ref(), 50, chrono::Utc::now())
+            .list_drafts_by_user(
+                user_id,
+                cursor.as_ref(),
+                RowLimit::at_most(50),
+                chrono::Utc::now(),
+            )
             .await?;
         if drafts.is_empty() {
             return Ok(None);
@@ -598,7 +604,7 @@ pub trait PostStorage: Send + Sync {
         &self,
         username: &Username,
         cursor: Option<&'a PostCursor>,
-        limit: u32,
+        limit: RowLimit,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
     ) -> sqlx::Result<Vec<PostRecord>>;
@@ -612,7 +618,7 @@ pub trait PostStorage: Send + Sync {
     async fn list_published<'a>(
         &self,
         cursor: Option<&'a PostCursor>,
-        limit: u32,
+        limit: RowLimit,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
     ) -> sqlx::Result<Vec<PostRecord>>;
@@ -629,7 +635,7 @@ pub trait PostStorage: Send + Sync {
         &self,
         user_id: UserId,
         cursor: Option<&'a PostCursor>,
-        limit: u32,
+        limit: RowLimit,
         now: DateTime<Utc>,
     ) -> sqlx::Result<Vec<PostRecord>>;
 
@@ -641,7 +647,7 @@ pub trait PostStorage: Send + Sync {
         &self,
         user_id: UserId,
         cursor: Option<&'a CollectionCursor>,
-        limit: u32,
+        limit: RowLimit,
     ) -> sqlx::Result<Vec<PostRecord>>;
 
     /// Associates a post with a tag. If the tag doesn't exist, it is created.
@@ -663,7 +669,7 @@ pub trait PostStorage: Send + Sync {
         &self,
         tag_slug: &Tag,
         cursor: Option<&'a PostCursor>,
-        limit: u32,
+        limit: RowLimit,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
     ) -> Result<Vec<PostRecord>, ListByTagError>;
@@ -679,7 +685,7 @@ pub trait PostStorage: Send + Sync {
         user_id: UserId,
         tag_slug: &Tag,
         cursor: Option<&'a PostCursor>,
-        limit: u32,
+        limit: RowLimit,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
     ) -> Result<Vec<PostRecord>, ListByTagError>;
@@ -691,7 +697,7 @@ pub trait PostStorage: Send + Sync {
     async fn list_tags<'a>(
         &self,
         prefix: Option<&'a str>,
-        limit: u32,
+        limit: RowLimit,
     ) -> sqlx::Result<Vec<TagRecord>>;
 
     /// Lists published posts matching `surface`, applying the
@@ -843,6 +849,9 @@ where
     // `Option<&PostTitle>` bound above.
     for<'q> Option<&'q PostSummary>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<i64>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    // `RowLimit` binds as itself via the ADR-0071 sqlx bridge (delegates to `i64`) —
+    // every listing's `LIMIT` placeholder (#696).
+    for<'q> RowLimit: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<DateTime<Utc>>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
@@ -1050,7 +1059,7 @@ where
         &self,
         username: &Username,
         cursor: Option<&'a PostCursor>,
-        limit: u32,
+        limit: RowLimit,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
     ) -> sqlx::Result<Vec<PostRecord>> {
@@ -1083,7 +1092,7 @@ where
                 .bind(now);
             binds
                 .bind_onto(query)
-                .bind(i64::from(limit))
+                .bind(limit)
                 .fetch_all(&self.pool)
                 .await?
         } else {
@@ -1107,7 +1116,7 @@ where
             let query = sqlx::query_as::<_, PostRow>(&sql).bind(username).bind(now);
             binds
                 .bind_onto(query)
-                .bind(i64::from(limit))
+                .bind(limit)
                 .fetch_all(&self.pool)
                 .await?
         };
@@ -1122,7 +1131,7 @@ where
     async fn list_published<'a>(
         &self,
         cursor: Option<&'a PostCursor>,
-        limit: u32,
+        limit: RowLimit,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
     ) -> sqlx::Result<Vec<PostRecord>> {
@@ -1153,7 +1162,7 @@ where
                 .bind(now);
             binds
                 .bind_onto(query)
-                .bind(i64::from(limit))
+                .bind(limit)
                 .fetch_all(&self.pool)
                 .await?
         } else {
@@ -1176,7 +1185,7 @@ where
             let query = sqlx::query_as::<_, PostRow>(&sql).bind(now);
             binds
                 .bind_onto(query)
-                .bind(i64::from(limit))
+                .bind(limit)
                 .fetch_all(&self.pool)
                 .await?
         };
@@ -1192,7 +1201,7 @@ where
         &self,
         user_id: UserId,
         cursor: Option<&'a PostCursor>,
-        limit: u32,
+        limit: RowLimit,
         now: DateTime<Utc>,
     ) -> sqlx::Result<Vec<PostRecord>> {
         let tags = DB::TAGS_SUBQUERY;
@@ -1218,7 +1227,7 @@ where
                 .bind(cursor.created_at)
                 .bind(cursor.post_id)
                 .bind(now)
-                .bind(i64::from(limit))
+                .bind(limit)
                 .fetch_all(&self.pool)
                 .await?
         } else {
@@ -1239,7 +1248,7 @@ where
             sqlx::query_as::<_, PostRow>(&sql)
                 .bind(user_id)
                 .bind(now)
-                .bind(i64::from(limit))
+                .bind(limit)
                 .fetch_all(&self.pool)
                 .await?
         };
@@ -1255,7 +1264,7 @@ where
         &self,
         user_id: UserId,
         cursor: Option<&'a CollectionCursor>,
-        limit: u32,
+        limit: RowLimit,
     ) -> sqlx::Result<Vec<PostRecord>> {
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
@@ -1275,7 +1284,7 @@ where
                 .bind(user_id)
                 .bind(cursor.updated_at)
                 .bind(cursor.post_id)
-                .bind(i64::from(limit))
+                .bind(limit)
                 .fetch_all(&self.pool)
                 .await?
         } else {
@@ -1292,7 +1301,7 @@ where
             );
             sqlx::query_as::<_, PostRow>(&sql)
                 .bind(user_id)
-                .bind(i64::from(limit))
+                .bind(limit)
                 .fetch_all(&self.pool)
                 .await?
         };
@@ -1361,7 +1370,7 @@ where
         &self,
         tag_slug: &Tag,
         cursor: Option<&'a PostCursor>,
-        limit: u32,
+        limit: RowLimit,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
     ) -> Result<Vec<PostRecord>, ListByTagError> {
@@ -1406,7 +1415,7 @@ where
                 .bind(now);
             binds
                 .bind_onto(query)
-                .bind(i64::from(limit))
+                .bind(limit)
                 .fetch_all(&self.pool)
                 .await?
         } else {
@@ -1432,7 +1441,7 @@ where
             let query = sqlx::query_as::<_, PostRow>(&sql).bind(tag_slug).bind(now);
             binds
                 .bind_onto(query)
-                .bind(i64::from(limit))
+                .bind(limit)
                 .fetch_all(&self.pool)
                 .await?
         };
@@ -1453,7 +1462,7 @@ where
         user_id: UserId,
         tag_slug: &Tag,
         cursor: Option<&'a PostCursor>,
-        limit: u32,
+        limit: RowLimit,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
     ) -> Result<Vec<PostRecord>, ListByTagError> {
@@ -1500,7 +1509,7 @@ where
                 .bind(now);
             binds
                 .bind_onto(query)
-                .bind(i64::from(limit))
+                .bind(limit)
                 .fetch_all(&self.pool)
                 .await?
         } else {
@@ -1530,7 +1539,7 @@ where
                 .bind(now);
             binds
                 .bind_onto(query)
-                .bind(i64::from(limit))
+                .bind(limit)
                 .fetch_all(&self.pool)
                 .await?
         };
@@ -1549,14 +1558,13 @@ where
     async fn list_tags<'a>(
         &self,
         prefix: Option<&'a str>,
-        limit: u32,
+        limit: RowLimit,
     ) -> sqlx::Result<Vec<TagRecord>> {
         let normalized = prefix
             .map(str::trim)
             .filter(|p| !p.is_empty())
             .map(str::to_ascii_lowercase);
         let pattern = normalized.as_deref().map(|p| format!("{p}%"));
-        let limit_i64 = i64::from(limit);
 
         let rows = match pattern {
             Some(ref like) => {
@@ -1567,7 +1575,7 @@ where
                      LIMIT $2",
                 )
                 .bind(like.as_str())
-                .bind(limit_i64)
+                .bind(limit)
                 .fetch_all(&self.pool)
                 .await?
             }
@@ -1577,7 +1585,7 @@ where
                      ORDER BY tag_slug
                      LIMIT $1",
                 )
-                .bind(limit_i64)
+                .bind(limit)
                 .fetch_all(&self.pool)
                 .await?
             }
@@ -2262,7 +2270,8 @@ mod tests {
     use super::*;
     use crate::test_support::{backends, Backend, CloseablePool, SeedRawPost, SeedUser};
     use common::test_support::{
-        parse_post_summary, parse_slug, parse_tag, parse_tag_label, parse_username, permalink_date,
+        parse_post_summary, parse_row_limit, parse_slug, parse_tag, parse_tag_label,
+        parse_username, permalink_date,
     };
     use rstest::*;
     use rstest_reuse::*;
@@ -2567,7 +2576,12 @@ mod tests {
         let result = env
             .state
             .posts
-            .list_published(None, 10, &ViewerIdentity::Anonymous, Utc::now())
+            .list_published(
+                None,
+                parse_row_limit("10"),
+                &ViewerIdentity::Anonymous,
+                Utc::now(),
+            )
             .await;
         assert!(result.is_err());
     }
@@ -2649,7 +2663,7 @@ mod tests {
         let results = env
             .state
             .posts
-            .list_collection_by_user(uid, None, 10)
+            .list_collection_by_user(uid, None, parse_row_limit("10"))
             .await
             .unwrap();
 
@@ -3065,7 +3079,7 @@ mod tests {
         // which is author-scoped and so needs no viewer) for its permalink parts.
         crate::test_support::seed_posts(&env.state, user_id, 3, false).await;
         let drafts = posts
-            .list_drafts_by_user(user_id, None, 50, Utc::now())
+            .list_drafts_by_user(user_id, None, parse_row_limit("50"), Utc::now())
             .await
             .unwrap();
         let record = drafts.first().expect("seeded draft is listed");
