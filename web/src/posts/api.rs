@@ -171,7 +171,7 @@ pub async fn create(args: CreateArgs) -> WebResult<CreateResult> {
         summary,
         audience,
     } = args;
-    boundary!("create", {
+    boundary!({
         let auth = require_auth().await?;
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
@@ -244,7 +244,7 @@ pub async fn create(args: CreateArgs) -> WebResult<CreateResult> {
 #[server(endpoint = "/posts/get")]
 #[tracing::instrument(name = "web.posts.get")]
 pub async fn get(username: Username, date: PermalinkDate, slug: Slug) -> WebResult<PostResponse> {
-    boundary!("get", {
+    boundary!({
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
         let viewer = viewer_identity().await;
@@ -281,7 +281,7 @@ pub async fn get(username: Username, date: PermalinkDate, slug: Slug) -> WebResu
 #[server(endpoint = "/posts/get_preview")]
 #[tracing::instrument(name = "web.posts.get_preview")]
 pub async fn get_preview(post_id: PostId) -> WebResult<PostResponse> {
-    boundary!("get_preview", {
+    boundary!({
         let auth = require_auth()
             .await
             .map_err(|e| private_post_not_found_error(&e))?;
@@ -318,7 +318,7 @@ pub async fn update(args: UpdateArgs) -> WebResult<UpdateResult> {
         summary,
         audience,
     } = args;
-    boundary!("update", {
+    boundary!({
         let auth = require_auth().await?;
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
@@ -401,7 +401,7 @@ pub async fn update(args: UpdateArgs) -> WebResult<UpdateResult> {
 #[server(endpoint = "/posts/get_default_audience_selection")]
 #[tracing::instrument(name = "web.posts.get_default_audience_selection")]
 pub async fn get_default_audience_selection() -> WebResult<AudienceSelection> {
-    boundary!("get_default_audience_selection", {
+    boundary!({
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
         require_auth().await?;
         let default = site_config.get_default_audience().await?;
@@ -416,7 +416,7 @@ pub async fn get_default_audience_selection() -> WebResult<AudienceSelection> {
 #[server(endpoint = "/posts/get_audience_selection")]
 #[tracing::instrument(name = "web.posts.get_audience_selection")]
 pub async fn get_audience_selection(post_id: PostId) -> WebResult<AudienceSelection> {
-    boundary!("get_audience_selection", {
+    boundary!({
         let posts = expect_context::<Arc<dyn PostStorage>>();
         let auth = require_auth()
             .await
@@ -443,7 +443,7 @@ pub async fn list_drafts(
     cursor_post_id: Option<PostId>,
     limit: Option<PageSize>,
 ) -> WebResult<Vec<DraftSummary>> {
-    boundary!("list_drafts", {
+    boundary!({
         let auth = require_auth().await?;
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
@@ -487,7 +487,7 @@ pub async fn list_drafts(
 #[server(endpoint = "/posts/publish")]
 #[tracing::instrument(name = "web.posts.publish")]
 pub async fn publish(post_id: PostId) -> WebResult<PublishResult> {
-    boundary!("publish", {
+    boundary!({
         let auth = require_auth().await?;
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
@@ -546,7 +546,7 @@ pub async fn publish(post_id: PostId) -> WebResult<PublishResult> {
 #[server(endpoint = "/posts/delete")]
 #[tracing::instrument(name = "web.posts.delete")]
 pub async fn delete(post_id: PostId) -> WebResult<()> {
-    boundary!("delete", {
+    boundary!({
         let auth = require_auth().await?;
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
@@ -580,7 +580,7 @@ pub async fn delete(post_id: PostId) -> WebResult<()> {
 #[server(endpoint = "/posts/unpublish")]
 #[tracing::instrument(name = "web.posts.unpublish")]
 pub async fn unpublish(post_id: PostId) -> WebResult<()> {
-    boundary!("unpublish", {
+    boundary!({
         let auth = require_auth().await?;
         let posts = expect_context::<Arc<dyn PostStorage>>();
 

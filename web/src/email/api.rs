@@ -26,7 +26,7 @@ use leptos::prelude::*;
 #[server(endpoint = "/email/request_verification")]
 #[tracing::instrument(name = "web.email.request_verification", skip_all)]
 pub async fn request_verification(email: Email) -> WebResult<()> {
-    boundary!("request_verification", {
+    boundary!({
         // `email` is already validated/normalized: it arrives typed as `Email`, so the
         // arg `Deserialize` ran its `FromStr`. Legitimate clients pre-validate the form
         // field (ADR-0065), so an invalid value only reaches here from a non-browser caller.
@@ -71,7 +71,7 @@ pub async fn request_verification(email: Email) -> WebResult<()> {
 #[server(endpoint = "/email/verify")]
 #[tracing::instrument(name = "web.email.verify", skip_all)]
 pub async fn verify(token: RawToken) -> WebResult<()> {
-    boundary!("verify", {
+    boundary!({
         let email_verifications = expect_context::<Arc<dyn EmailVerificationStorage>>();
         let users = expect_context::<Arc<dyn UserStorage>>();
 

@@ -52,7 +52,7 @@ pub struct SubscriberSummary {
 #[server(endpoint = "/audiences/create")]
 #[tracing::instrument(name = "web.audiences.create", skip_all)]
 pub async fn create(name: AudienceName) -> WebResult<AudienceId> {
-    boundary!("create", {
+    boundary!({
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
         // `name` arrives already validated (typed wire arg, client-pre-validated via the
@@ -67,7 +67,7 @@ pub async fn create(name: AudienceName) -> WebResult<AudienceId> {
 #[server(endpoint = "/audiences/rename")]
 #[tracing::instrument(name = "web.audiences.rename", skip(name))]
 pub async fn rename(audience_id: AudienceId, name: AudienceName) -> WebResult<()> {
-    boundary!("rename", {
+    boundary!({
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
         // `name` arrives already validated (see `create`).
@@ -82,7 +82,7 @@ pub async fn rename(audience_id: AudienceId, name: AudienceName) -> WebResult<()
 #[server(endpoint = "/audiences/delete")]
 #[tracing::instrument(name = "web.audiences.delete")]
 pub async fn delete(audience_id: AudienceId) -> WebResult<()> {
-    boundary!("delete", {
+    boundary!({
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
         audiences.delete_audience(auth.user_id, audience_id).await?;
@@ -94,7 +94,7 @@ pub async fn delete(audience_id: AudienceId) -> WebResult<()> {
 #[server(endpoint = "/audiences/list_mine")]
 #[tracing::instrument(name = "web.audiences.list_mine")]
 pub async fn list_mine() -> WebResult<Vec<Summary>> {
-    boundary!("list_mine", {
+    boundary!({
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
         let rows = audiences.list_audiences(auth.user_id).await?;
@@ -113,7 +113,7 @@ pub async fn list_mine() -> WebResult<Vec<Summary>> {
 #[server(endpoint = "/audiences/list_my_subscribers")]
 #[tracing::instrument(name = "web.audiences.list_my_subscribers")]
 pub async fn list_my_subscribers() -> WebResult<Vec<SubscriberSummary>> {
-    boundary!("list_my_subscribers", {
+    boundary!({
         let subscriptions = expect_context::<Arc<dyn SubscriptionStorage>>();
         let users = expect_context::<Arc<dyn UserStorage>>();
         let auth = require_auth().await?;
@@ -152,7 +152,7 @@ pub async fn add_subscriber(
     audience_id: AudienceId,
     subscription_id: SubscriptionId,
 ) -> WebResult<()> {
-    boundary!("add_subscriber", {
+    boundary!({
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
         audiences
@@ -170,7 +170,7 @@ pub async fn remove_subscriber(
     audience_id: AudienceId,
     subscription_id: SubscriptionId,
 ) -> WebResult<()> {
-    boundary!("remove_subscriber", {
+    boundary!({
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
         audiences
@@ -185,7 +185,7 @@ pub async fn remove_subscriber(
 #[server(endpoint = "/audiences/list_members")]
 #[tracing::instrument(name = "web.audiences.list_members")]
 pub async fn list_members(audience_id: AudienceId) -> WebResult<Vec<SubscriptionId>> {
-    boundary!("list_members", {
+    boundary!({
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
         let members = audiences.list_members(auth.user_id, audience_id).await?;

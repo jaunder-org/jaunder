@@ -9,12 +9,17 @@ pub use common::username;
 /// Wraps a `#[server]` function body in [`error::server_boundary`]: runs the
 /// async block, and on an `InternalError` logs the structured failure (kind,
 /// class, cause chain) and maps it to the public `WebError` so operator detail
-/// never reaches the client. `$name` is the server-fn label used in that log and
-/// in the error metric. Every server function routes its body through this.
+/// never reaches the client. Every server function routes its body through this.
+///
+/// It takes no label. Which fn failed is carried by the enclosing ADR-0011
+/// `#[tracing::instrument]` span, which both sinks stamp onto the event — see
+/// [`host::error::InternalError::emit_boundary_failure`]. The former label was a
+/// hand-written duplicate of that span name, guarded by nothing, and was removed
+/// in #714.
 #[macro_export]
 macro_rules! boundary {
-    ($name:expr, $body:block) => {
-        $crate::error::server_boundary($name, async move $body).await
+    ($body:block) => {
+        $crate::error::server_boundary(async move $body).await
     };
 }
 

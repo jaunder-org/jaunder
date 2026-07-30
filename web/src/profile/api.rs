@@ -41,7 +41,7 @@ pub struct Data {
 #[server(endpoint = "/profile/get")]
 #[tracing::instrument(name = "web.profile.get")]
 pub async fn get() -> WebResult<Data> {
-    boundary!("get", {
+    boundary!({
         let auth = require_auth().await?;
         let users = expect_context::<Arc<dyn UserStorage>>();
         let user = users
@@ -67,7 +67,7 @@ pub async fn get() -> WebResult<Data> {
 #[server(endpoint = "/profile/update")]
 #[tracing::instrument(name = "web.profile.update", skip_all)]
 pub async fn update(display_name: Option<DisplayName>, bio: Option<Bio>) -> WebResult<()> {
-    boundary!("update", {
+    boundary!({
         let auth = require_auth().await?;
         let users = expect_context::<Arc<dyn UserStorage>>();
         users
@@ -87,7 +87,7 @@ pub async fn update(display_name: Option<DisplayName>, bio: Option<Bio>) -> WebR
 #[server(endpoint = "/profile/get_default_post_format")]
 #[tracing::instrument(name = "web.profile.get_default_post_format")]
 pub async fn get_default_post_format() -> WebResult<PostFormat> {
-    boundary!("get_default_post_format", {
+    boundary!({
         let auth = require_auth().await?;
         let config = expect_context::<Arc<dyn UserConfigStorage>>();
         let format = storage_get_default_post_format(config.as_ref(), auth.user_id).await?;
@@ -99,7 +99,7 @@ pub async fn get_default_post_format() -> WebResult<PostFormat> {
 #[server(endpoint = "/profile/set_default_post_format")]
 #[tracing::instrument(name = "web.profile.set_default_post_format")]
 pub async fn set_default_post_format(format: PostFormat) -> WebResult<()> {
-    boundary!("set_default_post_format", {
+    boundary!({
         let auth = require_auth().await?;
         let config = expect_context::<Arc<dyn UserConfigStorage>>();
         storage_set_default_post_format(config.as_ref(), auth.user_id, format).await?;

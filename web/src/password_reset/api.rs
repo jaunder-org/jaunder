@@ -24,7 +24,7 @@ use leptos::prelude::*;
 #[server(endpoint = "/password_reset/request")]
 #[tracing::instrument(name = "web.password_reset.request")]
 pub async fn request(username: Username) -> WebResult<()> {
-    boundary!("request", {
+    boundary!({
         let users = expect_context::<Arc<dyn UserStorage>>();
         let password_resets = expect_context::<Arc<dyn PasswordResetStorage>>();
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
@@ -87,7 +87,7 @@ pub async fn request(username: Username) -> WebResult<()> {
 #[server(endpoint = "/password_reset/confirm")]
 #[tracing::instrument(name = "web.password_reset.confirm", skip_all)]
 pub async fn confirm(token: RawToken, new_password: ProfferedPassword) -> WebResult<()> {
-    boundary!("confirm", {
+    boundary!({
         let atomic = expect_context::<Arc<dyn AtomicOps>>();
 
         // `new_password` is the inbound-secret twin (ADR-0063); convert into the

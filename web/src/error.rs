@@ -113,7 +113,6 @@ pub(crate) fn project(kind: ErrorKind, public_message: &str) -> WebError {
 /// Returns `Err(WebError)` if the wrapped future returns an `InternalError`.
 #[cfg(feature = "server")]
 pub async fn server_boundary<T>(
-    server_fn: &'static str,
     future: impl std::future::Future<Output = InternalResult<T>>,
 ) -> WebResult<T> {
     match future.await {
@@ -121,7 +120,7 @@ pub async fn server_boundary<T>(
         Err(error) => {
             // The carrier owns its own observability (structured log + metric);
             // `web` only performs the wire projection.
-            error.emit_boundary_failure(server_fn);
+            error.emit_boundary_failure();
             Err(project(error.kind(), error.public_message()))
         }
     }
@@ -247,7 +246,7 @@ mod tests {
     #[cfg(feature = "server")]
     #[tokio::test]
     async fn server_boundary_logs_and_returns_public_error() {
-        let result: Result<(), WebError> = server_boundary("test_fn", async {
+        let result: Result<(), WebError> = server_boundary(async {
             Err(InternalError::storage(OuterError {
                 source: SourceError,
             }))
@@ -302,7 +301,7 @@ mod tests {
             .finish();
         let _guard = tracing::subscriber::set_default(subscriber);
 
-        let result = server_boundary("test_fn", async {
+        let result = server_boundary(async {
             Err::<(), _>(InternalError::server(OuterError {
                 source: SourceError,
             }))
@@ -349,7 +348,7 @@ mod tests {
     #[cfg(feature = "server")]
     #[tokio::test]
     async fn server_boundary_passes_through_ok_value() {
-        let result: WebResult<u32> = server_boundary("test_fn", async { Ok(42) }).await;
+        let result: WebResult<u32> = server_boundary(async { Ok(42) }).await;
         assert_eq!(result, Ok(42));
     }
 
@@ -454,24 +453,22 @@ mod tests {
     #[tokio::test]
     async fn server_boundary_err_path_projects_the_same_wire_error() {
         let result: WebResult<()> =
-            server_boundary("test_fn", async { Err(InternalError::not_found("Post")) }).await;
+            server_boundary(async { Err(InternalError::not_found("Post")) }).await;
         assert_eq!(result, Err(WebError::not_found("Post")));
     }
 
     #[cfg(feature = "server")]
     #[tokio::test]
     async fn server_boundary_logs_client_at_debug_and_returns_public() {
-        let result: WebResult<()> = server_boundary("test_fn", async {
-            Err(InternalError::validation("bad input"))
-        })
-        .await;
+        let result: WebResult<()> =
+            server_boundary(async { Err(InternalError::validation("bad input")) }).await;
         assert_eq!(result, Err(WebError::validation("bad input")));
     }
 
     #[cfg(feature = "server")]
     #[tokio::test]
     async fn server_boundary_logs_external_at_warn_and_returns_public() {
-        let result: WebResult<()> = server_boundary("test_fn", async {
+        let result: WebResult<()> = server_boundary(async {
             Err(InternalError::external(OuterError {
                 source: SourceError,
             }))
@@ -528,7 +525,7 @@ mod tests {
         // Stands in for a `#[server]` fn: same attribute, same boundary call.
         #[tracing::instrument(name = "web.example.do_thing")]
         async fn do_thing() -> WebResult<()> {
-            server_boundary("do_thing", async {
+            server_boundary(async {
                 Err(InternalError::server(OuterError {
                     source: SourceError,
                 }))

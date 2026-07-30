@@ -14,7 +14,7 @@ use {
 #[server(endpoint = "/site/get_identity")]
 #[tracing::instrument(name = "web.site.get_identity")]
 pub async fn get_identity() -> WebResult<SiteIdentity> {
-    boundary!("get_identity", {
+    boundary!({
         require_operator().await?;
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
         site_config
@@ -27,7 +27,7 @@ pub async fn get_identity() -> WebResult<SiteIdentity> {
 #[server(endpoint = "/site/update_identity")]
 #[tracing::instrument(name = "web.site.update_identity")]
 pub async fn update_identity(title: SiteTitle, base_url: Option<AbsoluteUrl>) -> WebResult<()> {
-    boundary!("update_identity", {
+    boundary!({
         require_operator().await?;
 
         // `base_url` is a typed `Option<AbsoluteUrl>` wire arg (ADR-0065): the
@@ -51,7 +51,7 @@ pub async fn update_identity(title: SiteTitle, base_url: Option<AbsoluteUrl>) ->
 #[server(endpoint = "/site/is_base_url_warning_visible")]
 #[tracing::instrument(name = "web.site.is_base_url_warning_visible")]
 pub async fn is_base_url_warning_visible() -> WebResult<bool> {
-    boundary!("is_base_url_warning_visible", {
+    boundary!({
         if !is_operator_soft().await? {
             return Ok(false);
         }

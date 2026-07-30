@@ -72,7 +72,7 @@ pub async fn list_mine(
     limit: Option<PageSize>,
     offset: Option<PageOffset>,
 ) -> WebResult<Vec<Item>> {
-    boundary!("list_mine", {
+    boundary!({
         let auth = require_auth().await?;
         let media = expect_context::<Arc<dyn MediaStorage>>();
 
@@ -107,7 +107,7 @@ pub async fn list_mine(
 #[server(endpoint = "/media/get_usage")]
 #[tracing::instrument(name = "web.media.get_usage")]
 pub async fn get_usage() -> WebResult<UsageData> {
-    boundary!("get_usage", {
+    boundary!({
         let auth = require_auth().await?;
         let media = expect_context::<Arc<dyn MediaStorage>>();
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
@@ -136,7 +136,7 @@ pub async fn delete(
     source: MediaSource,
     force: Option<bool>,
 ) -> WebResult<DeleteResult> {
-    boundary!("delete", {
+    boundary!({
         let auth = require_auth().await?;
         let media = expect_context::<Arc<dyn MediaStorage>>();
         let posts = expect_context::<Arc<dyn PostStorage>>();
@@ -213,7 +213,7 @@ fn map_media_error(err: &anyhow::Error) -> InternalError {
 #[server(input = MultipartFormData, endpoint = "/media/upload")]
 #[tracing::instrument(name = "web.media.upload", skip_all)]
 pub async fn upload(data: MultipartData) -> WebResult<UploadResponse> {
-    boundary!("upload", {
+    boundary!({
         let auth = require_auth().await?;
         let media = expect_context::<Arc<dyn MediaStorage>>();
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();

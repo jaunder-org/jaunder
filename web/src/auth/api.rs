@@ -44,7 +44,7 @@ pub async fn login(
     password: ProfferedPassword,
     label: Option<String>,
 ) -> WebResult<LoginResponse> {
-    boundary!("login", {
+    boundary!({
         let users = expect_context::<Arc<dyn UserStorage>>();
         let sessions = expect_context::<Arc<dyn SessionStorage>>();
         // `username` / `password` arrive already validated: typed wire args whose serde
@@ -113,7 +113,7 @@ pub async fn login(
 #[server(endpoint = "/auth/logout")]
 #[tracing::instrument(name = "web.auth.logout")]
 pub async fn logout() -> WebResult<()> {
-    boundary!("logout", {
+    boundary!({
         if let Ok(auth) = require_auth().await {
             let sessions = expect_context::<Arc<dyn SessionStorage>>();
             sessions.revoke_session(&auth.token_hash).await?;
@@ -130,7 +130,7 @@ pub async fn logout() -> WebResult<()> {
 #[server(endpoint = "/auth/get_session")]
 #[tracing::instrument(name = "web.auth.get_session")]
 pub async fn get_session() -> WebResult<Option<super::SessionUser>> {
-    boundary!("get_session", {
+    boundary!({
         let auth = match require_auth().await {
             Ok(auth) => auth,
             Err(error) if error.kind() == crate::error::ErrorKind::Auth => return Ok(None),

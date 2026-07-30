@@ -40,7 +40,7 @@ pub const MAX_TAG_LIMIT: u32 = PageSize::MAX;
 #[server(endpoint = "/tags/list", input = Json)]
 #[tracing::instrument(name = "web.tags.list", skip(prefix))]
 pub async fn list(prefix: Option<String>, limit: Option<u32>) -> WebResult<Vec<TagSummary>> {
-    boundary!("list", {
+    boundary!({
         let posts = expect_context::<Arc<dyn PostStorage>>();
         // `exact_limit`, not `fetch_limit`: the dropdown shows what it gets and has no
         // "load more", so an extra probing row would just be fetched and discarded.

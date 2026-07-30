@@ -21,7 +21,7 @@ use {
 #[server(endpoint = "/subscriptions/subscribe")]
 #[tracing::instrument(name = "web.subscriptions.subscribe")]
 pub async fn subscribe(author_username: Username) -> WebResult<()> {
-    boundary!("subscribe", {
+    boundary!({
         let subscriptions = expect_context::<Arc<dyn SubscriptionStorage>>();
         let users = expect_context::<Arc<dyn UserStorage>>();
         let auth = require_auth().await?;
@@ -40,7 +40,7 @@ pub async fn subscribe(author_username: Username) -> WebResult<()> {
 #[server(endpoint = "/subscriptions/unsubscribe")]
 #[tracing::instrument(name = "web.subscriptions.unsubscribe")]
 pub async fn unsubscribe(author_username: Username) -> WebResult<()> {
-    boundary!("unsubscribe", {
+    boundary!({
         let subscriptions = expect_context::<Arc<dyn SubscriptionStorage>>();
         let users = expect_context::<Arc<dyn UserStorage>>();
         let auth = require_auth().await?;
@@ -61,7 +61,7 @@ pub async fn unsubscribe(author_username: Username) -> WebResult<()> {
 #[server(endpoint = "/subscriptions/is_subscribed")]
 #[tracing::instrument(name = "web.subscriptions.is_subscribed")]
 pub async fn is_subscribed(author_username: Username) -> WebResult<bool> {
-    boundary!("is_subscribed", {
+    boundary!({
         let subscriptions = expect_context::<Arc<dyn SubscriptionStorage>>();
         let users = expect_context::<Arc<dyn UserStorage>>();
         let auth = require_auth().await?;

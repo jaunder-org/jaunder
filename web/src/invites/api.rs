@@ -43,7 +43,7 @@ pub async fn create(
     expires_in_hours: Option<InviteTtlHours>,
     recipient_email: Email,
 ) -> WebResult<()> {
-    boundary!("create", {
+    boundary!({
         let _auth = require_auth().await?;
         let invites = expect_context::<Arc<dyn InviteStorage>>();
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
@@ -91,7 +91,7 @@ pub async fn create(
 #[server(endpoint = "/invites/list")]
 #[tracing::instrument(name = "web.invites.list")]
 pub async fn list() -> WebResult<Vec<Info>> {
-    boundary!("list", {
+    boundary!({
         let _auth = require_auth().await?;
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
         let invites = expect_context::<Arc<dyn InviteStorage>>();

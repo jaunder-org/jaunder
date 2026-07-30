@@ -33,7 +33,7 @@ pub struct Info {
 #[server(endpoint = "/sessions/list")]
 #[tracing::instrument(name = "web.sessions.list")]
 pub async fn list() -> WebResult<Vec<Info>> {
-    boundary!("list", {
+    boundary!({
         let auth = require_auth().await?;
         let sessions = expect_context::<Arc<dyn SessionStorage>>();
         let records = sessions.list_sessions(auth.user_id).await?;
@@ -64,7 +64,7 @@ pub struct AppPassword {
 #[server(endpoint = "/sessions/create_app_password")]
 #[tracing::instrument(name = "web.sessions.create_app_password", skip_all)]
 pub async fn create_app_password(label: SessionLabel) -> WebResult<AppPassword> {
-    boundary!("create_app_password", {
+    boundary!({
         // `label` is a typed wire arg (ADR-0065): the `SessionLabel` serde bridge
         // already trimmed it and rejected empty/over-long at decode, so there is no
         // manual validation here.
@@ -79,7 +79,7 @@ pub async fn create_app_password(label: SessionLabel) -> WebResult<AppPassword> 
 #[server(endpoint = "/sessions/revoke")]
 #[tracing::instrument(name = "web.sessions.revoke", skip_all)]
 pub async fn revoke(token_hash: TokenHash) -> WebResult<()> {
-    boundary!("revoke", {
+    boundary!({
         let auth = require_auth().await?;
         let sessions = expect_context::<Arc<dyn SessionStorage>>();
         let session_records = sessions.list_sessions(auth.user_id).await?;

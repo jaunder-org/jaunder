@@ -40,7 +40,7 @@ use {
 #[server(endpoint = "/registration/get_policy")]
 #[tracing::instrument(name = "web.registration.get_policy")]
 pub async fn get_policy() -> WebResult<RegistrationPolicy> {
-    boundary!("get_policy", {
+    boundary!({
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
         let policy = site_config.get_registration_policy().await?;
         Ok(policy)
@@ -56,7 +56,7 @@ pub async fn register(
     password: ProfferedPassword,
     invite_code: Option<ProfferedInviteCode>,
 ) -> WebResult<RawToken> {
-    boundary!("register", {
+    boundary!({
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
         let users = expect_context::<Arc<dyn UserStorage>>();
         let atomic = expect_context::<Arc<dyn AtomicOps>>();

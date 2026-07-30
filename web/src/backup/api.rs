@@ -16,7 +16,7 @@ use {
 #[server(endpoint = "/backup/is_warning_visible")]
 #[tracing::instrument(name = "web.backup.is_warning_visible")]
 pub async fn is_warning_visible() -> WebResult<bool> {
-    boundary!("is_warning_visible", {
+    boundary!({
         if !is_operator_soft().await? {
             return Ok(false);
         }
@@ -29,7 +29,7 @@ pub async fn is_warning_visible() -> WebResult<bool> {
 #[server(endpoint = "/backup/get_settings")]
 #[tracing::instrument(name = "web.backup.get_settings")]
 pub async fn get_settings() -> WebResult<BackupConfig> {
-    boundary!("get_settings", {
+    boundary!({
         require_operator().await?;
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
         site_config
@@ -47,7 +47,7 @@ pub async fn update_settings(
     retention_count: RetentionCount,
     mode: BackupMode,
 ) -> WebResult<()> {
-    boundary!("update_settings", {
+    boundary!({
         require_operator().await?;
 
         // All four fields arrive already validated by the typed arg `Deserialize`: the required

@@ -118,7 +118,7 @@ pub async fn list_by_user(
     cursor_post_id: Option<PostId>,
     limit: Option<PageSize>,
 ) -> WebResult<TimelinePage> {
-    boundary!("list_by_user", {
+    boundary!({
         let posts = expect_context::<Arc<dyn PostStorage>>();
         let viewer = viewer_identity().await;
         fetch_user_posts(
@@ -141,7 +141,7 @@ pub async fn list_local_timeline(
     cursor_post_id: Option<PostId>,
     limit: Option<PageSize>,
 ) -> WebResult<TimelinePage> {
-    boundary!("list_local_timeline", {
+    boundary!({
         let posts = expect_context::<Arc<dyn PostStorage>>();
         let viewer = viewer_identity().await;
         fetch_local_timeline(
@@ -163,7 +163,7 @@ pub async fn list_home_feed(
     cursor_post_id: Option<PostId>,
     limit: Option<PageSize>,
 ) -> WebResult<TimelinePage> {
-    boundary!("list_home_feed", {
+    boundary!({
         let auth = require_auth().await?;
         let posts = expect_context::<Arc<dyn PostStorage>>();
 
@@ -265,7 +265,7 @@ pub async fn list_by_tag(
     cursor_post_id: Option<PostId>,
     limit: Option<PageSize>,
 ) -> WebResult<TimelinePage> {
-    boundary!("list_by_tag", {
+    boundary!({
         let posts = expect_context::<Arc<dyn PostStorage>>();
         let viewer = viewer_identity().await;
         fetch_posts_by_tag(
@@ -290,7 +290,7 @@ pub async fn list_by_user_and_tag(
     cursor_post_id: Option<PostId>,
     limit: Option<PageSize>,
 ) -> WebResult<TimelinePage> {
-    boundary!("list_by_user_and_tag", {
+    boundary!({
         let posts = expect_context::<Arc<dyn PostStorage>>();
         let users = expect_context::<Arc<dyn UserStorage>>();
         let viewer = viewer_identity().await;
