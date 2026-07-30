@@ -1,7 +1,7 @@
 # Plan — bound `Filename`'s length so a valid name cannot fail the encoded write (#708)
 
 Spec:
-[`docs/superpowers/specs/2026-07-30-issue-708-filename-length-bound.md`](../specs/2026-07-30-issue-708-filename-length-bound.md)
+[`docs/archive/2026-07-30-issue-708-filename-length-bound-spec.md`](2026-07-30-issue-708-filename-length-bound-spec.md)
 (approved). Decisions referenced as **D1**–**D5**, not restated.
 
 ## Review header
