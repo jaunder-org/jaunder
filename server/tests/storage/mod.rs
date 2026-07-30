@@ -19,7 +19,7 @@ use std::sync::Arc;
 use storage::{
     create_rendered_post, open_database, perform_post_update, update_rendered_post, AppState,
     AudienceError, ConfirmPasswordResetError, CreatePostError, CreateUserError, DbConnectOptions,
-    FeedCacheRow, GoLivePost, ListByTagError, PostCursor, PostFormat, PostUpdate,
+    FeedCacheRow, GoLivePost, ListByTagError, PostCursor, PostFormat, PostRecord, PostUpdate,
     PostgresSubscriptionStorage, ProfileUpdate, PublishUpdate, RegisterWithInviteError,
     RenderedHtml, RenderedPostContent, RenderedPostUpdate, SessionAuthError,
     SqliteSubscriptionStorage, SubscriptionStorage, TaggingError, UpdatePostError, UpdatePostInput,
@@ -47,6 +47,91 @@ use storage::test_support::{
 // `unique_postgres_url`/`template_postgres_url`, see helpers), so they run
 // safely under the default in-process parallelism. No `--test-threads=1` is
 // needed (jaunder-qguq).
+
+// ── Anonymous-viewer listing helpers ─────────────────────────────────────────
+//
+// 51 listing calls in this file pass the same five arguments — no cursor,
+// `&ViewerIdentity::Anonymous`, `Utc::now()` — and differ only in what they list and
+// how many rows they want. Spelling all five out per call site buried the one or two
+// that actually vary; #696 made it visible, because typing the limit pushed every such
+// call past the line width and rustfmt exploded each into seven lines.
+//
+// These return the rows directly rather than the `Result`: the few tests that assert on
+// an *error* call the store directly, and that difference is the point — a call that
+// goes through a helper is one that expects rows.
+
+async fn anon_by_tag(state: &AppState, tag: &Tag, limit: &str) -> Vec<PostRecord> {
+    state
+        .posts
+        .list_posts_by_tag(
+            tag,
+            None,
+            parse_row_limit(limit),
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
+        .await
+        .expect("list_posts_by_tag failed")
+}
+
+async fn anon_user_by_tag(
+    state: &AppState,
+    user_id: UserId,
+    tag: &Tag,
+    limit: &str,
+) -> Vec<PostRecord> {
+    state
+        .posts
+        .list_user_posts_by_tag(
+            user_id,
+            tag,
+            None,
+            parse_row_limit(limit),
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
+        .await
+        .expect("list_user_posts_by_tag failed")
+}
+
+async fn anon_published(state: &AppState, limit: &str) -> Vec<PostRecord> {
+    state
+        .posts
+        .list_published(
+            None,
+            parse_row_limit(limit),
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
+        .await
+        .expect("list_published failed")
+}
+
+async fn anon_published_by_user(
+    state: &AppState,
+    username: &Username,
+    limit: &str,
+) -> Vec<PostRecord> {
+    state
+        .posts
+        .list_published_by_user(
+            username,
+            None,
+            parse_row_limit(limit),
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
+        .await
+        .expect("list_published_by_user failed")
+}
+
+async fn drafts_of(state: &AppState, user_id: UserId, limit: &str) -> Vec<PostRecord> {
+    state
+        .posts
+        .list_drafts_by_user(user_id, None, parse_row_limit(limit), Utc::now())
+        .await
+        .expect("list_drafts_by_user failed")
+}
 
 async fn open_pool(base: &TempDir) -> SqlitePool {
     let DbConnectOptions::Sqlite(opts) = sqlite_url(base) else {
@@ -2589,30 +2674,12 @@ async fn soft_delete_excludes_post_from_lists(#[case] backend: Backend) {
 
     let post_id = SeedRawPost::new(user_id).seed(state).await.post_id;
 
-    let published = state
-        .posts
-        .list_published(
-            None,
-            parse_row_limit("10"),
-            &ViewerIdentity::Anonymous,
-            Utc::now(),
-        )
-        .await
-        .unwrap();
+    let published = anon_published(state, "10").await;
     assert!(published.iter().any(|p| p.post_id == post_id));
 
     state.posts.soft_delete_post(post_id).await.unwrap();
 
-    let published = state
-        .posts
-        .list_published(
-            None,
-            parse_row_limit("10"),
-            &ViewerIdentity::Anonymous,
-            Utc::now(),
-        )
-        .await
-        .unwrap();
+    let published = anon_published(state, "10").await;
     assert!(!published.iter().any(|p| p.post_id == post_id));
 
     let record = state
@@ -2805,31 +2872,11 @@ async fn list_published_by_user_returns_only_user_posts(#[case] backend: Backend
     SeedRawPost::new(alice_id).seed(state).await;
     SeedRawPost::new(bob_id).seed(state).await;
 
-    let alice_posts = state
-        .posts
-        .list_published_by_user(
-            &alice.username,
-            None,
-            parse_row_limit("10"),
-            &ViewerIdentity::Anonymous,
-            Utc::now(),
-        )
-        .await
-        .unwrap();
+    let alice_posts = anon_published_by_user(state, &alice.username, "10").await;
     assert_eq!(alice_posts.len(), 2);
     assert!(alice_posts.iter().all(|p| p.user_id == alice_id));
 
-    let bob_posts = state
-        .posts
-        .list_published_by_user(
-            &bob.username,
-            None,
-            parse_row_limit("10"),
-            &ViewerIdentity::Anonymous,
-            Utc::now(),
-        )
-        .await
-        .unwrap();
+    let bob_posts = anon_published_by_user(state, &bob.username, "10").await;
     assert_eq!(bob_posts.len(), 1);
     assert_eq!(bob_posts[0].user_id, bob_id);
 }
@@ -2847,16 +2894,7 @@ async fn list_published_returns_published_non_deleted_posts(#[case] backend: Bac
     SeedRawPost::new(user_id).seed(state).await;
     SeedRawPost::new(user_id).seed(state).await;
 
-    let published = state
-        .posts
-        .list_published(
-            None,
-            parse_row_limit("10"),
-            &ViewerIdentity::Anonymous,
-            Utc::now(),
-        )
-        .await
-        .unwrap();
+    let published = anon_published(state, "10").await;
     assert_eq!(published.len(), 2);
     assert!(published.iter().all(|p| p.published_at.is_some()));
 }
@@ -2874,11 +2912,7 @@ async fn list_drafts_by_user_returns_only_drafts(#[case] backend: Backend) {
     // Create a published post (should not appear in drafts)
     SeedRawPost::new(user_id).seed(state).await;
 
-    let drafts = state
-        .posts
-        .list_drafts_by_user(user_id, None, parse_row_limit("10"), Utc::now())
-        .await
-        .unwrap();
+    let drafts = drafts_of(state, user_id, "10").await;
     assert_eq!(drafts.len(), 2);
     assert!(drafts.iter().all(|p| p.published_at.is_none()));
     assert!(drafts.iter().all(|p| p.user_id == user_id));
@@ -3198,17 +3232,7 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
     assert_eq!(tags2[0].tag_display, "WEB-DEVELOPMENT");
 
     let tag_slug: Tag = "web-development".parse().unwrap();
-    let posts = state
-        .posts
-        .list_posts_by_tag(
-            &tag_slug,
-            None,
-            parse_row_limit("50"),
-            &ViewerIdentity::Anonymous,
-            Utc::now(),
-        )
-        .await
-        .expect("list_posts_by_tag failed");
+    let posts = anon_by_tag(state, &tag_slug, "50").await;
 
     assert_eq!(posts.len(), 2);
 }
@@ -3237,17 +3261,7 @@ async fn tag_list_pagination(#[case] backend: Backend) {
     }
 
     let tag_slug: Tag = "pagination-test".parse().unwrap();
-    let posts = state
-        .posts
-        .list_posts_by_tag(
-            &tag_slug,
-            None,
-            parse_row_limit("2"),
-            &ViewerIdentity::Anonymous,
-            Utc::now(),
-        )
-        .await
-        .expect("list_posts_by_tag failed");
+    let posts = anon_by_tag(state, &tag_slug, "2").await;
 
     assert_eq!(posts.len(), 2);
     // Should be reverse chronological
@@ -3287,34 +3301,12 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
         .expect("tag post2 failed");
 
     let tag_slug: Tag = "shared-tag".parse().unwrap();
-    let user1_posts = state
-        .posts
-        .list_user_posts_by_tag(
-            user1,
-            &tag_slug,
-            None,
-            parse_row_limit("50"),
-            &ViewerIdentity::Anonymous,
-            Utc::now(),
-        )
-        .await
-        .expect("list_user_posts_by_tag failed");
+    let user1_posts = anon_user_by_tag(state, user1, &tag_slug, "50").await;
 
     assert_eq!(user1_posts.len(), 1);
     assert_eq!(user1_posts[0].post_id, post1);
 
-    let user2_posts = state
-        .posts
-        .list_user_posts_by_tag(
-            user2,
-            &tag_slug,
-            None,
-            parse_row_limit("50"),
-            &ViewerIdentity::Anonymous,
-            Utc::now(),
-        )
-        .await
-        .expect("list_user_posts_by_tag failed");
+    let user2_posts = anon_user_by_tag(state, user2, &tag_slug, "50").await;
 
     assert_eq!(user2_posts.len(), 1);
     assert_eq!(user2_posts[0].post_id, post2);
@@ -3561,17 +3553,7 @@ async fn many_tags_many_posts(#[case] backend: Backend) {
 
     for tag in &tags {
         let tag_slug: Tag = tag.parse().unwrap();
-        let posts = state
-            .posts
-            .list_posts_by_tag(
-                &tag_slug,
-                None,
-                parse_row_limit("50"),
-                &ViewerIdentity::Anonymous,
-                Utc::now(),
-            )
-            .await
-            .expect("list_posts_by_tag failed");
+        let posts = anon_by_tag(state, &tag_slug, "50").await;
         assert_eq!(posts.len(), 3);
     }
 }
@@ -3851,17 +3833,7 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
     assert_eq!(tags_before[0].tag_display, "test");
 
     let tag_slug: Tag = "test".parse().unwrap();
-    let posts_before = state
-        .posts
-        .list_posts_by_tag(
-            &tag_slug,
-            None,
-            parse_row_limit("50"),
-            &ViewerIdentity::Anonymous,
-            Utc::now(),
-        )
-        .await
-        .expect("list_posts_by_tag failed");
+    let posts_before = anon_by_tag(state, &tag_slug, "50").await;
     assert_eq!(posts_before.len(), 1);
 
     state
@@ -3878,17 +3850,7 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
     assert_eq!(tags_after.len(), 0);
 
     // List by tag again - should return empty list (tag exists but no posts have it)
-    let posts_after = state
-        .posts
-        .list_posts_by_tag(
-            &tag_slug,
-            None,
-            parse_row_limit("50"),
-            &ViewerIdentity::Anonymous,
-            Utc::now(),
-        )
-        .await
-        .expect("list_posts_by_tag failed");
+    let posts_after = anon_by_tag(state, &tag_slug, "50").await;
     assert_eq!(posts_after.len(), 0);
 }
 
@@ -4058,17 +4020,7 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
         .expect("tag_post failed");
 
     let tag_slug: Tag = "javascript".parse().unwrap();
-    let posts = state
-        .posts
-        .list_posts_by_tag(
-            &tag_slug,
-            None,
-            parse_row_limit("50"),
-            &ViewerIdentity::Anonymous,
-            Utc::now(),
-        )
-        .await
-        .expect("list_posts_by_tag failed");
+    let posts = anon_by_tag(state, &tag_slug, "50").await;
 
     assert_eq!(posts.len(), 2);
     assert!(posts.iter().any(|p| p.post_id == post1));
@@ -4115,18 +4067,7 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
         .expect("tag_post failed");
 
     let tag_slug: Tag = "clojure".parse().unwrap();
-    let posts = state
-        .posts
-        .list_user_posts_by_tag(
-            user1,
-            &tag_slug,
-            None,
-            parse_row_limit("50"),
-            &ViewerIdentity::Anonymous,
-            Utc::now(),
-        )
-        .await
-        .expect("list_user_posts_by_tag failed");
+    let posts = anon_user_by_tag(state, user1, &tag_slug, "50").await;
 
     assert_eq!(posts.len(), 2);
     assert!(posts.iter().all(|p| p.user_id == user1));
@@ -4190,17 +4131,7 @@ async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
         .expect("soft_delete_post failed");
 
     let tag_slug: Tag = "haskell".parse().unwrap();
-    let posts = state
-        .posts
-        .list_posts_by_tag(
-            &tag_slug,
-            None,
-            parse_row_limit("50"),
-            &ViewerIdentity::Anonymous,
-            Utc::now(),
-        )
-        .await
-        .expect("list_posts_by_tag failed");
+    let posts = anon_by_tag(state, &tag_slug, "50").await;
 
     assert_eq!(posts.len(), 1);
     assert_eq!(posts[0].post_id, post2);
@@ -4276,17 +4207,7 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
         .expect("tag_post failed");
 
     let tag_slug: Tag = "kotlin".parse().unwrap();
-    let posts = state
-        .posts
-        .list_posts_by_tag(
-            &tag_slug,
-            None,
-            parse_row_limit("50"),
-            &ViewerIdentity::Anonymous,
-            Utc::now(),
-        )
-        .await
-        .expect("list_posts_by_tag failed");
+    let posts = anon_by_tag(state, &tag_slug, "50").await;
 
     assert_eq!(posts.len(), 1);
     assert_eq!(posts[0].post_id, post2);
@@ -4348,28 +4269,10 @@ async fn list_published_cursor_boundary(#[case] backend: Backend) {
         SeedRawPost::new(user).seed(state).await;
     }
 
-    let all = state
-        .posts
-        .list_published(
-            None,
-            parse_row_limit("10"),
-            &ViewerIdentity::Anonymous,
-            Utc::now(),
-        )
-        .await
-        .expect("list_published failed");
+    let all = anon_published(state, "10").await;
     assert_eq!(all.len(), 5);
 
-    let first = state
-        .posts
-        .list_published(
-            None,
-            parse_row_limit("2"),
-            &ViewerIdentity::Anonymous,
-            Utc::now(),
-        )
-        .await
-        .expect("list_published failed");
+    let first = anon_published(state, "2").await;
     assert_eq!(first.len(), 2);
 
     if !first.is_empty() {
@@ -4404,18 +4307,10 @@ async fn list_drafts_cursor_boundary(#[case] backend: Backend) {
         SeedRawPost::new(user).draft().seed(state).await;
     }
 
-    let all = state
-        .posts
-        .list_drafts_by_user(user, None, parse_row_limit("10"), Utc::now())
-        .await
-        .expect("list_drafts_by_user failed");
+    let all = drafts_of(state, user, "10").await;
     assert_eq!(all.len(), 3);
 
-    let first = state
-        .posts
-        .list_drafts_by_user(user, None, parse_row_limit("1"), Utc::now())
-        .await
-        .expect("list_drafts_by_user failed");
+    let first = drafts_of(state, user, "1").await;
     assert_eq!(first.len(), 1);
 
     if !first.is_empty() {
@@ -4451,32 +4346,10 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
 
     let tag: Tag = "cursor-tag".parse().unwrap();
 
-    let all = state
-        .posts
-        .list_user_posts_by_tag(
-            user,
-            &tag,
-            None,
-            parse_row_limit("10"),
-            &ViewerIdentity::Anonymous,
-            Utc::now(),
-        )
-        .await
-        .expect("list_user_posts_by_tag failed");
+    let all = anon_user_by_tag(state, user, &tag, "10").await;
     assert_eq!(all.len(), 3);
 
-    let first = state
-        .posts
-        .list_user_posts_by_tag(
-            user,
-            &tag,
-            None,
-            parse_row_limit("1"),
-            &ViewerIdentity::Anonymous,
-            Utc::now(),
-        )
-        .await
-        .expect("list_user_posts_by_tag failed");
+    let first = anon_user_by_tag(state, user, &tag, "1").await;
     assert_eq!(first.len(), 1);
 
     if !first.is_empty() {
@@ -4519,30 +4392,10 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
 
     let tag: Tag = "global-tag".parse().unwrap();
 
-    let all = state
-        .posts
-        .list_posts_by_tag(
-            &tag,
-            None,
-            parse_row_limit("10"),
-            &ViewerIdentity::Anonymous,
-            Utc::now(),
-        )
-        .await
-        .expect("list_posts_by_tag failed");
+    let all = anon_by_tag(state, &tag, "10").await;
     assert_eq!(all.len(), 3);
 
-    let first = state
-        .posts
-        .list_posts_by_tag(
-            &tag,
-            None,
-            parse_row_limit("1"),
-            &ViewerIdentity::Anonymous,
-            Utc::now(),
-        )
-        .await
-        .expect("list_posts_by_tag failed");
+    let first = anon_by_tag(state, &tag, "1").await;
     assert_eq!(first.len(), 1);
 
     if !first.is_empty() {
@@ -4595,17 +4448,7 @@ async fn soft_delete_then_operations(#[case] backend: Backend) {
     assert!(post.is_none() || post.unwrap().deleted_at.is_some());
 
     let tag: Tag = "delete-tag".parse().unwrap();
-    let posts = state
-        .posts
-        .list_posts_by_tag(
-            &tag,
-            None,
-            parse_row_limit("10"),
-            &ViewerIdentity::Anonymous,
-            Utc::now(),
-        )
-        .await
-        .expect("list_posts_by_tag failed");
+    let posts = anon_by_tag(state, &tag, "10").await;
     assert!(posts.is_empty());
 }
 
@@ -4658,17 +4501,7 @@ async fn list_published_by_user_no_posts(#[case] backend: Backend) {
     let state = &env.state;
     let user = SeedUser::new().seed(state).await;
 
-    let posts = state
-        .posts
-        .list_published_by_user(
-            &user.username,
-            None,
-            parse_row_limit("10"),
-            &ViewerIdentity::Anonymous,
-            Utc::now(),
-        )
-        .await
-        .expect("list_published_by_user failed");
+    let posts = anon_published_by_user(state, &user.username, "10").await;
     assert!(posts.is_empty());
 
     let cursor = PostCursor {
@@ -4850,16 +4683,7 @@ async fn list_published_with_cursor_same_timestamp(#[case] backend: Backend) {
         post_ids.push(post_id);
     }
 
-    let first = state
-        .posts
-        .list_published(
-            None,
-            parse_row_limit("2"),
-            &ViewerIdentity::Anonymous,
-            Utc::now(),
-        )
-        .await
-        .expect("list_published failed");
+    let first = anon_published(state, "2").await;
     assert_eq!(first.len(), 2);
 
     // Use cursor to get next batch with same created_at but different post_id
@@ -6374,11 +6198,8 @@ async fn anonymous_is_not_admitted_by_an_empty_subscriber_ref(#[case] backend: B
             .is_none(),
         "get_post_by_id: an empty subscriber_ref must not admit an anonymous viewer"
     );
-    let listed: std::collections::HashSet<PostId> = state
-        .posts
-        .list_published(None, parse_row_limit("100"), &anon, Utc::now())
+    let listed: std::collections::HashSet<PostId> = anon_published(state, "100")
         .await
-        .unwrap()
         .into_iter()
         .map(|p| p.post_id)
         .collect();
