@@ -11,7 +11,7 @@ use leptos::prelude::*;
 use leptos_router::hooks::{use_navigate, use_params_map};
 use leptos_router::NavigateOptions;
 
-use crate::audiences::{list_mine, AudienceSummary};
+use crate::audiences::{list_mine, Summary};
 use crate::avatar::Avatar;
 use crate::error::WebError;
 use crate::feed_discovery::{FeedDiscovery, RsdDiscovery};
@@ -24,8 +24,8 @@ use crate::media::MediaUpload;
 use crate::posts::{
     audience_selection, default_audience_selection, draft_row_display, get, get_preview,
     list_by_tag, list_by_user, list_by_user_and_tag, list_drafts, parse_permalink_params, Create,
-    CreatePostArgs, CreatePostResult, Delete, DraftRowDisplay, DraftSummary, Publish,
-    PublishPostResult, Unpublish, UpdatePostArgs, UpdatePostResult,
+    CreateArgs, CreateResult, Delete, DraftRowDisplay, DraftSummary, Publish, PublishResult,
+    Unpublish, UpdateArgs, UpdateResult,
 };
 use crate::subscriptions::SubscribeButton;
 use crate::taglist::TagCtx as TagContext;
@@ -411,10 +411,7 @@ pub fn AudiencePicker(selection: RwSignal<AudienceSelection>) -> impl IntoView {
 /// One named-audience checkbox row for [`AudiencePicker`]. Toggling it
 /// adds/removes the audience id in the shared selection. Disabled while the
 /// base is `Private`, since Private cannot combine with named audiences.
-fn audience_checkbox(
-    audience: AudienceSummary,
-    selection: RwSignal<AudienceSelection>,
-) -> impl IntoView {
+fn audience_checkbox(audience: Summary, selection: RwSignal<AudienceSelection>) -> impl IntoView {
     let id = audience.audience_id;
     let input_id = format!("audience-named-{id}");
     let checked = move || selection.get().named.contains(&id);
@@ -452,7 +449,7 @@ fn audience_checkbox(
 pub fn PostCreateForm(
     compact: bool,
     #[prop(optional)] username: Option<Username>,
-    #[prop(into)] on_success: Callback<CreatePostResult>,
+    #[prop(into)] on_success: Callback<CreateResult>,
     #[prop(default = 6)] rows: u32,
     #[prop(default = "What\u{2019}s on your mind?")] placeholder: &'static str,
     /// Called on every textarea input event (compact mode only).
@@ -502,7 +499,7 @@ pub fn PostCreateForm(
     if compact {
         let dispatch_save = move |_| {
             create_action.dispatch(Create {
-                args: CreatePostArgs {
+                args: CreateArgs {
                     body: body.get().into(),
                     format: format.get(),
                     slug_override: None,
@@ -516,7 +513,7 @@ pub fn PostCreateForm(
         };
         let dispatch_publish = move |_| {
             create_action.dispatch(Create {
-                args: CreatePostArgs {
+                args: CreateArgs {
                     body: body.get().into(),
                     format: format.get(),
                     slug_override: None,
@@ -609,7 +606,7 @@ pub fn PostCreateForm(
         let slug_field = Field::<Slug>::optional();
         let dispatch_create = move |publish: bool| {
             create_action.dispatch(Create {
-                args: CreatePostArgs {
+                args: CreateArgs {
                     body: body.get().into(),
                     format: format.get(),
                     slug_override: slug_field.parsed(),
@@ -761,7 +758,7 @@ pub fn PostCreateForm(
 pub fn InlineComposer(username: Username, on_publish: WriteSignal<u32>) -> impl IntoView {
     let flash: RwSignal<Option<(String, String)>> = RwSignal::new(None);
 
-    let on_success = Callback::new(move |created: CreatePostResult| {
+    let on_success = Callback::new(move |created: CreateResult| {
         use leptos_dom::helpers::set_timeout;
         use std::time::Duration;
         let url = created.permalink.to_string();
@@ -811,7 +808,7 @@ pub fn CreatePostPage() -> impl IntoView {
     // Server-confirmed gate: await the shared session reconcile (an expired cookie
     // must not show the create form) (#591).
     let session = crate::auth::use_session();
-    let last_result: RwSignal<Option<CreatePostResult>> = RwSignal::new(None);
+    let last_result: RwSignal<Option<CreateResult>> = RwSignal::new(None);
 
     view! {
         <Topbar title="New post" sub="Long-form" />
@@ -1239,7 +1236,7 @@ pub fn EditPostPage() -> impl IntoView {
                         let dispatch_update = move |publish: bool| {
                             update_post_action
                                 .dispatch(super::Update {
-                                    args: UpdatePostArgs {
+                                    args: UpdateArgs {
                                         post_id,
                                         body: body.get().into(),
                                         format: format.get(),
@@ -1418,7 +1415,7 @@ pub fn EditPostPage() -> impl IntoView {
             update_post_action
                 .value()
                 .get()
-                .map(|result: Result<UpdatePostResult, WebError>| match result {
+                .map(|result: Result<UpdateResult, WebError>| match result {
                     Ok(updated) if updated.published_at.is_none() => {
                         let slug_value = updated.slug.to_string();
                         let slug_for_attr = slug_value.clone();
@@ -1492,7 +1489,7 @@ pub fn DraftsPage() -> impl IntoView {
                     publish_action
                         .value()
                         .get()
-                        .map(|result: Result<PublishPostResult, WebError>| match result {
+                        .map(|result: Result<PublishResult, WebError>| match result {
                             Ok(published) => {
                                 view! {
                                     <p class="success">

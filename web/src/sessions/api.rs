@@ -1,5 +1,5 @@
 //! Sessions wire DTOs + `#[server]` endpoints (ADR-0070, amended #530): the
-//! `SessionInfo` / `AppPassword` payloads and the `list` /
+//! `Info` / `AppPassword` payloads and the `list` /
 //! `create_app_password` / `revoke` server fns. Dual-compiled (host +
 //! wasm); the vertical's one grouped `#[cfg(feature = "server")]` use-block lives
 //! here. Re-exported from `mod.rs` so external paths stay stable.
@@ -20,7 +20,7 @@ use {
 
 /// Session info returned by [`list`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionInfo {
+pub struct Info {
     pub token_hash: TokenHash,
     pub label: SessionLabel,
     pub created_at: UtcInstant,
@@ -32,14 +32,14 @@ pub struct SessionInfo {
 /// `is_current` is `true` for the session used to make this request.
 #[server(endpoint = "/list_sessions")]
 #[tracing::instrument(name = "web.sessions.list")]
-pub async fn list() -> WebResult<Vec<SessionInfo>> {
+pub async fn list() -> WebResult<Vec<Info>> {
     boundary!("list", {
         let auth = require_auth().await?;
         let sessions = expect_context::<Arc<dyn SessionStorage>>();
         let records = sessions.list_sessions(auth.user_id).await?;
         Ok(records
             .into_iter()
-            .map(|r| SessionInfo {
+            .map(|r| Info {
                 is_current: r.token_hash == auth.token_hash,
                 token_hash: r.token_hash,
                 label: r.label,

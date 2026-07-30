@@ -1,4 +1,4 @@
-//! Invites vertical — API surface: the `InviteInfo` wire type and the invite
+//! Invites vertical — API surface: the `Info` wire type and the invite
 //! `#[server]` endpoints (ADR-0070). Re-exported from `mod.rs`.
 
 #[cfg(feature = "server")]
@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 /// server→client (#400). Codes are delivered out-of-band (the `jaunder user invite` CLI
 /// prints the invitation URL; #433 will email them).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InviteInfo {
+pub struct Info {
     pub created_at: UtcInstant,
     pub expires_at: UtcInstant,
     pub used_at: Option<UtcInstant>,
@@ -90,7 +90,7 @@ pub async fn create(
 /// policy; returns an error otherwise.
 #[server(endpoint = "/list_invites")]
 #[tracing::instrument(name = "web.invites.list")]
-pub async fn list() -> WebResult<Vec<InviteInfo>> {
+pub async fn list() -> WebResult<Vec<Info>> {
     boundary!("list", {
         let _auth = require_auth().await?;
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
@@ -102,7 +102,7 @@ pub async fn list() -> WebResult<Vec<InviteInfo>> {
         let records = invites.list_invites().await?;
         Ok(records
             .into_iter()
-            .map(|r| InviteInfo {
+            .map(|r| Info {
                 created_at: UtcInstant::from(r.created_at),
                 expires_at: UtcInstant::from(r.expires_at),
                 used_at: r.used_at.map(UtcInstant::from),

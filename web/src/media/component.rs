@@ -9,7 +9,7 @@ use leptos::prelude::*;
 use common::pagination::{PageOffset, PageSize};
 use common::root_relative_url::RootRelativeUrl;
 
-use super::{format_bytes, list_mine, upload, usage, Delete, DeleteMediaResult, MediaItem};
+use super::{format_bytes, list_mine, upload, usage, Delete, DeleteResult, Item};
 use crate::error::WebError;
 use crate::topbar::Topbar;
 
@@ -247,7 +247,7 @@ pub fn MediaPage() -> impl IntoView {
                 delete_action
                     .value()
                     .get()
-                    .map(|result: Result<DeleteMediaResult, WebError>| match result {
+                    .map(|result: Result<DeleteResult, WebError>| match result {
                         Ok(r) if r.deleted => {
                             view! { <p class="success">"Media deleted."</p> }.into_any()
                         }
@@ -274,7 +274,7 @@ pub fn MediaPage() -> impl IntoView {
     }
 }
 
-fn render_media_row(item: &MediaItem, delete_action: ServerAction<Delete>) -> impl IntoView {
+fn render_media_row(item: &Item, delete_action: ServerAction<Delete>) -> impl IntoView {
     // Same reason as `filename` below: `RootRelativeUrl` is not an `IntoAttributeValue`,
     // so the `href` gets its `str` view here.
     let url = item.url.to_string();

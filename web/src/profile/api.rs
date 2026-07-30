@@ -1,5 +1,5 @@
 //! Profile wire DTOs + `#[server]` endpoints (ADR-0070, amended #530): the
-//! `ProfileData` payload and the `get` / `update` /
+//! `Data` payload and the `get` / `update` /
 //! `get_default_post_format` / `set_default_post_format` server fns. Dual-compiled
 //! (host + wasm); the vertical's one grouped `#[cfg(feature = "server")]` use-block
 //! lives here. Re-exported from `mod.rs` so `crate::profile::…` paths stay stable.
@@ -29,7 +29,7 @@ use {
 
 /// Profile data returned by [`get`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProfileData {
+pub struct Data {
     pub username: Username,
     pub display_name: Option<DisplayName>,
     pub bio: Option<Bio>,
@@ -40,7 +40,7 @@ pub struct ProfileData {
 /// Returns the authenticated user's profile.
 #[server(endpoint = "/get_profile")]
 #[tracing::instrument(name = "web.profile.get")]
-pub async fn get() -> WebResult<ProfileData> {
+pub async fn get() -> WebResult<Data> {
     boundary!("get", {
         let auth = require_auth().await?;
         let users = expect_context::<Arc<dyn UserStorage>>();
@@ -48,7 +48,7 @@ pub async fn get() -> WebResult<ProfileData> {
             .get_user(auth.user_id)
             .await?
             .ok_or_else(|| InternalError::not_found("user"))?;
-        Ok(ProfileData {
+        Ok(Data {
             username: user.username,
             display_name: user.display_name,
             bio: user.bio,

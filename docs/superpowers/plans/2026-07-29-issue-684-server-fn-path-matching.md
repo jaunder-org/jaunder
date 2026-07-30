@@ -771,7 +771,7 @@ span literal**.
 
 Run: `devtool run -- cargo nextest run --workspace` Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit** — `3a211658` (61 files)
 
 ```bash
 git add web/src server/tests docs/adr
@@ -798,7 +798,18 @@ git commit -m "refactor(web): drop vestigial vertical nouns from server-fn ident
   `posts::{CreateResult, UpdateResult, PublishResult, CreateArgs, UpdateArgs}`,
   `profile::Data`, `sessions::Info`.
 
-- [ ] **Step 1: Apply the 12 renames**
+**Outcome — a derive-generated companion the DoD grep could not see.**
+`AudienceSummary` derives `reactive_stores::Store`, which generates a trait
+named by concatenation: `AudienceSummaryStoreFields` (imported at
+`web/src/audiences/component.rs:6`). `rg -w AudienceSummary` does **not** match
+it, so the word-boundary check in Step 2 would have passed with a stale
+identifier in the tree. Renamed to `SummaryStoreFields`; a substring (non-`-w`)
+sweep across `web server common client csr` afterwards confirms no other renamed
+type has such a companion. Worth remembering for any future type rename: check
+substrings, not just word boundaries, when the type carries a derive that
+generates named items.
+
+- [x] **Step 1: Apply the 12 renames**
 
 Rename each type per the spec table, updating its `mod.rs` re-export and every
 call site. `AuthUser`, `AuthRejection`, and `TagInputState` are **not** renamed
@@ -806,15 +817,16 @@ call site. `AuthUser`, `AuthRejection`, and `TagInputState` are **not** renamed
 
 Bulk work — dispatch via **jaunder-dispatch**.
 
-- [ ] **Step 2: Verify no old name survives**
+- [x] **Step 2: Verify no old name survives** — zero matches, and zero as
+      _substrings_ too (the stricter sweep that catches derive companions)
 
 Run:
 `rg -w 'AudienceSummary|InviteInfo|MediaItem|MediaUsageData|DeleteMediaResult|CreatePostResult|UpdatePostResult|PublishPostResult|CreatePostArgs|UpdatePostArgs|ProfileData|SessionInfo' web server common client`
 Expected: no output.
 
-- [ ] **Step 3: Run the full host test suite**
+- [x] **Step 3: Run the full host test suite** — via `cargo xtask check` (green)
 
-Run: `devtool run -- cargo nextest run --workspace` Expected: PASS. These are
+Run: `devtool run -- cargo xtask check` Expected: PASS. These are
 `Serialize`/`Deserialize` structs whose _field_ names carry the wire format; the
 type name is not serialized, so no wire behavior changes.
 

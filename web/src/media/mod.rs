@@ -18,8 +18,8 @@ mod component;
 pub use format::format_bytes;
 
 pub use api::{
-    delete, list_mine, upload, usage, Delete, DeleteMediaResult, ListMine, MediaItem,
-    MediaUsageData, Upload, Usage,
+    delete, list_mine, upload, usage, Delete, DeleteResult, Item, ListMine, Upload, Usage,
+    UsageData,
 };
 
 #[cfg(target_arch = "wasm32")]

@@ -39,7 +39,7 @@ use crate::error::WebResult;
 
 /// A media item returned by [`list_mine`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MediaItem {
+pub struct Item {
     pub sha256: ContentHash,
     pub filename: Filename,
     pub source: MediaSource,
@@ -51,7 +51,7 @@ pub struct MediaItem {
 
 /// Storage usage returned by [`usage`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MediaUsageData {
+pub struct UsageData {
     pub used_bytes: ByteSize,
     pub quota_bytes: UserQuota,
     pub max_file_size_bytes: MaxFileSize,
@@ -59,7 +59,7 @@ pub struct MediaUsageData {
 
 /// Result returned by [`delete`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DeleteMediaResult {
+pub struct DeleteResult {
     pub deleted: bool,
     pub referenced_in_posts: Vec<PostId>,
 }
@@ -71,7 +71,7 @@ pub async fn list_mine(
     source: Option<MediaSource>,
     limit: Option<PageSize>,
     offset: Option<PageOffset>,
-) -> WebResult<Vec<MediaItem>> {
+) -> WebResult<Vec<Item>> {
     boundary!("list_mine", {
         let auth = require_auth().await?;
         let media = expect_context::<Arc<dyn MediaStorage>>();
@@ -89,7 +89,7 @@ pub async fn list_mine(
             .into_iter()
             .map(|r| {
                 let url = common::media::media_url(&r.source, &r.sha256, &r.filename);
-                MediaItem {
+                Item {
                     sha256: r.sha256,
                     filename: r.filename,
                     source: r.source,
@@ -106,7 +106,7 @@ pub async fn list_mine(
 /// Returns storage usage for the authenticated user.
 #[server(endpoint = "/media_usage")]
 #[tracing::instrument(name = "web.media.usage")]
-pub async fn usage() -> WebResult<MediaUsageData> {
+pub async fn usage() -> WebResult<UsageData> {
     boundary!("usage", {
         let auth = require_auth().await?;
         let media = expect_context::<Arc<dyn MediaStorage>>();
@@ -116,7 +116,7 @@ pub async fn usage() -> WebResult<MediaUsageData> {
         let quota_bytes = site_config.get_media_user_quota().await?;
         let max_file_size_bytes = site_config.get_media_max_file_size().await?;
 
-        Ok(MediaUsageData {
+        Ok(UsageData {
             used_bytes,
             quota_bytes,
             max_file_size_bytes,
@@ -135,7 +135,7 @@ pub async fn delete(
     filename: Filename,
     source: MediaSource,
     force: Option<bool>,
-) -> WebResult<DeleteMediaResult> {
+) -> WebResult<DeleteResult> {
     boundary!("delete", {
         let auth = require_auth().await?;
         let media = expect_context::<Arc<dyn MediaStorage>>();
@@ -172,7 +172,7 @@ pub async fn delete(
             .collect();
 
         if !referenced_in_posts.is_empty() && !force.unwrap_or(false) {
-            return Ok(DeleteMediaResult {
+            return Ok(DeleteResult {
                 deleted: false,
                 referenced_in_posts,
             });
@@ -183,7 +183,7 @@ pub async fn delete(
             .await
             .map_err(InternalError::storage)?;
 
-        Ok(DeleteMediaResult {
+        Ok(DeleteResult {
             deleted: true,
             referenced_in_posts,
         })

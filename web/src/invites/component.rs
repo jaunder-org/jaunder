@@ -1,6 +1,6 @@
 //! Invites vertical — wasm-only UI (ADR-0070): the invite management page.
 
-use super::{list, Create, InviteInfo};
+use super::{list, Create, Info};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::registration::get_policy;
@@ -110,7 +110,7 @@ pub fn InvitesPage() -> impl IntoView {
 }
 
 /// Renders a single invite row: its expiry and, if used, when.
-fn render_invite_row(i: &InviteInfo) -> impl IntoView {
+fn render_invite_row(i: &Info) -> impl IntoView {
     view! {
         <li>
             "Expires: " {i.expires_at.to_string()}

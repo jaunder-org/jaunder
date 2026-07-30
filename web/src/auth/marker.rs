@@ -19,7 +19,7 @@ pub const MARKER_KEY: &str = "jaunder_auth";
 /// returned by `session()`. `is_operator` is advisory chrome only —
 /// `require_operator()` is the real privilege guard, so a hand-edited marker grants
 /// nothing. Named `SessionUser` to stay distinct from the device-listing
-/// `sessions::SessionInfo` and the visibility `ViewerIdentity`.
+/// `sessions::Info` and the visibility `ViewerIdentity`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionUser {
     pub username: Username,

@@ -77,7 +77,7 @@ fn root_relative_path(path: String) -> RootRelativeUrl {
 
 /// Result returned by [`create`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CreatePostResult {
+pub struct CreateResult {
     pub post_id: PostId,
     pub slug: Slug,
     pub created_at: UtcInstant,
@@ -90,7 +90,7 @@ pub struct CreatePostResult {
 
 /// Result returned by [`update`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct UpdatePostResult {
+pub struct UpdateResult {
     pub post_id: PostId,
     pub slug: Slug,
     pub published_at: Option<UtcInstant>,
@@ -118,7 +118,7 @@ pub struct DraftSummary {
 
 /// Result returned by [`publish`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PublishPostResult {
+pub struct PublishResult {
     pub post_id: PostId,
     pub slug: Slug,
     pub published_at: UtcInstant,
@@ -129,7 +129,7 @@ pub struct PublishPostResult {
 /// contract; bundling them into a typed struct nests the JSON wire under `args`
 /// (#299).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreatePostArgs {
+pub struct CreateArgs {
     pub body: PostBody,
     pub format: PostFormat,
     pub slug_override: Option<Slug>,
@@ -140,10 +140,10 @@ pub struct CreatePostArgs {
     pub audience: Option<DomainAudienceSelection>,
 }
 
-/// Bundled arguments for [`update`]. Like [`CreatePostArgs`] with a leading
+/// Bundled arguments for [`update`]. Like [`CreateArgs`] with a leading
 /// `post_id`; bundling nests the JSON wire under `args` (#299).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UpdatePostArgs {
+pub struct UpdateArgs {
     pub post_id: PostId,
     pub body: PostBody,
     pub format: PostFormat,
@@ -164,8 +164,8 @@ pub struct UpdatePostArgs {
 /// `datetime-local` value to UTC before sending.
 #[server(endpoint = "/create_post", input = Json)]
 #[tracing::instrument(name = "web.posts.create", skip_all)]
-pub async fn create(args: CreatePostArgs) -> WebResult<CreatePostResult> {
-    let CreatePostArgs {
+pub async fn create(args: CreateArgs) -> WebResult<CreateResult> {
+    let CreateArgs {
         body,
         format,
         slug_override,
@@ -219,7 +219,7 @@ pub async fn create(args: CreatePostArgs) -> WebResult<CreatePostResult> {
         // created_at-based URL the permalink view renders for the author.
         let permalink = record.permalink();
 
-        let created = CreatePostResult {
+        let created = CreateResult {
             post_id: record.post_id,
             slug: record.slug,
             created_at,
@@ -310,8 +310,8 @@ pub async fn get_preview(post_id: PostId) -> WebResult<PostResponse> {
 /// See `create` for why it crosses the boundary as a [`UtcInstant`].
 #[server(endpoint = "/update_post", input = Json)]
 #[tracing::instrument(name = "web.posts.update", skip_all)]
-pub async fn update(args: UpdatePostArgs) -> WebResult<UpdatePostResult> {
-    let UpdatePostArgs {
+pub async fn update(args: UpdateArgs) -> WebResult<UpdateResult> {
+    let UpdateArgs {
         post_id,
         body,
         format,
@@ -390,7 +390,7 @@ pub async fn update(args: UpdatePostArgs) -> WebResult<UpdatePostResult> {
         let permalink = record.permalink();
 
         host::metrics::post(host::metrics::PostEvent::Updated);
-        Ok(UpdatePostResult {
+        Ok(UpdateResult {
             post_id,
             slug: record.slug,
             published_at,
@@ -490,7 +490,7 @@ pub async fn list_drafts(
 /// Publishes an existing draft owned by the authenticated user.
 #[server(endpoint = "/publish_post")]
 #[tracing::instrument(name = "web.posts.publish")]
-pub async fn publish(post_id: PostId) -> WebResult<PublishPostResult> {
+pub async fn publish(post_id: PostId) -> WebResult<PublishResult> {
     boundary!("publish", {
         let auth = require_auth().await?;
         let posts = expect_context::<Arc<dyn PostStorage>>();
@@ -537,7 +537,7 @@ pub async fn publish(post_id: PostId) -> WebResult<PublishPostResult> {
             .map_err(InternalError::storage)?;
 
         host::metrics::post(host::metrics::PostEvent::Published);
-        Ok(PublishPostResult {
+        Ok(PublishResult {
             post_id: updated.post_id,
             slug: updated.slug.clone(),
             published_at: UtcInstant::from(published_at),
@@ -653,11 +653,11 @@ mod tests {
     // JSON decode by the newtype's validating serde bridge (no in-body parse).
     #[test]
     fn publish_result_permalink_wire_is_root_relative() {
-        use super::PublishPostResult;
+        use super::PublishResult;
         use common::ids::PostId;
         use common::test_support::{parse_root_relative_url, parse_utc_instant};
 
-        let original = PublishPostResult {
+        let original = PublishResult {
             post_id: PostId::from(1),
             slug: "hello".parse::<Slug>().unwrap(),
             published_at: parse_utc_instant("2026-01-01T00:00:00Z"),
@@ -666,12 +666,12 @@ mod tests {
         let json = serde_json::to_string(&original).unwrap();
         // A root-relative permalink round-trips over the wire.
         assert_eq!(
-            serde_json::from_str::<PublishPostResult>(&json).unwrap(),
+            serde_json::from_str::<PublishResult>(&json).unwrap(),
             original
         );
         // Swapping the field to an absolute URL is rejected at decode.
         let absolute = json.replace("/~alice/2026/01/01/hello", "https://evil.example/x");
-        assert!(serde_json::from_str::<PublishPostResult>(&absolute).is_err());
+        assert!(serde_json::from_str::<PublishResult>(&absolute).is_err());
     }
 
     #[test]
@@ -693,9 +693,9 @@ mod tests {
     // corrupt only the format token so the test never hardcodes the full wire shape.
     #[test]
     fn create_post_args_rejects_unknown_format_token() {
-        use super::CreatePostArgs;
+        use super::CreateArgs;
         use common::render::PostFormat;
-        let args = CreatePostArgs {
+        let args = CreateArgs {
             body: "hi".into(),
             format: PostFormat::Markdown,
             slug_override: None,
@@ -706,17 +706,17 @@ mod tests {
             audience: None,
         };
         let json = serde_json::to_string(&args).unwrap();
-        assert!(serde_json::from_str::<CreatePostArgs>(&json).is_ok());
+        assert!(serde_json::from_str::<CreateArgs>(&json).is_ok());
         let bad = json.replace("\"markdown\"", "\"bogus\"");
-        assert!(serde_json::from_str::<CreatePostArgs>(&bad).is_err());
+        assert!(serde_json::from_str::<CreateArgs>(&bad).is_err());
     }
 
     #[test]
     fn update_post_args_rejects_unknown_format_token() {
-        use super::UpdatePostArgs;
+        use super::UpdateArgs;
         use common::ids::PostId;
         use common::render::PostFormat;
-        let args = UpdatePostArgs {
+        let args = UpdateArgs {
             post_id: PostId::from(1),
             body: "hi".into(),
             format: PostFormat::Markdown,
@@ -728,9 +728,9 @@ mod tests {
             audience: None,
         };
         let json = serde_json::to_string(&args).unwrap();
-        assert!(serde_json::from_str::<UpdatePostArgs>(&json).is_ok());
+        assert!(serde_json::from_str::<UpdateArgs>(&json).is_ok());
         let bad = json.replace("\"markdown\"", "\"bogus\"");
-        assert!(serde_json::from_str::<UpdatePostArgs>(&bad).is_err());
+        assert!(serde_json::from_str::<UpdateArgs>(&bad).is_err());
     }
 
     #[cfg(feature = "server")]

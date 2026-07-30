@@ -37,10 +37,10 @@ pub use parse::{draft_row_display, parse_permalink_params, DraftRowDisplay};
 pub use api::{
     audience_selection, create, default_audience_selection, delete, get, get_preview, list_by_tag,
     list_by_user, list_by_user_and_tag, list_drafts, list_home_feed, list_local_timeline, publish,
-    unpublish, update, AudienceSelection, Create, CreatePostArgs, CreatePostResult,
+    unpublish, update, AudienceSelection, Create, CreateArgs, CreateResult,
     DefaultAudienceSelection, Delete, DraftSummary, Get, GetPreview, ListByTag, ListByUser,
-    ListByUserAndTag, ListDrafts, ListHomeFeed, ListLocalTimeline, Publish, PublishPostResult,
-    Unpublish, Update, UpdatePostArgs, UpdatePostResult,
+    ListByUserAndTag, ListDrafts, ListHomeFeed, ListLocalTimeline, Publish, PublishResult,
+    Unpublish, Update, UpdateArgs, UpdateResult,
 };
 
 // Server-only shared fetch helpers, consumed by the `server` crate's public

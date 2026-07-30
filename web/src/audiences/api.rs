@@ -32,7 +32,7 @@ use {
 /// before the closure is reached, and the value can never differ. Only `name`'s
 /// attribute does real work — and it is the one the audiences e2e guards.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Store, Patch)]
-pub struct AudienceSummary {
+pub struct Summary {
     #[patch(|this, new| *this = new)]
     pub audience_id: AudienceId,
     #[patch(|this, new| *this = new)]
@@ -93,14 +93,14 @@ pub async fn delete(audience_id: AudienceId) -> WebResult<()> {
 /// Lists the authenticated author's named audiences.
 #[server(endpoint = "/list_my_audiences")]
 #[tracing::instrument(name = "web.audiences.list_mine")]
-pub async fn list_mine() -> WebResult<Vec<AudienceSummary>> {
+pub async fn list_mine() -> WebResult<Vec<Summary>> {
     boundary!("list_mine", {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
         let rows = audiences.list_audiences(auth.user_id).await?;
         Ok(rows
             .into_iter()
-            .map(|a| AudienceSummary {
+            .map(|a| Summary {
                 audience_id: a.audience_id,
                 name: a.name,
             })

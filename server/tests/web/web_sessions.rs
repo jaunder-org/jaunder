@@ -31,7 +31,7 @@ async fn list_sessions_returns_sessions_for_authenticated_user(#[case] backend: 
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    // The body is a JSON array of SessionInfo objects; verify both sessions are present.
+    // The body is a JSON array of sessions::Info objects; verify both sessions are present.
     // Count occurrences of "token_hash" to confirm both sessions are returned.
     let session_count = body.matches("\"token_hash\"").count();
     assert_eq!(session_count, 2, "expected 2 sessions, body: {body}");

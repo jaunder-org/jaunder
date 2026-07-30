@@ -22,8 +22,8 @@ mod server;
 
 pub use api::{
     add_subscriber, create, delete, list_members, list_mine, list_my_subscribers,
-    remove_subscriber, rename, AddSubscriber, AudienceSummary, Create, Delete, ListMembers,
-    ListMine, ListMySubscribers, RemoveSubscriber, Rename, SubscriberSummary,
+    remove_subscriber, rename, AddSubscriber, Create, Delete, ListMembers, ListMine,
+    ListMySubscribers, RemoveSubscriber, Rename, SubscriberSummary, Summary,
 };
 #[cfg(target_arch = "wasm32")]
 pub use component::AudiencesPage;

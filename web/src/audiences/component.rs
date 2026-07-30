@@ -2,8 +2,8 @@
 //! its child components, plus the keyed reactive store backing the list. Wasm-only.
 
 use super::api::{
-    list_members, list_mine, list_my_subscribers, AddSubscriber, AudienceSummary,
-    AudienceSummaryStoreFields, Create, Delete, RemoveSubscriber, Rename, SubscriberSummary,
+    list_members, list_mine, list_my_subscribers, AddSubscriber, Create, Delete, RemoveSubscriber,
+    Rename, SubscriberSummary, Summary, SummaryStoreFields,
 };
 use crate::error::WebResult;
 // `crate::forms::Field` (the validated-input field) is aliased to avoid colliding with
@@ -24,7 +24,7 @@ use reactive_stores::{Field, Patch, Store};
 #[derive(Default, Store, Patch)]
 struct AudienceListData {
     #[store(key: AudienceId = |a| a.audience_id)]
-    audiences: Vec<super::api::AudienceSummary>,
+    audiences: Vec<super::api::Summary>,
 }
 
 /// The subscriber roster shared via context: a reactive signal over the roster's full
@@ -208,7 +208,7 @@ fn CreateAudienceForm() -> impl IntoView {
 /// author's active subscribers (checked = member). Takes the row's keyed store field, so
 /// a rename updates the `<h3>` name in place (the row is never remounted).
 #[component]
-fn AudienceRow(row: Field<AudienceSummary>) -> impl IntoView {
+fn AudienceRow(row: Field<Summary>) -> impl IntoView {
     let audience_id = row.audience_id().get_untracked();
     let initial_name = row.name().get_untracked();
     view! {

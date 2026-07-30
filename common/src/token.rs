@@ -114,7 +114,7 @@ impl RawToken {
 /// The SHA-256 hash of a [`RawToken`] — what the `sessions` / `password_resets` /
 /// `email_verifications` tables store and what lookups and revocation key on. Not
 /// secret (it is a hash, compared and rendered in the session-management UI and
-/// crossing the wire in `SessionInfo`), so it carries the full non-secret trailer
+/// crossing the wire in `sessions::Info`), so it carries the full non-secret trailer
 /// plus std `PartialEq`/`Eq`/`Hash` for `TokenHash == TokenHash`. A `TokenHash` is
 /// a distinct type from [`RawToken`], so passing one where the other is expected
 /// does not compile.

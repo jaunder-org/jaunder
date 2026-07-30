@@ -7,7 +7,7 @@ use axum::{
 use server_fn::ServerFn;
 use tempfile::TempDir;
 use tower::ServiceExt;
-use web::media::{DeleteMediaResult, MediaItem, MediaUsageData};
+use web::media::{DeleteResult, Item, UsageData};
 
 use chrono::Utc;
 use storage::{CreateMediaError, MediaRecord};
@@ -41,7 +41,7 @@ async fn media_usage_returns_defaults_for_authenticated_user(#[case] backend: Ba
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let usage: MediaUsageData = serde_json::from_str(&body).expect("response should be valid JSON");
+    let usage: UsageData = serde_json::from_str(&body).expect("response should be valid JSON");
     assert_eq!(usage.used_bytes, parse_byte_size("0"));
     // No media config is set, so the getters return the type defaults (1 GiB / 50 MiB),
     // carried unchanged across the wire by the transparent-i64 serde bridge.
@@ -87,7 +87,7 @@ async fn list_my_media_returns_empty_for_new_user(#[case] backend: Backend) {
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let items: Vec<MediaItem> = serde_json::from_str(&body).expect("response should be valid JSON");
+    let items: Vec<Item> = serde_json::from_str(&body).expect("response should be valid JSON");
     assert!(items.is_empty(), "expected no media items for new user");
 }
 
@@ -148,7 +148,7 @@ async fn list_my_media_returns_inserted_item(#[case] backend: Backend) {
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let items: Vec<MediaItem> = serde_json::from_str(&body).expect("response should be valid JSON");
+    let items: Vec<Item> = serde_json::from_str(&body).expect("response should be valid JSON");
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].filename, "photo.jpg");
     assert!(
@@ -192,7 +192,7 @@ async fn list_my_media_with_source_filter(#[case] backend: Backend) {
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let items: Vec<MediaItem> = serde_json::from_str(&body).expect("response should be valid JSON");
+    let items: Vec<Item> = serde_json::from_str(&body).expect("response should be valid JSON");
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].source, MediaSource::Upload);
 }
@@ -235,7 +235,7 @@ async fn delete_media_succeeds_for_existing_item(#[case] backend: Backend) {
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body_str}");
-    let result: DeleteMediaResult =
+    let result: DeleteResult =
         serde_json::from_str(&body_str).expect("response should be valid JSON");
     assert!(
         result.deleted,
@@ -293,7 +293,7 @@ async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend:
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body_str}");
-    let result: DeleteMediaResult =
+    let result: DeleteResult =
         serde_json::from_str(&body_str).expect("response should be valid JSON");
     assert!(
         !result.deleted,
