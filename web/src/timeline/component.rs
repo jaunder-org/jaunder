@@ -1,7 +1,8 @@
-//! Timeline pagination — the wasm-only reactive layer (ADR-0070): the
-//! `TimelineState` signal bundle, the load-more task, and the shared
-//! `TimelineRows` view. Its pure types + fold logic live in the ungated,
-//! host-tested `state.rs`; this file carries no cfg gates of its own (its `mod`
+//! Timeline pagination — the wasm-only layer (ADR-0070): the load-more task and
+//! the shared `TimelineRows` view. The value model *and* the reactive
+//! `TimelineState` signal bundle live in the ungated, host-tested `state.rs`
+//! (#671); what stays here is only what cannot run on the host — `spawn_local`
+//! and the `view!` tree. This file carries no cfg gates of its own (its `mod`
 //! declaration is `#[cfg(target_arch = "wasm32")]`).
 
 use std::future::Future;
@@ -11,62 +12,13 @@ use leptos::task::spawn_local;
 
 use common::ids::PostId;
 use common::pagination::PageSize;
-use common::seed::{TimelinePage, TimelinePostSummary};
+use common::seed::TimelinePage;
 use common::time::UtcInstant;
 
-use super::state::{LoadStatus, TimelineCursor};
+use super::state::{LoadStatus, TimelineCursor, TimelineState};
 use crate::error::WebResult;
 use crate::posts::PostCard;
 use crate::taglist::TagCtx as TagContext;
-
-/// The reactive state of a cursor-paginated timeline, shared by the public Local
-/// timeline (`home.rs`) and the authed `/app` cockpit (`cockpit.rs`).
-#[derive(Clone, Copy)]
-pub struct TimelineState {
-    pub rows: RwSignal<Vec<TimelinePostSummary>>,
-    pub cursor: RwSignal<Option<TimelineCursor>>,
-    pub has_more: RwSignal<bool>,
-    pub status: RwSignal<LoadStatus>,
-}
-
-impl Default for TimelineState {
-    fn default() -> Self {
-        Self {
-            rows: RwSignal::new(Vec::new()),
-            cursor: RwSignal::new(None),
-            has_more: RwSignal::new(false),
-            status: RwSignal::new(LoadStatus::Idle),
-        }
-    }
-}
-
-impl TimelineState {
-    /// Adopt a page's rows + cursor (a projector seed or a fresh fetch),
-    /// replacing what's shown.
-    pub fn adopt(&self, page: TimelinePage) {
-        self.cursor.set(TimelineCursor::from_page(&page));
-        self.has_more.set(page.has_more);
-        self.rows.set(page.posts);
-    }
-
-    /// Resolve a re-fetch into the signals and settle to idle (clearing any prior
-    /// failure). wasm-only: re-fetches resolve on the client, in the page's
-    /// client-side `Effect`.
-    pub fn resolve(&self, page: TimelinePage) {
-        self.adopt(page);
-        self.status.set(LoadStatus::Idle);
-    }
-
-    /// Record a fetch failure: empty the rows (don't show a stale page), clear
-    /// the cursor + `has_more` so a failed timeline offers no "Load more", and
-    /// mark the failure for display.
-    pub fn fail(&self, message: String) {
-        self.rows.set(Vec::new());
-        self.cursor.set(None);
-        self.has_more.set(false);
-        self.status.set(LoadStatus::Failed(message));
-    }
-}
 
 /// wasm-only load-more: fetch the next page with the current cursor and append
 /// it. `fetch` is the page's list fn (`list_local_timeline` / `list_home_feed`).

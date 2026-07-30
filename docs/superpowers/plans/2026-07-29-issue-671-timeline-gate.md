@@ -114,9 +114,15 @@ these.
 - **Per-commit gate:** run `devtool run -- cargo xtask check` before every
   commit and let it pass clean (`jaunder-commit`). It auto-fixes formatting, so
   re-check `git status --porcelain` afterwards and stage what it rewrote.
-- **Wasm-only code additionally needs**
-  `cargo clippy -p web --target wasm32-unknown-unknown -- -D warnings` before
-  commit — the default gate does not build the wasm target.
+- **Fast gate for the inner loop:**
+  `devtool run -- cargo xtask check --no-test`. It runs the whole static ladder
+  including `wasm-clippy`, so it **does** lint the wasm target — there is no
+  separate wasm step to remember. **Do not hand-roll
+  `cargo clippy -p web --target wasm32-unknown-unknown`:** it omits
+  `--features csr` and the sibling `-p client -p csr`, so it fails with ~9
+  unrelated `cannot find reactive in client` / `cannot find upload in client`
+  errors that have nothing to do with your change. The real invocation, with two
+  temporary `-A` flags, is `xtask/src/steps/static_checks.rs:76-98`.
 
 ---
 
@@ -149,7 +155,7 @@ Pure move plus tests — **no semantic change**. Reviewable as a no-op.
   `resolve`, `fail` moved verbatim. `spawn_load_more`, `TimelineRows` stay in
   `component.rs`.
 
-- [ ] **Step 1: Move the bundle into `state.rs`**
+- [x] **Step 1: Move the bundle into `state.rs`**
 
 Cut `TimelineState`, its `impl Default`, and its `impl` block
 (`component.rs:22-69`) into `state.rs`, below `LoadStatus`. Replace the
@@ -162,7 +168,7 @@ correctly. Add `use leptos::prelude::*;` to `state.rs`. In `component.rs`, add
 (`component.rs:81`, `:82`, `:86`, `:89`, `:91`); neither becomes unused until T3
 Step 4 thins it, and clippy's `-D warnings` will force the prune there.
 
-- [ ] **Step 2: Move the export**
+- [x] **Step 2: Move the export**
 
 In `web/src/timeline/mod.rs`, extend the ungated re-export and shrink the gated
 one:
@@ -181,7 +187,7 @@ pub use component::{spawn_load_more, TimelineRows};
 `TimelineState` **must** leave the gated list — exporting it from both collides
 (A2).
 
-- [ ] **Step 3: Correct the three falsified module docs** (A8)
+- [x] **Step 3: Correct the three falsified module docs** (A8)
 
 Each currently asserts the bundle is wasm-only:
 
@@ -195,7 +201,7 @@ Each currently asserts the bundle is wasm-only:
 - `component.rs:1-5` — drop "the `TimelineState` signal bundle" from the
   inventory.
 
-- [ ] **Step 4: Write the failing tests**
+- [x] **Step 4: Write the failing tests**
 
 Append to `state.rs`'s existing `#[cfg(test)] mod tests`. Extend the existing
 `page()` helper (currently `state.rs:87-98`, always empty `posts`) to take rows,
@@ -283,7 +289,12 @@ fn fail_empties_the_timeline_and_records_the_message() {
 }
 ```
 
-- [ ] **Step 5: Run the tests, verify they fail**
+- [ ] **Step 5: Run the tests, verify they fail** — **NOT DONE.** The code and
+      tests were written together, so the first `nextest` run was already green.
+      For a verbatim relocation the red state is a compile error
+      (`TimelineState` absent from `crate::timeline::state`), which is
+      guaranteed rather than informative — but the step was still skipped, not
+      satisfied. Later tasks add real behavior and must run red first.
 
 ```
 cargo nextest run -p web timeline::state
@@ -292,24 +303,24 @@ cargo nextest run -p web timeline::state
 Expected: FAIL — `TimelineState` not found in `crate::timeline::state` before
 Step 1 lands.
 
-- [ ] **Step 6: Run the tests, verify they pass**
+- [x] **Step 6: Run the tests, verify they pass**
 
 ```
 cargo nextest run -p web timeline::state
 ```
 
 Expected: PASS — 7 tests (3 pre-existing at `state.rs:101`, `:121`, `:134`, plus
-4 new).
+4 new). _Observed: 7 passed, 121 skipped._
 
-- [ ] **Step 7: Verify nothing downstream moved**
+- [x] **Step 7: Verify nothing downstream moved**
 
 ```
 cargo clippy -p web --all-features --all-targets -- -D warnings
-cargo clippy -p web --target wasm32-unknown-unknown -- -D warnings
+devtool run -- cargo xtask check --no-test
 ```
 
 Expected: both clean. The five pages are untouched in this task, so any error
-here means the export move in Step 3 is wrong.
+here means the export move in Step 2 is wrong.
 
 - [ ] **Step 8: Commit**
 
@@ -398,7 +409,7 @@ are unchanged in shape but now yield `Option<WebError>`, so each
 ```
 cargo nextest run -p web timeline::state
 cargo clippy -p web --all-features --all-targets -- -D warnings
-cargo clippy -p web --target wasm32-unknown-unknown -- -D warnings
+devtool run -- cargo xtask check --no-test
 ```
 
 Expected: tests PASS, both clippy runs clean.
@@ -671,7 +682,7 @@ view shape until T7–T9.
 ```
 cargo nextest run -p web timeline::state
 cargo clippy -p web --all-features --all-targets -- -D warnings
-cargo clippy -p web --target wasm32-unknown-unknown -- -D warnings
+devtool run -- cargo xtask check --no-test
 ```
 
 Expected: tests PASS, both clippy runs clean. `unidentified()` has no caller yet
@@ -916,7 +927,7 @@ Two doc comments carry invariants no test can express — write them out:
 - [ ] **Step 2: Verify it compiles for both targets**
 
 ```
-cargo clippy -p web --target wasm32-unknown-unknown -- -D warnings
+devtool run -- cargo xtask check --no-test
 cargo clippy -p web --all-features --all-targets -- -D warnings
 ```
 
@@ -1186,7 +1197,7 @@ and the third view fragment (`:1798-1820`):
 - [ ] **Step 5: Verify**
 
 ```
-cargo clippy -p web --target wasm32-unknown-unknown -- -D warnings
+devtool run -- cargo xtask check --no-test
 cargo clippy -p web --all-features --all-targets -- -D warnings
 ```
 
@@ -1411,7 +1422,7 @@ or alter its `<div>`, only relocate it into the gate's `children` slot.
 - [ ] **Step 5: Run the e2e, verify it passes**
 
 ```
-cargo clippy -p web --target wasm32-unknown-unknown -- -D warnings
+devtool run -- cargo xtask check --no-test
 cargo xtask e2e-local posts.spec.ts
 ```
 
@@ -1554,7 +1565,7 @@ add `TimelineGate` and `NoIdentity`. Let clippy confirm.
 - [ ] **Step 3: Verify** (A7)
 
 ```
-cargo clippy -p web --target wasm32-unknown-unknown -- -D warnings
+devtool run -- cargo xtask check --no-test
 cargo clippy -p web --all-features --all-targets -- -D warnings
 rg -n 'bounce' web/src/cockpit/component.rs
 ```
