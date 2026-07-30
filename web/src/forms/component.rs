@@ -127,3 +127,69 @@ where
         </Labelled>
     }
 }
+
+/// The multi-line sibling of [`ValidatedInput`]: a labelled `<textarea>` bound to a
+/// [`Field<T>`], validating on input and showing the newtype's own message inline once the
+/// field is touched (blur). `name` MUST match the `#[server]` struct field and the e2e
+/// selector.
+///
+/// No `id` prop: [`Labelled`]'s wrapping `<label>` associates the control implicitly, so
+/// there is no `for=`/`id=` pair to keep in sync. No `transform` prop either — nothing
+/// multi-line needs live input massaging the way a username does.
+#[component]
+pub fn ValidatedTextarea<T>(
+    label: &'static str,
+    name: &'static str,
+    field: Field<T>,
+    /// Visible rows. Defaults to 3: the browser default of 2 is too short for the summary
+    /// and bio fields this serves.
+    #[prop(default = 3)]
+    rows: u32,
+    #[prop(optional)] placeholder: Option<&'static str>,
+    /// Override the wrapping `<label>` class (default `j-form-field`) so the field slots
+    /// into a bespoke layout.
+    #[prop(default = "j-form-field")]
+    field_class: &'static str,
+    /// Override the textarea's CSS class (default `j-form-input`) so a form with bespoke
+    /// styling keeps its look; the validation behavior is unchanged.
+    #[prop(default = "j-form-input")]
+    class: &'static str,
+    /// Optional hint line rendered under the textarea and wired to it via
+    /// `aria-describedby` (id `{name}-help`).
+    #[prop(optional)]
+    help: Option<&'static str>,
+) -> impl IntoView
+where
+    T: FromStr + 'static,
+    T::Err: Display,
+{
+    let on_input = move |ev| {
+        let v = event_target_value(&ev);
+        field.value.set(v.clone());
+        field.error.set(field.error_for(&v));
+    };
+    // Only wire `aria-describedby` when a help line is actually rendered (its id must resolve).
+    // Derived from `name` here and again in `Labelled`, for the reason given on `ValidatedInput`.
+    let describedby = help.map(|_| format!("{name}-help"));
+    view! {
+        <Labelled
+            label=label
+            name=name
+            field_class=field_class
+            error=field.error
+            touched=Signal::derive(move || field.is_touched())
+            help=help
+        >
+            <textarea
+                class=class
+                name=name
+                rows=rows
+                placeholder=placeholder
+                aria-describedby=describedby
+                prop:value=field.value
+                on:input=on_input
+                on:blur=move |_| field.touch()
+            ></textarea>
+        </Labelled>
+    }
+}

@@ -4,12 +4,12 @@
 //! `docs/adr/0065-client-side-domain-validation.md`.
 //!
 //! Client-side form primitives: `Field<T>` state, its validator, and the
-//! `ValidatedInput` widget.
+//! `ValidatedInput` / `ValidatedTextarea` widgets.
 
 #[cfg(target_arch = "wasm32")]
 mod component;
 mod field;
 
 #[cfg(target_arch = "wasm32")]
-pub use component::ValidatedInput;
+pub use component::{ValidatedInput, ValidatedTextarea};
 pub use field::{field_error, Field};

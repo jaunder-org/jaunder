@@ -334,7 +334,7 @@ backup is the **only** consumer that passes `help=` (`backup/component.rs:126`),
 the exact prop the `optional_no_strip` decision governs. Skipping this leaves
 that path unexercised.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit** — `ab0b20df`
 
 ```bash
 git add web/src/forms/component.rs
@@ -375,7 +375,7 @@ where
     T::Err: Display;
 ```
 
-- [ ] **Step 1: Write `ValidatedTextarea<T>`**
+- [x] **Step 1: Write `ValidatedTextarea<T>`**
 
 ```rust
 /// The multi-line sibling of [`ValidatedInput`]: a labelled `<textarea>` bound to a
@@ -441,7 +441,7 @@ where
 (`leptos_dom-0.8.8/src/helpers.rs:97-107`) and already works on the existing
 `<textarea>` sites, so no cast change is needed.
 
-- [ ] **Step 2: Export it and correct the module doc**
+- [x] **Step 2: Export it and correct the module doc**
 
 In `web/src/forms/mod.rs`, change line 7 to name both widgets and extend the
 re-export:
@@ -456,7 +456,7 @@ re-export:
 pub use component::{ValidatedInput, ValidatedTextarea};
 ```
 
-- [ ] **Step 3: Verify it compiles for wasm**
+- [x] **Step 3: Verify it compiles for wasm**
 
 Run: `devtool run -- cargo xtask check --no-test` Expected: PASS. The widget is
 `pub` and re-exported, so it is not dead code despite having no call site yet.
