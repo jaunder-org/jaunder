@@ -57,11 +57,23 @@ Adopt **C + mandatory + a `syn`-based `xtask` gate**.
   `test-backend-pattern` guard) enumerates `web` `#[server]` fns with `syn`
   (`parse_file` + `Visit`, as `xtask/src/coverage/exempt.rs` already does), maps
   each to `PascalCase(fn ident)`, parses the registrar's
-  `register_explicit::<web::…::LEAF>()` leaf names, and fails on any missing
-  leaf. It **matches by leaf type name, not module path**, because re-exports
-  (`pub use listing::*`) make the registrar path differ from the source path. It
-  checks only the missing direction — a stale registrar entry already fails to
-  compile. The core is a pure function unit-tested with string fixtures.
+  `register_explicit::<web::<vertical>::<Leaf>>()` entries, and fails on any
+  missing one. It **matches on `(vertical, leaf)`** — the vertical being the
+  first path segment under `web/src` — and rejects a registrar entry of any
+  other shape. It checks only the missing direction — a stale registrar entry
+  already fails to compile. The core is a pure function unit-tested with string
+  fixtures.
+
+  _Amended by #684._ This originally matched by **leaf name alone**, on the
+  grounds that re-exports (`pub use listing::*`) make the registrar path differ
+  from the source path. Keying on the vertical instead answers that without
+  resolving anything: `posts/api.rs` and `posts/api/listing.rs` share a
+  vertical, so the glob needs no resolution. It is also the only key the
+  registrar can actually spell — every vertical declares `mod api;`
+  **privately**, so `web::posts::api::CreatePost` is not a nameable path.
+  Leaf-only matching had made the vertical noun in a fn ident load-bearing:
+  strip it and `Create`, `Delete`, `List`, `Get`, `Update` all collide across
+  verticals.
 
 Reject **A** (leaves the duplication and its own rot) and **B** (no
 `inventory`/`linkme` exists in the repo; the cross-rlib linkage that forced
@@ -75,11 +87,30 @@ a gate-caught guarantee).
   host-side, naming the fn and its `file:line` — no more silent 404s.
 - The second registrar list and its independent rot risk are gone; there is one
   place to keep in sync, and the gate keeps it honest.
-- **Accepted limitation:** leaf-name matching means two `#[server]` fns with the
-  same name in different modules collapse to one leaf, so the gate could miss
-  one being unregistered. This is benign — they would also collide at the
-  `endpoint` level — and is preferred over resolving re-exports to reconstruct
-  full paths.
+- **Two `#[server]` fns with the same ident in one vertical are a hard
+  failure.** They collapse to a single `(vertical, leaf)` key, so one registrar
+  entry would satisfy both and leave the other to 404 silently — exactly the
+  #358 omission this gate exists to catch. Across _different_ verticals the same
+  leaf is not a collision at all.
+
+  The compiler does **not** own this case, which is why the check must stay. An
+  item defined in `api.rs` silently _shadows_ a glob-imported name of the same
+  ident from `pub use listing::*` (verified with `rustc`: exit 0, no error), so
+  the pair compiles cleanly; and each vertical's `mod.rs` re-exports an explicit
+  list from `api` only, so a duplicate added in `<vertical>/server.rs` never
+  reaches a `pub use` conflict either.
+
+  Such a pair would also collide at the `endpoint` level — since #684 that is
+  enforced independently by the `server-fn-endpoint` gate, which derives
+  `/<vertical>/<ident>`. Two guards, not one; neither is redundant, because a
+  `list_mine`/`listMine` pair shares a leaf (`ListMine`) while deriving
+  _distinct_ endpoints, so only this gate catches it.
+
+  _Amended by #684._ This bullet previously called leaf collision an "accepted
+  limitation … benign", describing it as something that could let an
+  unregistered fn **slip through** — a pass. The code hard-**failed** it. The
+  prose was wrong, not the code.
+
 - The gate assumes the `#[server(endpoint = "…")]` form (no positional type
   rename); it treats an unexpected positional-rename form as a hard error so the
   assumption cannot silently break the PascalCase mapping.

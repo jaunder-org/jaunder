@@ -1179,7 +1179,7 @@ Run: `devtool run -- cargo xtask e2e-local` Expected: PASS — the only detector
 of a missed e2e literal (**memory: local e2e runs here**). A 404 in a Playwright
 request is the signature of a missed site.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit** — `03e0d2ec` (15 files)
 
 ```bash
 git add end2end/tests docs server/tests/web/web_auth.rs
@@ -1201,7 +1201,7 @@ git commit -m "test(e2e): follow the server-fn endpoints to /<vertical>/<op> (#6
 - Consumes: the spec's D1, D2, D5, and §"Why the duplicate check cannot simply
   be deleted".
 
-- [ ] **Step 1: Amend ADR-0066**
+- [x] **Step 1: Amend ADR-0066**
 
 In _Decision_ `:56-64`, replace "It **matches by leaf type name, not module
 path**, because re-exports (`pub use listing::*`) make the registrar path differ
@@ -1224,7 +1224,8 @@ Per **memory: ADR promote → prettier the README** and **memory: pre-commit
 prettier restages prose**, run `prettier -w` on the edited markdown before
 staging.
 
-- [ ] **Step 2: Draft the wire-namespace ADR**
+- [x] **Step 2: Draft the wire-namespace ADR** —
+      `docs/adr/drafts/server-fn-wire-namespace.md`
 
 Create `docs/adr/drafts/server-fn-wire-namespace.md` from `docs/adr/template.md`
 (numberless — `cargo xtask adr promote` numbers it at ship, per ADR-0048).
@@ -1247,7 +1248,7 @@ Content:
 - Note the multi-segment wildcard dependency and the
   `server/tests/web/router.rs` guard from Task 7.
 
-- [ ] **Step 3: Run the gate**
+- [x] **Step 3: Run the gate** — `adr-format` and `adr-readme-parity` green
 
 Run: `devtool run -- cargo xtask check --no-test` Expected: PASS, including
 `adr-check`.
