@@ -1,5 +1,5 @@
 use chrono::{Datelike, Utc};
-use common::ids::{ChannelId, FeedEventId, PostId, UserId};
+use common::ids::{AudienceId, ChannelId, FeedEventId, PostId, UserId};
 use common::password::Password;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
@@ -239,17 +239,19 @@ async fn statuses_seed_maps_to_enum(#[case] backend: Backend) {
 // `local_channel_id()` is introduced in a later task — do not use it here.
 async fn local_channel_id(backend: Backend, env: &TestEnv) -> ChannelId {
     let sql = "SELECT channel_id FROM channels WHERE name = 'local'";
-    let raw: i64 = match backend {
-        Backend::Sqlite => sqlx::query_scalar(sql)
+    match backend {
+        Backend::Sqlite => sqlx::query_scalar::<_, ChannelId>(sql)
             .fetch_one(&open_pool(&env.base).await)
             .await
             .unwrap(),
         Backend::Postgres => {
             let pool = env.base.pool().postgres();
-            sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
+            sqlx::query_scalar::<_, ChannelId>(sql)
+                .fetch_one(pool)
+                .await
+                .unwrap()
         }
-    };
-    ChannelId::from(raw)
+    }
 }
 
 // The production `SubscriptionStorage::local_channel_id()` accessor must return
@@ -2447,7 +2449,7 @@ async fn post_audience_rows(
     backend: Backend,
     env: &TestEnv,
     post_id: PostId,
-) -> Vec<(String, Option<i64>)> {
+) -> Vec<(String, Option<AudienceId>)> {
     let sql = "SELECT tk.name, pa.audience_id \
                FROM post_audiences pa \
                JOIN target_kinds tk ON tk.kind_id = pa.target_kind_id \
@@ -2455,14 +2457,14 @@ async fn post_audience_rows(
                ORDER BY tk.name, pa.audience_id";
     match backend {
         Backend::Sqlite => sqlx::query_as(&sql.replace("$1", "?"))
-            .bind(i64::from(post_id))
+            .bind(post_id)
             .fetch_all(&open_pool(&env.base).await)
             .await
             .unwrap(),
         Backend::Postgres => {
             let pool = env.base.pool().postgres();
             sqlx::query_as(sql)
-                .bind(i64::from(post_id))
+                .bind(post_id)
                 .fetch_all(pool)
                 .await
                 .unwrap()
@@ -2525,7 +2527,7 @@ async fn post_audiences_are_persisted_and_replaced(#[case] backend: Backend) {
     assert_eq!(
         rows,
         vec![
-            ("named".to_string(), Some(i64::from(aud))),
+            ("named".to_string(), Some(aud)),
             ("public".to_string(), None),
         ],
         "create should persist one public and one named row"

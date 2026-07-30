@@ -431,7 +431,7 @@ Expected: PASS.
 
 ## Task 6 — The `server/tests` twins and the stale comment
 
-- [ ] Done
+- [x] Done
 
 **Files**
 

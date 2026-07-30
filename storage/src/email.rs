@@ -103,7 +103,7 @@ where
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `TokenHash` binds and `Email` binds/decodes as themselves via the sqlx
     // bridge (#438), which delegates to `String`; these bounds make that bridge
-    // available on the generic backend (the `(i64, Email): FromRow` bound above
+    // available on the generic backend (the `(UserId, Email): FromRow` bound above
     // threads the `Email` decode).
     String: sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
