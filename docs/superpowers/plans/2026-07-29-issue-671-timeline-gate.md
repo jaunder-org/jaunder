@@ -1497,7 +1497,7 @@ do. D7: its `Topbar` + `InlineComposer` become the gate's `children`, moved
 **wholesale** as the existing `match read_username()` so `InlineComposer` keeps
 its `username: Username` prop.
 
-- [ ] **Step 1: Rewrite the Effect and the view**
+- [x] **Step 1: Rewrite the Effect and the view**
 
 Keep `state`, `username`, `refresh_version`/`on_mutate`, `session`,
 `initial_page`, and `on_load_more` exactly as they are. Delete `bounce` (`:21`),
@@ -1563,12 +1563,12 @@ This reproduces all four current outcomes: the redirect and the error banner
 paint alone (chrome is suppressed in those arms by `shows_chrome()`), loading
 paints `Topbar` + `.j-loading`, and loaded paints `Topbar` + composer + rows.
 
-- [ ] **Step 2: Prune the imports**
+- [x] **Step 2: Prune the imports**
 
 Drop `leptos_router::components::Redirect` (`:11`) and `TimelineRows` (`:14`);
 add `TimelineGate` and `NoIdentity`. Let clippy confirm.
 
-- [ ] **Step 3: Verify** (A7)
+- [x] **Step 3: Verify** (A7)
 
 ```
 devtool run -- cargo xtask check --no-test
@@ -1578,7 +1578,7 @@ rg -n 'bounce' web/src/cockpit/component.rs
 
 Expected: both clippy runs clean; `rg` finds **nothing** (A7).
 
-- [ ] **Step 4: Run the cockpit e2e** (A5)
+- [x] **Step 4: Run the cockpit e2e** (A5)
 
 ```
 cargo xtask e2e-local authed-flash.spec.ts
@@ -1600,7 +1600,7 @@ backstop for `append`/D10 and the test that catches an over-broad `children`.
 named above would all still pass with a doubled feed, so they cannot catch that
 mistake alone.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 devtool run -- cargo xtask check

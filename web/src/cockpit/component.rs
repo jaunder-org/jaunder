@@ -8,17 +8,15 @@
 use common::pagination::PageSize;
 use common::username::Username;
 use leptos::prelude::*;
-use leptos_router::components::Redirect;
 
 use crate::posts::{list_home_feed, InlineComposer};
-use crate::timeline::{TimelineRows, TimelineState};
+use crate::timeline::{NoIdentity, TimelineGate, TimelineState};
 use crate::topbar::Topbar;
 
 #[component]
 pub fn CockpitPage() -> impl IntoView {
     let state = TimelineState::default();
     let username = RwSignal::new(None::<Username>);
-    let bounce = RwSignal::new(false);
 
     let refresh_version = RwSignal::new(0u32);
     let on_mutate = Callback::new(move |()| refresh_version.update(|v| *v += 1));
@@ -44,13 +42,16 @@ pub fn CockpitPage() -> impl IntoView {
         },
     );
 
-    // Copy the resolved Resource into the timeline signals once it loads.
+    // Copy the resolved Resource into the timeline signals once it loads. This
+    // `Effect` stays page-specific (#671): the payload carries the session-confirmed
+    // identity, which no shared helper can publish. Only the *transitions* it
+    // dispatches to are shared, and those are host-tested.
     Effect::new(move |_| {
         if let Some(result) = initial_page.try_get().flatten() {
             match result {
                 Ok(Some((user, page))) => {
                     // Only set `username` when it actually changes: a spurious set
-                    // would re-run the outer view closure and REMOUNT InlineComposer,
+                    // would re-run the chrome closure and REMOUNT InlineComposer,
                     // wiping its publish/draft flash (a re-fetch fires on every
                     // publish via `refresh_version`).
                     if username.get_untracked().as_ref() != Some(&user) {
@@ -58,7 +59,10 @@ pub fn CockpitPage() -> impl IntoView {
                     }
                     state.adopt(page);
                 }
-                Ok(None) => bounce.set(true),
+                // Anonymous / expired (D6). The status carries the bounce now — no
+                // separate `bounce` signal — and the gate's `no_identity` prop turns
+                // it into the `/login` redirect.
+                Ok(None) => state.unidentified(),
                 Err(err) => state.fail(err),
             }
         }
@@ -68,43 +72,29 @@ pub fn CockpitPage() -> impl IntoView {
         crate::timeline::spawn_load_more(state, list_home_feed);
     });
 
-    // A `Memo`, not a bare closure: the outer view closure below reads this to
-    // decide whether to show the error banner, and it also hosts `InlineComposer`
-    // — so it must re-run ONLY when the failure message changes, not on every
-    // `status` write. `resolve()` sets `status = Idle` on every refresh (incl.
-    // after a publish), and load-more toggles `InFlight`; reading `status` raw
-    // would re-run the closure and REMOUNT InlineComposer, wiping its publish
-    // flash (the same hazard the `username` guard above avoids). The memo
-    // dedupes `None -> None`, so only a real `Failed` transition notifies.
-    let read_error = Memo::new(move |_| state.status.get().into_failure());
-    let read_bounce = move || bounce.get();
     let read_username = move || username.get();
 
     view! {
-        {move || {
-            if read_bounce() {
-                return view! { <Redirect path="/login" /> }.into_any();
-            }
-            if let Some(err) = read_error.get() {
-                return view! { <p class="error">{err.to_string()}</p> }.into_any();
-            }
-            match read_username() {
-                None => {
-                    view! {
-                        <Topbar title="Home" />
-                        <p class="j-loading">"Loading\u{2026}"</p>
-                    }
-                        .into_any()
-                }
+        // Only the CHROME goes in `children` — the gate itself owns the loading
+        // placeholder and the rows. It renders in the loading and rows arms but not
+        // over the error banner or the redirect, which reproduces all four of this
+        // page's previous outcomes exactly.
+        <TimelineGate
+            state=state
+            on_mutate=on_mutate
+            on_load_more=on_load_more
+            no_identity=NoIdentity::Redirect("/login")
+        >
+            {move || match read_username() {
+                None => view! { <Topbar title="Home" /> }.into_any(),
                 Some(user) => {
                     view! {
                         <Topbar title="Home" sub="Your home feed" />
                         <InlineComposer username=user on_publish=refresh_version.write_only() />
-                        <TimelineRows state=state on_mutate=on_mutate on_load_more=on_load_more />
                     }
                         .into_any()
                 }
-            }
-        }}
+            }}
+        </TimelineGate>
     }
 }
