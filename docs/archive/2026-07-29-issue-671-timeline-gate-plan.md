@@ -5,7 +5,7 @@
 > useful). Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Spec:**
-[`docs/superpowers/specs/2026-07-29-issue-671-timeline-gate.md`](../specs/2026-07-29-issue-671-timeline-gate.md)
+[`2026-07-29-issue-671-timeline-gate-spec.md`](2026-07-29-issue-671-timeline-gate-spec.md)
 — referenced by decision (D1–D12) and acceptance criterion (A1–A9). **Read it
 first.** This plan is "how"; the spec is "what/why" and is not restated here.
 
