@@ -226,7 +226,7 @@ Expected: PASS.
 
 ## Task 3 — `feed_events::enqueue`
 
-- [ ] Done
+- [x] Done
 
 **Files** — `storage/src/feed_events.rs` (`:170` bound, `:178-183`)
 
