@@ -8,7 +8,7 @@
 //! sites; its tuple pass then missed every `query_scalar`).
 //!
 //! **This gate enumerates; it does not search**
-//! (`docs/adr/drafts/static-type-safety-gates-enumerate.md`). It reads **no SQL**: it
+//! (`docs/adr/0085-static-type-safety-gates-enumerate.md`). It reads **no SQL**: it
 //! does not look for `*_id` to decide something is an
 //! id, and it does not look for `COUNT(` to decide something is a count. Both are
 //! pattern searches, and either one hands the blind spot straight back —

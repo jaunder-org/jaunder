@@ -739,7 +739,7 @@ demonstration, not a committed test.
 
 - [x] Done
 
-**Files** — `docs/adr/drafts/static-type-safety-gates-enumerate.md` (drafted
+**Files** — `docs/adr/0085-static-type-safety-gates-enumerate.md` (drafted
 during `jaunder-start`), `xtask/src/steps/sqlx_newtype_bind_check.rs`, issue
 #716
 
@@ -756,7 +756,7 @@ non-conforming on **both** counts (spelling search at `:95-101`, region-scoped
 
 Add the ADR link to `sqlx_newtype_bind_check.rs`'s module doc at the existing
 "What it still cannot see" note (`:28-32`). Reference the draft **by path**
-(`docs/adr/drafts/static-type-safety-gates-enumerate.md`) so
+(`docs/adr/0085-static-type-safety-gates-enumerate.md`) so
 `cargo xtask adr promote` rewrites it to the assigned number at ship.
 
 Update issue #716 so its scope matches what the ADR asserts (AC19) — its body

@@ -31,7 +31,7 @@
 //! and two live instances are recorded there.
 //!
 //! **This gate does not conform to the "enumerate, don't search" decision**
-//! (`docs/adr/drafts/static-type-safety-gates-enumerate.md`, #715), on two counts, and
+//! (`docs/adr/0085-static-type-safety-gates-enumerate.md`, #715), on two counts, and
 //! the laundering above is a symptom rather than the disease:
 //!
 //! - It decides a violation by *searching* for three strip spellings (`.as_ref()`,

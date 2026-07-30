@@ -96,7 +96,7 @@ default-on, `secret` drops it, a secret re-adds it explicitly.
   way — including via a parameter — passes green; and its substring allowlist
   exempts every matching line under the root rather than one site. Both are
   departures from the decision recorded in
-  `docs/adr/drafts/static-type-safety-gates-enumerate.md`, and #716 now carries
+  `docs/adr/0085-static-type-safety-gates-enumerate.md`, and #716 now carries
   the scope of rebuilding this gate to enumerate.
 
 - **A second `xtask` gate (`sqlx-newtype-decode`, #715)** covers the other
