@@ -21,9 +21,11 @@ pub struct ServerFn {
     /// #684 dropped the vertical noun from these idents, fifteen fns share six
     /// idents across verticals ([`ServerFn::qualified`]).
     pub ident: String,
-    /// The declared `endpoint = "…"`, leading slash stripped. `None` for a bare
-    /// `#[server]`, whose generated path carries a hash suffix and so cannot be
-    /// matched by name — the verdict reports that as drift rather than guessing.
+    /// The endpoint the fn serves, leading slash stripped: the declared
+    /// `endpoint = "…"` for a leptos `#[server]`, or the `<vertical>/<ident>` that
+    /// `#[macros::server]` derives (#714). `None` for a bare `#[server]`, whose
+    /// generated path carries a hash suffix and so cannot be matched by name — the
+    /// verdict reports that as drift rather than guessing.
     pub endpoint: Option<String>,
     /// Crate-relative `::`-joined module path, from [`module_path_of`].
     pub module: String,
@@ -68,11 +70,25 @@ impl ServerFn {
 pub fn server_fns_in(src: &str, module: &str) -> Result<Vec<ServerFn>, String> {
     Ok(crate::web_server_fns::server_fns_in(src)?
         .into_iter()
-        .map(|f| ServerFn {
-            endpoint: endpoint_of(&f.attrs[f.server_attr_index]),
-            ident: f.ident,
-            module: module.to_string(),
-            line: f.line,
+        .map(|f| {
+            let uses_macro_attr = f.uses_macro_attr;
+            let mut out = ServerFn {
+                endpoint: endpoint_of(&f.attrs[f.server_attr_index]),
+                ident: f.ident,
+                module: module.to_string(),
+                line: f.line,
+            };
+            // `#[macros::server]` declares no `endpoint = "…"` — it *derives*
+            // `/<vertical>/<ident>` (#714), so reading the attribute yields `None`
+            // and every one of these fns would read as an unmatchable bare
+            // `#[server]`, i.e. drift. Repeat the derivation instead, via
+            // [`ServerFn::vertical`] so the notion of "vertical" stays single-sourced.
+            // Stored **without** the leading slash, like every other value in this
+            // field — `snapshot.rs` compares it against `"{vertical}/{ident}"`.
+            if uses_macro_attr {
+                out.endpoint = Some(format!("{}/{}", out.vertical(), out.ident));
+            }
+            out
         })
         .collect())
 }
@@ -150,6 +166,26 @@ mod tests {
         let fns = server_fns_in(src, "x").expect("enumerates");
         assert_eq!(fns[0].endpoint, None);
         assert_eq!(fns[0].ident, "thing");
+    }
+
+    #[test]
+    fn macro_attr_endpoint_is_derived_without_a_leading_slash() {
+        // `#[macros::server]` declares nothing, so the inventory must repeat the
+        // macro's own derivation — and store it the way this field is stored, with
+        // the leading slash off, since `snapshot.rs` matches `"{vertical}/{ident}"`.
+        let src = "#[macros::server]\npub async fn create() {}\n";
+        let fns = server_fns_in(src, "audiences::api").expect("enumerates");
+        assert_eq!(fns[0].endpoint.as_deref(), Some("audiences/create"));
+    }
+
+    #[test]
+    fn macro_attr_arguments_do_not_disturb_the_derived_endpoint() {
+        // `skip(...)` is routed to the span, `input = …` to `#[server]`; neither
+        // says anything about the wire path.
+        let src = "#[macros::server(input = MultipartFormData, skip_all)]\n\
+                   pub async fn upload() {}\n";
+        let fns = server_fns_in(src, "media::api").expect("enumerates");
+        assert_eq!(fns[0].endpoint.as_deref(), Some("media/upload"));
     }
 
     #[test]

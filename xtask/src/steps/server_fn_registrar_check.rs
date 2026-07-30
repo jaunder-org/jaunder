@@ -74,7 +74,7 @@ fn server_fns_in(src: &str) -> Result<Vec<ServerFn>, String> {
     let mut fns = Vec::with_capacity(found.len());
     for f in found {
         let attr = &f.attrs[f.server_attr_index];
-        match server_fn_default_named(attr) {
+        match server_fn_default_named(attr, f.uses_macro_attr) {
             Ok(true) => fns.push(ServerFn {
                 name: pascal_case(&f.ident),
                 line: f.line,
@@ -99,14 +99,31 @@ fn server_fns_in(src: &str) -> Result<Vec<ServerFn>, String> {
 /// positional argument (`#[server(SomeName)]`) renames the type → `Ok(false)`;
 /// an argument list we cannot parse as `Meta` → `Err`. Both are hard errors at
 /// the call site.
-fn server_fn_default_named(attr: &syn::Attribute) -> Result<bool, String> {
+///
+/// `uses_macro_attr` narrows the arguments considered to the ones that actually
+/// reach `#[server]`. Under `#[macros::server]` (#714) the attribute also carries
+/// the span's `skip(...)` (a `Meta::List`) and `skip_all` (a `Meta::Path`), which
+/// this test would otherwise read as positional type renames and hard-fail on. The
+/// remaining arguments are still checked, so `#[macros::server(SomeName)]` is
+/// caught rather than the detection being switched off.
+fn server_fn_default_named(attr: &syn::Attribute, uses_macro_attr: bool) -> Result<bool, String> {
     match web_server_fns::server_attr_args(attr)? {
         // The bare `#[server]` keeps the default name.
         None => Ok(true),
         // Only `key = value` args (NameValue) keep it; a bare path arg is a
         // positional rename.
-        Some(args) => Ok(args.iter().all(|m| matches!(m, Meta::NameValue(_)))),
+        Some(args) => Ok(args
+            .iter()
+            .filter(|m| !(uses_macro_attr && routed_to_instrument(m)))
+            .all(|m| matches!(m, Meta::NameValue(_)))),
     }
+}
+
+/// Whether `#[macros::server]` forwards this argument to `#[tracing::instrument]`
+/// rather than to `#[server]` (`macros/src/server_fn.rs`'s `route`). Those two say
+/// nothing about the generated type's name, so the naming test must not read them.
+fn routed_to_instrument(arg: &Meta) -> bool {
+    arg.path().is_ident("skip") || arg.path().is_ident("skip_all")
 }
 
 /// `snake_case` fn ident → `PascalCase` generated type name
@@ -373,6 +390,61 @@ mod tests {
     #[test]
     fn syn_parse_failure_is_an_error() {
         assert!(server_fns_in("fn broken( {{{ not valid").is_err());
+    }
+
+    // --- the `#[macros::server]` spelling (#714) ---
+
+    #[test]
+    fn macro_attr_span_arguments_are_not_read_as_a_positional_rename() {
+        // `skip_all` is a `Meta::Path` and `skip(name)` a `Meta::List` — the two
+        // shapes the naming test rejects as positional renames. Under
+        // `#[macros::server]` they belong to the span, not to `#[server]`, so the
+        // fn must still map to its default `PascalCase` type.
+        let all = "#[macros::server(skip_all)]\npub async fn create_post() {}\n";
+        assert_eq!(server_fns_in(all).unwrap()[0].name, "CreatePost");
+        let some = "#[macros::server(skip(name))]\npub async fn rename() {}\n";
+        assert_eq!(server_fns_in(some).unwrap()[0].name, "Rename");
+        let both = "#[macros::server(input = MultipartFormData, skip_all)]\n\
+                    pub async fn upload() {}\n";
+        assert_eq!(server_fns_in(both).unwrap()[0].name, "Upload");
+    }
+
+    #[test]
+    fn a_positional_rename_is_still_a_hard_error_under_the_macro_spelling() {
+        // Narrowing which arguments the test reads must not switch the detection
+        // off — only `skip`/`skip_all` are exempt.
+        let src = "#[macros::server(MyThing)]\npub async fn my_thing() {}\n";
+        assert!(server_fns_in(src).is_err());
+    }
+
+    #[test]
+    fn problems_is_none_for_registered_macro_attr_fns() {
+        let sources = vec![
+            (
+                "web/src/audiences/api.rs".to_string(),
+                "#[macros::server(skip(name))]\npub async fn rename() {}\n".to_string(),
+            ),
+            (
+                "web/src/posts/api.rs".to_string(),
+                "#[macros::server(skip_all)]\npub async fn create() {}\n".to_string(),
+            ),
+        ];
+        let registrar = wrap_reg(
+            "server_fn::axum::register_explicit::<web::audiences::Rename>();\n\
+             server_fn::axum::register_explicit::<web::posts::Create>();",
+        );
+        assert_eq!(problems(&sources, &registrar), None);
+    }
+
+    #[test]
+    fn an_unregistered_macro_attr_fn_is_still_flagged() {
+        // The spelling must not become a way out of the registrar requirement.
+        let sources = vec![(
+            "web/src/audiences/api.rs".to_string(),
+            "#[macros::server(skip_all)]\npub async fn rename() {}\n".to_string(),
+        )];
+        let detail = problems(&sources, &wrap_reg("")).expect("unregistered is a problem");
+        assert!(detail.contains("`web::audiences::Rename`"), "{detail}");
     }
 
     /// The `(vertical, leaf)` pairs a registrar body registers, ignoring the

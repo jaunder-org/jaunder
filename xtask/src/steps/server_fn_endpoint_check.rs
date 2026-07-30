@@ -102,6 +102,14 @@ fn problems(web_sources: &[(String, String)]) -> Option<String> {
                 .entry(expected.clone())
                 .or_default()
                 .push(format!("{path}:{}", f.line));
+            // `#[macros::server]` derives the endpoint from this same
+            // `(vertical, ident)` pair (#714), so there is no declared literal to
+            // check and nothing for `Mode::Fix` to write — rules 1 and 2 belong to
+            // the macro. Rule 3 above still covers it: the derivation is identical,
+            // so two such fns can still claim one wire path.
+            if f.uses_macro_attr {
+                continue;
+            }
             match endpoint_of(&f.attrs[f.server_attr_index]) {
                 Err(e) => lines.push(format!("{path}: {at}: {e}")),
                 Ok(None) => lines.push(format!(
@@ -157,6 +165,11 @@ fn endpoint_fixes(path: &str, src: &str) -> Vec<LineFix> {
     let lines: Vec<&str> = src.lines().collect();
     let mut fixes = Vec::new();
     for f in &fns {
+        // The macro spelling owns its endpoint; there is no literal to rewrite, and
+        // inserting one would be rejected by the macro itself.
+        if f.uses_macro_attr {
+            continue;
+        }
         let attr = &f.attrs[f.server_attr_index];
         if endpoint_of(attr).is_err() {
             continue;
@@ -299,6 +312,50 @@ mod tests {
             fixed.contains("input = Json"),
             "other args must survive: {fixed}"
         );
+    }
+
+    // --- the `#[macros::server]` spelling (#714) ---
+
+    #[test]
+    fn a_macro_attr_fn_is_not_reported_as_missing_an_endpoint() {
+        // The macro derives `/audiences/rename` itself, so the "no `endpoint`"
+        // hard error would be a false failure — and `Mode::Fix` deliberately never
+        // synthesizes one, leaving the tree permanently red.
+        let s = src(
+            "audiences",
+            "#[macros::server]\npub async fn rename() -> R {}\n",
+        );
+        assert_eq!(problems(&s), None);
+        let with_args = src(
+            "media",
+            "#[macros::server(input = MultipartFormData, skip_all)]\npub async fn upload() -> R {}\n",
+        );
+        assert_eq!(problems(&with_args), None);
+    }
+
+    #[test]
+    fn two_macro_attr_fns_deriving_one_endpoint_are_still_flagged() {
+        // Skipping the presence check must not skip the collision rule: the macro
+        // derives from `(vertical, ident)` exactly as this gate does.
+        let s = vec![
+            (
+                "web/src/posts/api.rs".to_string(),
+                "#[macros::server]\npub async fn create() -> R {}\n".to_string(),
+            ),
+            (
+                "web/src/posts/api/listing.rs".to_string(),
+                "#[macros::server]\npub async fn create() -> R {}\n".to_string(),
+            ),
+        ];
+        let detail = problems(&s).expect("a duplicate endpoint is a problem");
+        assert!(detail.contains("web/src/posts/api.rs"), "{detail}");
+        assert!(detail.contains("web/src/posts/api/listing.rs"), "{detail}");
+    }
+
+    #[test]
+    fn fix_leaves_a_macro_attr_fn_alone() {
+        let src_text = "#[macros::server(skip_all)]\npub async fn create() -> R {}\n";
+        assert!(endpoint_fixes("web/src/posts/api.rs", src_text).is_empty());
     }
 
     #[test]

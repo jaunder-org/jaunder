@@ -51,6 +51,32 @@ Playwright e2e.
 
 ---
 
+## Progress
+
+| Task | Commit     | Note                                                                                                 |
+| ---- | ---------- | ---------------------------------------------------------------------------------------------------- |
+| 1    | —          | Filed **#731**; added to Jaunder Backlog. Untriaged (no milestone/priority).                         |
+| 2    | `d05cc6b7` | **P1 PASSED** — the boundary failure event carries `web.example.do_thing`. The spec's premise holds. |
+| 3    | `5c7adff1` | 55 sites swept. The `server_boundary` test calls were **seven**, not the five this plan said.        |
+| 4+5  | `eba3e0b6` | **Merged into one commit** — see below.                                                              |
+
+**Deviation: Tasks 4 and 5 landed together.** Splitting them would have
+committed the pure core with no caller, and `dead_code` under `-D warnings`
+fails the gate — the pub-API/dead-code commit boundary. The TDD split still
+happened (core written and red-green'd first); only the commit merged.
+
+Three gate failures worth recording, all in Task 4/5:
+
+- `clippy::replace_box` on `f.block = Box::new(…)` → `*f.block = …`.
+- The `cov:ignore-start` marker sat _inside_ the shell fn, leaving its signature
+  and closing brace uncovered. It has to wrap the whole item, attribute
+  included.
+- A `panic!` arm in a test helper was uncovered. Restructured to
+  `.err().expect(…)` so the branch does not exist, rather than marking it
+  ignored — the gate was right.
+
+---
+
 ## Review header
 
 **Scope — in:** the attribute macro; converting all 55 server fns; deleting the
@@ -164,7 +190,7 @@ to the placement rule.
   current signature; Task 3 changes it.
 - Produces: `ScopeRecorder`, reused by Task 10's AC-5 test.
 
-- [ ] **Step 1: Write the test.**
+- [x] **Step 1: Write the test.**
 
 The existing
 `server_boundary_evaluates_tracing_fields_when_subscriber_is_active`
@@ -227,7 +253,7 @@ async fn boundary_failure_event_carries_the_enclosing_instrument_span() {
 }
 ```
 
-- [ ] **Step 2: Run it.**
+- [x] **Step 2: Run it.**
 
 Run:
 `devtool run -- cargo nextest run -p web --features server boundary_failure_event_carries_the_enclosing_instrument_span`
@@ -235,7 +261,10 @@ Run:
 Expected: **PASS.** This is a _probe_, not red-green — it asserts a property of
 current code. A FAIL means P1 is false: **stop the plan** and report.
 
-- [ ] **Step 3: Commit.**
+**Result: PASS** — `web.example.do_thing` was in scope on the boundary failure
+event. **P1 holds; the spec stands.**
+
+- [x] **Step 3: Commit.**
 
 ```bash
 cargo xtask check

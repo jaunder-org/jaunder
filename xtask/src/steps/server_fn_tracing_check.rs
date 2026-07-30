@@ -325,37 +325,53 @@ fn is_cfg_attr_instrument(attr: &syn::Attribute) -> bool {
     idents_in(&list.tokens).contains("instrument")
 }
 
-/// Every problem with one `#[server]` fn, as human-readable lines (without the
-/// file prefix, which the caller adds).
-fn problems_with(f: &WebServerFn, vertical: &str) -> Vec<String> {
-    let at = format!("line {}: `{}`", f.line, f.ident);
+/// The span declaration to hold the PII rule against, plus any presence/placement
+/// or `name` problems found on the way — or, in the `Err` arm, the problems that
+/// leave nothing to hold it against at all.
+///
+/// Two sources, because two spellings coexist during the #714 conversion. Under
+/// `#[macros::server]` rules 1 and 2 have nothing to inspect — the macro emits the
+/// `#[tracing::instrument]` and its `name`, so neither can be missing, misplaced or
+/// stale — and the `skip(...)` / `skip_all` the PII rule needs sit on the macro
+/// attribute itself.
+fn span_declaration(
+    f: &WebServerFn,
+    vertical: &str,
+    at: &str,
+) -> Result<(Instrument, Vec<String>), Vec<String>> {
+    if f.uses_macro_attr {
+        return match macro_attr_span(&f.attrs[f.server_attr_index]) {
+            Ok(parsed) => Ok((parsed, Vec::new())),
+            Err(e) => Err(vec![format!("{at}: {e}")]),
+        };
+    }
 
     // A conditionally-present span is exactly the inconsistency this gate exists to
     // remove, so check it before "missing" — otherwise the message would mislead.
     if f.attrs.iter().any(is_cfg_attr_instrument) {
-        return vec![format!(
+        return Err(vec![format!(
             "{at}: #[tracing::instrument] is wrapped in a #[cfg_attr(...)] — a span that exists \
              only under some cfg is the inconsistency this gate prevents; apply it unconditionally"
-        )];
+        )]);
     }
 
     let Some(index) = f.attrs.iter().position(is_instrument) else {
-        return vec![format!(
+        return Err(vec![format!(
             "{at}: #[server] fn has no #[tracing::instrument] — add \
              #[tracing::instrument(name = \"web.{vertical}.{}\")] directly after #[server] (#511)",
             f.ident
-        )];
+        )]);
     };
 
     if index < f.server_attr_index {
-        return vec![format!(
+        return Err(vec![format!(
             "{at}: #[tracing::instrument] must come *after* #[server], not before"
-        )];
+        )]);
     }
 
     let parsed = match parse_instrument(&f.attrs[index]) {
         Ok(p) => p,
-        Err(e) => return vec![format!("{at}: {e}")],
+        Err(e) => return Err(vec![format!("{at}: {e}")]),
     };
 
     let mut lines = Vec::new();
@@ -372,6 +388,62 @@ fn problems_with(f: &WebServerFn, vertical: &str) -> Vec<String> {
         )),
         Some(_) => {}
     }
+    Ok((parsed, lines))
+}
+
+/// What a `#[macros::server]` attribute declares about its span.
+///
+/// The macro forwards exactly `skip(...)` / `skip_all` to `#[tracing::instrument]`
+/// and `input = …` to `#[server]`, and rejects everything else — `endpoint` and
+/// `name` because it derives them, `fields(...)` because it retired the value-side
+/// PII check along with it (`macros/src/server_fn.rs`'s `route`). This mirrors that
+/// **default-deny**: an argument the macro might one day forward but this gate does
+/// not model could record a value the allowlist never inspected, so it fails here
+/// until modelled, exactly as an unmodelled `#[tracing::instrument]` argument does.
+fn macro_attr_span(attr: &syn::Attribute) -> Result<Instrument, String> {
+    let mut out = Instrument::default();
+    let Some(args) = web_server_fns::server_attr_args(attr)? else {
+        // The bare `#[macros::server]`: nothing skipped, so every parameter must be
+        // recordable on its own.
+        return Ok(out);
+    };
+    for arg in args {
+        let Some(ident) = arg.path().get_ident().map(ToString::to_string) else {
+            return Err(format!(
+                "unrecognized #[macros::server] argument `{}`",
+                path_text(arg.path())
+            ));
+        };
+        match ident.as_str() {
+            "skip" => {
+                let Meta::List(list) = &arg else {
+                    return Err("`skip` must be `skip(a, b)`".into());
+                };
+                out.skipped.extend(idents_in(&list.tokens));
+            }
+            "skip_all" => out.skip_all = true,
+            // Routed to `#[server]`, not to the span — it records nothing.
+            "input" => {}
+            other => {
+                return Err(format!(
+                    "unrecognized #[macros::server] argument `{other}` — the macro forwards only \
+                     `skip(...)`/`skip_all` to the span and `input = …` to #[server], and an \
+                     unmodelled argument could record a value the allowlist never inspected"
+                ))
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Every problem with one `#[server]` fn, as human-readable lines (without the
+/// file prefix, which the caller adds).
+fn problems_with(f: &WebServerFn, vertical: &str) -> Vec<String> {
+    let at = format!("line {}: `{}`", f.line, f.ident);
+    let (parsed, mut lines) = match span_declaration(f, vertical, &at) {
+        Ok(v) => v,
+        Err(fatal) => return fatal,
+    };
 
     for p in &f.params {
         let reduced = reduce_type(&p.ty);
@@ -424,6 +496,12 @@ fn name_fixes(path: &str, src: &str) -> Vec<LineFix> {
     let lines: Vec<&str> = src.lines().collect();
     let mut fixes = Vec::new();
     for f in &fns {
+        // The macro emits the span name; there is no source attribute to write it
+        // into, and a stray hand-written `#[tracing::instrument]` left on a
+        // converted fn must not be quietly patched up either — it should be deleted.
+        if f.uses_macro_attr {
+            continue;
+        }
         if f.attrs.iter().any(is_cfg_attr_instrument) {
             continue;
         }
@@ -826,6 +904,84 @@ mod tests {
         let fixed = apply_fixes(src, fixes);
         assert!(fixed.contains("name = \"web.posts.a\""), "{fixed}");
         assert!(fixed.contains("name = \"web.posts.b\""), "{fixed}");
+    }
+
+    // --- the `#[macros::server]` spelling (#714) ---
+
+    #[test]
+    fn the_pii_rule_still_bites_under_the_macro_spelling() {
+        // The substantive guarantee: rules 1 and 2 belong to the macro, but an
+        // unskipped non-recordable argument must still fail — and the same argument
+        // skipped on the macro attribute must pass.
+        let unskipped = src(
+            "email",
+            "#[macros::server]\npub async fn verify(token: RawToken) -> R {}\n",
+        );
+        let detail = problems(&unskipped).expect("an unclassified arg is still a problem");
+        assert!(detail.contains("token"), "{detail}");
+        assert!(detail.contains("RawToken"), "{detail}");
+
+        let skipped = src(
+            "email",
+            "#[macros::server(skip(token))]\npub async fn verify(token: RawToken) -> R {}\n",
+        );
+        assert_eq!(problems(&skipped), None);
+    }
+
+    #[test]
+    fn skip_all_on_the_macro_attribute_covers_every_argument() {
+        let s = src(
+            "posts",
+            "#[macros::server(skip_all)]\npub async fn create(args: CreatePostArgs) -> R {}\n",
+        );
+        assert_eq!(problems(&s), None);
+    }
+
+    #[test]
+    fn a_macro_attr_fn_needs_no_instrument_attribute_or_name() {
+        // Rule 1 (presence/placement) and rule 2 (the derived `name`) have nothing
+        // to inspect: the macro emits both. Demanding them would fail all 55 fns.
+        let s = src("tags", "#[macros::server]\npub async fn list() -> R {}\n");
+        assert_eq!(problems(&s), None);
+    }
+
+    #[test]
+    fn a_recordable_argument_still_needs_no_skip_under_the_macro_spelling() {
+        let s = src(
+            "posts",
+            "#[macros::server(input = Json)]\npub async fn get(id: Option<PostId>) -> R {}\n",
+        );
+        assert_eq!(problems(&s), None);
+    }
+
+    #[test]
+    fn a_nameless_parameter_still_needs_skip_all_under_the_macro_spelling() {
+        let s = src(
+            "posts",
+            "#[macros::server]\npub async fn x((a, b): (u32, u32)) -> R {}\n",
+        );
+        assert!(problems(&s)
+            .expect("a destructured parameter cannot be named in skip(...)")
+            .contains("skip_all"));
+    }
+
+    #[test]
+    fn an_unmodelled_macro_attr_argument_is_rejected() {
+        // Default-deny, mirroring the macro's own `route`: an argument this gate
+        // does not model could record a value the allowlist never inspected.
+        let s = src(
+            "posts",
+            "#[macros::server(fields(who = %token))]\npub async fn x(token: RawToken) -> R {}\n",
+        );
+        assert!(problems(&s)
+            .expect("an unmodelled arg is rejected")
+            .contains("fields"));
+    }
+
+    #[test]
+    fn nothing_is_rewritten_for_a_macro_attr_fn() {
+        let code = "#[macros::server(skip_all)]\npub async fn create(args: A) -> R {}\n";
+        assert!(name_fixes("web/src/posts/api.rs", code).is_empty());
     }
 
     // --- fail-loud enumeration (AC 12) ---

@@ -70,6 +70,19 @@ pub struct WebServerFn {
     pub attrs: Vec<syn::Attribute>,
     /// Index into [`attrs`](Self::attrs) of the `#[server]` attribute.
     pub server_attr_index: usize,
+    /// Whether the attribute is `#[macros::server]` rather than leptos's bare
+    /// `#[server]` (#714).
+    ///
+    /// The two carry different information, so every consumer has to branch on it:
+    /// the macro form *derives* the endpoint and span name instead of declaring
+    /// them, and it carries the `skip`/`skip_all` arguments that used to sit on
+    /// `#[tracing::instrument]`. Reported rather than judged, like everything else
+    /// here — this module says which spelling it found; the gates decide what that
+    /// means for them.
+    ///
+    /// Transitional: once every fn is converted, this is always `true` and the
+    /// field goes.
+    pub uses_macro_attr: bool,
 }
 
 /// Every `#[server]` fn in one source file, or a message describing why the file
@@ -91,15 +104,30 @@ struct Visitor {
     fns: Vec<WebServerFn>,
 }
 
+/// Whether `attr` declares a server fn, in either spelling.
+///
+/// Matched on the path's **last segment**, so both leptos's `#[server]` and
+/// jaunder's `#[macros::server]` (#714) are found. An `is_ident("server")` check
+/// would be false for the two-segment path — and because every gate here returns
+/// "no problems" on an empty enumeration, missing a spelling is a **silent green**
+/// across the registrar, tracing, and coverage gates at once, not a loud failure.
+fn is_server_attr(attr: &syn::Attribute) -> bool {
+    attr.path()
+        .segments
+        .last()
+        .is_some_and(|s| s.ident == "server")
+}
+
 impl<'ast> syn::visit::Visit<'ast> for Visitor {
     fn visit_item_fn(&mut self, f: &'ast syn::ItemFn) {
-        if let Some(index) = f.attrs.iter().position(|a| a.path().is_ident("server")) {
+        if let Some(index) = f.attrs.iter().position(is_server_attr) {
             self.fns.push(WebServerFn {
                 line: f.attrs[index].span().start().line,
                 ident: f.sig.ident.to_string(),
                 params: params_of(f),
                 attrs: f.attrs.clone(),
                 server_attr_index: index,
+                uses_macro_attr: f.attrs[index].path().segments.len() > 1,
             });
         }
         syn::visit::visit_item_fn(self, f);
@@ -411,6 +439,36 @@ mod tests {
         let fns = server_fns_in(src).unwrap();
         assert_eq!(fns[0].params.len(), 1);
         assert!(fns[0].params[0].name.is_none());
+    }
+
+    #[test]
+    fn both_spellings_enumerate_and_only_the_macro_one_says_so() {
+        // Matching on the path's last segment is what finds `#[macros::server]`;
+        // an `is_ident("server")` check would miss it, and because every consuming
+        // gate reports "no problems" on an empty enumeration that miss is a silent
+        // green rather than a failure.
+        let src = "#[server(endpoint = \"/audiences/rename\")]\n\
+                   pub async fn rename(name: AudienceName) -> R {}\n\
+                   #[macros::server(skip(name))]\n\
+                   pub async fn create(name: AudienceName) -> R {}\n";
+        let fns = server_fns_in(src).unwrap();
+        assert_eq!(fns.len(), 2);
+        let seen: Vec<(&str, bool)> = fns
+            .iter()
+            .map(|f| (f.ident.as_str(), f.uses_macro_attr))
+            .collect();
+        assert_eq!(seen, vec![("rename", false), ("create", true)]);
+        // The located attribute is the macro one, not some other attribute.
+        assert_eq!(
+            fns[1].attrs[fns[1].server_attr_index].path().segments.len(),
+            2
+        );
+    }
+
+    #[test]
+    fn a_bare_macro_server_attr_is_still_the_macro_spelling() {
+        let fns = server_fns_in("#[macros::server]\npub async fn x() -> R {}\n").unwrap();
+        assert!(fns[0].uses_macro_attr);
     }
 
     // --- vertical_of ---
