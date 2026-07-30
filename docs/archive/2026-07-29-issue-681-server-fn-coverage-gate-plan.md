@@ -1386,7 +1386,7 @@ git commit -m "test(xtask): seed server-fn coverage snapshot and allowlist from 
   regenerate)
 - Modify: `CONTRIBUTING.md` (coverage policy — the new obligation when adding a
   `#[server]` fn)
-- Modify: `docs/adr/drafts/empirical-server-fn-flow-coverage.md` (only if
+- Modify: `docs/adr/0081-empirical-server-fn-flow-coverage.md` (only if
   implementation diverged from the draft; the ADR is numbered at ship by
   `cargo xtask adr promote`)
 
