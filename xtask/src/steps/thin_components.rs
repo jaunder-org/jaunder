@@ -641,6 +641,37 @@ mod tests {
     }
 
     #[test]
+    fn a_violation_reports_the_offending_component_s_own_line() {
+        // `{path}:{line}` is the navigable half of the message — the part an editor
+        // jumps to. Nothing else asserts `line`, so an implementation that hardcoded 1,
+        // reported the file's first component, or reported the `#[component]` attribute
+        // instead of the fn would go unnoticed. The fixture puts a header comment and a
+        // THIN component ahead of the fat one so each of those fails here.
+        let src = "//! a header line\n\
+                   #[component]\n\
+                   fn Thin() -> impl IntoView { view! { <p></p> } }\n\
+                   \n\
+                   #[component]\n\
+                   fn Fat() -> impl IntoView {\n\
+                   let a = if p {1} else {2};\n\
+                   let b = if q {1} else {2};\n\
+                   let c = if r {1} else {2};\n\
+                   view! { <p></p> }\n}\n";
+        let v = violations(src).unwrap();
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].component, "Fat");
+        assert_eq!(v[0].line, 6, "`fn Fat` is declared on line 6");
+
+        // And the line survives into the message the gate prints.
+        let found = findings(&[("web/src/a.rs".to_string(), src.to_string())]);
+        assert!(
+            found.over_budget[0].starts_with("web/src/a.rs:6 "),
+            "the detail must open with the clickable location: {}",
+            found.over_budget[0]
+        );
+    }
+
+    #[test]
     fn a_view_violation_names_the_subcomponent_remedy() {
         // The two surfaces must hand out DIFFERENT advice; asserting only the setup
         // remedy above would pass even if both surfaces shared one message.

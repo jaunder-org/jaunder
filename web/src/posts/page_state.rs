@@ -13,10 +13,19 @@
 //! (did this update publish, and where does the browser go?) and [`with_post_id`]
 //! (short-circuit an absent/unparseable `post_id` to a client-side not-found instead
 //! of paying a round-trip, #487).
+//!
+//! `PostCard`'s parent-callback plumbing ([`notify`], [`notify_with_fallback`]) is
+//! here too. Firing an `Option<Callback>` is not browser wiring — ADR-0083 §1 grants
+//! only `Effect::new` and `spawn_local` permanent wasm-only status — so it is
+//! exercised under a reactive `Owner` exactly as [`crate::media::UploadCallbacks`]'s
+//! twin is.
 
 use std::future::Future;
 
+use leptos::prelude::*;
+
 use common::ids::PostId;
+use common::root_relative_url::RootRelativeUrl;
 use common::seed::{PageSeed, TimelinePage};
 use common::tag::Tag;
 use common::username::Username;
@@ -111,11 +120,40 @@ pub fn user_tag_query(username: Option<Username>, tag: Option<Tag>) -> WebResult
 /// failed one, and "not settled yet" all mean *nothing to navigate to*, and
 /// `on_settled_ok` skips all three identically, so collapsing them here leaves the
 /// component with no branch at all.
+///
+/// The permalink stays a [`RootRelativeUrl`] all the way to `use_navigate`, which takes
+/// `&str` by deref — unwrapping it here would trade the type for an allocation.
 #[must_use]
-pub fn publish_redirect<E>(settled: Option<Result<UpdateResult, E>>) -> Option<Result<String, E>> {
+pub fn publish_redirect<E>(
+    settled: Option<Result<UpdateResult, E>>,
+) -> Option<Result<RootRelativeUrl, E>> {
     let updated = settled?.ok()?;
     let published = updated.published_at.is_some();
-    published.then(|| String::from(updated.permalink)).map(Ok)
+    published.then_some(updated.permalink).map(Ok)
+}
+
+/// Fire an optional parent callback, when the caller supplied one.
+///
+/// Every lifecycle hook in the posts vertical spelled out the same `if let Some(cb)`
+/// — caller plumbing, not component logic (#306), and nothing about it is
+/// browser-bound, so it lives in this host-compiled module rather than in the
+/// wasm-only `component.rs` where no test could reach it.
+pub fn notify(callback: Option<Callback<()>>) {
+    if let Some(callback) = callback {
+        callback.run(());
+    }
+}
+
+/// Fire `preferred`, falling back to `shared` when the caller supplied only the
+/// shared one.
+///
+/// `PostCard`'s unpublish policy: a caller that wants to tell unpublish apart from the
+/// other mutations passes `on_unpublish`; one that treats them alike passes only
+/// `on_mutate` and still gets told. That is a real per-caller rule — which of two
+/// callbacks wins — so it is asserted here rather than left as an `.or()` inside the
+/// component.
+pub fn notify_with_fallback(preferred: Option<Callback<()>>, shared: Option<Callback<()>>) {
+    notify(preferred.or(shared));
 }
 
 /// Await `fetch` with the route's post id, or short-circuit to a client-side
@@ -356,13 +394,13 @@ mod tests {
     }
 
     #[test]
-    fn a_published_update_redirects_to_its_permalink() {
+    fn a_published_update_redirects_to_its_typed_permalink() {
         assert_eq!(
             publish_redirect::<WebError>(Some(Ok(update_result(Some(
                 "2026-01-02T00:00:00Z".parse().expect("a real instant")
             )))))
             .expect("a published update navigates"),
-            Ok("/~alice/2026/01/02/hello".to_string()),
+            Ok(parse_root_relative_url("/~alice/2026/01/02/hello")),
         );
     }
 
@@ -435,5 +473,87 @@ mod tests {
         })
         .await;
         assert_eq!(fetched, Err(WebError::validation("boom")));
+    }
+
+    // --- parent-callback plumbing ---
+
+    /// Run `body` under a fresh reactive `Owner` (the `media::upload_state` /
+    /// `forms::Field` convention), so `RwSignal`s and `Callback`s work host-side
+    /// without a browser.
+    fn with_owner(body: impl FnOnce()) {
+        let owner = Owner::new();
+        owner.set();
+        body();
+        drop(owner);
+    }
+
+    /// A real `Callback` that records having run into `fired`.
+    ///
+    /// **One helper, not a closure per test.** The cases that assert a callback did
+    /// *not* fire build their sink through this same constructor, so "the signal is
+    /// still false" means "this very callback — demonstrably capable of writing it,
+    /// two tests up — was never run", not "nothing here could ever have written".
+    fn recorder(fired: RwSignal<bool>) -> Callback<()> {
+        Callback::new(move |()| fired.set(true))
+    }
+
+    #[test]
+    fn notify_runs_a_supplied_callback() {
+        with_owner(|| {
+            let fired = RwSignal::new(false);
+            notify(Some(recorder(fired)));
+            assert!(fired.get(), "the callback must actually run");
+        });
+    }
+
+    #[test]
+    fn notify_without_a_callback_is_a_no_op() {
+        with_owner(|| {
+            let fired = RwSignal::new(false);
+            // Build the callback a caller WOULD have passed, then pass none: the sink
+            // is writable, so an unwritten sink is an observation, not a vacuum.
+            let unsupplied = Some(recorder(fired));
+            notify(None);
+            assert!(!fired.get(), "no callback, nothing fired");
+            notify(unsupplied);
+            assert!(fired.get(), "and the sink was writable all along");
+        });
+    }
+
+    #[test]
+    fn the_preferred_callback_wins_when_both_are_supplied() {
+        // `PostCard`'s unpublish arm: a caller that supplied `on_unpublish` must not
+        // also get `on_mutate` — the two are distinct notifications (#592).
+        with_owner(|| {
+            let preferred = RwSignal::new(false);
+            let shared = RwSignal::new(false);
+            notify_with_fallback(Some(recorder(preferred)), Some(recorder(shared)));
+            assert!(preferred.get(), "the preferred callback runs");
+            assert!(!shared.get(), "and the fallback must not also run");
+        });
+    }
+
+    #[test]
+    fn the_shared_callback_runs_when_the_preferred_one_is_absent() {
+        with_owner(|| {
+            let shared = RwSignal::new(false);
+            notify_with_fallback(None, Some(recorder(shared)));
+            assert!(
+                shared.get(),
+                "a caller that supplied only the shared one is told"
+            );
+        });
+    }
+
+    #[test]
+    fn a_caller_that_supplied_neither_callback_is_fine() {
+        with_owner(|| {
+            let never = RwSignal::new(false);
+            let unsupplied = Some(recorder(never));
+            notify_with_fallback(None, None);
+            assert!(!never.get());
+            notify_with_fallback(unsupplied, None);
+            assert!(never.get(), "the sink was writable all along");
+        });
     }
 }

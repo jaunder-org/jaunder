@@ -27,10 +27,10 @@ use crate::media::MediaUpload;
 // is named here only so a future author does not add it to the list.
 use crate::posts::{
     draft_row_display, get, get_audience_selection, get_default_audience_selection, get_preview,
-    list_by_tag, list_by_user, list_by_user_and_tag, list_drafts, parse_permalink_route,
-    publish_redirect, seeded_page, tag_query, user_query, user_tag_query, with_post_id, Create,
-    CreateArgs, CreateResult, Delete, DraftRowDisplay, DraftSummary, ListingRoute, PermalinkRoute,
-    Publish, PublishResult, Unpublish, UpdateArgs, UpdateResult,
+    list_by_tag, list_by_user, list_by_user_and_tag, list_drafts, notify, notify_with_fallback,
+    parse_permalink_route, publish_redirect, seeded_page, tag_query, user_query, user_tag_query,
+    with_post_id, Create, CreateArgs, CreateResult, Delete, DraftRowDisplay, DraftSummary,
+    ListingRoute, PermalinkRoute, Publish, PublishResult, Unpublish, UpdateArgs, UpdateResult,
 };
 use crate::subscriptions::SubscribeButton;
 use crate::taglist::TagCtx as TagContext;
@@ -42,6 +42,7 @@ use common::ids::PostId;
 use common::pagination::PageSize;
 use common::post_summary::PostSummary;
 use common::render::PostFormat;
+use common::root_relative_url::RootRelativeUrl;
 use common::seed::{PageSeed, PostResponse, TagSummary, TimelinePostSummary};
 use common::slug::Slug;
 use common::tag::Tag;
@@ -68,15 +69,6 @@ where
             on_ok(value);
         }
     });
-}
-
-/// Fire an optional parent callback, if the caller supplied one. Hoisted out of the
-/// component bodies for the same reason as [`on_settled_ok`]: the `Option` branch is
-/// caller plumbing, not component logic (#306).
-fn notify(callback: Option<Callback<()>>) {
-    if let Some(cb) = callback {
-        cb.run(());
-    }
 }
 
 /// The `.j-seg` Markdown/Org format toggle, shared by every post editor. Renders one
@@ -272,8 +264,9 @@ pub fn PostCard(
     );
     on_settled_ok(
         move || unpublish_action.value().get(),
-        // Unpublish prefers its own callback and falls back to the shared mutate one.
-        move |()| notify(on_unpublish.or(on_mutate)),
+        // Unpublish prefers its own callback and falls back to the shared mutate one —
+        // a per-caller policy, so it is the host-tested `notify_with_fallback` (#306).
+        move |()| notify_with_fallback(on_unpublish, on_mutate),
     );
     // Client-only navigation side-effect (web-style-guide §9): react to the
     // resolved publish action, mirroring EditPostPage's publish redirect.
@@ -1147,7 +1140,7 @@ pub fn EditPostPage() -> impl IntoView {
     let navigate = use_navigate();
     on_settled_ok(
         move || publish_redirect(update_post_action.value().get()),
-        move |permalink: String| navigate(&permalink, NavigateOptions::default()),
+        move |permalink: RootRelativeUrl| navigate(&permalink, NavigateOptions::default()),
     );
 
     // A missing or unparseable `post_id` is honest absence, not a real id: derive

@@ -185,6 +185,51 @@ mod tests {
         }
     }
 
+    /// The two sinks a caller's callbacks would write, plus the callbacks that write
+    /// them.
+    ///
+    /// **One helper, not a fresh pair of closures per test.** The no-callback case
+    /// asserts these very sinks stay unwritten, which only says something because the
+    /// same instrumented callbacks demonstrably write them a few lines earlier — the
+    /// difference between "no callback fired" and "nothing here could ever fire". It
+    /// also keeps the closure bodies covered by the positive cases rather than leaving
+    /// an uncovered stub behind in the negative one.
+    #[derive(Clone, Copy)]
+    struct Sinks {
+        uploaded: RwSignal<Option<RootRelativeUrl>>,
+        failed: RwSignal<Option<String>>,
+    }
+
+    impl Sinks {
+        fn new() -> Self {
+            Self {
+                uploaded: RwSignal::new(None),
+                failed: RwSignal::new(None),
+            }
+        }
+
+        /// Both callbacks supplied.
+        fn callbacks(self) -> UploadCallbacks {
+            UploadCallbacks {
+                on_uploaded: Some(Callback::new(move |url| self.uploaded.set(Some(url)))),
+                on_error: Some(Callback::new(move |message| self.failed.set(Some(message)))),
+            }
+        }
+
+        /// Only `on_error` supplied — the compose form's shape.
+        fn error_only(self) -> UploadCallbacks {
+            UploadCallbacks {
+                on_uploaded: None,
+                ..self.callbacks()
+            }
+        }
+
+        fn clear(self) {
+            self.uploaded.set(None);
+            self.failed.set(None);
+        }
+    }
+
     #[test]
     fn classify_keeps_only_the_url_on_success() {
         assert_eq!(
@@ -220,21 +265,17 @@ mod tests {
     #[test]
     fn notify_fires_only_the_matching_callback() {
         with_owner(|| {
-            let uploaded = RwSignal::new(None::<RootRelativeUrl>);
-            let failed = RwSignal::new(None::<String>);
-            let callbacks = UploadCallbacks {
-                on_uploaded: Some(Callback::new(move |u| uploaded.set(Some(u)))),
-                on_error: Some(Callback::new(move |m| failed.set(Some(m)))),
-            };
+            let sinks = Sinks::new();
+            let callbacks = sinks.callbacks();
 
             callbacks.notify(&UploadOutcome::Uploaded(url()));
-            assert_eq!(uploaded.get(), Some(url()));
-            assert_eq!(failed.get(), None, "a success must not fire on_error");
+            assert_eq!(sinks.uploaded.get(), Some(url()));
+            assert_eq!(sinks.failed.get(), None, "a success must not fire on_error");
 
             callbacks.notify(&UploadOutcome::Failed("boom".to_string()));
-            assert_eq!(failed.get(), Some("boom".to_string()));
+            assert_eq!(sinks.failed.get(), Some("boom".to_string()));
             assert_eq!(
-                uploaded.get(),
+                sinks.uploaded.get(),
                 Some(url()),
                 "a failure must not disturb the last success"
             );
@@ -244,25 +285,49 @@ mod tests {
     #[test]
     fn notify_without_callbacks_is_a_no_op_on_both_arms() {
         with_owner(|| {
+            let sinks = Sinks::new();
+            // First prove the sinks are writable through `notify` itself, so the
+            // assertions below distinguish "no callback fired" from "nothing here could
+            // ever have been observed" — which is all this test used to say.
+            sinks.callbacks().notify(&UploadOutcome::Uploaded(url()));
+            sinks
+                .callbacks()
+                .notify(&UploadOutcome::Failed("boom".to_string()));
+            assert_eq!(sinks.uploaded.get(), Some(url()));
+            assert_eq!(sinks.failed.get(), Some("boom".to_string()));
+
+            sinks.clear();
             no_callbacks().notify(&UploadOutcome::Uploaded(url()));
             no_callbacks().notify(&UploadOutcome::Failed("boom".to_string()));
+            assert_eq!(
+                sinks.uploaded.get(),
+                None,
+                "an absent on_uploaded writes nothing"
+            );
+            assert_eq!(
+                sinks.failed.get(),
+                None,
+                "an absent on_error writes nothing"
+            );
         });
     }
 
     #[test]
     fn notify_fires_the_error_arm_when_only_on_error_is_supplied() {
         with_owner(|| {
-            let failed = RwSignal::new(None::<String>);
-            let callbacks = UploadCallbacks {
-                on_uploaded: None,
-                on_error: Some(Callback::new(move |m| failed.set(Some(m)))),
-            };
+            let sinks = Sinks::new();
+            let callbacks = sinks.error_only();
 
             callbacks.notify(&UploadOutcome::Uploaded(url()));
-            assert_eq!(failed.get(), None);
+            assert_eq!(sinks.failed.get(), None);
+            assert_eq!(
+                sinks.uploaded.get(),
+                None,
+                "the absent on_uploaded fires nothing"
+            );
 
             callbacks.notify(&UploadOutcome::Failed("boom".to_string()));
-            assert_eq!(failed.get(), Some("boom".to_string()));
+            assert_eq!(sinks.failed.get(), Some("boom".to_string()));
         });
     }
 
@@ -338,19 +403,15 @@ mod tests {
     #[test]
     fn settle_notifies_the_caller_even_when_not_showing_results() {
         with_owner(|| {
-            let uploaded = RwSignal::new(None::<RootRelativeUrl>);
-            let failed = RwSignal::new(None::<String>);
-            let callbacks = UploadCallbacks {
-                on_uploaded: Some(Callback::new(move |u| uploaded.set(Some(u)))),
-                on_error: Some(Callback::new(move |m| failed.set(Some(m)))),
-            };
+            let sinks = Sinks::new();
+            let callbacks = sinks.callbacks();
             let state = UploadState::new(false);
 
             state.settle(Ok(response()), callbacks);
-            assert_eq!(uploaded.get(), Some(url()));
+            assert_eq!(sinks.uploaded.get(), Some(url()));
 
             state.settle(Err(WebError::validation("boom")), callbacks);
-            assert_eq!(failed.get(), Some("boom".to_string()));
+            assert_eq!(sinks.failed.get(), Some("boom".to_string()));
         });
     }
 }

@@ -71,8 +71,18 @@ macro) and **view** (inside it):
   units of raw control flow. Both are reported independently, because the two
   failures have different remedies (D4).
 - **D3 — Count raw Rust control flow only: `if`, `match`, `for`, `while`, `?`,
-  and `let … else`.** One unit per construct, not per line and not per `match`
-  arm. `else if` nests, so it counts as two.
+  `let … else`, and a guarded `match` arm.** One unit per construct, not per
+  line and not per unguarded `match` arm. `else if` nests, so it counts as two.
+
+  **Guarded arms added mid-implementation.** A guarded arm
+  (`Ok(list) if list.is_empty() => …`) counts one unit on top of its `match`.
+  `syn` models the guard as `Arm.guard`, not as an `ExprIf`, so without this a
+  single `match` could carry unlimited invisible branching — the same class of
+  hiding place as `let … else`. Setup surface only, and deliberately: on the
+  view surface the guard's `if` arrives as a plain `Ident` the token counter
+  already sees. Found while remediating `DraftsPage`, when rewriting a guarded
+  arm as a nested `if/else` _changed the score_ — which is only possible if the
+  guard form had been hiding a branch.
 
   `let … else` is **not** an `Expr` node — `syn` models it as a `Local` whose
   `LocalInit` carries a `diverge` arm — so a visitor listing only
@@ -97,7 +107,12 @@ macro) and **view** (inside it):
   are no `ExprIf`/`ExprMatch` nodes in there to visit. So:
   - **setup** is counted over the **AST** — visit the component body's
     expressions, skipping any `Macro` node, and count `ExprIf` / `ExprMatch` /
-    `ExprForLoop` / `ExprWhile` / `ExprTry`.
+    `ExprForLoop` / `ExprWhile` / `ExprTry`. A skipped macro's tokens are not
+    discarded: a **`view!`** hands them to the view surface, and **any other
+    macro** hands them to the setup surface. Added mid-implementation, because
+    "skip the macro node" alone would let control flow inside a `format!`
+    argument escape _both_ surfaces — and when it is setup logic, the setup
+    remedy is the advice that fits it.
   - **view** is counted over the macro's **token stream** — walk it recursively
     and count the `Ident` tokens `if`, `match`, `for`, `while` and the `?`
     `Punct`. Token-level counting is _why_ `<Show>` is free: it arrives as
@@ -160,6 +175,16 @@ macro) and **view** (inside it):
 - **D8 — Timeline pages get minimal extraction only.** #671 owns "thin the three
   timeline pages onto a shared `TimelineGate`". This issue extracts only as much
   as the budget requires and does **not** invent that abstraction.
+
+  **Superseded by events: #671 landed first.** This issue was blocked behind it
+  and resumed afterwards, so `TimelineGate` and a host-tested `TimelineState`
+  already exist on `main` and are consumed at `posts/component.rs` and
+  `cockpit/component.rs`. #671 also cleared every timeline _view_ violation and
+  `HomePage` outright, and cut the tag/timeline setup counts (`UserTagPage` 8→6,
+  the others 6→4). What remained here was folding those pages' residual setup
+  into `posts/page_state.rs`. The carve-out is therefore moot rather than
+  observed — see AC15.
+
 - **D9 — Document the invariant.** A numberless ADR draft in `docs/adr/drafts/`
   (numbered at ship by `cargo xtask adr promote`) recording the enforced
   thin-component invariant and its relationship to ADR-0050's assumption, plus a
@@ -182,11 +207,11 @@ macro) and **view** (inside it):
 - **AC3** — The gate passes a thin fixture (setup ≤ 2, view ≤ 2).
 - **AC4** — `<Show>`, `<For>`, and child components do not count toward either
   budget (a fixture using them heavily, with no raw control flow, passes).
-- **AC5** — `?`, `if`, `match`, `for`, `while`, and `let … else` each count; a
-  fixture isolating each one proves it, asserting the **count value**, not
-  merely that some violation was produced (an assertion that only checks "one
-  violation exists" passes against any over- or under-count that still exceeds
-  the budget).
+- **AC5** — `?`, `if`, `match`, `for`, `while`, `let … else`, and a guarded
+  `match` arm each count; a fixture isolating each one proves it, asserting the
+  **count value**, not merely that some violation was produced (an assertion
+  that only checks "one violation exists" passes against any over- or
+  under-count that still exceeds the budget).
 - **AC6** — An unparseable file fails the gate (D6), with the parse error in the
   detail.
 - **AC7** — Counting is per construct, not per line or per `match` arm: a 10-arm
@@ -200,9 +225,30 @@ macro) and **view** (inside it):
   shapes, not a synthetic one.
 - **AC7c** — A statement-position `view! { … };` is counted on the **view**
   surface, not silently dropped (**D3c**).
-- **AC8** — All 58 real components pass both budgets at the end of the branch.
+- **AC8** — **Every** component in `web/src` passes both budgets at the end of
+  the branch — the gate reports zero over-budget surfaces tree-wide. Stated as
+  "all 58" when written; the tree now holds 68, because #671 landed nine
+  components and this branch added nine subcomponents. The criterion is "the
+  report is empty", which does not depend on the count.
 - **AC9** — Every extraction made for AC8 is covered by `nextest` assertions on
-  the extracted function, or is a subcomponent whose own body is within budget.
+  the extracted function, or is a subcomponent whose own body is within budget,
+  **or is irreducible browser wiring**: a named wasm-only helper whose branch is
+  inside an `Effect::new` or `spawn_local`, which ADR-0083 §1 grants as
+  permanently un-host-testable.
+
+  **The third category was added mid-implementation, and it is narrow on
+  purpose.** "Not host-tested" is not the qualifier — `Effect`/`spawn_local` is.
+  A plain wasm-only fn holding an ordinary branch does **not** qualify merely by
+  living in `component.rs`: that is the escape hatch this issue exists to close,
+  and review caught exactly one instance (`notify`) where this spec's own
+  allowance had been stretched to cover an `Option<Callback>` branch that the
+  same branch host-tested elsewhere as `UploadCallbacks::notify`.
+
+  The allowance never covers a fn that **returns markup**. The gate measures
+  only `#[component]` bodies, so a view-returning plain fn hides a branch
+  instead of moving it somewhere checked; markup extractions are `#[component]`
+  subcomponents, which the gate then measures like any other.
+
 - **AC10** — `cargo xtask check` and `cargo xtask validate` both report the
   step.
 - **AC11** — No new `cargo xtask` subcommand (`--help` unchanged).
@@ -212,13 +258,23 @@ macro) and **view** (inside it):
   component), then restored green.
 - **AC14** — `CONTRIBUTING.md` documents the step and both budgets; an ADR draft
   records the invariant.
-- **AC15** — The timeline pages are within budget without a `TimelineGate`
-  abstraction (D8).
+- **AC15** — ~~The timeline pages are within budget without a `TimelineGate`
+  abstraction (D8).~~ **Void, not met: #671 landed first**, so `TimelineGate`
+  exists on `main` and these pages consume it. The criterion was written to stop
+  this issue pre-empting that design; sequencing achieved the same end, and
+  asserting its absence would now fail against `main`'s own code. The surviving
+  obligation is D8's substance — this branch invented no timeline abstraction of
+  its own, which `git diff main...HEAD -- web/src/timeline/` (empty) shows.
 
 ## Scope
 
 **In:** the `thin-components` gate step and its tests; extraction/decomposition
-of the 19 violating components; the ADR draft and `CONTRIBUTING.md` entry.
+of every violating component; the ADR draft and `CONTRIBUTING.md` entry.
+
+The estimate below says "19 components"; the counter's own report found **19
+findings across 15 components** — some over budget on both surfaces — and #671
+then changed the composition again before the work resumed. The scope is
+whatever the report lists, which is why AC8 is phrased as "the report is empty".
 
 **Out:** `exempt.rs` and the coverage gate (D1/AC12); the #671 `TimelineGate`
 design (D8); #301's lint-suppression work (`needless_pass_by_value`, display
