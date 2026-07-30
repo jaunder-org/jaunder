@@ -71,19 +71,30 @@ above rather than asserted. Two committed artifacts under `docs/coverage/`:
 | `server-fns.json`           | generated    | server fn → the named tests that drove it, plus an orphan bucket  |
 | `server-fns-allowlist.json` | hand-written | one entry per knowingly-uncovered fn: fn name, reason, issue link |
 
-A fn is identified by the **union** of two signals: a span named
-`__server_<ident>` with a matching `code.namespace`, or a request `uri`
-resolving to the fn's declared endpoint. Attribution is an **ancestor walk** up
-`parent_span_id` to a known `e2e.test` span — `uri` hits resolve in one hop,
-span-name hits in two.
+A fn is identified by the **union** of two signals: its **span name** with a
+matching `code.namespace`, or a request **`uri`** resolving to the fn's declared
+endpoint. Attribution is an **ancestor walk** up `parent_span_id` to a known
+`e2e.test` span — `uri` hits resolve in one hop, span-name hits in two.
 
-The `__server_` prefix is load-bearing. `#[server]` relocates the annotated body
-— carrying its `#[tracing::instrument]` — into a generated `__server_<ident>` fn
-(`server_fn_macro`'s `to_dummy_ident`), so that, not the bare ident, is the
-derived span name. Matching the bare ident finds nothing, and finds it silently:
-`uri` covers the same fns, so the union still looks healthy. That is why
+**The span name is matched forward, from the inventory — never inverted out of
+the name.** This repo has already had two naming regimes: `server-fn-tracing`
+writes `web.<vertical>.<ident>` today (#511, ADR-0011), while omitting the
+explicit `name` derives `__server_<ident>`, because `#[server]` relocates the
+annotated body — and its `#[tracing::instrument]` — into a generated fn of that
+name (`server_fn_macro`'s `to_dummy_ident`). The extractor computes every
+candidate for each inventory fn and accepts any, so a regime change is a code
+update rather than a silent outage. An earlier version matched one shape only
+and therefore matched **nothing**, silently: `uri` covered the same fns, so the
+union looked healthy. That is why
 `each_signal_finds_fns_on_its_own_in_the_real_capture` measures the two signals
-**separately** against the committed capture instead of trusting the union.
+**separately** against the committed capture, asserting each alone covers
+everything the union does.
+
+**`code.namespace` is the disambiguator, not the name.**
+`web.<vertical>.<ident>` uses the module's _first_ segment, so `posts::api` and
+`posts::api::listing` both render `web.posts.…`; the name alone could not
+separate a same-named fn in each. `(module, ident)` cannot collide at all — Rust
+forbids two items of one name in one module.
 
 **Two lanes, and neither is sufficient alone.** Traces exist only in the e2e
 lane; fast feedback only in the static one.
@@ -133,15 +144,21 @@ inventory — an earlier version did, misread `upload_media`'s
 `#[server(input = MultipartFormData, endpoint = "/upload_media")]`, and silently
 dropped it while every test still passed.
 
-**The orphan bucket** counts hits whose walk reached no test. It is reported,
-not failed: a non-empty bucket means attribution stopped somewhere, which is
-worth seeing. Expect the app-shell fns (`session`, `list_local_timeline`, the
-two warning-visibility fns) to orphan once per test — that is the
-`_autoPerfSpan` warmup load, which applies the per-test traceparent only _after_
-`warmupPageContext` so warmup traffic stays out of attribution — and **twice**
-per test for the instrumented ones, where the warmup request span and the
-`__server_*` span beneath it are two hits on the same unattributed chain. A
-_per-test_ orphan for anything else means a context is missing its traceparent.
+**The orphan bucket** records hits whose walk reached no test, keyed by **why**
+— `unknown-parent:<span id>`, `no-parent`, or `depth-exceeded` — rather than as
+a bare count. That distinction is the point: "outside any test" and "attribution
+is broken" are the same _shape_ of result but opposite in meaning, and a bucket
+that cannot tell them apart hides the very failure this gate exists to catch.
+
+It is reported, not failed. Expect the app-shell fns (`session`,
+`list_local_timeline`, and the two warning-visibility fns) at **twice per
+test**, all under `unknown-parent:` naming the run-wide traceparent's span id:
+that is the `_autoPerfSpan` warmup load — which applies the per-test traceparent
+only _after_ `warmupPageContext`, so warmup traffic stays out of attribution —
+counted twice because the warmup request span and the instrument span beneath it
+are two hits on the same unattributed chain. A different reason key, an
+unfamiliar parent id, or any other fn appearing means a context lost its
+traceparent or the capture is truncated.
 
 ## Server-side scoped diagnostic log — look here first (#144)
 

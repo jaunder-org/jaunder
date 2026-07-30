@@ -357,29 +357,6 @@ mod tests {
         );
     }
 
-    /// The prefix `#[server]` gives the fn it relocates the annotated body into
-    /// (`server_fn_macro`'s `to_dummy_ident`), and therefore the prefix a derived
-    /// `#[tracing::instrument]` span name carries in a real capture.
-    const DERIVED_SPAN_PREFIX: &str = "__server_";
-
-    /// The eleven `#[server]` fns in `web/src` carrying a `#[tracing::instrument]`,
-    /// and so the only fns the span-name signal can ever find (AC3). Spelled out
-    /// rather than re-derived: this is the *expected* set, and a test that computed
-    /// it the way the extractor does could not disagree with the extractor.
-    const INSTRUMENTED_FNS: &[&str] = &[
-        "backup_warning_visible",
-        "base_url_warning_visible",
-        "get_backup_settings",
-        "get_registration_policy",
-        "get_site_identity",
-        "login",
-        "logout",
-        "register",
-        "session",
-        "update_backup_settings",
-        "update_site_identity",
-    ];
-
     /// The seed capture with every span's `uri` erased, so whatever `extract` still
     /// finds got there by the span-name signal alone. Erased rather than dropped:
     /// removing the request spans would break the ancestor chains an instrument span
@@ -392,9 +369,11 @@ mod tests {
         spans
     }
 
-    /// The seed capture with every non-test span renamed out of `__server_<ident>`
-    /// shape, so whatever `extract` finds got there by the `uri` signal alone.
-    fn seed_spans_without_derived_names() -> Vec<crate::traces::parse::Span> {
+    /// The seed capture with every non-test span's name mangled, so whatever
+    /// `extract` still finds got there by the `uri` signal alone. Renamed rather
+    /// than dropped, for the same reason `seed_spans_without_uris` erases instead
+    /// of removing: the spans are load-bearing links in the ancestor chains.
+    fn seed_spans_without_span_names() -> Vec<crate::traces::parse::Span> {
         let mut spans = seed_spans();
         for span in &mut spans {
             if span.name != "e2e.test" {
@@ -407,64 +386,81 @@ mod tests {
     #[test]
     fn each_signal_finds_fns_on_its_own_in_the_real_capture() {
         // AC2's "both signals" clause, measured signal-by-signal against real data
-        // instead of inferred from the union. This is the assertion whose absence let
-        // the span-name signal sit dead for the whole cycle: it matched
-        // `<ident>` while every real span is named `__server_<ident>`, and because
-        // `uri` covers the same fns the union looked entirely healthy.
+        // rather than inferred from the union. This is the assertion whose absence
+        // let the span-name signal sit dead for an entire cycle: it matched the bare
+        // `<ident>` while every real span was named `__server_<ident>`, and since
+        // `uri` covered the same fns the union looked perfectly healthy.
+        //
+        // Since #511 instrumented all 55 fns, the two signals now cover the SAME
+        // set — which is the redundancy the design wants, and is why each must be
+        // measured alone. Asserting set equality both ways means a regression in
+        // either one fails here instead of hiding behind the other.
         let inv = inventory(&repo_root().join(WEB_SRC)).expect("inventory enumerates");
         let by_name = crate::server_fn_coverage::extract(&seed_spans_without_uris(), &inv);
-        let by_uri = crate::server_fn_coverage::extract(&seed_spans_without_derived_names(), &inv);
+        let by_uri = crate::server_fn_coverage::extract(&seed_spans_without_span_names(), &inv);
+        let union = crate::server_fn_coverage::extract(&seed_spans(), &inv);
 
-        // Signal 1 alone must find exactly the instrumented fns — no more (nothing
-        // else emits a derived span) and no fewer (a module-check or prefix
-        // regression drops them).
-        let found: Vec<&String> = by_name.covered.keys().collect();
+        assert!(
+            !union.covered.is_empty(),
+            "the fixture must cover something, or every assertion below is vacuous"
+        );
+        let names: Vec<&String> = by_name.covered.keys().collect();
+        let uris: Vec<&String> = by_uri.covered.keys().collect();
+        let both: Vec<&String> = union.covered.keys().collect();
         assert_eq!(
-            found, INSTRUMENTED_FNS,
-            "the span-name signal alone must cover exactly the instrumented fns"
+            names, both,
+            "the span-name signal alone must cover everything the union does"
+        );
+        assert_eq!(
+            uris, both,
+            "the uri signal alone must cover everything the union does"
         );
 
-        // Signal 2 alone must find fns signal 1 structurally cannot: neither
-        // `create_post` nor `upload_media` carries a `#[tracing::instrument]`, so no
-        // span in any capture bears their name. `upload_media` is the sharper case —
-        // it declares `#[server(input = MultipartFormData, endpoint =
-        // "/upload_media")]`, so anything reading `endpoint` as the attribute's first
-        // argument loses it silently.
-        for ident in ["create_post", "upload_media"] {
-            assert!(
-                by_uri.covered.contains_key(ident),
-                "{ident} must be covered by the uri signal alone"
-            );
-            assert!(
-                !by_name.covered.contains_key(ident),
-                "{ident} emits no derived span, so the span-name signal must not \
-                 claim it"
-            );
-        }
+        // `upload_media` is the sharpest single case for the uri signal: it declares
+        // `#[server(input = MultipartFormData, endpoint = "/upload_media")]`, so
+        // anything reading `endpoint` as the attribute's FIRST argument loses it
+        // silently and the fn drops out of URI matching altogether.
+        assert!(
+            by_uri.covered.contains_key("upload_media"),
+            "upload_media must be covered by the uri signal alone"
+        );
 
         // No query-string assertion here: every server fn this suite drives is a
-        // POST, so not one of the full capture's 2175 `/api/` URIs carries a `?`.
-        // Query stripping stays pinned on the hand-authored `coverage-sample.jsonl`
-        // — asserting it against real data would only pin its absence.
+        // POST, so not one `/api/` URI in the capture carries a `?`. Query stripping
+        // stays pinned on the hand-authored `coverage-sample.jsonl` — asserting it
+        // against real data would only pin its absence.
     }
 
     #[test]
-    fn the_derived_span_names_carry_the_module_the_check_compares() {
+    fn the_span_names_carry_the_module_the_check_compares() {
         // Guards the reduction as much as the extractor: signal 1 refuses a hit it
-        // cannot place in the right module, so a fixture that kept the
-        // `__server_*` spans but dropped their `code.namespace` would silently
-        // fall back to `uri` for everything.
-        for span in seed_spans()
+        // cannot place in the right module, so a fixture that kept the instrument
+        // spans but dropped their `code.namespace` would silently fall back to `uri`
+        // for everything — and, per the test above, look identical while doing it.
+        let inv = inventory(&repo_root().join(WEB_SRC)).expect("inventory enumerates");
+        let verticals: std::collections::BTreeSet<&str> = inv
             .iter()
-            .filter(|s| s.name.starts_with(DERIVED_SPAN_PREFIX))
-        {
+            .map(|f| f.module.split("::").next().unwrap_or(&f.module))
+            .collect();
+        let mut checked = 0;
+        for span in seed_spans().iter().filter(|s| {
+            verticals
+                .iter()
+                .any(|v| s.name.starts_with(&format!("web.{v}.")))
+        }) {
             let namespace = crate::traces::parse::get_attr(&span.raw, "code.namespace");
             assert!(
                 namespace.starts_with("web::"),
                 "{} lost its web:: code.namespace: {namespace:?}",
                 span.name
             );
+            checked += 1;
         }
+        assert!(
+            checked > 0,
+            "no instrument spans in the fixture — the reduction dropped the span-name \
+             signal's evidence entirely"
+        );
     }
 
     #[test]
