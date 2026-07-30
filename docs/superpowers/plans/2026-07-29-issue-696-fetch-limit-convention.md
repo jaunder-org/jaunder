@@ -358,21 +358,21 @@ if the title changes (it should not).
 Two decisions from this cycle belong in the convention ADR, amended in place
 (the repo convention for an accepted/proposed ADR, as #400 did):
 
-- [ ] **The min-only saturating door.** §2 documents `clamped` as requiring both
+- [x] **The min-only saturating door.** §2 documents `clamped` as requiring both
       bounds. `RowLimit::at_most` is the same idea with only a `min` — a
       validated door that cannot yield an out-of-range value. Record it as
       sanctioned, with the constraint that it is for internally-derived values
       (a literal cap), not user input, which still goes through
       `clamped`/`FromStr`.
-- [ ] **An unsigned `inner` is not a substitute for a declared bound.** Record
+- [x] **An unsigned `inner` is not a substitute for a declared bound.** Record
       that a `NumNewtype` whose value crosses the sqlx boundary should declare
       its `min` rather than lean on `u32`, because sqlx has no Postgres `Encode`
       for unsigned types — so the primitive's range is discarded at the bind,
       while a declared bound is re-run by `FromStr`, serde, and `Decode`. This
       is the principle #715 and #716 will both need.
-- [ ] Cross-check ADR-0071's numeric paragraphs for wording that now understates
+- [x] Cross-check ADR-0071's numeric paragraphs for wording that now understates
       the convention; fix in the same commit
-- [ ] `prettier -w` the touched docs; `cargo xtask check` → green; commit
+- [x] `prettier -w` the touched docs; `cargo xtask check` → green; commit
 
 ---
 

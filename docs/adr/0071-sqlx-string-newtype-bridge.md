@@ -77,13 +77,19 @@ default-on, `secret` drops it, a secret re-adds it explicitly.
   `common` makes any future violation fail loudly.
 - **An `xtask` enforcement gate (`sqlx-newtype-bind`)** scans `storage/src` and
   fails on the newtype-stripping bind idioms — the stringly ones
-  (`.bind(_.as_ref())`, `.bind(&*_)`, `.bind(&**_)`) and, since #686, the
-  numeric one (`.bind(i64::from(_))`) — so a newtype cannot silently be bound as
-  a bare primitive again. It carries a small, substring-matched allowlist: the
-  one legitimate `.as_ref()` bind (a typed `Option<PostTitle>::as_ref()`), and
-  two forced `u32 → i64` widenings that are not strips at all (see below). (#502
-  retired the `RenderedHtml` entry by giving that type a hand-written write-only
-  bridge — see Consequences.)
+  (`.bind(_.as_ref())`, `.bind(&*_)`, `.bind(&**_)`), since #686 the numeric one
+  (`.bind(i64::from(_))`), and since #696 the **hoisted** form of that
+  (`let x = i64::from(y); … .bind(x)`, which evaded a scan that only looked
+  after `.bind(`) — so a newtype cannot silently be bound as a bare primitive
+  again. Its substring-matched allowlist holds **only** two typed
+  `Option<_>::as_ref()` binds; **nothing numeric is exempt** (#696 removed the
+  last two, below). (#502 retired the `RenderedHtml` entry by giving that type a
+  hand-written write-only bridge — see Consequences.)
+
+  **What the gate still cannot see** is a strip laundered through a function
+  parameter: the conversion in one function, the `.bind` in another, where
+  nothing remains to detect. That is a real limit of a line-based scan rather
+  than an oversight, and it is tracked as **#716**.
 
 **The `IdNewtype` and `NumNewtype` bridges (#686)** have the same
 `Type`/`Encode` shape, delegating to the declared inner integer rather than
@@ -106,12 +112,19 @@ default-on, `secret` drops it, a secret re-adds it explicitly.
   first). No id or bounded numeric has such a value — an id is not a credential.
   Add a flag when one appears, not before.
 
-**The residue this leaves** is two `.bind(i64::from(…))` shapes that are **not**
-newtype strips: `limit` is a bare `u32`, and `PageOffset`'s declared `inner` is
-`u32`. sqlx implements no Postgres `Encode` for unsigned types, so the widening
-to `i64` is forced by the driver, not by a missing bridge. They are the gate's
-two documented allowlist entries and belong to #696, which owns the storage
-fetch-limit types.
+**The residue this left, and how it was closed.** #686 finished with two
+`.bind(i64::from(…))` shapes it could not sweep, because they were not newtype
+strips: `limit` was a bare `u32` and `PageOffset`'s `inner` was `u32`, and sqlx
+implements no Postgres `Encode` for unsigned types, so the widening was forced
+by the driver rather than by a missing bridge. They became two documented
+allowlist entries.
+
+**#696 removed both by removing their cause** — giving those values `i64`-backed
+newtypes with _declared_ bounds (`RowLimit`, `min = 1`; `PageOffset`, `min = 0`)
+rather than bounds implied by an unsigned primitive that the boundary discards
+anyway. The general rule is recorded in ADR-0063 §2: an unsigned `inner` is not
+a substitute for a declared `min` on a value that crosses this boundary. So the
+numeric half of the gate is now absolute rather than absolute-with-footnotes.
 
 ## Consequences
 
@@ -145,7 +158,8 @@ fetch-limit types.
   bridges are unconditional; the asymmetry is deliberate, not an oversight.
 - Commits us to: the `common` optional-`sqlx`-feature seam (kept off for wasm by
   the `compile_error!` guard and the wasm-clippy gate); the `sqlx-newtype-bind`
-  gate and its allowlist (down to one entry after #502).
+  gate and its allowlist (two typed `Option<_>::as_ref()` binds after #502 and
+  #696 — nothing numeric).
 - Rules out per-type hand-written sqlx impls (orphan-rule-bound and duplicative)
   and a storage-side wrapper type (second-class, conversion at every edge) — for
   derive-eligible newtypes. The lone sanctioned exception is `RenderedHtml`

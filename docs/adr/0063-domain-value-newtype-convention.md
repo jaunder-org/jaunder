@@ -196,6 +196,30 @@ it on the wire (the AtomPub `?limit=` page size). First users: `RetentionCount`
 (#455), `FeedMinItems`/`FeedMinDays` (#535); `PageSize` (#537, the first `clamp`
 adopter).
 
+**Min-only saturating doors** are the same idea where only a lower bound exists,
+and are **hand-written** rather than generated: `clamp` requires both bounds,
+and a type with a meaningful floor but no principled ceiling should not invent
+one just to unlock the generated `clamped`. `RowLimit::at_most(n)` (#696)
+saturates a value below its `min` up to it, which makes it a **validated** door
+in the same sense — it cannot yield an out-of-range value, so it does not weaken
+the invariant. The constraint that keeps it honest: it is for values **derived
+internally** (a literal cap, a scan batch size), not for user input, which still
+goes through `FromStr`, the serde bridge, or `clamped`. Saturating a caller's
+`0` to `1` is fine; silently accepting a client's is not.
+
+**An unsigned `inner` is not a substitute for a declared bound.** A `NumNewtype`
+whose value crosses the `sqlx` boundary should declare its `min` rather than
+lean on `u32` to express "non-negative", because sqlx implements no Postgres
+`Encode` for unsigned types: the value is widened to `i64` at every bind, so the
+primitive's range is discarded exactly where the database could act on it, while
+a declared bound is re-run by `FromStr`, the serde bridge, and the sqlx
+`Decode`. #696 moved `PageOffset` from `inner = u32` (bound implied) to
+`inner = i64, min = 0` (bound declared) for this reason, and gave `RowLimit`
+`min = 1` from the start. **The trap to name explicitly:** changing `inner` to
+`i64` _without_ declaring the `min` makes the bind gate green while deleting the
+only guarantee the type carried — the change looks like a widening and is
+actually a removal.
+
 **String truncating door.** The string analog of `clamped` is a **hand-written**
 `truncated(&str) -> Self` on a length-bounded `str`-newtype: it trims and
 truncates to the cap, yielding an infallible **validated** door that cannot
