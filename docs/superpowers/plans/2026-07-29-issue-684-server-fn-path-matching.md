@@ -1253,7 +1253,7 @@ Content:
 Run: `devtool run -- cargo xtask check --no-test` Expected: PASS, including
 `adr-check`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit** — `8ab4f8ce`
 
 ```bash
 git add docs/adr
