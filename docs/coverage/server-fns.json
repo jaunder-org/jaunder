@@ -79,6 +79,10 @@
       "Audiences: CRUD + membership toggle re-fetch without list remount or flash"
     ],
     "auth::get_session": [
+      "/ : projector paint does not shift across mount",
+      "/tags/:tag : projector paint does not shift across mount",
+      "/~:username : projector paint does not shift across mount",
+      "/~:username/tags/:tag : projector paint does not shift across mount",
       "Audiences: CRUD + membership toggle re-fetch without list remount or flash",
       "Audiences: a failed subscriber-roster fetch surfaces an error, not an empty roster",
       "Audiences: a genuinely empty roster still shows the empty message",
@@ -182,6 +186,7 @@
       "site base URL warning banner shows when unset and hides once configured",
       "tag chip on permalink navigates to site tag listing",
       "unpublishing from a permalink navigates to /drafts without a full reload",
+      "unseeded client-nav to / paints Loading with the masthead intact",
       "upload widget on create-post page uploads file and shows URL",
       "upload widget on the /app cockpit uploads file and shows URL",
       "user tag page lists that user's tagged posts",
@@ -225,6 +230,10 @@
       "backup schedule field gates submit until a valid cron is entered"
     ],
     "backup::is_warning_visible": [
+      "/ : projector paint does not shift across mount",
+      "/tags/:tag : projector paint does not shift across mount",
+      "/~:username : projector paint does not shift across mount",
+      "/~:username/tags/:tag : projector paint does not shift across mount",
       "Audiences: CRUD + membership toggle re-fetch without list remount or flash",
       "Audiences: a failed subscriber-roster fetch surfaces an error, not an empty roster",
       "Audiences: a genuinely empty roster still shows the empty message",
@@ -328,6 +337,7 @@
       "site base URL warning banner shows when unset and hides once configured",
       "tag chip on permalink navigates to site tag listing",
       "unpublishing from a permalink navigates to /drafts without a full reload",
+      "unseeded client-nav to / paints Loading with the masthead intact",
       "upload widget on create-post page uploads file and shows URL",
       "upload widget on the /app cockpit uploads file and shows URL",
       "user tag page lists that user's tagged posts",
@@ -376,6 +386,10 @@
       "password reset flow completes successfully"
     ],
     "posts::create": [
+      "/ : projector paint does not shift across mount",
+      "/tags/:tag : projector paint does not shift across mount",
+      "/~:username : projector paint does not shift across mount",
+      "/~:username/tags/:tag : projector paint does not shift across mount",
       "Named audience: assigned member sees a Friends post; an unassigned non-member does not",
       "Private post: hidden from anonymous and non-subscriber, visible to author",
       "Public post is visible to anonymous and appears in the feed; Subscribers post does not",
@@ -499,11 +513,13 @@
       "editing an invalid or nonexistent post shows not-found"
     ],
     "posts::list_by_tag": [
+      "/tags/:tag : projector paint does not shift across mount",
       "editing a post updates tag chips and tag listing pages",
       "head discovery links update across a client-side nav, staying a single set",
       "tag chip on permalink navigates to site tag listing"
     ],
     "posts::list_by_user": [
+      "/~:username : projector paint does not shift across mount",
       "Audiences: CRUD + membership toggle re-fetch without list remount or flash",
       "Audiences: a failed subscriber-roster fetch surfaces an error, not an empty roster",
       "Audiences: refresh pulls a mid-session new subscriber into the checklists",
@@ -516,6 +532,7 @@
       "per-user timeline lists published posts with pagination"
     ],
     "posts::list_by_user_and_tag": [
+      "/~:username/tags/:tag : projector paint does not shift across mount",
       "user tag page lists that user's tagged posts"
     ],
     "posts::list_drafts": [
@@ -538,6 +555,10 @@
       "upload widget on the /app cockpit uploads file and shows URL"
     ],
     "posts::list_local_timeline": [
+      "/ : projector paint does not shift across mount",
+      "/tags/:tag : projector paint does not shift across mount",
+      "/~:username : projector paint does not shift across mount",
+      "/~:username/tags/:tag : projector paint does not shift across mount",
       "Audiences: CRUD + membership toggle re-fetch without list remount or flash",
       "Audiences: a failed subscriber-roster fetch surfaces an error, not an empty roster",
       "Audiences: a genuinely empty roster still shows the empty message",
@@ -634,6 +655,7 @@
       "site base URL warning banner shows when unset and hides once configured",
       "tag chip on permalink navigates to site tag listing",
       "unpublishing from a permalink navigates to /drafts without a full reload",
+      "unseeded client-nav to / paints Loading with the masthead intact",
       "upload widget on create-post page uploads file and shows URL",
       "upload widget on the /app cockpit uploads file and shows URL",
       "user tag page lists that user's tagged posts",
@@ -684,6 +706,10 @@
       "profile update persists a valid display name"
     ],
     "registration::get_policy": [
+      "/ : projector paint does not shift across mount",
+      "/tags/:tag : projector paint does not shift across mount",
+      "/~:username : projector paint does not shift across mount",
+      "/~:username/tags/:tag : projector paint does not shift across mount",
       "Audiences: CRUD + membership toggle re-fetch without list remount or flash",
       "Audiences: a failed subscriber-roster fetch surfaces an error, not an empty roster",
       "Audiences: a genuinely empty roster still shows the empty message",
@@ -776,6 +802,10 @@
       "user with no posts serves a valid empty feed in each format"
     ],
     "registration::register": [
+      "/ : projector paint does not shift across mount",
+      "/tags/:tag : projector paint does not shift across mount",
+      "/~:username : projector paint does not shift across mount",
+      "/~:username/tags/:tag : projector paint does not shift across mount",
       "Audiences: CRUD + membership toggle re-fetch without list remount or flash",
       "Audiences: a failed subscriber-roster fetch surfaces an error, not an empty roster",
       "Audiences: a genuinely empty roster still shows the empty message",
@@ -878,6 +908,10 @@
       "site base URL warning banner shows when unset and hides once configured"
     ],
     "site::is_base_url_warning_visible": [
+      "/ : projector paint does not shift across mount",
+      "/tags/:tag : projector paint does not shift across mount",
+      "/~:username : projector paint does not shift across mount",
+      "/~:username/tags/:tag : projector paint does not shift across mount",
       "Audiences: CRUD + membership toggle re-fetch without list remount or flash",
       "Audiences: a failed subscriber-roster fetch surfaces an error, not an empty roster",
       "Audiences: a genuinely empty roster still shows the empty message",
@@ -981,6 +1015,7 @@
       "site base URL warning banner shows when unset and hides once configured",
       "tag chip on permalink navigates to site tag listing",
       "unpublishing from a permalink navigates to /drafts without a full reload",
+      "unseeded client-nav to / paints Loading with the masthead intact",
       "upload widget on create-post page uploads file and shows URL",
       "upload widget on the /app cockpit uploads file and shows URL",
       "user tag page lists that user's tagged posts",
@@ -994,6 +1029,7 @@
       "site base URL warning banner shows when unset and hides once configured"
     ],
     "subscriptions::is_subscribed": [
+      "/~:username : projector paint does not shift across mount",
       "Audiences: CRUD + membership toggle re-fetch without list remount or flash",
       "Audiences: a failed subscriber-roster fetch surfaces an error, not an empty roster",
       "Audiences: refresh pulls a mid-session new subscriber into the checklists",
