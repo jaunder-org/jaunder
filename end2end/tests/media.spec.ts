@@ -67,6 +67,52 @@ test.describe("Media upload and serving", () => {
     expect(await serveResponse.text()).toBe("spaced filename content");
   });
 
+  test("the media row decodes its label but not its delete key", async ({
+    page,
+  }, testInfo) => {
+    // The media library is a CSR view, so this is the only surface that can observe both
+    // spellings of one filename (#720). `component.rs` used to derive a single String for
+    // the link text and the hidden delete field; they diverge now, and getting it wrong is
+    // invisible to type checking — the label would show `my%20holiday%20photo.jpg`, or the
+    // delete would fail at the wire door.
+    await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 30000));
+
+    const response = await page.request.post(BASE_URL + "/api/upload_media", {
+      multipart: {
+        file: {
+          name: "my holiday photo.jpg",
+          mimeType: "image/jpeg",
+          buffer: Buffer.from("spaced filename content"),
+        },
+      },
+    });
+    expect(response.status()).toBe(200);
+
+    // Reached via the nav link and pinned on the page's own landmark, matching the
+    // sibling media-page tests below — a bare `goto` races the CSR shell's hydration.
+    await click(page, "a[href='/media']");
+    await waitForSelector(page, "button:has-text('Attach media')");
+
+    // Wait on the *label*, not the hidden input: `waitForSelector` waits for visibility,
+    // which a `type="hidden"` field never reaches.
+    //
+    // The label is cosmetic and decodes; the hidden field is the lookup key and does not.
+    await expect(
+      page.getByRole("link", { name: "my holiday photo.jpg" }),
+    ).toBeVisible();
+    await expect(page.locator('input[name="filename"]')).toHaveValue(
+      "my%20holiday%20photo.jpg",
+    );
+
+    // And the round-trip: deleting through the form succeeds, which is the end-to-end
+    // check that the key was not decoded — `Filename`'s wire door rejects a raw value.
+    page.on("dialog", (dialog) => dialog.accept());
+    await click(page, 'button:has-text("Delete")');
+    await expect(
+      page.getByRole("link", { name: "my holiday photo.jpg" }),
+    ).toHaveCount(0);
+  });
+
   test("unauthenticated upload is rejected", async ({ page }) => {
     // No session: `require_auth()` rejects and the server fn returns a serialized
     // `WebError::Unauthorized` — not necessarily a bare 401 status.

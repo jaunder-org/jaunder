@@ -133,9 +133,16 @@ async fn serve_response(
         .find_by_hash(&hash, &source)
         .await
         .map_err(serve_internal_error)?
-        .map_or_else(|| detect_content_type(&filename), |r| r.content_type);
+        // Both read *inside* the name rather than using it as a path, so both take the
+        // decoded form (#720). Extension sniffing on the encoded form happens to work
+        // only because `.` is unreserved and every extension in the table is ASCII
+        // alphanumeric — a coincidence of the encode set, not a property to rely on.
+        .map_or_else(
+            || detect_content_type(&filename.decoded()),
+            |r| r.content_type,
+        );
 
-    let disposition = content_disposition(&content_type, &filename);
+    let disposition = content_disposition(&content_type, &filename.decoded());
 
     let file = fs::File::open(&file_path)
         .await
@@ -266,6 +273,12 @@ fn resolve_media_path(
 }
 
 /// Builds a header-safe `Content-Disposition` value for serving `filename`.
+///
+/// Takes the **decoded** name — this header is what the user sees and saves as, so it
+/// carries the name they typed (#720). Its internal `NON_ALPHANUMERIC` encode below is the
+/// RFC 5987 one, a deliberately *different* set from the media path segment's (ADR-0080);
+/// passing an already-encoded name here would double-encode into a header that still looks
+/// well-formed.
 ///
 /// The filename is attacker-influenced (it round-trips through the URL), so it
 /// is emitted in two forms: a quote/backslash-escaped, ASCII-only `filename=`
@@ -508,6 +521,26 @@ mod tests {
             resolve_media_path(Path::new("/data"), &p),
             Err(StatusCode::NOT_FOUND)
         );
+    }
+
+    #[test]
+    fn content_disposition_carries_decoded_and_rfc5987_forms() {
+        // The argument is the *decoded* name (#720). The helper's own `NON_ALPHANUMERIC`
+        // encode is the RFC 5987 one and is a different set from the media segment's —
+        // both correct in place. Handing it the already-encoded name would double-encode
+        // into a header that still looks well-formed, which is exactly the failure class
+        // this issue exists to remove, so both parameters are pinned as exact strings.
+        let value = content_disposition("image/png", "my photo.jpg");
+        assert!(value.contains("filename=\"my photo.jpg\""), "{value}");
+        // Note `%2E`, not `.`: the RFC 5987 parameter uses the **bare** `NON_ALPHANUMERIC`
+        // set, which encodes the unreserved marks the media path segment deliberately
+        // keeps. The two sets genuinely differ and are each correct in place (ADR-0080);
+        // pinning the exact string here is what stops one being swapped for the other.
+        assert!(
+            value.contains("filename*=UTF-8''my%20photo%2Ejpg"),
+            "{value}"
+        );
+        assert!(!value.contains("%2520"), "double-encoded: {value}");
     }
 
     #[test]

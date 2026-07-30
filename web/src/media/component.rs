@@ -278,10 +278,16 @@ fn render_media_row(item: &Item, delete_action: ServerAction<Delete>) -> impl In
     // Same reason as `filename` below: `RootRelativeUrl` is not an `IntoAttributeValue`,
     // so the `href` gets its `str` view here.
     let url = item.url.to_string();
-    // `Filename` implements neither Leptos `IntoView` nor `IntoAttributeValue`, so
-    // render it as an owned String for the link text and the hidden form field
-    // (mirroring `item.sha256.to_string()` below).
-    let filename = item.filename.to_string();
+    // `Filename` implements neither Leptos `IntoView` nor `IntoAttributeValue`, so both
+    // views are taken as owned Strings (mirroring `item.sha256.to_string()` below).
+    //
+    // Two roles, two spellings (#720). The label is cosmetic and decodes to the name the
+    // user typed; the hidden field is the *key* that round-trips to
+    // `delete_media(filename: Filename)`, so it must stay canonical. Decoding the key
+    // would make every delete of an encoding-needing name fail at the wire door — loudly,
+    // since `Filename`'s `FromStr` rejects a raw value, but fail all the same.
+    let display_name = item.filename.decoded().into_owned();
+    let filename_key = item.filename.to_string();
     // The ActionForm hidden field needs an owned String; `ContentHash: Display`.
     let sha256 = item.sha256.to_string();
     let source = item.source.to_string();
@@ -292,7 +298,7 @@ fn render_media_row(item: &Item, delete_action: ServerAction<Delete>) -> impl In
         <tr>
             <td>
                 <a href=url target="_blank">
-                    {filename.clone()}
+                    {display_name}
                 </a>
             </td>
             <td>{item.content_type.to_string()}</td>
@@ -302,7 +308,7 @@ fn render_media_row(item: &Item, delete_action: ServerAction<Delete>) -> impl In
             <td>
                 <ActionForm action=delete_action>
                     <input type="hidden" name="sha256" value=sha256 />
-                    <input type="hidden" name="filename" value=filename />
+                    <input type="hidden" name="filename" value=filename_key />
                     <input type="hidden" name="source" value=source />
                     <button
                         type="submit"
