@@ -1194,7 +1194,7 @@ git commit -m "test(e2e): follow the server-fn endpoints to /<vertical>/<op> (#6
 
 - Modify: `docs/adr/0066-server-fn-test-registrar-guard.md` (Decision `:56-64`,
   Consequences `:78-82`)
-- Create: `docs/adr/drafts/server-fn-wire-namespace.md`
+- Create: `docs/adr/0082-server-fn-wire-namespace.md`
 
 **Interfaces:**
 
@@ -1225,9 +1225,9 @@ prettier restages prose**, run `prettier -w` on the edited markdown before
 staging.
 
 - [x] **Step 2: Draft the wire-namespace ADR** —
-      `docs/adr/drafts/server-fn-wire-namespace.md`
+      `docs/adr/0082-server-fn-wire-namespace.md`
 
-Create `docs/adr/drafts/server-fn-wire-namespace.md` from `docs/adr/template.md`
+Create `docs/adr/0082-server-fn-wire-namespace.md` from `docs/adr/template.md`
 (numberless — `cargo xtask adr promote` numbers it at ship, per ADR-0048).
 Content:
 

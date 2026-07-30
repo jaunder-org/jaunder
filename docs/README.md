@@ -109,6 +109,7 @@ convention). See the Status column below for each ADR's current status.
 | [0079](adr/0079-rendered-html-sanitization.md)                     | `RenderedHtml` carries a sanitization invariant, via two named doors                                         | accepted   |
 | [0080](adr/0080-media-path-naming-correspondence.md)               | Media path naming — one layout, percent-encoded, URL-identical on disk                                       | accepted   |
 | [0081](adr/0081-empirical-server-fn-flow-coverage.md)              | Server-fn flow coverage is derived from e2e traces, not asserted                                             | proposed   |
+| [0082](adr/0082-server-fn-wire-namespace.md)                       | Server-fn wire URLs are `/api/<vertical>/<op>`, derived and gate-written                                     | proposed   |
 
 <!-- adr-table:end -->
 
