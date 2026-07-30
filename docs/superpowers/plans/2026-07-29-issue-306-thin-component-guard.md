@@ -188,7 +188,7 @@ pub fn problems(scanned: &[(String, String)]) -> Option<String>;
 pub fn run(result: &mut CommandResult);
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Every AC gets one. The three trap fixtures (`let … else`, `for=`,
 statement-position `view!`) are the ones most likely to be wrong, so they are
@@ -345,12 +345,12 @@ written from the **real** shapes in `posts/component.rs`, not invented:
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 `cargo test --manifest-path xtask/Cargo.toml thin_components` — FAIL, symbols
 undefined.
 
-- [ ] **Step 3: Implement the counter**
+- [x] **Step 3: Implement the counter**
 
 Structure mirrors `target_arch_placement_check`. Specifics that the fixtures pin
 but the shape does not:
@@ -378,11 +378,11 @@ const VIEW_REMEDY: &str = "extract a subcomponent, or use <Show>/<For> instead o
                            `move || if` (#306)";
 ```
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 `cargo test --manifest-path xtask/Cargo.toml thin_components` — PASS.
 
-- [ ] **Step 5: Wire the step, report-only**
+- [x] **Step 5: Wire the step, report-only**
 
 `run()` scans `web/src` (the `rust_files` recursion from
 `target_arch_placement_check`) and pushes:
@@ -397,7 +397,7 @@ result.push(StepResult::ok("thin-components").detail(report(&scanned)));
 An unreadable or unparseable file still **fails** here (**D6**) — report-only
 applies to over-budget components, not to "the guard could not look".
 
-- [ ] **Step 6: Capture the authoritative violator list**
+- [x] **Step 6: Capture the authoritative violator list**
 
 ```bash
 cargo xtask check --no-test
@@ -413,7 +413,7 @@ logic → `#[derive(Clone, Copy)]` state struct host-tested under
 one-line shell in the view. View-surface excess is usually a **subcomponent**
 extraction (**D4**).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 Run `cargo xtask check` first (**`jaunder-commit`**).
 
@@ -467,12 +467,12 @@ of the 10 `let … else` are here).
 - Produces: extracted `pub` functions / state structs, re-exported from
   `posts/mod.rs` so the host lib build does not see them as `dead_code`.
 
-- [ ] **Step 1: Record this vertical's violators from Task 1's report**
+- [x] **Step 1: Record this vertical's violators from Task 1's report**
 
 Paste the report's `posts/` lines here with counts, worst first, before editing
 anything — the list is the task's definition of done.
 
-- [ ] **Step 2: Extract setup logic, test-first**
+- [x] **Step 2: Extract setup logic, test-first**
 
 Write the `#[cfg(test)]` assertions for the extracted function _before_ moving
 the body, run them red, then move the logic and run them green.
@@ -521,7 +521,7 @@ The `let … else` clusters (`:941`, `:951`, `:957` in `UserTagPage`; `:1094`;
 parsing that becomes a pure function returning `Option`/`Result`, asserted
 directly.
 
-- [ ] **Step 3: Decompose view-surface excess into subcomponents**
+- [x] **Step 3: Decompose view-surface excess into subcomponents**
 
 Extract a `#[component]` subcomponent rather than moving markup into Rust
 (**D4**); each new subcomponent must itself be within both budgets. Prefer
@@ -533,12 +533,12 @@ free (**D3**), so this is the cheapest fix.
 and the bottom-level `{move || …map(|r| match r { Ok(u) if … => … })}`. Re-run
 the report after each; do not assume one move suffices.
 
-- [ ] **Step 4: Re-export and check visibility**
+- [x] **Step 4: Re-export and check visibility**
 
 Add `pub use` lines to `web/src/posts/mod.rs` for every new `pub` item, or the
 host lib build reports `dead_code`.
 
-- [ ] **Step 5: Verify**
+- [x] **Step 5: Verify**
 
 ```bash
 cargo nextest run -p web
@@ -549,7 +549,7 @@ cargo xtask check --no-test
 Expected: tests pass; wasm-clippy clean; the `thin-components` report lists
 **no** `posts/` violators.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add web/src/posts docs/superpowers/plans
@@ -568,18 +568,18 @@ git commit -m "refactor(web): thin the posts components onto host-tested logic"
 
 **Interfaces:** as Task 2, per vertical.
 
-- [ ] **Step 1: Record these verticals' violators from Task 1's report.**
-- [ ] **Step 2: Extract setup logic, test-first** — same tier shapes as Task 2.
+- [x] **Step 1: Record these verticals' violators from Task 1's report.**
+- [x] **Step 2: Extract setup logic, test-first** — same tier shapes as Task 2.
       Note `media/component.rs:56`'s `let … else` (T1) and `MediaUpload`'s
       `web_sys`/`spawn_local` glue (T3 — leave a one-line shell).
-- [ ] **Step 3: Decompose view excess into subcomponents.** `MediaPage` needs ~3
+- [x] **Step 3: Decompose view excess into subcomponents.** `MediaPage` needs ~3
       extractions (one per `Suspense` body) and lands **exactly** at budget —
       re-run the report after each, expect no margin.
-- [ ] **Step 4: Re-export from each `mod.rs`.**
-- [ ] **Step 5: Verify** — `cargo nextest run -p web`, the verbatim wasm-clippy
+- [x] **Step 4: Re-export from each `mod.rs`.**
+- [x] **Step 5: Verify** — `cargo nextest run -p web`, the verbatim wasm-clippy
       command, `cargo xtask check --no-test` report clean for these three
       verticals.
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add web/src/media web/src/cockpit web/src/home docs/superpowers/plans
@@ -603,13 +603,13 @@ invent `TimelineGate`, that is #671's).
 
 **Interfaces:** as Task 2, per vertical.
 
-- [ ] **Step 1: Record the remaining violators from Task 1's report.**
-- [ ] **Step 2: Extract setup logic, test-first.**
-- [ ] **Step 3: Decompose view excess into subcomponents.**
-- [ ] **Step 4: Timeline pages — minimal only.** Record in the commit message
+- [x] **Step 1: Record the remaining violators from Task 1's report.**
+- [x] **Step 2: Extract setup logic, test-first.**
+- [x] **Step 3: Decompose view excess into subcomponents.**
+- [x] **Step 4: Timeline pages — minimal only.** Record in the commit message
       what was deliberately left to #671, so that issue's scope stays legible.
-- [ ] **Step 5: Re-export from each `mod.rs`.**
-- [ ] **Step 6: Verify the report is now EMPTY tree-wide.** This is the
+- [x] **Step 5: Re-export from each `mod.rs`.**
+- [x] **Step 6: Verify the report is now EMPTY tree-wide.** This is the
       precondition for Task 5 (**AC8**) — flipping to enforcing while any
       violator remains produces a commit the hook will refuse.
 
@@ -619,7 +619,7 @@ cargo clippy -p web -p client -p csr --features csr --target wasm32-unknown-unkn
 cargo xtask check --no-test
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add web/src docs/superpowers/plans
@@ -644,7 +644,7 @@ machinery.
 - Consumes: `problems()` (Task 1).
 - Produces: a failing `thin-components` step when any component is over budget.
 
-- [ ] **Step 1: Flip `run()`**
+- [x] **Step 1: Flip `run()`**
 
 ```rust
 let step = match (problems(&scanned), unreadable.is_empty()) {
@@ -660,22 +660,22 @@ else calls it — if `report()` becomes dead, either keep it as the `ok` detail
 preferred; a passing gate that still shows each component's headroom is how the
 next author notices they are at 2.
 
-- [ ] **Step 2: Verify the gate passes**
+- [x] **Step 2: Verify the gate passes**
 
 `cargo xtask check --no-test` → PASS with `[ ok ] thin-components` (**AC8**, and
 proof Tasks 2–4 finished).
 
-- [ ] **Step 3: Verify it BITES (AC13)**
+- [x] **Step 3: Verify it BITES (AC13)**
 
 Add a third `if` to one real component, re-run, confirm `[FAIL] thin-components`
 naming file, component, surface, and count — then restore and re-run green. A
 gate never observed failing is not known to bite.
 
-- [ ] **Step 4: Confirm the coverage boundary was not touched (AC12)**
+- [x] **Step 4: Confirm the coverage boundary was not touched (AC12)**
 
 `git diff --stat wt-base-issue-306..HEAD -- xtask/src/coverage/` → **empty**.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add xtask/src/steps/thin_components.rs docs/superpowers/plans
@@ -698,12 +698,12 @@ git commit -m "feat(xtask): enforce the thin-component budget"
 - Consumes: the step name and both budgets (Task 1/5).
 - Produces: nothing consumed by later tasks.
 
-- [ ] **Step 1: Add the `CONTRIBUTING.md` ladder bullet**
+- [x] **Step 1: Add the `CONTRIBUTING.md` ladder bullet**
 
 State the step, both surfaces, the budget, and that `<Show>`/`<For>` are free —
 the last is what a reader cannot guess and what makes the gate cheap to satisfy.
 
-- [ ] **Step 2: Write the ADR draft**
+- [x] **Step 2: Write the ADR draft**
 
 Heading exactly `# ADR-DRAFT: <Title>`. Record: ADR-0050 _assumed_ thin
 components; #520 removed the exemption and made the wasm-only layout the reason
@@ -712,12 +712,12 @@ remediation as the sanctioned response and **D11**'s no-escape-hatch stance.
 Link sibling ADRs bare (`0050-…md`, not `../0050-…md`) per
 `docs/adr/drafts/README.md` rule 4 — promotion strips one `../` level.
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 `cargo xtask check --no-test` — `prettier`, `adr-format`, and `doc-links` all
 ok.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 Prettier reflows Markdown during the gate; re-check `git status --porcelain` and
 stage the rewrite.
@@ -731,19 +731,19 @@ git commit -m "docs: record the enforced thin-component invariant"
 
 ## Final verification
 
-- [ ] `cargo xtask validate --no-e2e` — the full local gate.
-- [ ] **One e2e combo.** This branch restructures `web/` components, which the
+- [x] `cargo xtask validate --no-e2e` — the full local gate.
+- [x] **One e2e combo.** This branch restructures `web/` components, which the
       CSR bundle compiles and the browser renders, so host tests cannot see a
       broken view tree: run `cargo xtask e2e-local`. The full matrix is CI's
       (ADR-0034).
-- [ ] **AC11 — no new CLI surface.** `cargo xtask --help`; the subcommand list
+- [x] **AC11 — no new CLI surface.** `cargo xtask --help`; the subcommand list
       is unchanged from `main`, and `thin-components` appears only as a step
       name.
-- [ ] **AC12 — coverage untouched.**
+- [x] **AC12 — coverage untouched.**
       `git diff --stat wt-base-issue-306..HEAD -- xtask/src/coverage/` is empty.
-- [ ] **AC9 — every extraction is asserted.** For each new `*_logic.rs`/state
+- [x] **AC9 — every extraction is asserted.** For each new `*_logic.rs`/state
       module, confirm `#[cfg(test)]` assertions exist, and that any new
       subcomponent is itself within both budgets (the gate proves the latter).
-- [ ] **AC15 — no `TimelineGate`.** `rg -n 'TimelineGate' web/src` → no matches;
+- [x] **AC15 — no `TimelineGate`.** `rg -n 'TimelineGate' web/src` → no matches;
       #671's design was not pre-empted.
-- [ ] Confirm `git status --porcelain` is clean.
+- [x] Confirm `git status --porcelain` is clean.

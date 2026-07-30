@@ -374,30 +374,18 @@ pub fn run(result: &mut CommandResult) {
         }
     }
 
-    // REPORT-ONLY (#306, Task 1): over-budget components are LISTED, not failed, while
-    // the remediation lands — the list is the authoritative input to Tasks 2-4. Wiring
-    // the step now also gives the whole counter a real non-test caller; a `pub` item in
-    // this private module is dead code under `-D warnings` until one exists, and
-    // `#[cfg(test)]` use does not satisfy the lint.
-    //
-    // A file the guard cannot READ or PARSE fails even now: "could not look" is not
-    // the same as "nothing over budget".
-    //
-    // TASK 5 FLIPS THIS: move `over_budget` into the failing branch alongside
-    // `blocked`. That one change is the whole of enforcement.
+    // Both classes fail. They are collected separately because they mean different
+    // things — `blocked` is "the guard could not look at this file", `over_budget` is
+    // "it looked and this is too complex" — and because the report-only phase this
+    // step shipped in failed on the first while merely listing the second.
     let found = findings(&scanned);
-    let mut blocking = unreadable;
-    blocking.extend(found.blocked);
-    let step = if !blocking.is_empty() {
-        StepResult::fail("thin-components").detail(blocking.join("\n"))
-    } else if found.over_budget.is_empty() {
+    let mut problems = unreadable;
+    problems.extend(found.blocked);
+    problems.extend(found.over_budget);
+    let step = if problems.is_empty() {
         StepResult::ok("thin-components")
     } else {
-        StepResult::ok("thin-components").detail(format!(
-            "REPORT-ONLY ({} over budget; #306 Task 5 makes this fail)\n{}",
-            found.over_budget.len(),
-            found.over_budget.join("\n")
-        ))
+        StepResult::fail("thin-components").detail(problems.join("\n"))
     };
     result.push(step);
 }

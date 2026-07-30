@@ -246,6 +246,23 @@ job. Running every combo in parallel across runners cuts e2e wall-clock;
   plans, which may link files they will create). Note this is a **different**
   list from `.prettierignore`'s, which excludes only `docs/archive/`; the two
   are maintained separately on purpose.
+- `thin-components` fails when a Leptos `#[component]` body carries more than
+  **2** units of control flow on either of two surfaces: **setup** (the body
+  outside any macro) and **view** (inside `view!`). A unit is `if`, `match`,
+  `for`, `while`, `?`, `let … else`, or a guarded `match` arm — one per
+  construct, so a 10-arm `match` is one and `else if` nests. The two surfaces
+  are reported separately because the fixes differ: setup complexity belongs in
+  a host-tested function, view complexity wants a subcomponent.
+
+  **`<Show>`, `<For>`, and child components cost nothing**, deliberately — the
+  cheapest way to satisfy the gate is the idiomatic Leptos form or a
+  subcomponent. Note that a subcomponent is measured too, so it must itself be
+  within budget; and extracting into a plain fn that returns `impl IntoView`
+  does **not** count as a fix, because the gate measures only `#[component]`
+  bodies and such a fn hides the branch rather than moving it somewhere checked.
+  There is no suppression marker. See ADR-0083 for how to build a component that
+  passes by construction.
+
 - `elisp-fmt`, `ert`, and `byte-compile` run the elisp subproject's formatter,
   ERT suite, and warnings-as-errors byte-compilation under `emacs --batch` (see
   the Elisp subproject section below).
