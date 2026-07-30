@@ -269,7 +269,7 @@ Expected: PASS.
 
 ## Task 4 — The two feed-events row mappers and the `corrupt` seam
 
-- [ ] Done
+- [x] Done
 
 **Files**
 

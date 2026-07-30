@@ -18,13 +18,13 @@ pub type PostgresFeedEventStorage = FeedEventStore<Postgres>;
 /// regeneration need re-enqueues via the write/go-live path. Best-effort: a
 /// delete failure is logged, never propagated — the corrupt ids are already
 /// excluded from the returned batch, so the worker proceeds regardless.
-async fn purge_corrupt(pool: &Pool<Postgres>, ids: &[i64]) {
+async fn purge_corrupt(pool: &Pool<Postgres>, ids: &[FeedEventId]) {
     if ids.is_empty() {
         return;
     }
     tracing::warn!("feed_events: purging rows with an unparseable feed_url");
     if let Err(e) = sqlx::query("DELETE FROM feed_events WHERE id = ANY($1)")
-        .bind(ids)
+        .bind(raw_ids(ids))
         .execute(pool)
         .await
     {
@@ -74,7 +74,7 @@ impl FeedEventDialect for Postgres {
         let mut records = Vec::with_capacity(rows.len());
         let mut corrupt = Vec::new();
         for r in rows {
-            let id: i64 = r.get("id");
+            let id: FeedEventId = r.get("id");
             // A feed_url that won't parse can only come from DB tampering/corruption
             // (enqueue takes a validated FeedPath). Such a row is an unactionable
             // work item, so collect it for purge rather than failing the whole batch
@@ -84,7 +84,7 @@ impl FeedEventDialect for Postgres {
                 continue;
             };
             records.push(FeedEventRecord {
-                id: FeedEventId::from(id),
+                id,
                 feed_path,
                 status: parse_status(r.get::<&str, _>("status")),
                 attempts: r.get("attempts"),
