@@ -133,15 +133,26 @@ impl ContentHash {
 /// `Content-Disposition` header, so an un-sanitized one is a path-traversal /
 /// header-injection hazard (ADR-0063 §1: invariant + trust/safety boundary).
 ///
-/// Two construction doors, mirroring [`ContentHash`]'s `FromStr` + `from_digest`:
+/// It is also bounded: no `Filename` can exist whose percent-encoded form exceeds
+/// [`MAX_FILENAME_ENCODED_BYTES`], so a value that passes validation can always be written
+/// to disk. The bound is on the *encoded* length because that is what the filesystem sees
+/// (#708) — a 90-character name of non-ASCII characters does not fit.
+///
+/// Two construction doors, mirroring [`ContentHash`]'s `FromStr` + `from_digest`. They differ
+/// on length deliberately, matching their roles:
 /// - [`FromStr`] **validates** — it accepts a string iff it is already a canonical
-///   leaf (`sanitize_filename(s) == s`, non-empty), *rejecting* a non-canonical
-///   name rather than normalizing it. This is the door for untrusted URL / wire /
-///   DB values that must match a stored filename exactly; `#[derive(StrNewtype)]`
-///   routes `Deserialize` through it, so a non-canonical filename is rejected on
-///   the wire.
+///   leaf (`sanitize_filename(s) == s`, non-empty) **and within budget**, *rejecting* a
+///   non-canonical or over-long name rather than normalizing it. This is the door for
+///   untrusted URL / wire / DB values that must match a stored filename exactly, so silently
+///   shortening one would match the wrong file; `#[derive(StrNewtype)]` routes `Deserialize`
+///   through it, so both failures are rejected on the wire.
 /// - [`sanitized`][Filename::sanitized] **normalizes** — the upload-intake door,
-///   where a client's arbitrary name is meant to be reduced to a safe leaf.
+///   where a client's arbitrary name is meant to be reduced to a safe leaf. It
+///   **truncates** an over-long name (keeping the extension) instead of failing, so an
+///   upload is never lost for a cosmetic reason.
+///
+/// Their contract: `sanitized`'s output always satisfies `FromStr`, pinned by
+/// `sanitized_output_always_reparses_as_filename`.
 ///
 /// The rest of the ADR-0063 string-newtype trailer (`Display`, `AsRef<str>`,
 /// `Borrow<str>`, `Deref<Target = str>`, owned `String` conversions,
@@ -159,12 +170,28 @@ impl ContentHash {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, StrNewtype)]
 pub struct Filename(String);
 
-/// Error returned when a string is not a canonical media filename leaf.
+/// Error returned when a string is not a usable media filename leaf.
 #[derive(Debug, Error)]
-#[error(
-    "filename must be a non-empty safe path leaf (no path components, `.`/`..`, or null bytes)"
-)]
-pub struct InvalidFilename;
+pub enum InvalidFilename {
+    /// Not a canonical single path component.
+    #[error(
+        "filename must be a non-empty safe path leaf (no path components, `.`/`..`, or null bytes)"
+    )]
+    NotASafeLeaf,
+    /// Longer than the filesystem can hold once percent-encoded.
+    ///
+    /// The message states the *encoded* length and why it differs from what the user typed:
+    /// "my 90-character name was rejected" is otherwise baffling (#708).
+    #[error(
+        "filename is too long: {encoded} bytes once percent-encoded, limit \
+         {MAX_FILENAME_ENCODED_BYTES} (encoding expands each unsafe byte to `%XX`, so the \
+         limit applies to the encoded form, not the characters you typed)"
+    )]
+    TooLong {
+        /// The candidate's encoded byte length.
+        encoded: usize,
+    },
+}
 
 impl FromStr for Filename {
     type Err = InvalidFilename;
@@ -174,11 +201,17 @@ impl FromStr for Filename {
         // is the oracle. The `is_empty` guard is explicit because `sanitize_filename("")`
         // is `""`, so `sanitize_filename(s) == s` alone would accept the empty string —
         // and a filename is never empty.
-        if !s.is_empty() && sanitize_filename(s) == s {
-            Ok(Filename(s.to_owned()))
-        } else {
-            Err(InvalidFilename)
+        if s.is_empty() || sanitize_filename(s) != s {
+            return Err(InvalidFilename::NotASafeLeaf);
         }
+        // The strict door *rejects* an over-long name rather than truncating: it exists for
+        // values that must match a stored name exactly (a URL segment, a DB read), and a
+        // silently-shortened one would match the wrong file — or nothing (#708).
+        let encoded = encoded_len(s);
+        if encoded > MAX_FILENAME_ENCODED_BYTES {
+            return Err(InvalidFilename::TooLong { encoded });
+        }
+        Ok(Filename(s.to_owned()))
     }
 }
 
@@ -189,18 +222,80 @@ impl Filename {
     /// where a client's arbitrary name is meant to be reduced to a single leaf —
     /// as distinct from [`FromStr`], which rejects a non-canonical name outright.
     ///
+    /// An over-long name is **truncated, not rejected** — see [`truncate_to_budget`]. This is
+    /// the intake door: failing an upload because the name is long would lose the file for a
+    /// cosmetic reason, and shortening it is exactly the "reduce to a usable leaf" job this
+    /// door already has (#708).
+    ///
     /// # Errors
     ///
-    /// Returns [`InvalidFilename`] when `raw` sanitizes to the empty string (i.e.
-    /// `""`, `.`, or `..`).
+    /// Returns [`InvalidFilename::NotASafeLeaf`] when `raw` sanitizes — or truncates — to a
+    /// name that is not one: `""`, `.`, or `..`.
     pub fn sanitized(raw: &str) -> Result<Self, InvalidFilename> {
-        let s = sanitize_filename(raw);
-        if s.is_empty() {
-            Err(InvalidFilename)
-        } else {
-            Ok(Filename(s))
+        let s = truncate_to_budget(sanitize_filename(raw));
+        // Truncation can leave a degenerate leaf (an empty stem with no extension), and
+        // `sanitize_filename` already maps `.`/`..` to empty. Guarded here so this door's
+        // output always satisfies `FromStr`.
+        if s.is_empty() || s == "." || s == ".." {
+            return Err(InvalidFilename::NotASafeLeaf);
         }
+        Ok(Filename(s))
     }
+}
+
+/// Shortens `name` until its percent-encoded form fits [`MAX_FILENAME_ENCODED_BYTES`],
+/// keeping the extension and never splitting a grapheme cluster. A name already within
+/// budget is returned unchanged.
+///
+/// The extension is kept because [`detect_content_type`] is the **only** content-type source
+/// when a client sends no `Content-Type`, and it runs on the already-sanitized name — so
+/// dropping the extension here would store `application/octet-stream` permanently, with no
+/// way back but a re-upload. (Serving itself reads the stored column, so it is unaffected.)
+/// It also keeps the `Content-Disposition` name openable on the user's machine.
+///
+/// [`Path`]'s stem/extension split is used rather than a last-dot search so a dotfile
+/// survives: `.hiddenfile` has no extension, so it is truncated as one piece instead of
+/// having its "stem" emptied.
+fn truncate_to_budget(name: String) -> String {
+    if encoded_len(&name) <= MAX_FILENAME_ENCODED_BYTES {
+        return name;
+    }
+    let path = Path::new(&name);
+    let split = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .zip(path.extension().and_then(|e| e.to_str()));
+    let (stem, extension) = match split {
+        Some((stem, extension)) => (stem, format!(".{extension}")),
+        None => (name.as_str(), String::new()),
+    };
+    // Reserve room for the extension **and a minimal stem**. Reserving only the extension
+    // would let a name whose first grapheme cluster alone busts the budget — a base character
+    // with dozens of combining marks — truncate to bare `.jpg`. That is a *dotfile*, whose
+    // `Path::extension()` is `None`, so `detect_content_type` would answer
+    // `application/octet-stream` and store it permanently: precisely the loss keeping the
+    // extension is meant to prevent. An extension too large to leave that room is beyond
+    // saving — drop it and truncate the whole name, accepting the degraded content type.
+    let reserved = encoded_len(&extension) + encoded_len(TRUNCATED_STEM);
+    let (stem, extension) = if reserved > MAX_FILENAME_ENCODED_BYTES {
+        (name.as_str(), String::new())
+    } else {
+        (stem, extension)
+    };
+
+    let budget = MAX_FILENAME_ENCODED_BYTES - encoded_len(&extension);
+    let truncated = crate::text::truncate_by_graphemes(stem, budget, encoded_len);
+    // Nothing usable survived — or what did is not a name (`.`/`..`). Substitute the same
+    // placeholder a *missing* filename gets, so the result is always a real leaf carrying its
+    // extension. This is what keeps truncation from ever producing a value `FromStr` would
+    // reject, which `sanitized` relies on because it constructs `Filename` directly.
+    let mut out = if truncated.is_empty() || truncated == "." || truncated == ".." {
+        TRUNCATED_STEM.to_owned()
+    } else {
+        truncated
+    };
+    out.push_str(&extension);
+    out
 }
 
 /// Strip path components, replace null bytes, reject `.`, `..`, and empty results.
@@ -300,6 +395,32 @@ const MEDIA_SEGMENT_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
 #[must_use]
 pub fn encode_filename_segment(filename: &Filename) -> impl std::fmt::Display + '_ {
     utf8_percent_encode(filename, MEDIA_SEGMENT_ENCODE_SET)
+}
+
+/// The filesystem's limit on a single path component, in bytes. ext4/XFS/btrfs, APFS and NTFS
+/// all cap one name at 255, and the media layout puts the whole filename in a single
+/// component, so this is the entire budget.
+///
+/// It is measured against the **percent-encoded** form, because that is what lands on disk
+/// (ADR-0080) — a name can be well under 255 characters and still not fit. That makes this
+/// bound depend on [`MEDIA_SEGMENT_ENCODE_SET`]: widening that set shrinks the set of
+/// representable names, so the two must be revisited together (#708).
+pub const MAX_FILENAME_ENCODED_BYTES: usize = 255;
+
+/// The stem substituted when truncation leaves nothing usable — the same placeholder a
+/// *missing* upload filename already gets (`MediaManager::validate_filename`), so operators
+/// see one recognizable name for "we had to invent this" rather than two.
+const TRUNCATED_STEM: &str = "upload";
+
+/// The encoded byte length of `s` as a media path segment — what the name costs on disk.
+///
+/// Sums the encoder's output chunks rather than collecting a `String`, so the per-grapheme
+/// loop in [`truncate_to_budget`] allocates nothing. The single place the budget is measured,
+/// so both `Filename` doors agree.
+fn encoded_len(s: &str) -> usize {
+    utf8_percent_encode(s, MEDIA_SEGMENT_ENCODE_SET)
+        .map(str::len)
+        .sum()
 }
 
 /// Returns `"<source>/<p1>/<p2>/<full-sha256>/<filename>"`, the content-
@@ -1039,12 +1160,168 @@ mod tests {
         assert!(msg.contains("safe path leaf"), "{msg}");
     }
 
-    // Idempotence pin (spec criterion 8): every non-empty `sanitize_filename`
-    // output must re-parse through Door A. A future change to `sanitize_filename`
-    // that broke idempotence would silently turn stored (Door-B-written) filenames
-    // into `Decode` errors on read-back — this fails loudly here instead.
+    // --- #708: the length bound is on the ENCODED form ---
+
     #[test]
-    fn sanitize_filename_output_always_reparses_as_filename() {
+    fn from_str_rejects_a_name_whose_encoded_form_exceeds_the_budget() {
+        // 100 chars, 200 raw bytes, 600 encoded. A char-count bound — the house pattern for
+        // every other bounded newtype here — would accept this and the write would fail.
+        let raw = "ä".repeat(100);
+        let err = raw
+            .parse::<Filename>()
+            .expect_err("an over-budget name must be rejected");
+        assert!(
+            matches!(err, InvalidFilename::TooLong { .. }),
+            "wrong variant: {err}"
+        );
+        // The message must explain the expansion, or "my 100-character name was rejected"
+        // is baffling.
+        let msg = err.to_string();
+        assert!(msg.contains("percent-encoded"), "{msg}");
+        assert!(msg.contains("255"), "{msg}");
+    }
+
+    #[test]
+    fn from_str_accepts_a_name_exactly_at_the_budget() {
+        // Boundary: `<=` not `<`. Plain ASCII encodes 1:1, so 255 chars is 255 bytes.
+        let raw = "a".repeat(MAX_FILENAME_ENCODED_BYTES);
+        assert!(raw.parse::<Filename>().is_ok());
+        let over = "a".repeat(MAX_FILENAME_ENCODED_BYTES + 1);
+        assert!(matches!(
+            over.parse::<Filename>().expect_err("one over must fail"),
+            InvalidFilename::TooLong { .. }
+        ));
+    }
+
+    #[test]
+    fn from_str_still_reports_a_bad_leaf_as_such() {
+        // The two failures stay distinguishable — the length check runs after the leaf check.
+        assert!(matches!(
+            "../escape"
+                .parse::<Filename>()
+                .expect_err("traversal must fail"),
+            InvalidFilename::NotASafeLeaf
+        ));
+    }
+
+    #[test]
+    fn sanitized_truncates_instead_of_failing_and_keeps_the_extension() {
+        let long = format!("{}.jpg", "a".repeat(400));
+        let f = Filename::sanitized(&long).expect("the intake door truncates, never fails here");
+        assert!(f.ends_with(".jpg"), "extension must survive: {f}");
+        assert!(encoded_len(&f) <= MAX_FILENAME_ENCODED_BYTES, "{f}");
+        // The property the extension is kept *for*: the stored content type is unchanged.
+        // Asserting merely "ends_with(.jpg)" would pass on a mangled extension.
+        assert_eq!(detect_content_type(&f), detect_content_type(&long));
+    }
+
+    #[test]
+    fn sanitized_truncation_is_measured_in_encoded_bytes_not_characters() {
+        // ~3× expansion. Truncating to 255 *characters* would leave ~765 encoded bytes —
+        // still unwritable. This is the assertion that pins D1's choice.
+        let long = format!("{}.png", "ä".repeat(300));
+        let f = Filename::sanitized(&long).expect("must truncate");
+        assert!(encoded_len(&f) <= MAX_FILENAME_ENCODED_BYTES, "{f}");
+        assert!(
+            f.chars().count() < 255,
+            "must cut well short of 255 chars: {f}"
+        );
+        assert_eq!(detect_content_type(&f), detect_content_type(&long));
+    }
+
+    #[test]
+    fn sanitized_never_splits_a_grapheme_cluster() {
+        // Devanagari base + combining vowel sign: cutting between them corrupts the
+        // character. Re-parsing through the strict door proves the result is a valid,
+        // in-budget leaf.
+        let long = format!("{}.txt", "कि".repeat(200));
+        let f = Filename::sanitized(&long).expect("must truncate");
+        assert!(encoded_len(&f) <= MAX_FILENAME_ENCODED_BYTES, "{f}");
+        assert!(f.as_ref().parse::<Filename>().is_ok(), "{f}");
+        // No lone combining mark left at the cut.
+        assert!(!f.starts_with('\u{093F}'), "{f}");
+    }
+
+    #[test]
+    fn sanitized_preserves_a_dotfile_rather_than_treating_it_as_all_extension() {
+        // `Path::extension()` is `None` for a dotfile, so it truncates as one piece. A
+        // manual last-dot split would empty the "stem" and destroy the name.
+        assert_eq!(
+            Filename::sanitized(".hiddenfile").expect("valid leaf"),
+            ".hiddenfile"
+        );
+        let long = format!(".{}", "a".repeat(400));
+        let f = Filename::sanitized(&long).expect("must truncate");
+        assert!(f.starts_with('.'), "leading dot must survive: {f}");
+        assert!(encoded_len(&f) <= MAX_FILENAME_ENCODED_BYTES, "{f}");
+    }
+
+    #[test]
+    fn sanitized_truncates_the_whole_name_when_the_extension_alone_is_over_budget() {
+        let f = Filename::sanitized(&format!("x.{}", "ä".repeat(300))).expect("must truncate");
+        assert!(encoded_len(&f) <= MAX_FILENAME_ENCODED_BYTES, "{f}");
+        assert!(f.as_ref().parse::<Filename>().is_ok(), "{f}");
+    }
+
+    #[test]
+    fn sanitized_rejects_input_that_reduces_to_a_degenerate_name() {
+        for bad in ["", ".", ".."] {
+            assert!(matches!(
+                Filename::sanitized(bad).expect_err("degenerate names are not filenames"),
+                InvalidFilename::NotASafeLeaf
+            ));
+        }
+    }
+
+    /// A stem that is a **single** grapheme cluster too large for the budget: one base
+    /// character carrying ~80 combining marks. Nothing of the stem fits, so a naive
+    /// implementation emits bare `.jpg` — a *dotfile*, whose `Path::extension()` is `None`,
+    /// so `detect_content_type` answers `application/octet-stream` and stores it forever.
+    /// That is the exact loss keeping the extension is supposed to prevent, so it is pinned.
+    #[test]
+    fn sanitized_substitutes_a_stem_when_no_cluster_of_the_original_fits() {
+        let zalgo = format!("a{}.jpg", "\u{0301}".repeat(80));
+        let f = Filename::sanitized(&zalgo).expect("must truncate, not fail");
+
+        assert!(encoded_len(&f) <= MAX_FILENAME_ENCODED_BYTES, "{f}");
+        assert!(f.ends_with(".jpg"), "{f}");
+        // The property that matters: still detected as an image, not octet-stream.
+        assert_eq!(detect_content_type(&f), detect_content_type(&zalgo));
+        assert_ne!(f, ".jpg", "a bare extension is a dotfile, not a filename");
+        // And it is a value the strict door accepts — `sanitized` builds `Filename` directly,
+        // so nothing else enforces that.
+        assert!(f.as_ref().parse::<Filename>().is_ok(), "{f}");
+    }
+
+    #[test]
+    fn sanitized_never_reports_a_length_failure_as_a_bad_leaf() {
+        // Truncation must always yield a usable name, so a merely-long input is never an
+        // error — the `NotASafeLeaf` guard is only for what `sanitize_filename` itself
+        // empties (`""`, `.`, `..`). A regression here would surface as a baffling
+        // "must be a non-empty safe path leaf" for a name that is one.
+        for long in [
+            format!("a{}.jpg", "\u{0301}".repeat(80)), // no cluster of the stem fits
+            format!("a{}", "\u{0301}".repeat(80)),     // ditto, and no extension to keep
+            format!(".{}", "\u{0301}".repeat(80)),     // dotfile whose only cluster busts it
+            "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}".repeat(40), // ZWJ family emoji
+        ] {
+            assert!(
+                Filename::sanitized(&long).is_ok(),
+                "a long-but-legal name must truncate, not fail: {long:?}"
+            );
+        }
+    }
+
+    // Idempotence pin: whatever the intake door (B) emits must re-parse through the strict
+    // door (A). Otherwise a stored, B-written filename becomes a `Decode` error on read-back
+    // — this fails loudly here instead.
+    //
+    // Asserted on `Filename::sanitized`, not on `sanitize_filename`. Since #708 the bare
+    // oracle is no longer enough: it does not truncate, so its output for a long name is
+    // over budget and Door A rightly rejects it. The claim that has to hold is about the
+    // door callers actually use.
+    #[test]
+    fn sanitized_output_always_reparses_as_filename() {
         for raw in [
             "photo.jpg",
             "../../etc/passwd",
@@ -1054,15 +1331,19 @@ mod tests {
             "a b.txt",
             ".hidden",
             "no-ext",
+            // Over budget once encoded — the cases that motivated #708.
+            &"ä".repeat(300),
+            &format!("{}.jpg", "a".repeat(400)),
         ] {
-            let s = sanitize_filename(raw);
-            // Every non-empty sanitize output must re-parse through Door A. Expressed
-            // as a single disjunction (not an `if` guard) so no always-true branch
-            // region is left uncovered; none of these inputs sanitize to empty, so the
-            // left disjunct is false and the parse is what's actually asserted.
+            // Asserted as `Ok` first, deliberately: an earlier form allowed `Err` to satisfy
+            // the claim, which meant the test could not catch `sanitized` regressing to
+            // *rejecting* long names — the very behaviour #708 changed. None of these inputs
+            // is degenerate, so every one must succeed.
+            let f = Filename::sanitized(raw)
+                .unwrap_or_else(|e| panic!("sanitized({raw:?}) must succeed, got {e}"));
             assert!(
-                s.is_empty() || s.parse::<Filename>().is_ok(),
-                "sanitize({raw:?}) = {s:?} must re-parse as Filename"
+                f.as_ref().parse::<Filename>().is_ok(),
+                "sanitized({raw:?}) = {f:?} must re-parse as Filename"
             );
         }
     }
