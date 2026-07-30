@@ -28,38 +28,62 @@ import { createPostViaApi } from "./posts";
 import { expectNoShiftAcrossMount } from "./layout-shift";
 
 /**
- * The four routes, and the chrome element that must not move on each.
+ * The four routes, the chrome element that must not move on each, and whether a post
+ * row can also be measured there.
  *
  * `/` paints the masthead hero (the `inner_html` subtree #671 moves into the gate's
  * `children` slot, and the ADR-0041 coincidence surface #653 regressed); the other
  * three paint a `Topbar`. `url` is built from the per-test username, which doubles as
- * the tag — see `seedTaggedPost`.
+ * the tag.
+ *
+ * `measureRow` is false for `/` **on purpose, and it is not a weakened assertion**.
+ * The other three routes are scoped to this test's unique username/tag, so the page
+ * holds exactly one row — ours — and its position can only move if the layout moved.
+ * `/` is the shared site-wide timeline: every other test's posts are on it, new posts
+ * are *prepended*, and the projector response is cacheable while the CSR refetch is
+ * live. So a row's absolute position legitimately differs between the frozen first
+ * paint and the post-mount sample — that is content drift, not layout shift, and the
+ * measurement cannot tell the two apart. (Observed under the full suite: the same row
+ * moved 137px on one attempt and 216px on the retry.) The masthead sits above the
+ * rows, is unaffected by row count, and is the target #671 actually puts at risk.
  */
 const ROUTES: {
   name: string;
   url: (user: string) => string;
   chrome: string;
+  measureRow: boolean;
 }[] = [
-  { name: "/", url: () => "/", chrome: ".j-hero" },
-  { name: "/tags/:tag", url: (u) => `/tags/${u}`, chrome: ".j-topbar" },
-  { name: "/~:username", url: (u) => `/~${u}`, chrome: ".j-topbar" },
+  { name: "/", url: () => "/", chrome: ".j-hero", measureRow: false },
+  {
+    name: "/tags/:tag",
+    url: (u) => `/tags/${u}`,
+    chrome: ".j-topbar",
+    measureRow: true,
+  },
+  {
+    name: "/~:username",
+    url: (u) => `/~${u}`,
+    chrome: ".j-topbar",
+    measureRow: true,
+  },
   {
     name: "/~:username/tags/:tag",
     url: (u) => `/~${u}/tags/${u}`,
     chrome: ".j-topbar",
+    measureRow: true,
   },
 ];
 
 for (const route of ROUTES) {
-  test(`${route.name} : chrome and first row do not shift across mount`, async ({
+  test(`${route.name} : projector paint does not shift across mount`, async ({
     page,
     firstNav,
   }, testInfo) => {
     // Register a fresh user and publish one short post tagged with their own
     // username. The username is unique per run, so it doubles as a collision-free
-    // tag — which makes the measured row scopeable to THIS test's post even on the
-    // shared `/` timeline, and gives `/tags/:tag` a page whose only row is ours.
-    // Short body: no wrap, so a reflow cannot masquerade as a shift.
+    // tag — which gives the three scoped routes a page whose only row is ours, and
+    // scopes the row locator to THIS test's post. Short body: no wrap, so a reflow
+    // cannot masquerade as a shift.
     const username = await register(page, firstNav);
     await createPostViaApi(page, { body: "cls probe", tags: [username] });
 
@@ -67,16 +91,22 @@ for (const route of ROUTES) {
       url: route.url(username),
       targets: (p) => [
         { name: "chrome", locator: p.locator(route.chrome) },
-        {
-          name: "own post head",
-          // Scoped by the author handle rendered at `posts/render.rs:203`, so a
-          // concurrent worker's post cannot be measured by mistake.
-          locator: p
-            .locator(".j-post", {
-              has: p.locator(".j-post-handle", { hasText: `@${username}` }),
-            })
-            .locator(".j-post-head"),
-        },
+        // Scoped by the author handle rendered at `posts/render.rs:203`, so a
+        // concurrent worker's post cannot be measured by mistake.
+        ...(route.measureRow
+          ? [
+              {
+                name: "own post head",
+                locator: p
+                  .locator(".j-post", {
+                    has: p.locator(".j-post-handle", {
+                      hasText: `@${username}`,
+                    }),
+                  })
+                  .locator(".j-post-head"),
+              },
+            ]
+          : []),
       ],
       afterMount: async (p) => {
         // Proves the reactive tree really mounted, so a zero-shift result cannot be
