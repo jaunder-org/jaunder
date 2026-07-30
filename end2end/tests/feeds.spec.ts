@@ -2,7 +2,7 @@ import type { Page } from "@playwright/test";
 import { goto, register, click, waitForHydration, BASE_URL } from "./helpers";
 // `test` comes from the shared fixtures, not @playwright/test, so this spec emits
 // an `e2e.test` span and its traffic — including the direct `page.request.post`
-// to /api/update_post below — is attributable to a named test (#681).
+// to /api/posts/update below — is attributable to a named test (#681).
 import {
   test,
   expect,
@@ -267,7 +267,7 @@ test("publishing and editing a post each trigger a WebSub hub ping", async ({
   await page.waitForTimeout(2_000);
   const beforeEdit = readPingLines().length;
 
-  const editRes = await page.request.post(`${BASE_URL}/api/update_post`, {
+  const editRes = await page.request.post(`${BASE_URL}/api/posts/update`, {
     data: {
       args: {
         post_id,
@@ -278,7 +278,7 @@ test("publishing and editing a post each trigger a WebSub hub ping", async ({
       },
     },
   });
-  expect(editRes.ok(), "update_post").toBeTruthy();
+  expect(editRes.ok(), "posts::update").toBeTruthy();
 
   const secondPing = await waitForPingMatching(beforeEdit, isUserFeed, 40_000);
   expect(secondPing.feed_url).toContain(`/~${username}/feed`);

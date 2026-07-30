@@ -18,12 +18,12 @@ test("profile update persists a valid display name", async ({
   await page.fill(DISPLAY_NAME, "Ada Lovelace");
 
   const updated = page.waitForResponse((response) =>
-    response.url().includes("update_profile"),
+    response.url().includes("profile/update"),
   );
   await page.click(UPDATE_BUTTON);
   expect((await updated).ok()).toBe(true);
 
-  // A fresh load reads the persisted value back through get_profile.
+  // A fresh load reads the persisted value back through profile::get.
   await goto(page, "/profile");
   await expect(page.locator(DISPLAY_NAME)).toHaveValue("Ada Lovelace");
 });
@@ -57,7 +57,7 @@ test("clearing the display name persists as empty", async ({
 
   await page.fill(DISPLAY_NAME, "Temp Name");
   let updated = page.waitForResponse((response) =>
-    response.url().includes("update_profile"),
+    response.url().includes("profile/update"),
   );
   await page.click(UPDATE_BUTTON);
   expect((await updated).ok()).toBe(true);
@@ -68,7 +68,7 @@ test("clearing the display name persists as empty", async ({
   // Empty the field (valid for an optional field ⇒ submit stays enabled) and save.
   await page.fill(DISPLAY_NAME, "");
   updated = page.waitForResponse((response) =>
-    response.url().includes("update_profile"),
+    response.url().includes("profile/update"),
   );
   await page.click(UPDATE_BUTTON);
   expect((await updated).ok()).toBe(true);
@@ -78,7 +78,7 @@ test("clearing the display name persists as empty", async ({
 });
 
 // #545: a valid bio entered on the profile page persists across a reload — the
-// typed Option<Bio> wire arg round-trips through update_profile/get_profile.
+// typed Option<Bio> wire arg round-trips through profile::update/profile::get.
 test("profile update persists a valid bio", async ({
   registeredPage: page,
 }) => {
@@ -87,7 +87,7 @@ test("profile update persists a valid bio", async ({
   await page.fill(BIO, "Mathematician and first programmer.");
 
   const updated = page.waitForResponse((response) =>
-    response.url().includes("update_profile"),
+    response.url().includes("profile/update"),
   );
   await page.click(UPDATE_BUTTON);
   expect((await updated).ok()).toBe(true);
@@ -153,7 +153,7 @@ test("clearing the bio persists as empty", async ({ registeredPage: page }) => {
 
   await page.fill(BIO, "Temporary bio");
   let updated = page.waitForResponse((response) =>
-    response.url().includes("update_profile"),
+    response.url().includes("profile/update"),
   );
   await page.click(UPDATE_BUTTON);
   expect((await updated).ok()).toBe(true);
@@ -164,7 +164,7 @@ test("clearing the bio persists as empty", async ({ registeredPage: page }) => {
   // Empty the field (valid for an optional field ⇒ submit stays enabled) and save.
   await page.fill(BIO, "");
   updated = page.waitForResponse((response) =>
-    response.url().includes("update_profile"),
+    response.url().includes("profile/update"),
   );
   await page.click(UPDATE_BUTTON);
   expect((await updated).ok()).toBe(true);

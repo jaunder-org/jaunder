@@ -2,7 +2,7 @@
 //! exchange. See the module doc on [`super`] for the authorization model.
 
 use crate::error::WebResult;
-// `AudienceName` is the wire-arg type of `create_audience` / `rename_audience`, so the
+// `AudienceName` is the wire-arg type of `create` / `rename`, so the
 // `#[server]`-generated arg structs reference it on both the client and server builds —
 // keep it ungated.
 use common::audience::AudienceName;
@@ -32,7 +32,7 @@ use {
 /// before the closure is reached, and the value can never differ. Only `name`'s
 /// attribute does real work — and it is the one the audiences e2e guards.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Store, Patch)]
-pub struct AudienceSummary {
+pub struct Summary {
     #[patch(|this, new| *this = new)]
     pub audience_id: AudienceId,
     #[patch(|this, new| *this = new)]
@@ -49,10 +49,10 @@ pub struct SubscriberSummary {
 }
 
 /// Creates a named audience owned by the authenticated author.
-#[server(endpoint = "/create_audience")]
-#[tracing::instrument(name = "web.audiences.create_audience", skip_all)]
-pub async fn create_audience(name: AudienceName) -> WebResult<AudienceId> {
-    boundary!("create_audience", {
+#[server(endpoint = "/audiences/create")]
+#[tracing::instrument(name = "web.audiences.create", skip_all)]
+pub async fn create(name: AudienceName) -> WebResult<AudienceId> {
+    boundary!("create", {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
         // `name` arrives already validated (typed wire arg, client-pre-validated via the
@@ -64,13 +64,13 @@ pub async fn create_audience(name: AudienceName) -> WebResult<AudienceId> {
 }
 
 /// Renames an audience the authenticated author owns.
-#[server(endpoint = "/rename_audience")]
-#[tracing::instrument(name = "web.audiences.rename_audience", skip(name))]
-pub async fn rename_audience(audience_id: AudienceId, name: AudienceName) -> WebResult<()> {
-    boundary!("rename_audience", {
+#[server(endpoint = "/audiences/rename")]
+#[tracing::instrument(name = "web.audiences.rename", skip(name))]
+pub async fn rename(audience_id: AudienceId, name: AudienceName) -> WebResult<()> {
+    boundary!("rename", {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
-        // `name` arrives already validated (see `create_audience`).
+        // `name` arrives already validated (see `create`).
         audiences
             .rename_audience(auth.user_id, audience_id, &name)
             .await?;
@@ -79,10 +79,10 @@ pub async fn rename_audience(audience_id: AudienceId, name: AudienceName) -> Web
 }
 
 /// Deletes an audience the authenticated author owns (and its memberships).
-#[server(endpoint = "/delete_audience")]
-#[tracing::instrument(name = "web.audiences.delete_audience")]
-pub async fn delete_audience(audience_id: AudienceId) -> WebResult<()> {
-    boundary!("delete_audience", {
+#[server(endpoint = "/audiences/delete")]
+#[tracing::instrument(name = "web.audiences.delete")]
+pub async fn delete(audience_id: AudienceId) -> WebResult<()> {
+    boundary!("delete", {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
         audiences.delete_audience(auth.user_id, audience_id).await?;
@@ -91,16 +91,16 @@ pub async fn delete_audience(audience_id: AudienceId) -> WebResult<()> {
 }
 
 /// Lists the authenticated author's named audiences.
-#[server(endpoint = "/list_my_audiences")]
-#[tracing::instrument(name = "web.audiences.list_my_audiences")]
-pub async fn list_my_audiences() -> WebResult<Vec<AudienceSummary>> {
-    boundary!("list_my_audiences", {
+#[server(endpoint = "/audiences/list_mine")]
+#[tracing::instrument(name = "web.audiences.list_mine")]
+pub async fn list_mine() -> WebResult<Vec<Summary>> {
+    boundary!("list_mine", {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
         let rows = audiences.list_audiences(auth.user_id).await?;
         Ok(rows
             .into_iter()
-            .map(|a| AudienceSummary {
+            .map(|a| Summary {
                 audience_id: a.audience_id,
                 name: a.name,
             })
@@ -110,7 +110,7 @@ pub async fn list_my_audiences() -> WebResult<Vec<AudienceSummary>> {
 
 /// Lists the authenticated author's active subscribers (for the assignment
 /// checklist). Resolves each local `subscriber_ref` to a username for display.
-#[server(endpoint = "/list_my_subscribers")]
+#[server(endpoint = "/audiences/list_my_subscribers")]
 #[tracing::instrument(name = "web.audiences.list_my_subscribers")]
 pub async fn list_my_subscribers() -> WebResult<Vec<SubscriberSummary>> {
     boundary!("list_my_subscribers", {
@@ -146,13 +146,13 @@ pub async fn list_my_subscribers() -> WebResult<Vec<SubscriberSummary>> {
 /// `add_member` is author-scoped in the store (it writes `author_user_id` so
 /// the composite FKs reject a cross-author pairing), so passing the session's
 /// `user_id` is the authorization.
-#[server(endpoint = "/add_subscriber_to_audience")]
-#[tracing::instrument(name = "web.audiences.add_subscriber_to_audience")]
-pub async fn add_subscriber_to_audience(
+#[server(endpoint = "/audiences/add_subscriber")]
+#[tracing::instrument(name = "web.audiences.add_subscriber")]
+pub async fn add_subscriber(
     audience_id: AudienceId,
     subscription_id: SubscriptionId,
 ) -> WebResult<()> {
-    boundary!("add_subscriber_to_audience", {
+    boundary!("add_subscriber", {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
         audiences
@@ -164,13 +164,13 @@ pub async fn add_subscriber_to_audience(
 
 /// Removes a subscription from an audience the authenticated author owns.
 /// `remove_member` is author-scoped, so a cross-author `audience_id` is a no-op.
-#[server(endpoint = "/remove_subscriber_from_audience")]
-#[tracing::instrument(name = "web.audiences.remove_subscriber_from_audience")]
-pub async fn remove_subscriber_from_audience(
+#[server(endpoint = "/audiences/remove_subscriber")]
+#[tracing::instrument(name = "web.audiences.remove_subscriber")]
+pub async fn remove_subscriber(
     audience_id: AudienceId,
     subscription_id: SubscriptionId,
 ) -> WebResult<()> {
-    boundary!("remove_subscriber_from_audience", {
+    boundary!("remove_subscriber", {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
         audiences
@@ -182,10 +182,10 @@ pub async fn remove_subscriber_from_audience(
 
 /// Lists the `subscription_id`s assigned to an audience the author owns.
 /// `list_members` is author-scoped, so a cross-author `audience_id` lists empty.
-#[server(endpoint = "/list_audience_members")]
-#[tracing::instrument(name = "web.audiences.list_audience_members")]
-pub async fn list_audience_members(audience_id: AudienceId) -> WebResult<Vec<SubscriptionId>> {
-    boundary!("list_audience_members", {
+#[server(endpoint = "/audiences/list_members")]
+#[tracing::instrument(name = "web.audiences.list_members")]
+pub async fn list_members(audience_id: AudienceId) -> WebResult<Vec<SubscriptionId>> {
+    boundary!("list_members", {
         let audiences = expect_context::<Arc<dyn AudienceStorage>>();
         let auth = require_auth().await?;
         let members = audiences.list_members(auth.user_id, audience_id).await?;

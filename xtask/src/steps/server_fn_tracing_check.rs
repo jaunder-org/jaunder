@@ -44,7 +44,9 @@ use syn::spanned::Spanned;
 use syn::{Meta, Token};
 
 use crate::result::{CommandResult, Mode, StepResult};
-use crate::web_server_fns::{self, WebServerFn, WEB_SRC};
+use crate::web_server_fns::{
+    self, apply_fixes, rewrite_attr_arg, vertical_of, LineFix, WebServerFn, WEB_SRC,
+};
 
 /// Argument types whose values may be recorded on a span, each with the ground
 /// that admits it (ADR-0011's addendum for #511).
@@ -129,24 +131,6 @@ fn reduce_type(ty: &syn::Type) -> Option<String> {
             Some(seg.ident.to_string())
         }
         _ => None,
-    }
-}
-
-/// The vertical a source file belongs to: the first path segment under `web/src`.
-///
-/// A `#[server]` fn in a file directly under `web/src` has no vertical directory,
-/// so there is no honest name to derive — that is an error naming the file, not a
-/// guess at `web.foo.rs.…`.
-fn vertical_of(path: &str) -> Result<&str, String> {
-    let (_, rest) = path
-        .split_once(&format!("{WEB_SRC}/"))
-        .ok_or_else(|| format!("{path}: not under {WEB_SRC}/"))?;
-    match rest.split_once('/') {
-        Some((vertical, _)) => Ok(vertical),
-        None => Err(format!(
-            "{path}: a #[server] fn directly under {WEB_SRC} has no vertical directory, so its \
-             span name cannot be derived — move it into {WEB_SRC}/<vertical>/"
-        )),
     }
 }
 
@@ -425,89 +409,6 @@ fn problems_with(f: &WebServerFn, vertical: &str) -> Vec<String> {
     lines
 }
 
-/// Rewrite one `#[tracing::instrument(...)]` attribute's source so its `name`
-/// argument is `desired`, or `None` when it already is.
-///
-/// Textual rather than a token-stream re-emit, because the attribute has already
-/// been parsed and validated by this point and a re-emit would reformat the
-/// author's `skip(...)`/`fields(...)` spelling. Three shapes occur:
-///
-/// - `#[tracing::instrument]`            → `#[tracing::instrument(name = "…")]`
-/// - `#[tracing::instrument(skip_all)]`  → `#[tracing::instrument(name = "…", skip_all)]`
-/// - `#[tracing::instrument(name = "x")]`→ the literal is replaced in place
-fn rewrite_name(attr_src: &str, desired: &str) -> Option<String> {
-    let quoted = format!("\"{desired}\"");
-    // An existing `name = "…"`: replace just the literal, leaving everything else.
-    if let Some(eq) = find_name_eq(attr_src) {
-        let rest = &attr_src[eq..];
-        let open = rest.find('"')?;
-        let close = rest[open + 1..].find('"')? + open + 1;
-        if rest[open..=close] == quoted {
-            return None;
-        }
-        let mut out = String::with_capacity(attr_src.len() + desired.len());
-        out.push_str(&attr_src[..eq + open]);
-        out.push_str(&quoted);
-        out.push_str(&rest[close + 1..]);
-        return Some(out);
-    }
-    // No `name` at all: insert one as the first argument.
-    let instrument = attr_src.find("instrument")? + "instrument".len();
-    let tail = &attr_src[instrument..];
-    if let Some(paren) = tail.find('(') {
-        // `…instrument(args)]` → `…instrument(name = "…", args)]`
-        let at = instrument + paren + 1;
-        let sep = if tail[paren + 1..].trim_start().starts_with(')') {
-            String::new()
-        } else {
-            ", ".to_string()
-        };
-        return Some(format!(
-            "{}name = {quoted}{sep}{}",
-            &attr_src[..at],
-            &attr_src[at..]
-        ));
-    }
-    // Bare `#[…instrument]` → `#[…instrument(name = "…")]`
-    let close = attr_src.rfind(']')?;
-    Some(format!(
-        "{}(name = {quoted}){}",
-        &attr_src[..close],
-        &attr_src[close..]
-    ))
-}
-
-/// Byte offset just past the `=` of an existing `name =` argument, or `None`.
-///
-/// Matched on the identifier boundary so a `fields(name = …)` entry or a
-/// `…_name` argument cannot be mistaken for the span name.
-fn find_name_eq(attr_src: &str) -> Option<usize> {
-    let bytes = attr_src.as_bytes();
-    let mut from = 0;
-    while let Some(rel) = attr_src[from..].find("name") {
-        let start = from + rel;
-        let end = start + "name".len();
-        let before_ok = start
-            .checked_sub(1)
-            .is_none_or(|i| !bytes[i].is_ascii_alphanumeric() && bytes[i] != b'_');
-        let after = attr_src[end..].trim_start();
-        // `fields(...)` is always spelled after `name` in a rewrite target, but a
-        // field could still be *called* `name`; only a top-level `name =` counts,
-        // and `fields(` always precedes its own contents, so stop at it.
-        let is_field_arg = attr_src[..start].contains("fields(");
-        if before_ok && after.starts_with('=') && !is_field_arg {
-            let eq = end + (attr_src[end..].len() - after.len()) + 1;
-            return Some(eq);
-        }
-        from = end;
-    }
-    None
-}
-
-/// One file's pending name rewrites, as (1-based line range of the attribute,
-/// replacement text). Applied bottom-up so earlier ranges stay valid.
-type LineFix = (usize, usize, String);
-
 /// The name rewrites `Mode::Fix` should apply to one source file.
 ///
 /// Only fns that are *otherwise* well-formed are rewritten: if a fn has no
@@ -539,26 +440,12 @@ fn name_fixes(path: &str, src: &str) -> Vec<LineFix> {
         }
         let current = lines[start - 1..end].join("\n");
         let desired = format!("web.{vertical}.{}", f.ident);
-        if let Some(replacement) = rewrite_name(&current, &desired) {
+        if let Some(replacement) = rewrite_attr_arg(&current, "instrument", "name", &desired, true)
+        {
             fixes.push((start, end, replacement));
         }
     }
     fixes
-}
-
-/// Apply line-range replacements bottom-up and return the new file text.
-fn apply_fixes(src: &str, mut fixes: Vec<LineFix>) -> String {
-    let mut lines: Vec<String> = src.lines().map(ToString::to_string).collect();
-    fixes.sort_by_key(|(start, _, _)| std::cmp::Reverse(*start));
-    for (start, end, replacement) in fixes {
-        let new: Vec<String> = replacement.lines().map(ToString::to_string).collect();
-        lines.splice(start - 1..end, new);
-    }
-    let mut out = lines.join("\n");
-    if src.ends_with('\n') {
-        out.push('\n');
-    }
-    out
 }
 
 /// The failure detail for every non-conforming `#[server]` fn, or `None` when
@@ -882,65 +769,10 @@ mod tests {
 
     // --- Mode::Fix — the gate writes the derived name ---
 
-    #[test]
-    fn rewrite_adds_a_name_to_a_bare_instrument() {
-        assert_eq!(
-            rewrite_name("#[tracing::instrument]", "web.posts.x").unwrap(),
-            "#[tracing::instrument(name = \"web.posts.x\")]"
-        );
-    }
-
-    #[test]
-    fn rewrite_inserts_the_name_before_existing_arguments() {
-        assert_eq!(
-            rewrite_name("#[tracing::instrument(skip_all)]", "web.posts.create_post").unwrap(),
-            "#[tracing::instrument(name = \"web.posts.create_post\", skip_all)]"
-        );
-    }
-
-    #[test]
-    fn rewrite_replaces_a_wrong_name_leaving_other_arguments_alone() {
-        assert_eq!(
-            rewrite_name(
-                "#[tracing::instrument(name = \"stale\", skip(prefix))]",
-                "web.tags.list_tags"
-            )
-            .unwrap(),
-            "#[tracing::instrument(name = \"web.tags.list_tags\", skip(prefix))]"
-        );
-    }
-
-    #[test]
-    fn rewrite_is_a_no_op_when_the_name_is_already_right() {
-        assert_eq!(
-            rewrite_name(
-                "#[tracing::instrument(name = \"web.tags.list_tags\", skip(prefix))]",
-                "web.tags.list_tags"
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn rewrite_does_not_mistake_a_field_called_name_for_the_span_name() {
-        // `fields(name = %username)` must not be rewritten into the span name —
-        // that would silently change what the span records.
-        let src = "#[tracing::instrument(skip_all, fields(name = %username))]";
-        assert_eq!(
-            rewrite_name(src, "web.profile.get_profile").unwrap(),
-            "#[tracing::instrument(name = \"web.profile.get_profile\", skip_all, \
-             fields(name = %username))]"
-        );
-    }
-
-    #[test]
-    fn rewrite_spans_a_multi_line_attribute() {
-        let src = "#[tracing::instrument(\n    name = \"stale\",\n    skip(a, b)\n)]";
-        let got = rewrite_name(src, "web.backup.update_backup_settings").unwrap();
-        assert!(got.contains("web.backup.update_backup_settings"), "{got}");
-        assert!(got.contains("skip(a, b)"), "{got}");
-        assert!(!got.contains("stale"), "{got}");
-    }
+    // The attribute-rewrite primitive itself moved to `web_server_fns` in #684 and
+    // is unit-tested there, including these `instrument`/`name` cases. What stays
+    // here is this gate's use of it: `name_fixes` deciding *which* attributes to
+    // rewrite and to what.
 
     #[test]
     fn name_fixes_targets_the_attribute_lines_and_apply_splices_them() {

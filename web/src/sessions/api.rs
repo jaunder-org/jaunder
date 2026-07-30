@@ -1,6 +1,6 @@
 //! Sessions wire DTOs + `#[server]` endpoints (ADR-0070, amended #530): the
-//! `SessionInfo` / `AppPassword` payloads and the `list_sessions` /
-//! `create_app_password` / `revoke_session` server fns. Dual-compiled (host +
+//! `Info` / `AppPassword` payloads and the `list` /
+//! `create_app_password` / `revoke` server fns. Dual-compiled (host +
 //! wasm); the vertical's one grouped `#[cfg(feature = "server")]` use-block lives
 //! here. Re-exported from `mod.rs` so external paths stay stable.
 
@@ -18,9 +18,9 @@ use {
     crate::auth::require_auth, crate::error::InternalError, std::sync::Arc, storage::SessionStorage,
 };
 
-/// Session info returned by [`list_sessions`].
+/// Session info returned by [`list`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionInfo {
+pub struct Info {
     pub token_hash: TokenHash,
     pub label: SessionLabel,
     pub created_at: UtcInstant,
@@ -30,16 +30,16 @@ pub struct SessionInfo {
 
 /// Returns all sessions for the authenticated user.
 /// `is_current` is `true` for the session used to make this request.
-#[server(endpoint = "/list_sessions")]
-#[tracing::instrument(name = "web.sessions.list_sessions")]
-pub async fn list_sessions() -> WebResult<Vec<SessionInfo>> {
-    boundary!("list_sessions", {
+#[server(endpoint = "/sessions/list")]
+#[tracing::instrument(name = "web.sessions.list")]
+pub async fn list() -> WebResult<Vec<Info>> {
+    boundary!("list", {
         let auth = require_auth().await?;
         let sessions = expect_context::<Arc<dyn SessionStorage>>();
         let records = sessions.list_sessions(auth.user_id).await?;
         Ok(records
             .into_iter()
-            .map(|r| SessionInfo {
+            .map(|r| Info {
                 is_current: r.token_hash == auth.token_hash,
                 token_hash: r.token_hash,
                 label: r.label,
@@ -61,7 +61,7 @@ pub struct AppPassword {
 
 /// Mints a new app-specific password (a labelled session) for the authenticated
 /// user. The returned raw token is shown only once; only its hash is stored.
-#[server(endpoint = "/create_app_password")]
+#[server(endpoint = "/sessions/create_app_password")]
 #[tracing::instrument(name = "web.sessions.create_app_password", skip_all)]
 pub async fn create_app_password(label: SessionLabel) -> WebResult<AppPassword> {
     boundary!("create_app_password", {
@@ -76,10 +76,10 @@ pub async fn create_app_password(label: SessionLabel) -> WebResult<AppPassword> 
 }
 
 /// Revokes a session belonging to the authenticated user.
-#[server(endpoint = "/revoke_session")]
-#[tracing::instrument(name = "web.sessions.revoke_session", skip_all)]
-pub async fn revoke_session(token_hash: TokenHash) -> WebResult<()> {
-    boundary!("revoke_session", {
+#[server(endpoint = "/sessions/revoke")]
+#[tracing::instrument(name = "web.sessions.revoke", skip_all)]
+pub async fn revoke(token_hash: TokenHash) -> WebResult<()> {
+    boundary!("revoke", {
         let auth = require_auth().await?;
         let sessions = expect_context::<Arc<dyn SessionStorage>>();
         let session_records = sessions.list_sessions(auth.user_id).await?;

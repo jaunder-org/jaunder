@@ -13,7 +13,7 @@ import { goto, click, register, subscribeTo, failServerFn } from "./helpers";
 //   1. A membership toggle must NOT rebuild (remount) the audience list, and must
 //      re-fetch only that audience's members (#359). Each MemberChecklist owns a *local*
 //      members trigger, so an add/remove re-fetches only its own audience. Verified with a
-//      stable element handle on an untouched row + a `list_audience_members` request count.
+//      stable element handle on an untouched row + a `audiences::list_members` request count.
 //   2. A list-level mutation (create/rename/delete) must `patch` the keyed reactive store
 //      in place (#348): unchanged rows keep their DOM — their MemberChecklists are never
 //      remounted (no "Loading members…" reflash) — and a rename updates the row's name in
@@ -84,7 +84,7 @@ test("Audiences: CRUD + membership toggle re-fetch without list remount or flash
     .elementHandle();
 
   // The members trigger is local to each MemberChecklist, so adding X to Friends
-  // re-fetches ONLY Friends' members — one `list_audience_members` round-trip. A
+  // re-fetches ONLY Friends' members — one `audiences::list_members` round-trip. A
   // shared trigger would produce two (Friends + Family).
   // Two request counts. `memberFetches`: a local per-checklist trigger, so a toggle
   // re-fetches only its own audience (one round-trip). `listFetches`: the audience LIST
@@ -94,8 +94,8 @@ test("Audiences: CRUD + membership toggle re-fetch without list remount or flash
   let listFetches = 0;
   page.on("request", (req) => {
     const url = req.url();
-    if (url.includes("/api/list_audience_members")) memberFetches += 1;
-    if (url.includes("/api/list_my_audiences")) listFetches += 1;
+    if (url.includes("/api/audiences/list_members")) memberFetches += 1;
+    if (url.includes("/api/audiences/list_mine")) listFetches += 1;
   });
 
   // Add X to Friends; the button flips Add -> Remove.
@@ -179,7 +179,7 @@ test("Audiences: a list fetch error surfaces the error node, not an empty list",
   await register(page, firstNav);
 
   // Force the audience-list resource to fail before the page loads it.
-  await failServerFn(page, "list_my_audiences");
+  await failServerFn(page, "audiences/list_mine");
   await goto(page, "/audiences");
 
   // `ListState::Error` renders `<p class="error">` — NOT the empty-state "No audiences yet."
@@ -196,7 +196,7 @@ test("Audiences: a members fetch error surfaces the error node, not an empty che
   await goto(page, "/audiences");
 
   // Force the members resource to fail, then create an audience whose checklist will fetch.
-  await failServerFn(page, "list_audience_members");
+  await failServerFn(page, "audiences/list_members");
   await page.fill('input[placeholder="Audience name"]', "Friends");
   await click(page, 'button:has-text("Create")');
 
@@ -227,7 +227,7 @@ test("Audiences: a failed subscriber-roster fetch surfaces an error, not an empt
   await xCtx.close();
 
   // Force the roster fetch to fail before the page loads it (the shared #383 helper).
-  await failServerFn(page, "list_my_subscribers");
+  await failServerFn(page, "audiences/list_my_subscribers");
 
   await goto(page, "/audiences");
 

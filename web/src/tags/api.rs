@@ -1,7 +1,7 @@
 use leptos::prelude::*;
 use leptos::server_fn::codec::Json;
 
-// `TagLabel` is only named in the server-only `list_tags` body (the client build
+// `TagLabel` is only named in the server-only `list` body (the client build
 // strips it via the `#[server]` stub), so gate it to match — the wire `TagSummary`
 // it builds now lives in `common::seed`.
 #[cfg(feature = "server")]
@@ -37,10 +37,10 @@ pub const MAX_TAG_LIMIT: u32 = PageSize::MAX;
 /// `prefix` stays `String` (not `Tag`): it is a partial search fragment matched
 /// with SQL `LIKE prefix%`, not a complete tag value — typing it `Tag` would
 /// reject valid partials (ADR-0063 §4 boundary policy; #409 Decision 7).
-#[server(endpoint = "/list_tags", input = Json)]
-#[tracing::instrument(name = "web.tags.list_tags", skip(prefix))]
-pub async fn list_tags(prefix: Option<String>, limit: Option<u32>) -> WebResult<Vec<TagSummary>> {
-    boundary!("list_tags", {
+#[server(endpoint = "/tags/list", input = Json)]
+#[tracing::instrument(name = "web.tags.list", skip(prefix))]
+pub async fn list(prefix: Option<String>, limit: Option<u32>) -> WebResult<Vec<TagSummary>> {
+    boundary!("list", {
         let posts = expect_context::<Arc<dyn PostStorage>>();
         // `exact_limit`, not `fetch_limit`: the dropdown shows what it gets and has no
         // "load more", so an extra probing row would just be fetched and discarded.
@@ -90,7 +90,7 @@ mod tests {
     /// and nested here so the file keeps a single `tests` module.
     #[cfg(feature = "server")]
     mod server {
-        use super::super::list_tags;
+        use super::super::list;
         use leptos::prelude::provide_context;
         use leptos::reactive::owner::Owner;
         use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -163,7 +163,7 @@ mod tests {
         /// argument, and never carries the skipped one's value.
         // guard:no-backend — mock store
         #[tokio::test]
-        async fn list_tags_emits_its_derived_span_recording_limit_but_not_prefix() {
+        async fn list_emits_its_derived_span_recording_limit_but_not_prefix() {
             let captured = Arc::new(Mutex::new(Captured::default()));
             let subscriber =
                 tracing_subscriber::registry().with(CaptureLayer(Arc::clone(&captured)));
@@ -177,9 +177,9 @@ mod tests {
                 .returning(|_prefix, _limit| Ok(Vec::new()));
             provide_context(Arc::new(posts) as Arc<dyn PostStorage>);
 
-            let result = list_tags(Some(SECRET_PREFIX.to_string()), Some(5)).await;
+            let result = list(Some(SECRET_PREFIX.to_string()), Some(5)).await;
             drop(owner);
-            assert!(result.is_ok(), "list_tags failed: {result:?}");
+            assert!(result.is_ok(), "list failed: {result:?}");
 
             // Asserted over collected values rather than an `expect`/`else panic!`, so
             // every line here executes on the passing path — a diagnostic-only branch
@@ -187,13 +187,13 @@ mod tests {
             let captured = lock(&captured);
             let names: Vec<&str> = captured.spans.iter().map(|s| s.name.as_str()).collect();
             assert!(
-                names.contains(&"web.tags.list_tags"),
-                "list_tags must emit a span named web.tags.list_tags; saw {names:?}"
+                names.contains(&"web.tags.list"),
+                "list must emit a span named web.tags.list; saw {names:?}"
             );
             let fields: Vec<&(String, String)> = captured
                 .spans
                 .iter()
-                .filter(|s| s.name == "web.tags.list_tags")
+                .filter(|s| s.name == "web.tags.list")
                 .flat_map(|s| s.fields.iter())
                 .collect();
             assert!(

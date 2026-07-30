@@ -7,7 +7,7 @@
 ## Context
 
 The live-server e2e suite (Playwright, HTTP-only, no DB handle) populates
-timeline fixtures by looping `POST /api/create_post` — one HTTP round-trip per
+timeline fixtures by looping `POST /api/posts/create` — one HTTP round-trip per
 post, ~50 per heavy test. That sequential setup, not the behaviour under test,
 is the long pole for the slow timeline tests (#155/#152 trace analysis) and
 balloons under CPU contention.

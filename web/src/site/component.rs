@@ -1,4 +1,4 @@
-use super::{get_site_identity, UpdateSiteIdentity};
+use super::{get_identity, UpdateIdentity};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::topbar::Topbar;
@@ -8,11 +8,8 @@ use leptos::prelude::*;
 
 #[component]
 pub fn SiteSettingsPage() -> impl IntoView {
-    let update_action = ServerAction::<UpdateSiteIdentity>::new();
-    let settings = Resource::new(
-        move || update_action.version().get(),
-        |_| get_site_identity(),
-    );
+    let update_action = ServerAction::<UpdateIdentity>::new();
+    let settings = Resource::new(move || update_action.version().get(), |_| get_identity());
 
     view! {
         <Topbar title="Site Settings" sub="Operations" />
@@ -59,18 +56,18 @@ pub fn SiteSettingsPage() -> impl IntoView {
 /// component-owned `title` buffer and the optional `base_url` `Field` are created
 /// **here** (inside the resolved-`identity` scope, like the backup form) so the
 /// inputs render already populated. The save button dispatches the typed
-/// `UpdateSiteIdentity` args directly (ADR-0065): an empty base URL is valid, so
+/// `UpdateIdentity` args directly (ADR-0065): an empty base URL is valid, so
 /// `parsed()` yields `None` and the field is omitted on the wire (clear-to-None).
 fn site_settings_form(
     identity: &SiteIdentity,
-    update_action: ServerAction<UpdateSiteIdentity>,
+    update_action: ServerAction<UpdateIdentity>,
 ) -> impl IntoView {
     let title_field = Field::<SiteTitle>::prefilled(&identity.title);
     let base_url_field =
         Field::<AbsoluteUrl>::optional_prefilled(identity.base_url.as_deref().unwrap_or_default());
     let submit = move |_| {
         if let Some(title) = title_field.parsed() {
-            update_action.dispatch(UpdateSiteIdentity {
+            update_action.dispatch(UpdateIdentity {
                 title,
                 base_url: base_url_field.parsed(),
             });
@@ -122,11 +119,11 @@ fn site_settings_form(
 
 /// The #575 warning banner: shown in the authed admin chrome when `site.base_url` is
 /// unconfigured (feeds/AtomPub disabled). A thin wrapper over the shared `WarnBanner`,
-/// driven by the soft `base_url_warning_visible` server fn — hidden for non-operators
+/// driven by the soft `is_base_url_warning_visible` server fn — hidden for non-operators
 /// and once a base URL is set.
 #[component]
 pub fn SiteBaseUrlBanner() -> impl IntoView {
-    let visible = Resource::new(|| (), |()| super::base_url_warning_visible());
+    let visible = Resource::new(|| (), |()| super::is_base_url_warning_visible());
     view! {
         <crate::banner::WarnBanner
             visible=visible

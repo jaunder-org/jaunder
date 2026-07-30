@@ -51,7 +51,7 @@ fn page_from_rows(
     }
 }
 
-/// The shared "posts by user" query, used by both the `list_user_posts` server
+/// The shared "posts by user" query, used by both the `list_by_user` server
 /// fn and the public projector (anonymous viewer). One query, no drift.
 ///
 /// # Errors
@@ -110,15 +110,15 @@ pub async fn fetch_local_timeline(
 }
 
 /// Lists published, non-deleted posts for a user using cursor pagination.
-#[server(endpoint = "/list_user_posts")]
-#[tracing::instrument(name = "web.posts.list_user_posts")]
-pub async fn list_user_posts(
+#[server(endpoint = "/posts/list_by_user")]
+#[tracing::instrument(name = "web.posts.list_by_user")]
+pub async fn list_by_user(
     username: Username,
     cursor_created_at: Option<UtcInstant>,
     cursor_post_id: Option<PostId>,
     limit: Option<PageSize>,
 ) -> WebResult<TimelinePage> {
-    boundary!("list_user_posts", {
+    boundary!("list_by_user", {
         let posts = expect_context::<Arc<dyn PostStorage>>();
         let viewer = viewer_identity().await;
         fetch_user_posts(
@@ -134,7 +134,7 @@ pub async fn list_user_posts(
 }
 
 /// Lists published, non-deleted posts across all users using cursor pagination.
-#[server(endpoint = "/list_local_timeline")]
+#[server(endpoint = "/posts/list_local_timeline")]
 #[tracing::instrument(name = "web.posts.list_local_timeline")]
 pub async fn list_local_timeline(
     cursor_created_at: Option<UtcInstant>,
@@ -156,7 +156,7 @@ pub async fn list_local_timeline(
 }
 
 /// Lists published, non-deleted posts by the authenticated user using cursor pagination.
-#[server(endpoint = "/list_home_feed")]
+#[server(endpoint = "/posts/list_home_feed")]
 #[tracing::instrument(name = "web.posts.list_home_feed")]
 pub async fn list_home_feed(
     cursor_created_at: Option<UtcInstant>,
@@ -188,7 +188,7 @@ pub async fn list_home_feed(
 }
 
 /// The shared "posts site-wide carrying a tag" query, used by both the
-/// `list_posts_by_tag` server fn and the public projector (anonymous viewer).
+/// `list_by_tag` server fn and the public projector (anonymous viewer).
 ///
 /// # Errors
 ///
@@ -220,7 +220,7 @@ pub async fn fetch_posts_by_tag(
 }
 
 /// The shared "posts by a user carrying a tag" query, used by both the
-/// `list_user_posts_by_tag` server fn and the public projector.
+/// `list_by_user_and_tag` server fn and the public projector.
 ///
 /// # Errors
 ///
@@ -257,15 +257,15 @@ pub async fn fetch_user_posts_by_tag(
 }
 
 /// Lists published, non-deleted posts site-wide carrying `tag`.
-#[server(endpoint = "/list_posts_by_tag")]
-#[tracing::instrument(name = "web.posts.list_posts_by_tag")]
-pub async fn list_posts_by_tag(
+#[server(endpoint = "/posts/list_by_tag")]
+#[tracing::instrument(name = "web.posts.list_by_tag")]
+pub async fn list_by_tag(
     tag: Tag,
     cursor_created_at: Option<UtcInstant>,
     cursor_post_id: Option<PostId>,
     limit: Option<PageSize>,
 ) -> WebResult<TimelinePage> {
-    boundary!("list_posts_by_tag", {
+    boundary!("list_by_tag", {
         let posts = expect_context::<Arc<dyn PostStorage>>();
         let viewer = viewer_identity().await;
         fetch_posts_by_tag(
@@ -281,16 +281,16 @@ pub async fn list_posts_by_tag(
 }
 
 /// Lists published, non-deleted posts by `username` carrying `tag`.
-#[server(endpoint = "/list_user_posts_by_tag")]
-#[tracing::instrument(name = "web.posts.list_user_posts_by_tag")]
-pub async fn list_user_posts_by_tag(
+#[server(endpoint = "/posts/list_by_user_and_tag")]
+#[tracing::instrument(name = "web.posts.list_by_user_and_tag")]
+pub async fn list_by_user_and_tag(
     username: Username,
     tag: Tag,
     cursor_created_at: Option<UtcInstant>,
     cursor_post_id: Option<PostId>,
     limit: Option<PageSize>,
 ) -> WebResult<TimelinePage> {
-    boundary!("list_user_posts_by_tag", {
+    boundary!("list_by_user_and_tag", {
         let posts = expect_context::<Arc<dyn PostStorage>>();
         let users = expect_context::<Arc<dyn UserStorage>>();
         let viewer = viewer_identity().await;

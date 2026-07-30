@@ -18,10 +18,10 @@ use {
 ///
 /// Requires an authenticated local account (Layer A). Rejects a self-subscribe
 /// and an unknown author. Idempotent: subscribing twice is a no-op.
-#[server(endpoint = "/subscribe_to")]
-#[tracing::instrument(name = "web.subscriptions.subscribe_to")]
-pub async fn subscribe_to(author_username: Username) -> WebResult<()> {
-    boundary!("subscribe_to", {
+#[server(endpoint = "/subscriptions/subscribe")]
+#[tracing::instrument(name = "web.subscriptions.subscribe")]
+pub async fn subscribe(author_username: Username) -> WebResult<()> {
+    boundary!("subscribe", {
         let subscriptions = expect_context::<Arc<dyn SubscriptionStorage>>();
         let users = expect_context::<Arc<dyn UserStorage>>();
         let auth = require_auth().await?;
@@ -36,11 +36,11 @@ pub async fn subscribe_to(author_username: Username) -> WebResult<()> {
 
 /// Unsubscribes the authenticated local user from `author_username`.
 ///
-/// Mirror of [`subscribe_to`]. A no-op if no subscription exists.
-#[server(endpoint = "/unsubscribe_from")]
-#[tracing::instrument(name = "web.subscriptions.unsubscribe_from")]
-pub async fn unsubscribe_from(author_username: Username) -> WebResult<()> {
-    boundary!("unsubscribe_from", {
+/// Mirror of [`subscribe`]. A no-op if no subscription exists.
+#[server(endpoint = "/subscriptions/unsubscribe")]
+#[tracing::instrument(name = "web.subscriptions.unsubscribe")]
+pub async fn unsubscribe(author_username: Username) -> WebResult<()> {
+    boundary!("unsubscribe", {
         let subscriptions = expect_context::<Arc<dyn SubscriptionStorage>>();
         let users = expect_context::<Arc<dyn UserStorage>>();
         let auth = require_auth().await?;
@@ -58,10 +58,10 @@ pub async fn unsubscribe_from(author_username: Username) -> WebResult<()> {
 ///
 /// Returns `false` for an anonymous viewer or when viewing one's own profile
 /// (self-subscription is impossible), so the caller can hide the control.
-#[server(endpoint = "/is_subscribed_to")]
-#[tracing::instrument(name = "web.subscriptions.is_subscribed_to")]
-pub async fn is_subscribed_to(author_username: Username) -> WebResult<bool> {
-    boundary!("is_subscribed_to", {
+#[server(endpoint = "/subscriptions/is_subscribed")]
+#[tracing::instrument(name = "web.subscriptions.is_subscribed")]
+pub async fn is_subscribed(author_username: Username) -> WebResult<bool> {
+    boundary!("is_subscribed", {
         let subscriptions = expect_context::<Arc<dyn SubscriptionStorage>>();
         let users = expect_context::<Arc<dyn UserStorage>>();
         let auth = require_auth().await?;

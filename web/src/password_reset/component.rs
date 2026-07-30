@@ -1,7 +1,7 @@
 //! Password-reset vertical — wasm-only UI (ADR-0070): the forgot-password and
 //! reset-password pages.
 
-use super::{ConfirmPasswordReset, RequestPasswordReset};
+use super::{Confirm, Request};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::topbar::Topbar;
@@ -16,7 +16,7 @@ use leptos_router::components::Redirect;
 /// email / contact operator) surfaces the error message directly.
 #[component]
 pub fn ForgotPasswordPage() -> impl IntoView {
-    let request_action = ServerAction::<RequestPasswordReset>::new();
+    let request_action = ServerAction::<Request>::new();
     let username = Field::<Username>::new();
 
     view! {
@@ -75,7 +75,7 @@ pub fn ResetPasswordPage() -> impl IntoView {
     // query map for a param that never changes on this page.
     let token = use_query_map().read().get("token").unwrap_or_default();
 
-    let confirm_action = ServerAction::<ConfirmPasswordReset>::new();
+    let confirm_action = ServerAction::<Confirm>::new();
     let new_password = Field::<Password>::new();
 
     view! {

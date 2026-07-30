@@ -1,5 +1,5 @@
 //! Profile wire DTOs + `#[server]` endpoints (ADR-0070, amended #530): the
-//! `ProfileData` payload and the `get_profile` / `update_profile` /
+//! `Data` payload and the `get` / `update` /
 //! `get_default_post_format` / `set_default_post_format` server fns. Dual-compiled
 //! (host + wasm); the vertical's one grouped `#[cfg(feature = "server")]` use-block
 //! lives here. Re-exported from `mod.rs` so `crate::profile::…` paths stay stable.
@@ -27,9 +27,9 @@ use {
     },
 };
 
-/// Profile data returned by [`get_profile`].
+/// Profile data returned by [`get`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProfileData {
+pub struct Data {
     pub username: Username,
     pub display_name: Option<DisplayName>,
     pub bio: Option<Bio>,
@@ -38,17 +38,17 @@ pub struct ProfileData {
 }
 
 /// Returns the authenticated user's profile.
-#[server(endpoint = "/get_profile")]
-#[tracing::instrument(name = "web.profile.get_profile")]
-pub async fn get_profile() -> WebResult<ProfileData> {
-    boundary!("get_profile", {
+#[server(endpoint = "/profile/get")]
+#[tracing::instrument(name = "web.profile.get")]
+pub async fn get() -> WebResult<Data> {
+    boundary!("get", {
         let auth = require_auth().await?;
         let users = expect_context::<Arc<dyn UserStorage>>();
         let user = users
             .get_user(auth.user_id)
             .await?
             .ok_or_else(|| InternalError::not_found("user"))?;
-        Ok(ProfileData {
+        Ok(Data {
             username: user.username,
             display_name: user.display_name,
             bio: user.bio,
@@ -64,10 +64,10 @@ pub async fn get_profile() -> WebResult<ProfileData> {
 /// (ADR-0065): `None` clears (the field is omitted), `Some` is already
 /// trimmed/bounded. Both `Option`s model presence, so no `non_empty` shim is
 /// needed — an empty wire value is rejected at decode, clearing goes via omission.
-#[server(endpoint = "/update_profile")]
-#[tracing::instrument(name = "web.profile.update_profile", skip_all)]
-pub async fn update_profile(display_name: Option<DisplayName>, bio: Option<Bio>) -> WebResult<()> {
-    boundary!("update_profile", {
+#[server(endpoint = "/profile/update")]
+#[tracing::instrument(name = "web.profile.update", skip_all)]
+pub async fn update(display_name: Option<DisplayName>, bio: Option<Bio>) -> WebResult<()> {
+    boundary!("update", {
         let auth = require_auth().await?;
         let users = expect_context::<Arc<dyn UserStorage>>();
         users
@@ -84,7 +84,7 @@ pub async fn update_profile(display_name: Option<DisplayName>, bio: Option<Bio>)
 }
 
 /// Retrieves the authenticated user's default post format preference.
-#[server(endpoint = "/get_default_post_format")]
+#[server(endpoint = "/profile/get_default_post_format")]
 #[tracing::instrument(name = "web.profile.get_default_post_format")]
 pub async fn get_default_post_format() -> WebResult<PostFormat> {
     boundary!("get_default_post_format", {
@@ -96,7 +96,7 @@ pub async fn get_default_post_format() -> WebResult<PostFormat> {
 }
 
 /// Sets the authenticated user's default post format preference.
-#[server(endpoint = "/set_default_post_format")]
+#[server(endpoint = "/profile/set_default_post_format")]
 #[tracing::instrument(name = "web.profile.set_default_post_format")]
 pub async fn set_default_post_format(format: PostFormat) -> WebResult<()> {
     boundary!("set_default_post_format", {

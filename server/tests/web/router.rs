@@ -15,6 +15,7 @@ use axum::{
     body::Body,
     http::{header::CONTENT_TYPE, Request, StatusCode},
 };
+use server_fn::ServerFn;
 use tower::ServiceExt;
 
 use rstest::*;
@@ -80,7 +81,7 @@ async fn session_api_route_returns_ok(#[case] backend: Backend) {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/session")
+                .uri(<web::auth::GetSession as ServerFn>::PATH)
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header(
                     "traceparent",
@@ -92,4 +93,35 @@ async fn session_api_route_returns_ok(#[case] backend: Backend) {
         .await
         .expect("failed to get response");
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// `server/src/lib.rs:65` mounts every server fn under one wildcard,
+/// `"/api/{*fn_name}"`. The #684 endpoint scheme (`/api/<vertical>/<op>`) is only
+/// viable if that wildcard captures multi-segment remainders — matchit's own
+/// doctest says it does (`matchit-0.8.4/src/lib.rs:47-48`); this pins it so an
+/// axum upgrade cannot silently 404 every server-fn route at once.
+#[apply(backends)]
+#[tokio::test]
+async fn multi_segment_server_fn_route_is_reachable(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    ensure_server_fns_registered();
+    let app = jaunder::create_router(state, noop_mailer(), true, tmp_storage_path());
+    let path = <web::auth::GetSession as ServerFn>::PATH;
+    assert_eq!(path, "/api/auth/get_session", "the #684 scheme under test");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(path)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::empty())
+                .expect("failed to build request"),
+        )
+        .await
+        .expect("failed to get response");
+    assert_ne!(
+        response.status(),
+        StatusCode::NOT_FOUND,
+        "`/api/{{*fn_name}}` must capture a multi-segment server-fn path"
+    );
 }

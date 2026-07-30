@@ -1,6 +1,6 @@
-//! The **profile** vertical: the `#[server]` endpoints (`get_profile`,
-//! `update_profile`, `get_default_post_format`, `set_default_post_format`) and
-//! the `ProfileData` wire DTO in [`api`], and the co-located reactive UI
+//! The **profile** vertical: the `#[server]` endpoints (`get`,
+//! `update`, `get_default_post_format`, `set_default_post_format`) and
+//! the `Data` wire DTO in [`api`], and the co-located reactive UI
 //! (`ProfilePage`) in [`component`].
 //!
 //! This module is **wiring only** (ADR-0070, amended #530): module declarations
@@ -16,8 +16,8 @@ mod api;
 mod component;
 
 pub use api::{
-    get_default_post_format, get_profile, set_default_post_format, update_profile,
-    GetDefaultPostFormat, GetProfile, ProfileData, SetDefaultPostFormat, UpdateProfile,
+    get, get_default_post_format, set_default_post_format, update, Data, Get, GetDefaultPostFormat,
+    SetDefaultPostFormat, Update,
 };
 #[cfg(target_arch = "wasm32")]
 pub use component::ProfilePage;

@@ -4,6 +4,7 @@ use rstest::*;
 use rstest_reuse::*;
 
 use common::test_support::parse_session_label;
+use server_fn::ServerFn;
 
 use crate::helpers::{create_session_for, create_user_and_session, post_form};
 use storage::test_support::{backends, Backend, TestEnv};
@@ -21,10 +22,16 @@ async fn list_sessions_returns_sessions_for_authenticated_user(#[case] backend: 
         .await
         .unwrap();
 
-    let (status, body) = post_form(&state, "/api/list_sessions", "", Some(&cookie)).await;
+    let (status, body) = post_form(
+        &state,
+        <web::sessions::List as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK);
-    // The body is a JSON array of SessionInfo objects; verify both sessions are present.
+    // The body is a JSON array of sessions::Info objects; verify both sessions are present.
     // Count occurrences of "token_hash" to confirm both sessions are returned.
     let session_count = body.matches("\"token_hash\"").count();
     assert_eq!(session_count, 2, "expected 2 sessions, body: {body}");
@@ -40,7 +47,13 @@ async fn list_sessions_marks_current_session(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
 
-    let (status, body) = post_form(&state, "/api/list_sessions", "", Some(&cookie)).await;
+    let (status, body) = post_form(
+        &state,
+        <web::sessions::List as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK);
     assert!(
@@ -54,7 +67,7 @@ async fn list_sessions_marks_current_session(#[case] backend: Backend) {
 async fn list_sessions_requires_authentication(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, _) = post_form(&state, "/api/list_sessions", "", None).await;
+    let (status, _) = post_form(&state, <web::sessions::List as ServerFn>::PATH, "", None).await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
@@ -75,7 +88,13 @@ async fn revoke_session_removes_session_for_authenticated_user(#[case] backend: 
         .token_hash;
 
     let body = format!("token_hash={token_hash2}");
-    let (status, _) = post_form(&state, "/api/revoke_session", body, Some(&cookie1)).await;
+    let (status, _) = post_form(
+        &state,
+        <web::sessions::Revoke as ServerFn>::PATH,
+        body,
+        Some(&cookie1),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK);
 
@@ -108,7 +127,13 @@ async fn revoke_session_rejects_session_belonging_to_another_user(#[case] backen
 
     // Alice tries to revoke Bob's session.
     let body = format!("token_hash={bob_token_hash}");
-    let (status, _) = post_form(&state, "/api/revoke_session", body, Some(&alice_cookie)).await;
+    let (status, _) = post_form(
+        &state,
+        <web::sessions::Revoke as ServerFn>::PATH,
+        body,
+        Some(&alice_cookie),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 
@@ -125,7 +150,13 @@ async fn revoke_session_rejects_session_belonging_to_another_user(#[case] backen
 async fn revoke_session_requires_authentication(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, _) = post_form(&state, "/api/revoke_session", "token_hash=somehash", None).await;
+    let (status, _) = post_form(
+        &state,
+        <web::sessions::Revoke as ServerFn>::PATH,
+        "token_hash=somehash",
+        None,
+    )
+    .await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
@@ -139,7 +170,7 @@ async fn create_app_password_mints_labelled_session(#[case] backend: Backend) {
 
     let (status, body) = post_form(
         &state,
-        "/api/create_app_password",
+        <web::sessions::CreateAppPassword as ServerFn>::PATH,
         "label=MarsEdit",
         Some(&cookie),
     )
@@ -162,7 +193,7 @@ async fn create_app_password_rejects_blank_label(#[case] backend: Backend) {
 
     let (status, _body) = post_form(
         &state,
-        "/api/create_app_password",
+        <web::sessions::CreateAppPassword as ServerFn>::PATH,
         "label=%20%20",
         Some(&cookie),
     )
@@ -185,7 +216,7 @@ async fn create_app_password_rejects_overlong_label(#[case] backend: Backend) {
     let overlong = "a".repeat(256);
     let (status, _body) = post_form(
         &state,
-        "/api/create_app_password",
+        <web::sessions::CreateAppPassword as ServerFn>::PATH,
         format!("label={overlong}"),
         Some(&cookie),
     )
@@ -199,8 +230,13 @@ async fn create_app_password_rejects_overlong_label(#[case] backend: Backend) {
 async fn create_app_password_requires_authentication(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, _body) =
-        post_form(&state, "/api/create_app_password", "label=MarsEdit", None).await;
+    let (status, _body) = post_form(
+        &state,
+        <web::sessions::CreateAppPassword as ServerFn>::PATH,
+        "label=MarsEdit",
+        None,
+    )
+    .await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }

@@ -11,18 +11,25 @@ use leptos::prelude::*;
 use leptos_router::hooks::{use_navigate, use_params_map};
 use leptos_router::NavigateOptions;
 
-use crate::audiences::{list_my_audiences, AudienceSummary};
+// `Summary` is module-qualified at its use site: this file already has
+// `DraftSummary`, `PostSummary`, `TagSummary` and `TimelinePostSummary` in scope, and
+// a bare `Summary` among them says nothing about which one it is.
+use crate::audiences::{self, list_mine};
 use crate::avatar::Avatar;
 use crate::error::WebError;
 use crate::feed_discovery::{FeedDiscovery, RsdDiscovery};
 use crate::forms::Field;
 use crate::media::MediaUpload;
+// `Get`/`Update` are deliberately absent from this list: naming the generated
+// structs here would shadow the identically-named `leptos::prelude` traits this
+// file's 86 `.get()`/`.update()` calls resolve through. `Update` is spelled
+// `super::Update` at its use sites; `Get` is not needed in this file at all, and
+// is named here only so a future author does not add it to the list.
 use crate::posts::{
-    default_audience_selection, draft_row_display, get_post, get_post_preview, list_drafts,
-    list_posts_by_tag, list_user_posts, list_user_posts_by_tag, parse_permalink_params,
-    post_audience_selection, CreatePost, CreatePostArgs, CreatePostResult, DeletePost,
-    DraftRowDisplay, DraftSummary, PublishPost, PublishPostResult, UnpublishPost, UpdatePost,
-    UpdatePostArgs, UpdatePostResult,
+    draft_row_display, get, get_audience_selection, get_default_audience_selection, get_preview,
+    list_by_tag, list_by_user, list_by_user_and_tag, list_drafts, parse_permalink_params, Create,
+    CreateArgs, CreateResult, Delete, DraftRowDisplay, DraftSummary, Publish, PublishResult,
+    Unpublish, UpdateArgs, UpdateResult,
 };
 use crate::subscriptions::SubscribeButton;
 use crate::taglist::TagCtx as TagContext;
@@ -221,9 +228,9 @@ pub fn PostCard(
     // unpublished post.
     let is_draft = post.is_draft;
     let edit_url = format!("/posts/{post_id}/edit");
-    let delete_action = ServerAction::<DeletePost>::new();
-    let unpublish_action = ServerAction::<UnpublishPost>::new();
-    let publish_action = ServerAction::<PublishPost>::new();
+    let delete_action = ServerAction::<Delete>::new();
+    let unpublish_action = ServerAction::<Unpublish>::new();
+    let publish_action = ServerAction::<Publish>::new();
     let deleted = RwSignal::new(false);
 
     Effect::new(move |_| {
@@ -262,7 +269,7 @@ pub fn PostCard(
     });
 
     // The primary lifecycle action adapts to draft state (#23): a draft gets
-    // Publish (dispatching PublishPost behind a confirm), a published post keeps
+    // Publish (dispatching Publish behind a confirm), a published post keeps
     // Unpublish. Edit and Delete are identical either way.
     let primary_action = if is_draft {
         view! {
@@ -272,7 +279,7 @@ pub fn PostCard(
                 on:click=move |_| {
                     let confirmed = client::dialog::confirm("Publish this draft?");
                     if confirmed {
-                        publish_action.dispatch(PublishPost { post_id });
+                        publish_action.dispatch(Publish { post_id });
                     }
                 }
             >
@@ -286,7 +293,7 @@ pub fn PostCard(
                 type="button"
                 class="j-btn"
                 on:click=move |_| {
-                    unpublish_action.dispatch(UnpublishPost { post_id });
+                    unpublish_action.dispatch(Unpublish { post_id });
                 }
             >
                 "Unpublish"
@@ -312,7 +319,7 @@ pub fn PostCard(
                     on:click=move |_| {
                         let confirmed = client::dialog::confirm("Delete this post?");
                         if confirmed {
-                            delete_action.dispatch(DeletePost { post_id });
+                            delete_action.dispatch(Delete { post_id });
                         }
                     }
                 >
@@ -345,7 +352,7 @@ pub fn AudiencePicker(selection: RwSignal<AudienceSelection>) -> impl IntoView {
     // The named audiences the author owns, consumed directly in the checkbox
     // view below. `None` (unresolved) and `Some(Err)` both fold to an empty
     // list, so the multiselect renders no rows until the fetch lands.
-    let named = Resource::new(|| (), |()| list_my_audiences());
+    let named = Resource::new(|| (), |()| list_mine());
 
     // Each base variant paired with its UI caption in one place, so the two
     // can't drift out of order.
@@ -409,7 +416,7 @@ pub fn AudiencePicker(selection: RwSignal<AudienceSelection>) -> impl IntoView {
 /// adds/removes the audience id in the shared selection. Disabled while the
 /// base is `Private`, since Private cannot combine with named audiences.
 fn audience_checkbox(
-    audience: AudienceSummary,
+    audience: audiences::Summary,
     selection: RwSignal<AudienceSelection>,
 ) -> impl IntoView {
     let id = audience.audience_id;
@@ -449,14 +456,14 @@ fn audience_checkbox(
 pub fn PostCreateForm(
     compact: bool,
     #[prop(optional)] username: Option<Username>,
-    #[prop(into)] on_success: Callback<CreatePostResult>,
+    #[prop(into)] on_success: Callback<CreateResult>,
     #[prop(default = 6)] rows: u32,
     #[prop(default = "What\u{2019}s on your mind?")] placeholder: &'static str,
     /// Called on every textarea input event (compact mode only).
     #[prop(optional)]
     on_input: Option<Callback<()>>,
 ) -> impl IntoView {
-    let create_action = ServerAction::<CreatePost>::new();
+    let create_action = ServerAction::<Create>::new();
     let body = RwSignal::new(String::new());
     let format = RwSignal::new(PostFormat::Markdown);
     // Optional summary: a parent-owned validated field (ADR-0065 direct-bind), so an
@@ -474,7 +481,7 @@ pub fn PostCreateForm(
         base: AudienceBase::Public,
         named: Vec::new(),
     });
-    let default_audience = Resource::new(|| (), |()| default_audience_selection());
+    let default_audience = Resource::new(|| (), |()| get_default_audience_selection());
     // The site-wide default audience resolves asynchronously; the composer must
     // render immediately (no Suspense), so seed the editable `audience` signal
     // once the Resource resolves, over the Public placeholder above. The author
@@ -498,8 +505,8 @@ pub fn PostCreateForm(
 
     if compact {
         let dispatch_save = move |_| {
-            create_action.dispatch(CreatePost {
-                args: CreatePostArgs {
+            create_action.dispatch(Create {
+                args: CreateArgs {
                     body: body.get().into(),
                     format: format.get(),
                     slug_override: None,
@@ -512,8 +519,8 @@ pub fn PostCreateForm(
             });
         };
         let dispatch_publish = move |_| {
-            create_action.dispatch(CreatePost {
-                args: CreatePostArgs {
+            create_action.dispatch(Create {
+                args: CreateArgs {
                     body: body.get().into(),
                     format: format.get(),
                     slug_override: None,
@@ -605,8 +612,8 @@ pub fn PostCreateForm(
     } else {
         let slug_field = Field::<Slug>::optional();
         let dispatch_create = move |publish: bool| {
-            create_action.dispatch(CreatePost {
-                args: CreatePostArgs {
+            create_action.dispatch(Create {
+                args: CreateArgs {
                     body: body.get().into(),
                     format: format.get(),
                     slug_override: slug_field.parsed(),
@@ -758,7 +765,7 @@ pub fn PostCreateForm(
 pub fn InlineComposer(username: Username, on_publish: WriteSignal<u32>) -> impl IntoView {
     let flash: RwSignal<Option<(String, String)>> = RwSignal::new(None);
 
-    let on_success = Callback::new(move |created: CreatePostResult| {
+    let on_success = Callback::new(move |created: CreateResult| {
         use leptos_dom::helpers::set_timeout;
         use std::time::Duration;
         let url = created.permalink.to_string();
@@ -808,7 +815,7 @@ pub fn CreatePostPage() -> impl IntoView {
     // Server-confirmed gate: await the shared session reconcile (an expired cookie
     // must not show the create form) (#591).
     let session = crate::auth::use_session();
-    let last_result: RwSignal<Option<CreatePostResult>> = RwSignal::new(None);
+    let last_result: RwSignal<Option<CreateResult>> = RwSignal::new(None);
 
     view! {
         <Topbar title="New post" sub="Long-form" />
@@ -917,7 +924,7 @@ pub fn PostPage() -> impl IntoView {
     let post_data = move || {
         let params = params.get();
         // Decode the permalink route params into typed values client-side so
-        // `get_post` takes a typed `Slug`/`Username` (ADR-0063 §4). The pure
+        // `get` takes a typed `Slug`/`Username` (ADR-0063 §4). The pure
         // decoder is host-tested in `super::parse`.
         parse_permalink_params(
             params.get("username").as_deref(),
@@ -953,11 +960,11 @@ pub fn PostPage() -> impl IntoView {
             };
             // A '~'-prefixed permalink with an unparseable slug is a malformed
             // permalink (not a server URL): 404 client-side without calling the
-            // server, matching the pre-typing behavior where get_post rejected it.
+            // server, matching the pre-typing behavior where get rejected it.
             let Some(slug) = slug else {
                 return Err(WebError::validation("Invalid permalink"));
             };
-            get_post(username, date, slug).await
+            get(username, date, slug).await
         },
     );
 
@@ -1048,7 +1055,7 @@ pub fn UserTimelinePage() -> impl IntoView {
         move || (username.get(), mutate_version.get()),
         |(username, _)| async move {
             let username = username.ok_or_else(|| WebError::validation("Invalid username"))?;
-            list_user_posts(username, None, None, Some(PageSize::default())).await
+            list_by_user(username, None, None, Some(PageSize::default())).await
         },
     );
 
@@ -1095,7 +1102,7 @@ pub fn UserTimelinePage() -> impl IntoView {
             return;
         };
         spawn_load_more(state, move |created_at, post_id, limit| {
-            list_user_posts(username, created_at, post_id, limit)
+            list_by_user(username, created_at, post_id, limit)
         });
     });
 
@@ -1155,7 +1162,7 @@ pub fn UserTimelinePage() -> impl IntoView {
 #[component]
 pub fn EditPostPage() -> impl IntoView {
     let params = use_params_map();
-    let update_post_action = ServerAction::<UpdatePost>::new();
+    let update_post_action = ServerAction::<super::Update>::new();
     let body = RwSignal::new(String::new());
     let format = RwSignal::new(PostFormat::Markdown);
     let slug_field = Field::<Slug>::optional();
@@ -1196,7 +1203,7 @@ pub fn EditPostPage() -> impl IntoView {
     };
     let post = Resource::new(post_id_param, |maybe_id| async move {
         match maybe_id {
-            Some(id) => get_post_preview(id).await,
+            Some(id) => get_preview(id).await,
             None => Err(WebError::not_found("Post")),
         }
     });
@@ -1208,7 +1215,7 @@ pub fn EditPostPage() -> impl IntoView {
     // inside the macro.
     let current_audience = Resource::new(post_id_param, |maybe_id| async move {
         match maybe_id {
-            Some(id) => post_audience_selection(id).await,
+            Some(id) => get_audience_selection(id).await,
             None => Err(WebError::not_found("Post")),
         }
     });
@@ -1235,8 +1242,8 @@ pub fn EditPostPage() -> impl IntoView {
                         let is_published = fetched.published_at.is_some();
                         let dispatch_update = move |publish: bool| {
                             update_post_action
-                                .dispatch(UpdatePost {
-                                    args: UpdatePostArgs {
+                                .dispatch(super::Update {
+                                    args: UpdateArgs {
                                         post_id,
                                         body: body.get().into(),
                                         format: format.get(),
@@ -1415,7 +1422,7 @@ pub fn EditPostPage() -> impl IntoView {
             update_post_action
                 .value()
                 .get()
-                .map(|result: Result<UpdatePostResult, WebError>| match result {
+                .map(|result: Result<UpdateResult, WebError>| match result {
                     Ok(updated) if updated.published_at.is_none() => {
                         let slug_value = updated.slug.to_string();
                         let slug_for_attr = slug_value.clone();
@@ -1442,8 +1449,8 @@ pub fn EditPostPage() -> impl IntoView {
 
 #[component]
 pub fn DraftsPage() -> impl IntoView {
-    let publish_action = ServerAction::<PublishPost>::new();
-    let delete_action = ServerAction::<DeletePost>::new();
+    let publish_action = ServerAction::<Publish>::new();
+    let delete_action = ServerAction::<Delete>::new();
     let drafts = Resource::new(
         move || {
             (
@@ -1489,7 +1496,7 @@ pub fn DraftsPage() -> impl IntoView {
                     publish_action
                         .value()
                         .get()
-                        .map(|result: Result<PublishPostResult, WebError>| match result {
+                        .map(|result: Result<PublishResult, WebError>| match result {
                             Ok(published) => {
                                 view! {
                                     <p class="success">
@@ -1518,8 +1525,8 @@ pub fn DraftsPage() -> impl IntoView {
 
 fn render_draft_row(
     draft: DraftSummary,
-    publish_action: ServerAction<PublishPost>,
-    delete_action: ServerAction<DeletePost>,
+    publish_action: ServerAction<Publish>,
+    delete_action: ServerAction<Delete>,
 ) -> impl IntoView {
     let post_id = i64::from(draft.post_id);
     // Pure title + scheduled-badge-text computation (host-tested in `super::parse`);
@@ -1593,7 +1600,7 @@ pub fn SiteTagPage() -> impl IntoView {
             let Some(tag) = tag else {
                 return Err(WebError::validation("Invalid tag"));
             };
-            list_posts_by_tag(tag, None, None, Some(PageSize::default())).await
+            list_by_tag(tag, None, None, Some(PageSize::default())).await
         },
     );
 
@@ -1636,7 +1643,7 @@ pub fn SiteTagPage() -> impl IntoView {
             return;
         };
         spawn_load_more(state, move |created_at, post_id, limit| {
-            list_posts_by_tag(tag_value, created_at, post_id, limit)
+            list_by_tag(tag_value, created_at, post_id, limit)
         });
     });
 
@@ -1712,7 +1719,7 @@ pub fn UserTagPage() -> impl IntoView {
             let Some(tag) = tag else {
                 return Err(WebError::validation("Invalid tag"));
             };
-            list_user_posts_by_tag(username, tag, None, None, Some(PageSize::default())).await
+            list_by_user_and_tag(username, tag, None, None, Some(PageSize::default())).await
         },
     );
 
@@ -1760,7 +1767,7 @@ pub fn UserTagPage() -> impl IntoView {
             return;
         };
         spawn_load_more(state, move |created_at, post_id, limit| {
-            list_user_posts_by_tag(username_value, tag_value, created_at, post_id, limit)
+            list_by_user_and_tag(username_value, tag_value, created_at, post_id, limit)
         });
     });
 

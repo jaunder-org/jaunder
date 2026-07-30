@@ -7,10 +7,10 @@ test.describe("Media upload and serving", () => {
   }, testInfo) => {
     await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 30000));
 
-    // Drive the `upload_media` server fn directly — session cookie is in page's
+    // Drive the `media::upload` server fn directly — session cookie is in page's
     // cookie jar. The fn returns 200 with the bare `UploadResponse` JSON.
     const fileContent = Buffer.from("fake image content for testing");
-    const response = await page.request.post(BASE_URL + "/api/upload_media", {
+    const response = await page.request.post(BASE_URL + "/api/media/upload", {
       multipart: {
         file: {
           name: "test-image.jpg",
@@ -43,7 +43,7 @@ test.describe("Media upload and serving", () => {
     // derives, the name it wrote on disk, and the request the browser sends back for it
     // (#675). Before the fix the derived URL carried a raw space.
     const fileContent = Buffer.from("spaced filename content");
-    const response = await page.request.post(BASE_URL + "/api/upload_media", {
+    const response = await page.request.post(BASE_URL + "/api/media/upload", {
       multipart: {
         file: {
           name: "my holiday photo.jpg",
@@ -68,7 +68,7 @@ test.describe("Media upload and serving", () => {
   test("unauthenticated upload is rejected", async ({ page }) => {
     // No session: `require_auth()` rejects and the server fn returns a serialized
     // `WebError::Unauthorized` — not necessarily a bare 401 status.
-    const response = await page.request.post(BASE_URL + "/api/upload_media", {
+    const response = await page.request.post(BASE_URL + "/api/media/upload", {
       multipart: {
         file: {
           name: "test.jpg",

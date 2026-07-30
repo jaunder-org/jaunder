@@ -1,5 +1,6 @@
 use axum::http::StatusCode;
 use common::visibility::ViewerIdentity;
+use server_fn::ServerFn;
 
 use rstest::*;
 use rstest_reuse::*;
@@ -20,7 +21,7 @@ async fn subscribe_then_unsubscribe_round_trips(#[case] backend: Backend) {
 
     let (status, body) = post_form(
         &state,
-        "/api/subscribe_to",
+        <web::subscriptions::Subscribe as ServerFn>::PATH,
         format!("author_username={}", author.username),
         Some(&cookie),
     )
@@ -37,7 +38,7 @@ async fn subscribe_then_unsubscribe_round_trips(#[case] backend: Backend) {
 
     let (status, body) = post_form(
         &state,
-        "/api/unsubscribe_from",
+        <web::subscriptions::Unsubscribe as ServerFn>::PATH,
         format!("author_username={}", author.username),
         Some(&cookie),
     )
@@ -64,7 +65,7 @@ async fn self_subscribe_is_rejected(#[case] backend: Backend) {
 
     let (status, _body) = post_form(
         &state,
-        "/api/subscribe_to",
+        <web::subscriptions::Subscribe as ServerFn>::PATH,
         format!("author_username={}", me.username),
         Some(&cookie),
     )
@@ -89,7 +90,7 @@ async fn subscribe_unauthenticated_is_rejected(#[case] backend: Backend) {
 
     let (status, _body) = post_form(
         &state,
-        "/api/subscribe_to",
+        <web::subscriptions::Subscribe as ServerFn>::PATH,
         format!("author_username={}", author.username),
         None,
     )
@@ -107,7 +108,7 @@ async fn is_subscribed_to_reports_state(#[case] backend: Backend) {
 
     let (status, body) = post_form(
         &state,
-        "/api/is_subscribed_to",
+        <web::subscriptions::IsSubscribed as ServerFn>::PATH,
         format!("author_username={}", author.username),
         Some(&cookie),
     )
@@ -120,7 +121,7 @@ async fn is_subscribed_to_reports_state(#[case] backend: Backend) {
 
     post_form(
         &state,
-        "/api/subscribe_to",
+        <web::subscriptions::Subscribe as ServerFn>::PATH,
         format!("author_username={}", author.username),
         Some(&cookie),
     )
@@ -128,7 +129,7 @@ async fn is_subscribed_to_reports_state(#[case] backend: Backend) {
 
     let (status, body) = post_form(
         &state,
-        "/api/is_subscribed_to",
+        <web::subscriptions::IsSubscribed as ServerFn>::PATH,
         format!("author_username={}", author.username),
         Some(&cookie),
     )

@@ -8,8 +8,9 @@ use common::tag::TagLabel;
 use common::test_support::{parse_audience_name, parse_row_limit};
 use common::time::UtcInstant;
 use common::visibility::{AudienceBase, AudienceSelection};
+use server_fn::ServerFn;
 use storage::PostFormat;
-use web::posts::{CreatePostResult, DraftSummary, PublishPostResult, UpdatePostResult};
+use web::posts::{CreateResult, DraftSummary, PublishResult, UpdateResult};
 
 use rstest::*;
 use rstest_reuse::*;
@@ -26,7 +27,7 @@ async fn unpublish_post_form(
 ) -> (StatusCode, String) {
     post_form(
         state,
-        "/api/unpublish_post",
+        <web::posts::Unpublish as ServerFn>::PATH,
         format!("post_id={post_id}"),
         cookie,
     )
@@ -49,7 +50,13 @@ async fn create_post_json(
             "publish": publish,
         }
     });
-    post_json(state, "/api/create_post", payload, cookie).await
+    post_json(
+        state,
+        <web::posts::Create as ServerFn>::PATH,
+        payload,
+        cookie,
+    )
+    .await
 }
 
 async fn update_post_json(
@@ -70,7 +77,13 @@ async fn update_post_json(
             "publish": publish,
         }
     });
-    post_json(state, "/api/update_post", payload, cookie).await
+    post_json(
+        state,
+        <web::posts::Update as ServerFn>::PATH,
+        payload,
+        cookie,
+    )
+    .await
 }
 
 async fn get_post_form(
@@ -85,7 +98,7 @@ async fn get_post_form(
     // `get_post` now takes a single `date: PermalinkDate` wire arg (serde-transparent →
     // the ISO `YYYY-MM-DD` field), replacing the old loose `year/month/day` triple (#583).
     let body = format!("username={username}&date={year:04}-{month:02}-{day:02}&slug={slug}");
-    post_form(state, "/api/get_post", body, cookie).await
+    post_form(state, <web::posts::Get as ServerFn>::PATH, body, cookie).await
 }
 
 async fn get_post_preview_form(
@@ -94,7 +107,13 @@ async fn get_post_preview_form(
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
     let body = format!("post_id={post_id}");
-    post_form(state, "/api/get_post_preview", body, cookie).await
+    post_form(
+        state,
+        <web::posts::GetPreview as ServerFn>::PATH,
+        body,
+        cookie,
+    )
+    .await
 }
 
 #[apply(backends)]
@@ -118,7 +137,7 @@ async fn create_post_persists_rendered_published_post(#[case] backend: Backend) 
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
     assert_eq!(created.slug, "hello-world");
     assert!(created.published_at.is_some());
 
@@ -188,7 +207,7 @@ second",
     .await;
 
     assert_eq!(second_status, StatusCode::OK, "body: {second_body}");
-    let created: CreatePostResult = serde_json::from_str(&second_body).unwrap();
+    let created: CreateResult = serde_json::from_str(&second_body).unwrap();
     assert_eq!(created.slug, "repeated-title-2");
 }
 
@@ -267,7 +286,7 @@ async fn create_post_accepts_slug_override_and_saves_draft(#[case] backend: Back
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
     assert_eq!(created.slug, "custom-slug");
     assert!(created.published_at.is_none());
     // A draft now carries its canonical (created_at-based) permalink; the permalink
@@ -313,7 +332,7 @@ async fn create_post_accepts_titleless_body(#[case] backend: Backend) {
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
     assert_eq!(created.slug, "titleless-note");
     let record = state
         .posts
@@ -347,7 +366,7 @@ Body text",
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
     assert_eq!(created.slug, "extracted-title");
     let record = state
         .posts
@@ -422,7 +441,7 @@ async fn get_post_returns_published_post(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
 
     let record = state
         .posts
@@ -472,7 +491,7 @@ draft",
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
     let record = state
         .posts
         .get_post_by_id(
@@ -551,7 +570,7 @@ draft",
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
 
     let (status, body) = get_post_preview_form(&state, created.post_id, Some(&author_cookie)).await;
     assert_eq!(status, StatusCode::OK, "author preview failed: {body}");
@@ -584,7 +603,7 @@ async fn get_post_hides_drafts_from_guests(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
     let record = state
         .posts
         .get_post_by_id(
@@ -654,7 +673,13 @@ async fn list_drafts_form(
         parts.push(format!("cursor_created_at={created_at}"));
         parts.push(format!("cursor_post_id={post_id}"));
     }
-    post_form(state, "/api/list_drafts", parts.join("&"), cookie).await
+    post_form(
+        state,
+        <web::posts::ListDrafts as ServerFn>::PATH,
+        parts.join("&"),
+        cookie,
+    )
+    .await
 }
 
 async fn publish_post_form(
@@ -664,7 +689,7 @@ async fn publish_post_form(
 ) -> (StatusCode, String) {
     post_form(
         state,
-        "/api/publish_post",
+        <web::posts::Publish as ServerFn>::PATH,
         format!("post_id={post_id}"),
         cookie,
     )
@@ -684,7 +709,13 @@ async fn list_user_posts_form(
         parts.push(format!("cursor_created_at={created_at}"));
         parts.push(format!("cursor_post_id={post_id}"));
     }
-    post_form(state, "/api/list_user_posts", parts.join("&"), cookie).await
+    post_form(
+        state,
+        <web::posts::ListByUser as ServerFn>::PATH,
+        parts.join("&"),
+        cookie,
+    )
+    .await
 }
 
 async fn list_posts_by_tag_form(
@@ -693,7 +724,13 @@ async fn list_posts_by_tag_form(
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
     let body = format!("tag={tag}&limit=50");
-    post_form(state, "/api/list_posts_by_tag", body, cookie).await
+    post_form(
+        state,
+        <web::posts::ListByTag as ServerFn>::PATH,
+        body,
+        cookie,
+    )
+    .await
 }
 
 async fn list_user_posts_by_tag_form(
@@ -703,7 +740,13 @@ async fn list_user_posts_by_tag_form(
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
     let body = format!("username={username}&tag={tag}&limit=50");
-    post_form(state, "/api/list_user_posts_by_tag", body, cookie).await
+    post_form(
+        state,
+        <web::posts::ListByUserAndTag as ServerFn>::PATH,
+        body,
+        cookie,
+    )
+    .await
 }
 
 async fn list_local_timeline_form(
@@ -718,7 +761,13 @@ async fn list_local_timeline_form(
         parts.push(format!("cursor_created_at={created_at}"));
         parts.push(format!("cursor_post_id={post_id}"));
     }
-    post_form(state, "/api/list_local_timeline", parts.join("&"), cookie).await
+    post_form(
+        state,
+        <web::posts::ListLocalTimeline as ServerFn>::PATH,
+        parts.join("&"),
+        cookie,
+    )
+    .await
 }
 
 async fn list_home_feed_form(
@@ -733,7 +782,13 @@ async fn list_home_feed_form(
         parts.push(format!("cursor_created_at={created_at}"));
         parts.push(format!("cursor_post_id={post_id}"));
     }
-    post_form(state, "/api/list_home_feed", parts.join("&"), cookie).await
+    post_form(
+        state,
+        <web::posts::ListHomeFeed as ServerFn>::PATH,
+        parts.join("&"),
+        cookie,
+    )
+    .await
 }
 
 #[apply(backends)]
@@ -745,7 +800,7 @@ async fn update_post_updates_draft_content_and_slug(#[case] backend: Backend) {
     let (status, body) =
         create_post_json(&state, "original", "markdown", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
     let post_id = created.post_id;
 
     // Title embedded as # heading; slug_override takes precedence over the derived slug
@@ -763,7 +818,7 @@ async fn update_post_updates_draft_content_and_slug(#[case] backend: Backend) {
     .await;
 
     assert_eq!(status, StatusCode::OK, "update body: {body}");
-    let updated: UpdatePostResult = serde_json::from_str(&body).unwrap();
+    let updated: UpdateResult = serde_json::from_str(&body).unwrap();
     assert_eq!(updated.slug, "updated-slug");
     assert!(updated.published_at.is_none());
 
@@ -790,7 +845,7 @@ async fn update_post_freezes_slug_when_published(#[case] backend: Backend) {
     let (status, body) =
         create_post_json(&state, "body", "markdown", None, true, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
     let post_id = created.post_id;
     let original_slug = created.slug.clone();
 
@@ -806,7 +861,7 @@ async fn update_post_freezes_slug_when_published(#[case] backend: Backend) {
     .await;
 
     assert_eq!(status, StatusCode::OK, "update body: {body}");
-    let updated: UpdatePostResult = serde_json::from_str(&body).unwrap();
+    let updated: UpdateResult = serde_json::from_str(&body).unwrap();
     assert_eq!(
         updated.slug, original_slug,
         "slug must not change after publication"
@@ -823,7 +878,7 @@ async fn update_post_publishes_draft(#[case] backend: Backend) {
     let (status, body) =
         create_post_json(&state, "draft body", "markdown", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
     assert!(created.published_at.is_none());
     let post_id = created.post_id;
 
@@ -839,7 +894,7 @@ async fn update_post_publishes_draft(#[case] backend: Backend) {
     .await;
 
     assert_eq!(status, StatusCode::OK, "update body: {body}");
-    let updated: UpdatePostResult = serde_json::from_str(&body).unwrap();
+    let updated: UpdateResult = serde_json::from_str(&body).unwrap();
     assert!(updated.published_at.is_some());
     assert!(!updated.permalink.as_ref().is_empty());
 }
@@ -861,7 +916,7 @@ async fn update_post_rejects_non_author(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
 
     let (status, body) = update_post_json(
         &state,
@@ -898,7 +953,7 @@ async fn update_post_rejects(
     let (status, body) =
         create_post_json(&state, "original", "markdown", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
 
     let (status, body) = update_post_json(
         &state,
@@ -945,7 +1000,7 @@ async fn update_post_returns_not_found_for_deleted_post(#[case] backend: Backend
     let (status, body) =
         create_post_json(&state, "body", "markdown", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
 
     state.posts.soft_delete_post(created.post_id).await.unwrap();
 
@@ -981,7 +1036,7 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let first_draft: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let first_draft: CreateResult = serde_json::from_str(&body).unwrap();
 
     let (status, body) = create_post_json(
         &state,
@@ -993,7 +1048,7 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let second_draft: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let second_draft: CreateResult = serde_json::from_str(&body).unwrap();
 
     let (status, body) = create_post_json(
         &state,
@@ -1106,9 +1161,15 @@ async fn create_post_with_future_publish_at_is_scheduled(#[case] backend: Backen
             "publish_at": future.to_rfc3339(),
         }
     });
-    let (status, body) = post_json(&state, "/api/create_post", payload, Some(&cookie)).await;
+    let (status, body) = post_json(
+        &state,
+        <web::posts::Create as ServerFn>::PATH,
+        payload,
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
 
     let record = state
         .posts
@@ -1156,7 +1217,7 @@ async fn create_post_publish_without_publish_at_is_live_now(#[case] backend: Bac
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
 
     let record = state
         .posts
@@ -1202,12 +1263,12 @@ async fn publish_post_publishes_draft_and_returns_permalink(#[case] backend: Bac
     let (status, body) =
         create_post_json(&state, "draft body", "markdown", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
     assert!(created.published_at.is_none());
 
     let (status, body) = publish_post_form(&state, created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "publish body: {body}");
-    let published: PublishPostResult = serde_json::from_str(&body).unwrap();
+    let published: PublishResult = serde_json::from_str(&body).unwrap();
     assert_eq!(published.post_id, created.post_id);
     assert!(published
         .permalink
@@ -1242,7 +1303,7 @@ async fn publish_post_rejects_non_author(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
 
     let (status, body) = publish_post_form(&state, created.post_id, Some(&stranger_cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
@@ -1262,22 +1323,22 @@ async fn publish_post_rejects_non_author(#[case] backend: Backend) {
 // validation, so a single setup serves every row without branching.
 #[apply(backends_matrix)]
 #[case::list_drafts(
-    "/api/list_drafts",
+    <web::posts::ListDrafts as ServerFn>::PATH,
     "cursor_created_at=2026-04-16T10:11:12%2B00:00&limit=10",
     "cursor_created_at=bad-time&cursor_post_id=10&limit=10"
 )]
 #[case::list_user_posts(
-    "/api/list_user_posts",
+    <web::posts::ListByUser as ServerFn>::PATH,
     "username=author&cursor_created_at=2026-04-16T10:11:12%2B00:00&limit=10",
     "username=author&cursor_created_at=bad-time&cursor_post_id=12&limit=10"
 )]
 #[case::list_local_timeline(
-    "/api/list_local_timeline",
+    <web::posts::ListLocalTimeline as ServerFn>::PATH,
     "cursor_created_at=2026-04-16T10:11:12%2B00:00&limit=10",
     "cursor_created_at=bad-time&cursor_post_id=12&limit=10"
 )]
 #[case::list_home_feed(
-    "/api/list_home_feed",
+    <web::posts::ListHomeFeed as ServerFn>::PATH,
     "cursor_created_at=2026-04-16T10:11:12%2B00:00&limit=10",
     "cursor_created_at=bad-time&cursor_post_id=12&limit=10"
 )]
@@ -1315,7 +1376,7 @@ async fn publish_post_returns_not_found_for_missing_or_deleted_posts(#[case] bac
     let (status, body) =
         create_post_json(&state, "body", "markdown", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
     state.posts.soft_delete_post(created.post_id).await.unwrap();
 
     let (status, body) = publish_post_form(&state, created.post_id, Some(&cookie)).await;
@@ -1454,7 +1515,7 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
     let (status, body) =
         create_post_json(&state, "gone", "markdown", None, true, Some(&author_cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let deleted: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let deleted: CreateResult = serde_json::from_str(&body).unwrap();
     state.posts.soft_delete_post(deleted.post_id).await.unwrap();
 
     let (status, body) = list_local_timeline_form(&state, None, None, 50, None).await;
@@ -1585,7 +1646,7 @@ async fn delete_post_form(
 ) -> (StatusCode, String) {
     post_form(
         state,
-        "/api/delete_post",
+        <web::posts::Delete as ServerFn>::PATH,
         format!("post_id={post_id}"),
         cookie,
     )
@@ -1601,7 +1662,7 @@ async fn delete_post_soft_deletes_post(#[case] backend: Backend) {
     let (status, body) =
         create_post_json(&state, "gone", "markdown", None, true, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
 
     let (status, body) = delete_post_form(&state, created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
@@ -1629,7 +1690,7 @@ async fn delete_post_rejects_non_author(#[case] backend: Backend) {
     let (status, body) =
         create_post_json(&state, "mine", "markdown", None, true, Some(&author_cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
 
     let (status, body) = delete_post_form(&state, created.post_id, Some(&stranger_cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
@@ -1645,7 +1706,7 @@ async fn delete_post_rejects_unauthenticated(#[case] backend: Backend) {
     let (status, body) =
         create_post_json(&state, "body", "markdown", None, true, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
 
     let (status, body) = delete_post_form(&state, created.post_id, None).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
@@ -1661,7 +1722,7 @@ async fn delete_post_returns_not_found_for_already_deleted_post(#[case] backend:
     let (status, body) =
         create_post_json(&state, "body", "markdown", None, true, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
 
     let (status, body) = delete_post_form(&state, created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "first delete body: {body}");
@@ -1692,7 +1753,7 @@ body",
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
     let permalink = String::from(created.permalink);
 
     // Verify post appears in user timeline before deletion
@@ -1755,7 +1816,7 @@ body",
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
     assert!(created.published_at.is_some(), "should be published");
 
     let (status, body) = unpublish_post_form(&state, created.post_id, Some(&cookie)).await;
@@ -1798,7 +1859,7 @@ body",
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
 
     let (status, body) = unpublish_post_form(&state, created.post_id, Some(&other_cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
@@ -1822,7 +1883,7 @@ async fn list_user_posts_carries_tags_per_post(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
 
     // Apply two tags via the storage layer (the create_post tags param lands
     // in tags.5; here we just verify the timeline surface threads them
@@ -1869,7 +1930,7 @@ async fn get_post_carries_tags(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
 
     state
         .posts
@@ -1926,9 +1987,15 @@ async fn create_post_applies_tags_from_param(#[case] backend: Backend) {
             "tags": ["Rust", "web-dev"],
         }
     });
-    let (status, body) = post_json(&state, "/api/create_post", payload, Some(&cookie)).await;
+    let (status, body) = post_json(
+        &state,
+        <web::posts::Create as ServerFn>::PATH,
+        payload,
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
 
     let stored_tags = state
         .posts
@@ -1954,7 +2021,13 @@ async fn create_post_rejects_invalid_tag_token(#[case] backend: Backend) {
             "tags": ["rust", "not a valid tag!"],
         }
     });
-    let (status, body) = post_json(&state, "/api/create_post", payload, Some(&cookie)).await;
+    let (status, body) = post_json(
+        &state,
+        <web::posts::Create as ServerFn>::PATH,
+        payload,
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     // The invalid token is now rejected at the wire→TagLabel parse, surfacing
     // InvalidTagLabel's own message (the single validation source) rather than the
@@ -1977,7 +2050,13 @@ async fn create_post_rejects_more_than_25_tags(#[case] backend: Backend) {
             "tags": many,
         }
     });
-    let (status, body) = post_json(&state, "/api/create_post", payload, Some(&cookie)).await;
+    let (status, body) = post_json(
+        &state,
+        <web::posts::Create as ServerFn>::PATH,
+        payload,
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("too many tags"), "body: {body}");
 }
@@ -1997,9 +2076,15 @@ async fn update_post_applies_tag_set_diff(#[case] backend: Backend) {
             "tags": ["rust", "old-tag"],
         }
     });
-    let (status, body) = post_json(&state, "/api/create_post", create_payload, Some(&cookie)).await;
+    let (status, body) = post_json(
+        &state,
+        <web::posts::Create as ServerFn>::PATH,
+        create_payload,
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
 
     // Update: replace old-tag with new-tag, keep rust.
     let update_payload = serde_json::json!({
@@ -2012,7 +2097,13 @@ async fn update_post_applies_tag_set_diff(#[case] backend: Backend) {
             "tags": ["rust", "new-tag"],
         }
     });
-    let (status, body) = post_json(&state, "/api/update_post", update_payload, Some(&cookie)).await;
+    let (status, body) = post_json(
+        &state,
+        <web::posts::Update as ServerFn>::PATH,
+        update_payload,
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "update body: {body}");
 
     let stored = state
@@ -2047,10 +2138,15 @@ async fn list_posts_by_tag_returns_matching_posts_from_all_users(#[case] backend
                     "tags": tags,
                 }
             });
-            let (status, body) =
-                post_json(&state, "/api/create_post", payload, Some(&cookie)).await;
+            let (status, body) = post_json(
+                &state,
+                <web::posts::Create as ServerFn>::PATH,
+                payload,
+                Some(&cookie),
+            )
+            .await;
             assert_eq!(status, StatusCode::OK, "create body: {body}");
-            serde_json::from_str::<CreatePostResult>(&body).unwrap()
+            serde_json::from_str::<CreateResult>(&body).unwrap()
         }
     };
 
@@ -2123,8 +2219,13 @@ async fn list_user_posts_by_tag_scopes_to_user(#[case] backend: Backend) {
                     "tags": ["shared"],
                 }
             });
-            let (status, body) =
-                post_json(&state, "/api/create_post", payload, Some(&cookie)).await;
+            let (status, body) = post_json(
+                &state,
+                <web::posts::Create as ServerFn>::PATH,
+                payload,
+                Some(&cookie),
+            )
+            .await;
             assert_eq!(status, StatusCode::OK, "create body: {body}");
         }
     };
@@ -2164,9 +2265,15 @@ async fn update_post_with_tags_unset_leaves_existing_tags_alone(#[case] backend:
             "tags": ["keep"],
         }
     });
-    let (status, body) = post_json(&state, "/api/create_post", create_payload, Some(&cookie)).await;
+    let (status, body) = post_json(
+        &state,
+        <web::posts::Create as ServerFn>::PATH,
+        create_payload,
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
 
     // Update without including the tags key (None on the server side).
     let update_payload = serde_json::json!({
@@ -2178,7 +2285,13 @@ async fn update_post_with_tags_unset_leaves_existing_tags_alone(#[case] backend:
             "publish": false,
         }
     });
-    let (status, body) = post_json(&state, "/api/update_post", update_payload, Some(&cookie)).await;
+    let (status, body) = post_json(
+        &state,
+        <web::posts::Update as ServerFn>::PATH,
+        update_payload,
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "update body: {body}");
 
     let stored = state
@@ -2195,7 +2308,13 @@ async fn update_post_with_tags_unset_leaves_existing_tags_alone(#[case] backend:
 async fn get_default_post_format_returns_markdown_by_default(#[case] backend: Backend) {
     let (_base, state, cookie) = login_and_state(backend).await;
 
-    let (status, body) = post_form(&state, "/api/get_default_post_format", "", Some(&cookie)).await;
+    let (status, body) = post_form(
+        &state,
+        <web::profile::GetDefaultPostFormat as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "get body: {body}");
     assert_eq!(
         body, "\"markdown\"",
@@ -2210,14 +2329,20 @@ async fn set_default_post_format_persists_and_retrieves_markdown(#[case] backend
 
     let (status, body) = post_form(
         &state,
-        "/api/set_default_post_format",
+        <web::profile::SetDefaultPostFormat as ServerFn>::PATH,
         "format=markdown",
         Some(&cookie),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "set body: {body}");
 
-    let (status, body) = post_form(&state, "/api/get_default_post_format", "", Some(&cookie)).await;
+    let (status, body) = post_form(
+        &state,
+        <web::profile::GetDefaultPostFormat as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "get body: {body}");
     assert_eq!(
         body, "\"markdown\"",
@@ -2440,7 +2565,7 @@ async fn default_audience_selection_returns_public_by_default(#[case] backend: B
 
     let (status, body) = post_json(
         &state,
-        "/api/default_audience_selection",
+        <web::posts::GetDefaultAudienceSelection as ServerFn>::PATH,
         serde_json::json!({}),
         Some(&cookie),
     )
@@ -2459,7 +2584,7 @@ async fn default_audience_selection_rejects_unauthenticated(#[case] backend: Bac
 
     let (status, body) = post_json(
         &state,
-        "/api/default_audience_selection",
+        <web::posts::GetDefaultAudienceSelection as ServerFn>::PATH,
         serde_json::json!({}),
         None,
     )
@@ -2478,11 +2603,11 @@ async fn post_audience_selection_returns_public_for_new_post(#[case] backend: Ba
     let (status, body) =
         create_post_json(&state, "Hello", "markdown", None, true, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
 
     let (status, body) = post_form(
         &state,
-        "/api/post_audience_selection",
+        <web::posts::GetAudienceSelection as ServerFn>::PATH,
         format!("post_id={}", created.post_id),
         Some(&cookie),
     )
@@ -2503,7 +2628,7 @@ async fn post_audience_selection_rejects_missing_post(#[case] backend: Backend) 
 
     let (status, body) = post_form(
         &state,
-        "/api/post_audience_selection",
+        <web::posts::GetAudienceSelection as ServerFn>::PATH,
         "post_id=99999".to_string(),
         Some(&cookie),
     )
@@ -2530,12 +2655,12 @@ async fn post_audience_selection_rejects_non_owner(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreatePostResult = serde_json::from_str(&body).unwrap();
+    let created: CreateResult = serde_json::from_str(&body).unwrap();
 
     // A different user must not learn another author's targeting.
     let (status, body) = post_form(
         &state,
-        "/api/post_audience_selection",
+        <web::posts::GetAudienceSelection as ServerFn>::PATH,
         format!("post_id={}", created.post_id),
         Some(&other_cookie),
     )

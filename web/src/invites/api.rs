@@ -1,4 +1,4 @@
-//! Invites vertical — API surface: the `InviteInfo` wire type and the invite
+//! Invites vertical — API surface: the `Info` wire type and the invite
 //! `#[server]` endpoints (ADR-0070). Re-exported from `mod.rs`.
 
 #[cfg(feature = "server")]
@@ -20,13 +20,13 @@ use common::time::UtcInstant;
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// Invite metadata returned by [`list_invites`].
+/// Invite metadata returned by [`list`].
 ///
 /// The raw code is deliberately **not** included — a capability token is never sent
 /// server→client (#400). Codes are delivered out-of-band (the `jaunder user invite` CLI
 /// prints the invitation URL; #433 will email them).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InviteInfo {
+pub struct Info {
     pub created_at: UtcInstant,
     pub expires_at: UtcInstant,
     pub used_at: Option<UtcInstant>,
@@ -36,14 +36,14 @@ pub struct InviteInfo {
 /// Creates an invite code expiring in `expires_in_hours` (default 168 = 7 days) and
 /// **emails the invitation link** to `recipient_email`. Requires authentication. The
 /// code is never returned to the client (#400) — it is delivered only as the link in
-/// the email (mirrors `request_password_reset`).
-#[server(endpoint = "/create_invite")]
-#[tracing::instrument(name = "web.invites.create_invite", skip(recipient_email))]
-pub async fn create_invite(
+/// the email (mirrors `password_reset::request`).
+#[server(endpoint = "/invites/create")]
+#[tracing::instrument(name = "web.invites.create", skip(recipient_email))]
+pub async fn create(
     expires_in_hours: Option<InviteTtlHours>,
     recipient_email: Email,
 ) -> WebResult<()> {
-    boundary!("create_invite", {
+    boundary!("create", {
         let _auth = require_auth().await?;
         let invites = expect_context::<Arc<dyn InviteStorage>>();
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
@@ -88,10 +88,10 @@ pub async fn create_invite(
 
 /// Returns invite metadata (never the raw codes). Requires `invite_only` registration
 /// policy; returns an error otherwise.
-#[server(endpoint = "/list_invites")]
-#[tracing::instrument(name = "web.invites.list_invites")]
-pub async fn list_invites() -> WebResult<Vec<InviteInfo>> {
-    boundary!("list_invites", {
+#[server(endpoint = "/invites/list")]
+#[tracing::instrument(name = "web.invites.list")]
+pub async fn list() -> WebResult<Vec<Info>> {
+    boundary!("list", {
         let _auth = require_auth().await?;
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
         let invites = expect_context::<Arc<dyn InviteStorage>>();
@@ -102,7 +102,7 @@ pub async fn list_invites() -> WebResult<Vec<InviteInfo>> {
         let records = invites.list_invites().await?;
         Ok(records
             .into_iter()
-            .map(|r| InviteInfo {
+            .map(|r| Info {
                 created_at: UtcInstant::from(r.created_at),
                 expires_at: UtcInstant::from(r.expires_at),
                 used_at: r.used_at.map(UtcInstant::from),

@@ -3,7 +3,7 @@
 //! [`marker_storage`](crate::auth::marker_storage) binding) directly, no `cfg`
 //! gates inside this file.
 
-use super::{get_registration_policy, Register};
+use super::{get_policy, Register};
 use crate::auth::{set_session, SessionUser};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
@@ -35,7 +35,7 @@ pub fn RegisterPage() -> impl IntoView {
     use leptos_router::hooks::use_query_map;
 
     let register_action = ServerAction::<Register>::new();
-    let policy = Resource::new(|| (), |()| get_registration_policy());
+    let policy = Resource::new(|| (), |()| get_policy());
     let username = Field::<Username>::new();
     let password = Field::<Password>::new();
 

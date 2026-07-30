@@ -8,13 +8,13 @@ use common::media::{
     ByteSize, ContentHash, ContentType, Filename, MaxFileSize, MediaSource, UserQuota,
 };
 use leptos::prelude::*;
-// `MultipartData`/`MultipartFormData` are named in the `upload_media` signature,
+// `MultipartData`/`MultipartFormData` are named in the `upload` signature,
 // which compiles for both the wasm client stub and the server build, so this import
 // is ungated. (#517)
 use leptos::server_fn::codec::{MultipartData, MultipartFormData};
 use serde::{Deserialize, Serialize};
 
-// `upload_media`'s return type; ungated so it is nameable on the wasm client stub
+// `upload`'s return type; ungated so it is nameable on the wasm client stub
 // (where `storage` is not compiled). (#517)
 use common::media::UploadResponse;
 
@@ -37,9 +37,9 @@ use common::time::UtcInstant;
 
 use crate::error::WebResult;
 
-/// A media item returned by [`list_my_media`].
+/// A media item returned by [`list_mine`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MediaItem {
+pub struct Item {
     pub sha256: ContentHash,
     pub filename: Filename,
     pub source: MediaSource,
@@ -49,30 +49,30 @@ pub struct MediaItem {
     pub created_at: UtcInstant,
 }
 
-/// Storage usage returned by [`media_usage`].
+/// Storage usage returned by [`get_usage`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MediaUsageData {
+pub struct UsageData {
     pub used_bytes: ByteSize,
     pub quota_bytes: UserQuota,
     pub max_file_size_bytes: MaxFileSize,
 }
 
-/// Result returned by [`delete_media`].
+/// Result returned by [`delete`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DeleteMediaResult {
+pub struct DeleteResult {
     pub deleted: bool,
     pub referenced_in_posts: Vec<PostId>,
 }
 
 /// Lists media items owned by the authenticated user.
-#[server(endpoint = "/list_my_media")]
-#[tracing::instrument(name = "web.media.list_my_media")]
-pub async fn list_my_media(
+#[server(endpoint = "/media/list_mine")]
+#[tracing::instrument(name = "web.media.list_mine")]
+pub async fn list_mine(
     source: Option<MediaSource>,
     limit: Option<PageSize>,
     offset: Option<PageOffset>,
-) -> WebResult<Vec<MediaItem>> {
-    boundary!("list_my_media", {
+) -> WebResult<Vec<Item>> {
+    boundary!("list_mine", {
         let auth = require_auth().await?;
         let media = expect_context::<Arc<dyn MediaStorage>>();
 
@@ -89,7 +89,7 @@ pub async fn list_my_media(
             .into_iter()
             .map(|r| {
                 let url = common::media::media_url(&r.source, &r.sha256, &r.filename);
-                MediaItem {
+                Item {
                     sha256: r.sha256,
                     filename: r.filename,
                     source: r.source,
@@ -104,10 +104,10 @@ pub async fn list_my_media(
 }
 
 /// Returns storage usage for the authenticated user.
-#[server(endpoint = "/media_usage")]
-#[tracing::instrument(name = "web.media.media_usage")]
-pub async fn media_usage() -> WebResult<MediaUsageData> {
-    boundary!("media_usage", {
+#[server(endpoint = "/media/get_usage")]
+#[tracing::instrument(name = "web.media.get_usage")]
+pub async fn get_usage() -> WebResult<UsageData> {
+    boundary!("get_usage", {
         let auth = require_auth().await?;
         let media = expect_context::<Arc<dyn MediaStorage>>();
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
@@ -116,7 +116,7 @@ pub async fn media_usage() -> WebResult<MediaUsageData> {
         let quota_bytes = site_config.get_media_user_quota().await?;
         let max_file_size_bytes = site_config.get_media_max_file_size().await?;
 
-        Ok(MediaUsageData {
+        Ok(UsageData {
             used_bytes,
             quota_bytes,
             max_file_size_bytes,
@@ -128,15 +128,15 @@ pub async fn media_usage() -> WebResult<MediaUsageData> {
 ///
 /// If the item is referenced in any posts, it will not be deleted unless
 /// `force` is `Some(true)`.
-#[server(endpoint = "/delete_media")]
-#[tracing::instrument(name = "web.media.delete_media", skip(filename))]
-pub async fn delete_media(
+#[server(endpoint = "/media/delete")]
+#[tracing::instrument(name = "web.media.delete", skip(filename))]
+pub async fn delete(
     sha256: ContentHash,
     filename: Filename,
     source: MediaSource,
     force: Option<bool>,
-) -> WebResult<DeleteMediaResult> {
-    boundary!("delete_media", {
+) -> WebResult<DeleteResult> {
+    boundary!("delete", {
         let auth = require_auth().await?;
         let media = expect_context::<Arc<dyn MediaStorage>>();
         let posts = expect_context::<Arc<dyn PostStorage>>();
@@ -172,7 +172,7 @@ pub async fn delete_media(
             .collect();
 
         if !referenced_in_posts.is_empty() && !force.unwrap_or(false) {
-            return Ok(DeleteMediaResult {
+            return Ok(DeleteResult {
                 deleted: false,
                 referenced_in_posts,
             });
@@ -183,7 +183,7 @@ pub async fn delete_media(
             .await
             .map_err(InternalError::storage)?;
 
-        Ok(DeleteMediaResult {
+        Ok(DeleteResult {
             deleted: true,
             referenced_in_posts,
         })
@@ -210,10 +210,10 @@ fn map_media_error(err: &anyhow::Error) -> InternalError {
 
 /// Streams a multipart file upload to storage and returns its stored URL/metadata.
 /// The multipart `#[server]` fn replacing the old `POST /media/upload` glue (#517).
-#[server(input = MultipartFormData, endpoint = "/upload_media")]
-#[tracing::instrument(name = "web.media.upload_media", skip_all)]
-pub async fn upload_media(data: MultipartData) -> WebResult<UploadResponse> {
-    boundary!("upload_media", {
+#[server(input = MultipartFormData, endpoint = "/media/upload")]
+#[tracing::instrument(name = "web.media.upload", skip_all)]
+pub async fn upload(data: MultipartData) -> WebResult<UploadResponse> {
+    boundary!("upload", {
         let auth = require_auth().await?;
         let media = expect_context::<Arc<dyn MediaStorage>>();
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();

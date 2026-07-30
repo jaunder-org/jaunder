@@ -1,13 +1,13 @@
 //! The shared reactive session context (#591, ADR-0044): one marker-seeded
-//! `SessionUser` signal plus a per-navigation reconcile against [`session`].
+//! `SessionUser` signal plus a per-navigation reconcile against [`get_session`].
 //! Supersedes the ad-hoc `current_user()` fetches that each component used to
-//! spin. wasm-only reactive glue — the `session()` server fn itself lives in
+//! spin. wasm-only reactive glue — the `get_session()` server fn itself lives in
 //! [`super::api`]; this module is the client context around it.
 
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
 
-use super::{marker_storage, session, SessionUser};
+use super::{get_session, marker_storage, SessionUser};
 use crate::error::WebResult;
 
 /// The viewer/session identity shared across the app tree.
@@ -23,14 +23,14 @@ pub struct SessionContext {
 }
 
 /// Provide the session context. Seeds from the marker synchronously, then
-/// reconciles against `session()` on every navigation, writing the result back
+/// reconciles against `get_session()` on every navigation, writing the result back
 /// into the `current` signal AND the marker (so the next boot stays flash-free).
 /// ADR-0044 D3. Must be called from inside `<Router>` (it reads `use_location`) —
 /// `AppShell` is that owner, and every consumer is a descendant of it.
 pub fn provide_session_context() {
     let current = RwSignal::new(marker_storage::get());
     let location = use_location();
-    let reconcile = Resource::new(move || location.pathname.get(), |_| session());
+    let reconcile = Resource::new(move || location.pathname.get(), |_| get_session());
     Effect::new(move |_| {
         if let Some(Ok(next)) = reconcile.get() {
             match &next {

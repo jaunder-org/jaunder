@@ -23,10 +23,10 @@ use leptos::prelude::*;
 ///
 /// Creates a 24-hour verification token, sends an absolute
 /// `{base_url}/verify-email?token=…` link via the configured mailer.
-#[server(endpoint = "/request_email_verification")]
-#[tracing::instrument(name = "web.email.request_email_verification", skip_all)]
-pub async fn request_email_verification(email: Email) -> WebResult<()> {
-    boundary!("request_email_verification", {
+#[server(endpoint = "/email/request_verification")]
+#[tracing::instrument(name = "web.email.request_verification", skip_all)]
+pub async fn request_verification(email: Email) -> WebResult<()> {
+    boundary!("request_verification", {
         // `email` is already validated/normalized: it arrives typed as `Email`, so the
         // arg `Deserialize` ran its `FromStr`. Legitimate clients pre-validate the form
         // field (ADR-0065), so an invalid value only reaches here from a non-browser caller.
@@ -68,10 +68,10 @@ pub async fn request_email_verification(email: Email) -> WebResult<()> {
 
 /// Consumes a verification token and marks the associated email as verified
 /// on the user account.
-#[server(endpoint = "/verify_email")]
-#[tracing::instrument(name = "web.email.verify_email", skip_all)]
-pub async fn verify_email(token: RawToken) -> WebResult<()> {
-    boundary!("verify_email", {
+#[server(endpoint = "/email/verify")]
+#[tracing::instrument(name = "web.email.verify", skip_all)]
+pub async fn verify(token: RawToken) -> WebResult<()> {
+    boundary!("verify", {
         let email_verifications = expect_context::<Arc<dyn EmailVerificationStorage>>();
         let users = expect_context::<Arc<dyn UserStorage>>();
 

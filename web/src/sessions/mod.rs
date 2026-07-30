@@ -1,5 +1,5 @@
-//! The **sessions** vertical: the `#[server]` endpoints (`list_sessions`,
-//! `create_app_password`, `revoke_session`) and the `SessionInfo` / `AppPassword`
+//! The **sessions** vertical: the `#[server]` endpoints (`list`,
+//! `create_app_password`, `revoke`) and the `Info` / `AppPassword`
 //! wire DTOs in [`api`], and the co-located reactive UI (`SessionsPage`) in
 //! [`component`]. App passwords are labelled sessions used for `AtomPub` HTTP
 //! Basic auth.
@@ -16,8 +16,7 @@ mod api;
 mod component;
 
 pub use api::{
-    create_app_password, list_sessions, revoke_session, AppPassword, CreateAppPassword,
-    ListSessions, RevokeSession, SessionInfo,
+    create_app_password, list, revoke, AppPassword, CreateAppPassword, Info, List, Revoke,
 };
 #[cfg(target_arch = "wasm32")]
 pub use component::SessionsPage;

@@ -6,16 +6,16 @@ use common::display_name::DisplayName;
 use common::render::PostFormat;
 use leptos::prelude::*;
 
-use super::api::{get_default_post_format, get_profile, SetDefaultPostFormat, UpdateProfile};
+use super::api::{get, get_default_post_format, SetDefaultPostFormat, Update};
 
 /// Profile page — shows username, display name, bio; allows updating.
 #[component]
 pub fn ProfilePage() -> impl IntoView {
-    let update_action = ServerAction::<UpdateProfile>::new();
-    let profile = Resource::new(move || update_action.version().get(), |_| get_profile());
+    let update_action = ServerAction::<Update>::new();
+    let profile = Resource::new(move || update_action.version().get(), |_| get());
     // Client-validated display name and bio (both optional: empty clears them),
     // owned by the component so the bespoke form can `.dispatch` the typed
-    // `UpdateProfile` args — the ADR-0065 direct-bind pattern (mirrors the post
+    // `Update` args — the ADR-0065 direct-bind pattern (mirrors the post
     // compose/edit forms), replacing the former `<ActionForm>` whose string fields
     // could not carry validated `Option<DisplayName>`/`Option<Bio>`.
     let dn_field = Field::<DisplayName>::optional();
@@ -41,7 +41,7 @@ pub fn ProfilePage() -> impl IntoView {
                                     .set(data.bio.as_deref().unwrap_or_default().to_string());
                                 let submit = move |_| {
                                     update_action
-                                        .dispatch(UpdateProfile {
+                                        .dispatch(Update {
                                             display_name: dn_field.parsed(),
                                             bio: bio_field.parsed(),
                                         });

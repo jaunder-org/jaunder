@@ -61,12 +61,16 @@ const TEST_SPAN_NAME: &str = "e2e.test";
 const TEST_TITLE_ATTR: &str = "e2e.test";
 
 /// Which tests exercised each server fn, plus hits attributable to no test.
+///
+/// Both maps are keyed by [`ServerFn::qualified`] — `<vertical>::<ident>`, never
+/// the bare ident, which fifteen fns share across six verticals since #684.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Coverage {
-    /// fn ident → the sorted, de-duplicated titles of the tests that drove it.
+    /// `<vertical>::<ident>` → the sorted, de-duplicated titles of the tests that
+    /// drove it.
     pub covered: BTreeMap<String, BTreeSet<String>>,
-    /// fn ident → the distinct [`OrphanReason`]s (rendered) its unattributed hits
-    /// ended with. Reasons, not counts, and for two reasons.
+    /// `<vertical>::<ident>` → the distinct [`OrphanReason`]s (rendered) its
+    /// unattributed hits ended with. Reasons, not counts, and for two reasons.
     ///
     /// *Diagnosability:* "outside any test" and "attribution is broken" are the same
     /// shape of result but opposite in meaning, so the artifact has to say which
@@ -95,7 +99,7 @@ pub struct Coverage {
 ///   into a generated `__server_<ident>` fn (`server_fn_macro`'s `to_dummy_ident`).
 /// - `<ident>` — what derivation would yield if `#[server]` stopped relocating.
 fn candidate_span_names(f: &ServerFn) -> [String; 3] {
-    let vertical = f.module.split("::").next().unwrap_or(&f.module);
+    let vertical = f.vertical();
     [
         format!("{EXPLICIT_SPAN_PREFIX}{vertical}.{}", f.ident),
         format!("{DERIVED_SPAN_PREFIX}{}", f.ident),
@@ -232,14 +236,14 @@ pub fn extract(spans: &[Span], inventory: &[ServerFn]) -> Coverage {
             Ok(title) => {
                 coverage
                     .covered
-                    .entry(f.ident.clone())
+                    .entry(f.qualified())
                     .or_default()
                     .insert(title);
             }
             Err(reason) => {
                 coverage
                     .orphans
-                    .entry(f.ident.clone())
+                    .entry(f.qualified())
                     .or_default()
                     .insert(reason.to_string());
             }
@@ -284,9 +288,10 @@ mod tests {
         ]
     }
 
-    fn titles(c: &Coverage, ident: &str) -> Vec<String> {
+    /// The tests recorded against a qualified key (`<vertical>::<ident>`).
+    fn titles(c: &Coverage, qualified: &str) -> Vec<String> {
         c.covered
-            .get(ident)
+            .get(qualified)
             .map(|s| s.iter().cloned().collect())
             .unwrap_or_default()
     }
@@ -294,7 +299,7 @@ mod tests {
     #[test]
     fn uri_hit_attributes_to_its_test() {
         let c = extract(&sample_spans(), &sample_inventory());
-        assert_eq!(titles(&c, "create_post"), vec!["creates a post"]);
+        assert_eq!(titles(&c, "posts::create_post"), vec!["creates a post"]);
     }
 
     #[test]
@@ -303,13 +308,13 @@ mod tests {
         // in isolation: `__server_update_post` carries no `uri`, and the request it
         // hangs under is a `create_post` call, so only the span name can find it.
         let c = extract(&sample_spans(), &sample_inventory());
-        assert_eq!(titles(&c, "update_post"), vec!["creates a post"]);
+        assert_eq!(titles(&c, "posts::update_post"), vec!["creates a post"]);
     }
 
     #[test]
     fn query_string_is_stripped() {
         let c = extract(&sample_spans(), &sample_inventory());
-        assert!(c.covered.contains_key("get_post"));
+        assert!(c.covered.contains_key("posts::get_post"));
     }
 
     #[test]
@@ -317,18 +322,21 @@ mod tests {
         // Real captures carry origin-form (`/api/…`); other fixtures carry
         // absolute URLs. Both must work or a real run finds zero hits.
         let c = extract(&sample_spans(), &sample_inventory());
-        assert!(c.covered.contains_key("create_post"), "origin form");
-        assert!(c.covered.contains_key("list_tags"), "absolute form");
+        assert!(c.covered.contains_key("posts::create_post"), "origin form");
+        assert!(c.covered.contains_key("tags::list_tags"), "absolute form");
     }
 
     #[test]
     fn unattributable_hit_lands_in_orphans_not_covered() {
         let c = extract(&sample_spans(), &sample_inventory());
-        assert!(!c.covered.contains_key("register"));
+        assert!(!c.covered.contains_key("registration::register"));
         // Recorded by REASON, not as a bare count: AC5's point is that a deliberate
         // non-attribution and a broken chain must not look alike. A count would also
         // track how many tests ran, which would churn this byte-compared artifact.
-        let reasons = c.orphans.get("register").expect("register is orphaned");
+        let reasons = c
+            .orphans
+            .get("registration::register")
+            .expect("register is orphaned");
         let reason = reasons.iter().next().expect("one reason");
         assert_eq!(reasons.len(), 1, "one distinct reason: {reasons:?}");
         assert!(
@@ -365,8 +373,8 @@ mod tests {
         // module is a different fn; and it carries no `uri`, so nothing else
         // matches it.
         let c = extract(&sample_spans(), &[fnf("update_post", "storage::posts")]);
-        assert!(!c.covered.contains_key("update_post"));
-        assert!(!c.orphans.contains_key("update_post"));
+        assert!(!c.covered.contains_key("storage::update_post"));
+        assert!(!c.orphans.contains_key("storage::update_post"));
     }
 
     #[test]
@@ -375,7 +383,7 @@ mod tests {
         // Comparing them raw would reject every span-name hit — silently, since
         // `uri` would still carry the fn.
         let c = extract(&sample_spans(), &[fnf("update_post", "posts::api")]);
-        assert_eq!(titles(&c, "update_post"), vec!["creates a post"]);
+        assert_eq!(titles(&c, "posts::update_post"), vec!["creates a post"]);
     }
 
     #[test]
@@ -403,7 +411,7 @@ mod tests {
         // and the `__server_create_post` instrument span beneath it. The union is a
         // set of test titles, so the same test must not be listed twice.
         let c = extract(&sample_spans(), &sample_inventory());
-        assert_eq!(titles(&c, "create_post").len(), 1);
+        assert_eq!(titles(&c, "posts::create_post").len(), 1);
     }
 
     /// One `e2e.test` span with a single child span of `name`, declaring `namespace`.
@@ -442,7 +450,7 @@ mod tests {
                 &[fnf("update_post", "posts::api")],
             );
             assert_eq!(
-                titles(&c, "update_post"),
+                titles(&c, "posts::update_post"),
                 vec!["t"],
                 "span name `{name}` must identify the fn"
             );
@@ -481,7 +489,7 @@ mod tests {
             line: 1,
         };
         let c = extract(&sample_spans(), &[renamed]);
-        assert_eq!(titles(&c, "fetch_post"), vec!["creates a post"]);
+        assert_eq!(titles(&c, "posts::fetch_post"), vec!["creates a post"]);
     }
 
     #[test]
@@ -497,5 +505,49 @@ mod tests {
         };
         let c = extract(&sample_spans(), &[bare]);
         assert!(c.covered.is_empty(), "None endpoint must not match /api/…");
+    }
+
+    /// The two fns #684 makes indistinguishable by ident: one `create` per
+    /// vertical, each with the endpoint its vertical declares.
+    fn two_creates() -> Vec<ServerFn> {
+        vec![
+            ServerFn {
+                ident: "create".into(),
+                endpoint: Some("posts/create".into()),
+                module: "posts::api".into(),
+                line: 1,
+            },
+            ServerFn {
+                ident: "create".into(),
+                endpoint: Some("audiences/create".into()),
+                module: "audiences::api".into(),
+                line: 1,
+            },
+        ]
+    }
+
+    #[test]
+    fn one_verticals_hit_does_not_cover_another_verticals_same_named_fn() {
+        // The whole point of the qualified key. #684 dropped the vertical noun from
+        // these idents, so `create` now names three fns; keying coverage on the
+        // ident would have marked all three covered the moment any one of them ran,
+        // and the gate would have gone green over two entirely untested flows.
+        //
+        // Both signals are exercised, because either one keying on the ident would
+        // reopen the hole on its own: a span-name hit (module `web::posts::api`,
+        // no `uri`) and a `uri` hit (`/api/posts/create`, no `code.namespace`).
+        let by_name = one_named_span("web.posts.create", "web::posts::api");
+        let mut by_uri = one_named_span("masked", "");
+        by_uri[1].uri = "/api/posts/create".into();
+
+        for spans in [by_name, by_uri] {
+            let c = extract(&spans, &two_creates());
+            assert_eq!(titles(&c, "posts::create"), vec!["t"]);
+            assert!(
+                !c.covered.contains_key("audiences::create"),
+                "audiences::create was never driven and must report as uncovered: {:?}",
+                c.covered
+            );
+        }
     }
 }
