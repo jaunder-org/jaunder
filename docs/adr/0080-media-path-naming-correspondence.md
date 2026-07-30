@@ -102,15 +102,29 @@ business.
   holds the raw name and `media_path` re-encodes it to recover the stored
   spelling. It reads like something to simplify away, and doing so breaks
   serving for any name needing encoding.
-- **The effective filename-length ceiling is lower.** `Filename` has no length
-  bound, and encoding expands a name up to 3× (9× for multi-byte UTF-8), so a
-  name that validates can exceed the 255-byte per-component filesystem limit and
-  fail the write with an IO error rather than a domain error at the boundary.
-  This is a _narrowing of an existing_ failure mode — an over-long name already
-  failed — and is tracked as
-  [#708](https://github.com/jaunder-org/jaunder/issues/708), which must decide
-  whether to bound the raw or the encoded length, and whether the intake door
-  truncates or rejects.
+- **The effective filename-length ceiling is lower, so `Filename` is now bounded
+  by its encoded length.** Encoding expands a name up to 3× (9× for multi-byte
+  UTF-8), so a name that validated could exceed the 255-byte per-component
+  filesystem limit and fail the write with an IO error rather than a domain
+  error. Resolved in [#708](https://github.com/jaunder-org/jaunder/issues/708):
+  - The bound is on the **encoded** form (`MAX_FILENAME_ENCODED_BYTES`), not a
+    character count — a char count cannot express this limit, since a safe one
+    would be ~28 characters. This makes `Filename`'s invariant depend on the
+    encode set above: **widening that set shrinks the set of representable
+    names, so the two must be revisited together.**
+  - It is enforced in `Filename`'s own doors, which is the _earliest_ point in
+    the upload pipeline — a name's length is known before the stream opens,
+    unlike a file's size.
+  - The two doors differ, matching their roles: `FromStr` **rejects** (its
+    values must match a stored name exactly, so shortening one would match the
+    wrong file), while the upload-intake door `Filename::sanitized`
+    **truncates**, keeping the extension. So a merely-long name is no longer an
+    error at all.
+  - The extension is kept because `detect_content_type` is the only content-type
+    source when a client sends none, and it runs on the sanitized name —
+    dropping the extension would store `application/octet-stream` permanently.
+    Serving is unaffected; it reads the stored column.
+
 - Backup/restore is unaffected: it mirrors the media tree by directory
   traversal, never reconstructing names from the database, so it carries
   whatever names exist.
