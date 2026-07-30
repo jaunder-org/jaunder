@@ -48,11 +48,12 @@
 //! back to `application/octet-stream`), and [`should_inline`] decides whether a
 //! type is served inline or as an attachment (the `Content-Disposition`).
 
+use std::borrow::Cow;
 use std::path::Path;
 use std::str::FromStr;
 
 use macros::{NumNewtype, StrNewtype};
-use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
+use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -240,6 +241,29 @@ impl Filename {
             return Err(InvalidFilename::NotASafeLeaf);
         }
         Ok(Filename(s))
+    }
+
+    /// The name as a human should read it — the stored value with its percent-escapes
+    /// undone. The **display view**, and the only place a `Filename` is transformed on
+    /// the way out (#720).
+    ///
+    /// Every other consumer — [`media_path`], the URL builders, the `sqlx` bind, a
+    /// reference comparison — wants the stored bytes and gets them from the ADR-0063
+    /// trailer (`Display`, `Deref<str>`, `AsRef<str>`) with no call. That asymmetry is
+    /// deliberate: a missed decode here is cosmetic, whereas a missed *encode* on a path
+    /// would be a 404 or, with a name collision, the wrong file. The fragile direction is
+    /// the one that must not need remembering.
+    ///
+    /// Returns [`Cow`] so the common nothing-to-decode case allocates nothing.
+    ///
+    /// Decoding is **lossy**, and cannot lose anything: a `Filename`'s escapes were
+    /// produced by encoding valid UTF-8, and a lone invalid byte such as `%FF` cannot be
+    /// stored — it fails the canonicity check, since decoding it yields U+FFFD, which
+    /// re-encodes to `%EF%BF%BD` and so differs from the input. The substitution arm is
+    /// therefore unreachable on a value of this type.
+    #[must_use]
+    pub fn decoded(&self) -> Cow<'_, str> {
+        percent_decode_str(&self.0).decode_utf8_lossy()
     }
 }
 
@@ -1121,6 +1145,34 @@ mod tests {
         let f: Filename = "a.txt".parse().unwrap();
         assert_eq!(f.to_string(), "a.txt");
         assert_eq!(&f[..1], "a"); // Deref<Target = str>
+    }
+
+    // --- Filename: the display view (#720) ---
+
+    #[test]
+    fn decoded_is_identity_for_a_name_with_nothing_encoded() {
+        let f = Filename::sanitized("photo.jpg").expect("valid leaf");
+        assert_eq!(f.decoded(), "photo.jpg");
+    }
+
+    #[test]
+    fn decoded_borrows_when_there_is_nothing_to_decode() {
+        let f = Filename::sanitized("photo.jpg").expect("valid leaf");
+        assert!(matches!(f.decoded(), std::borrow::Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn decoded_undoes_percent_escapes() {
+        // Constructed through `FromStr` so this states the intended post-#720
+        // relationship directly, independent of what `sanitized` currently stores.
+        let f: Filename = "my%20photo.jpg".parse().expect("a safe leaf today");
+        assert_eq!(f.decoded(), "my photo.jpg");
+    }
+
+    #[test]
+    fn decoded_recovers_a_literal_percent() {
+        let f: Filename = "50%25.jpg".parse().expect("a safe leaf today");
+        assert_eq!(f.decoded(), "50%.jpg");
     }
 
     // --- Filename: Door B (normalizing producer) ---

@@ -134,7 +134,7 @@ pin. Task 4 changes what it observes without changing its signature.
 
 - Produces: `pub fn Filename::decoded(&self) -> std::borrow::Cow<'_, str>`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `common/src/media.rs`'s `#[cfg(test)] mod tests`:
 
@@ -166,12 +166,16 @@ fn decoded_recovers_a_literal_percent() {
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run: `devtool run -- cargo nextest run -p common decoded` Expected: FAIL — no
 method named `decoded` found for struct `Filename`
 
-- [ ] **Step 3: Implement against the tests**
+Observed:
+`error[E0599]: no method named 'decoded' found for struct 'media::Filename'`,
+×4.
+
+- [x] **Step 3: Implement against the tests**
 
 Add to the `impl Filename` block, to signature
 `pub fn decoded(&self) -> std::borrow::Cow<'_, str>`. Body is
@@ -184,12 +188,14 @@ escapes were produced by encoding valid UTF-8, and a lone invalid byte such as
 `%FF` fails the canonicity check (`decode` yields U+FFFD, which re-encodes to
 `%EF%BF%BD` ≠ `%FF`) — so the lossy substitution is unreachable on a `Filename`.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Run: `devtool run -- cargo nextest run -p common decoded` Expected: PASS (4
 tests)
 
-- [ ] **Step 5: Commit**
+Observed: `4 tests run: 4 passed, 428 skipped`. Full `cargo xtask check` green.
+
+- [x] **Step 5: Commit**
 
 ```bash
 devtool run -- cargo xtask check
@@ -676,8 +682,6 @@ because it is a lookup key (D7); display surfaces decode it.
 `rg -n 'encoded_len\(&|parse_filename\(|\.filename, "' common/src server/src server/tests`
 and confirm every hit is either in this list or provably unaffected. A raw-name
 assertion that survives to Task 5 is a red gate at the wrong commit.
-
-- [ ] **Step 5: Run the tests, verify they pass**
 
 - [ ] **Step 5: Add the two missing AtomPub round-trip tests (AC8)**
 
