@@ -258,9 +258,14 @@ fn resolve_media_path(
     // Built via `media_path` — the single definition of the layout — rather than
     // re-joining the segments here. The write path (`storage::MediaManager::upload`) uses
     // it too, so the two cannot disagree; a hand-rolled read path would miss the file
-    // whenever the name needs percent-encoding, because axum has already *decoded* the
-    // incoming segment and `media_path` is what re-encodes it. The re-encode looks
-    // redundant and is not (#675).
+    // whenever the name needs percent-encoding.
+    //
+    // The re-encode still happens and is still not redundant (#675), but since #720 it
+    // lives in `ProfferedFilename`'s door, not here: axum has already *decoded* the
+    // incoming segment, that door re-encodes it to recover the stored spelling, and
+    // `media_path` then merely interpolates a value that already is the path segment.
+    // Deleting that door — or "simplifying" it to `Filename` — breaks serving for every
+    // name needing encoding, and axum offers no un-decoded extractor to avoid it with.
     //
     // The parsed values are used, not the raw `params.*`: `p1`/`p2` are re-derived from
     // the validated hash, having already been checked against it in

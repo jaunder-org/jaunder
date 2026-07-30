@@ -12,30 +12,35 @@
 //! hex digest — a two-level fan-out that keeps any single directory small.
 //! `source` distinguishes provenance (e.g. `upload` vs a remote cache).
 //!
-//! The `<filename>` segment is **percent-encoded** ([`MEDIA_SEGMENT_ENCODE_SET`]), so the URL path
-//! and the on-disk path are byte-identical: paste the tail of a serve URL and you have the
-//! path to the file. Both come from [`media_path`], which is the only place the layout is
-//! spelled — so a new consumer must call it rather than re-deriving, or the two spellings
-//! drift apart (#675).
+//! The `<filename>` segment is **percent-encoded**, so the URL path and the on-disk path are
+//! byte-identical: paste the tail of a serve URL and you have the path to the file. Both come
+//! from [`media_path`], which is the only place the layout is spelled — so a new consumer must
+//! call it rather than re-deriving, or the two spellings drift apart (#675).
 //!
-//! The database `filename` column keeps the **raw** name — it is the display name shown in
-//! the media list — so DB → disk is a derivation, while URL → disk is identity.
+//! Since #720 that encoding is not something [`media_path`] *does* — a [`Filename`] already
+//! **is** the canonical encoded segment. The database column, the on-disk name and the URL all
+//! hold the same bytes, and display is the one place anything is transformed
+//! ([`Filename::decoded`]).
 //!
-//! Encoding is not cosmetic. A `Filename` may legally contain a space (which
+//! Encoding is not cosmetic. The name a user types may legally contain a space (which
 //! [`crate::root_relative_url::RootRelativeUrl`] rejects) or a `?`/`#` (which it *accepts*,
 //! silently truncating the path at the delimiter and addressing a different file).
 //!
-//! The three spellings of a filename (raw in the database, encoded on disk and in URLs) and
-//! why they are what they are: `docs/adr/0080-media-path-naming-correspondence.md`.
+//! One canonical spelling plus a decoded display view, and why:
+//! `docs/adr/0080-media-path-naming-correspondence.md` (as amended by
+//! `docs/adr/drafts/media-filename-encoded-canonical.md`).
 //!
 //! # Untrusted input
 //!
 //! Filenames and hashes round-trip through URLs, so they are attacker-
 //! influenced. [`sanitize_filename`] reduces a name to a single safe path
 //! component; [`Filename`] is the newtype that holds such a value — its
-//! validating [`FromStr`] admits only an already-safe leaf, and its
-//! [`sanitized`][Filename::sanitized] door normalizes an arbitrary name into one —
-//! so an un-sanitized filename is unrepresentable past the boundary. An externally
+//! validating [`FromStr`] admits only a **canonically encoded** value whose
+//! *decoded* form is a safe leaf, and its [`sanitized`][Filename::sanitized] door
+//! normalizes an arbitrary name into one — so an un-sanitized filename is
+//! unrepresentable past the boundary. A third door, [`ProfferedFilename`], takes the
+//! decoded segment axum hands the three routes that carry a filename in their path,
+//! and re-encodes it to recover the stored spelling. An externally
 //! supplied hash must be parsed into a [`ContentHash`]
 //! (via [`is_valid_content_hash`], its `FromStr`'s validating engine) before it
 //! reaches [`media_path`]: the type is what guarantees the `sha256[..2]`/`[2..4]`
@@ -127,33 +132,48 @@ impl ContentHash {
     }
 }
 
-/// A validated media filename: a single safe path leaf — the canonical form
-/// produced by [`sanitize_filename`] (no path components, no `.`/`..`, no `\0`,
-/// non-empty). The newtype makes an un-sanitized filename unrepresentable where a
-/// filename is expected: the value feeds a filesystem path and a
-/// `Content-Disposition` header, so an un-sanitized one is a path-traversal /
-/// header-injection hazard (ADR-0063 §1: invariant + trust/safety boundary).
+/// A media filename in its **canonical spelling**: the percent-encoded safe leaf that is
+/// simultaneously the database value, the on-disk name, and the URL segment — one value, no
+/// derivation between them (#720). [`decoded`][Filename::decoded] is the display view.
 ///
-/// It is also bounded: no `Filename` can exist whose percent-encoded form exceeds
-/// [`MAX_FILENAME_ENCODED_BYTES`], so a value that passes validation can always be written
-/// to disk. The bound is on the *encoded* length because that is what the filesystem sees
-/// (#708) — a 90-character name of non-ASCII characters does not fit.
+/// The newtype makes an un-sanitized filename unrepresentable where a filename is expected:
+/// the value feeds a filesystem path and a `Content-Disposition` header, so an un-sanitized
+/// one is a path-traversal / header-injection hazard (ADR-0063 §1: invariant + trust/safety
+/// boundary).
 ///
-/// Two construction doors, mirroring [`ContentHash`]'s `FromStr` + `from_digest`. They differ
-/// on length deliberately, matching their roles:
-/// - [`FromStr`] **validates** — it accepts a string iff it is already a canonical
-///   leaf (`sanitize_filename(s) == s`, non-empty) **and within budget**, *rejecting* a
-///   non-canonical or over-long name rather than normalizing it. This is the door for
-///   untrusted URL / wire / DB values that must match a stored filename exactly, so silently
-///   shortening one would match the wrong file; `#[derive(StrNewtype)]` routes `Deserialize`
-///   through it, so both failures are rejected on the wire.
-/// - [`sanitized`][Filename::sanitized] **normalizes** — the upload-intake door,
-///   where a client's arbitrary name is meant to be reduced to a safe leaf. It
-///   **truncates** an over-long name (keeping the extension) instead of failing, so an
-///   upload is never lost for a cosmetic reason.
+/// It is also bounded by [`MAX_FILENAME_ENCODED_BYTES`], so a value that passes validation
+/// can always be written to disk. Because the stored value already *is* the encoded form,
+/// that bound is a plain byte length — the encode-set coupling #708 recorded now lives only
+/// in [`sanitized`][Filename::sanitized]'s intake budget.
+///
+/// Three construction doors:
+/// - [`FromStr`] **validates** the canonical spelling — the door for untrusted URL / wire /
+///   DB values that must match a stored filename exactly. It accepts `s` only when, **in
+///   this order**: `s` is non-empty and neither `.` nor `..`; `sanitize_filename` fixes the
+///   *decoded* form; `s` equals the encoder's output for that form; and `s.len()` is within
+///   budget. `#[derive(StrNewtype)]` routes both `Deserialize` and the `sqlx` `Decode`
+///   through it, so every wire value and every column read passes here.
+///
+///   Two subtleties, each load-bearing. The safe-leaf oracle runs on `decode(s)`, **never**
+///   on `s`: `sanitize_filename("a%2Fb.jpg")` is `"a%2Fb.jpg"`, so checking the encoded form
+///   passes vacuously and would admit a separator or a NUL. And the leaf check precedes the
+///   canonicity check because a value like `a/b.txt` fails both — the caller needs to hear
+///   about the leaf.
+///
+///   It *rejects* rather than truncating: a silently shortened value would match the wrong
+///   file, or nothing (#708).
+/// - [`sanitized`][Filename::sanitized] **normalizes** — the upload-intake door, where a
+///   client's arbitrary name is reduced to a safe leaf and then encoded. It **truncates** an
+///   over-long name (keeping the extension) instead of failing, so an upload is never lost
+///   for a cosmetic reason. This is the one intricate step in the whole arrangement;
+///   everything else is dumb by design.
+/// - [`ProfferedFilename`] **re-encodes** — the inbound door for the three route segments
+///   axum has already percent-decoded. It exists because encoding is not idempotent, so one
+///   `FromStr` cannot serve both a decoded and an already-canonical input.
 ///
 /// Their contract: `sanitized`'s output always satisfies `FromStr`, pinned by
-/// `sanitized_output_always_reparses_as_filename`.
+/// `sanitized_output_always_reparses_as_filename`; and `ProfferedFilename`'s does too, which
+/// is what makes `From<ProfferedFilename> for Filename` total.
 ///
 /// The rest of the ADR-0063 string-newtype trailer (`Display`, `AsRef<str>`,
 /// `Borrow<str>`, `Deref<Target = str>`, owned `String` conversions,

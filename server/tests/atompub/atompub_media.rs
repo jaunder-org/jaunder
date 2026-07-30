@@ -406,9 +406,14 @@ async fn member_forbids_other_user(backend: Backend, #[case] method: &str) {
 }
 
 // A malformed `{sha}` or `{filename}` segment on the authenticated member routes is
-// rejected by the typed `Path<(Username, ContentHash, Filename)>` extractor as a
+// rejected by the typed `Path<(Username, ContentHash, ProfferedFilename)>` extractor as a
 // pre-handler 400 (the URL is one we minted, so a bad segment is the caller's fault) —
 // distinct from a well-formed-but-absent resource, which is 404 above.
+//
+// This test is unchanged by #720, and deliberately so: `ProfferedFilename` runs the
+// safe-leaf oracle on the decoded segment *before* re-encoding, so `a\b.png` is still
+// rejected at the door. Had the oracle been dropped or moved after the encode, this would
+// have quietly become a 404 lookup miss instead.
 #[apply(backends)]
 #[tokio::test]
 async fn member_rejects_malformed_segment_returns_400(#[case] backend: Backend) {
@@ -426,7 +431,7 @@ async fn member_rejects_malformed_segment_returns_400(#[case] backend: Backend) 
     assert_eq!(bad_hash.status(), StatusCode::BAD_REQUEST);
 
     // Non-canonical filename segment (`a%5Cb.png` decodes to `a\b.png`, not a safe leaf)
-    // → Filename parse fails → 400.
+    // → ProfferedFilename parse fails → 400.
     let bad_name = app
         .oneshot(atompub_get(
             &session,

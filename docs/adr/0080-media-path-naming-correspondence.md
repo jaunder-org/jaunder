@@ -56,8 +56,18 @@ definition of the layout.**
   exactly that reason. This is the one place a filename becomes a path segment
   outside `media_path`, and it is typed `RootRelativeUrl` too, so the two cannot
   drift in kind.
+  - **Amended by `docs/adr/drafts/media-filename-encoded-canonical.md` (#720):**
+    a `Filename` now _is_ the canonical percent-encoded segment, so neither site
+    encodes — both interpolate — and `encode_filename_segment` is deleted,
+    returning the encode set to a private const with no public escape hatch.
 - **The database `filename` column keeps the raw name.** It is the display name
   shown in the media list and returned as `UploadResponse.filename`.
+  - **Reversed by `docs/adr/drafts/media-filename-encoded-canonical.md`
+    (#720).** The column now holds the **encoded** form, byte-identical to the
+    on-disk name and the URL segment; display surfaces decode. The motivating
+    reason is #711's post→media reference table, whose comparison against names
+    extracted from rendered HTML becomes byte equality instead of a transform at
+    a comparison point.
 - `media_url` returns `RootRelativeUrl` **infallibly**. Every segment is a hex
   digest, a bounded enum token, or percent-encoded, so the parse cannot fail;
   the `unreachable!` arm follows `AbsoluteUrl::compose`. **No trusted-minting
@@ -75,6 +85,14 @@ them:
 | URL (serve + AtomPub) | encoded  | must be a well-formed URL reference             |
 
 **URL → disk is identity. DB → disk requires encoding.**
+
+**Superseded by `docs/adr/drafts/media-filename-encoded-canonical.md` (#720):**
+there is now **one** spelling — database, disk and URL are byte-identical — plus
+a decoded _view_ for display. The remaining derivations are the display decode
+(cosmetic if missed) and a re-encode at the three inbound URL doors, where axum
+has already percent-decoded the segment. That re-encode is dumb and its only
+failure is a 404: percent-encoding under a fixed set is injective, so a
+mis-encoded lookup can miss but can never resolve to a _different_ file.
 
 ## Consequences
 
@@ -102,6 +120,12 @@ business.
   holds the raw name and `media_path` re-encodes it to recover the stored
   spelling. It reads like something to simplify away, and doing so breaks
   serving for any name needing encoding.
+  - **Relocated by `docs/adr/drafts/media-filename-encoded-canonical.md`
+    (#720):** the re-encode still exists and is still not redundant, but it now
+    lives in `ProfferedFilename`'s door rather than in `media_path`, which only
+    interpolates. There is no un-decoded extractor to avoid it with —
+    `RawPathParams` is "raw" only in the sense of _undeserialized_; its values
+    are `PercentDecodedStr` too.
 - **The effective filename-length ceiling is lower, so `Filename` is now bounded
   by its encoded length.** Encoding expands a name up to 3× (9× for multi-byte
   UTF-8), so a name that validated could exceed the 255-byte per-component
@@ -109,9 +133,28 @@ business.
   error. Resolved in [#708](https://github.com/jaunder-org/jaunder/issues/708):
   - The bound is on the **encoded** form (`MAX_FILENAME_ENCODED_BYTES`), not a
     character count — a char count cannot express this limit, since a safe one
-    would be ~28 characters. This makes `Filename`'s invariant depend on the
-    encode set above: **widening that set shrinks the set of representable
-    names, so the two must be revisited together.**
+    would be ~28 characters.
+  - **Narrowed by `docs/adr/drafts/media-filename-encoded-canonical.md`
+    (#720).** This note used to say the bound makes `Filename`'s _invariant_
+    depend on the encode set. That is no longer true: the stored value already
+    **is** the encoded form, so the type's own bound is a plain `len() <= 255`
+    with no encode-set reference.
+
+    The coupling itself survives, relocated to the **intake budget**. Intake
+    still runs `sanitize → truncate → encode`, with `truncate_to_budget` walking
+    raw graphemes and measuring each by its encoded cost — truncating in encoded
+    space would mean never splitting a `%XX` escape, never splitting the escape
+    run of one multi-byte character (`ä` is `%C3%A4`; a cut after `%C3` decodes
+    to invalid UTF-8), and still never splitting a grapheme cluster, which is
+    strictly harder for no gain. So **widening the encode set still shrinks the
+    set of typed names that survive intake intact, and the two must still be
+    revisited together** — it is now a property of `Filename::sanitized`, not of
+    the type's invariant.
+
+    Strict canonicity does put a new encode-set reference into `FromStr`, but it
+    is a better dependency: about _which spelling is canonical_, not _how much
+    fits_.
+
   - It is enforced in `Filename`'s own doors, which is the _earliest_ point in
     the upload pipeline — a name's length is known before the stream opens,
     unlike a file's size.
@@ -128,6 +171,12 @@ business.
 - Backup/restore is unaffected: it mirrors the media tree by directory
   traversal, never reconstructing names from the database, so it carries
   whatever names exist.
+  - Since #720 the `filename` **column** has an invariant a backup could
+    violate, and restore does not check it — it binds every cell as text, never
+    constructing the newtype, so a bad value surfaces later as a `Decode` error
+    on read rather than at the restore boundary. Tracked as
+    [#725](https://github.com/jaunder-org/jaunder/issues/725); the gap is
+    generic to every typed column, not specific to media.
 - This was adopted with **no legacy data**. Had there been stored media,
   changing the on-disk spelling would have required a migration, and changing
   the AtomPub member URL would have changed existing entries' `atom:id`.
