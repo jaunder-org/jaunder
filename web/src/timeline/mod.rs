@@ -14,7 +14,7 @@
 
 pub(crate) mod render;
 mod state;
-pub use state::{LoadStatus, TimelineCursor, TimelineState};
+pub use state::{LoadStatus, NoIdentity, TimelineCursor, TimelinePaint, TimelineState};
 
 #[cfg(target_arch = "wasm32")]
 mod component;

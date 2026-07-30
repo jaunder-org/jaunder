@@ -717,7 +717,7 @@ git commit -m "refactor(timeline): complete the host-tested TimelineState machin
   `TimelineState::paint(&self, context: Option<TagCtx>) -> WebResult<TimelinePaint>`.
   All three re-exported ungated from `timeline/mod.rs`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 One case per row of spec §3's 7-row table, plus `shows_chrome` per variant, plus
 the derive-exercise A3 requires so `NoIdentity`'s `#[derive]` is not an
@@ -846,7 +846,7 @@ fn timeline_paint_is_debug_printable() {
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 ```
 cargo nextest run -p web timeline::state
@@ -855,7 +855,7 @@ cargo nextest run -p web timeline::state
 Expected: FAIL — `TimelinePaint`, `NoIdentity`, `paint`, `shows_chrome`
 undefined.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 Add the two enums with the derives from spec §3 (`TimelinePaint`:
 `Clone, Debug, PartialEq, Eq`; `NoIdentity`:
@@ -865,7 +865,7 @@ the tests determine the bodies. Add `use crate::taglist::TagCtx;` to
 `state.rs`'s **production** imports (the test block above imports it too).
 Export all three from `timeline/mod.rs`'s ungated `pub use state::{…}`.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 ```
 cargo nextest run -p web timeline::state
