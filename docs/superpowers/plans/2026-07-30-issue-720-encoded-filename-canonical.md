@@ -335,7 +335,7 @@ receive a **decoded** path segment; it exists because encoding is not
 idempotent, so one `FromStr` cannot serve both a decoded and an already-encoded
 input; and it carries a deliberately minimal trailer per D4a, with the reasons.
 
-- [ ] **Step 4: Rewire the three doors**
+- [x] **Step 4: Rewire the three doors**
 
 `server/src/media.rs:67` — `pub filename: SoftPath<ProfferedFilename>,`. In
 `validate_serve_params` (`:229-233`), convert on the way out:
@@ -413,7 +413,7 @@ red.
   signature changes — `media_path`, `media_url`, `Filename::sanitized`, and
   `FromStr` keep their current shapes.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `common/src/media.rs`'s test module:
 
@@ -528,7 +528,7 @@ The existing contract test `sanitized_output_always_reparses_as_filename`
 (`:1319+`) stays and is now the load-bearing pin that `sanitized`'s encoded
 output satisfies the tightened `FromStr`.
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run: `devtool run -- cargo nextest run -p common media` Expected: FAIL —
 `sanitized_stores_the_encoded_form` (gets `my photo.jpg`),
@@ -537,7 +537,7 @@ Run: `devtool run -- cargo nextest run -p common media` Expected: FAIL —
 `media_path_interpolates_without_encoding` (double-encodes), and both round-trip
 tests.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 `InvalidFilename` — add a third variant `NotCanonical` (spec D3), message along
 the lines of "filename must be percent-encoded in canonical form (this is the
@@ -592,7 +592,7 @@ encode set; the _intake budget_ does. `InvalidFilename::TooLong`'s message stays
 as-is: it is still reporting an encoded length, and the explanation is still the
 reason a short-looking name is rejected.
 
-- [ ] **Step 4: Repair the eleven existing tests the flip invalidates**
+- [x] **Step 4: Repair the eleven existing tests the flip invalidates**
 
 This is the largest part of the task and the easiest to under-scope. Three of
 these need their **meaning** re-decided, not just a literal updated. Work the
@@ -693,7 +693,7 @@ because it is a lookup key (D7); display surfaces decode it.
 and confirm every hit is either in this list or provably unaffected. A raw-name
 assertion that survives to Task 5 is a red gate at the wrong commit.
 
-- [ ] **Step 5: Add the two missing AtomPub round-trip tests (AC8)**
+- [x] **Step 5: Add the two missing AtomPub round-trip tests (AC8)**
 
 The serve route's encoding round-trip is covered by
 `server/tests/web/web_media.rs:301 upload_then_serve_round_trips_a_filename_needing_encoding`,
@@ -737,7 +737,7 @@ async fn an_over_long_segment_does_not_truncate_onto_a_stored_name(#[case] backe
 }
 ```
 
-- [ ] **Step 6: Run the tests, verify they pass**
+- [x] **Step 6: Run the tests, verify they pass**
 
 Run: `devtool run -- cargo nextest run -p common media` Expected: PASS
 
@@ -748,7 +748,7 @@ both new member round-trips
 Run: `devtool run -- cargo xtask e2e-local media.spec.ts` Expected: PASS —
 including "a filename needing percent-encoding uploads and serves"
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 devtool run -- cargo xtask check
@@ -777,7 +777,7 @@ cosmetic surface decode (D6), and splits the one binding that serves two roles.
 - Consumes: `Filename::decoded()` (Task 2).
 - Produces: no new API.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `server/src/media.rs` in-file tests — AC12, both header parameters as exact
 strings:
@@ -842,7 +842,7 @@ test("a name needing percent-encoding deletes from the media library", async ({
 Both build on the existing upload flow in that file (the `my holiday photo.jpg`
 fixture at `:36-65`), so they need no new harness.
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run: `devtool pg run -- cargo nextest run -p jaunder media` Expected: FAIL —
 `content_disposition` receives the encoded name, so `filename=` shows
@@ -852,7 +852,7 @@ the rendered row shows the encoded name as its link text.
 Run: `devtool run -- cargo nextest run -p common atompub` Expected: FAIL —
 `<title>my%20photo.jpg</title>`
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 `web/src/media/component.rs:289` — split into two bindings:
 
@@ -884,7 +884,7 @@ the detect branch; changed anyway so the two callers cannot drift.)
 the `MediaLinkEntry.title` doc comment says the value is canonical and the
 renderer decodes.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Run: `devtool pg run -- cargo nextest run -p jaunder media` Expected: PASS
 
@@ -892,7 +892,7 @@ Run: `devtool run -- cargo nextest run -p common atompub` Expected: PASS
 
 Run: `devtool run -- cargo xtask e2e-local media.spec.ts` Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 devtool run -- cargo xtask check
@@ -921,7 +921,7 @@ would be undecidable.
   and `pub fn run(result: &mut CommandResult)`, matching
   `proffered_secret_check`'s shape.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `xtask/src/steps/proffered_filename_check.rs`'s `#[cfg(test)] mod tests`,
 mirroring `proffered_secret_check`'s fixture style:
@@ -1009,13 +1009,13 @@ fn the_owner_file_is_exempt() {
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run:
 `devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml proffered_filename`
 Expected: FAIL — no such module
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 **Duplicate `proffered_secret_check`'s `type_index` whole-word helper into this
 file with a pointer comment naming the original — do not extract it.**
@@ -1041,20 +1041,20 @@ Module doc must state the bare-versus-wrapped rationale and carry the same
 accepted per-line-matching limitation note `proffered_secret_check:86-89`
 carries.
 
-- [ ] **Step 4: Register the step**
+- [x] **Step 4: Register the step**
 
 `xtask/src/lib.rs:31` — `pub mod proffered_filename_check;` `:343` and `:380` —
 `steps::proffered_filename_check::run(&mut result);` immediately after each
 `proffered_secret_check::run` call, so it runs in both the `check` and
 `validate` ladders.
 
-- [ ] **Step 5: Run the tests, verify they pass**
+- [x] **Step 5: Run the tests, verify they pass**
 
 Run:
 `devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml proffered_filename`
 Expected: PASS (8 tests)
 
-- [ ] **Step 6: Prove it bites on the real tree**
+- [x] **Step 6: Prove it bites on the real tree**
 
 Temporarily add **both** lines to `web/src/media/api.rs`:
 
@@ -1071,7 +1071,7 @@ to pass for entirely the wrong reason. Run
 (the `use` line must **not** be reported). Revert both lines and confirm `check`
 goes green again. Do not commit the temporary edit.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 devtool run -- cargo xtask check
@@ -1102,7 +1102,7 @@ at `docs/adr/drafts/media-filename-encoded-canonical.md` and is numbered by
 
 **Interfaces:** none.
 
-- [ ] **Step 1: Narrow ADR-0080**
+- [x] **Step 1: Narrow ADR-0080**
 
 `:59-60` — replace "The database `filename` column keeps the raw name" with a
 pointer: this was reversed by
@@ -1142,7 +1142,7 @@ still revisited together.
 Add a line noting that restore does not validate typed columns, citing `#725`
 from Task 1.
 
-- [ ] **Step 2: Refresh `common/src/media.rs`'s module doc**
+- [x] **Step 2: Refresh `common/src/media.rs`'s module doc**
 
 `:21-22` — the column holds the **encoded** name, identical to the on-disk name
 and the URL segment; the media list decodes for display.
@@ -1170,7 +1170,7 @@ and for the reason in spec D3; `sanitized` normalizes, truncates, then encodes;
 and `ProfferedFilename` is the third door, for URL segments axum has decoded.
 Keep the two `compile_fail` doctests at `:163-169` — they still hold.
 
-- [ ] **Step 3: Rewrite the serve route's re-encode comment**
+- [x] **Step 3: Rewrite the serve route's re-encode comment**
 
 `server/src/media.rs:243-248` currently explains that `media_path` re-encodes
 what axum decoded. After Task 4 that is `ProfferedFilename`'s job and
@@ -1185,7 +1185,7 @@ whose comments name `Filename` as the member routes' extractor type. The
 _assertions_ are correct and stay untouched (AC9); only the prose naming the
 type is stale after Task 3.
 
-- [ ] **Step 4: Verify the docs gates**
+- [x] **Step 4: Verify the docs gates**
 
 Run: `devtool run -- cargo xtask check --no-test` Expected: PASS —
 `adr-readme-parity` and `doc_links` both green. Do **not** hand-edit
@@ -1195,7 +1195,7 @@ Note: the pre-commit hook runs `prettier -w` on prose, which restages. Run
 `prettier -w docs/adr/0080-media-path-naming-correspondence.md` before staging
 so the formatting lands in this commit.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 devtool run -- cargo xtask check
@@ -1204,6 +1204,41 @@ git commit -m "docs(media): narrow ADR-0080's coupling note for the encoded colu
 ```
 
 ---
+
+## Execution notes — what the tree taught us
+
+Three things the plan got wrong, found by running it. Recorded because each was
+a _correction to an approved document_, not a detail:
+
+1. **CRLF is not rejected, and never was.** The spec listed `a%0D%0Ab.jpg` among
+   the canonical-but-unsafe values the relocated oracle catches. It does not:
+   `sanitize_filename` normalizes backslashes, strips components and maps NUL,
+   but has never touched CR/LF. So `a\r\nb.jpg` was an acceptable raw name
+   before this change and `a%0D%0Ab.jpg` is an acceptable encoded one after it —
+   the relocation neither widens nor narrows the oracle. No live hazard follows
+   (`content_disposition` strips control characters from its fallback and
+   percent-encodes `filename*=`; CR/LF are legal XML). Pinned as
+   `from_str_accepts_a_canonical_name_carrying_control_characters` so it reads
+   as decided rather than missed; tightening it would change which uploads are
+   accepted, which is a separate decision.
+
+2. **`Content-Disposition`'s `filename*=` is `my%20photo%2Ejpg`, not
+   `my%20photo.jpg`.** AC12 assumed the media encode set; RFC 5987 uses the
+   **bare** `NON_ALPHANUMERIC` set, which encodes `.` too. The code was right —
+   this is exactly ADR-0080's "the bare set is correct there, wrong here" — and
+   the exact string is now pinned so the two cannot be swapped.
+
+3. **The gate's first real run failed on a multi-line `use`.**
+   `server/src/media.rs:17` is a continuation line of a braced import, starting
+   with neither `use ` nor `//`, so a prefix-only rule reported it. Import
+   tracking became a state machine, with fixtures for both the wrapped-import
+   shape and the case where a braced import must not swallow a later leak. The
+   gate proving itself wrong before it proved itself right is the outcome "prove
+   it bites" is for.
+
+Also: Task 4's inventory found **six** `encoded_len(&f)` truncation assertions,
+not the three the cold review reported — the review understated it, and the
+completeness-check grep in Step 4 is what closed the gap.
 
 ## Self-review
 
