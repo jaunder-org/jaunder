@@ -81,7 +81,7 @@ async fn session_api_route_returns_ok(#[case] backend: Backend) {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(<web::auth::Session as ServerFn>::PATH)
+                .uri(<web::auth::GetSession as ServerFn>::PATH)
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header(
                     "traceparent",
@@ -106,8 +106,8 @@ async fn multi_segment_server_fn_route_is_reachable(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     ensure_server_fns_registered();
     let app = jaunder::create_router(state, noop_mailer(), true, tmp_storage_path());
-    let path = <web::auth::Session as ServerFn>::PATH;
-    assert_eq!(path, "/api/auth/session", "the #684 scheme under test");
+    let path = <web::auth::GetSession as ServerFn>::PATH;
+    assert_eq!(path, "/api/auth/get_session", "the #684 scheme under test");
     let response = app
         .oneshot(
             Request::builder()

@@ -13,10 +13,10 @@ use {
     storage::SiteConfigStorage,
 };
 
-#[server(endpoint = "/backup/warning_visible")]
-#[tracing::instrument(name = "web.backup.warning_visible")]
-pub async fn warning_visible() -> WebResult<bool> {
-    boundary!("warning_visible", {
+#[server(endpoint = "/backup/is_warning_visible")]
+#[tracing::instrument(name = "web.backup.is_warning_visible")]
+pub async fn is_warning_visible() -> WebResult<bool> {
+    boundary!("is_warning_visible", {
         if !is_operator_soft().await? {
             return Ok(false);
         }

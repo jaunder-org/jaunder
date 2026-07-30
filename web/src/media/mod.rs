@@ -18,7 +18,7 @@ mod component;
 pub use format::format_bytes;
 
 pub use api::{
-    delete, list_mine, upload, usage, Delete, DeleteResult, Item, ListMine, Upload, Usage,
+    delete, get_usage, list_mine, upload, Delete, DeleteResult, GetUsage, Item, ListMine, Upload,
     UsageData,
 };
 

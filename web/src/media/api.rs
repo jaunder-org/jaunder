@@ -49,7 +49,7 @@ pub struct Item {
     pub created_at: UtcInstant,
 }
 
-/// Storage usage returned by [`usage`].
+/// Storage usage returned by [`get_usage`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UsageData {
     pub used_bytes: ByteSize,
@@ -104,10 +104,10 @@ pub async fn list_mine(
 }
 
 /// Returns storage usage for the authenticated user.
-#[server(endpoint = "/media/usage")]
-#[tracing::instrument(name = "web.media.usage")]
-pub async fn usage() -> WebResult<UsageData> {
-    boundary!("usage", {
+#[server(endpoint = "/media/get_usage")]
+#[tracing::instrument(name = "web.media.get_usage")]
+pub async fn get_usage() -> WebResult<UsageData> {
+    boundary!("get_usage", {
         let auth = require_auth().await?;
         let media = expect_context::<Arc<dyn MediaStorage>>();
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();

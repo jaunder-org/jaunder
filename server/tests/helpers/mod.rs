@@ -31,8 +31,8 @@ pub use websub_capturing::CapturingWebSubClient;
 pub fn ensure_server_fns_registered() {
     static ONCE: OnceLock<()> = OnceLock::new();
     ONCE.get_or_init(|| {
-        server_fn::axum::register_explicit::<web::auth::Session>();
-        server_fn::axum::register_explicit::<web::backup::WarningVisible>();
+        server_fn::axum::register_explicit::<web::auth::GetSession>();
+        server_fn::axum::register_explicit::<web::backup::IsWarningVisible>();
         server_fn::axum::register_explicit::<web::backup::GetSettings>();
         server_fn::axum::register_explicit::<web::backup::UpdateSettings>();
         server_fn::axum::register_explicit::<web::registration::GetPolicy>();
@@ -65,13 +65,13 @@ pub fn ensure_server_fns_registered() {
         server_fn::axum::register_explicit::<web::posts::ListByUserAndTag>();
         server_fn::axum::register_explicit::<web::posts::Delete>();
         server_fn::axum::register_explicit::<web::posts::Unpublish>();
-        server_fn::axum::register_explicit::<web::posts::DefaultAudienceSelection>();
-        server_fn::axum::register_explicit::<web::posts::AudienceSelection>();
+        server_fn::axum::register_explicit::<web::posts::GetDefaultAudienceSelection>();
+        server_fn::axum::register_explicit::<web::posts::GetAudienceSelection>();
         server_fn::axum::register_explicit::<web::site::GetIdentity>();
         server_fn::axum::register_explicit::<web::site::UpdateIdentity>();
-        server_fn::axum::register_explicit::<web::site::BaseUrlWarningVisible>();
+        server_fn::axum::register_explicit::<web::site::IsBaseUrlWarningVisible>();
         server_fn::axum::register_explicit::<web::media::ListMine>();
-        server_fn::axum::register_explicit::<web::media::Usage>();
+        server_fn::axum::register_explicit::<web::media::GetUsage>();
         server_fn::axum::register_explicit::<web::media::Delete>();
         server_fn::axum::register_explicit::<web::media::Upload>();
         server_fn::axum::register_explicit::<web::tags::List>();

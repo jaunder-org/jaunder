@@ -125,8 +125,8 @@ DB, so a hand-edited marker only reveals a link that rejects on use.
 **Decision 3's reconcile is lifted to one app-level context.** The per-component
 `current_user()` fetches (sidebar, cockpit, create-post, subscribe-button) and
 the reactive `current_user_is_operator()` are retired in favour of a single
-`session()` `#[server]` fn returning `Option<SessionUser>`, exposed through a
-shared `SessionContext` provided in `AppShell`: a marker-seeded
+`get_session()` `#[server]` fn returning `Option<SessionUser>`, exposed through
+a shared `SessionContext` provided in `AppShell`: a marker-seeded
 `RwSignal<Option<SessionUser>>` plus a per-navigation reconcile `Resource` that
 confirms the marker against the live session and rewrites both the signal and
 the marker. Components read the context (synchronous seed for chrome; awaited

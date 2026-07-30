@@ -265,7 +265,7 @@ async fn backup_warning_visible_for_operator_without_destination(#[case] backend
 
     let (status, body) = post_form(
         &state,
-        <web::backup::WarningVisible as ServerFn>::PATH,
+        <web::backup::IsWarningVisible as ServerFn>::PATH,
         "",
         Some(&cookie),
     )
@@ -288,7 +288,7 @@ async fn backup_warning_hidden_when_destination_configured(#[case] backend: Back
 
     let (status, body) = post_form(
         &state,
-        <web::backup::WarningVisible as ServerFn>::PATH,
+        <web::backup::IsWarningVisible as ServerFn>::PATH,
         "",
         Some(&cookie),
     )
@@ -316,7 +316,7 @@ async fn backup_warning_visible_when_configured_schedule_is_invalid(#[case] back
 
     let (status, body) = post_form(
         &state,
-        <web::backup::WarningVisible as ServerFn>::PATH,
+        <web::backup::IsWarningVisible as ServerFn>::PATH,
         "",
         Some(&cookie),
     )
@@ -335,7 +335,7 @@ async fn backup_warning_hidden_for_non_operator(#[case] backend: Backend) {
 
     let (status, body) = post_form(
         &state,
-        <web::backup::WarningVisible as ServerFn>::PATH,
+        <web::backup::IsWarningVisible as ServerFn>::PATH,
         "",
         Some(&cookie),
     )
@@ -352,7 +352,7 @@ async fn backup_warning_hidden_without_authentication(#[case] backend: Backend) 
 
     let (status, body) = post_form(
         &state,
-        <web::backup::WarningVisible as ServerFn>::PATH,
+        <web::backup::IsWarningVisible as ServerFn>::PATH,
         "",
         None,
     )
@@ -438,7 +438,7 @@ async fn backup_warning_visible_propagates_storage_error_during_auth(#[case] bac
 
     let (status, _body) = post_form(
         &state,
-        <web::backup::WarningVisible as ServerFn>::PATH,
+        <web::backup::IsWarningVisible as ServerFn>::PATH,
         "",
         Some(&cookie),
     )
@@ -461,7 +461,7 @@ async fn session_reports_username_and_operator(#[case] backend: Backend) {
 
     let (status, body) = post_form(
         &state,
-        <web::auth::Session as ServerFn>::PATH,
+        <web::auth::GetSession as ServerFn>::PATH,
         "",
         Some(&operator_cookie),
     )
@@ -475,7 +475,7 @@ async fn session_reports_username_and_operator(#[case] backend: Backend) {
 
     let (status, body) = post_form(
         &state,
-        <web::auth::Session as ServerFn>::PATH,
+        <web::auth::GetSession as ServerFn>::PATH,
         "",
         Some(&member_cookie),
     )
@@ -487,7 +487,8 @@ async fn session_reports_username_and_operator(#[case] backend: Backend) {
     );
     assert!(body.contains(r#""is_operator":false"#), "body: {body}");
 
-    let (status, body) = post_form(&state, <web::auth::Session as ServerFn>::PATH, "", None).await;
+    let (status, body) =
+        post_form(&state, <web::auth::GetSession as ServerFn>::PATH, "", None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert_eq!(body.trim(), "null"); // Ok(None) serializes to JSON null
 }
@@ -504,7 +505,7 @@ async fn session_propagates_storage_error_during_auth(#[case] backend: Backend) 
 
     let (status, _body) = post_form(
         &state,
-        <web::auth::Session as ServerFn>::PATH,
+        <web::auth::GetSession as ServerFn>::PATH,
         "",
         Some(&cookie),
     )

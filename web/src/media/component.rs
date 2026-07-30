@@ -9,7 +9,7 @@ use leptos::prelude::*;
 use common::pagination::{PageOffset, PageSize};
 use common::root_relative_url::RootRelativeUrl;
 
-use super::{format_bytes, list_mine, upload, usage, Delete, DeleteResult, Item};
+use super::{format_bytes, get_usage, list_mine, upload, Delete, DeleteResult, Item};
 use crate::error::WebError;
 use crate::topbar::Topbar;
 
@@ -140,7 +140,7 @@ pub fn MediaPage() -> impl IntoView {
 
     let usage = Resource::new(
         move || (delete_action.version().get(), upload_version.get()),
-        |_: (usize, u32)| usage(),
+        |_: (usize, u32)| get_usage(),
     );
 
     let media_list = Resource::new(

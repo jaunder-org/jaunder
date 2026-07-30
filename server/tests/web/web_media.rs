@@ -34,7 +34,7 @@ async fn media_usage_returns_defaults_for_authenticated_user(#[case] backend: Ba
 
     let (status, body) = post_form(
         &state,
-        <web::media::Usage as ServerFn>::PATH,
+        <web::media::GetUsage as ServerFn>::PATH,
         "",
         Some(&cookie),
     )
@@ -53,7 +53,7 @@ async fn media_usage_returns_defaults_for_authenticated_user(#[case] backend: Ba
 // way (Leptos server fn → INTERNAL_SERVER_ERROR + "unauthorized"); only the
 // endpoint and request body vary.
 #[apply(backends_matrix)]
-#[case::media_usage(<web::media::Usage as ServerFn>::PATH, "")]
+#[case::media_usage(<web::media::GetUsage as ServerFn>::PATH, "")]
 #[case::list_my_media(<web::media::ListMine as ServerFn>::PATH, "")]
 #[case::delete_media(<web::media::Delete as ServerFn>::PATH, "sha256=deadbeef00000000000000000000000000000000000000000000000000000000&filename=test.png&source=upload")]
 #[tokio::test]

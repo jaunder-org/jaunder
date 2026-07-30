@@ -243,7 +243,7 @@ async fn base_url_warning_visible_for_operator_when_unset(#[case] backend: Backe
     let cookie = create_operator_and_session(&state).await.cookie();
     let (status, body) = post_form(
         &state,
-        <web::site::BaseUrlWarningVisible as ServerFn>::PATH,
+        <web::site::IsBaseUrlWarningVisible as ServerFn>::PATH,
         "",
         Some(&cookie),
     )
@@ -267,7 +267,7 @@ async fn base_url_warning_hidden_when_base_url_configured(#[case] backend: Backe
     assert_eq!(up, StatusCode::OK, "body: {up_body}");
     let (status, body) = post_form(
         &state,
-        <web::site::BaseUrlWarningVisible as ServerFn>::PATH,
+        <web::site::IsBaseUrlWarningVisible as ServerFn>::PATH,
         "",
         Some(&cookie),
     )
@@ -283,7 +283,7 @@ async fn base_url_warning_hidden_for_non_operator(#[case] backend: Backend) {
     let cookie = create_user_and_session(&state).await.cookie();
     let (status, body) = post_form(
         &state,
-        <web::site::BaseUrlWarningVisible as ServerFn>::PATH,
+        <web::site::IsBaseUrlWarningVisible as ServerFn>::PATH,
         "",
         Some(&cookie),
     )
@@ -298,7 +298,7 @@ async fn base_url_warning_hidden_without_authentication(#[case] backend: Backend
     let TestEnv { state, base: _base } = backend.setup().await;
     let (status, body) = post_form(
         &state,
-        <web::site::BaseUrlWarningVisible as ServerFn>::PATH,
+        <web::site::IsBaseUrlWarningVisible as ServerFn>::PATH,
         "",
         None,
     )
@@ -319,7 +319,7 @@ async fn base_url_warning_propagates_storage_error_during_auth(#[case] backend: 
     base.close_pool().await;
     let (status, _body) = post_form(
         &state,
-        <web::site::BaseUrlWarningVisible as ServerFn>::PATH,
+        <web::site::IsBaseUrlWarningVisible as ServerFn>::PATH,
         "",
         Some(&cookie),
     )

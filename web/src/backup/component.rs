@@ -1,4 +1,4 @@
-use crate::backup::{get_settings, warning_visible, UpdateSettings};
+use crate::backup::{get_settings, is_warning_visible, UpdateSettings};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::topbar::Topbar;
@@ -180,7 +180,7 @@ fn backup_settings_form(
 
 #[component]
 pub fn BackupBanner() -> impl IntoView {
-    let visible = Resource::new(|| (), |()| warning_visible());
+    let visible = Resource::new(|| (), |()| is_warning_visible());
     view! {
         <crate::banner::WarnBanner
             visible=visible

@@ -2565,7 +2565,7 @@ async fn default_audience_selection_returns_public_by_default(#[case] backend: B
 
     let (status, body) = post_json(
         &state,
-        <web::posts::DefaultAudienceSelection as ServerFn>::PATH,
+        <web::posts::GetDefaultAudienceSelection as ServerFn>::PATH,
         serde_json::json!({}),
         Some(&cookie),
     )
@@ -2584,7 +2584,7 @@ async fn default_audience_selection_rejects_unauthenticated(#[case] backend: Bac
 
     let (status, body) = post_json(
         &state,
-        <web::posts::DefaultAudienceSelection as ServerFn>::PATH,
+        <web::posts::GetDefaultAudienceSelection as ServerFn>::PATH,
         serde_json::json!({}),
         None,
     )
@@ -2607,7 +2607,7 @@ async fn post_audience_selection_returns_public_for_new_post(#[case] backend: Ba
 
     let (status, body) = post_form(
         &state,
-        <web::posts::AudienceSelection as ServerFn>::PATH,
+        <web::posts::GetAudienceSelection as ServerFn>::PATH,
         format!("post_id={}", created.post_id),
         Some(&cookie),
     )
@@ -2628,7 +2628,7 @@ async fn post_audience_selection_rejects_missing_post(#[case] backend: Backend) 
 
     let (status, body) = post_form(
         &state,
-        <web::posts::AudienceSelection as ServerFn>::PATH,
+        <web::posts::GetAudienceSelection as ServerFn>::PATH,
         "post_id=99999".to_string(),
         Some(&cookie),
     )
@@ -2660,7 +2660,7 @@ async fn post_audience_selection_rejects_non_owner(#[case] backend: Backend) {
     // A different user must not learn another author's targeting.
     let (status, body) = post_form(
         &state,
-        <web::posts::AudienceSelection as ServerFn>::PATH,
+        <web::posts::GetAudienceSelection as ServerFn>::PATH,
         format!("post_id={}", created.post_id),
         Some(&other_cookie),
     )

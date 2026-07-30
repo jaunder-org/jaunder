@@ -98,7 +98,7 @@ The check is therefore **narrowed to per-vertical**, not deleted (D2).
 | D1  | The registrar gate matches on **`(vertical, leaf)`**, where vertical is the first path segment under `web/src`.                                                                                                                             | The source module path is not usable: every vertical declares `mod api;` **privately** and re-exports explicitly, so `web::posts::api::CreatePost` is not a nameable path. `(vertical, leaf)` is a directory lookup needing no name resolution, and it is already the shape of all 55 registrar entries.                                                                                                                                                                                                                                                                                                                         |
 | D2  | The duplicate-leaf hard-fail is **narrowed to per-vertical**, not deleted.                                                                                                                                                                  | `(vertical, leaf)` dissolves the _cross_-vertical collisions that blocked the rename, but does **not** make the within-vertical check redundant — the compiler does not catch that case (see above). Narrowing also closes a residual hole: `list_mine` and `listMine` are distinct idents that both PascalCase to `ListMine`, so they produce _different_ endpoints and would slip past the endpoint gate; a per-vertical leaf check catches them.                                                                                                                                                                              |
 | D3  | `pub use listing::*;` (`web/src/posts/api.rs:16`) needs **no resolution**.                                                                                                                                                                  | `posts/api.rs` and `posts/api/listing.rs` share the vertical `posts`. The re-export problem ADR-0066 cited as the blocker for path matching is not in the way.                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| D4  | Idents drop the vertical's own noun; where a bare strip **misreads**, the name is rephrased.                                                                                                                                                | `posts::list_user_posts` → `list_user` reads as _listing users_. The goal is that `<vertical>::<ident>` reads as the operation, which a backwards name fails just as `create_post` does. Two fns are affected.                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| D4  | Idents drop the vertical's own noun; where a bare strip **misreads**, the name is rephrased. **Every ident is verb-led**: getters take `get_`, boolean predicates take `is_`.                                                               | `posts::list_user_posts` → `list_user` reads as _listing users_. The goal is that `<vertical>::<ident>` reads as the operation, which a backwards name fails just as `create_post` does. Two fns are affected by the rephrase. The verb clause is not a new convention — 49 of the 55 idents were already verb-led, and `subscriptions::is_subscribed` already set the predicate form; it states the rule so the six exceptions stop being exceptions. See D12.                                                                                                                                                                  |
 | D5  | Endpoints are re-namespaced to **`/api/<vertical>/<ident>`**.                                                                                                                                                                               | Restores the ident↔endpoint correspondence the rename would otherwise break, and makes the wire mirror the module tree. Verified dispatchable.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | D6  | `server/tests/**` stops hardcoding endpoint strings and names **`<web::…::Type as ServerFn>::PATH`**.                                                                                                                                       | `server`'s tests already link `web` and already name those exact types in the registrar. Kills the drift class permanently and makes D5 a leaf change for 228 Rust literals.                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | D7  | A **new sibling gate** `server-fn-endpoint` owns the endpoint rule, with the `Mode::Fix`/`Mode::Check` split.                                                                                                                               | `endpoint` becomes a derived literal in exactly the sense `name` is. Auto-fix means the 55 endpoint rewrites are generated, not typed, so they cannot be typo'd on a wire format.                                                                                                                                                                                                                                                                                                                                                                                                                                                |
@@ -107,10 +107,60 @@ The check is therefore **narrowed to per-vertical**, not deleted (D2).
 | D10 | **Diff discipline.** Comments and doc comments are edited **only** where the rename makes them factually incorrect (a stale ident, a stale URL, a stale claim). No opportunistic rewording, no reflowing, no "while I'm here" improvements. | The diff is already large (228 + 55 + 42 + 12 sites). Every non-essential comment edit is noise a reviewer must read and dismiss. Keeping the diff mechanical is what keeps it reviewable.                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | D11 | The **`boundary!("…")` label** is renamed along with its fn — a _third_ derived literal, alongside the span name and the endpoint.                                                                                                          | Every `#[server]` body wraps itself in `boundary!("<fn ident>", { … })`; `web/src/lib.rs:15-19` forwards the string to `error::server_boundary(server_fn: &'static str, …)` (`web/src/error.rs:115-127`), which emits it as the ADR-0011 structured-log/metric field naming the **failing server fn**. Unlike the other two it is enforced by **nothing** — not the compiler (an opaque `&'static str`), not a gate, not a test. Leaving the 42 labels stale would attribute failures to fns that no longer exist, silently. A gate for it is out of scope (#714), so the rename is hand-done and verified by an explicit sweep. |
 
-### Rename table — fns (42 renamed, 13 unchanged)
+### D12 — the six verb-normalizing renames
+
+Amended after implementation, on review of the `AudienceSelection` name
+collision.
+
+The `#[server]` macro generates one struct per fn, named `PascalCase(fn ident)`
+(`server_fn_macro-0.8.10/src/lib.rs:394-435`), holding the fn's parameters. It
+is `pub`, so it occupies the vertical's namespace whether or not anyone wants it
+to. That is why `posts::audience_selection` — whose generated struct holds only
+`post_id` and is a _request for_ a selection, not a selection — squatted on the
+name of the domain type `common::visibility::AudienceSelection`, forcing an
+import alias.
+
+Aliasing a domain type to make room for an RPC struct is the wrong trade when we
+own both names, and the more fundamental type in `common` has the better claim.
+Since the struct name is derived, the fn is what changes. Applying D4's verb
+clause resolves it as a rule rather than an exception, and closes the other five
+gaps at the same time:
+
+| Vertical | Old                          | New                              | Why       |
+| -------- | ---------------------------- | -------------------------------- | --------- |
+| auth     | `session`                    | `get_session`                    | getter    |
+| media    | `usage`                      | `get_usage`                      | getter    |
+| posts    | `audience_selection`         | `get_audience_selection`         | getter    |
+| posts    | `default_audience_selection` | `get_default_audience_selection` | getter    |
+| backup   | `warning_visible`            | `is_warning_visible`             | `-> bool` |
+| site     | `base_url_warning_visible`   | `is_base_url_warning_visible`    | `-> bool` |
+
+`session`, `default_audience_selection` and `base_url_warning_visible` were in
+the untouched-13 — they carry no vertical noun, so D4's original clause left
+them alone. The verb clause is what reaches them, and taking them now is far
+cheaper than a follow-up: every one would otherwise re-traverse idents →
+registrar leaves → endpoints → span names → `boundary!` labels → e2e → docs for
+a second time.
+
+Consequence: `GetAudienceSelection` no longer collides, so the
+`DomainAudienceSelection` alias is deleted and
+`common::visibility::AudienceSelection` is imported plainly again.
+
+### Rename table — fns (45 renamed, 10 unchanged)
 
 Independently recomputed and confirmed: zero per-vertical leaf collisions, zero
 endpoint collisions, zero collisions with existing public items.
+
+The table below is the original 42 noun-strips; D12 adds three more (`session`,
+`default_audience_selection`, `base_url_warning_visible` were untouched by the
+noun rule) and re-renames three the table already lists (`usage`,
+`audience_selection`, `warning_visible`) — hence 45 renamed, 10 unchanged, still
+55 total.
+
+The ten unchanged are `login`, `logout`, `register`, `list_local_timeline`,
+`list_home_feed`, `list_drafts`, `list_my_subscribers`, `create_app_password`,
+`get_default_post_format`, `set_default_post_format` — all already verb-led and
+carrying no vertical noun.
 
 | Vertical       | Rename                                                                                                                                                                                                                                                                                                                                                           | Unchanged (no vertical noun)                                                         |
 | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |

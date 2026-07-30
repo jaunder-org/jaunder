@@ -5,7 +5,8 @@ mod api;
 mod component;
 
 pub use api::{
-    get_settings, update_settings, warning_visible, GetSettings, UpdateSettings, WarningVisible,
+    get_settings, is_warning_visible, update_settings, GetSettings, IsWarningVisible,
+    UpdateSettings,
 };
 #[cfg(target_arch = "wasm32")]
 pub use component::{BackupBanner, BackupSettingsPage};

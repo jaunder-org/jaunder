@@ -45,13 +45,13 @@ pub async fn update_identity(title: SiteTitle, base_url: Option<AbsoluteUrl>) ->
 
 /// Whether to show the "site base URL not configured" warning banner (#575): `true`
 /// only for an operator when `SiteIdentity.base_url` is `None`. Like
-/// `backup::warning_visible`, this is a **soft** check — a non-operator or
+/// `backup::is_warning_visible`, this is a **soft** check — a non-operator or
 /// unauthenticated caller yields `Ok(false)` (banner hidden), never an error — so the
 /// banner degrades to absent rather than surfacing a failure in the chrome.
-#[server(endpoint = "/site/base_url_warning_visible")]
-#[tracing::instrument(name = "web.site.base_url_warning_visible")]
-pub async fn base_url_warning_visible() -> WebResult<bool> {
-    boundary!("base_url_warning_visible", {
+#[server(endpoint = "/site/is_base_url_warning_visible")]
+#[tracing::instrument(name = "web.site.is_base_url_warning_visible")]
+pub async fn is_base_url_warning_visible() -> WebResult<bool> {
+    boundary!("is_base_url_warning_visible", {
         if !is_operator_soft().await? {
             return Ok(false);
         }

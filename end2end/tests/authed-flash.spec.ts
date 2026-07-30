@@ -98,7 +98,7 @@ test("anonymous: / has no authed sidebar chrome", async ({ page }) => {
 });
 
 // #591: operator status now rides in the auth marker, so operator chrome is seeded
-// flash-free on boot (not awaited from a server fetch). Proof: fail the `session()`
+// flash-free on boot (not awaited from a server fetch). Proof: fail the `get_session()`
 // reconcile so no server confirmation can arrive — the operator admin nav must still
 // paint, sourced from the marker seed alone.
 test("operator: admin chrome is seeded flash-free from the marker", async ({
@@ -107,8 +107,8 @@ test("operator: admin chrome is seeded flash-free from the marker", async ({
   // Log in as the seeded operator; this writes the marker with is_operator:true.
   await login(page, "testoperator", "testpassword123");
 
-  // With session() failing, the operator admin nav can only come from the marker.
-  await failServerFn(page, "auth/session");
+  // With get_session() failing, the operator admin nav can only come from the marker.
+  await failServerFn(page, "auth/get_session");
   await goto(page, "/");
 
   await expect(

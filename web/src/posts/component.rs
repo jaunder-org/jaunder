@@ -26,7 +26,7 @@ use crate::media::MediaUpload;
 // `super::Update` at its use sites; `Get` is not needed in this file at all, and
 // is named here only so a future author does not add it to the list.
 use crate::posts::{
-    audience_selection, default_audience_selection, draft_row_display, get, get_preview,
+    draft_row_display, get, get_audience_selection, get_default_audience_selection, get_preview,
     list_by_tag, list_by_user, list_by_user_and_tag, list_drafts, parse_permalink_params, Create,
     CreateArgs, CreateResult, Delete, DraftRowDisplay, DraftSummary, Publish, PublishResult,
     Unpublish, UpdateArgs, UpdateResult,
@@ -481,7 +481,7 @@ pub fn PostCreateForm(
         base: AudienceBase::Public,
         named: Vec::new(),
     });
-    let default_audience = Resource::new(|| (), |()| default_audience_selection());
+    let default_audience = Resource::new(|| (), |()| get_default_audience_selection());
     // The site-wide default audience resolves asynchronously; the composer must
     // render immediately (no Suspense), so seed the editable `audience` signal
     // once the Resource resolves, over the Public placeholder above. The author
@@ -1215,7 +1215,7 @@ pub fn EditPostPage() -> impl IntoView {
     // inside the macro.
     let current_audience = Resource::new(post_id_param, |maybe_id| async move {
         match maybe_id {
-            Some(id) => audience_selection(id).await,
+            Some(id) => get_audience_selection(id).await,
             None => Err(WebError::not_found("Post")),
         }
     });

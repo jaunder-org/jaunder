@@ -27,12 +27,8 @@ use common::{
     tag::TagLabel,
     time::{PermalinkDate, UtcInstant},
     username::Username,
+    visibility::AudienceSelection,
 };
-
-// Aliased, not imported under its own name: the `audience_selection` server fn's
-// generated struct is also `AudienceSelection`, so an unaliased import would
-// collide with it in this module.
-use common::visibility::AudienceSelection as DomainAudienceSelection;
 
 use common::seed::PostResponse;
 
@@ -137,7 +133,7 @@ pub struct CreateArgs {
     pub publish_at: Option<UtcInstant>,
     pub tags: Option<Vec<TagLabel>>,
     pub summary: Option<PostSummary>,
-    pub audience: Option<DomainAudienceSelection>,
+    pub audience: Option<AudienceSelection>,
 }
 
 /// Bundled arguments for [`update`]. Like [`CreateArgs`] with a leading
@@ -152,7 +148,7 @@ pub struct UpdateArgs {
     pub publish_at: Option<UtcInstant>,
     pub tags: Option<Vec<TagLabel>>,
     pub summary: Option<PostSummary>,
-    pub audience: Option<DomainAudienceSelection>,
+    pub audience: Option<AudienceSelection>,
 }
 
 /// Creates a post for the authenticated user.
@@ -402,10 +398,10 @@ pub async fn update(args: UpdateArgs) -> WebResult<UpdateResult> {
 
 /// Returns the audience-picker selection for a new post: the site-wide
 /// default audience. Used to initialize the editor on the create page.
-#[server(endpoint = "/posts/default_audience_selection")]
-#[tracing::instrument(name = "web.posts.default_audience_selection")]
-pub async fn default_audience_selection() -> WebResult<DomainAudienceSelection> {
-    boundary!("default_audience_selection", {
+#[server(endpoint = "/posts/get_default_audience_selection")]
+#[tracing::instrument(name = "web.posts.get_default_audience_selection")]
+pub async fn get_default_audience_selection() -> WebResult<AudienceSelection> {
+    boundary!("get_default_audience_selection", {
         let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
         require_auth().await?;
         let default = site_config.get_default_audience().await?;
@@ -417,10 +413,10 @@ pub async fn default_audience_selection() -> WebResult<DomainAudienceSelection> 
 
 /// Returns the audience-picker selection for an existing post (its current
 /// targeting). Owner-only. Used to pre-select the editor on the edit page.
-#[server(endpoint = "/posts/audience_selection")]
-#[tracing::instrument(name = "web.posts.audience_selection")]
-pub async fn audience_selection(post_id: PostId) -> WebResult<DomainAudienceSelection> {
-    boundary!("audience_selection", {
+#[server(endpoint = "/posts/get_audience_selection")]
+#[tracing::instrument(name = "web.posts.get_audience_selection")]
+pub async fn get_audience_selection(post_id: PostId) -> WebResult<AudienceSelection> {
+    boundary!("get_audience_selection", {
         let posts = expect_context::<Arc<dyn PostStorage>>();
         let auth = require_auth()
             .await
