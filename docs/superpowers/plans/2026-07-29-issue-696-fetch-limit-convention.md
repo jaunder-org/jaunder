@@ -136,24 +136,44 @@ result is `2..=51`. It constructs `RowLimit` via the tuple field rather than
 `TryFrom` because a `const fn` cannot `?`, and the bound is proven by
 `PageSize`'s own range — note that in a comment so it does not read as a bypass.
 
-- [ ] Add `RowLimit` + `at_most`, and the three `PageSize` accessors
-- [ ] Export `RowLimit` from `common::pagination`; add
+- [x] Add `RowLimit` + `at_most`, and the three `PageSize` accessors
+- [x] Export `RowLimit` from `common::pagination`; add
       `common::test_support::parse_row_limit` mirroring `parse_page_size`
 
 **Four tests, written RED first** (the items do not exist yet):
 
-- [ ] `row_limit_surface` — `FromStr` / serde / `TryFrom` round-trip via
+- [x] `row_limit_surface` — `FromStr` / serde / `TryFrom` round-trip via
       `parse_row_limit`; `"0"` and `"-1"` both rejected
-- [ ] `at_most_saturates_below_one` — `at_most(0).value() == 1`,
+- [x] `at_most_saturates_below_one` — `at_most(0).value() == 1`,
       `at_most(-5).value() == 1`, `at_most(100).value() == 100`
-- [ ] `fetch_limit_is_page_plus_one` — for `PageSize`'s min (1) and max/default
+- [x] `fetch_limit_is_page_plus_one` — for `PageSize`'s min (1) and max/default
       (50): `fetch_limit().value() == page_len() as i64 + 1`
-- [ ] `has_more_is_the_inverse_of_fetch_limit` — for each of those sizes, a row
+- [x] `has_more_is_the_inverse_of_fetch_limit` — for each of those sizes, a row
       count equal to `page_len()` is **not** more, and `fetch_limit()` rows
-      **is**. This is the test that pins the two halves together; it fails if
-      either drifts.
-- [ ] `cargo nextest run -p common pagination` → PASS
-- [ ] `cargo xtask check` → green; commit
+      **is**.
+- [x] `cargo nextest run -p common pagination` → PASS (6/6)
+- [x] `cargo xtask check` → green; commit
+
+**Correction — the coupling needed a fourth assertion the plan did not
+anticipate.** As first written, `has_more_is_the_inverse_of_fetch_limit` did
+**not** pin the `+1`: mutating `fetch_limit` to `+2` left it green (only
+`fetch_limit_is_page_plus_one` caught that), because `has_more(page)` is false
+and `has_more(page + n)` is true for every `n >= 1`. Verified by mutation, not
+reasoning.
+
+What actually couples the halves is that `fetch_limit` is the **smallest** count
+proving a next page, so the test now also asserts `!has_more(fetch_limit - 1)`.
+With that, the `+2` mutation fails **both** tests. Re-verified in both
+directions:
+
+| Mutation                  | Caught by                                               |
+| ------------------------- | ------------------------------------------------------- |
+| `fetch_limit` `+1` → `+2` | `fetch_limit_is_page_plus_one` **and** the inverse test |
+| `has_more` `>` → `>=`     | the inverse test                                        |
+
+Lesson for the remaining tasks: an assertion that a threshold behaves correctly
+_above and below itself_ does not pin _where_ the threshold is. #709's audit of
+vacuous assertions is the same failure mode in a different crate.
 
 **Done when:** the `+1` and its inverse exist exactly once each, adjacently,
 with a test that fails if they disagree.
