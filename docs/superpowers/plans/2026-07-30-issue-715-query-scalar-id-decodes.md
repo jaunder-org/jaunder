@@ -90,7 +90,7 @@ seam (#716's class, spec D9).
 
 ## Task 1 — Five self-contained `query_scalar` id sites
 
-- [ ] Done
+- [x] Done
 
 **Files**
 

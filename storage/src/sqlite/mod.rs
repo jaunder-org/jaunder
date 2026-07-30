@@ -233,7 +233,7 @@ impl AtomicOps for SqliteAtomicOps {
                 .await
                 .map_err(|e| RegisterWithInviteError::Internal(sqlx::Error::Io(e)))?;
 
-            let insert = sqlx::query_scalar::<_, i64>(
+            let insert = sqlx::query_scalar::<_, UserId>(
                 "INSERT INTO users (username, password_hash, display_name, created_at, is_operator)
                  VALUES ($1, $2, $3, $4, $5)
                  RETURNING user_id",
@@ -247,7 +247,7 @@ impl AtomicOps for SqliteAtomicOps {
             .await;
 
             let user_id = match insert {
-                Ok(id) => UserId::from(id),
+                Ok(id) => id,
                 Err(sqlx::Error::Database(error)) if error.is_unique_violation() => {
                     return Err(RegisterWithInviteError::UsernameTaken);
                 }

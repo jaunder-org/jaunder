@@ -822,13 +822,16 @@ impl<DB> PostStorage for PostStore<DB>
 where
     DB: PostDialect,
     PostRow: for<'r> sqlx::FromRow<'r, DB::Row>,
-    (i64,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (PostId,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (bool,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (PostId, TagId, Tag, TagLabel): for<'r> sqlx::FromRow<'r, DB::Row>,
     (TagId, Tag): for<'r> sqlx::FromRow<'r, DB::Row>,
     (String, Option<i64>): for<'r> sqlx::FromRow<'r, DB::Row>,
     (DateTime<Utc>,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (String, DateTime<Utc>): for<'r> sqlx::FromRow<'r, DB::Row>,
+    // Not residue: the ADR-0071 bridge *delegates* to `i64`, so `i64: Encode`/`Type` is
+    // what makes every id newtype bind on a generic backend. Removing it breaks the
+    // typed binds, not just the untyped ones.
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<&'q str>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -905,14 +908,14 @@ where
         user_id: UserId,
         key: &str,
     ) -> Result<Option<PostId>, sqlx::Error> {
-        let post_id = sqlx::query_scalar::<_, i64>(
+        let post_id = sqlx::query_scalar::<_, PostId>(
             "SELECT post_id FROM idempotency_keys WHERE user_id = $1 AND key = $2",
         )
         .bind(user_id)
         .bind(key)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(post_id.map(PostId::from))
+        Ok(post_id)
     }
 
     #[tracing::instrument(
@@ -1908,13 +1911,13 @@ where
     // (delegates to `String`) on the create paths, mirroring the
     // `Option<&PostTitle>` bound above.
     for<'q> Option<&'q PostSummary>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    (i64,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (PostId,): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     let now = Utc::now();
 
-    let post_id = sqlx::query_scalar::<_, i64>(
+    let post_id = sqlx::query_scalar::<_, PostId>(
         "INSERT INTO posts (user_id, title, slug, body, format, rendered_html, created_at, updated_at, published_at, summary)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          RETURNING post_id",
@@ -1940,7 +1943,6 @@ where
         sqlx::Error::Database(db) if db.is_unique_violation() => CreatePostError::SlugConflict,
         e => CreatePostError::Internal(e),
     })?;
-    let post_id = PostId::from(post_id);
 
     replace_post_audiences::<DB>(conn, post_id, &input.audiences).await?;
 
