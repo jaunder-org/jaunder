@@ -65,10 +65,19 @@ const TEST_TITLE_ATTR: &str = "e2e.test";
 pub struct Coverage {
     /// fn ident → the sorted, de-duplicated titles of the tests that drove it.
     pub covered: BTreeMap<String, BTreeSet<String>>,
-    /// fn ident → [`OrphanReason`] (rendered) → how many hits ended that way. Keyed
-    /// by reason rather than a bare total so the artifact says *why* attribution
-    /// stopped — see [`OrphanReason`].
-    pub orphans: BTreeMap<String, BTreeMap<String, usize>>,
+    /// fn ident → the distinct [`OrphanReason`]s (rendered) its unattributed hits
+    /// ended with. Reasons, not counts, and for two reasons.
+    ///
+    /// *Diagnosability:* "outside any test" and "attribution is broken" are the same
+    /// shape of result but opposite in meaning, so the artifact has to say which
+    /// (spec AC5).
+    ///
+    /// *Stability:* a **count** is proportional to how many tests ran — warmup
+    /// orphans twice per test — so it changes whenever anyone adds or removes an
+    /// e2e test anywhere in the suite. Since the snapshot is compared byte-for-byte,
+    /// counts would make this artifact churn on unrelated PRs and go spuriously red.
+    /// A reason set is a function of the code, which is what the gate is about.
+    pub orphans: BTreeMap<String, BTreeSet<String>>,
 }
 
 /// Every span name that could denote `f`, under any naming regime this repo has
@@ -228,12 +237,11 @@ pub fn extract(spans: &[Span], inventory: &[ServerFn]) -> Coverage {
                     .insert(title);
             }
             Err(reason) => {
-                *coverage
+                coverage
                     .orphans
                     .entry(f.ident.clone())
                     .or_default()
-                    .entry(reason.to_string())
-                    .or_default() += 1;
+                    .insert(reason.to_string());
             }
         }
     }
@@ -317,11 +325,12 @@ mod tests {
     fn unattributable_hit_lands_in_orphans_not_covered() {
         let c = extract(&sample_spans(), &sample_inventory());
         assert!(!c.covered.contains_key("register"));
-        // Bucketed by REASON, not a bare count — the whole point of AC5 is that a
-        // deliberate non-attribution and a broken chain must not look alike.
+        // Recorded by REASON, not as a bare count: AC5's point is that a deliberate
+        // non-attribution and a broken chain must not look alike. A count would also
+        // track how many tests ran, which would churn this byte-compared artifact.
         let reasons = c.orphans.get("register").expect("register is orphaned");
-        assert_eq!(reasons.values().sum::<usize>(), 1);
-        let reason = reasons.keys().next().expect("one reason");
+        let reason = reasons.iter().next().expect("one reason");
+        assert_eq!(reasons.len(), 1, "one distinct reason: {reasons:?}");
         assert!(
             reason.starts_with("unknown-parent:"),
             "the fixture's orphan has a parent absent from the capture: {reason}"

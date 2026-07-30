@@ -28,12 +28,16 @@ pub const REGENERATE_CMD: &str = "cargo xtask server-fn-coverage regenerate";
 pub struct Snapshot {
     /// fn ident → the tests that drove it, sorted.
     pub covered: BTreeMap<String, Vec<String>>,
-    /// fn ident → why-unattributed → hit count. Reported, not failed: a non-empty
-    /// bucket means the harness stopped attributing somewhere, which is worth
-    /// seeing — and the reason key is what makes it diagnosable rather than just
-    /// visible (spec AC5). See `OrphanReason`.
+    /// fn ident → the distinct reasons its unattributed hits ended with. Reported,
+    /// not failed: a non-empty bucket means the harness stopped attributing
+    /// somewhere, which is worth seeing — and the reason is what makes it
+    /// diagnosable rather than merely visible (spec AC5).
+    ///
+    /// Deliberately not counts: a count tracks how many tests ran, so it would make
+    /// this byte-compared artifact churn every time anyone adds an e2e test. See
+    /// `Coverage::orphans`.
     #[serde(default)]
-    pub orphans: BTreeMap<String, BTreeMap<String, usize>>,
+    pub orphans: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl From<Coverage> for Snapshot {

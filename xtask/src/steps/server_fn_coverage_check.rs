@@ -108,10 +108,10 @@ fn regenerate_or_verify(
     let covered = snapshot.covered.len();
 
     if regenerate {
-        let orphans: usize = snapshot.orphans.values().flat_map(|r| r.values()).sum();
+        let orphans = snapshot.orphans.len();
         write_snapshot(snapshot_path, &snapshot)?;
         return Ok(StepResult::ok(name).detail(format!(
-            "{covered} covered, {orphans} orphan hit(s) → {}",
+            "{covered} covered, {orphans} fn(s) with unattributed hits → {}",
             snapshot_path.display()
         )));
     }

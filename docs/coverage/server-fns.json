@@ -23,6 +23,7 @@
       "TagInput: invalid tag text shows an error",
       "TagInput: keyboard navigation selects autocomplete item",
       "a Unicode-titled post is reachable at its permalink",
+      "a filename needing percent-encoding uploads and serves",
       "admin site settings page loads and allows updating title and base_url",
       "an app password can be minted from the sessions page",
       "an emoji-only title falls back to the 'post' slug and is reachable",
@@ -133,6 +134,7 @@
       "TagInput: invalid tag text shows an error",
       "TagInput: keyboard navigation selects autocomplete item",
       "a Unicode-titled post is reachable at its permalink",
+      "a filename needing percent-encoding uploads and serves",
       "admin site settings page loads and allows updating title and base_url",
       "an app password can be minted from the sessions page",
       "an emoji-only title falls back to the 'post' slug and is reachable",
@@ -319,6 +321,7 @@
       "inline composer: published post appears in timeline without page reload",
       "over-long post summary shows an inline error and gates submit",
       "owner: /app cockpit boots straight into the personalized feed",
+      "owner: jaunder_home_redirect='app' makes the pre-paint script redirect / → /app",
       "published post renders at permalink",
       "scheduling a post shows a Scheduled-for badge on the drafts page",
       "unpublishing from a permalink navigates to /drafts without a full reload",
@@ -407,6 +410,7 @@
       "TagInput: invalid tag text shows an error",
       "TagInput: keyboard navigation selects autocomplete item",
       "a Unicode-titled post is reachable at its permalink",
+      "a filename needing percent-encoding uploads and serves",
       "an app password can be minted from the sessions page",
       "an emoji-only title falls back to the 'post' slug and is reachable",
       "authed owner: own-post action column is additive (no content shift)",
@@ -548,6 +552,7 @@
       "TagInput: invalid tag text shows an error",
       "TagInput: keyboard navigation selects autocomplete item",
       "a Unicode-titled post is reachable at its permalink",
+      "a filename needing percent-encoding uploads and serves",
       "admin site settings page loads and allows updating title and base_url",
       "an app password can be minted from the sessions page",
       "an emoji-only title falls back to the 'post' slug and is reachable",
@@ -775,6 +780,7 @@
       "TagInput: invalid tag text shows an error",
       "TagInput: keyboard navigation selects autocomplete item",
       "a Unicode-titled post is reachable at its permalink",
+      "a filename needing percent-encoding uploads and serves",
       "an app password can be minted from the sessions page",
       "an emoji-only title falls back to the 'post' slug and is reachable",
       "authed owner: own-post action column is additive (no content shift)",
@@ -876,6 +882,7 @@
       "TagInput: invalid tag text shows an error",
       "TagInput: keyboard navigation selects autocomplete item",
       "a Unicode-titled post is reachable at its permalink",
+      "a filename needing percent-encoding uploads and serves",
       "admin site settings page loads and allows updating title and base_url",
       "an app password can be minted from the sessions page",
       "an emoji-only title falls back to the 'post' slug and is reachable",
@@ -1006,6 +1013,7 @@
       "site base URL warning banner shows when unset and hides once configured"
     ],
     "upload_media": [
+      "a filename needing percent-encoding uploads and serves",
       "authenticated user can upload and access media",
       "unauthenticated upload is rejected",
       "upload widget on create-post page uploads file and shows URL",
@@ -1018,17 +1026,17 @@
     ]
   },
   "orphans": {
-    "backup_warning_visible": {
-      "unknown-parent:1111111111111111": 222
-    },
-    "base_url_warning_visible": {
-      "unknown-parent:1111111111111111": 222
-    },
-    "list_local_timeline": {
-      "unknown-parent:1111111111111111": 222
-    },
-    "session": {
-      "unknown-parent:1111111111111111": 222
-    }
+    "backup_warning_visible": [
+      "unknown-parent:1111111111111111"
+    ],
+    "base_url_warning_visible": [
+      "unknown-parent:1111111111111111"
+    ],
+    "list_local_timeline": [
+      "unknown-parent:1111111111111111"
+    ],
+    "session": [
+      "unknown-parent:1111111111111111"
+    ]
   }
 }

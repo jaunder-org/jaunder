@@ -144,21 +144,26 @@ inventory — an earlier version did, misread `upload_media`'s
 `#[server(input = MultipartFormData, endpoint = "/upload_media")]`, and silently
 dropped it while every test still passed.
 
-**The orphan bucket** records hits whose walk reached no test, keyed by **why**
-— `unknown-parent:<span id>`, `no-parent`, or `depth-exceeded` — rather than as
-a bare count. That distinction is the point: "outside any test" and "attribution
-is broken" are the same _shape_ of result but opposite in meaning, and a bucket
-that cannot tell them apart hides the very failure this gate exists to catch.
+**The orphan bucket** records, per fn, the distinct **reasons** its unattributed
+hits ended with — `unknown-parent:<span id>`, `no-parent`, or `depth-exceeded`.
+Two properties, both deliberate:
 
-It is reported, not failed. Expect the app-shell fns (`session`,
-`list_local_timeline`, and the two warning-visibility fns) at **twice per
-test**, all under `unknown-parent:` naming the run-wide traceparent's span id:
-that is the `_autoPerfSpan` warmup load — which applies the per-test traceparent
-only _after_ `warmupPageContext`, so warmup traffic stays out of attribution —
-counted twice because the warmup request span and the instrument span beneath it
-are two hits on the same unattributed chain. A different reason key, an
-unfamiliar parent id, or any other fn appearing means a context lost its
-traceparent or the capture is truncated.
+- **Reasons, because "outside any test" and "attribution is broken" are the same
+  _shape_ of result but opposite in meaning.** A bucket that cannot tell them
+  apart hides the very failure this gate exists to catch.
+- **Not counts, because a count tracks how many tests ran.** Warmup orphans
+  twice per test, so any PR adding or removing an e2e test anywhere would move
+  the numbers — and since the snapshot is compared byte-for-byte, that would
+  make this artifact a tax on unrelated work. A reason set is a function of the
+  code.
+
+It is reported, not failed. Expect exactly the app-shell fns (`session`,
+`list_local_timeline`, and the two warning-visibility fns), each carrying the
+single reason `unknown-parent:` naming the run-wide traceparent's span id: that
+is the `_autoPerfSpan` warmup load, which applies the per-test traceparent only
+_after_ `warmupPageContext`, so warmup traffic stays out of attribution by
+design. A different reason, an unfamiliar parent id, or any other fn appearing
+means a context lost its traceparent or the capture is truncated.
 
 ## Server-side scoped diagnostic log — look here first (#144)
 
