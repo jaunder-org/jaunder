@@ -18,7 +18,7 @@ use {
 ///
 /// Requires an authenticated local account (Layer A). Rejects a self-subscribe
 /// and an unknown author. Idempotent: subscribing twice is a no-op.
-#[server(endpoint = "/subscribe_to")]
+#[server(endpoint = "/subscriptions/subscribe")]
 #[tracing::instrument(name = "web.subscriptions.subscribe")]
 pub async fn subscribe(author_username: Username) -> WebResult<()> {
     boundary!("subscribe", {
@@ -37,7 +37,7 @@ pub async fn subscribe(author_username: Username) -> WebResult<()> {
 /// Unsubscribes the authenticated local user from `author_username`.
 ///
 /// Mirror of [`subscribe`]. A no-op if no subscription exists.
-#[server(endpoint = "/unsubscribe_from")]
+#[server(endpoint = "/subscriptions/unsubscribe")]
 #[tracing::instrument(name = "web.subscriptions.unsubscribe")]
 pub async fn unsubscribe(author_username: Username) -> WebResult<()> {
     boundary!("unsubscribe", {
@@ -58,7 +58,7 @@ pub async fn unsubscribe(author_username: Username) -> WebResult<()> {
 ///
 /// Returns `false` for an anonymous viewer or when viewing one's own profile
 /// (self-subscription is impossible), so the caller can hide the control.
-#[server(endpoint = "/is_subscribed_to")]
+#[server(endpoint = "/subscriptions/is_subscribed")]
 #[tracing::instrument(name = "web.subscriptions.is_subscribed")]
 pub async fn is_subscribed(author_username: Username) -> WebResult<bool> {
     boundary!("is_subscribed", {

@@ -37,7 +37,7 @@ pub struct LoginResponse {
 
 /// Authenticates a user.  Returns a [`LoginResponse`] (the freshly minted session
 /// [`RawToken`] + the viewer's operator flag) and sets the `session` cookie.
-#[server(endpoint = "/login")]
+#[server(endpoint = "/auth/login")]
 #[tracing::instrument(name = "web.auth.login", skip(password, label))]
 pub async fn login(
     username: Username,
@@ -110,7 +110,7 @@ pub async fn login(
 }
 
 /// Revokes the current session and clears the `session` cookie.
-#[server(endpoint = "/logout")]
+#[server(endpoint = "/auth/logout")]
 #[tracing::instrument(name = "web.auth.logout")]
 pub async fn logout() -> WebResult<()> {
     boundary!("logout", {
@@ -127,7 +127,7 @@ pub async fn logout() -> WebResult<()> {
 /// The viewer's session identity — username + operator flag — or `None` when
 /// anonymous/expired. The single reconcile fetch behind the shared session context
 /// (#591), superseding `current_user` + the reactive `current_user_is_operator`.
-#[server(endpoint = "/session")]
+#[server(endpoint = "/auth/session")]
 #[tracing::instrument(name = "web.auth.session")]
 pub async fn session() -> WebResult<Option<super::SessionUser>> {
     boundary!("session", {

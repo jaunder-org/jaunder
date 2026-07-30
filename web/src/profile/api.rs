@@ -38,7 +38,7 @@ pub struct Data {
 }
 
 /// Returns the authenticated user's profile.
-#[server(endpoint = "/get_profile")]
+#[server(endpoint = "/profile/get")]
 #[tracing::instrument(name = "web.profile.get")]
 pub async fn get() -> WebResult<Data> {
     boundary!("get", {
@@ -64,7 +64,7 @@ pub async fn get() -> WebResult<Data> {
 /// (ADR-0065): `None` clears (the field is omitted), `Some` is already
 /// trimmed/bounded. Both `Option`s model presence, so no `non_empty` shim is
 /// needed — an empty wire value is rejected at decode, clearing goes via omission.
-#[server(endpoint = "/update_profile")]
+#[server(endpoint = "/profile/update")]
 #[tracing::instrument(name = "web.profile.update", skip_all)]
 pub async fn update(display_name: Option<DisplayName>, bio: Option<Bio>) -> WebResult<()> {
     boundary!("update", {
@@ -84,7 +84,7 @@ pub async fn update(display_name: Option<DisplayName>, bio: Option<Bio>) -> WebR
 }
 
 /// Retrieves the authenticated user's default post format preference.
-#[server(endpoint = "/get_default_post_format")]
+#[server(endpoint = "/profile/get_default_post_format")]
 #[tracing::instrument(name = "web.profile.get_default_post_format")]
 pub async fn get_default_post_format() -> WebResult<PostFormat> {
     boundary!("get_default_post_format", {
@@ -96,7 +96,7 @@ pub async fn get_default_post_format() -> WebResult<PostFormat> {
 }
 
 /// Sets the authenticated user's default post format preference.
-#[server(endpoint = "/set_default_post_format")]
+#[server(endpoint = "/profile/set_default_post_format")]
 #[tracing::instrument(name = "web.profile.set_default_post_format")]
 pub async fn set_default_post_format(format: PostFormat) -> WebResult<()> {
     boundary!("set_default_post_format", {

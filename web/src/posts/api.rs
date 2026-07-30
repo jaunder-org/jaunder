@@ -162,7 +162,7 @@ pub struct UpdateArgs {
 /// RFC 3339 wire string; expressible in the `#[server]` signature on both the
 /// server and the wasm client). The browser converts the author's local
 /// `datetime-local` value to UTC before sending.
-#[server(endpoint = "/create_post", input = Json)]
+#[server(endpoint = "/posts/create", input = Json)]
 #[tracing::instrument(name = "web.posts.create", skip_all)]
 pub async fn create(args: CreateArgs) -> WebResult<CreateResult> {
     let CreateArgs {
@@ -245,7 +245,7 @@ pub async fn create(args: CreateArgs) -> WebResult<CreateResult> {
 }
 
 /// Retrieves a post by its permalink.
-#[server(endpoint = "/get_post")]
+#[server(endpoint = "/posts/get")]
 #[tracing::instrument(name = "web.posts.get")]
 pub async fn get(username: Username, date: PermalinkDate, slug: Slug) -> WebResult<PostResponse> {
     boundary!("get", {
@@ -282,7 +282,7 @@ pub async fn get(username: Username, date: PermalinkDate, slug: Slug) -> WebResu
 }
 
 /// Retrieves a draft preview for the authenticated author.
-#[server(endpoint = "/get_post_preview")]
+#[server(endpoint = "/posts/get_preview")]
 #[tracing::instrument(name = "web.posts.get_preview")]
 pub async fn get_preview(post_id: PostId) -> WebResult<PostResponse> {
     boundary!("get_preview", {
@@ -308,7 +308,7 @@ pub async fn get_preview(post_id: PostId) -> WebResult<PostResponse> {
 ///
 /// `publish_at` is an optional UTC instant from the editor's datetime control.
 /// See `create` for why it crosses the boundary as a [`UtcInstant`].
-#[server(endpoint = "/update_post", input = Json)]
+#[server(endpoint = "/posts/update", input = Json)]
 #[tracing::instrument(name = "web.posts.update", skip_all)]
 pub async fn update(args: UpdateArgs) -> WebResult<UpdateResult> {
     let UpdateArgs {
@@ -402,7 +402,7 @@ pub async fn update(args: UpdateArgs) -> WebResult<UpdateResult> {
 
 /// Returns the audience-picker selection for a new post: the site-wide
 /// default audience. Used to initialize the editor on the create page.
-#[server(endpoint = "/default_audience_selection")]
+#[server(endpoint = "/posts/default_audience_selection")]
 #[tracing::instrument(name = "web.posts.default_audience_selection")]
 pub async fn default_audience_selection() -> WebResult<DomainAudienceSelection> {
     boundary!("default_audience_selection", {
@@ -417,7 +417,7 @@ pub async fn default_audience_selection() -> WebResult<DomainAudienceSelection> 
 
 /// Returns the audience-picker selection for an existing post (its current
 /// targeting). Owner-only. Used to pre-select the editor on the edit page.
-#[server(endpoint = "/post_audience_selection")]
+#[server(endpoint = "/posts/audience_selection")]
 #[tracing::instrument(name = "web.posts.audience_selection")]
 pub async fn audience_selection(post_id: PostId) -> WebResult<DomainAudienceSelection> {
     boundary!("audience_selection", {
@@ -440,7 +440,7 @@ pub async fn audience_selection(post_id: PostId) -> WebResult<DomainAudienceSele
 }
 
 /// Lists drafts for the authenticated user.
-#[server(endpoint = "/list_drafts")]
+#[server(endpoint = "/posts/list_drafts")]
 #[tracing::instrument(name = "web.posts.list_drafts")]
 pub async fn list_drafts(
     cursor_created_at: Option<UtcInstant>,
@@ -488,7 +488,7 @@ pub async fn list_drafts(
 }
 
 /// Publishes an existing draft owned by the authenticated user.
-#[server(endpoint = "/publish_post")]
+#[server(endpoint = "/posts/publish")]
 #[tracing::instrument(name = "web.posts.publish")]
 pub async fn publish(post_id: PostId) -> WebResult<PublishResult> {
     boundary!("publish", {
@@ -547,7 +547,7 @@ pub async fn publish(post_id: PostId) -> WebResult<PublishResult> {
 }
 
 /// Soft-deletes a post owned by the authenticated user.
-#[server(endpoint = "/delete_post")]
+#[server(endpoint = "/posts/delete")]
 #[tracing::instrument(name = "web.posts.delete")]
 pub async fn delete(post_id: PostId) -> WebResult<()> {
     boundary!("delete", {
@@ -581,7 +581,7 @@ pub async fn delete(post_id: PostId) -> WebResult<()> {
 }
 
 /// Reverts a published post owned by the authenticated user back to draft status.
-#[server(endpoint = "/unpublish_post")]
+#[server(endpoint = "/posts/unpublish")]
 #[tracing::instrument(name = "web.posts.unpublish")]
 pub async fn unpublish(post_id: PostId) -> WebResult<()> {
     boundary!("unpublish", {

@@ -21,7 +21,7 @@ use common::token::RawToken;
 use common::username::Username;
 use leptos::prelude::*;
 
-#[server(endpoint = "/request_password_reset")]
+#[server(endpoint = "/password_reset/request")]
 #[tracing::instrument(name = "web.password_reset.request")]
 pub async fn request(username: Username) -> WebResult<()> {
     boundary!("request", {
@@ -84,7 +84,7 @@ pub async fn request(username: Username) -> WebResult<()> {
     })
 }
 
-#[server(endpoint = "/confirm_password_reset")]
+#[server(endpoint = "/password_reset/confirm")]
 #[tracing::instrument(name = "web.password_reset.confirm", skip_all)]
 pub async fn confirm(token: RawToken, new_password: ProfferedPassword) -> WebResult<()> {
     boundary!("confirm", {

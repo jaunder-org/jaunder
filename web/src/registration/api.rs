@@ -37,7 +37,7 @@ use {
 /// Returns the site's current registration policy — one of
 /// [`RegistrationPolicy::Open`], [`RegistrationPolicy::InviteOnly`], or
 /// [`RegistrationPolicy::Closed`].
-#[server(endpoint = "/get_registration_policy")]
+#[server(endpoint = "/registration/get_policy")]
 #[tracing::instrument(name = "web.registration.get_policy")]
 pub async fn get_policy() -> WebResult<RegistrationPolicy> {
     boundary!("get_policy", {
@@ -49,7 +49,7 @@ pub async fn get_policy() -> WebResult<RegistrationPolicy> {
 
 /// Registers a new user.  Returns the freshly minted session [`RawToken`] on
 /// success and sets the `session` cookie.
-#[server(endpoint = "/register")]
+#[server(endpoint = "/registration/register")]
 #[tracing::instrument(name = "web.registration.register", skip(password, invite_code))]
 pub async fn register(
     username: Username,

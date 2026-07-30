@@ -13,7 +13,7 @@ use {
     storage::SiteConfigStorage,
 };
 
-#[server(endpoint = "/backup_warning_visible")]
+#[server(endpoint = "/backup/warning_visible")]
 #[tracing::instrument(name = "web.backup.warning_visible")]
 pub async fn warning_visible() -> WebResult<bool> {
     boundary!("warning_visible", {
@@ -26,7 +26,7 @@ pub async fn warning_visible() -> WebResult<bool> {
     })
 }
 
-#[server(endpoint = "/get_backup_settings")]
+#[server(endpoint = "/backup/get_settings")]
 #[tracing::instrument(name = "web.backup.get_settings")]
 pub async fn get_settings() -> WebResult<BackupConfig> {
     boundary!("get_settings", {
@@ -39,7 +39,7 @@ pub async fn get_settings() -> WebResult<BackupConfig> {
     })
 }
 
-#[server(endpoint = "/update_backup_settings")]
+#[server(endpoint = "/backup/update_settings")]
 #[tracing::instrument(name = "web.backup.update_settings")]
 pub async fn update_settings(
     destination_path: Option<DestinationPath>,

@@ -110,7 +110,7 @@ pub async fn fetch_local_timeline(
 }
 
 /// Lists published, non-deleted posts for a user using cursor pagination.
-#[server(endpoint = "/list_user_posts")]
+#[server(endpoint = "/posts/list_by_user")]
 #[tracing::instrument(name = "web.posts.list_by_user")]
 pub async fn list_by_user(
     username: Username,
@@ -134,7 +134,7 @@ pub async fn list_by_user(
 }
 
 /// Lists published, non-deleted posts across all users using cursor pagination.
-#[server(endpoint = "/list_local_timeline")]
+#[server(endpoint = "/posts/list_local_timeline")]
 #[tracing::instrument(name = "web.posts.list_local_timeline")]
 pub async fn list_local_timeline(
     cursor_created_at: Option<UtcInstant>,
@@ -156,7 +156,7 @@ pub async fn list_local_timeline(
 }
 
 /// Lists published, non-deleted posts by the authenticated user using cursor pagination.
-#[server(endpoint = "/list_home_feed")]
+#[server(endpoint = "/posts/list_home_feed")]
 #[tracing::instrument(name = "web.posts.list_home_feed")]
 pub async fn list_home_feed(
     cursor_created_at: Option<UtcInstant>,
@@ -257,7 +257,7 @@ pub async fn fetch_user_posts_by_tag(
 }
 
 /// Lists published, non-deleted posts site-wide carrying `tag`.
-#[server(endpoint = "/list_posts_by_tag")]
+#[server(endpoint = "/posts/list_by_tag")]
 #[tracing::instrument(name = "web.posts.list_by_tag")]
 pub async fn list_by_tag(
     tag: Tag,
@@ -281,7 +281,7 @@ pub async fn list_by_tag(
 }
 
 /// Lists published, non-deleted posts by `username` carrying `tag`.
-#[server(endpoint = "/list_user_posts_by_tag")]
+#[server(endpoint = "/posts/list_by_user_and_tag")]
 #[tracing::instrument(name = "web.posts.list_by_user_and_tag")]
 pub async fn list_by_user_and_tag(
     username: Username,

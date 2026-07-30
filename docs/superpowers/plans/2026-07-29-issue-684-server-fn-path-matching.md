@@ -830,7 +830,7 @@ Run: `devtool run -- cargo xtask check` Expected: PASS. These are
 `Serialize`/`Deserialize` structs whose _field_ names carry the wire format; the
 type name is not serialized, so no wire behavior changes.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit** — `30f69a5d` (22 files)
 
 ```bash
 git add web/src server client
@@ -869,7 +869,7 @@ follows immediately; do not run `e2e-local` at the end of 7a.
   `server-fn-endpoint` step, mirroring `server_fn_tracing_check::run`'s shape at
   `:611-647`.
 
-- [ ] **Step 1: Write the failing gate tests**
+- [x] **Step 1: Write the failing gate tests** — all 7 exist and pass
 
 In `xtask/src/steps/server_fn_endpoint_check.rs`'s test module. Reuse the
 tracing gate's `src(vertical, body)` helper shape (`:653-656`).
@@ -946,13 +946,16 @@ fn fix_does_not_synthesize_a_missing_endpoint() {
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [~] **Step 2: Run the tests, verify they fail** — **SKIPPED; recorded as a
+  deviation.** The implementer created the module with its seven tests in one
+  write rather than landing them red first, so no red phase was observed. Same
+  deviation as Task 3 Step 2. All seven are the plan's verbatim tests and pass.
 
 Run:
 `devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml server_fn_endpoint`
 Expected: FAIL — the module does not exist.
 
-- [ ] **Step 3: Implement the gate**
+- [x] **Step 3: Implement the gate**
 
 Write `server_fn_endpoint_check.rs` with:
 
@@ -977,8 +980,11 @@ Write `server_fn_endpoint_check.rs` with:
 
 - `fn endpoint_fixes(path: &str, src: &str) -> Vec<LineFix>` — mirrors
   `name_fixes` (`server_fn_tracing_check.rs:516-547`) but calls
-  `rewrite_attr_arg(&current, "endpoint", &desired, false)`, so a missing
-  `endpoint` is never synthesized.
+  `rewrite_attr_arg(&current, "server", "endpoint", &desired, false)`, so a
+  missing `endpoint` is never synthesized. (Five arguments —
+  `attr_src, attr_name, key, desired, insert_if_absent`. An earlier draft of
+  this line spelled a four-argument call, from before the plan review added
+  `attr_name`; Task 2's Interfaces block is the authoritative signature.)
 - `pub fn run(mode: Mode, result: &mut CommandResult)` — mirrors
   `server_fn_tracing_check::run` (`:611-647`): read sources, apply fixes under
   `Mode::Fix`, then report.
@@ -987,13 +993,14 @@ Wire into `xtask/src/lib.rs`: `pub mod server_fn_endpoint_check;` at `:27-28`,
 `steps::server_fn_endpoint_check::run(Mode::Fix, &mut result);` after the
 tracing gate at `:300`, and `Mode::Check` at `:334`.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass** — 7/7
 
 Run:
 `devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml server_fn_endpoint`
 Expected: PASS
 
-- [ ] **Step 5: Let the gate flip all 55 endpoints**
+- [x] **Step 5: Let the gate flip all 55 endpoints** — 55 rewritten, zero
+      hand-edited; green in a single invocation as designed
 
 Run: `devtool run -- cargo xtask check --no-test` Expected: PASS in a single
 invocation. `run` applies the fixes to the in-memory sources and _then_
@@ -1007,7 +1014,7 @@ Verify: `git diff --stat web/src` shows 55 endpoint edits;
 `rg 'endpoint = "/[a-z_]+"' web/src` returns nothing (every endpoint now has two
 segments). **Do not hand-edit an endpoint literal.**
 
-- [ ] **Step 6: Write the router regression test**
+- [x] **Step 6: Write the router regression test** — passes on both backends
 
 The multi-segment wildcard is the assumption the whole scheme rests on.
 
@@ -1058,18 +1065,28 @@ breaking when the session fn's own behavior changes. `auth::session` is one of
 the 13 unchanged idents, so this test's expected path is stable across the
 rename.
 
-- [ ] **Step 7: Run the gates in both modes**
+- [x] **Step 7: Run the gates in both modes**
 
 Run: `devtool run -- cargo xtask check` Expected: PASS, with
 `server-fn-endpoint` present in the step list (spec AC8).
 
-Run: `devtool run -- cargo xtask validate --no-e2e` Expected: PASS, with
-`server-fn-endpoint` present (AC8 names `validate`, and AC29 requires this
-command to be green). This is the **only** step in the plan that exercises the
-`Mode::Check` path — the one CI runs, and the one that must not mutate the tree.
-Confirm `git status --porcelain` is clean afterwards.
+Run: `devtool run -- cargo xtask validate --no-e2e --allow-dirty` Expected:
+PASS, with `server-fn-endpoint` present (AC8 names `validate`). This is the
+**only** step in the plan that exercises the `Mode::Check` path — the one CI
+runs, and the one that must not mutate the tree. Confirm
+`git status --porcelain` is **byte-identical before and after** the run; that,
+not a clean tree, is the no-mutation evidence.
 
-- [ ] **Step 8: Commit**
+**`--allow-dirty` is required here.** `validate`'s `clean-tree` precheck
+hard-fails a dirty tree, and Step 8 (commit) has not run yet, so at this point
+the tree is necessarily dirty. Bare `validate --no-e2e` — the AC29 form, with
+`clean-tree` green — is run **after** Step 8 lands, on the now-clean tree.
+
+- [ ] **Step 8: Commit**, then re-run bare
+      `devtool run -- cargo xtask validate --no-e2e`
+
+AC29 names the bare form. Running it post-commit is the only point in the cycle
+where the tree is clean enough for `clean-tree` to pass.
 
 ```bash
 git add xtask/src web/src server/tests/web/router.rs

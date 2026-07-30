@@ -37,7 +37,7 @@ pub const MAX_TAG_LIMIT: u32 = PageSize::MAX;
 /// `prefix` stays `String` (not `Tag`): it is a partial search fragment matched
 /// with SQL `LIKE prefix%`, not a complete tag value — typing it `Tag` would
 /// reject valid partials (ADR-0063 §4 boundary policy; #409 Decision 7).
-#[server(endpoint = "/list_tags", input = Json)]
+#[server(endpoint = "/tags/list", input = Json)]
 #[tracing::instrument(name = "web.tags.list", skip(prefix))]
 pub async fn list(prefix: Option<String>, limit: Option<u32>) -> WebResult<Vec<TagSummary>> {
     boundary!("list", {

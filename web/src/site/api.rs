@@ -11,7 +11,7 @@ use {
     storage::SiteConfigStorage,
 };
 
-#[server(endpoint = "/get_site_identity")]
+#[server(endpoint = "/site/get_identity")]
 #[tracing::instrument(name = "web.site.get_identity")]
 pub async fn get_identity() -> WebResult<SiteIdentity> {
     boundary!("get_identity", {
@@ -24,7 +24,7 @@ pub async fn get_identity() -> WebResult<SiteIdentity> {
     })
 }
 
-#[server(endpoint = "/update_site_identity")]
+#[server(endpoint = "/site/update_identity")]
 #[tracing::instrument(name = "web.site.update_identity")]
 pub async fn update_identity(title: SiteTitle, base_url: Option<AbsoluteUrl>) -> WebResult<()> {
     boundary!("update_identity", {
@@ -48,7 +48,7 @@ pub async fn update_identity(title: SiteTitle, base_url: Option<AbsoluteUrl>) ->
 /// `backup::warning_visible`, this is a **soft** check — a non-operator or
 /// unauthenticated caller yields `Ok(false)` (banner hidden), never an error — so the
 /// banner degrades to absent rather than surfacing a failure in the chrome.
-#[server(endpoint = "/base_url_warning_visible")]
+#[server(endpoint = "/site/base_url_warning_visible")]
 #[tracing::instrument(name = "web.site.base_url_warning_visible")]
 pub async fn base_url_warning_visible() -> WebResult<bool> {
     boundary!("base_url_warning_visible", {

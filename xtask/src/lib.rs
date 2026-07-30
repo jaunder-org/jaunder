@@ -32,6 +32,7 @@ mod steps {
     pub mod rendered_html_from_trusted_check;
     pub mod sequence_check;
     pub mod server_fn_coverage_check;
+    pub mod server_fn_endpoint_check;
     pub mod server_fn_registrar_check;
     pub mod server_fn_tracing_check;
     pub mod sqlx_newtype_bind_check;
@@ -338,6 +339,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::test_pattern_check::run(&mut result);
             steps::server_fn_registrar_check::run(&mut result);
             steps::server_fn_tracing_check::run(Mode::Fix, &mut result);
+            steps::server_fn_endpoint_check::run(Mode::Fix, &mut result);
             steps::server_fn_coverage_check::run(&mut result);
             steps::traced_context_check::run(&mut result);
             steps::proffered_secret_check::run(&mut result);
@@ -375,6 +377,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::test_pattern_check::run(&mut result);
             steps::server_fn_registrar_check::run(&mut result);
             steps::server_fn_tracing_check::run(Mode::Check, &mut result);
+            steps::server_fn_endpoint_check::run(Mode::Check, &mut result);
             steps::server_fn_coverage_check::run(&mut result);
             steps::traced_context_check::run(&mut result);
             steps::proffered_secret_check::run(&mut result);

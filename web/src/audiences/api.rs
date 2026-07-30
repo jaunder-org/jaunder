@@ -49,7 +49,7 @@ pub struct SubscriberSummary {
 }
 
 /// Creates a named audience owned by the authenticated author.
-#[server(endpoint = "/create_audience")]
+#[server(endpoint = "/audiences/create")]
 #[tracing::instrument(name = "web.audiences.create", skip_all)]
 pub async fn create(name: AudienceName) -> WebResult<AudienceId> {
     boundary!("create", {
@@ -64,7 +64,7 @@ pub async fn create(name: AudienceName) -> WebResult<AudienceId> {
 }
 
 /// Renames an audience the authenticated author owns.
-#[server(endpoint = "/rename_audience")]
+#[server(endpoint = "/audiences/rename")]
 #[tracing::instrument(name = "web.audiences.rename", skip(name))]
 pub async fn rename(audience_id: AudienceId, name: AudienceName) -> WebResult<()> {
     boundary!("rename", {
@@ -79,7 +79,7 @@ pub async fn rename(audience_id: AudienceId, name: AudienceName) -> WebResult<()
 }
 
 /// Deletes an audience the authenticated author owns (and its memberships).
-#[server(endpoint = "/delete_audience")]
+#[server(endpoint = "/audiences/delete")]
 #[tracing::instrument(name = "web.audiences.delete")]
 pub async fn delete(audience_id: AudienceId) -> WebResult<()> {
     boundary!("delete", {
@@ -91,7 +91,7 @@ pub async fn delete(audience_id: AudienceId) -> WebResult<()> {
 }
 
 /// Lists the authenticated author's named audiences.
-#[server(endpoint = "/list_my_audiences")]
+#[server(endpoint = "/audiences/list_mine")]
 #[tracing::instrument(name = "web.audiences.list_mine")]
 pub async fn list_mine() -> WebResult<Vec<Summary>> {
     boundary!("list_mine", {
@@ -110,7 +110,7 @@ pub async fn list_mine() -> WebResult<Vec<Summary>> {
 
 /// Lists the authenticated author's active subscribers (for the assignment
 /// checklist). Resolves each local `subscriber_ref` to a username for display.
-#[server(endpoint = "/list_my_subscribers")]
+#[server(endpoint = "/audiences/list_my_subscribers")]
 #[tracing::instrument(name = "web.audiences.list_my_subscribers")]
 pub async fn list_my_subscribers() -> WebResult<Vec<SubscriberSummary>> {
     boundary!("list_my_subscribers", {
@@ -146,7 +146,7 @@ pub async fn list_my_subscribers() -> WebResult<Vec<SubscriberSummary>> {
 /// `add_member` is author-scoped in the store (it writes `author_user_id` so
 /// the composite FKs reject a cross-author pairing), so passing the session's
 /// `user_id` is the authorization.
-#[server(endpoint = "/add_subscriber_to_audience")]
+#[server(endpoint = "/audiences/add_subscriber")]
 #[tracing::instrument(name = "web.audiences.add_subscriber")]
 pub async fn add_subscriber(
     audience_id: AudienceId,
@@ -164,7 +164,7 @@ pub async fn add_subscriber(
 
 /// Removes a subscription from an audience the authenticated author owns.
 /// `remove_member` is author-scoped, so a cross-author `audience_id` is a no-op.
-#[server(endpoint = "/remove_subscriber_from_audience")]
+#[server(endpoint = "/audiences/remove_subscriber")]
 #[tracing::instrument(name = "web.audiences.remove_subscriber")]
 pub async fn remove_subscriber(
     audience_id: AudienceId,
@@ -182,7 +182,7 @@ pub async fn remove_subscriber(
 
 /// Lists the `subscription_id`s assigned to an audience the author owns.
 /// `list_members` is author-scoped, so a cross-author `audience_id` lists empty.
-#[server(endpoint = "/list_audience_members")]
+#[server(endpoint = "/audiences/list_members")]
 #[tracing::instrument(name = "web.audiences.list_members")]
 pub async fn list_members(audience_id: AudienceId) -> WebResult<Vec<SubscriptionId>> {
     boundary!("list_members", {
