@@ -1,7 +1,7 @@
 # Plan — #696: `RowLimit` + the `PageSize` fetch-limit accessors
 
 Spec:
-[2026-07-29-issue-696-fetch-limit-convention.md](../specs/2026-07-29-issue-696-fetch-limit-convention.md)
+[2026-07-30-issue-696-fetch-limit-convention-spec.md](2026-07-30-issue-696-fetch-limit-convention-spec.md)
 · Issue: [#696](https://github.com/jaunder-org/jaunder/issues/696) · Branch:
 `worktree-issue-696-fetch-limit-convention` · Fork point: `wt-base-issue-696`
 (`0e6c0958`)

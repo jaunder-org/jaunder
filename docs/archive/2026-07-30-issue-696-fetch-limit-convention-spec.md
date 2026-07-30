@@ -2,8 +2,8 @@
 
 - Issue: [#696](https://github.com/jaunder-org/jaunder/issues/696)
 - Milestone: Domain-value type safety (newtypes)
-- Governing ADR: [ADR-0063](../../adr/0063-domain-value-newtype-convention.md)
-  §1–§2, [ADR-0071](../../adr/0071-sqlx-string-newtype-bridge.md) (the bridge
+- Governing ADR: [ADR-0063](../adr/0063-domain-value-newtype-convention.md)
+  §1–§2, [ADR-0071](../adr/0071-sqlx-string-newtype-bridge.md) (the bridge
   #686 broadened)
 - Follows: [#686](https://github.com/jaunder-org/jaunder/issues/686) — this
   issue owns the 2 ALLOWLIST carve-outs that one left behind
