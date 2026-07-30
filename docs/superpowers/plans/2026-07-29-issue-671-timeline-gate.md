@@ -1621,7 +1621,7 @@ git commit -m "refactor(cockpit): put the home feed on TimelineGate (#671)"
 `cargo xtask adr promote` assigns the number and updates `docs/README.md` at
 ship (`jaunder-ship`).
 
-- [ ] **Step 1: Write the draft** (A9)
+- [x] **Step 1: Write the draft** (A9)
 
 Follow the house ADR shape (Context / Decision / Consequences) used by
 `docs/adr/0070-web-vertical-wasm-only-component-files.md`. Record D4, D6, and D8
@@ -1649,7 +1649,7 @@ as one reusable pattern, and cite #306, #520, ADR-0070 §6, ADR-0041 §2, and
   the pattern's cost is one enum and one fold per widget. First instance:
   `web/src/timeline` (#671).
 
-- [ ] **Step 2: Format and verify the gate sees it**
+- [x] **Step 2: Format and verify the gate sees it**
 
 ```
 prettier -w docs/adr/drafts/reactive-paint-fold.md
@@ -1659,12 +1659,19 @@ devtool run -- cargo xtask check
 Expected: clean. (The pre-commit hook runs prettier and restages prose, so
 formatting first avoids a dirty tree after the commit.)
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: ~~Commit~~ — NOT APPLICABLE, and the plan was wrong here.**
 
-```bash
-git add docs/adr/drafts/reactive-paint-fold.md
-git commit -m "docs(adr): draft the reactive paint-fold pattern (#671)"
-```
+Everything under `docs/adr/drafts/` **except its `README.md` is gitignored**
+(`docs/adr/drafts/README.md`), precisely so a draft cannot be committed with a
+premature number — an ADR number is a shared monotonic sequence knowable only at
+integration. `git add` of the draft is a no-op and `git status` stays clean.
+
+The draft lands during **ship**: after the final rebase onto `main`,
+`cargo xtask adr promote` assigns the next free number, moves the file to
+`docs/adr/NNNN-reactive-paint-fold.md`, rewrites its path-form references, syncs
+the README table, and **stages** the result. So this task produces an
+**uncommitted working-tree file** by design, and `jaunder-ship` is what commits
+it.
 
 ---
 
