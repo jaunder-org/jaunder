@@ -28,7 +28,7 @@
 //!
 //! One canonical spelling plus a decoded display view, and why:
 //! `docs/adr/0080-media-path-naming-correspondence.md` (as amended by
-//! `docs/adr/drafts/media-filename-encoded-canonical.md`).
+//! `docs/adr/0084-media-filename-encoded-canonical.md`).
 //!
 //! # Untrusted input
 //!

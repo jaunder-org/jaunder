@@ -56,18 +56,18 @@ definition of the layout.**
   exactly that reason. This is the one place a filename becomes a path segment
   outside `media_path`, and it is typed `RootRelativeUrl` too, so the two cannot
   drift in kind.
-  - **Amended by `docs/adr/drafts/media-filename-encoded-canonical.md` (#720):**
-    a `Filename` now _is_ the canonical percent-encoded segment, so neither site
+  - **Amended by `docs/adr/0084-media-filename-encoded-canonical.md` (#720):** a
+    `Filename` now _is_ the canonical percent-encoded segment, so neither site
     encodes — both interpolate — and `encode_filename_segment` is deleted,
     returning the encode set to a private const with no public escape hatch.
 - **The database `filename` column keeps the raw name.** It is the display name
   shown in the media list and returned as `UploadResponse.filename`.
-  - **Reversed by `docs/adr/drafts/media-filename-encoded-canonical.md`
-    (#720).** The column now holds the **encoded** form, byte-identical to the
-    on-disk name and the URL segment; display surfaces decode. The motivating
-    reason is #711's post→media reference table, whose comparison against names
-    extracted from rendered HTML becomes byte equality instead of a transform at
-    a comparison point.
+  - **Reversed by `docs/adr/0084-media-filename-encoded-canonical.md` (#720).**
+    The column now holds the **encoded** form, byte-identical to the on-disk
+    name and the URL segment; display surfaces decode. The motivating reason is
+    #711's post→media reference table, whose comparison against names extracted
+    from rendered HTML becomes byte equality instead of a transform at a
+    comparison point.
 - `media_url` returns `RootRelativeUrl` **infallibly**. Every segment is a hex
   digest, a bounded enum token, or percent-encoded, so the parse cannot fail;
   the `unreachable!` arm follows `AbsoluteUrl::compose`. **No trusted-minting
@@ -86,7 +86,7 @@ them:
 
 **URL → disk is identity. DB → disk requires encoding.**
 
-**Superseded by `docs/adr/drafts/media-filename-encoded-canonical.md` (#720):**
+**Superseded by `docs/adr/0084-media-filename-encoded-canonical.md` (#720):**
 there is now **one** spelling — database, disk and URL are byte-identical — plus
 a decoded _view_ for display. The remaining derivations are the display decode
 (cosmetic if missed) and a re-encode at the three inbound URL doors, where axum
@@ -120,9 +120,9 @@ business.
   holds the raw name and `media_path` re-encodes it to recover the stored
   spelling. It reads like something to simplify away, and doing so breaks
   serving for any name needing encoding.
-  - **Relocated by `docs/adr/drafts/media-filename-encoded-canonical.md`
-    (#720):** the re-encode still exists and is still not redundant, but it now
-    lives in `ProfferedFilename`'s door rather than in `media_path`, which only
+  - **Relocated by `docs/adr/0084-media-filename-encoded-canonical.md` (#720):**
+    the re-encode still exists and is still not redundant, but it now lives in
+    `ProfferedFilename`'s door rather than in `media_path`, which only
     interpolates. There is no un-decoded extractor to avoid it with —
     `RawPathParams` is "raw" only in the sense of _undeserialized_; its values
     are `PercentDecodedStr` too.
@@ -134,11 +134,11 @@ business.
   - The bound is on the **encoded** form (`MAX_FILENAME_ENCODED_BYTES`), not a
     character count — a char count cannot express this limit, since a safe one
     would be ~28 characters.
-  - **Narrowed by `docs/adr/drafts/media-filename-encoded-canonical.md`
-    (#720).** This note used to say the bound makes `Filename`'s _invariant_
-    depend on the encode set. That is no longer true: the stored value already
-    **is** the encoded form, so the type's own bound is a plain `len() <= 255`
-    with no encode-set reference.
+  - **Narrowed by `docs/adr/0084-media-filename-encoded-canonical.md` (#720).**
+    This note used to say the bound makes `Filename`'s _invariant_ depend on the
+    encode set. That is no longer true: the stored value already **is** the
+    encoded form, so the type's own bound is a plain `len() <= 255` with no
+    encode-set reference.
 
     The coupling itself survives, relocated to the **intake budget**. Intake
     still runs `sanitize → truncate → encode`, with `truncate_to_budget` walking

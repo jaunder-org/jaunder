@@ -114,7 +114,7 @@ invariant is written unchallenged and surfaces as a sqlx `Decode` error on the
 next read (the mechanism pinned by `storage/src/media.rs:425`) — a 500 from the
 media library, or a silently skipped row via `list_media`'s skip path. Note that
 #720 makes this concrete for `media.filename` but the gap is generic. Reference
-`docs/adr/drafts/media-filename-encoded-canonical.md`.
+`docs/adr/0084-media-filename-encoded-canonical.md`.
 
 - [x] **Step 2: Record the number** in this plan — Task 7 Step 1 now cites #725.
 
@@ -1085,7 +1085,7 @@ git commit -m "feat(xtask): confine ProfferedFilename to axum extractor position
 
 The comments that assert the now-reversed arrangement are the next reader's map,
 so a stale one is a defect (AC18, AC19). The ADR draft itself is already written
-at `docs/adr/drafts/media-filename-encoded-canonical.md` and is numbered by
+at `docs/adr/0084-media-filename-encoded-canonical.md` and is numbered by
 `cargo xtask adr promote` at ship, not here.
 
 **Files:**
@@ -1106,7 +1106,7 @@ at `docs/adr/drafts/media-filename-encoded-canonical.md` and is numbered by
 
 `:59-60` — replace "The database `filename` column keeps the raw name" with a
 pointer: this was reversed by
-`docs/adr/drafts/media-filename-encoded-canonical.md` (#720); the column now
+`docs/adr/0084-media-filename-encoded-canonical.md` (#720); the column now
 holds the encoded form and display decodes.
 
 **Write that path as a bare code span, never a markdown link.**

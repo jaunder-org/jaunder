@@ -139,8 +139,8 @@ client-side" a compile fact. `ProfferedInviteCode` (#400), paired with the
 domain `InviteCode`, is the first user.
 
 **`Proffered` generalized: inbound twins that are not secrets.** Amended by
-`docs/adr/drafts/media-filename-encoded-canonical.md` (#720). The prefix names
-an **untrusted inbound twin of a domain type**, of which the inbound-_secret_
+`docs/adr/0084-media-filename-encoded-canonical.md` (#720). The prefix names an
+**untrusted inbound twin of a domain type**, of which the inbound-_secret_
 profile above is one specialization. `ProfferedFilename` is the first non-secret
 user: its concern is _representation_, not secrecy. axum percent-decodes path
 parameters, so the routes carrying a filename hold the decoded spelling while
