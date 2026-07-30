@@ -127,7 +127,7 @@ export async function failServerFn(
 export async function stallServerFn(
   page: Page,
   endpoint: string,
-): Promise<() => Promise<void>> {
+): Promise<() => void> {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -136,9 +136,7 @@ export async function stallServerFn(
     await gate;
     await route.continue();
   });
-  return async () => {
-    release();
-  };
+  return release;
 }
 
 // ---------------------------------------------------------------------------

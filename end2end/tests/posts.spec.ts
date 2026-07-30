@@ -1054,6 +1054,7 @@ test("unseeded client-nav to / paints Loading with the masthead intact", async (
   // the masthead up alongside it. The masthead — not `.j-scroll` — is the anchor,
   // because `TimelineRows` alone emits `.j-scroll` and it does not exist here.
   await waitForSelector(page, ".j-loading");
+  await expect(page.locator(".j-loading")).toBeVisible();
   const masthead = page.locator(".j-hero");
   await expect(masthead).toBeVisible();
   await expect(page.locator(".j-scroll")).toHaveCount(0);
@@ -1071,7 +1072,7 @@ test("unseeded client-nav to / paints Loading with the masthead intact", async (
   await masthead.evaluate((el) => {
     el.setAttribute("data-j-probe", "1");
   });
-  await release();
+  release();
 
   // Rows arm: the SAME masthead node survives the transition. Emitting `{children}`
   // inside each match arm would have torn it down and rebuilt it, losing the stamp —

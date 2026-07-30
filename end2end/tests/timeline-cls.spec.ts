@@ -10,8 +10,8 @@
  * pass straight through a visible flash. #653 was exactly such a flash on the tag
  * pages and the suite missed it.
  *
- * These probes turn the argument into a gate. They are written BEFORE the page sweeps
- * and pass on the pre-sweep tree: green before *and* after is what proves
+ * These probes turn the argument into a gate. They were written BEFORE the page sweeps
+ * and passed on the pre-sweep tree: green before *and* after is what proves
  * preservation; a test authored afterwards would only document the end state.
  *
  * Deterministic by construction via the shared `expectNoShiftAcrossMount` helper
@@ -28,128 +28,64 @@ import { createPostViaApi } from "./posts";
 import { expectNoShiftAcrossMount } from "./layout-shift";
 
 /**
- * Register a fresh user and publish one short post tagged with their own username.
+ * The four routes, and the chrome element that must not move on each.
  *
- * The username is unique per run, so it doubles as a collision-free tag — which makes
- * every measured element scopeable to THIS test's post even on the shared `/`
- * timeline, and gives `/tags/:tag` a page whose only row is ours. Short body: no wrap,
- * so a reflow cannot masquerade as a shift.
+ * `/` paints the masthead hero (the `inner_html` subtree #671 moves into the gate's
+ * `children` slot, and the ADR-0041 coincidence surface #653 regressed); the other
+ * three paint a `Topbar`. `url` is built from the per-test username, which doubles as
+ * the tag — see `seedTaggedPost`.
  */
-async function seedTaggedPost(
-  page: Parameters<typeof createPostViaApi>[0],
-  firstNav: number,
-): Promise<string> {
-  const username = await register(page, firstNav);
-  await createPostViaApi(page, { body: "cls probe", tags: [username] });
-  return username;
+const ROUTES: {
+  name: string;
+  url: (user: string) => string;
+  chrome: string;
+}[] = [
+  { name: "/", url: () => "/", chrome: ".j-hero" },
+  { name: "/tags/:tag", url: (u) => `/tags/${u}`, chrome: ".j-topbar" },
+  { name: "/~:username", url: (u) => `/~${u}`, chrome: ".j-topbar" },
+  {
+    name: "/~:username/tags/:tag",
+    url: (u) => `/~${u}/tags/${u}`,
+    chrome: ".j-topbar",
+  },
+];
+
+for (const route of ROUTES) {
+  test(`${route.name} : chrome and first row do not shift across mount`, async ({
+    page,
+    firstNav,
+  }, testInfo) => {
+    // Register a fresh user and publish one short post tagged with their own
+    // username. The username is unique per run, so it doubles as a collision-free
+    // tag — which makes the measured row scopeable to THIS test's post even on the
+    // shared `/` timeline, and gives `/tags/:tag` a page whose only row is ours.
+    // Short body: no wrap, so a reflow cannot masquerade as a shift.
+    const username = await register(page, firstNav);
+    await createPostViaApi(page, { body: "cls probe", tags: [username] });
+
+    await expectNoShiftAcrossMount(page, {
+      url: route.url(username),
+      targets: (p) => [
+        { name: "chrome", locator: p.locator(route.chrome) },
+        {
+          name: "own post head",
+          // Scoped by the author handle rendered at `posts/render.rs:203`, so a
+          // concurrent worker's post cannot be measured by mistake.
+          locator: p
+            .locator(".j-post", {
+              has: p.locator(".j-post-handle", { hasText: `@${username}` }),
+            })
+            .locator(".j-post-head"),
+        },
+      ],
+      afterMount: async (p) => {
+        // Proves the reactive tree really mounted, so a zero-shift result cannot be
+        // a frozen-projector no-op. `.j-scroll` is emitted only by `TimelineRows`.
+        await expect(p.locator(".j-scroll").first()).toBeVisible({
+          timeout: slowBrowserTimeoutMs(testInfo, 10_000),
+        });
+      },
+      tolerancePx: 0,
+    });
+  });
 }
-
-/** This test's own post, scoped by the author handle rendered at `render.rs:203`. */
-function ownPost(
-  page: Parameters<typeof createPostViaApi>[0],
-  username: string,
-) {
-  return page.locator(".j-post", {
-    has: page.locator(".j-post-handle", { hasText: `@${username}` }),
-  });
-}
-
-test("/ : masthead and first row do not shift across mount", async ({
-  page,
-  firstNav,
-}, testInfo) => {
-  const username = await seedTaggedPost(page, firstNav);
-
-  await expectNoShiftAcrossMount(page, {
-    url: "/",
-    targets: (p) => [
-      // The masthead hero — the `inner_html` subtree #671 moves into the gate's
-      // `children` slot, and the ADR-0041 coincidence surface #653 regressed.
-      { name: "masthead hero", locator: p.locator(".j-hero") },
-      {
-        name: "own post head",
-        locator: ownPost(p, username).locator(".j-post-head"),
-      },
-    ],
-    afterMount: async (p) => {
-      // Proves the reactive tree really mounted, so a zero-shift result cannot be a
-      // frozen-projector no-op. `.j-scroll` is emitted only by `TimelineRows`.
-      await expect(p.locator(".j-scroll").first()).toBeVisible({
-        timeout: slowBrowserTimeoutMs(testInfo, 10_000),
-      });
-    },
-    tolerancePx: 0,
-  });
-});
-
-test("/tags/:tag : topbar and first row do not shift across mount", async ({
-  page,
-  firstNav,
-}, testInfo) => {
-  const username = await seedTaggedPost(page, firstNav);
-
-  await expectNoShiftAcrossMount(page, {
-    url: `/tags/${username}`,
-    targets: (p) => [
-      { name: "topbar", locator: p.locator(".j-topbar") },
-      {
-        name: "own post head",
-        locator: ownPost(p, username).locator(".j-post-head"),
-      },
-    ],
-    afterMount: async (p) => {
-      await expect(p.locator(".j-scroll").first()).toBeVisible({
-        timeout: slowBrowserTimeoutMs(testInfo, 10_000),
-      });
-    },
-    tolerancePx: 0,
-  });
-});
-
-test("/~:username : topbar and first row do not shift across mount", async ({
-  page,
-  firstNav,
-}, testInfo) => {
-  const username = await seedTaggedPost(page, firstNav);
-
-  await expectNoShiftAcrossMount(page, {
-    url: `/~${username}`,
-    targets: (p) => [
-      { name: "topbar", locator: p.locator(".j-topbar") },
-      {
-        name: "own post head",
-        locator: ownPost(p, username).locator(".j-post-head"),
-      },
-    ],
-    afterMount: async (p) => {
-      await expect(p.locator(".j-scroll").first()).toBeVisible({
-        timeout: slowBrowserTimeoutMs(testInfo, 10_000),
-      });
-    },
-    tolerancePx: 0,
-  });
-});
-
-test("/~:username/tags/:tag : topbar and first row do not shift across mount", async ({
-  page,
-  firstNav,
-}, testInfo) => {
-  const username = await seedTaggedPost(page, firstNav);
-
-  await expectNoShiftAcrossMount(page, {
-    url: `/~${username}/tags/${username}`,
-    targets: (p) => [
-      { name: "topbar", locator: p.locator(".j-topbar") },
-      {
-        name: "own post head",
-        locator: ownPost(p, username).locator(".j-post-head"),
-      },
-    ],
-    afterMount: async (p) => {
-      await expect(p.locator(".j-scroll").first()).toBeVisible({
-        timeout: slowBrowserTimeoutMs(testInfo, 10_000),
-      });
-    },
-    tolerancePx: 0,
-  });
-});

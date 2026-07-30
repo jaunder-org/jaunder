@@ -64,6 +64,7 @@ impl TimelineCursor {
 /// failure stays on `Result`'s error axis all the way to the render, which is the
 /// only place that decides how to display it. Stringifying at the producer threw
 /// the error *kind* away for no benefit.
+///
 /// `NeverLoaded` is the default so "loaded yet?" is a property of the status
 /// rather than a parallel `RwSignal<bool>` each page carried alongside it (#671):
 /// "idle but never loaded" is now unrepresentable, the same way `Failed` already
@@ -85,18 +86,6 @@ impl LoadStatus {
     #[must_use]
     pub fn is_in_flight(&self) -> bool {
         matches!(self, Self::InFlight)
-    }
-
-    /// Consume the status into the error to display, if the last load failed.
-    /// Owned (`self`) so the reactive callers — which hold a cloned `LoadStatus`
-    /// from the status signal's `.get()` — can return the `WebError` directly
-    /// instead of re-matching the `Failed` arm inline.
-    #[must_use]
-    pub fn into_failure(self) -> Option<WebError> {
-        match self {
-            Self::Failed(error) => Some(error),
-            Self::NeverLoaded | Self::Idle | Self::InFlight | Self::Unidentified => None,
-        }
     }
 }
 
@@ -186,24 +175,26 @@ impl TimelineState {
         }
     }
 
-    /// Record a fetch failure: empty the rows (don't show a stale page), clear
-    /// the cursor + `has_more` so a failed timeline offers no "Load more", and
-    /// mark the failure for display.
-    pub fn fail(&self, error: WebError) {
+    /// Empty the timeline and settle on a terminal `status`. Shared by the two
+    /// outcomes that show nothing: don't leave a stale page up, and clear the
+    /// cursor + `has_more` so the emptied timeline offers no "Load more".
+    fn clear_to(&self, status: LoadStatus) {
         self.rows.set(Vec::new());
         self.cursor.set(None);
         self.has_more.set(false);
-        self.status.set(LoadStatus::Failed(error));
+        self.status.set(status);
+    }
+
+    /// Record a fetch failure, marking the error for display.
+    pub fn fail(&self, error: WebError) {
+        self.clear_to(LoadStatus::Failed(error));
     }
 
     /// Record that the load resolved to no viewer at all (anonymous / expired).
     /// Clears like a failure, but is not one — the page decides what to paint,
     /// which for the cockpit is a redirect to `/login`.
     pub fn unidentified(&self) {
-        self.rows.set(Vec::new());
-        self.cursor.set(None);
-        self.has_more.set(false);
-        self.status.set(LoadStatus::Unidentified);
+        self.clear_to(LoadStatus::Unidentified);
     }
 
     /// Apply a load-more result: **extend** on success, and on failure mark the
@@ -626,6 +617,11 @@ mod tests {
                 Ok(TimelinePaint::Unidentified),
                 "a fetch-determined absence outranks a present context"
             );
+            assert_eq!(
+                state.paint(None),
+                Ok(TimelinePaint::Unidentified),
+                "and agrees with a route-derived absence"
+            );
         });
     }
 
@@ -717,20 +713,5 @@ mod tests {
         assert!(LoadStatus::InFlight.is_in_flight());
         assert!(!LoadStatus::Failed(WebError::validation("boom")).is_in_flight());
         assert!(!LoadStatus::Unidentified.is_in_flight());
-    }
-
-    // The payload is the typed `WebError`, not a pre-rendered string: the error KIND
-    // survives the round trip, so the render decides how to display it and nothing
-    // stringifies eagerly at the producer (#671 D3).
-    #[test]
-    fn into_failure_covers_every_status() {
-        assert_eq!(LoadStatus::NeverLoaded.into_failure(), None);
-        assert_eq!(LoadStatus::Idle.into_failure(), None);
-        assert_eq!(LoadStatus::InFlight.into_failure(), None);
-        assert_eq!(LoadStatus::Unidentified.into_failure(), None);
-        assert_eq!(
-            LoadStatus::Failed(WebError::validation("boom")).into_failure(),
-            Some(WebError::validation("boom")),
-        );
     }
 }
