@@ -304,22 +304,22 @@ function-scope state, so `violations` grows a pass that collects locals assigned
 from `i64::from(…)` and then flags `.bind(<that ident>)`. Keep it line-based — a
 brace-depth reset is enough scoping; do not reach for `syn` here.
 
-- [ ] Unit tests first (RED): - `hoisted_i64_from_bind_is_flagged` —
+- [x] Unit tests first (RED): - `hoisted_i64_from_bind_is_flagged` —
       `let x = i64::from(user_id);` … `.bind(x)` -
       `hoisted_local_not_from_a_strip_is_clean` — `let x = row.count;` …
       `.bind(x)` - `bind_of_an_unrelated_ident_is_clean` — no assignment in
       scope
-- [ ] Implement the local-tracking pass
-- [ ] **Delete both numeric ALLOWLIST entries** (`i64::from(limit)`,
+- [x] Implement the local-tracking pass
+- [x] **Delete both numeric ALLOWLIST entries** (`i64::from(limit)`,
       `i64::from(offset.value())`) — tasks 2 and 4 removed their sites. Add
       none: spec §7 establishes `claim_pending_batch` is invisible to this rule,
       not exempted by it.
-- [ ] Update the module doc + failure-detail text to name the hoisted case
-- [ ] **Prove it bites:** re-hoist `list_tags`' conversion
+- [x] Update the module doc + failure-detail text to name the hoisted case
+- [x] **Prove it bites:** re-hoist `list_tags`' conversion
       (`let limit_i64 = i64::from(limit); … .bind(limit_i64)`), confirm
       `cargo xtask check --no-test` fails naming that line, restore. **Not**
       `claim_pending_batch` — header risk 2.
-- [ ] `cargo nextest run --manifest-path xtask/Cargo.toml sqlx_newtype_bind`;
+- [x] `cargo nextest run --manifest-path xtask/Cargo.toml sqlx_newtype_bind`;
       `cargo xtask check` → green; commit
 
 **Re-audit before finishing:** the spec's Risks note the rule may match shapes
@@ -327,6 +327,28 @@ the audit didn't enumerate. Run
 `rg -n 'as i64|let .*: i64 =|i64::try_from' storage/src` and confirm every hit
 is either swept, genuinely primitive, or a #716 cross-function case — and say
 which in the commit message. Do not silently exempt.
+
+**Re-audit result — 16 hits, none an un-swept strip.** Nothing was exempted
+silently:
+
+| Hits                                                                                                                                    | Classification                                                                                                                                                                  |
+| --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `postgres/posts.rs:147`, `sqlite/posts.rs:163`, `feed_events.rs:178`, `{postgres,sqlite}/feed_events.rs:77`, `sqlite/feed_events.rs:86` | **decodes**, not binds — `let x: i64 = query_scalar/row.get`. Reading an id as a primitive is real residue but a different defect, and it is **#715**; this gate polices binds. |
+| `feed_events.rs:198`                                                                                                                    | `i64::try_from(limit)`, bound in two other files — **#716**, invisible to any line-based rule.                                                                                  |
+| `postgres/schema.rs:22`, `backup.rs:733`, `:771`                                                                                        | genuine primitives — `COUNT(*)` and a `pg_constraint` flag.                                                                                                                     |
+| `media_manager.rs:357`, `:388`, `:392`, `:636`                                                                                          | genuine `usize → i64` byte lengths, then wrapped in `ByteSize`.                                                                                                                 |
+| `sqlite/backup.rs:195`, `:200`                                                                                                          | a comment and a JSON-value width branch.                                                                                                                                        |
+
+**The rule is deliberately narrow, and that is the finding.**
+`hoisted_strip_binding` matches only `let x = … i64::from(…)` — not
+`let x: i64 = …`, `as i64`, or `i64::try_from(…)`. Widening it would be easy and
+wrong: per the table, those spellings are decodes (#715), cross-function
+laundering (#716), or genuine primitives. A gate that appeared to cover them
+without doing so would be worse than one whose limits are written down.
+
+**Verified by mutation, on the site the plan named:** re-hoisting `list_tags`'
+conversion made the gate fail on **both** its binds (`posts.rs:1579`, `:1589`),
+then restored — `posts.rs` is byte-identical to its committed state afterwards.
 
 ## Task 6 — amend ADR-0063
 
