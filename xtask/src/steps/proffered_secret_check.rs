@@ -93,7 +93,15 @@ fn violations(source: &str, type_name: &str) -> Vec<usize> {
     let mut in_server_params = false;
     for (i, raw) in source.lines().enumerate() {
         let t = raw.trim();
-        if t.starts_with("#[server") {
+        // Both spellings arm the region: leptos's `#[server]` and jaunder's
+        // `#[macros::server]` (#714). This scan is independent of
+        // `web_server_fns`'s enumeration — it is a text state machine, not a syn
+        // walk — so it has to learn the new attribute separately. Missing it does
+        // not fail open in the usual way: every `Proffered*` parameter suddenly
+        // reads as sitting *outside* a server fn, so the gate goes loudly red
+        // rather than quietly green. That is the right direction for a secrets
+        // guard, but it still has to be taught.
+        if t.starts_with("#[server") || t.starts_with("#[macros::server") {
             pending_server = true;
         }
         if pending_server && t.contains("fn ") {
@@ -230,6 +238,35 @@ use common::invite::ProfferedInviteCode;
     fn server_fn_parameter_is_clean() {
         assert!(violations(SERVER_PARAM, "ProfferedInviteCode").is_empty());
         assert!(violations(SERVER_PARAM, "ProfferedPassword").is_empty());
+    }
+
+    /// The `#[macros::server]` spelling (#714) must arm the parameter region just
+    /// as `#[server]` does. This scan is a text state machine independent of
+    /// `web_server_fns`, so teaching that enumerator the new attribute did nothing
+    /// for this gate — every real `Proffered*` parameter read as a violation until
+    /// this was fixed.
+    #[test]
+    fn macro_attr_server_fn_parameter_is_clean() {
+        let source = "\
+#[macros::server]
+pub async fn register(
+    code: ProfferedInviteCode,
+    password: ProfferedPassword,
+) -> WebResult<()> {
+";
+        assert!(violations(source, "ProfferedInviteCode").is_empty());
+        assert!(violations(source, "ProfferedPassword").is_empty());
+    }
+
+    /// …and the return position is still caught under the new spelling, so the
+    /// fix widened what arms the region without weakening what it catches.
+    #[test]
+    fn macro_attr_server_fn_return_is_flagged() {
+        let source = "\
+#[macros::server(skip_all)]
+pub async fn mint() -> WebResult<ProfferedInviteCode> {
+";
+        assert_eq!(violations(source, "ProfferedInviteCode"), vec![2]);
     }
 
     #[test]

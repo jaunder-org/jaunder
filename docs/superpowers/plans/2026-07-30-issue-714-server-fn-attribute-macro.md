@@ -778,8 +778,11 @@ Run: `rg -c '#\[macros::server' web/src` → 14 files summing to **50**. Run:
 
 Run: `devtool run -- cargo check -p web --all-features --all-targets` → PASS.
 Run:
-`devtool run -- cargo clippy -p web --target wasm32-unknown-unknown -- -D warnings`
-→ PASS.
+`devtool run -- cargo clippy -p web -p client -p csr --features csr --target wasm32-unknown-unknown -- -D warnings -A clippy::too_many_arguments -A unfulfilled_lint_expectations`
+(the repo's own invocation — `xtask/src/steps/static_checks.rs:225-248`. A bare
+`-p web --target wasm32…` fails with `cannot find reactive in client` regardless
+of this work, because `client/src/lib.rs:34,39` gate those modules behind
+`feature = "csr"`.) → PASS.
 
 The wasm run (AC-12) proves the client still discards the wrapped body — spec
 "Boundary", assumptions 1–2.
@@ -893,8 +896,12 @@ two of the fns in a doc comment only.
 - [ ] **Step 5: Build both targets and run the suites.**
 
 Run: `devtool run -- cargo check -p web --all-features --all-targets` Run:
-`devtool run -- cargo clippy -p web --target wasm32-unknown-unknown -- -D warnings`
-Run: `devtool run -- cargo nextest run -p jaunder --test integration`
+`devtool run -- cargo clippy -p web -p client -p csr --features csr --target wasm32-unknown-unknown -- -D warnings -A clippy::too_many_arguments -A unfulfilled_lint_expectations`
+(the repo's own invocation — `xtask/src/steps/static_checks.rs:225-248`. A bare
+`-p web --target wasm32…` fails with `cannot find reactive in client` regardless
+of this work, because `client/src/lib.rs:34,39` gate those modules behind
+`feature = "csr"`.) Run:
+`devtool run -- cargo nextest run -p jaunder --test integration`
 
 The wasm clippy run is the **only** thing that catches a missed component-file
 import.

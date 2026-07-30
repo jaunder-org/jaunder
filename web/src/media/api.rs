@@ -7,7 +7,6 @@
 use common::media::{
     ByteSize, ContentHash, ContentType, Filename, MaxFileSize, MediaSource, UserQuota,
 };
-use leptos::prelude::*;
 // `MultipartData`/`MultipartFormData` are named in the `upload` signature,
 // which compiles for both the wasm client stub and the server build, so this import
 // is ungated. (#517)
@@ -24,6 +23,7 @@ use {
     crate::error::InternalError,
     // Server-only: the reference scan's flat cap. The CSR build never binds a query.
     common::pagination::RowLimit,
+    leptos::prelude::*,
     leptos_axum::extract,
     std::path::PathBuf,
     std::sync::Arc,
@@ -65,62 +65,56 @@ pub struct DeleteResult {
 }
 
 /// Lists media items owned by the authenticated user.
-#[server(endpoint = "/media/list_mine")]
-#[tracing::instrument(name = "web.media.list_mine")]
+#[macros::server]
 pub async fn list_mine(
     source: Option<MediaSource>,
     limit: Option<PageSize>,
     offset: Option<PageOffset>,
 ) -> WebResult<Vec<Item>> {
-    boundary!({
-        let auth = require_auth().await?;
-        let media = expect_context::<Arc<dyn MediaStorage>>();
+    let auth = require_auth().await?;
+    let media = expect_context::<Arc<dyn MediaStorage>>();
 
-        let records = media
-            .list_media(
-                auth.user_id,
-                source.as_ref(),
-                limit.unwrap_or_default().exact_limit(),
-                offset.unwrap_or_default(),
-            )
-            .await?;
+    let records = media
+        .list_media(
+            auth.user_id,
+            source.as_ref(),
+            limit.unwrap_or_default().exact_limit(),
+            offset.unwrap_or_default(),
+        )
+        .await?;
 
-        Ok(records
-            .into_iter()
-            .map(|r| {
-                let url = common::media::media_url(&r.source, &r.sha256, &r.filename);
-                Item {
-                    sha256: r.sha256,
-                    filename: r.filename,
-                    source: r.source,
-                    content_type: r.content_type,
-                    size_bytes: r.size_bytes,
-                    url,
-                    created_at: UtcInstant::from(r.created_at),
-                }
-            })
-            .collect())
-    })
+    Ok(records
+        .into_iter()
+        .map(|r| {
+            let url = common::media::media_url(&r.source, &r.sha256, &r.filename);
+            Item {
+                sha256: r.sha256,
+                filename: r.filename,
+                source: r.source,
+                content_type: r.content_type,
+                size_bytes: r.size_bytes,
+                url,
+                created_at: UtcInstant::from(r.created_at),
+            }
+        })
+        .collect())
 }
 
 /// Returns storage usage for the authenticated user.
-#[server(endpoint = "/media/get_usage")]
-#[tracing::instrument(name = "web.media.get_usage")]
+#[macros::server]
 pub async fn get_usage() -> WebResult<UsageData> {
-    boundary!({
-        let auth = require_auth().await?;
-        let media = expect_context::<Arc<dyn MediaStorage>>();
-        let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
+    let auth = require_auth().await?;
+    let media = expect_context::<Arc<dyn MediaStorage>>();
+    let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
 
-        let used_bytes = media.get_user_upload_usage(auth.user_id).await?;
-        let quota_bytes = site_config.get_media_user_quota().await?;
-        let max_file_size_bytes = site_config.get_media_max_file_size().await?;
+    let used_bytes = media.get_user_upload_usage(auth.user_id).await?;
+    let quota_bytes = site_config.get_media_user_quota().await?;
+    let max_file_size_bytes = site_config.get_media_max_file_size().await?;
 
-        Ok(UsageData {
-            used_bytes,
-            quota_bytes,
-            max_file_size_bytes,
-        })
+    Ok(UsageData {
+        used_bytes,
+        quota_bytes,
+        max_file_size_bytes,
     })
 }
 
@@ -128,70 +122,67 @@ pub async fn get_usage() -> WebResult<UsageData> {
 ///
 /// If the item is referenced in any posts, it will not be deleted unless
 /// `force` is `Some(true)`.
-#[server(endpoint = "/media/delete")]
-#[tracing::instrument(name = "web.media.delete", skip(filename))]
+#[macros::server(skip(filename))]
 pub async fn delete(
     sha256: ContentHash,
     filename: Filename,
     source: MediaSource,
     force: Option<bool>,
 ) -> WebResult<DeleteResult> {
-    boundary!({
-        let auth = require_auth().await?;
-        let media = expect_context::<Arc<dyn MediaStorage>>();
-        let posts = expect_context::<Arc<dyn PostStorage>>();
+    let auth = require_auth().await?;
+    let media = expect_context::<Arc<dyn MediaStorage>>();
+    let posts = expect_context::<Arc<dyn PostStorage>>();
 
-        let url = common::media::media_url(&source, &sha256, &filename);
-        // `str::contains` wants a `Pattern`, which the newtype is not — take its `str`
-        // view once here rather than at each of the two call sites below.
-        let needle: &str = &url;
+    let url = common::media::media_url(&source, &sha256, &filename);
+    // `str::contains` wants a `Pattern`, which the newtype is not — take its `str`
+    // view once here rather than at each of the two call sites below.
+    let needle: &str = &url;
 
-        // A flat cap, not a page: this scans the author's posts for references to the
-        // media item, so it wants "as many as we are willing to look at" with no
-        // pagination behind it.
-        let scan_cap = RowLimit::at_most(1000);
-        let published = posts
-            .list_published_by_user(
-                &auth.username,
-                None,
-                scan_cap,
-                &crate::viewer::viewer_identity().await,
-                chrono::Utc::now(),
-            )
-            .await?;
+    // A flat cap, not a page: this scans the author's posts for references to the
+    // media item, so it wants "as many as we are willing to look at" with no
+    // pagination behind it.
+    let scan_cap = RowLimit::at_most(1000);
+    let published = posts
+        .list_published_by_user(
+            &auth.username,
+            None,
+            scan_cap,
+            &crate::viewer::viewer_identity().await,
+            chrono::Utc::now(),
+        )
+        .await?;
 
-        let drafts = posts
-            .list_drafts_by_user(auth.user_id, None, scan_cap, chrono::Utc::now())
-            .await?;
+    let drafts = posts
+        .list_drafts_by_user(auth.user_id, None, scan_cap, chrono::Utc::now())
+        .await?;
 
-        let referenced_in_posts: Vec<PostId> = published
-            .iter()
-            .chain(drafts.iter())
-            .filter(|post| post.body.contains(needle) || post.rendered_html.contains(needle))
-            .map(|post| post.post_id)
-            .collect();
+    let referenced_in_posts: Vec<PostId> = published
+        .iter()
+        .chain(drafts.iter())
+        .filter(|post| post.body.contains(needle) || post.rendered_html.contains(needle))
+        .map(|post| post.post_id)
+        .collect();
 
-        if !referenced_in_posts.is_empty() && !force.unwrap_or(false) {
-            return Ok(DeleteResult {
-                deleted: false,
-                referenced_in_posts,
-            });
-        }
-
-        media
-            .delete_media(auth.user_id, &sha256, &filename, &source)
-            .await
-            .map_err(InternalError::storage)?;
-
-        Ok(DeleteResult {
-            deleted: true,
+    if !referenced_in_posts.is_empty() && !force.unwrap_or(false) {
+        return Ok(DeleteResult {
+            deleted: false,
             referenced_in_posts,
-        })
+        });
+    }
+
+    media
+        .delete_media(auth.user_id, &sha256, &filename, &source)
+        .await
+        .map_err(InternalError::storage)?;
+
+    Ok(DeleteResult {
+        deleted: true,
+        referenced_in_posts,
     })
 }
 
 /// Maps a media upload `anyhow::Error` (carrying a `storage::MediaError`) to an
-/// `InternalError`, so `boundary!` projects it to the right `WebError`: a bad
+/// `InternalError`, so the error boundary projects it to the right `WebError`: a bad
 /// request / too-large / over-quota is client validation (`WebError::Validation`),
 /// an internal or unknown failure masks as a server error (`WebError::Server`). The
 /// upload metric is already emitted inside `storage::MediaManager`, so this is a
@@ -210,45 +201,42 @@ fn map_media_error(err: &anyhow::Error) -> InternalError {
 
 /// Streams a multipart file upload to storage and returns its stored URL/metadata.
 /// The multipart `#[server]` fn replacing the old `POST /media/upload` glue (#517).
-#[server(input = MultipartFormData, endpoint = "/media/upload")]
-#[tracing::instrument(name = "web.media.upload", skip_all)]
+#[macros::server(input = MultipartFormData, skip_all)]
 pub async fn upload(data: MultipartData) -> WebResult<UploadResponse> {
-    boundary!({
-        let auth = require_auth().await?;
-        let media = expect_context::<Arc<dyn MediaStorage>>();
-        let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
+    let auth = require_auth().await?;
+    let media = expect_context::<Arc<dyn MediaStorage>>();
+    let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
 
-        // `storage_path` is an axum `Extension` (server/src/lib.rs), not a leptos
-        // context value, so pull it via the request extractor rather than expect_context.
-        let axum::Extension(storage_path) = extract::<axum::Extension<Arc<PathBuf>>>()
-            .await
-            .map_err(|e| InternalError::server_message(format!("storage_path extract: {e}")))?;
+    // `storage_path` is an axum `Extension` (server/src/lib.rs), not a leptos
+    // context value, so pull it via the request extractor rather than expect_context.
+    let axum::Extension(storage_path) = extract::<axum::Extension<Arc<PathBuf>>>()
+        .await
+        .map_err(|e| InternalError::server_message(format!("storage_path extract: {e}")))?;
 
-        // `into_inner()` is `Some` on the server (the parsed multipart body).
-        let mut multipart = data
-            .into_inner()
-            .ok_or_else(|| InternalError::validation("missing multipart body"))?;
+    // `into_inner()` is `Some` on the server (the parsed multipart body).
+    let mut multipart = data
+        .into_inner()
+        .ok_or_else(|| InternalError::validation("missing multipart body"))?;
 
-        let field = multipart
-            .next_field()
-            .await
-            .map_err(|e| InternalError::validation(format!("bad multipart: {e}")))?
-            .ok_or_else(|| InternalError::validation("no file field"))?;
+    let field = multipart
+        .next_field()
+        .await
+        .map_err(|e| InternalError::validation(format!("bad multipart: {e}")))?
+        .ok_or_else(|| InternalError::validation("no file field"))?;
 
-        // The `file_name()`/`content_type()` borrows must end before `field` is moved
-        // into `upload` as the byte stream.
-        let filename =
-            MediaManager::validate_filename(field.file_name()).map_err(|e| map_media_error(&e))?;
-        // `multer::Field::content_type()` yields `Option<&mime::Mime>`; render it to a
-        // `String` so it outlives the field being moved into `upload` as the stream.
-        let content_type = field.content_type().map(ToString::to_string);
+    // The `file_name()`/`content_type()` borrows must end before `field` is moved
+    // into `upload` as the byte stream.
+    let filename =
+        MediaManager::validate_filename(field.file_name()).map_err(|e| map_media_error(&e))?;
+    // `multer::Field::content_type()` yields `Option<&mime::Mime>`; render it to a
+    // `String` so it outlives the field being moved into `upload` as the stream.
+    let content_type = field.content_type().map(ToString::to_string);
 
-        let manager = MediaManager::new(media, site_config, storage_path);
-        manager
-            .upload(auth.user_id, &filename, content_type.as_deref(), field)
-            .await
-            .map_err(|e| map_media_error(&e))
-    })
+    let manager = MediaManager::new(media, site_config, storage_path);
+    manager
+        .upload(auth.user_id, &filename, content_type.as_deref(), field)
+        .await
+        .map_err(|e| map_media_error(&e))
 }
 
 #[cfg(all(test, feature = "server"))]

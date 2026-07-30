@@ -1,11 +1,10 @@
-use leptos::prelude::*;
 use leptos::server_fn::codec::Json;
 
 // `TagLabel` is only named in the server-only `list` body (the client build
 // strips it via the `#[server]` stub), so gate it to match — the wire `TagSummary`
 // it builds now lives in `common::seed`.
 #[cfg(feature = "server")]
-use {common::tag::TagLabel, std::sync::Arc, storage::PostStorage};
+use {common::tag::TagLabel, leptos::prelude::*, std::sync::Arc, storage::PostStorage};
 
 use common::pagination::PageSize;
 use common::seed::TagSummary;
@@ -37,23 +36,20 @@ pub const MAX_TAG_LIMIT: u32 = PageSize::MAX;
 /// `prefix` stays `String` (not `Tag`): it is a partial search fragment matched
 /// with SQL `LIKE prefix%`, not a complete tag value — typing it `Tag` would
 /// reject valid partials (ADR-0063 §4 boundary policy; #409 Decision 7).
-#[server(endpoint = "/tags/list", input = Json)]
-#[tracing::instrument(name = "web.tags.list", skip(prefix))]
+#[macros::server(input = Json, skip(prefix))]
 pub async fn list(prefix: Option<String>, limit: Option<u32>) -> WebResult<Vec<TagSummary>> {
-    boundary!({
-        let posts = expect_context::<Arc<dyn PostStorage>>();
-        // `exact_limit`, not `fetch_limit`: the dropdown shows what it gets and has no
-        // "load more", so an extra probing row would just be fetched and discarded.
-        let resolved_limit = PageSize::clamped(limit.unwrap_or(DEFAULT_TAG_LIMIT)).exact_limit();
-        let records = posts.list_tags(prefix.as_deref(), resolved_limit).await?;
-        Ok(records
-            .into_iter()
-            .map(|rec| TagSummary {
-                slug: rec.tag_slug.clone(),
-                display: TagLabel::from(rec.tag_slug),
-            })
-            .collect())
-    })
+    let posts = expect_context::<Arc<dyn PostStorage>>();
+    // `exact_limit`, not `fetch_limit`: the dropdown shows what it gets and has no
+    // "load more", so an extra probing row would just be fetched and discarded.
+    let resolved_limit = PageSize::clamped(limit.unwrap_or(DEFAULT_TAG_LIMIT)).exact_limit();
+    let records = posts.list_tags(prefix.as_deref(), resolved_limit).await?;
+    Ok(records
+        .into_iter()
+        .map(|rec| TagSummary {
+            slug: rec.tag_slug.clone(),
+            display: TagLabel::from(rec.tag_slug),
+        })
+        .collect())
 }
 
 #[cfg(test)]
