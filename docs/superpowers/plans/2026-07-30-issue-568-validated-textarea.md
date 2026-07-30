@@ -155,7 +155,7 @@ error spacing from `.j-form-field`'s `gap:7px` to the parent container's gap, so
 it is a visible change wanting its own review. Label `web`; milestone unset for
 triage.
 
-- [ ] **Step 3: Commit the planning docs**
+- [x] **Step 3: Commit the planning docs** — `1d48bc63`
 
 ```bash
 git add docs/superpowers/specs/2026-07-30-issue-568-validated-textarea.md docs/superpowers/plans/2026-07-30-issue-568-validated-textarea.md
@@ -167,7 +167,7 @@ Run
 first — the pre-commit hook runs prettier and would otherwise restage
 mid-commit.
 
-- [ ] **Step 4: Confirm the tree is clean**
+- [x] **Step 4: Confirm the tree is clean**
 
 Run: `git status --porcelain` Expected: **empty**. Task 8's `validate` cannot
 run otherwise.
@@ -209,14 +209,14 @@ compile untouched: `auth/component.rs:47`, `:56`; `site:85`, `:94`;
 `backup:118`, `:128`; `invites:44`, `:53`; `registration:91`, `:100`;
 `email:41`; `password_reset:27`, `:87`.
 
-- [ ] **Step 1: There is no failing test to write — record why**
+- [x] **Step 1: There is no failing test to write — record why**
 
 This task changes no behaviour and the code cannot be host-tested (see Global
 Constraints). Its contract is that the **existing** e2e for the current
 `ValidatedInput` consumers keeps passing, which Step 4 checks. Skip straight to
 the implementation.
 
-- [ ] **Step 2: Write `Labelled`**
+- [x] **Step 2: Write `Labelled`**
 
 Add to `web/src/forms/component.rs`, above `ValidatedInput`. `Children`,
 `Signal`, and `Signal::derive` all come from `leptos::prelude::*`, already
@@ -279,7 +279,7 @@ fn Labelled(
 (`reactive_graph-0.2.14/src/wrappers.rs:853`), which is why `error` carries
 `#[prop(into)]` and `touched` does not.
 
-- [ ] **Step 3: Rewrite `ValidatedInput<T>` to delegate**
+- [x] **Step 3: Rewrite `ValidatedInput<T>` to delegate**
 
 Replace the body of `ValidatedInput` (currently `component.rs:52-81`) so it
 emits **only** the `<input>` and hands the chrome to `Labelled`. Keep the doc
@@ -319,7 +319,8 @@ The `describedby` binding (`help.map(|_| format!("{name}-help"))`) stays in
 is derived in `Labelled`. Both derive it from `name` independently — leave a
 comment above the `view!` saying so.
 
-- [ ] **Step 4: Verify it compiles for wasm and behaves identically**
+- [x] **Step 4: Verify it compiles for wasm and behaves identically** —
+      `auth.spec.ts` 12 passed, `backup.spec.ts` 4 passed
 
 Run: `devtool run -- cargo xtask check --no-test` Expected: PASS (this includes
 the wasm-target clippy step).
