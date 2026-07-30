@@ -24,7 +24,7 @@ one-line shells in the view).
 `xtask/Cargo.toml`); `web` crate with `nextest` host tests.
 
 **Spec:**
-[2026-07-29-issue-306-thin-component-guard.md](../specs/2026-07-29-issue-306-thin-component-guard.md)
+[2026-07-29-issue-306-thin-component-guard-spec.md](2026-07-29-issue-306-thin-component-guard-spec.md)
 — the "what" and "why". This plan is the "how"; decisions are cited as
 **D1**–**D11** and criteria as **AC1**–**AC15** rather than restated.
 
