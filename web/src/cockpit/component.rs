@@ -56,7 +56,7 @@ pub fn CockpitPage() -> impl IntoView {
                     if username.get_untracked().as_ref() != Some(&user) {
                         username.set(Some(user));
                     }
-                    state.resolve(page);
+                    state.adopt(page);
                 }
                 Ok(None) => bounce.set(true),
                 Err(err) => state.fail(err),

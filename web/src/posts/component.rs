@@ -1090,7 +1090,7 @@ pub fn UserTimelinePage() -> impl IntoView {
     Effect::new(move |_| {
         if let Some(result) = initial_page.try_get().flatten() {
             match result {
-                Ok(page) => state.resolve(page),
+                Ok(page) => state.adopt(page),
                 Err(err) => state.fail(err),
             }
             loaded.set(true);
@@ -1631,7 +1631,7 @@ pub fn SiteTagPage() -> impl IntoView {
     Effect::new(move |_| {
         if let Some(result) = initial_page.try_get().flatten() {
             match result {
-                Ok(page) => state.resolve(page),
+                Ok(page) => state.adopt(page),
                 Err(err) => state.fail(err),
             }
             loaded.set(true);
@@ -1752,7 +1752,7 @@ pub fn UserTagPage() -> impl IntoView {
     Effect::new(move |_| {
         if let Some(result) = initial_page.try_get().flatten() {
             match result {
-                Ok(page) => state.resolve(page),
+                Ok(page) => state.adopt(page),
                 Err(err) => state.fail(err),
             }
             loaded.set(true);

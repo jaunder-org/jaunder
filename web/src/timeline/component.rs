@@ -15,7 +15,7 @@ use common::pagination::PageSize;
 use common::seed::TimelinePage;
 use common::time::UtcInstant;
 
-use super::state::{LoadStatus, TimelineCursor, TimelineState};
+use super::state::TimelineState;
 use crate::error::WebResult;
 use crate::posts::PostCard;
 use crate::taglist::TagCtx as TagContext;
@@ -27,21 +27,14 @@ where
     F: FnOnce(Option<UtcInstant>, Option<PostId>, Option<PageSize>) -> Fut + 'static,
     Fut: Future<Output = WebResult<TimelinePage>> + 'static,
 {
-    if state.status.get_untracked().is_in_flight() || !state.has_more.get_untracked() {
+    // The guard, the cursor split, and the result fold are all host-tested on
+    // `TimelineState` (#671); what cannot run on the host — and so all that is left
+    // here — is `spawn_local`.
+    let Some((created_at, post_id)) = state.begin_load_more() else {
         return;
-    }
-    state.status.set(LoadStatus::InFlight);
-    let (created_at, post_id) = TimelineCursor::into_query(state.cursor.get_untracked());
+    };
     spawn_local(async move {
-        match fetch(created_at, post_id, Some(PageSize::default())).await {
-            Ok(page) => {
-                state.cursor.set(TimelineCursor::from_page(&page));
-                state.has_more.set(page.has_more);
-                state.rows.update(|rows| rows.extend(page.posts));
-                state.status.set(LoadStatus::Idle);
-            }
-            Err(err) => state.status.set(LoadStatus::Failed(err)),
-        }
+        state.append(fetch(created_at, post_id, Some(PageSize::default())).await);
     });
 }
 

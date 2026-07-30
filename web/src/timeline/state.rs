@@ -15,7 +15,7 @@ use common::ids::PostId;
 use common::seed::{TimelinePage, TimelinePostSummary};
 use common::time::UtcInstant;
 
-use crate::error::WebError;
+use crate::error::{WebError, WebResult};
 
 /// A keyset pagination cursor: the `(created_at, post_id)` pair a timeline page
 /// hands back to fetch the next page. Bundling the two — which always move
@@ -63,12 +63,20 @@ impl TimelineCursor {
 /// failure stays on `Result`'s error axis all the way to the render, which is the
 /// only place that decides how to display it. Stringifying at the producer threw
 /// the error *kind* away for no benefit.
+/// `NeverLoaded` is the default so "loaded yet?" is a property of the status
+/// rather than a parallel `RwSignal<bool>` each page carried alongside it (#671):
+/// "idle but never loaded" is now unrepresentable, the same way `Failed` already
+/// made "loading *and* errored" unrepresentable. `Unidentified` is the terminal
+/// outcome of a load that resolved to *nobody* — the cockpit's anonymous/expired
+/// session — which is neither a failure nor a page.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum LoadStatus {
     #[default]
+    NeverLoaded,
     Idle,
     InFlight,
     Failed(WebError),
+    Unidentified,
 }
 
 impl LoadStatus {
@@ -86,7 +94,7 @@ impl LoadStatus {
     pub fn into_failure(self) -> Option<WebError> {
         match self {
             Self::Failed(error) => Some(error),
-            Self::Idle | Self::InFlight => None,
+            Self::NeverLoaded | Self::Idle | Self::InFlight | Self::Unidentified => None,
         }
     }
 }
@@ -106,20 +114,35 @@ pub struct TimelineState {
 }
 
 impl TimelineState {
-    /// Adopt a page's rows + cursor (a projector seed or a fresh fetch),
-    /// replacing what's shown.
+    /// Adopt a page's rows + cursor — a projector seed or a fresh fetch —
+    /// replacing what's shown and settling to idle.
+    ///
+    /// Settling to `Idle` is what lets this one method serve **both** the seed
+    /// path and the fetch-resolve path; the separate `resolve()` it replaced
+    /// differed only by that line (#671). It also clears any prior failure, so a
+    /// successful refetch after an error recovers.
     pub fn adopt(&self, page: TimelinePage) {
         self.cursor.set(TimelineCursor::from_page(&page));
         self.has_more.set(page.has_more);
         self.rows.set(page.posts);
+        self.status.set(LoadStatus::Idle);
     }
 
-    /// Resolve a re-fetch into the signals and settle to idle (clearing any prior
-    /// failure). wasm-only: re-fetches resolve on the client, in the page's
-    /// client-side `Effect`.
-    pub fn resolve(&self, page: TimelinePage) {
-        self.adopt(page);
-        self.status.set(LoadStatus::Idle);
+    /// Adopt a projector seed when the page was seeded for these params. `None`
+    /// means the projector painted a different page (or none), so the timeline
+    /// stays `NeverLoaded` and the reactive fetch fills it in.
+    pub fn adopt_seed(&self, page: Option<TimelinePage>) {
+        if let Some(page) = page {
+            self.adopt(page);
+        }
+    }
+
+    /// Apply an initial/refetch result: replace on success, reset on failure.
+    pub fn apply(&self, result: WebResult<TimelinePage>) {
+        match result {
+            Ok(page) => self.adopt(page),
+            Err(error) => self.fail(error),
+        }
     }
 
     /// Record a fetch failure: empty the rows (don't show a stale page), clear
@@ -130,6 +153,48 @@ impl TimelineState {
         self.cursor.set(None);
         self.has_more.set(false);
         self.status.set(LoadStatus::Failed(error));
+    }
+
+    /// Record that the load resolved to no viewer at all (anonymous / expired).
+    /// Clears like a failure, but is not one — the page decides what to paint,
+    /// which for the cockpit is a redirect to `/login`.
+    pub fn unidentified(&self) {
+        self.rows.set(Vec::new());
+        self.cursor.set(None);
+        self.has_more.set(false);
+        self.status.set(LoadStatus::Unidentified);
+    }
+
+    /// Apply a load-more result: **extend** on success, and on failure mark the
+    /// status *only*.
+    ///
+    /// Deliberately asymmetric with [`apply`](Self::apply), which clears: page 1
+    /// succeeded and only page 2 failed, so throwing page 1 away would lose work
+    /// the user already has.
+    pub fn append(&self, result: WebResult<TimelinePage>) {
+        match result {
+            Ok(page) => {
+                self.cursor.set(TimelineCursor::from_page(&page));
+                self.has_more.set(page.has_more);
+                self.rows.update(|rows| rows.extend(page.posts));
+                self.status.set(LoadStatus::Idle);
+            }
+            Err(error) => self.status.set(LoadStatus::Failed(error)),
+        }
+    }
+
+    /// Claim the load-more slot: `None` when there is nothing to fetch or a fetch
+    /// is already in flight, else the current cursor as the `(created_at, post_id)`
+    /// query pair, having marked the status `InFlight`.
+    ///
+    /// Returning the query pair rather than a bare `bool` keeps the cursor read
+    /// and its split host-tested, leaving the wasm caller a six-line shell.
+    pub fn begin_load_more(&self) -> Option<(Option<UtcInstant>, Option<PostId>)> {
+        if self.status.get_untracked().is_in_flight() || !self.has_more.get_untracked() {
+            return None;
+        }
+        self.status.set(LoadStatus::InFlight);
+        Some(TimelineCursor::into_query(self.cursor.get_untracked()))
     }
 }
 
@@ -213,13 +278,13 @@ mod tests {
     }
 
     #[test]
-    fn default_state_is_empty_and_idle() {
+    fn default_status_is_never_loaded() {
         with_owner(|| {
             let state = TimelineState::default();
             assert!(state.rows.get().is_empty());
             assert_eq!(state.cursor.get(), None);
             assert!(!state.has_more.get());
-            assert_eq!(state.status.get(), LoadStatus::Idle);
+            assert_eq!(state.status.get(), LoadStatus::NeverLoaded);
         });
     }
 
@@ -246,13 +311,185 @@ mod tests {
     }
 
     #[test]
-    fn resolve_adopts_and_clears_a_prior_failure() {
+    fn adopt_settles_to_idle_and_clears_a_prior_failure() {
         with_owner(|| {
             let state = TimelineState::default();
             state.fail(WebError::validation("boom"));
-            state.resolve(page_with(vec![sample_summary()], None, None, false));
+            state.adopt(page_with(vec![sample_summary()], None, None, false));
             assert_eq!(state.rows.get().len(), 1);
-            assert_eq!(state.status.get(), LoadStatus::Idle, "failure cleared");
+            assert_eq!(
+                state.status.get(),
+                LoadStatus::Idle,
+                "adopt IS the old resolve"
+            );
+        });
+    }
+
+    #[test]
+    fn adopt_seed_adopts_only_when_seeded() {
+        with_owner(|| {
+            let state = TimelineState::default();
+            state.adopt_seed(None);
+            assert!(state.rows.get().is_empty());
+            assert_eq!(
+                state.status.get(),
+                LoadStatus::NeverLoaded,
+                "not seeded, not loaded"
+            );
+
+            state.adopt_seed(Some(page_with(vec![sample_summary()], None, None, false)));
+            assert_eq!(state.rows.get().len(), 1);
+            assert_eq!(state.status.get(), LoadStatus::Idle);
+        });
+    }
+
+    #[test]
+    fn apply_ok_adopts_and_apply_err_empties() {
+        with_owner(|| {
+            let state = TimelineState::default();
+            state.apply(Ok(page_with(
+                vec![sample_summary()],
+                Some(instant()),
+                Some(PostId::from(7)),
+                true,
+            )));
+            assert_eq!(state.rows.get().len(), 1);
+            assert!(state.has_more.get());
+
+            state.apply(Err(WebError::validation("boom")));
+            assert!(
+                state.rows.get().is_empty(),
+                "no stale page on a refetch failure"
+            );
+            assert_eq!(state.cursor.get(), None);
+            assert!(!state.has_more.get());
+            assert_eq!(
+                state.status.get(),
+                LoadStatus::Failed(WebError::validation("boom"))
+            );
+        });
+    }
+
+    #[test]
+    fn unidentified_empties_the_timeline_and_marks_the_status() {
+        with_owner(|| {
+            let state = TimelineState::default();
+            state.adopt(page_with(vec![sample_summary()], None, None, true));
+            state.unidentified();
+            assert!(state.rows.get().is_empty());
+            assert_eq!(state.cursor.get(), None);
+            assert!(!state.has_more.get());
+            assert_eq!(state.status.get(), LoadStatus::Unidentified);
+        });
+    }
+
+    // All four effects asserted, so an `append` that forgets the cursor — and
+    // therefore refetches page 1 forever — cannot pass.
+    #[test]
+    fn append_ok_extends_rows_and_advances_the_cursor() {
+        with_owner(|| {
+            let state = TimelineState::default();
+            state.adopt(page_with(
+                vec![sample_summary()],
+                Some(instant()),
+                Some(PostId::from(7)),
+                true,
+            ));
+            state.status.set(LoadStatus::InFlight);
+
+            let later: UtcInstant = "2026-07-20T10:30:00Z".parse().unwrap();
+            state.append(Ok(page_with(
+                vec![sample_summary(), sample_summary()],
+                Some(later),
+                Some(PostId::from(9)),
+                false,
+            )));
+
+            assert_eq!(state.rows.get().len(), 3, "extends, does not replace");
+            assert_eq!(
+                state.cursor.get(),
+                Some(TimelineCursor {
+                    created_at: later,
+                    post_id: PostId::from(9)
+                }),
+                "cursor advances to the new page"
+            );
+            assert!(!state.has_more.get(), "has_more is overwritten");
+            assert_eq!(state.status.get(), LoadStatus::Idle);
+        });
+    }
+
+    // A load-more failure keeps the pages already fetched — unlike `apply`, which
+    // clears. The asymmetry is deliberate: page 1 succeeded, only page 2 failed.
+    #[test]
+    fn append_err_marks_the_status_and_retains_the_rows() {
+        with_owner(|| {
+            let state = TimelineState::default();
+            state.adopt(page_with(
+                vec![sample_summary()],
+                Some(instant()),
+                Some(PostId::from(7)),
+                true,
+            ));
+            state.append(Err(WebError::validation("boom")));
+
+            assert_eq!(
+                state.rows.get().len(),
+                1,
+                "page 1 survives a page-2 failure"
+            );
+            assert_eq!(
+                state.cursor.get(),
+                Some(TimelineCursor {
+                    created_at: instant(),
+                    post_id: PostId::from(7)
+                }),
+                "cursor untouched"
+            );
+            assert!(state.has_more.get(), "has_more untouched");
+            assert_eq!(
+                state.status.get(),
+                LoadStatus::Failed(WebError::validation("boom"))
+            );
+        });
+    }
+
+    #[test]
+    fn begin_load_more_guards_then_marks_in_flight() {
+        with_owner(|| {
+            let state = TimelineState::default();
+
+            state.has_more.set(false);
+            assert_eq!(state.begin_load_more(), None, "nothing more to fetch");
+
+            state.has_more.set(true);
+            state.status.set(LoadStatus::InFlight);
+            assert_eq!(state.begin_load_more(), None, "already in flight");
+
+            state.status.set(LoadStatus::Idle);
+            state.cursor.set(Some(TimelineCursor {
+                created_at: instant(),
+                post_id: PostId::from(7),
+            }));
+            assert_eq!(
+                state.begin_load_more(),
+                Some((Some(instant()), Some(PostId::from(7)))),
+                "hands back the cursor as a query pair"
+            );
+            assert_eq!(
+                state.status.get(),
+                LoadStatus::InFlight,
+                "and marks it in flight"
+            );
+        });
+    }
+
+    #[test]
+    fn begin_load_more_without_a_cursor_yields_an_empty_query() {
+        with_owner(|| {
+            let state = TimelineState::default();
+            state.has_more.set(true);
+            assert_eq!(state.begin_load_more(), Some((None, None)));
         });
     }
 
@@ -281,19 +518,23 @@ mod tests {
     }
 
     #[test]
-    fn load_status_accessors_cover_each_arm() {
+    fn is_in_flight_covers_every_status() {
+        assert!(!LoadStatus::NeverLoaded.is_in_flight());
         assert!(!LoadStatus::Idle.is_in_flight());
         assert!(LoadStatus::InFlight.is_in_flight());
         assert!(!LoadStatus::Failed(WebError::validation("boom")).is_in_flight());
+        assert!(!LoadStatus::Unidentified.is_in_flight());
     }
 
     // The payload is the typed `WebError`, not a pre-rendered string: the error KIND
     // survives the round trip, so the render decides how to display it and nothing
     // stringifies eagerly at the producer (#671 D3).
     #[test]
-    fn into_failure_returns_the_typed_error() {
+    fn into_failure_covers_every_status() {
+        assert_eq!(LoadStatus::NeverLoaded.into_failure(), None);
         assert_eq!(LoadStatus::Idle.into_failure(), None);
         assert_eq!(LoadStatus::InFlight.into_failure(), None);
+        assert_eq!(LoadStatus::Unidentified.into_failure(), None);
         assert_eq!(
             LoadStatus::Failed(WebError::validation("boom")).into_failure(),
             Some(WebError::validation("boom")),

@@ -452,7 +452,7 @@ Adds the two new statuses and every remaining transition, and thins
   `LoadStatus::{NeverLoaded, Unidentified}`, `NeverLoaded` being `#[default]`.
   `resolve()` is **deleted**.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```rust
 #[test]
@@ -641,16 +641,17 @@ Delete `default_state_is_empty_and_idle` from T1 (superseded by
 older `load_status_accessors_cover_each_arm` (superseded by the two exhaustive
 tests above).
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 ```
 cargo nextest run -p web timeline::state
 ```
 
 Expected: FAIL — `NeverLoaded`, `Unidentified`, `adopt_seed`, `apply`,
-`unidentified`, `append`, `begin_load_more` all undefined.
+`unidentified`, `append`, `begin_load_more` all undefined. _Observed: 18 ×
+`E0599`, one per missing variant/method._
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 Add the two `LoadStatus` variants (`NeverLoaded` carrying `#[default]`, moved
 off `Idle`) and the seven `TimelineState` methods to the signatures in
@@ -664,7 +665,7 @@ One invariant the tests cannot express, so state it in a doc comment on `adopt`:
 settling to `Idle` is what makes `adopt` serve **both** the projector-seed path
 and the fetch-resolve path, which is why `resolve` no longer exists (D2).
 
-- [ ] **Step 4: Thin `spawn_load_more`**
+- [x] **Step 4: Thin `spawn_load_more`**
 
 Replace `component.rs:73-94`'s body with the six-line shell from spec §3,
 delegating to `begin_load_more` and `append`. Its `where` clause and generics
@@ -672,14 +673,14 @@ are unchanged. This is where `LoadStatus` and `TimelineCursor` finally leave
 `component.rs`'s `use super::state::{…}` — clippy's `-D warnings` will name
 them; prune exactly what it names.
 
-- [ ] **Step 5: Point the five `resolve` callers at `adopt`**
+- [x] **Step 5: Point the five `resolve` callers at `adopt`**
 
 `state.resolve(page)` → `state.adopt(page)` at `posts/component.rs:1086`,
 `:1627`, `:1748`, `home/component.rs:46`, `cockpit/component.rs:59`. Nothing
 else on those pages changes yet — each keeps its own `loaded` signal and its own
 view shape until T7–T9.
 
-- [ ] **Step 6: Run the tests, verify they pass**
+- [x] **Step 6: Run the tests, verify they pass**
 
 ```
 cargo nextest run -p web timeline::state
