@@ -1615,7 +1615,7 @@ git commit -m "refactor(cockpit): put the home feed on TimelineGate (#671)"
 
 **Files:**
 
-- Create: `docs/adr/drafts/reactive-paint-fold.md`
+- Create: `docs/adr/0083-reactive-paint-fold.md`
 
 **Interfaces:** none — documentation only. Numberless by design;
 `cargo xtask adr promote` assigns the number and updates `docs/README.md` at
@@ -1652,7 +1652,7 @@ as one reusable pattern, and cite #306, #520, ADR-0070 §6, ADR-0041 §2, and
 - [x] **Step 2: Format and verify the gate sees it**
 
 ```
-prettier -w docs/adr/drafts/reactive-paint-fold.md
+prettier -w docs/adr/0083-reactive-paint-fold.md
 devtool run -- cargo xtask check
 ```
 

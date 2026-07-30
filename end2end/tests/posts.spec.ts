@@ -1047,7 +1047,7 @@ test("unseeded client-nav to / paints Loading with the masthead intact", async (
   });
 
   // Register the stall BEFORE the click, or the fetch escapes the route.
-  const release = await stallServerFn(page, "list_local_timeline");
+  const release = await stallServerFn(page, "posts/list_local_timeline");
   await click(page, ".j-brand");
 
   // Loading arm: the gate paints `.j-loading`, and the chrome sibling region keeps
