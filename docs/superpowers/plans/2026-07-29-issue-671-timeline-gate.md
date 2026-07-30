@@ -1254,7 +1254,7 @@ The risk concentration. The e2e is written **first**, as the failing test.
   `helpers.ts` — routes `**/api/${endpoint}`, holds each request until the
   returned release fn is called, then continues it.
 
-- [ ] **Step 1: Add the stall helper**
+- [x] **Step 1: Add the stall helper**
 
 `failServerFn` (`helpers.ts:105-112`) is the existing `page.route` precedent;
 this is its releasable sibling. It must hold the request rather than failing it,
@@ -1291,7 +1291,7 @@ nothing in the test needs the route torn down. (If an assertion throws before
 `release()` the handler stays parked until teardown — acceptable for a single
 test, and the alternative would swallow the real failure.)
 
-- [ ] **Step 2: Write the failing e2e**
+- [x] **Step 2: Write the failing e2e**
 
 Add `stallServerFn` to the existing `./helpers` import at
 `end2end/tests/posts.spec.ts:8` (`expect` already comes from `./fixtures`), then
@@ -1375,7 +1375,7 @@ test("unseeded client-nav to / paints Loading with the masthead intact", async (
 sits inside the `inner_html` wrapper, so stamping it proves the whole wrapped
 subtree survived — a torn-down wrapper takes `.j-hero` with it.
 
-- [ ] **Step 3: Run the e2e, verify it fails**
+- [x] **Step 3: Run the e2e, verify it fails**
 
 ```
 cargo xtask e2e-local posts.spec.ts
@@ -1384,7 +1384,7 @@ cargo xtask e2e-local posts.spec.ts
 Expected: FAIL — home still renders the empty-rows placeholder, so `.j-loading`
 never appears and `waitForSelector` times out.
 
-- [ ] **Step 4: Rewrite `HomePage`**
+- [x] **Step 4: Rewrite `HomePage`**
 
 Change the import at `:10` from
 `use crate::timeline::{TimelineRows, TimelineState};` to
@@ -1425,7 +1425,7 @@ or alter its `<div>`, only relocate it into the gate's `children` slot.
     }
 ```
 
-- [ ] **Step 5: Run the e2e, verify it passes**
+- [x] **Step 5: Run the e2e, verify it passes**
 
 ```
 devtool run -- cargo xtask check --no-test
@@ -1450,7 +1450,7 @@ only one of them implicates the design.** Do not weaken any assertion.
   means D8 is wrong.** Stop and revise the spec's D8 with what you observed; do
   not drop the stamp check to get green.
 
-- [ ] **Step 6: Confirm the neighbours still pass**
+- [x] **Step 6: Confirm the neighbours still pass**
 
 ```
 cargo xtask e2e-local authed-flash.spec.ts
@@ -1467,7 +1467,7 @@ task where the masthead's `inner_html` div actually relocates (into the gate's
 relocation is invisible on a **seeded** load. Step 2's stamp check covers the
 _unseeded_ path; together they cover both.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 devtool run -- cargo xtask check

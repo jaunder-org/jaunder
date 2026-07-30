@@ -5,7 +5,13 @@ import {
   slowBrowserFirstNavigationTimeoutMs,
   slowBrowserTimeoutMs,
 } from "./fixtures";
-import { goto, click, waitForSelector, register } from "./helpers";
+import {
+  goto,
+  click,
+  waitForSelector,
+  register,
+  stallServerFn,
+} from "./helpers";
 import { createPerfProbe } from "./perf";
 import { seedPostsViaTool } from "./seed";
 import { SEL } from "./selectors";
@@ -1018,4 +1024,70 @@ test("scheduling a post shows a Scheduled-for badge on the drafts page", async (
   const badge = scheduledRow.locator(".j-badge-scheduled");
   await expect(badge).toBeVisible();
   await expect(badge).toContainText("Scheduled for");
+});
+
+// #671: `/` is the one timeline whose Loading arm is reachable ONLY by a client-side
+// nav — a full load of it is always projector-seeded (`site_timeline` has no shell
+// fallback, unlike the profile/tag routes), so it never paints Loading. Before #671 an
+// unseeded arrival flashed `TimelineRows`' "No posts yet." empty state; the gate now
+// paints `.j-loading` until the fetch resolves. This is the ONE visible change in #671.
+test("unseeded client-nav to / paints Loading with the masthead intact", async ({
+  page,
+}) => {
+  // Enter on a NON-`/` URL. Home reads its projector seed from the INITIAL document
+  // and that context persists for the SPA's life, so a document entered on `/` stays
+  // seeded and never reaches the Loading arm. `/login` is the SPA shell: no seed.
+  await goto(page, "/login");
+
+  // A full document load would wipe this; a client-side nav preserves it — the same
+  // probe auth.spec.ts uses to prove its login/logout navs are client-side.
+  await page.evaluate(() => {
+    (window as Window & { __jaunderNoReload?: boolean }).__jaunderNoReload =
+      true;
+  });
+
+  // Register the stall BEFORE the click, or the fetch escapes the route.
+  const release = await stallServerFn(page, "list_local_timeline");
+  await click(page, ".j-brand");
+
+  // Loading arm: the gate paints `.j-loading`, and the chrome sibling region keeps
+  // the masthead up alongside it. The masthead — not `.j-scroll` — is the anchor,
+  // because `TimelineRows` alone emits `.j-scroll` and it does not exist here.
+  await waitForSelector(page, ".j-loading");
+  const masthead = page.locator(".j-hero");
+  await expect(masthead).toBeVisible();
+  await expect(page.locator(".j-scroll")).toHaveCount(0);
+
+  // The nav really was client-side — otherwise the Loading arm above is a full-load
+  // artifact and this test proves nothing about the gate.
+  const sameDocument = await page.evaluate(
+    () =>
+      (window as Window & { __jaunderNoReload?: boolean }).__jaunderNoReload ===
+      true,
+  );
+  expect(sameDocument).toBe(true);
+
+  // Stamp the live node, then let the fetch through.
+  await masthead.evaluate((el) => {
+    el.setAttribute("data-j-probe", "1");
+  });
+  await release();
+
+  // Rows arm: the SAME masthead node survives the transition. Emitting `{children}`
+  // inside each match arm would have torn it down and rebuilt it, losing the stamp —
+  // the #653 hazard class, on projector-coincident markup.
+  await waitForSelector(page, ".j-scroll");
+  await expect(page.locator(".j-hero[data-j-probe='1']")).toHaveCount(1);
+  await expect(page.locator(".j-loading")).toHaveCount(0);
+
+  // ...and still precedes the rows. Playwright locators do not express document
+  // order, so ask the DOM directly.
+  const mastheadFirst = await page.evaluate(() => {
+    const hero = document.querySelector(".j-hero");
+    const scroll = document.querySelector(".j-scroll");
+    if (!hero || !scroll) return false;
+    // DOCUMENT_POSITION_FOLLOWING === 4
+    return (hero.compareDocumentPosition(scroll) & 4) !== 0;
+  });
+  expect(mastheadFirst).toBe(true);
 });

@@ -112,6 +112,35 @@ export async function failServerFn(
   );
 }
 
+/**
+ * Hold every call to `/api/${endpoint}` open until the returned release fn runs, then
+ * let it continue to the real backend.
+ *
+ * The releasable sibling of {@link failServerFn}: instead of fulfilling an immediate
+ * 500, this suspends the request so a *loading* state can be observed
+ * deterministically rather than raced. Register it **before** the action that triggers
+ * the fetch, or the request escapes the route.
+ *
+ * Deliberately no `page.unroute` on release — unrouting immediately would race the
+ * still-suspended handler's `continue()`, and the route is harmless once released.
+ */
+export async function stallServerFn(
+  page: Page,
+  endpoint: string,
+): Promise<() => Promise<void>> {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route(`**/api/${endpoint}`, async (route) => {
+    await gate;
+    await route.continue();
+  });
+  return async () => {
+    release();
+  };
+}
+
 // ---------------------------------------------------------------------------
 // High-level flows
 // ---------------------------------------------------------------------------
