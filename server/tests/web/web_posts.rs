@@ -5,7 +5,7 @@ use chrono::Datelike;
 use common::ids::{PostId, UserId};
 use common::seed::{PostResponse, TimelinePage};
 use common::tag::TagLabel;
-use common::test_support::parse_audience_name;
+use common::test_support::{parse_audience_name, parse_row_limit};
 use common::time::UtcInstant;
 use common::visibility::{AudienceBase, AudienceSelection};
 use storage::PostFormat;
@@ -1126,7 +1126,7 @@ async fn create_post_with_future_publish_at_is_scheduled(#[case] backend: Backen
         .posts
         .list_published(
             None,
-            50,
+            parse_row_limit("50"),
             &common::visibility::ViewerIdentity::Anonymous,
             chrono::Utc::now(),
         )
@@ -1180,7 +1180,7 @@ async fn create_post_publish_without_publish_at_is_live_now(#[case] backend: Bac
         .posts
         .list_published(
             None,
-            50,
+            parse_row_limit("50"),
             &common::visibility::ViewerIdentity::Anonymous,
             now,
         )

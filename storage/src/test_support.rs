@@ -1158,6 +1158,7 @@ mod tests {
         SeedUser,
     };
     use chrono::Utc;
+    use common::test_support::parse_row_limit;
     use common::visibility::ViewerIdentity;
     use rstest::*;
     use rstest_reuse::*;
@@ -1484,7 +1485,7 @@ mod tests {
             .list_published_by_user(
                 &author.username,
                 None,
-                50,
+                parse_row_limit("50"),
                 &ViewerIdentity::Anonymous,
                 Utc::now(),
             )

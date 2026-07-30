@@ -7,17 +7,26 @@ use leptos::server_fn::codec::Json;
 #[cfg(feature = "server")]
 use {common::tag::TagLabel, std::sync::Arc, storage::PostStorage};
 
+use common::pagination::PageSize;
 use common::seed::TagSummary;
 
 use crate::error::WebResult;
 
 /// Default number of suggestions returned to the autocomplete dropdown when
 /// the caller doesn't specify a limit.
+///
+/// Expressed as a [`PageSize`] because that type already carries this bound: its
+/// range is `1..=50`, exactly the clamp this endpoint used to apply by hand, and
+/// `PageSize::clamped` is the coerce-rather-than-reject policy a public `limit=`
+/// param wants (#696; the `AtomPub` default of 25 is recorded the same way).
 pub const DEFAULT_TAG_LIMIT: u32 = 10;
 
 /// Hard upper bound on the autocomplete result set; protects the database
 /// against pathological requests.
-pub const MAX_TAG_LIMIT: u32 = 50;
+///
+/// Equal to `PageSize::MAX` — the hand-rolled `.clamp(1, MAX_TAG_LIMIT)` this
+/// replaced was a re-implementation of [`PageSize::clamped`].
+pub const MAX_TAG_LIMIT: u32 = PageSize::MAX;
 
 /// Returns tag suggestions for the autocomplete dropdown.
 ///
@@ -33,7 +42,9 @@ pub const MAX_TAG_LIMIT: u32 = 50;
 pub async fn list_tags(prefix: Option<String>, limit: Option<u32>) -> WebResult<Vec<TagSummary>> {
     boundary!("list_tags", {
         let posts = expect_context::<Arc<dyn PostStorage>>();
-        let resolved_limit = limit.unwrap_or(DEFAULT_TAG_LIMIT).clamp(1, MAX_TAG_LIMIT);
+        // `exact_limit`, not `fetch_limit`: the dropdown shows what it gets and has no
+        // "load more", so an extra probing row would just be fetched and discarded.
+        let resolved_limit = PageSize::clamped(limit.unwrap_or(DEFAULT_TAG_LIMIT)).exact_limit();
         let records = posts.list_tags(prefix.as_deref(), resolved_limit).await?;
         Ok(records
             .into_iter()

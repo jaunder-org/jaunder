@@ -9,7 +9,7 @@ use thiserror::Error;
 
 use crate::backend::Backend;
 use common::ids::UserId;
-use common::pagination::PageOffset;
+use common::pagination::{PageOffset, RowLimit};
 
 /// A media metadata record returned by [`MediaStorage`] queries.
 #[derive(Clone, Debug)]
@@ -93,7 +93,7 @@ pub trait MediaStorage: Send + Sync {
         &self,
         user_id: UserId,
         source: Option<&'a MediaSource>,
-        limit: u32,
+        limit: RowLimit,
         offset: PageOffset,
     ) -> sqlx::Result<Vec<MediaRecord>>;
 
@@ -182,6 +182,9 @@ where
     // `Option` wrapper has to be named explicitly — same reason the `Option<String>` bound
     // it replaces was spelled out.
     for<'q> Option<AbsoluteUrl>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    // `RowLimit` binds as itself via the ADR-0071 sqlx bridge (delegates to `i64`) —
+    // the listing's `LIMIT` placeholder (#696).
+    for<'q> RowLimit: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
@@ -255,7 +258,7 @@ where
         &self,
         user_id: UserId,
         source: Option<&'a MediaSource>,
-        limit: u32,
+        limit: RowLimit,
         offset: PageOffset,
     ) -> sqlx::Result<Vec<MediaRecord>> {
         // Fetch raw rows (not `query_as::<MediaRow>`) so each row decodes
@@ -273,7 +276,7 @@ where
             )
             .bind(user_id)
             .bind(*src)
-            .bind(i64::from(limit))
+            .bind(limit)
             .bind(i64::from(offset.value()))
             .fetch_all(&self.pool)
             .await?
@@ -286,7 +289,7 @@ where
                  LIMIT $2 OFFSET $3",
             )
             .bind(user_id)
-            .bind(i64::from(limit))
+            .bind(limit)
             .bind(i64::from(offset.value()))
             .fetch_all(&self.pool)
             .await?
@@ -380,6 +383,7 @@ mod tests {
     use crate::test_support::{backends, Backend, SeedUser, TestEnv};
     use common::test_support::{
         parse_byte_size, parse_content_hash, parse_content_type, parse_filename, parse_page_offset,
+        parse_row_limit,
     };
     use rstest::*;
     use rstest_reuse::*;
@@ -557,7 +561,7 @@ mod tests {
         let listed = env
             .state
             .media
-            .list_media(user_id, None, 10, parse_page_offset("0"))
+            .list_media(user_id, None, parse_row_limit("10"), parse_page_offset("0"))
             .await
             .unwrap();
         assert_eq!(
@@ -611,7 +615,12 @@ mod tests {
         base.close_pool().await;
         let result = state
             .media
-            .list_media(UserId::from(1), None, 10, parse_page_offset("0"))
+            .list_media(
+                UserId::from(1),
+                None,
+                parse_row_limit("10"),
+                parse_page_offset("0"),
+            )
             .await;
         assert!(result.is_err());
     }

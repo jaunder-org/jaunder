@@ -22,6 +22,8 @@ use common::media::UploadResponse;
 use {
     crate::auth::require_auth,
     crate::error::InternalError,
+    // Server-only: the reference scan's flat cap. The CSR build never binds a query.
+    common::pagination::RowLimit,
     leptos_axum::extract,
     std::path::PathBuf,
     std::sync::Arc,
@@ -78,7 +80,7 @@ pub async fn list_my_media(
             .list_media(
                 auth.user_id,
                 source.as_ref(),
-                limit.unwrap_or_default().value(),
+                limit.unwrap_or_default().exact_limit(),
                 offset.unwrap_or_default(),
             )
             .await?;
@@ -144,18 +146,22 @@ pub async fn delete_media(
         // view once here rather than at each of the two call sites below.
         let needle: &str = &url;
 
+        // A flat cap, not a page: this scans the author's posts for references to the
+        // media item, so it wants "as many as we are willing to look at" with no
+        // pagination behind it.
+        let scan_cap = RowLimit::at_most(1000);
         let published = posts
             .list_published_by_user(
                 &auth.username,
                 None,
-                1000,
+                scan_cap,
                 &crate::viewer::viewer_identity().await,
                 chrono::Utc::now(),
             )
             .await?;
 
         let drafts = posts
-            .list_drafts_by_user(auth.user_id, None, 1000, chrono::Utc::now())
+            .list_drafts_by_user(auth.user_id, None, scan_cap, chrono::Utc::now())
             .await?;
 
         let referenced_in_posts: Vec<PostId> = published

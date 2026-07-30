@@ -190,13 +190,13 @@ Per spec §1/§5. Each `limit: u32` becomes `limit: RowLimit`; each
 `let limit_i64 = i64::from(limit);` is deleted and both its binds take `limit`
 directly.
 
-- [ ] Retype the 16 signatures (spec's site table has the exact lines)
-- [ ] Rewrite the 14 inline `.bind(i64::from(limit))` → `.bind(limit)`
-- [ ] Delete `posts.rs:1559`'s hoist; bind `limit` at `:1570`/`:1580`
-- [ ] Where inference then fails, add an explicit annotation — **do not**
+- [x] Retype the 16 signatures (spec's site table has the exact lines)
+- [x] Rewrite the 14 inline `.bind(i64::from(limit))` → `.bind(limit)`
+- [x] Delete `posts.rs:1559`'s hoist; bind `limit` at `:1570`/`:1580`
+- [x] Where inference then fails, add an explicit annotation — **do not**
       reinstate `i64::from`; report any site where that is impossible
-- [ ] `rg -n 'i64::from\(limit' storage/src` → no hits
-- [ ] `cargo xtask check` → green; commit
+- [x] `rg -n 'i64::from\(limit' storage/src` → no hits
+- [x] `cargo xtask check` → green; commit
 
 **Watch for:** the generic stores restate row tuples and bind types as
 `where`-clause bounds (ADR-0019 — supertrait clauses don't propagate). #686
@@ -207,9 +207,29 @@ that binds one.
 
 ## Task 3 — the call sites stop doing arithmetic
 
-**Files:** `web/src/posts/api/listing.rs`, `web/src/tags/api.rs`,
-`web/src/media/api.rs`, `server/src/atompub/service.rs`. **Test:** existing web
-tests; plus one new test per spec §4's has-more claim.
+**Files:** `web/src/posts/api/listing.rs`, `web/src/posts/api.rs`,
+`web/src/tags/api.rs`, `web/src/media/api.rs`, `server/src/atompub/service.rs`,
+`test-support/src/{lib,main}.rs`.
+
+**Scope correction (verified by compiling after task 2).** This task's site list
+was under-counted. The compiler names **12 call sites plus a crate the plan
+never mentioned**:
+
+| Site                                                     | In the original list? |
+| -------------------------------------------------------- | --------------------- |
+| `web/src/posts/api/listing.rs` `:74 :106 :185 :232 :273` | yes (5)               |
+| `web/src/tags/api.rs:37`                                 | yes                   |
+| `web/src/media/api.rs` `:80 :147 :154`                   | **only `:77`**        |
+| `web/src/posts/api.rs:461`                               | **no**                |
+| `test-support/src/lib.rs:192`, `src/main.rs:199`         | **no — whole crate**  |
+| `server/src/atompub/service.rs:34`                       | yes                   |
+
+Enumerating call sites from the spec's `rg` sweep found the _derivation_ sites
+(the `saturating_add`) but not every _pass-through_ site, because a caller that
+simply forwards a `u32` has no distinguishing text to grep for. The compiler is
+the only reliable enumerator here — which is the same lesson #715 records about
+auditing by call-shape. **Test:** existing web tests; plus one new test per spec
+§4's has-more claim.
 
 Per spec §4–§5. **Task 1's accessors are dead code until this lands** — see the
 header's first risk.

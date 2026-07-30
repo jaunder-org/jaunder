@@ -88,6 +88,19 @@ impl PageSize {
         RowLimit(self.0 as i64 + 1)
     }
 
+    /// Rows to fetch for exactly one page, with **no** has-more probe.
+    ///
+    /// For a listing that returns a page and does not report whether another exists —
+    /// the media listing and the draft listing, which have no "load more" affordance.
+    /// Contrast [`Self::fetch_limit`], which fetches the extra probing row; using that
+    /// one here would return a row the caller then has to know to discard.
+    #[must_use]
+    pub const fn exact_limit(self) -> RowLimit {
+        // `PageSize` is `1..=50`, so this satisfies `RowLimit`'s `min = 1`; see the note
+        // on `fetch_limit` for why this constructs directly rather than via `TryFrom`.
+        RowLimit(self.0 as i64)
+    }
+
     /// Whether an over-fetched row set proves another page exists — the inverse of
     /// [`Self::fetch_limit`].
     #[must_use]
@@ -244,6 +257,18 @@ mod tests {
                 size.fetch_limit().value(),
                 i64::from(size.value()) + 1,
                 "fetch_limit must be page_len + 1 for {size}"
+            );
+            // The probing variant is exactly one row more than the non-probing one —
+            // stated as a relation between the two so neither can move alone.
+            assert_eq!(
+                size.exact_limit().value(),
+                i64::from(size.value()),
+                "exact_limit must be the page itself for {size}"
+            );
+            assert_eq!(
+                size.fetch_limit().value(),
+                size.exact_limit().value() + 1,
+                "fetch_limit must be exact_limit + 1 for {size}"
             );
         }
     }

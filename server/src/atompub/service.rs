@@ -8,6 +8,7 @@ use axum::Extension;
 
 use common::absolute_url::compose;
 use common::atompub::{render_service_document, CollectionDecl, ServiceDocument};
+use common::pagination::RowLimit;
 use storage::{PostStorage, SiteConfigStorage};
 use web::auth::AuthUser;
 
@@ -30,8 +31,10 @@ pub async fn service_document(
     let base = required_base_url(site_config.as_ref()).await?;
     let username = &*auth_user.username;
 
+    // A flat cap on the service-document category list, not a page — there is no
+    // pagination behind it, and 100 exceeds `PageSize`'s range by design (#696).
     let categories = posts
-        .list_tags(None, 100)
+        .list_tags(None, RowLimit::at_most(100))
         .await?
         .into_iter()
         .map(|t| t.tag_slug)

@@ -6,7 +6,8 @@ use common::tag::{Tag, TagLabel};
 use common::test_support::{
     parse_absolute_url, parse_audience_name, parse_bio, parse_byte_size, parse_content_hash,
     parse_content_type, parse_display_name, parse_email, parse_etag, parse_filename,
-    parse_page_offset, parse_raw_token, parse_session_label, parse_slug, permalink_date,
+    parse_page_offset, parse_raw_token, parse_row_limit, parse_session_label, parse_slug,
+    permalink_date,
 };
 use common::username::Username;
 use common::visibility::{
@@ -1927,7 +1928,13 @@ async fn list_published_by_user_hides_scheduled_until_due(#[case] backend: Backe
 
     let at_now = state
         .posts
-        .list_published_by_user(&user.username, None, 50, &ViewerIdentity::Anonymous, now)
+        .list_published_by_user(
+            &user.username,
+            None,
+            parse_row_limit("50"),
+            &ViewerIdentity::Anonymous,
+            now,
+        )
         .await
         .unwrap();
     let ids_now: Vec<PostId> = at_now.iter().map(|p| p.post_id).collect();
@@ -1940,7 +1947,13 @@ async fn list_published_by_user_hides_scheduled_until_due(#[case] backend: Backe
     let after = now + Duration::hours(1) + Duration::seconds(1);
     let at_after = state
         .posts
-        .list_published_by_user(&user.username, None, 50, &ViewerIdentity::Anonymous, after)
+        .list_published_by_user(
+            &user.username,
+            None,
+            parse_row_limit("50"),
+            &ViewerIdentity::Anonymous,
+            after,
+        )
         .await
         .unwrap();
     assert!(
@@ -1962,7 +1975,7 @@ async fn list_published_hides_scheduled_until_due(#[case] backend: Backend) {
 
     let at_now = state
         .posts
-        .list_published(None, 50, &ViewerIdentity::Anonymous, now)
+        .list_published(None, parse_row_limit("50"), &ViewerIdentity::Anonymous, now)
         .await
         .unwrap();
     let ids_now: Vec<PostId> = at_now.iter().map(|p| p.post_id).collect();
@@ -1975,7 +1988,12 @@ async fn list_published_hides_scheduled_until_due(#[case] backend: Backend) {
     let after = now + Duration::hours(1) + Duration::seconds(1);
     let at_after = state
         .posts
-        .list_published(None, 50, &ViewerIdentity::Anonymous, after)
+        .list_published(
+            None,
+            parse_row_limit("50"),
+            &ViewerIdentity::Anonymous,
+            after,
+        )
         .await
         .unwrap();
     assert!(
@@ -2008,7 +2026,13 @@ async fn list_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backend) {
 
     let at_now = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous, now)
+        .list_posts_by_tag(
+            &tag_slug,
+            None,
+            parse_row_limit("50"),
+            &ViewerIdentity::Anonymous,
+            now,
+        )
         .await
         .unwrap();
     let ids_now: Vec<PostId> = at_now.iter().map(|p| p.post_id).collect();
@@ -2021,7 +2045,13 @@ async fn list_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backend) {
     let after = now + Duration::hours(1) + Duration::seconds(1);
     let at_after = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous, after)
+        .list_posts_by_tag(
+            &tag_slug,
+            None,
+            parse_row_limit("50"),
+            &ViewerIdentity::Anonymous,
+            after,
+        )
         .await
         .unwrap();
     assert!(
@@ -2058,7 +2088,7 @@ async fn list_user_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backe
             user_id,
             &tag_slug,
             None,
-            50,
+            parse_row_limit("50"),
             &ViewerIdentity::Anonymous,
             now,
         )
@@ -2078,7 +2108,7 @@ async fn list_user_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backe
             user_id,
             &tag_slug,
             None,
-            50,
+            parse_row_limit("50"),
             &ViewerIdentity::Anonymous,
             after,
         )
@@ -2561,7 +2591,12 @@ async fn soft_delete_excludes_post_from_lists(#[case] backend: Backend) {
 
     let published = state
         .posts
-        .list_published(None, 10, &ViewerIdentity::Anonymous, Utc::now())
+        .list_published(
+            None,
+            parse_row_limit("10"),
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
         .await
         .unwrap();
     assert!(published.iter().any(|p| p.post_id == post_id));
@@ -2570,7 +2605,12 @@ async fn soft_delete_excludes_post_from_lists(#[case] backend: Backend) {
 
     let published = state
         .posts
-        .list_published(None, 10, &ViewerIdentity::Anonymous, Utc::now())
+        .list_published(
+            None,
+            parse_row_limit("10"),
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
         .await
         .unwrap();
     assert!(!published.iter().any(|p| p.post_id == post_id));
@@ -2770,7 +2810,7 @@ async fn list_published_by_user_returns_only_user_posts(#[case] backend: Backend
         .list_published_by_user(
             &alice.username,
             None,
-            10,
+            parse_row_limit("10"),
             &ViewerIdentity::Anonymous,
             Utc::now(),
         )
@@ -2784,7 +2824,7 @@ async fn list_published_by_user_returns_only_user_posts(#[case] backend: Backend
         .list_published_by_user(
             &bob.username,
             None,
-            10,
+            parse_row_limit("10"),
             &ViewerIdentity::Anonymous,
             Utc::now(),
         )
@@ -2809,7 +2849,12 @@ async fn list_published_returns_published_non_deleted_posts(#[case] backend: Bac
 
     let published = state
         .posts
-        .list_published(None, 10, &ViewerIdentity::Anonymous, Utc::now())
+        .list_published(
+            None,
+            parse_row_limit("10"),
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
         .await
         .unwrap();
     assert_eq!(published.len(), 2);
@@ -2831,7 +2876,7 @@ async fn list_drafts_by_user_returns_only_drafts(#[case] backend: Backend) {
 
     let drafts = state
         .posts
-        .list_drafts_by_user(user_id, None, 10, Utc::now())
+        .list_drafts_by_user(user_id, None, parse_row_limit("10"), Utc::now())
         .await
         .unwrap();
     assert_eq!(drafts.len(), 2);
@@ -2865,7 +2910,7 @@ async fn drafts_list_includes_scheduled_excludes_live(#[case] backend: Backend) 
 
     let rows = state
         .posts
-        .list_drafts_by_user(user_id, None, 50, now)
+        .list_drafts_by_user(user_id, None, parse_row_limit("50"), now)
         .await
         .unwrap();
     let slugs: Vec<String> = rows.iter().map(|p| p.slug.to_string()).collect();
@@ -3155,7 +3200,13 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
     let tag_slug: Tag = "web-development".parse().unwrap();
     let posts = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous, Utc::now())
+        .list_posts_by_tag(
+            &tag_slug,
+            None,
+            parse_row_limit("50"),
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
         .await
         .expect("list_posts_by_tag failed");
 
@@ -3188,7 +3239,13 @@ async fn tag_list_pagination(#[case] backend: Backend) {
     let tag_slug: Tag = "pagination-test".parse().unwrap();
     let posts = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 2, &ViewerIdentity::Anonymous, Utc::now())
+        .list_posts_by_tag(
+            &tag_slug,
+            None,
+            parse_row_limit("2"),
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
         .await
         .expect("list_posts_by_tag failed");
 
@@ -3236,7 +3293,7 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
             user1,
             &tag_slug,
             None,
-            50,
+            parse_row_limit("50"),
             &ViewerIdentity::Anonymous,
             Utc::now(),
         )
@@ -3252,7 +3309,7 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
             user2,
             &tag_slug,
             None,
-            50,
+            parse_row_limit("50"),
             &ViewerIdentity::Anonymous,
             Utc::now(),
         )
@@ -3427,7 +3484,13 @@ async fn list_posts_by_nonexistent_tag(#[case] backend: Backend) {
     let tag_slug: Tag = "nosuch-tag".parse().unwrap();
     let result = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous, Utc::now())
+        .list_posts_by_tag(
+            &tag_slug,
+            None,
+            parse_row_limit("50"),
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
         .await;
 
     assert!(matches!(result, Err(ListByTagError::TagNotFound)));
@@ -3451,7 +3514,7 @@ async fn list_user_posts_by_nonexistent_tag(#[case] backend: Backend) {
             user,
             &tag_slug,
             None,
-            50,
+            parse_row_limit("50"),
             &ViewerIdentity::Anonymous,
             Utc::now(),
         )
@@ -3500,7 +3563,13 @@ async fn many_tags_many_posts(#[case] backend: Backend) {
         let tag_slug: Tag = tag.parse().unwrap();
         let posts = state
             .posts
-            .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous, Utc::now())
+            .list_posts_by_tag(
+                &tag_slug,
+                None,
+                parse_row_limit("50"),
+                &ViewerIdentity::Anonymous,
+                Utc::now(),
+            )
             .await
             .expect("list_posts_by_tag failed");
         assert_eq!(posts.len(), 3);
@@ -3784,7 +3853,13 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
     let tag_slug: Tag = "test".parse().unwrap();
     let posts_before = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous, Utc::now())
+        .list_posts_by_tag(
+            &tag_slug,
+            None,
+            parse_row_limit("50"),
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
         .await
         .expect("list_posts_by_tag failed");
     assert_eq!(posts_before.len(), 1);
@@ -3805,7 +3880,13 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
     // List by tag again - should return empty list (tag exists but no posts have it)
     let posts_after = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous, Utc::now())
+        .list_posts_by_tag(
+            &tag_slug,
+            None,
+            parse_row_limit("50"),
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
         .await
         .expect("list_posts_by_tag failed");
     assert_eq!(posts_after.len(), 0);
@@ -3979,7 +4060,13 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
     let tag_slug: Tag = "javascript".parse().unwrap();
     let posts = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous, Utc::now())
+        .list_posts_by_tag(
+            &tag_slug,
+            None,
+            parse_row_limit("50"),
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
         .await
         .expect("list_posts_by_tag failed");
 
@@ -4034,7 +4121,7 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
             user1,
             &tag_slug,
             None,
-            50,
+            parse_row_limit("50"),
             &ViewerIdentity::Anonymous,
             Utc::now(),
         )
@@ -4053,7 +4140,13 @@ async fn tag_not_found_error(#[case] backend: Backend) {
     let tag_slug: Tag = "nonexistent".parse().unwrap();
     let result = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous, Utc::now())
+        .list_posts_by_tag(
+            &tag_slug,
+            None,
+            parse_row_limit("50"),
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
         .await;
 
     match result {
@@ -4099,7 +4192,13 @@ async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
     let tag_slug: Tag = "haskell".parse().unwrap();
     let posts = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous, Utc::now())
+        .list_posts_by_tag(
+            &tag_slug,
+            None,
+            parse_row_limit("50"),
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
         .await
         .expect("list_posts_by_tag failed");
 
@@ -4179,7 +4278,13 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
     let tag_slug: Tag = "kotlin".parse().unwrap();
     let posts = state
         .posts
-        .list_posts_by_tag(&tag_slug, None, 50, &ViewerIdentity::Anonymous, Utc::now())
+        .list_posts_by_tag(
+            &tag_slug,
+            None,
+            parse_row_limit("50"),
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
         .await
         .expect("list_posts_by_tag failed");
 
@@ -4245,14 +4350,24 @@ async fn list_published_cursor_boundary(#[case] backend: Backend) {
 
     let all = state
         .posts
-        .list_published(None, 10, &ViewerIdentity::Anonymous, Utc::now())
+        .list_published(
+            None,
+            parse_row_limit("10"),
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
         .await
         .expect("list_published failed");
     assert_eq!(all.len(), 5);
 
     let first = state
         .posts
-        .list_published(None, 2, &ViewerIdentity::Anonymous, Utc::now())
+        .list_published(
+            None,
+            parse_row_limit("2"),
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
         .await
         .expect("list_published failed");
     assert_eq!(first.len(), 2);
@@ -4264,7 +4379,12 @@ async fn list_published_cursor_boundary(#[case] backend: Backend) {
         };
         let next = state
             .posts
-            .list_published(Some(&cursor), 2, &ViewerIdentity::Anonymous, Utc::now())
+            .list_published(
+                Some(&cursor),
+                parse_row_limit("2"),
+                &ViewerIdentity::Anonymous,
+                Utc::now(),
+            )
             .await
             .expect("list_published with cursor failed");
         assert_eq!(next.len(), 2);
@@ -4286,14 +4406,14 @@ async fn list_drafts_cursor_boundary(#[case] backend: Backend) {
 
     let all = state
         .posts
-        .list_drafts_by_user(user, None, 10, Utc::now())
+        .list_drafts_by_user(user, None, parse_row_limit("10"), Utc::now())
         .await
         .expect("list_drafts_by_user failed");
     assert_eq!(all.len(), 3);
 
     let first = state
         .posts
-        .list_drafts_by_user(user, None, 1, Utc::now())
+        .list_drafts_by_user(user, None, parse_row_limit("1"), Utc::now())
         .await
         .expect("list_drafts_by_user failed");
     assert_eq!(first.len(), 1);
@@ -4305,7 +4425,7 @@ async fn list_drafts_cursor_boundary(#[case] backend: Backend) {
         };
         let next = state
             .posts
-            .list_drafts_by_user(user, Some(&cursor), 2, Utc::now())
+            .list_drafts_by_user(user, Some(&cursor), parse_row_limit("2"), Utc::now())
             .await
             .expect("list_drafts_by_user with cursor failed");
         assert!(next.len() <= 2);
@@ -4333,14 +4453,28 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
 
     let all = state
         .posts
-        .list_user_posts_by_tag(user, &tag, None, 10, &ViewerIdentity::Anonymous, Utc::now())
+        .list_user_posts_by_tag(
+            user,
+            &tag,
+            None,
+            parse_row_limit("10"),
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
         .await
         .expect("list_user_posts_by_tag failed");
     assert_eq!(all.len(), 3);
 
     let first = state
         .posts
-        .list_user_posts_by_tag(user, &tag, None, 1, &ViewerIdentity::Anonymous, Utc::now())
+        .list_user_posts_by_tag(
+            user,
+            &tag,
+            None,
+            parse_row_limit("1"),
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
         .await
         .expect("list_user_posts_by_tag failed");
     assert_eq!(first.len(), 1);
@@ -4356,7 +4490,7 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
                 user,
                 &tag,
                 Some(&cursor),
-                2,
+                parse_row_limit("2"),
                 &ViewerIdentity::Anonymous,
                 Utc::now(),
             )
@@ -4387,14 +4521,26 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
 
     let all = state
         .posts
-        .list_posts_by_tag(&tag, None, 10, &ViewerIdentity::Anonymous, Utc::now())
+        .list_posts_by_tag(
+            &tag,
+            None,
+            parse_row_limit("10"),
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
         .await
         .expect("list_posts_by_tag failed");
     assert_eq!(all.len(), 3);
 
     let first = state
         .posts
-        .list_posts_by_tag(&tag, None, 1, &ViewerIdentity::Anonymous, Utc::now())
+        .list_posts_by_tag(
+            &tag,
+            None,
+            parse_row_limit("1"),
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
         .await
         .expect("list_posts_by_tag failed");
     assert_eq!(first.len(), 1);
@@ -4409,7 +4555,7 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
             .list_posts_by_tag(
                 &tag,
                 Some(&cursor),
-                2,
+                parse_row_limit("2"),
                 &ViewerIdentity::Anonymous,
                 Utc::now(),
             )
@@ -4451,7 +4597,13 @@ async fn soft_delete_then_operations(#[case] backend: Backend) {
     let tag: Tag = "delete-tag".parse().unwrap();
     let posts = state
         .posts
-        .list_posts_by_tag(&tag, None, 10, &ViewerIdentity::Anonymous, Utc::now())
+        .list_posts_by_tag(
+            &tag,
+            None,
+            parse_row_limit("10"),
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
         .await
         .expect("list_posts_by_tag failed");
     assert!(posts.is_empty());
@@ -4511,7 +4663,7 @@ async fn list_published_by_user_no_posts(#[case] backend: Backend) {
         .list_published_by_user(
             &user.username,
             None,
-            10,
+            parse_row_limit("10"),
             &ViewerIdentity::Anonymous,
             Utc::now(),
         )
@@ -4528,7 +4680,7 @@ async fn list_published_by_user_no_posts(#[case] backend: Backend) {
         .list_published_by_user(
             &user.username,
             Some(&cursor),
-            10,
+            parse_row_limit("10"),
             &ViewerIdentity::Anonymous,
             Utc::now(),
         )
@@ -4700,7 +4852,12 @@ async fn list_published_with_cursor_same_timestamp(#[case] backend: Backend) {
 
     let first = state
         .posts
-        .list_published(None, 2, &ViewerIdentity::Anonymous, Utc::now())
+        .list_published(
+            None,
+            parse_row_limit("2"),
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
         .await
         .expect("list_published failed");
     assert_eq!(first.len(), 2);
@@ -4713,7 +4870,12 @@ async fn list_published_with_cursor_same_timestamp(#[case] backend: Backend) {
         };
         let next = state
             .posts
-            .list_published(Some(&cursor), 2, &ViewerIdentity::Anonymous, Utc::now())
+            .list_published(
+                Some(&cursor),
+                parse_row_limit("2"),
+                &ViewerIdentity::Anonymous,
+                Utc::now(),
+            )
             .await
             .expect("list_published with cursor failed");
         assert_eq!(next.len(), 2);
@@ -5162,7 +5324,7 @@ async fn create_posts_conflict_rolls_back_whole_batch(#[case] backend: Backend) 
     // Nothing persisted: the author's collection (drafts + published) is empty.
     let collection = state
         .posts
-        .list_collection_by_user(user_id, None, 50)
+        .list_collection_by_user(user_id, None, parse_row_limit("50"))
         .await
         .unwrap();
     assert!(
@@ -5437,7 +5599,7 @@ async fn list_media_skips_rows_that_fail_to_decode(#[case] backend: Backend) {
     // than failing the whole query (which would hide the user's valid media too).
     let listed = state
         .media
-        .list_media(user_id, None, 10, parse_page_offset("0"))
+        .list_media(user_id, None, parse_row_limit("10"), parse_page_offset("0"))
         .await
         .unwrap();
     assert_eq!(
@@ -5583,7 +5745,7 @@ async fn list_media_returns_records_for_user(#[case] backend: Backend) {
 
     let results = state
         .media
-        .list_media(user_a, None, 10, parse_page_offset("0"))
+        .list_media(user_a, None, parse_row_limit("10"), parse_page_offset("0"))
         .await
         .unwrap();
     assert_eq!(results.len(), 2, "user_a should have 2 records");
@@ -5626,7 +5788,7 @@ async fn list_media_filtered_by_source(#[case] backend: Backend) {
         .list_media(
             user_id,
             Some(&MediaSource::Upload),
-            10,
+            parse_row_limit("10"),
             parse_page_offset("0"),
         )
         .await
@@ -5639,7 +5801,7 @@ async fn list_media_filtered_by_source(#[case] backend: Backend) {
         .list_media(
             user_id,
             Some(&MediaSource::Cached),
-            10,
+            parse_row_limit("10"),
             parse_page_offset("0"),
         )
         .await
@@ -5811,7 +5973,11 @@ async fn list_tags_returns_alphabetical_with_prefix(#[case] backend: Backend) {
     }
 
     // No prefix → all tags, alphabetical by slug.
-    let all = state.posts.list_tags(None, 50).await.unwrap();
+    let all = state
+        .posts
+        .list_tags(None, parse_row_limit("50"))
+        .await
+        .unwrap();
     let slugs: Vec<&str> = all.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert_eq!(
         slugs,
@@ -5819,25 +5985,45 @@ async fn list_tags_returns_alphabetical_with_prefix(#[case] backend: Backend) {
     );
 
     // Prefix "rust" → "rust" and "rust-lang", still alphabetical.
-    let rs = state.posts.list_tags(Some("rust"), 50).await.unwrap();
+    let rs = state
+        .posts
+        .list_tags(Some("rust"), parse_row_limit("50"))
+        .await
+        .unwrap();
     let rs_slugs: Vec<&str> = rs.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert_eq!(rs_slugs, vec!["rust", "rust-lang"]);
 
     // Prefix case-insensitive: "RUST" matches the same set.
-    let upper = state.posts.list_tags(Some("RUST"), 50).await.unwrap();
+    let upper = state
+        .posts
+        .list_tags(Some("RUST"), parse_row_limit("50"))
+        .await
+        .unwrap();
     let upper_slugs: Vec<&str> = upper.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert_eq!(upper_slugs, vec!["rust", "rust-lang"]);
 
     // Limit clamps the result.
-    let limited = state.posts.list_tags(None, 2).await.unwrap();
+    let limited = state
+        .posts
+        .list_tags(None, parse_row_limit("2"))
+        .await
+        .unwrap();
     assert_eq!(limited.len(), 2);
 
     // Empty-string prefix is treated as "no prefix".
-    let empty = state.posts.list_tags(Some("   "), 50).await.unwrap();
+    let empty = state
+        .posts
+        .list_tags(Some("   "), parse_row_limit("50"))
+        .await
+        .unwrap();
     assert_eq!(empty.len(), 5);
 
     // Nonexistent prefix → empty.
-    let none = state.posts.list_tags(Some("zz"), 50).await.unwrap();
+    let none = state
+        .posts
+        .list_tags(Some("zz"), parse_row_limit("50"))
+        .await
+        .unwrap();
     assert!(none.is_empty());
 }
 
@@ -6125,7 +6311,7 @@ async fn resolution_matrix(#[case] backend: Backend) {
     for (vi, (vlabel, viewer)) in viewers.iter().enumerate() {
         let listed: std::collections::HashSet<PostId> = state
             .posts
-            .list_published(None, 100, viewer, Utc::now())
+            .list_published(None, parse_row_limit("100"), viewer, Utc::now())
             .await
             .unwrap()
             .into_iter()
@@ -6190,7 +6376,7 @@ async fn anonymous_is_not_admitted_by_an_empty_subscriber_ref(#[case] backend: B
     );
     let listed: std::collections::HashSet<PostId> = state
         .posts
-        .list_published(None, 100, &anon, Utc::now())
+        .list_published(None, parse_row_limit("100"), &anon, Utc::now())
         .await
         .unwrap()
         .into_iter()

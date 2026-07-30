@@ -206,11 +206,33 @@ describes for public `?limit=` params. It should become `PageSize::clamped(…)`
 in the same way `PageSize`'s doc records AtomPub's default of 25 as
 `PageSize::clamped(25)`.
 
-That leaves `at_most` with **one** caller — AtomPub's literal `100`, which
-exceeds `PageSize`'s range and so genuinely needs a plain cap. A single literal
-caller is a much better justification for a saturating `const fn` than the first
-draft had, and it makes the alternative (declare an arbitrary `max` on
-`RowLimit` purely to unlock the generated `clamped`) clearly worse.
+That leaves `at_most` for the genuine flat caps — values with no page behind
+them, which is the case a saturating `const fn` is for.
+
+**Correction (found during implementation): there are three such callers, not
+one.** The draft said "one — AtomPub's literal `100`". Two more surfaced, both
+missed by the call-site audit because neither is a `limit` _parameter_; both are
+internal scan batches:
+
+| Caller                             | Cap    | Why it is a flat cap                   |
+| ---------------------------------- | ------ | -------------------------------------- |
+| `server/src/atompub/service.rs:34` | `100`  | service-document category list         |
+| `storage/src/posts.rs:474`         | `50`   | draft-permalink scan batch             |
+| `web/src/media/api.rs`             | `1000` | scans an author's posts for media refs |
+
+Three real callers is a **stronger** justification for the door than the one the
+draft argued from, and it leaves the alternative — declaring an arbitrary `max`
+on `RowLimit` purely to unlock the generated `clamped` — clearly worse.
+
+**A third derivation was also needed: `PageSize::exact_limit`.** Three call
+sites want a row limit that is _exactly_ one page with **no** has-more probe:
+the media listing, the draft listing, and the tags typeahead, none of which has
+a "load more" affordance. The draft's two doors did not cover this —
+`fetch_limit` would fetch a row the caller must then know to discard, and
+`at_most(i64::from(size.value()))` reintroduces a conversion at the boundary and
+severs the link to the page. So `PageSize` carries both: `fetch_limit` (probing)
+and `exact_limit` (not), with a test asserting `fetch_limit == exact_limit + 1`
+so the pair still cannot drift.
 
 ### 3. `PageOffset` moves to `inner = i64, min = 0`
 
