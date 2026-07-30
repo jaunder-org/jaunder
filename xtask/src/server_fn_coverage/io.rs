@@ -24,7 +24,7 @@ pub const ALLOWLIST_PATH: &str = "docs/coverage/server-fns-allowlist.json";
 /// Where `cargo xtask e2e sqlite chromium` lifts the authoritative capture.
 pub const CAPTURE_PATH: &str = ".xtask/diagnostics/e2e-sqlite-chromium/capture-sqlite.tar.gz";
 
-/// Every `#[server]` fn under `web/src`, sorted by ident. A file that cannot be
+/// Every `#[server]` fn under `web/src`, sorted by qualified name. A file that cannot be
 /// enumerated is a hard error: a file we cannot read could hide a fn, and an
 /// under-counted inventory is exactly a false pass.
 pub fn inventory(root: &Path) -> Result<Vec<ServerFn>> {
@@ -41,7 +41,10 @@ pub fn inventory(root: &Path) -> Result<Vec<ServerFn>> {
             Err(msg) => bail!("{}: {msg}", path.display()),
         }
     }
-    out.sort_by(|a, b| a.ident.cmp(&b.ident));
+    // By the coverage key, not the ident: idents collide across verticals (#684),
+    // so an ident sort leaves the order of a collision set up to directory walk
+    // order.
+    out.sort_by_key(ServerFn::qualified);
     Ok(out)
 }
 

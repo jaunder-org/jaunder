@@ -24,14 +24,18 @@ use crate::server_fns::ServerFn;
 pub const REGENERATE_CMD: &str = "cargo xtask server-fn-coverage regenerate";
 
 /// Which tests exercised each server fn, as committed to `docs/coverage/`.
+///
+/// Keyed by [`ServerFn::qualified`] — `<vertical>::<ident>` — as is the
+/// allowlist's `server_fn` field, so the two files and the inventory all name a fn
+/// the same way.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Snapshot {
-    /// fn ident → the tests that drove it, sorted.
+    /// `<vertical>::<ident>` → the tests that drove it, sorted.
     pub covered: BTreeMap<String, Vec<String>>,
-    /// fn ident → the distinct reasons its unattributed hits ended with. Reported,
-    /// not failed: a non-empty bucket means the harness stopped attributing
-    /// somewhere, which is worth seeing — and the reason is what makes it
-    /// diagnosable rather than merely visible (spec AC5).
+    /// `<vertical>::<ident>` → the distinct reasons its unattributed hits ended
+    /// with. Reported, not failed: a non-empty bucket means the harness stopped
+    /// attributing somewhere, which is worth seeing — and the reason is what makes
+    /// it diagnosable rather than merely visible (spec AC5).
     ///
     /// Deliberately not counts: a count tracks how many tests ran, so it would make
     /// this byte-compared artifact churn every time anyone adds an e2e test. See
@@ -58,6 +62,8 @@ impl From<Coverage> for Snapshot {
 /// silent bypass.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AllowlistEntry {
+    /// The fn, as `<vertical>::<ident>` ([`ServerFn::qualified`]). A bare ident
+    /// would excuse every vertical's fn of that name at once.
     pub server_fn: String,
     pub reason: String,
     pub issue: String,
@@ -93,49 +99,59 @@ pub fn verdict(
         .iter()
         .map(|e| (e.server_fn.as_str(), e))
         .collect();
-    let inventory_idents: BTreeSet<&str> = inventory.iter().map(|f| f.ident.as_str()).collect();
+    // Every name the gate speaks is qualified (`<vertical>::<ident>`): fifteen fns
+    // share six idents across verticals since #684, so an ident-keyed set would
+    // treat `audiences::create` as accounted for by `posts::create`.
+    let inventory_names: BTreeSet<String> = inventory.iter().map(ServerFn::qualified).collect();
 
     for f in inventory {
-        // Endpoint/fn-name drift. A bare `#[server]` (no endpoint) counts: its
-        // generated path carries a hash suffix, so it is NOT `/api/<fn_name>` and
-        // the URI signal would silently never match it.
+        let qualified = f.qualified();
+        // Endpoint drift. The URI signal matches `/api/<endpoint>`, so the endpoint
+        // has to be derivable from the fn or that signal silently never fires.
+        //
+        // Since #684 the scheme is `<vertical>/<ident>` — the vertical being the
+        // module's first segment, exactly as the derived span name uses it (see
+        // `extract::candidate_span_names`). `/api/` is one flat namespace under a
+        // single wildcard route, so the vertical is what keeps three verticals'
+        // `create` apart; a bare `<ident>` would collide.
+        //
+        // A bare `#[server]` (no endpoint) still counts as drift: its generated path
+        // carries a `CARGO_MANIFEST_DIR`-derived hash suffix, so it is not
+        // `/api/<anything>` we can predict.
+        let expected = format!("{}/{}", f.vertical(), f.ident);
         match f.endpoint.as_deref() {
             None => out.push(format!(
-                "{}: bare #[server] with no `endpoint = \"…\"` — its generated path carries a \
-                 hash suffix, so coverage cannot match it by URI; add `endpoint = \"/{}\"`",
-                f.ident, f.ident
+                "{qualified}: bare #[server] with no `endpoint = \"…\"` — its generated path \
+                 carries a hash suffix, so coverage cannot match it by URI; add \
+                 `endpoint = \"/{expected}\"`"
             )),
-            Some(ep) if ep != f.ident => out.push(format!(
-                "{}: declared endpoint `{ep}` does not match the fn name — intentional renames \
-                 are fine, but update this gate's expectations deliberately rather than by \
-                 accident",
-                f.ident
+            Some(ep) if ep != expected => out.push(format!(
+                "{qualified}: declared endpoint `{ep}` does not match the derived `{expected}` — \
+                 intentional renames are fine, but update this gate's expectations deliberately \
+                 rather than by accident"
             )),
             Some(_) => {}
         }
 
-        let covered = snapshot.covered.contains_key(&f.ident);
-        let entry = allowed.get(f.ident.as_str());
+        let covered = snapshot.covered.contains_key(&qualified);
+        let entry = allowed.get(qualified.as_str());
 
         match (covered, entry) {
             // The ratchet must not loosen: a stale entry for a now-covered fn is
             // itself a failure, so entries cannot quietly become write-only.
             (true, Some(_)) => out.push(format!(
-                "{}: allowlisted but the snapshot shows it covered — the entry is no longer \
-                 needed; delete it from the allowlist",
-                f.ident
+                "{qualified}: allowlisted but the snapshot shows it covered — the entry is no \
+                 longer needed; delete it from the allowlist"
             )),
             (false, None) => out.push(format!(
-                "{}: no e2e flow drives this server fn. Either add one and regenerate \
-                 (`{REGENERATE_CMD}`), or add an allowlist entry with a reason and an issue link",
-                f.ident
+                "{qualified}: no e2e flow drives this server fn. Either add one and regenerate \
+                 (`{REGENERATE_CMD}`), or add an allowlist entry with a reason and an issue link"
             )),
             (false, Some(e)) => {
                 if e.reason.trim().is_empty() || e.issue.trim().is_empty() {
                     out.push(format!(
-                        "{}: allowlist entry needs both a non-empty `reason` and `issue` — an \
-                         entry without them is a silent bypass",
-                        f.ident
+                        "{qualified}: allowlist entry needs both a non-empty `reason` and \
+                         `issue` — an entry without them is a silent bypass"
                     ));
                 }
             }
@@ -144,16 +160,16 @@ pub fn verdict(
     }
 
     // A snapshot or allowlist naming something the inventory does not is stale.
-    for ident in snapshot.covered.keys() {
-        if !inventory_idents.contains(ident.as_str()) {
+    for name in snapshot.covered.keys() {
+        if !inventory_names.contains(name) {
             out.push(format!(
-                "{ident}: present in the snapshot but is not a #[server] fn — regenerate \
+                "{name}: present in the snapshot but is not a #[server] fn — regenerate \
                  (`{REGENERATE_CMD}`)"
             ));
         }
     }
     for e in allowlist {
-        if !inventory_idents.contains(e.server_fn.as_str()) {
+        if !inventory_names.contains(&e.server_fn) {
             out.push(format!(
                 "{}: allowlisted but is not a #[server] fn — delete the stale entry",
                 e.server_fn
@@ -169,13 +185,25 @@ pub fn verdict(
 mod tests {
     use super::*;
 
+    /// The vertical the helpers below write their fns in. Everything the gate
+    /// names is qualified by it: the key is `<vertical>::<ident>` and the derived
+    /// endpoint `<vertical>/<ident>`.
+    const V: &str = "posts";
+
+    /// A fn in [`V`] whose declared endpoint matches what the gate derives, so a
+    /// test that is not about endpoint drift does not trip over it.
     fn fnf(ident: &str) -> ServerFn {
         ServerFn {
             ident: ident.to_string(),
-            endpoint: Some(ident.to_string()),
-            module: "x::api".to_string(),
+            endpoint: Some(format!("{V}/{ident}")),
+            module: format!("{V}::api"),
             line: 1,
         }
+    }
+
+    /// The coverage key of an ident written in [`V`].
+    fn qual(ident: &str) -> String {
+        format!("{V}::{ident}")
     }
 
     fn inv(idents: &[&str]) -> Vec<ServerFn> {
@@ -186,7 +214,7 @@ mod tests {
         Snapshot {
             covered: idents
                 .iter()
-                .map(|i| ((*i).to_string(), vec!["a test".to_string()]))
+                .map(|i| (qual(i), vec!["a test".to_string()]))
                 .collect(),
             orphans: BTreeMap::new(),
         }
@@ -246,7 +274,7 @@ mod tests {
     #[test]
     fn allowlisted_uncovered_fn_passes() {
         let al = vec![entry(
-            "delete_media",
+            &qual("delete_media"),
             "covered by server integration tests, no browser flow",
             "https://github.com/jaunder-org/jaunder/issues/700",
         )];
@@ -255,14 +283,18 @@ mod tests {
 
     #[test]
     fn allowlist_entry_without_reason_is_rejected() {
-        let al = vec![entry("delete_media", "  ", "https://example.invalid/1")];
+        let al = vec![entry(
+            &qual("delete_media"),
+            "  ",
+            "https://example.invalid/1",
+        )];
         let v = verdict(&inv(&["delete_media"]), &Snapshot::default(), &al);
         assert!(!v.is_empty(), "a hollow entry must not satisfy the gate");
     }
 
     #[test]
     fn allowlist_entry_without_issue_is_rejected() {
-        let al = vec![entry("delete_media", "a real reason", "")];
+        let al = vec![entry(&qual("delete_media"), "a real reason", "")];
         let v = verdict(&inv(&["delete_media"]), &Snapshot::default(), &al);
         assert!(!v.is_empty(), "a hollow entry must not satisfy the gate");
     }
@@ -270,7 +302,7 @@ mod tests {
     #[test]
     fn allowlist_entry_for_a_covered_fn_is_a_violation() {
         // The ratchet must not loosen: stale entries are removed, not accumulated.
-        let al = vec![entry("delete_media", "r", "i")];
+        let al = vec![entry(&qual("delete_media"), "r", "i")];
         let v = verdict(
             &inv(&["delete_media"]),
             &covered_with(&["delete_media"]),
@@ -304,7 +336,7 @@ mod tests {
 
     #[test]
     fn allowlist_entry_for_an_unknown_fn_is_stale() {
-        let al = vec![entry("ghost", "r", "i")];
+        let al = vec![entry(&qual("ghost"), "r", "i")];
         let v = verdict(&inv(&["a"]), &covered_with(&["a"]), &al);
         assert!(v.iter().any(|m| m.contains("ghost")), "{v:?}");
     }
@@ -319,6 +351,65 @@ mod tests {
             v.iter().any(|m| m.contains("brand_new_uncovered_fn")),
             "{v:?}"
         );
+    }
+
+    #[test]
+    fn covering_one_verticals_fn_leaves_another_verticals_same_named_fn_uncovered() {
+        // The #684 collision, at the layer that decides red or green: three
+        // verticals declare `create`, and an ident-keyed gate would have passed all
+        // three on the strength of one covered flow.
+        let one_create_per_vertical: Vec<ServerFn> = ["posts", "audiences", "invites"]
+            .iter()
+            .map(|v| ServerFn {
+                ident: "create".to_string(),
+                endpoint: Some(format!("{v}/create")),
+                module: format!("{v}::api"),
+                line: 1,
+            })
+            .collect();
+        let snapshot = Snapshot {
+            covered: [(
+                "posts::create".to_string(),
+                vec!["creates a post".to_string()],
+            )]
+            .into_iter()
+            .collect(),
+            orphans: BTreeMap::new(),
+        };
+
+        let v = verdict(&one_create_per_vertical, &snapshot, &[]);
+        assert!(
+            v.iter().any(|m| m.starts_with("audiences::create:")),
+            "audiences::create is undriven and must be reported: {v:?}"
+        );
+        assert!(
+            v.iter().any(|m| m.starts_with("invites::create:")),
+            "invites::create is undriven and must be reported: {v:?}"
+        );
+        assert!(
+            !v.iter().any(|m| m.starts_with("posts::create:")),
+            "posts::create IS covered and must not be reported: {v:?}"
+        );
+    }
+
+    #[test]
+    fn an_allowlist_entry_excuses_only_its_own_vertical() {
+        // The mirror of the above: excusing `media::delete` must not excuse
+        // `posts::delete`, which a bare `delete` entry would have.
+        let inventory: Vec<ServerFn> = ["media", "posts"]
+            .iter()
+            .map(|v| ServerFn {
+                ident: "delete".to_string(),
+                endpoint: Some(format!("{v}/delete")),
+                module: format!("{v}::api"),
+                line: 1,
+            })
+            .collect();
+        let al = vec![entry("media::delete", "no browser flow", "#706")];
+
+        let v = verdict(&inventory, &Snapshot::default(), &al);
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(v[0].starts_with("posts::delete:"), "{}", v[0]);
     }
 
     #[test]

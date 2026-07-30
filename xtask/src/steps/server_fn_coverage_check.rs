@@ -165,13 +165,23 @@ pub fn verify_after_combo(result: &mut CommandResult, backend: &str, browser: &s
 mod tests {
     use super::*;
 
-    /// A `web/src`-shaped tree with one `#[server]` fn per ident given.
+    /// The vertical the fixture tree writes its fns in.
+    const VERTICAL: &str = "posts";
+
+    /// A `web/src`-shaped tree with one `#[server]` fn per ident given, all in the
+    /// [`VERTICAL`] vertical — a fn at the crate root has no vertical, so its
+    /// coverage key would be a degenerate `::<ident>` and pin nothing about the
+    /// real artifacts. The endpoints are the `<vertical>/<ident>` the gate derives.
     fn web_src_with(dir: &Path, idents: &[&str]) {
         let src: String = idents
             .iter()
-            .map(|i| format!("#[server(endpoint = \"/{i}\")]\npub async fn {i}() {{}}\n"))
+            .map(|i| {
+                format!("#[server(endpoint = \"/{VERTICAL}/{i}\")]\npub async fn {i}() {{}}\n")
+            })
             .collect();
-        std::fs::write(dir.join("lib.rs"), src).expect("write source");
+        let vertical = dir.join(VERTICAL);
+        std::fs::create_dir_all(&vertical).expect("create the vertical's dir");
+        std::fs::write(vertical.join("api.rs"), src).expect("write source");
     }
 
     fn write_json(path: &Path, json: &str) {
@@ -185,7 +195,7 @@ mod tests {
         let snap = tmp.path().join("snap.json");
         write_json(
             &snap,
-            r#"{"covered":{"create_post":["creates a post"]},"orphans":{}}"#,
+            r#"{"covered":{"posts::create_post":["creates a post"]},"orphans":{}}"#,
         );
 
         let step = check(tmp.path(), &snap, &tmp.path().join("absent-allowlist.json"));
@@ -202,7 +212,7 @@ mod tests {
         let snap = tmp.path().join("snap.json");
         write_json(
             &snap,
-            r#"{"covered":{"create_post":["creates a post"]},"orphans":{}}"#,
+            r#"{"covered":{"posts::create_post":["creates a post"]},"orphans":{}}"#,
         );
 
         let step = check(tmp.path(), &snap, &tmp.path().join("absent-allowlist.json"));
@@ -220,7 +230,7 @@ mod tests {
         let allow = tmp.path().join("allow.json");
         write_json(
             &allow,
-            r##"[{"server_fn":"no_flow_yet","reason":"no UI surface yet","issue":"#700"}]"##,
+            r##"[{"server_fn":"posts::no_flow_yet","reason":"no UI surface yet","issue":"#700"}]"##,
         );
 
         let step = check(tmp.path(), &snap, &allow);
@@ -416,13 +426,13 @@ mod tests {
             "the uri signal alone must cover everything the union does"
         );
 
-        // `upload_media` is the sharpest single case for the uri signal: it declares
-        // `#[server(input = MultipartFormData, endpoint = "/upload_media")]`, so
+        // `media::upload` is the sharpest single case for the uri signal: it declares
+        // `#[server(input = MultipartFormData, endpoint = "/media/upload")]`, so
         // anything reading `endpoint` as the attribute's FIRST argument loses it
         // silently and the fn drops out of URI matching altogether.
         assert!(
-            by_uri.covered.contains_key("upload_media"),
-            "upload_media must be covered by the uri signal alone"
+            by_uri.covered.contains_key("media::upload"),
+            "media::upload must be covered by the uri signal alone"
         );
 
         // No query-string assertion here: every server fn this suite drives is a
@@ -440,7 +450,7 @@ mod tests {
         let inv = inventory(&repo_root().join(WEB_SRC)).expect("inventory enumerates");
         let verticals: std::collections::BTreeSet<&str> = inv
             .iter()
-            .map(|f| f.module.split("::").next().unwrap_or(&f.module))
+            .map(crate::server_fns::ServerFn::vertical)
             .collect();
         let mut checked = 0;
         for span in seed_spans().iter().filter(|s| {

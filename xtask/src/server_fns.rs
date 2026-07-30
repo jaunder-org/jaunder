@@ -16,8 +16,10 @@ use std::path::Path;
 /// One `#[server]` fn, as the coverage gate needs to see it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerFn {
-    /// The fn ident as written — the coverage key, and what a derived span name
-    /// carries (see `server_fn_coverage::extract`).
+    /// The fn ident as written — what a derived span name carries (see
+    /// `server_fn_coverage::extract`). **Not** the coverage key on its own: since
+    /// #684 dropped the vertical noun from these idents, fifteen fns share six
+    /// idents across verticals ([`ServerFn::qualified`]).
     pub ident: String,
     /// The declared `endpoint = "…"`, leading slash stripped. `None` for a bare
     /// `#[server]`, whose generated path carries a hash suffix and so cannot be
@@ -27,6 +29,37 @@ pub struct ServerFn {
     pub module: String,
     /// 1-based line of the `#[server]` attribute.
     pub line: usize,
+}
+
+impl ServerFn {
+    /// The vertical the fn belongs to: the module path's **first** segment, so
+    /// `posts::api` and `posts::api::listing` both read as `posts`.
+    ///
+    /// One definition, used by every derivation that needs a vertical — the
+    /// candidate span names, the coverage key, and the expected endpoint — so a
+    /// change to what "vertical" means cannot land in one of them and not the
+    /// others.
+    pub fn vertical(&self) -> &str {
+        self.module.split("::").next().unwrap_or(&self.module)
+    }
+
+    /// `<vertical>::<ident>` — how coverage identifies a fn.
+    ///
+    /// The bare ident is not enough: #684 dropped the vertical noun from the
+    /// idents, so `posts::create`, `audiences::create` and `invites::create` all
+    /// answer to `create`. Keying on the ident would have covered all three the
+    /// moment any one of them was exercised — the gate would go green over two
+    /// untested flows.
+    ///
+    /// `::` rather than `/`, because this is a Rust path and must not be mistaken
+    /// for the `/`-separated endpoint. Vertical plus ident rather than the full
+    /// module path, because `posts::api` and `posts::api::listing` denote one
+    /// vertical — and because that is already ADR-0066's registrar key
+    /// `(vertical, leaf)`, so all four `#[server]` gates share one notion of
+    /// identity.
+    pub fn qualified(&self) -> String {
+        format!("{}::{}", self.vertical(), self.ident)
+    }
 }
 
 /// Every `#[server]` fn in one source file, or a message describing why the file
@@ -128,6 +161,27 @@ mod tests {
             module_path_of(Path::new("posts/api/listing.rs")),
             "posts::api::listing"
         );
+    }
+
+    #[test]
+    fn vertical_is_the_modules_first_segment() {
+        let src = "#[server(endpoint = \"/posts/create\")]\npub async fn create() {}\n";
+        let deep = server_fns_in(src, "posts::api::listing").expect("enumerates");
+        assert_eq!(deep[0].vertical(), "posts");
+        let shallow = server_fns_in(src, "posts").expect("enumerates");
+        assert_eq!(shallow[0].vertical(), "posts");
+    }
+
+    #[test]
+    fn qualified_separates_one_ident_across_two_verticals() {
+        // The #684 collision in miniature: three verticals declare `create`, and
+        // the ident alone cannot tell them apart.
+        let src = "#[server]\npub async fn create() {}\n";
+        let posts = server_fns_in(src, "posts::api").expect("enumerates");
+        let audiences = server_fns_in(src, "audiences::api").expect("enumerates");
+        assert_eq!(posts[0].qualified(), "posts::create");
+        assert_eq!(audiences[0].qualified(), "audiences::create");
+        assert_ne!(posts[0].qualified(), audiences[0].qualified());
     }
 
     #[test]

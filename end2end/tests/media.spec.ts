@@ -43,7 +43,7 @@ test.describe("Media upload and serving", () => {
     // derives, the name it wrote on disk, and the request the browser sends back for it
     // (#675). Before the fix the derived URL carried a raw space.
     const fileContent = Buffer.from("spaced filename content");
-    const response = await page.request.post(BASE_URL + "/api/upload_media", {
+    const response = await page.request.post(BASE_URL + "/api/media/upload", {
       multipart: {
         file: {
           name: "my holiday photo.jpg",

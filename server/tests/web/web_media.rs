@@ -351,7 +351,7 @@ async fn upload_then_serve_round_trips_a_filename_needing_encoding(#[case] backe
     let (status, body) = post_multipart(
         &state,
         &storage,
-        "/api/upload_media",
+        <web::media::Upload as ServerFn>::PATH,
         MultipartFile {
             filename: "my photo.jpg",
             content_type: "image/jpeg",
@@ -399,7 +399,7 @@ async fn upload_then_serve_survives_a_name_too_long_to_store(#[case] backend: Ba
     let (status, body) = post_multipart(
         &state,
         &storage,
-        "/api/upload_media",
+        <web::media::Upload as ServerFn>::PATH,
         MultipartFile {
             filename: &long_name,
             content_type: "image/jpeg",
