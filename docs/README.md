@@ -108,6 +108,7 @@ convention). See the Status column below for each ADR's current status.
 | [0078](adr/0078-reactive-store-domain-newtype-fields.md)           | Domain newtypes in reactive-store rows via the `Patch` derive's `#[patch]` escape hatch                      | accepted   |
 | [0079](adr/0079-rendered-html-sanitization.md)                     | `RenderedHtml` carries a sanitization invariant, via two named doors                                         | accepted   |
 | [0080](adr/0080-media-path-naming-correspondence.md)               | Media path naming — one layout, percent-encoded, URL-identical on disk                                       | accepted   |
+| [0081](adr/0081-empirical-server-fn-flow-coverage.md)              | Server-fn flow coverage is derived from e2e traces, not asserted                                             | proposed   |
 
 <!-- adr-table:end -->
 

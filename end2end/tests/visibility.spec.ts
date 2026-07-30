@@ -3,8 +3,9 @@ import {
   expect,
   setTestBudget,
   slowBrowserFirstNavigationTimeoutMs,
+  type NewTracedContext,
 } from "./fixtures";
-import type { Browser, Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import {
   BASE_URL,
   goto,
@@ -51,13 +52,13 @@ async function publishWithBaseAudience(
 
 /** Visit a permalink and assert the post body IS rendered (viewer can see it). */
 async function expectPostVisible(
-  browser: Browser,
+  newContext: NewTracedContext,
   permalink: string,
   title: string,
   firstNavigationTimeoutMs: number,
   loginAs?: { username: string; password: string },
 ): Promise<void> {
-  const ctx = await browser.newContext();
+  const ctx = await newContext();
   try {
     const page = await ctx.newPage();
     if (loginAs) {
@@ -77,13 +78,13 @@ async function expectPostVisible(
 
 /** Visit a permalink and assert the viewer is denied (Post not found). */
 async function expectPostHidden(
-  browser: Browser,
+  newContext: NewTracedContext,
   permalink: string,
   title: string,
   firstNavigationTimeoutMs: number,
   loginAs?: { username: string; password: string },
 ): Promise<void> {
-  const ctx = await browser.newContext();
+  const ctx = await newContext();
   try {
     const page = await ctx.newPage();
     if (loginAs) {
@@ -106,7 +107,7 @@ async function expectPostHidden(
 
 test("Private post: hidden from anonymous and non-subscriber, visible to author", async ({
   page,
-  browser,
+  tracedContext,
 }, testInfo) => {
   setTestBudget(60_000);
   const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
@@ -119,23 +120,29 @@ test("Private post: hidden from anonymous and non-subscriber, visible to author"
   );
 
   // A second registered user who never subscribes.
-  const otherCtx = await browser.newContext();
+  const otherCtx = await tracedContext();
   const otherPage = await otherCtx.newPage();
   const other = await registerKnown(otherPage, firstNav);
   await otherCtx.close();
 
   // Anonymous visitor: hidden on permalink.
-  await expectPostHidden(browser, permalink, "Private Secret", firstNav);
+  await expectPostHidden(tracedContext, permalink, "Private Secret", firstNav);
 
   // Logged-in non-subscriber: hidden on permalink.
-  await expectPostHidden(browser, permalink, "Private Secret", firstNav, other);
+  await expectPostHidden(
+    tracedContext,
+    permalink,
+    "Private Secret",
+    firstNav,
+    other,
+  );
 
   // The author themselves can see it.
   await goto(page, permalink);
   await expect(page.locator("article h1")).toHaveText("Private Secret");
 
   // And it is absent from the author's public timeline for an anonymous viewer.
-  const anonCtx = await browser.newContext();
+  const anonCtx = await tracedContext();
   try {
     const anonPage = await anonCtx.newPage();
     await goto(anonPage, `/~${author.username}`, { timeout: firstNav });
@@ -149,7 +156,7 @@ test("Private post: hidden from anonymous and non-subscriber, visible to author"
 
 test("Subscribers post: visible after Subscribe, hidden again after Unsubscribe", async ({
   page,
-  browser,
+  tracedContext,
 }, testInfo) => {
   setTestBudget(60_000);
   const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
@@ -162,7 +169,7 @@ test("Subscribers post: visible after Subscribe, hidden again after Unsubscribe"
   );
 
   // A second user, in their own context for the whole scenario.
-  const viewerCtx = await browser.newContext();
+  const viewerCtx = await tracedContext();
   const viewerPage = await viewerCtx.newPage();
   try {
     await registerKnown(viewerPage, firstNav);
@@ -205,7 +212,7 @@ test("Subscribers post: visible after Subscribe, hidden again after Unsubscribe"
 
 test("Named audience: assigned member sees a Friends post; an unassigned non-member does not", async ({
   page,
-  browser,
+  tracedContext,
 }, testInfo) => {
   setTestBudget(90_000);
   const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
@@ -213,13 +220,13 @@ test("Named audience: assigned member sees a Friends post; an unassigned non-mem
   const author = await registerKnown(page, firstNav);
 
   // X subscribes (so the author can add X to a named audience).
-  const xCtx = await browser.newContext();
+  const xCtx = await tracedContext();
   const xPage = await xCtx.newPage();
   const userX = await registerKnown(xPage, firstNav);
   await subscribeTo(xPage, author.username);
 
   // Y registers but never subscribes — it is neither a subscriber nor a member.
-  const yCtx = await browser.newContext();
+  const yCtx = await tracedContext();
   const yPage = await yCtx.newPage();
   const userY = await registerKnown(yPage, firstNav);
 
@@ -278,7 +285,7 @@ test("Named audience: assigned member sees a Friends post; an unassigned non-mem
 
 test("Public post is visible to anonymous and appears in the feed; Subscribers post does not", async ({
   page,
-  browser,
+  tracedContext,
 }, testInfo) => {
   setTestBudget(90_000);
   const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
@@ -294,7 +301,7 @@ test("Public post is visible to anonymous and appears in the feed; Subscribers p
 
   // Anonymous visitor sees the public post on its permalink.
   await expectPostVisible(
-    browser,
+    tracedContext,
     publicPermalink,
     "Public Broadcast",
     firstNav,

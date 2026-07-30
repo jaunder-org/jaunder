@@ -26,7 +26,7 @@ test.afterAll(() => {
 // code from the URL and submits it as a hidden field).
 test("invite link registration completes end-to-end", async ({
   page,
-  browser,
+  tracedContext,
   user,
   mailbox,
 }) => {
@@ -55,7 +55,7 @@ test("invite link registration completes end-to-end", async ({
 
   // A fresh, logged-out visitor follows the invite link and registers. No code
   // is typed — the register page carries it from the URL as a hidden field.
-  const context = await browser.newContext();
+  const context = await tracedContext();
   try {
     const invitee = await context.newPage();
     const firstNav = slowBrowserFirstNavigationTimeoutMs(test.info(), 15_000);

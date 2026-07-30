@@ -1,7 +1,14 @@
-import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import { goto, register, click, BASE_URL } from "./helpers";
-import { setTestBudget, slowBrowserFirstNavigationTimeoutMs } from "./fixtures";
+// `test` comes from the shared fixtures, not @playwright/test, so this spec emits
+// an `e2e.test` span and its server-fn traffic (app-password minting, AtomPub
+// publishing over HTTP) is attributable to a named test (#681).
+import {
+  test,
+  expect,
+  setTestBudget,
+  slowBrowserFirstNavigationTimeoutMs,
+} from "./fixtures";
 
 /// Mints an app password via the Sessions UI and returns the raw token.
 async function mintAppPassword(page: Page, label: string): Promise<string> {

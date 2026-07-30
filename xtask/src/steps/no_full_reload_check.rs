@@ -10,8 +10,9 @@
 //! so a chain split across lines by the formatter could evade it — a guardrail against
 //! accidental reintroduction, not a determined adversary.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
+use crate::files;
 use crate::result::{CommandResult, StepResult};
 
 /// Navigation methods on a `web_sys::Location` that trigger a full document load.
@@ -55,30 +56,20 @@ pub fn problems(scanned: &[(String, String)]) -> Option<String> {
     (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
-/// Collect every `.rs` file under `dir`, recursively.
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let path = entry?.path();
-        if path.is_dir() {
-            rust_files(&path, out)?;
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
-        }
-    }
-    Ok(())
-}
-
 /// Scan every Rust file under each of [`POLICED_ROOTS`] and push the result step. A
 /// missing root is a hard failure, so a moved/renamed tree can never quietly disable the
 /// guard.
 pub fn run(result: &mut CommandResult) {
     let mut files = Vec::new();
     for root in POLICED_ROOTS {
-        if let Err(e) = rust_files(Path::new(root), &mut files) {
-            result.push(
-                StepResult::fail("no-full-reload").detail(format!("cannot scan {root}: {e}")),
-            );
-            return;
+        match files::with_extension(Path::new(root), "rs") {
+            Ok(found) => files.extend(found),
+            Err(e) => {
+                result.push(
+                    StepResult::fail("no-full-reload").detail(format!("cannot scan {root}: {e}")),
+                );
+                return;
+            }
         }
     }
     let scanned: Vec<(String, String)> = files

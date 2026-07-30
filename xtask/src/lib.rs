@@ -7,10 +7,13 @@ mod adr_readme;
 mod audit_wasm;
 pub mod coverage;
 mod doc_links;
+mod files;
 pub mod git;
 mod ids;
 mod nix_build;
 mod result;
+mod server_fn_coverage;
+mod server_fns;
 mod sh;
 #[cfg(test)]
 mod test_support;
@@ -28,12 +31,14 @@ mod steps {
     pub mod proffered_secret_check;
     pub mod rendered_html_from_trusted_check;
     pub mod sequence_check;
+    pub mod server_fn_coverage_check;
     pub mod server_fn_registrar_check;
     pub mod server_fn_tracing_check;
     pub mod sqlx_newtype_bind_check;
     pub mod static_checks;
     pub mod target_arch_placement_check;
     pub mod test_pattern_check;
+    pub mod traced_context_check;
 }
 pub use result::{CommandResult, Mode, StepResult};
 
@@ -155,10 +160,34 @@ pub enum Command {
     /// Coverage tooling — the source-filter drift probe (#241).
     #[command(subcommand)]
     Coverage(CoverageCommand),
+    /// Trace-derived `#[server]` fn flow coverage (#681): which server entry
+    /// points the e2e suite actually drives.
+    #[command(subcommand)]
+    ServerFnCoverage(ServerFnCoverageCommand),
     /// Build the hermetic elisp live-integration VM check (ADR-0035) through the
     /// same diagnostic-preserving wrapper. For CI's parallel `elisp-integration`
     /// job; local `validate` realizes it via the `e2e` aggregate. Host only.
     ElispIntegration,
+}
+
+/// `server-fn-coverage` subcommands (#681).
+#[derive(Subcommand)]
+pub enum ServerFnCoverageCommand {
+    /// Re-derive the coverage snapshot from the `sqlite × chromium` e2e capture
+    /// and write it to `docs/coverage/server-fns.json`.
+    ///
+    /// Run after `cargo xtask e2e sqlite chromium`, which lifts the capture this
+    /// reads. That one combo is authoritative (spec D6): neither backend nor
+    /// browser changes which server fns the UI invokes, and running it per-combo
+    /// avoids the aggregate `checks.e2e` join, where both sqlite combos' captures
+    /// collide under the same file name.
+    #[command(after_help = "EXAMPLES:\n  cargo xtask e2e sqlite chromium\n  \
+        cargo xtask server-fn-coverage regenerate")]
+    Regenerate,
+    /// Re-derive the snapshot and fail if it differs from the committed copy.
+    /// The e2e-lane half of the gate.
+    #[command(after_help = "EXAMPLES:\n  cargo xtask server-fn-coverage verify")]
+    Verify,
 }
 
 /// `adr` subcommands.
@@ -264,6 +293,12 @@ impl Cli {
             Command::Traces(TracesCommand::Analyze { .. }) => "traces-analyze",
             Command::Traces(TracesCommand::Run { .. }) => "traces-run",
             Command::Coverage(CoverageCommand::ProbeSource) => "coverage-probe-source",
+            Command::ServerFnCoverage(ServerFnCoverageCommand::Regenerate) => {
+                steps::server_fn_coverage_check::REGENERATE_STEP
+            }
+            Command::ServerFnCoverage(ServerFnCoverageCommand::Verify) => {
+                steps::server_fn_coverage_check::VERIFY_STEP
+            }
             Command::ElispIntegration => "elisp-integration",
         }
     }
@@ -303,6 +338,8 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::test_pattern_check::run(&mut result);
             steps::server_fn_registrar_check::run(&mut result);
             steps::server_fn_tracing_check::run(Mode::Fix, &mut result);
+            steps::server_fn_coverage_check::run(&mut result);
+            steps::traced_context_check::run(&mut result);
             steps::proffered_secret_check::run(&mut result);
             steps::no_full_reload_check::run(&mut result);
             steps::target_arch_placement_check::run(&mut result);
@@ -338,6 +375,8 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::test_pattern_check::run(&mut result);
             steps::server_fn_registrar_check::run(&mut result);
             steps::server_fn_tracing_check::run(Mode::Check, &mut result);
+            steps::server_fn_coverage_check::run(&mut result);
+            steps::traced_context_check::run(&mut result);
             steps::proffered_secret_check::run(&mut result);
             steps::no_full_reload_check::run(&mut result);
             steps::target_arch_placement_check::run(&mut result);
@@ -379,6 +418,14 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             // lifted out of the VM (see steps::flaky). Informational — never fails
             // the combo.
             steps::flaky::collect(&mut result, backend.as_str(), browser.as_str());
+            // #681: the e2e half of the flow-coverage gate. Only this per-combo path
+            // has an uncollided capture (spec D8), and only the authoritative combo's
+            // traces are used (D6) — `verify_after_combo` enforces both.
+            steps::server_fn_coverage_check::verify_after_combo(
+                &mut result,
+                backend.as_str(),
+                browser.as_str(),
+            );
             finalize(&mut result, start);
             Ok(result)
         }
@@ -464,6 +511,26 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let analysis = traces::analyze::analyze(&files, filters)?;
             result.traces = Some(traces::render::render(&analysis, top as usize));
             result.push(StepResult::ok("traces-run").detail(format!("{n} trace file(s)")));
+            finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::ServerFnCoverage(sub) => {
+            let start = std::time::Instant::now();
+            use steps::server_fn_coverage_check::{REGENERATE_STEP, VERIFY_STEP};
+            let regenerate = matches!(sub, ServerFnCoverageCommand::Regenerate);
+            let mut result = CommandResult::new(if regenerate {
+                REGENERATE_STEP
+            } else {
+                VERIFY_STEP
+            });
+            // A missing/empty/unparseable capture propagates as Err → the exit-2
+            // path, never a green run: treating a broken capture as "nothing
+            // uncovered" would make the whole gate dishonest.
+            let step = steps::server_fn_coverage_check::from_capture(
+                Path::new(server_fn_coverage::io::CAPTURE_PATH),
+                regenerate,
+            )?;
+            result.push(step);
             finalize(&mut result, start);
             Ok(result)
         }
@@ -722,6 +789,30 @@ mod cli_tests {
             }
             _ => panic!("expected traces run"),
         }
+    }
+
+    #[test]
+    fn server_fn_coverage_parses_both_subcommands() {
+        // Both spellings appear verbatim in the gate's failure messages and in
+        // CONTRIBUTING, so a rename must break a test rather than a developer.
+        let cli = Cli::try_parse_from(["xtask", "server-fn-coverage", "regenerate"]).unwrap();
+        assert_eq!(cli.command_name(), "server-fn-coverage-regenerate");
+        assert!(matches!(
+            cli.command,
+            Command::ServerFnCoverage(ServerFnCoverageCommand::Regenerate)
+        ));
+
+        let cli = Cli::try_parse_from(["xtask", "server-fn-coverage", "verify"]).unwrap();
+        assert_eq!(cli.command_name(), "server-fn-coverage-verify");
+        assert!(matches!(
+            cli.command,
+            Command::ServerFnCoverage(ServerFnCoverageCommand::Verify)
+        ));
+    }
+
+    #[test]
+    fn server_fn_coverage_requires_a_subcommand() {
+        assert!(Cli::try_parse_from(["xtask", "server-fn-coverage"]).is_err());
     }
 
     #[test]

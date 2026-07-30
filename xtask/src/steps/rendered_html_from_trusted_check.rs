@@ -40,10 +40,11 @@
 //! spurious door — a false pass), matching
 //! [`crate::steps::server_fn_registrar_check`].
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use syn::spanned::Spanned;
 
+use crate::files;
 use crate::result::{CommandResult, StepResult};
 
 /// Source roots scanned recursively for `.rs` files — production `src` trees, not
@@ -240,31 +241,21 @@ pub fn problems(scanned: &[(String, String)]) -> Option<String> {
     Some(lines.join("\n"))
 }
 
-/// Collect every `.rs` file under `dir`, recursively.
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let path = entry?.path();
-        if path.is_dir() {
-            rust_files(&path, out)?;
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
-        }
-    }
-    Ok(())
-}
-
 /// Scan every Rust file under each [`POLICED_ROOTS`] and push the result step. A
 /// missing root is a hard failure, so a moved/renamed tree can never quietly
 /// disable the guard.
 pub fn run(result: &mut CommandResult) {
     let mut files = Vec::new();
     for root in POLICED_ROOTS {
-        if let Err(e) = rust_files(Path::new(root), &mut files) {
-            result.push(
-                StepResult::fail("rendered-html-from-trusted")
-                    .detail(format!("cannot scan {root}: {e}")),
-            );
-            return;
+        match files::with_extension(Path::new(root), "rs") {
+            Ok(found) => files.extend(found),
+            Err(e) => {
+                result.push(
+                    StepResult::fail("rendered-html-from-trusted")
+                        .detail(format!("cannot scan {root}: {e}")),
+                );
+                return;
+            }
         }
     }
     let mut scanned = Vec::new();

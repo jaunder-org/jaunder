@@ -19,8 +19,9 @@
 //! `format.as_str()`) is a genuine owned-`String` slice, not a newtype strip, and
 //! is **not** policed.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
+use crate::files;
 use crate::result::{CommandResult, StepResult};
 
 /// A bind-expression exempt from the guard, matched by **substring** so it is
@@ -140,31 +141,20 @@ pub fn problems(scanned: &[(String, String)]) -> Option<String> {
     Some(lines.join("\n"))
 }
 
-/// Collect every `.rs` file under `dir`, recursively.
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let path = entry?.path();
-        if path.is_dir() {
-            rust_files(&path, out)?;
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
-        }
-    }
-    Ok(())
-}
-
 /// Scan every Rust file under [`POLICED_ROOT`] and push the result step. A missing
 /// root is a hard failure, so a moved/renamed tree can never quietly disable the
 /// guard.
 pub fn run(result: &mut CommandResult) {
-    let mut files = Vec::new();
-    if let Err(e) = rust_files(Path::new(POLICED_ROOT), &mut files) {
-        result.push(
-            StepResult::fail("sqlx-newtype-bind")
-                .detail(format!("cannot scan {POLICED_ROOT}: {e}")),
-        );
-        return;
-    }
+    let files = match files::with_extension(Path::new(POLICED_ROOT), "rs") {
+        Ok(files) => files,
+        Err(e) => {
+            result.push(
+                StepResult::fail("sqlx-newtype-bind")
+                    .detail(format!("cannot scan {POLICED_ROOT}: {e}")),
+            );
+            return;
+        }
+    };
     let scanned: Vec<(String, String)> = files
         .iter()
         .filter_map(|p| {

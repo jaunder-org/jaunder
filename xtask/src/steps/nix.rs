@@ -1,5 +1,6 @@
 use std::fs::File;
 use std::io::{self, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -95,7 +96,7 @@ pub fn e2e_combo(result: &mut CommandResult, backend: &str, browser: &str) {
     let check = format!("e2e-{backend}-{browser}");
     let step_name = format!("nix-{check}");
     result.push(build_check(&step_name, &check));
-    copy_e2e_diagnostics_between(
+    lift_e2e_diagnostics(
         std::path::Path::new(&format!(".xtask/gcroots/{check}")),
         std::path::Path::new(&format!(".xtask/diagnostics/{check}")),
     );
@@ -109,7 +110,7 @@ pub fn e2e_combo(result: &mut CommandResult, backend: &str, browser: &str) {
 pub fn elisp_integration(result: &mut CommandResult) {
     let check = "e2e-elisp-integration";
     result.push(build_check("nix-elisp-integration", check));
-    copy_e2e_diagnostics_between(
+    lift_e2e_diagnostics(
         std::path::Path::new(&format!(".xtask/gcroots/{check}")),
         std::path::Path::new(&format!(".xtask/diagnostics/{check}")),
     );
@@ -119,10 +120,20 @@ pub fn elisp_integration(result: &mut CommandResult) {
 /// and the Playwright report — into the canonical diagnostics dir. Best-effort;
 /// silent on a missing out-link (e.g. a failed build).
 fn copy_e2e_journals() {
-    copy_e2e_diagnostics_between(
+    lift_e2e_diagnostics(
         std::path::Path::new(".xtask/gcroots/e2e"),
         std::path::Path::new(".xtask/diagnostics/e2e"),
     );
+}
+
+/// What one diagnostics-copy pass did.
+struct DiagnosticsCopy {
+    /// How many artifacts were lifted.
+    copied: usize,
+    /// One message per artifact that could NOT be lifted, naming the file and the OS
+    /// error. Reported rather than counted: which file went missing is the whole
+    /// diagnostic value, and a bare count would say only that something did.
+    failures: Vec<String>,
 }
 
 /// Copy e2e diagnostic files — the app journal (`jaunder-journal-*.log`), the full
@@ -134,8 +145,12 @@ fn copy_e2e_journals() {
 /// the #123/#49 failure-path additions; the capture tarball is the #227 consolidated
 /// capture artifact.
 /// Serves both the success path (from the out-link) and the failure path (from the
-/// kept outPath). Returns the count copied. Pure path logic so it is unit-testable.
-fn copy_e2e_diagnostics_between(src_dir: &std::path::Path, dest_dir: &std::path::Path) -> usize {
+/// kept outPath). Pure path logic so it is unit-testable; [`lift_e2e_diagnostics`] is
+/// the wrapper callers use, which surfaces the failures.
+fn copy_e2e_diagnostics_between(
+    src_dir: &std::path::Path,
+    dest_dir: &std::path::Path,
+) -> DiagnosticsCopy {
     let wanted = |name: &str| {
         (name.starts_with("jaunder-journal-") && name.ends_with(".log"))
             || (name.starts_with("system-journal-") && name.ends_with(".log"))
@@ -144,10 +159,16 @@ fn copy_e2e_diagnostics_between(src_dir: &std::path::Path, dest_dir: &std::path:
             || (name.starts_with("capture-") && name.ends_with(".tar.gz"))
     };
     let Ok(entries) = std::fs::read_dir(src_dir) else {
-        return 0;
+        // No source dir at all is the ordinary "this check emits no diagnostics" case
+        // (a non-e2e check, or a build that produced no out-link), not a failure.
+        return DiagnosticsCopy {
+            copied: 0,
+            failures: Vec::new(),
+        };
     };
     let _ = std::fs::create_dir_all(dest_dir);
     let mut copied = 0;
+    let mut failures = Vec::new();
     for entry in entries.flatten() {
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
@@ -158,11 +179,44 @@ fn copy_e2e_diagnostics_between(src_dir: &std::path::Path, dest_dir: &std::path:
         let to = dest_dir.join(name);
         // Every lifted artifact is a flat file (journals, the Playwright report, and the
         // trace/capture tarballs); the otel trace now rides `capture-*.tar.gz`.
-        if std::fs::copy(&from, &to).is_ok() {
-            copied += 1;
+        //
+        // Remove first: these come from the nix store, so a previously-copied artifact
+        // is on disk read-only (0444) and `fs::copy` onto it fails EACCES. That error
+        // was swallowed, so a second run silently kept the FIRST run's files — and the
+        // flow-coverage gate (#681) reads `capture-*.tar.gz` from here, so it would
+        // have verified today's build against yesterday's traces. Clear the read-only
+        // bit after copying too, so the next run can overwrite even if the remove
+        // fails.
+        let _ = std::fs::remove_file(&to);
+        match std::fs::copy(&from, &to) {
+            Ok(_) => {
+                let _ = std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o644));
+                copied += 1;
+            }
+            // Recorded, not discarded: an undetected copy failure is what let the stale
+            // capture above survive, so any future variant of it has to say so.
+            Err(e) => failures.push(format!(
+                "could not copy {} to {}: {e}",
+                from.display(),
+                to.display()
+            )),
         }
     }
-    copied
+    DiagnosticsCopy { copied, failures }
+}
+
+/// [`copy_e2e_diagnostics_between`], with every failure warned about on stderr.
+///
+/// Still best-effort — diagnostics are a nicety and must never fail a gate or panic —
+/// but *visibly* so. Silence was the actual defect in the stale-capture bug: the copy
+/// failed on every re-run and nothing said a word, so the gate kept reading the first
+/// run's artifacts. Returns the number lifted, for a caller that wants it.
+fn lift_e2e_diagnostics(src_dir: &std::path::Path, dest_dir: &std::path::Path) -> usize {
+    let outcome = copy_e2e_diagnostics_between(src_dir, dest_dir);
+    for failure in &outcome.failures {
+        eprintln!("xtask: warning: {failure}");
+    }
+    outcome.copied
 }
 
 /// A `Write` that fans every write out to two inner writers, **best-effort**: a
@@ -384,7 +438,7 @@ fn rescue_diagnostics(check: &str) {
     // the success-path copier (which handles the otel directory layout). A no-op for
     // non-e2e checks — their outPath carries no matching files.
     if let Some(out_path) = eval_out_path(check) {
-        copy_e2e_diagnostics_between(std::path::Path::new(&out_path), std::path::Path::new(&dest));
+        lift_e2e_diagnostics(std::path::Path::new(&out_path), std::path::Path::new(&dest));
     }
     // Resolve the kept-build-dir glob in Rust and copy with explicit `cp` args
     // (no `bash -c`) so the check name can never inject into a shell command.
@@ -410,6 +464,8 @@ fn rescue_diagnostics(check: &str) {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
     use super::sentinel_detail;
     use coverage::status::{CoverageStatus, StatusCategory};
 
@@ -590,10 +646,11 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
         // the `capture-<backend>` prefix the flake's tar step always produces.
         std::fs::write(src.join("capture.tar.gz"), b"n").unwrap();
 
-        let n = super::copy_e2e_diagnostics_between(&src, &dest);
+        let outcome = super::copy_e2e_diagnostics_between(&src, &dest);
 
+        assert!(outcome.failures.is_empty(), "{:?}", outcome.failures);
         assert_eq!(
-            n, 5,
+            outcome.copied, 5,
             "journal + playwright report + artifacts tarball + system journal + capture tarball are copied; unrelated and un-suffixed capture are not"
         );
         assert!(dest.join("jaunder-journal-sqlite.log").exists());
@@ -605,6 +662,63 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
         assert!(
             !dest.join("capture.tar.gz").exists(),
             "un-suffixed capture.tar.gz must not be lifted"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn copy_e2e_diagnostics_overwrites_a_read_only_previous_copy() {
+        // Artifacts come from the nix store, so the previous run's copy is on disk
+        // read-only and `fs::copy` onto it fails EACCES. That was swallowed, leaving
+        // the FIRST run's capture in place — and the #681 gate reads its capture from
+        // this directory, so it would verify a new build against stale traces.
+        let tmp = std::env::temp_dir().join(format!("xtask-ro-{}", std::process::id()));
+        let src = tmp.join("src");
+        let dest = tmp.join("dest");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+
+        std::fs::write(src.join("capture-sqlite.tar.gz"), b"first").unwrap();
+        assert_eq!(super::copy_e2e_diagnostics_between(&src, &dest).copied, 1);
+        // Reproduce the store's 0444 on the destination.
+        std::fs::set_permissions(
+            dest.join("capture-sqlite.tar.gz"),
+            std::fs::Permissions::from_mode(0o444),
+        )
+        .unwrap();
+
+        std::fs::write(src.join("capture-sqlite.tar.gz"), b"second").unwrap();
+        assert_eq!(super::copy_e2e_diagnostics_between(&src, &dest).copied, 1);
+
+        assert_eq!(
+            std::fs::read(dest.join("capture-sqlite.tar.gz")).unwrap(),
+            b"second",
+            "a re-run must replace the previous capture, not silently keep it"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn copy_e2e_diagnostics_reports_a_file_it_could_not_copy() {
+        // The invisibility, not the failure, was the bug: a copy that cannot happen
+        // leaves a STALE artifact behind, and the #681 gate then reads it as this run's.
+        // A directory squatting on the destination name is the deterministic stand-in
+        // for the read-only store copy that used to fail in silence.
+        let tmp = std::env::temp_dir().join(format!("xtask-cf-{}", std::process::id()));
+        let src = tmp.join("src");
+        let dest = tmp.join("dest");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(dest.join("capture-sqlite.tar.gz")).unwrap();
+        std::fs::write(src.join("capture-sqlite.tar.gz"), b"new").unwrap();
+
+        let outcome = super::copy_e2e_diagnostics_between(&src, &dest);
+
+        assert_eq!(outcome.copied, 0);
+        assert_eq!(outcome.failures.len(), 1, "{:?}", outcome.failures);
+        assert!(
+            outcome.failures[0].contains("capture-sqlite.tar.gz"),
+            "names the artifact that went missing: {}",
+            outcome.failures[0]
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }

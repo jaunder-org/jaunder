@@ -15,11 +15,18 @@ use url::Url;
 /// A single flattened span with the scalar fields the reports read, its e2e
 /// project, and the raw span object for on-demand `e2e.*_json` reads (only
 /// `e2e.test` spans carry those, so they are parsed lazily by the sections that
-/// need them). Node keeps `spanId`/`parentSpanId` too, but no report reads them,
-/// so they are omitted.
+/// need them).
+///
+/// `span_id`/`parent_span_id` were originally omitted (no report read them), but
+/// the flow-coverage gate (#681) walks `parent_span_id` upward from a server-fn
+/// hit to the `e2e.test` span that caused it — an instrument span's parent is the
+/// request span, not the test — so the identity edges are retained. Absent ids are
+/// the empty string, matching the other string-typed fields.
 #[derive(Debug, Clone)]
 pub struct Span {
     pub trace_id: String,
+    pub span_id: String,
+    pub parent_span_id: String,
     pub name: String,
     pub method: String,
     pub uri: String,
@@ -175,6 +182,16 @@ pub fn parse_spans(content: &str, filters: &Filters, source: &str) -> Result<Vec
                             .and_then(Value::as_str)
                             .unwrap_or("")
                             .to_string(),
+                        span_id: span
+                            .get("spanId")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
+                        parent_span_id: span
+                            .get("parentSpanId")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
                         method: get_attr(&span, "method"),
                         uri: get_attr(&span, "uri"),
                         busy_ns: get_attr(&span, "busy_ns"),
@@ -270,6 +287,27 @@ mod tests {
         let spans = parse_spans(&content, &Filters::default(), "sample").unwrap();
         assert_eq!(spans.len(), 2);
         assert!(spans.iter().all(|s| s.source == "sample"));
+    }
+
+    #[test]
+    fn span_ids_are_parsed() {
+        // The flow-coverage gate (#681) joins on these edges.
+        let content = line(json!([
+            { "traceId": "aa", "spanId": "bb", "parentSpanId": "cc", "name": "request" },
+        ]));
+        let spans = parse_spans(&content, &Filters::default(), "t").unwrap();
+        assert_eq!(spans[0].span_id, "bb");
+        assert_eq!(spans[0].parent_span_id, "cc");
+    }
+
+    #[test]
+    fn missing_parent_span_id_is_empty_not_an_error() {
+        // A root span legitimately has no parent; that must not fail parsing.
+        let content = line(json!([
+            { "traceId": "aa", "spanId": "bb", "name": "request" },
+        ]));
+        let spans = parse_spans(&content, &Filters::default(), "t").unwrap();
+        assert_eq!(spans[0].parent_span_id, "");
     }
 
     #[test]

@@ -94,7 +94,10 @@ pub fn collect_trace_files(
 /// bundle to `dest`, via the `tar` + `flate2` crates (matching `storage::backup`'s
 /// archive I/O rather than shelling out `tar`). Errors, naming the tarball, if the
 /// member is absent.
-fn extract_trace(tarball: &Path, dest: &Path) -> Result<()> {
+///
+/// `pub(crate)` for the flow-coverage gate (#681), which reads the same member out
+/// of the same bundle — reusing this rather than hand-rolling a second extractor.
+pub(crate) fn extract_trace(tarball: &Path, dest: &Path) -> Result<()> {
     let file = File::open(tarball).with_context(|| format!("opening {}", tarball.display()))?;
     let mut archive = tar::Archive::new(GzDecoder::new(file));
     for entry in archive.entries()? {
