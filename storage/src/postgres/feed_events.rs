@@ -37,6 +37,13 @@ async fn purge_corrupt(pool: &Pool<Postgres>, ids: &[FeedEventId]) {
 
 /// Unwrap an id batch to the raw `i64` slice Postgres binds as a single
 /// `= ANY($n)` array parameter — the sqlx seam takes `&[i64]`, not the newtype.
+///
+/// Forced, not chosen: the ADR-0071 bridge emits `Type`/`Encode`/`Decode` but no
+/// `PgHasArrayType`, so `.bind(&[FeedEventId])` has no array encoding. #715 typed
+/// `purge_corrupt`'s parameter and routed it through here, which added a fourth
+/// caller — so this helper now launders *more* strips past both gates, not fewer.
+/// That is #716's shape (a strip in one function, the bind in another), and closing
+/// it means giving `IdNewtype` a `PgHasArrayType` rather than deleting this helper.
 fn raw_ids(ids: &[FeedEventId]) -> Vec<i64> {
     ids.iter().map(|id| i64::from(*id)).collect()
 }

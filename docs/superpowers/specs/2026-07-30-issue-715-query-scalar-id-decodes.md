@@ -126,9 +126,10 @@ rule:
 
 "Per call" also means a `let` or `fn` covering several calls yields one record
 each: `backup.rs:733-745` is one `let live_count: i64 = match { … }` over two
-`query_scalar` calls and must produce two records, which is what allowlist entry
-A's `count: 2` depends on. Position 4 is a separate population, recorded per
-declared field, not per call.
+`query_scalar` calls and must produce two records — entries A1/A2 below. The
+same property is what `test_support.rs`'s `scalar_i64` entry (`count: 2`) rests
+on. Position 4 is a separate population, recorded per declared field, not per
+call.
 
 ### D5 — What the gate cannot read, stated rather than papered over
 
@@ -240,11 +241,20 @@ the failure mode the work exists to close.
 Sites 9–11 are absent from the issue's table. #9 is a genuine **#686 miss** —
 its audit required a turbofish and this site writes the type on the `let`.
 
-### Exemptions — 9 allowlist entries covering 12 sites
+### Exemptions — 10 allowlist entries covering 12 sites
+
+**Corrected during implementation: 10 entries, not 9.** Entry A was written as
+one `count: 2` entry, but its two dialect arms issue _different_ SQL
+(`sqlite_master` vs `information_schema.tables`), and the SQL text is part of
+the entry key (D7). Two distinct keys cannot share one entry, so A is two
+`count: 1` entries. Forced by the site-scoping rule rather than chosen — and the
+rule working as intended: a single entry spanning both arms would have been a
+small region exemption.
 
 | Entry | Site(s)                       | Count | Reason                                                                           |
 | ----- | ----------------------------- | ----- | -------------------------------------------------------------------------------- |
-| A     | `backup.rs:734`, `:739`       | 2     | `COUNT(*)` of live tables, two dialect arms under one `let live_count: i64`      |
+| A1    | `backup.rs:734`               | 1     | `COUNT(*)` of live SQLite tables, checked against the backup manifest            |
+| A2    | `backup.rs:739`               | 1     | `COUNT(*)` of live Postgres tables, the dialect twin of A1                       |
 | B     | `backup.rs:773`, `:778`       | 2     | `COUNT(*)` per seeded table; byte-identical, SQL built in `format!`              |
 | C     | `sqlite/mod.rs:150`           | 1     | `SELECT EXISTS(…)` decoded as `i64` (SQLite has no bool); SQL built in `format!` |
 | D     | `postgres/schema.rs:22`       | 1     | `COUNT(*)` of non-deferrable FK constraints                                      |
@@ -351,7 +361,7 @@ here.
     `i64` decode in the same function still fails (D7).
 12. Reverting any one of the 11 sweep sites to its `i64` decode makes the gate
     fail. Demonstrated for at least one site and stated in the PR body.
-13. The allowlist contains exactly the 9 entries in the exemptions table, each
+13. The allowlist contains exactly the 10 entries in the exemptions table, each
     with a prose reason, and **no** entry for a decode that yields an id.
 14. A missing/renamed `storage/src` is a hard gate failure, not a silent skip —
     matching `sqlx-newtype-bind`'s `POLICED_ROOT` behaviour.

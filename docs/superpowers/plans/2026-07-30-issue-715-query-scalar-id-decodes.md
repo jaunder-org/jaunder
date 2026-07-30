@@ -17,8 +17,8 @@ population rather than searching for violation spellings.
 **In** — the 11 `storage/src` decode sites (spec §"Violations"); the two
 `server/tests/storage/mod.rs` twins; `audience_target_row`'s encode twin; the
 generic bounds that move with them; the `sqlx-newtype-decode` xtask gate with
-its 9 seed allowlist entries; the "enumerate, don't search" ADR draft; the #716
-scope update.
+its seed allowlist (shipped as 10 entries over 12 sites); the "enumerate, don't
+search" ADR draft; the #716 scope update.
 
 **Out** — the bind direction (#716); the string decode family and the
 out-of-population record (#728, already filed, blocked by this); `SiteConfigKey`
@@ -614,7 +614,10 @@ justify it"), a count mismatch ("this entry declared N, the tree has M"), and a
 stale entry (declared but no matching site) — a stale entry is a failure too, or
 the allowlist stops tracking the tree.
 
-**Seed exactly these 9 entries.** Function names verified against the tree:
+**Seed exactly these entries.** Function names verified against the tree.
+(Shipped as **10** entries, not 9: `backup_covers_every_table_…`'s two arms
+issue different SQL, and the SQL is part of the entry key, so they cannot share
+one entry — see the spec's Exemptions note.)
 
 | File                    | Fn                                                      | Target        | Count | Reason                                                                         |
 | ----------------------- | ------------------------------------------------------- | ------------- | ----- | ------------------------------------------------------------------------------ |

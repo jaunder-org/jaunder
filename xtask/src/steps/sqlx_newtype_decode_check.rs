@@ -7,8 +7,9 @@
 //! author had in mind and reported done (#686's field-name pass missed five tuple
 //! sites; its tuple pass then missed every `query_scalar`).
 //!
-//! **This gate enumerates; it does not search** (see the "enumerate, don't search"
-//! ADR). It reads **no SQL**: it does not look for `*_id` to decide something is an
+//! **This gate enumerates; it does not search**
+//! (`docs/adr/drafts/static-type-safety-gates-enumerate.md`). It reads **no SQL**: it
+//! does not look for `*_id` to decide something is an
 //! id, and it does not look for `COUNT(` to decide something is a count. Both are
 //! pattern searches, and either one hands the blind spot straight back —
 //! `SELECT post_id FROM t WHERE (SELECT COUNT(*) …) > 0` defeats the second while
@@ -55,6 +56,20 @@
 //!
 //! Neither occurs as an id decode today. They are recorded here so the boundary is
 //! inherited by the next audit rather than rediscovered.
+//!
+//! The boundary is visible in the tree, and the shape is worth recognising: the two
+//! feed-events dialects decode the same `attempts` column, and only one is policed.
+//! SQLite ascribes `let attempts: i64`, so it is in population and carries an
+//! allowlist entry; Postgres reads it unascribed straight into a struct field, so the
+//! field's declared type pins it and the call is invisible here. Same act, two
+//! spellings, one policed — which is the honest cost of a population defined by where
+//! the type is written down, not a gap to paper over with a heuristic.
+//!
+//! The mirror of that boundary is a **latent over-bite**: an unascribed `.get(…)` on
+//! something that is not a row — a `HashMap`, a JSON map — inside a function whose
+//! return type is in the `i64` family would be recorded, because rule 3 supplies the
+//! target. No such site exists today. If one appears, the fix is a turbofish or an
+//! ascription at the call, not a receiver-name heuristic here.
 //!
 //! # Root
 //!
@@ -191,7 +206,7 @@ const ALLOWLIST: &[Allowed] = &[
 
 /// One decode site: where it is, and what it decodes into.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Decode {
+struct DecodeSite {
     /// Enclosing function name; empty at item level (a declared target type).
     function: String,
     /// Rendered decode target, whitespace-stripped.
@@ -251,25 +266,33 @@ fn target_index(name: &str) -> Option<usize> {
     }
 }
 
-/// The `n`th type argument of an angle-bracketed turbofish, if present.
+/// The `n`th *type* argument in a generic-argument list, skipping lifetimes and
+/// consts. Shared by the free-call path (`query_scalar::<_, T>`) and the method path
+/// (`row.get::<T, _>`), which spell their turbofish differently but index it the same.
+fn nth_type_of<'a>(
+    args: impl Iterator<Item = &'a syn::GenericArgument>,
+    n: usize,
+) -> Option<syn::Type> {
+    args.filter_map(|a| match a {
+        syn::GenericArgument::Type(t) => Some(t.clone()),
+        _ => None,
+    })
+    .nth(n)
+}
+
+/// The `n`th type argument of a path's angle-bracketed turbofish, if present.
 fn nth_type_arg(args: &syn::PathArguments, n: usize) -> Option<syn::Type> {
     let syn::PathArguments::AngleBracketed(ab) = args else {
         return None;
     };
-    ab.args
-        .iter()
-        .filter_map(|a| match a {
-            syn::GenericArgument::Type(t) => Some(t.clone()),
-            _ => None,
-        })
-        .nth(n)
+    nth_type_of(ab.args.iter(), n)
 }
 
-/// Walks a file collecting [`Decode`]s, carrying the enclosing `fn` name/return type
+/// Walks a file collecting [`DecodeSite`]s, carrying the enclosing `fn` name/return type
 /// and the enclosing `let` ascription so each call can take its **nearest** declared
 /// type.
 struct Scanner {
-    out: Vec<Decode>,
+    out: Vec<DecodeSite>,
     function: String,
     fn_ret: Option<syn::Type>,
     let_ty: Option<syn::Type>,
@@ -299,7 +322,7 @@ impl Scanner {
         if !is_i64_family(&target) {
             return;
         }
-        self.out.push(Decode {
+        self.out.push(DecodeSite {
             function: self.function.clone(),
             target: render(&target),
             what,
@@ -369,16 +392,7 @@ impl<'ast> syn::visit::Visit<'ast> for Scanner {
             let turbofish = i
                 .turbofish
                 .as_ref()
-                .and_then(|t| {
-                    t.args
-                        .iter()
-                        .filter_map(|a| match a {
-                            syn::GenericArgument::Type(ty) => Some(ty.clone()),
-                            _ => None,
-                        })
-                        .nth(idx)
-                })
-                .or(None);
+                .and_then(|t| nth_type_of(t.args.iter(), idx));
             let what = i.args.first().map(render).unwrap_or_default();
             self.record(turbofish, what, i.method.span());
         }
@@ -395,7 +409,7 @@ impl<'ast> syn::visit::Visit<'ast> for Scanner {
         if is_from_row {
             for f in &i.fields {
                 if is_i64_family(&f.ty) {
-                    self.out.push(Decode {
+                    self.out.push(DecodeSite {
                         function: String::new(),
                         target: render(&f.ty),
                         what: f
@@ -418,7 +432,7 @@ impl<'ast> syn::visit::Visit<'ast> for Scanner {
         if let syn::Type::Tuple(t) = &*i.ty {
             for (n, elem) in t.elems.iter().enumerate() {
                 if is_i64_family(elem) {
-                    self.out.push(Decode {
+                    self.out.push(DecodeSite {
                         function: String::new(),
                         target: render(elem),
                         what: format!("{}.{n}", i.ident),
@@ -436,26 +450,28 @@ impl<'ast> syn::visit::Visit<'ast> for Scanner {
 /// A file that will not parse is **not** silently skipped: an unparsed file is a file
 /// the gate cannot see, and a gate that quietly shrinks its own population is the
 /// failure this whole design exists to prevent. Pure, so it is unit-tested directly.
-fn decodes(source: &str) -> Result<Vec<Decode>, String> {
+fn decodes(source: &str) -> Result<Vec<DecodeSite>, String> {
     let file = syn::parse_file(source).map_err(|e| format!("cannot parse as Rust: {e}"))?;
     let mut scanner = Scanner::new();
     syn::visit::Visit::visit_file(&mut scanner, &file);
     Ok(scanner.out)
 }
 
-/// Whether `path` ends with the allowlist entry's `file` suffix, at a path boundary
-/// so `mod.rs` cannot match `sqlite/mod.rs`'s entry and vice versa.
-fn file_matches(path: &str, suffix: &str) -> bool {
-    let normalized = path.replace('\\', "/");
-    normalized == suffix
-        || normalized.ends_with(&format!("/{suffix}"))
-        || normalized
-            .strip_prefix(POLICED_ROOT)
-            .is_some_and(|rest| rest.trim_start_matches('/') == suffix)
+/// Whether `path` is exactly `POLICED_ROOT/relative`.
+///
+/// **Exact, not a suffix match.** Three files under the root are named `backup.rs`,
+/// and two of them declare a function called `schema_version`, so a suffix match would
+/// let the `backup.rs` entry reach decodes in `postgres/backup.rs` — a region-scoped
+/// exemption of exactly the kind the site-scoping rule exists to stop. The other key
+/// fields happen to keep it honest today; that is luck, not design.
+fn file_matches(path: &str, relative: &str) -> bool {
+    path.strip_prefix(POLICED_ROOT)
+        .map(|rest| rest.trim_start_matches('/'))
+        == Some(relative)
 }
 
 /// Whether `entry` names `decode` in `path`.
-fn entry_matches(entry: &Allowed, path: &str, decode: &Decode) -> bool {
+fn entry_matches(entry: &Allowed, path: &str, decode: &DecodeSite) -> bool {
     file_matches(path, entry.file)
         && entry.function == decode.function
         && entry.target == decode.target
@@ -466,7 +482,7 @@ fn entry_matches(entry: &Allowed, path: &str, decode: &Decode) -> bool {
 /// declared count no longer matches the tree, or `None` when the population is exactly
 /// accounted for. Pure given the `(path, source)` pairs, so it is unit-tested directly.
 pub fn problems(scanned: &[(String, String)]) -> Option<String> {
-    let mut found: Vec<(String, Decode)> = Vec::new();
+    let mut found: Vec<(String, DecodeSite)> = Vec::new();
     let mut lines = Vec::new();
     for (path, source) in scanned {
         match decodes(source) {
@@ -550,19 +566,35 @@ pub fn run(result: &mut CommandResult) {
             return;
         }
     };
-    let scanned: Vec<(String, String)> = files
-        .iter()
-        .filter_map(|p| {
-            std::fs::read_to_string(p)
-                .ok()
-                .map(|s| (p.display().to_string(), s))
-        })
-        .collect();
-    let step = match problems(&scanned) {
-        None => StepResult::ok("sqlx-newtype-decode"),
-        Some(detail) => StepResult::fail("sqlx-newtype-decode").detail(detail),
+    // A file that cannot be READ is as invisible as one that cannot be PARSED, so it
+    // fails the same way. `read_to_string(p).ok()` would have dropped it from the
+    // population silently — the precise failure this gate exists to prevent, committed
+    // by the gate itself.
+    let mut scanned: Vec<(String, String)> = Vec::with_capacity(files.len());
+    let mut unreadable = Vec::new();
+    for p in &files {
+        let path = p.display().to_string();
+        match std::fs::read_to_string(p) {
+            Ok(s) => scanned.push((path, s)),
+            Err(e) => unreadable.push(format!(
+                "{path}: cannot read: {e} — an unread file is invisible to this gate, so it \
+                 fails rather than shrinking the population."
+            )),
+        }
+    }
+
+    let detail = match (problems(&scanned), unreadable.is_empty()) {
+        (None, true) => {
+            result.push(StepResult::ok("sqlx-newtype-decode"));
+            return;
+        }
+        (found, _) => {
+            let mut lines = unreadable;
+            lines.extend(found);
+            lines.join("\n")
+        }
     };
-    result.push(step);
+    result.push(StepResult::fail("sqlx-newtype-decode").detail(detail));
 }
 
 #[cfg(test)]
@@ -837,6 +869,20 @@ mod tests {
             detail.contains("The decode is gone — delete the entry."),
             "{detail}"
         );
+    }
+
+    #[test]
+    fn an_entry_does_not_reach_a_same_named_file_in_a_subdirectory() {
+        // `backup.rs`, `postgres/backup.rs` and `sqlite/backup.rs` all exist, and the
+        // last two both declare `schema_version`. A suffix match would let one entry
+        // exempt decodes in a sibling file — a region exemption by the back door.
+        assert!(file_matches("storage/src/backup.rs", "backup.rs"));
+        assert!(!file_matches("storage/src/postgres/backup.rs", "backup.rs"));
+        assert!(file_matches(
+            "storage/src/postgres/backup.rs",
+            "postgres/backup.rs"
+        ));
+        assert!(!file_matches("storage/src/sqlite/mod.rs", "mod.rs"));
     }
 
     #[test]
