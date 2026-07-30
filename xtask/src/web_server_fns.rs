@@ -1,13 +1,16 @@
 //! Shared enumeration of the `web` crate's `#[server]` functions.
 //!
-//! Two static checks need the same list — [`server_fn_registrar_check`] (#426,
-//! ADR-0066: every `#[server]` fn must appear in the test registrar) and
+//! Three static checks need the same list — [`server_fn_registrar_check`] (#426,
+//! ADR-0066: every `#[server]` fn must appear in the test registrar),
 //! [`server_fn_tracing_check`] (#511: every one must carry a PII-safe
-//! `#[tracing::instrument]` span). Enumerating twice would let the two drift, so
-//! the walk lives here and each gate applies its own rule to the result.
+//! `#[tracing::instrument]` span), and [`server_fn_endpoint_check`] (#684: every
+//! one's `endpoint` must be `/<vertical>/<ident>`). Enumerating three times would
+//! let them drift, so the walk lives here and each gate applies its own rule to
+//! the result.
 //!
 //! [`server_fn_registrar_check`]: crate::steps::server_fn_registrar_check
 //! [`server_fn_tracing_check`]: crate::steps::server_fn_tracing_check
+//! [`server_fn_endpoint_check`]: crate::steps::server_fn_endpoint_check
 //!
 //! The enumeration is deliberately **dumb**: it reports what it found and
 //! interprets nothing. Whether a `#[server(...)]` form is supported, what a span
@@ -175,6 +178,37 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The arguments of a `#[server(...)]` attribute, as `Meta` items.
+///
+/// `Ok(None)` for the bare `#[server]` (there is no argument list); `Ok(Some(args))`
+/// for `#[server(endpoint = "…", input = Json)]`; `Err` for the `#[server = …]` form
+/// or an argument list `syn` cannot parse as `Meta`.
+///
+/// Shared because both the registrar gate (which needs to know whether any argument
+/// is a positional type rename) and the endpoint gate (which reads
+/// `endpoint = "…"`) must agree on how this attribute parses and on what an
+/// unparseable one says — the same drift argument that put the enumeration here.
+/// What each gate concludes from the arguments stays its own.
+///
+/// # Errors
+///
+/// Returns `Err` for a malformed or unexpected attribute form, never for an
+/// argument this module does not recognise.
+pub fn server_attr_args(attr: &syn::Attribute) -> Result<Option<Vec<syn::Meta>>, String> {
+    match &attr.meta {
+        syn::Meta::Path(_) => Ok(None),
+        syn::Meta::NameValue(_) => Err("unexpected `#[server = ...]` form".to_string()),
+        syn::Meta::List(_) => {
+            let args = attr
+                .parse_args_with(
+                    syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+                )
+                .map_err(|e| format!("cannot parse #[server(...)] arguments: {e}"))?;
+            Ok(Some(args.into_iter().collect()))
+        }
+    }
+}
+
 /// The vertical a source file belongs to: the first path segment under `web/src`.
 ///
 /// All three server-fn gates key something on it — the registrar's match key
@@ -279,7 +313,7 @@ pub fn rewrite_attr_arg(
 /// top-level `name =`, and neither attribute this serves today (`instrument`,
 /// `server`) has any other nested argument list. A future attribute that did would
 /// need it generalized.
-pub fn find_attr_arg_eq(attr_src: &str, key: &str) -> Option<usize> {
+fn find_attr_arg_eq(attr_src: &str, key: &str) -> Option<usize> {
     let bytes = attr_src.as_bytes();
     let mut from = 0;
     while let Some(rel) = attr_src[from..].find(key) {

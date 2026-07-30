@@ -45,8 +45,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use syn::punctuated::Punctuated;
-use syn::{Meta, Token};
+use syn::Meta;
 
 use crate::result::{CommandResult, StepResult};
 use crate::web_server_fns::{self, WEB_SRC};
@@ -101,17 +100,12 @@ fn server_fns_in(src: &str) -> Result<Vec<ServerFn>, String> {
 /// an argument list we cannot parse as `Meta` → `Err`. Both are hard errors at
 /// the call site.
 fn server_fn_default_named(attr: &syn::Attribute) -> Result<bool, String> {
-    match &attr.meta {
-        Meta::Path(_) => Ok(true),
-        Meta::List(_) => {
-            let args = attr
-                .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
-                .map_err(|e| format!("cannot parse #[server(...)] arguments: {e}"))?;
-            // Only `key = value` args (NameValue) keep the default name; a bare
-            // path arg is a positional rename.
-            Ok(args.iter().all(|m| matches!(m, Meta::NameValue(_))))
-        }
-        Meta::NameValue(_) => Err("unexpected `#[server = ...]` form".to_string()),
+    match web_server_fns::server_attr_args(attr)? {
+        // The bare `#[server]` keeps the default name.
+        None => Ok(true),
+        // Only `key = value` args (NameValue) keep it; a bare path arg is a
+        // positional rename.
+        Some(args) => Ok(args.iter().all(|m| matches!(m, Meta::NameValue(_)))),
     }
 }
 
@@ -516,9 +510,11 @@ mod tests {
         let registrar = wrap_reg("server_fn::axum::register_explicit::<web::audiences::Create>();");
         let detail = problems(&sources, &registrar).expect("posts::Create is unregistered");
         assert!(detail.contains("web/src/posts/api.rs"), "{detail}");
+        // The vertical-qualified type name, not a bare `posts` — which the file
+        // path alone would satisfy, making the assertion tautological.
         assert!(
-            detail.contains("posts"),
-            "the vertical is what disambiguates the pair: {detail}"
+            detail.contains("`web::posts::Create`"),
+            "the message must name the vertical-qualified type: {detail}"
         );
         assert!(!detail.contains("web/src/audiences/api.rs"), "{detail}");
     }

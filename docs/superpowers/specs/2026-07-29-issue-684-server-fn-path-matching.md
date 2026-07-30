@@ -230,14 +230,19 @@ Explicitly **not** renamed (not wire types): `auth::AuthUser`,
 
 - **AC20** All 55 endpoints are `/<vertical>/<ident>`; `server-fn-endpoint`
   passes.
-- **AC21** `rg '"/api/[a-z_]+"' server/tests` returns **nothing** — every
-  _complete quoted URL literal_ is replaced by
-  `<web::…::Type as ServerFn>::PATH`. The pattern is anchored on the closing
-  quote deliberately: `server/tests/web/web_auth.rs` also carries an assert
-  _message_, `"/api/register route not registered (got 404)"`, which names a
-  route in prose rather than passing a URL. That one is not a `::PATH` candidate
-  — converting it would mean restructuring the assertion — so it is updated with
-  the other prose mentions (AC24).
+- **AC21** No `server/tests` call site passes a hardcoded server-fn URL; each
+  names `<web::…::Type as ServerFn>::PATH`. Checked with
+  `rg '"/api/' server/tests`, whose only permitted survivors are the three
+  non-call-site mentions: `web_auth.rs:725`'s assert _message_ (prose naming a
+  route, not a URL passed to a helper — converting it would mean restructuring
+  the assertion), and `router.rs:99,110`, where the multi-segment wildcard test
+  must name a literal path to be testing anything.
+
+  _An earlier draft stated this as `rg '"/api/[a-z_]+"' … returns
+  nothing`. That check was vacuous: the character class excludes `/`, so it cannot match a new-scheme literal like `"/api/posts/create"`
+  — it would have passed even with hardcoded URLs throughout. The looser pattern
+  plus a named exemption list is what actually verifies the claim.\_
+
 - **AC22** All 15 `end2end/tests/**` edit points are updated across 7 files: 11
   lines carrying an `/api/…` literal — `media.spec.ts` (2), `feeds.spec.ts` (1),
   `backup.spec.ts` (2), `posts.ts` (1 + doc comment), `audiences.spec.ts` (2),
@@ -320,7 +325,27 @@ record and is **not** edited. Every other doc is live and must be correct.
 
 The re-export collision check (no new ident or PascalCase type collides with an
 existing public item in its vertical) was run across all 14 verticals at spec
-time and came back clean. It is deliberately **not** an acceptance criterion: it
-asserts past activity a conformance review cannot re-run, and its falsifiable
-content is already carried by AC29 — if a collision existed, the crate would not
-compile.
+time. It is deliberately **not** an acceptance criterion: it asserts past
+activity a conformance review cannot re-run, and its falsifiable content is
+already carried by AC29 — if a collision existed, the crate would not compile.
+
+**It was also incomplete, and implementation proved it.** The check compared new
+names against each vertical's `mod.rs` exports only. It did not consider names
+_imported into_ the declaring file, nor traits in scope, and three collisions
+surfaced during the rename that it had predicted clean:
+
+- `posts::audience_selection` generates `AudienceSelection`, colliding with the
+  imported `common::visibility::AudienceSelection` — the domain type is now
+  aliased in that file.
+- `posts::{get,update}` generate `Get`/`Update`, which shadow the
+  `leptos::prelude` traits that 86 `.get()`/`.update()` calls in
+  `web/src/posts/component.rs` resolve through. Kept out of that import list and
+  spelled `super::Update` at the use sites.
+- `AudienceSummary` derives `reactive_stores::Store`, generating
+  `AudienceSummaryStoreFields` by concatenation — invisible to a word-boundary
+  grep for the old name.
+
+All three were resolved without renaming a generated struct. Recorded because
+the lesson generalises: a rename's collision surface includes imported names,
+traits in scope, and derive-generated identifiers, and a grep for the old name
+catches only the last of those.

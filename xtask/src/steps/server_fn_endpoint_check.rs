@@ -34,9 +34,8 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
-use syn::{Meta, Token};
+use syn::Meta;
 
 use crate::result::{CommandResult, Mode, StepResult};
 use crate::web_server_fns::{self, apply_fixes, rewrite_attr_arg, vertical_of, LineFix, WEB_SRC};
@@ -48,31 +47,26 @@ use crate::web_server_fns::{self, apply_fixes, rewrite_attr_arg, vertical_of, Li
 /// `endpoint` is present but is not a string literal — both would leave the gate
 /// guessing at what goes on the wire, so they fail rather than pass silently.
 fn endpoint_of(attr: &syn::Attribute) -> Result<Option<String>, String> {
-    match &attr.meta {
-        Meta::Path(_) => Ok(None),
-        Meta::NameValue(_) => Err("unexpected `#[server = ...]` form".to_string()),
-        Meta::List(_) => {
-            let args = attr
-                .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
-                .map_err(|e| format!("cannot parse #[server(...)] arguments: {e}"))?;
-            for arg in args {
-                let Meta::NameValue(nv) = &arg else {
-                    continue;
-                };
-                if !nv.path.is_ident("endpoint") {
-                    continue;
-                }
-                let syn::Expr::Lit(lit) = &nv.value else {
-                    return Err("`endpoint` must be a string literal".to_string());
-                };
-                let syn::Lit::Str(s) = &lit.lit else {
-                    return Err("`endpoint` must be a string literal".to_string());
-                };
-                return Ok(Some(s.value()));
-            }
-            Ok(None)
+    let Some(args) = web_server_fns::server_attr_args(attr)? else {
+        // The bare `#[server]` — no argument list, so no endpoint.
+        return Ok(None);
+    };
+    for arg in args {
+        let Meta::NameValue(nv) = &arg else {
+            continue;
+        };
+        if !nv.path.is_ident("endpoint") {
+            continue;
         }
+        let syn::Expr::Lit(lit) = &nv.value else {
+            return Err("`endpoint` must be a string literal".to_string());
+        };
+        let syn::Lit::Str(s) = &lit.lit else {
+            return Err("`endpoint` must be a string literal".to_string());
+        };
+        return Ok(Some(s.value()));
     }
+    Ok(None)
 }
 
 /// The failure detail for every non-conforming `#[server]` fn, or `None` when every

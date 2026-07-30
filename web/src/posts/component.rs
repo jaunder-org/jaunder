@@ -11,7 +11,10 @@ use leptos::prelude::*;
 use leptos_router::hooks::{use_navigate, use_params_map};
 use leptos_router::NavigateOptions;
 
-use crate::audiences::{list_mine, Summary};
+// `Summary` is module-qualified at its use site: this file already has
+// `DraftSummary`, `PostSummary`, `TagSummary` and `TimelinePostSummary` in scope, and
+// a bare `Summary` among them says nothing about which one it is.
+use crate::audiences::{self, list_mine};
 use crate::avatar::Avatar;
 use crate::error::WebError;
 use crate::feed_discovery::{FeedDiscovery, RsdDiscovery};
@@ -19,8 +22,9 @@ use crate::forms::Field;
 use crate::media::MediaUpload;
 // `Get`/`Update` are deliberately absent from this list: naming the generated
 // structs here would shadow the identically-named `leptos::prelude` traits this
-// file's `.get()`/`.update()` calls resolve through. They are spelled
-// `super::Get` / `super::Update` at their use sites instead.
+// file's 86 `.get()`/`.update()` calls resolve through. `Update` is spelled
+// `super::Update` at its use sites; `Get` is not needed in this file at all, and
+// is named here only so a future author does not add it to the list.
 use crate::posts::{
     audience_selection, default_audience_selection, draft_row_display, get, get_preview,
     list_by_tag, list_by_user, list_by_user_and_tag, list_drafts, parse_permalink_params, Create,
@@ -411,7 +415,10 @@ pub fn AudiencePicker(selection: RwSignal<AudienceSelection>) -> impl IntoView {
 /// One named-audience checkbox row for [`AudiencePicker`]. Toggling it
 /// adds/removes the audience id in the shared selection. Disabled while the
 /// base is `Private`, since Private cannot combine with named audiences.
-fn audience_checkbox(audience: Summary, selection: RwSignal<AudienceSelection>) -> impl IntoView {
+fn audience_checkbox(
+    audience: audiences::Summary,
+    selection: RwSignal<AudienceSelection>,
+) -> impl IntoView {
     let id = audience.audience_id;
     let input_id = format!("audience-named-{id}");
     let checked = move || selection.get().named.contains(&id);
