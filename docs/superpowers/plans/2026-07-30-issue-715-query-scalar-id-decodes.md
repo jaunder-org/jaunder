@@ -347,7 +347,7 @@ Expected: PASS.
 
 ## Task 5 — Audiences: the decode, its encode twin, and four bounds
 
-- [ ] Done
+- [x] Done
 
 **Files** — `storage/src/posts.rs`: bounds `:829`, `:851`, `:1893`, `:1979`; the
 query at `:949-966`; the mapper pair at `:1838-1846` and `:1856-1863`;
