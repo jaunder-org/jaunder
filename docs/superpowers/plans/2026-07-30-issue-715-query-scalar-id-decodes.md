@@ -734,7 +734,7 @@ demonstration, not a committed test.
 
 ## Task 8 — ADR, the bind-gate link, #716, and the PR notes
 
-- [ ] Done
+- [x] Done
 
 **Files** — `docs/adr/drafts/static-type-safety-gates-enumerate.md` (drafted
 during `jaunder-start`), `xtask/src/steps/sqlx_newtype_bind_check.rs`, issue
