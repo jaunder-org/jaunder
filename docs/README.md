@@ -110,6 +110,7 @@ convention). See the Status column below for each ADR's current status.
 | [0080](adr/0080-media-path-naming-correspondence.md)               | Media path naming — one layout, percent-encoded, URL-identical on disk                                       | accepted   |
 | [0081](adr/0081-empirical-server-fn-flow-coverage.md)              | Server-fn flow coverage is derived from e2e traces, not asserted                                             | proposed   |
 | [0082](adr/0082-server-fn-wire-namespace.md)                       | Server-fn wire URLs are `/api/<vertical>/<op>`, derived and gate-written                                     | proposed   |
+| [0083](adr/0083-reactive-paint-fold.md)                            | Reactive components paint from a host-tested decision fold                                                   | accepted   |
 
 <!-- adr-table:end -->
 

@@ -34,7 +34,7 @@ use crate::posts::{
 use crate::subscriptions::SubscribeButton;
 use crate::taglist::TagCtx as TagContext;
 use crate::tags::TagInput;
-use crate::timeline::{spawn_load_more, TimelineRows, TimelineState};
+use crate::timeline::{spawn_load_more, wire_timeline_resolve, TimelineGate, TimelineState};
 use crate::topbar::Topbar;
 use common::feed::FeedSurface;
 use common::ids::PostId;
@@ -1029,11 +1029,6 @@ pub fn PostPage() -> impl IntoView {
     .into_any()
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "Leptos view fn; length is inherent to the view! markup — splitting into \
-              sub-components would fragment the page without real benefit"
-)]
 #[component]
 pub fn UserTimelinePage() -> impl IntoView {
     let params = use_params_map();
@@ -1060,42 +1055,20 @@ pub fn UserTimelinePage() -> impl IntoView {
     );
 
     let state = TimelineState::default();
-    // CSR loading gate: the shared `TimelineState`/`LoadStatus` has no
-    // "never-loaded" state (home.rs is always projector-seeded; cockpit.rs gates
-    // on its username resolving), but this page gets `username` from the route
-    // param immediately and is not always seeded. Without the gate, the unseeded
-    // client-nav first load would flash `TimelineRows`' "No posts yet." empty
-    // state before the fetch resolves.
-    let loaded = RwSignal::new(false);
-
     // Public projector seed (#178/#179): if the server painted this profile,
     // adopt its posts as the initial state so first paint shows content (no
     // Loading flash). Guarded on the username so a client-side navigation to a
     // *different* profile ignores the initial URL's seed; the reactive fetch
     // still runs and takes over.
-    if let Some(PageSeed::Profile {
-        username: seed_user,
-        page,
-    }) = use_context::<Option<PageSeed>>().flatten()
-    {
-        if username.get_untracked().as_ref() == Some(&seed_user) {
-            state.adopt(page);
-            loaded.set(true);
-        }
-    }
-
-    // The initial-page fetch resolves on the client; seed the shared timeline
-    // once it arrives (load-more appends via `spawn_load_more`). Canonical CSR
-    // shape, mirroring home.rs / cockpit.rs.
-    Effect::new(move |_| {
-        if let Some(result) = initial_page.try_get().flatten() {
-            match result {
-                Ok(page) => state.resolve(page),
-                Err(err) => state.fail(err.to_string()),
-            }
-            loaded.set(true);
-        }
+    state.adopt_seed(match use_context::<Option<PageSeed>>().flatten() {
+        Some(PageSeed::Profile {
+            username: seed_user,
+            page,
+        }) if username.get_untracked().as_ref() == Some(&seed_user) => Some(page),
+        _ => None,
     });
+
+    wire_timeline_resolve(state, initial_page);
 
     let on_load_more = Callback::new(move |()| {
         let Some(username) = username.get_untracked() else {
@@ -1105,10 +1078,6 @@ pub fn UserTimelinePage() -> impl IntoView {
             list_by_user(username, created_at, post_id, limit)
         });
     });
-
-    // A `Memo` (not a bare closure) so the outer view closure re-runs only when
-    // the failure message changes — not on every `status` write, mirroring home.rs.
-    let read_error = Memo::new(move |_| state.status.get().into_failure());
 
     // The heading shows the canonical (parsed, lowercased) username, or empty for an
     // invalid segment — the page renders a validation error in that case anyway.
@@ -1129,28 +1098,12 @@ pub fn UserTimelinePage() -> impl IntoView {
         }}
         <Topbar title=move || format!("Posts by {}", display_username()) sub="User timeline" />
         {move || { username.get().map(|username| view! { <SubscribeButton username=username /> }) }}
-        {move || {
-            if let Some(err) = read_error.get() {
-                return view! { <p class="error">{err}</p> }.into_any();
-            }
-            if !loaded.get() {
-                return view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any();
-            }
-            match username.get() {
-                Some(user) => {
-                    view! {
-                        <TimelineRows
-                            state=state
-                            on_mutate=on_mutate
-                            on_load_more=on_load_more
-                            tag_context=TagContext::ForUser(user)
-                        />
-                    }
-                        .into_any()
-                }
-                None => ().into_any(),
-            }
-        }}
+        <TimelineGate
+            state=state
+            on_mutate=on_mutate
+            on_load_more=on_load_more
+            tag_context=Signal::derive(move || username.get().map(TagContext::ForUser))
+        />
     }
 }
 
@@ -1577,11 +1530,6 @@ fn render_draft_row(
 }
 
 /// Site-wide listing of posts carrying a tag, at `/tags/:tag`.
-#[expect(
-    clippy::too_many_lines,
-    reason = "Leptos view fn; length is inherent to the view! markup — splitting into \
-              sub-components would fragment the page without real benefit"
-)]
 #[component]
 pub fn SiteTagPage() -> impl IntoView {
     let params = use_params_map();
@@ -1605,38 +1553,18 @@ pub fn SiteTagPage() -> impl IntoView {
     );
 
     let state = TimelineState::default();
-    // CSR loading gate (see `UserTimelinePage`): the shared `TimelineState` has no
-    // "never-loaded" state, and this page gets `tag` from the route param
-    // immediately and is not always seeded, so gate the empty-state flash on an
-    // unseeded client-nav first load.
-    let loaded = RwSignal::new(false);
-
     // Public projector seed (#178/#179): adopt the seeded posts for a matching
     // tag so first paint shows content (guarded so a client-side nav to a
     // different tag ignores the initial URL's seed); the reactive fetch still runs.
-    if let Some(PageSeed::SiteTag {
-        tag: seed_tag,
-        page,
-    }) = use_context::<Option<PageSeed>>().flatten()
-    {
-        if tag.get_untracked().as_ref() == Some(&seed_tag) {
-            state.adopt(page);
-            loaded.set(true);
-        }
-    }
-
-    // The initial-page fetch resolves on the client; seed the shared timeline once
-    // it arrives (load-more appends via `spawn_load_more`). Canonical CSR, mirroring
-    // home.rs / the user timeline.
-    Effect::new(move |_| {
-        if let Some(result) = initial_page.try_get().flatten() {
-            match result {
-                Ok(page) => state.resolve(page),
-                Err(err) => state.fail(err.to_string()),
-            }
-            loaded.set(true);
-        }
+    state.adopt_seed(match use_context::<Option<PageSeed>>().flatten() {
+        Some(PageSeed::SiteTag {
+            tag: seed_tag,
+            page,
+        }) if tag.get_untracked().as_ref() == Some(&seed_tag) => Some(page),
+        _ => None,
     });
+
+    wire_timeline_resolve(state, initial_page);
 
     let on_load_more = Callback::new(move |()| {
         let Some(tag_value) = tag.get_untracked() else {
@@ -1647,49 +1575,25 @@ pub fn SiteTagPage() -> impl IntoView {
         });
     });
 
-    // A `Memo` so the outer view closure re-runs only on a real failure transition,
-    // mirroring home.rs.
-    let read_error = Memo::new(move |_| state.status.get().into_failure());
-
     // The canonical tag for the heading (a newtype is not `IntoRender`), or empty
     // for an unparseable segment — the page renders a validation error anyway.
     let read_tag = move || tag.get().map(|t| t.to_string()).unwrap_or_default();
 
     view! {
         {move || {
-            view! {
-                {tag
-                    .get()
-                    .map(|tag| view! { <FeedDiscovery surface=FeedSurface::SiteTag { tag } /> })}
-            }
+            tag.get().map(|tag| view! { <FeedDiscovery surface=FeedSurface::SiteTag { tag } /> })
         }}
         <Topbar title=move || format!("#{}", read_tag()) sub="Posts on this instance" />
-        {move || {
-            if let Some(err) = read_error.get() {
-                return view! { <p class="error">{err}</p> }.into_any();
-            }
-            if !loaded.get() {
-                return view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any();
-            }
-            view! {
-                <TimelineRows
-                    state=state
-                    on_mutate=on_mutate
-                    on_load_more=on_load_more
-                    empty_text="No posts with this tag yet."
-                />
-            }
-                .into_any()
-        }}
+        <TimelineGate
+            state=state
+            on_mutate=on_mutate
+            on_load_more=on_load_more
+            empty_text="No posts with this tag yet."
+        />
     }
 }
 
 /// Per-user listing of posts carrying a tag, at `/~:username/tags/:tag`.
-#[expect(
-    clippy::too_many_lines,
-    reason = "Leptos view fn; length is inherent to the view! markup — splitting into \
-              sub-components would fragment the page without real benefit"
-)]
 #[component]
 pub fn UserTagPage() -> impl IntoView {
     let params = use_params_map();
@@ -1724,40 +1628,22 @@ pub fn UserTagPage() -> impl IntoView {
     );
 
     let state = TimelineState::default();
-    // CSR loading gate (see `UserTimelinePage`): the shared `TimelineState` has no
-    // "never-loaded" state, and this page gets `username`/`tag` from the route
-    // params immediately and is not always seeded, so gate the empty-state flash on
-    // an unseeded client-nav first load.
-    let loaded = RwSignal::new(false);
-
     // Public projector seed (#178/#179): adopt the seeded posts for a matching
     // username+tag so first paint shows content; the reactive fetch still runs.
-    if let Some(PageSeed::UserTag {
-        username: seed_user,
-        tag: seed_tag,
-        page,
-    }) = use_context::<Option<PageSeed>>().flatten()
-    {
-        if username.get_untracked().as_ref() == Some(&seed_user)
-            && tag.get_untracked().as_ref() == Some(&seed_tag)
+    state.adopt_seed(match use_context::<Option<PageSeed>>().flatten() {
+        Some(PageSeed::UserTag {
+            username: seed_user,
+            tag: seed_tag,
+            page,
+        }) if username.get_untracked().as_ref() == Some(&seed_user)
+            && tag.get_untracked().as_ref() == Some(&seed_tag) =>
         {
-            state.adopt(page);
-            loaded.set(true);
+            Some(page)
         }
-    }
-
-    // The initial-page fetch resolves on the client; seed the shared timeline once
-    // it arrives (load-more appends via `spawn_load_more`). Canonical CSR, mirroring
-    // home.rs / the user timeline.
-    Effect::new(move |_| {
-        if let Some(result) = initial_page.try_get().flatten() {
-            match result {
-                Ok(page) => state.resolve(page),
-                Err(err) => state.fail(err.to_string()),
-            }
-            loaded.set(true);
-        }
+        _ => None,
     });
+
+    wire_timeline_resolve(state, initial_page);
 
     let on_load_more = Callback::new(move |()| {
         let Some(username_value) = username.get_untracked() else {
@@ -1771,10 +1657,6 @@ pub fn UserTagPage() -> impl IntoView {
         });
     });
 
-    // A `Memo` so the outer view closure re-runs only on a real failure transition,
-    // mirroring home.rs.
-    let read_error = Memo::new(move |_| state.status.get().into_failure());
-
     // Canonical (parsed, lowercased) username for the heading, or empty for an
     // invalid segment — the page renders a validation error in that case anyway.
     let read_username = move || username.get().map(String::from).unwrap_or_default();
@@ -1784,46 +1666,28 @@ pub fn UserTagPage() -> impl IntoView {
 
     view! {
         {move || {
-            view! {
-                {username
-                    .get()
-                    .zip(tag.get())
-                    .map(|(username, tag)| {
-                        view! {
-                            <FeedDiscovery surface=FeedSurface::UserTag {
-                                username,
-                                tag,
-                            } />
-                        }
-                    })}
-            }
+            username
+                .get()
+                .zip(tag.get())
+                .map(|(username, tag)| {
+                    view! {
+                        <FeedDiscovery surface=FeedSurface::UserTag {
+                            username,
+                            tag,
+                        } />
+                    }
+                })
         }}
         <Topbar
             title=move || format!("#{}", read_tag())
             sub=move || format!("Posts by ~{}", read_username())
         />
-        {move || {
-            if let Some(err) = read_error.get() {
-                return view! { <p class="error">{err}</p> }.into_any();
-            }
-            if !loaded.get() {
-                return view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any();
-            }
-            match username.get() {
-                Some(user) => {
-                    view! {
-                        <TimelineRows
-                            state=state
-                            on_mutate=on_mutate
-                            on_load_more=on_load_more
-                            tag_context=TagContext::ForUser(user)
-                            empty_text="No posts with this tag yet."
-                        />
-                    }
-                        .into_any()
-                }
-                None => ().into_any(),
-            }
-        }}
+        <TimelineGate
+            state=state
+            on_mutate=on_mutate
+            on_load_more=on_load_more
+            tag_context=Signal::derive(move || username.get().map(TagContext::ForUser))
+            empty_text="No posts with this tag yet."
+        />
     }
 }
