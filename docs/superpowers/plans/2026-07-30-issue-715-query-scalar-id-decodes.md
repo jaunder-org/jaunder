@@ -180,7 +180,7 @@ Expected: PASS.
 
 ## Task 2 — The `tag_id` pair
 
-- [ ] Done
+- [x] Done
 
 **Files**
 

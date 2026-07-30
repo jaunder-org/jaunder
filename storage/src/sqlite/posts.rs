@@ -4,7 +4,7 @@ use sqlx::{Pool, Sqlite};
 
 use crate::helpers::{post_record_from_row, PostRow};
 use crate::{PostDialect, PostRecord, PostStore, TaggingError, UpdatePostError, UpdatePostInput};
-use common::ids::{PostId, UserId};
+use common::ids::{PostId, TagId, UserId};
 use common::tag::{Tag, TagLabel};
 
 /// SQLite-backed post storage.
@@ -160,8 +160,8 @@ impl PostDialect for Sqlite {
                 .execute(&mut *conn)
                 .await?;
 
-            let tag_id: i64 =
-                sqlx::query_scalar::<_, i64>("SELECT tag_id FROM tags WHERE tag_slug = $1")
+            let tag_id =
+                sqlx::query_scalar::<_, TagId>("SELECT tag_id FROM tags WHERE tag_slug = $1")
                     .bind(&slug)
                     .fetch_one(&mut *conn)
                     .await?;
