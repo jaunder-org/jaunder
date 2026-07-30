@@ -72,14 +72,27 @@ DB read and every wire value. It accepts `s` iff:
    no encode-set reference.
 
 **(2) is load-bearing and easy to lose.** Canonicity does _not_ imply a safe
-leaf: `a%2Fb.jpg`, `a%00b.jpg` and `a%0D%0Ab.jpg` are all canonical, non-empty,
+leaf: `a%2Fb.jpg`, `a%00b.jpg` and `a%5Cb.jpg` are all canonical, non-empty,
 short, and neither `.` nor `..`, yet decode to `a/b.jpg`, `a\0b.jpg` and
-`a\r\nb.jpg`. Today's `sanitize_filename(s) == s` oracle
+`a\b.jpg`. Today's `sanitize_filename(s) == s` oracle
 (`common/src/media.rs:204`) rejects all three; dropping it would weaken exactly
 the path-traversal / header-injection guard that justifies the type
 (`common/src/media.rs:129-134`, ADR-0063 §1). A NUL recovered by `.decoded()` is
 not a legal XML character, so it would make `render_media_link_entry` emit an
 unparseable feed.
+
+**Correction, found in implementation:** an earlier draft of this spec also
+listed `a%0D%0Ab.jpg` (CRLF) as a value the guard rejects. It does not, and
+never did — `sanitize_filename` normalizes backslashes, strips path components
+and maps NUL, but has never touched CR/LF, so `a\r\nb.jpg` is an acceptable raw
+name today and an acceptable encoded one after this change. Relocating the
+oracle onto the decoded form neither widens nor narrows it. No live hazard
+follows: `content_disposition` drops control characters from its `filename=`
+fallback and percent-encodes `filename*=`, the stored spelling contains no
+literal control byte, and CR/LF are legal XML characters. Tightening this would
+change which uploads are accepted and is out of scope here; pinned as an
+explicit test (`from_str_accepts_a_canonical_name_carrying_control_characters`)
+so it reads as decided rather than missed.
 
 The check must run on `decode(s)`, **not** on `s`:
 `sanitize_filename("a%2Fb.jpg")` is `"a%2Fb.jpg"`, so testing the encoded form

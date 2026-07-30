@@ -55,8 +55,10 @@ test.describe("Media upload and serving", () => {
     expect(response.status()).toBe(200);
 
     const json = await response.json();
-    // The display name stays raw; only the URL segment is encoded.
-    expect(json.filename).toBe("my holiday photo.jpg");
+    // Since #720 the wire field carries the canonical encoded spelling — it is a lookup
+    // key, not a display value, so it matches the URL segment and the on-disk name byte
+    // for byte. Display surfaces decode it.
+    expect(json.filename).toBe("my%20holiday%20photo.jpg");
     expect(json.url).toContain("my%20holiday%20photo.jpg");
     expect(json.url).not.toContain(" ");
 

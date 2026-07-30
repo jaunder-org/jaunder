@@ -363,8 +363,11 @@ async fn upload_then_serve_round_trips_a_filename_needing_encoding(#[case] backe
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let resp: UploadResponse = serde_json::from_str(&body).expect("response should be valid JSON");
 
-    // The display name stays raw; only the URL/disk segment is encoded.
-    assert_eq!(resp.filename, "my photo.jpg");
+    // Since #720 the wire field carries the *canonical* encoded spelling, because it is a
+    // lookup key rather than a display value — `atompub::media::collection_post` passes it
+    // straight to `get_media`. Rendering surfaces decode it; this one does not.
+    assert_eq!(resp.filename, "my%20photo.jpg");
+    assert_eq!(resp.filename.decoded(), "my photo.jpg");
     assert!(resp.url.contains("my%20photo.jpg"), "url: {}", resp.url);
     assert!(!resp.url.contains(' '), "url: {}", resp.url);
 

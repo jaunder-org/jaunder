@@ -397,10 +397,12 @@ mod tests {
     }
 
     #[test]
-    fn resolve_media_path_encodes_the_filename_like_the_writer_does() {
+    fn resolve_media_path_recovers_the_stored_spelling_from_a_decoded_segment() {
         // The read path must spell the name exactly as `storage`'s upload wrote it. axum
-        // hands us the *decoded* segment, so resolving has to re-encode; a hand-rolled
-        // join here would look for `a b.txt` and miss the stored `a%20b.txt` (#675).
+        // hands us the *decoded* segment, so `ProfferedFilename`'s door re-encodes it to
+        // recover the stored spelling; `media_path` then only interpolates (#720). A
+        // hand-rolled join here would look for `a b.txt` and miss the stored
+        // `a%20b.txt` (#675). This is the test that proves the door carries the encode.
         //
         // Each case is a distinct hazard: a space is unrepresentable as a `RootRelativeUrl`;
         // `?`/`#` would truncate the path if unencoded (the failure the newtype cannot
@@ -418,9 +420,9 @@ mod tests {
             let (_source, _hash, filename, path) = resolve_media_path(Path::new("/data"), &p)
                 .unwrap_or_else(|e| panic!("{raw} is a legal Filename, got {e}"));
 
-            // The typed filename stays raw — it is the display name — while the on-disk
-            // path carries the encoded spelling the writer used.
-            assert_eq!(filename, raw);
+            // The typed filename IS the stored spelling — one value, no derivation — and
+            // the on-disk path is byte-identical to it.
+            assert_eq!(filename, stored);
             assert_eq!(
                 path,
                 Path::new("/data")

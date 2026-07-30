@@ -193,6 +193,141 @@ async fn delete_media_member_returns_204_then_404(#[case] backend: Backend) {
     assert_eq!(del_resp2.status(), StatusCode::NOT_FOUND);
 }
 
+/// Replaces the trailing filename segment of a member URL, keeping everything before it.
+/// Used to aim a request at a name the server never minted.
+fn with_filename_segment(member_url: &str, segment: &str) -> String {
+    let (prefix, _old) = member_url
+        .rsplit_once('/')
+        .expect("a member URL always has a trailing filename segment");
+    format!("{prefix}/{segment}")
+}
+
+/// Uploads `slug` and returns the member URL the server minted for it.
+async fn upload_and_member_url(
+    app: &axum::Router,
+    session: &crate::helpers::SeededSession,
+    slug: &str,
+) -> String {
+    let resp = app
+        .clone()
+        .oneshot(atompub_upload(session, slug, PNG))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED, "uploading {slug:?}");
+    resp.headers()
+        .get(header::LOCATION)
+        .expect("a created media member carries a Location")
+        .to_str()
+        .expect("Location is ASCII")
+        .to_string()
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn member_get_resolves_a_filename_needing_encoding(#[case] backend: Backend) {
+    // The re-encode's proof for `member_get` (#720). Every other test in this file uses
+    // `pic.png`, which encodes to itself — so none of them would fail if
+    // `ProfferedFilename`'s encode step were deleted. This one would: axum decodes the
+    // `my%20photo.jpg` segment to `my photo.jpg`, and only the re-encode recovers the
+    // stored spelling to match the row.
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+    let storage = TempDir::new().unwrap();
+    let app = make_app(&state, &storage);
+
+    let loc = upload_and_member_url(&app, &session, "my photo.jpg").await;
+    assert!(loc.ends_with("/my%20photo.jpg"), "minted URL: {loc}");
+
+    let get_resp = app
+        .oneshot(
+            atompub_at(&session, "GET", &loc)
+                .body(Body::empty())
+                .expect("failed to build atompub GET request"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(get_resp.status(), StatusCode::OK, "fetching {loc}");
+    let body = body_string(get_resp).await;
+    // The entry we got back is the one we stored: its member URL carries the canonical
+    // spelling, byte-identical to the segment we requested. (The `<title>` is the decoded
+    // display view — asserted separately, where that decode lands.)
+    assert!(body.contains("/my%20photo.jpg\""), "body: {body}");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn member_delete_resolves_a_filename_needing_encoding(#[case] backend: Backend) {
+    // As above, for `member_delete`: the delete must match the stored row rather than
+    // missing it, which the follow-up 404 confirms actually happened.
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+    let storage = TempDir::new().unwrap();
+    let app = make_app(&state, &storage);
+
+    let loc = upload_and_member_url(&app, &session, "my photo.jpg").await;
+
+    let del_resp = app
+        .clone()
+        .oneshot(
+            atompub_at(&session, "DELETE", &loc)
+                .body(Body::empty())
+                .expect("failed to build atompub request"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(del_resp.status(), StatusCode::NO_CONTENT, "deleting {loc}");
+
+    let get_resp = app
+        .oneshot(
+            atompub_at(&session, "GET", &loc)
+                .body(Body::empty())
+                .expect("failed to build atompub GET request"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn an_over_long_segment_does_not_truncate_onto_a_stored_name(#[case] backend: Backend) {
+    // The discriminating test for "checks, never repairs" (#720, AC6). Asserting merely
+    // that an over-long segment does not resolve would pass whether or not truncation was
+    // removed — a name that never matched anything does not resolve either. So: store a
+    // name sitting exactly at the budget, then request a *longer* one whose truncation
+    // would land on it. If `ProfferedFilename` ever repaired instead of rejecting, this
+    // would resolve to another user's file rather than missing.
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+    let storage = TempDir::new().unwrap();
+    let app = make_app(&state, &storage);
+
+    let at_budget = "a".repeat(common::media::MAX_FILENAME_ENCODED_BYTES);
+    let loc = upload_and_member_url(&app, &session, &at_budget).await;
+    assert!(loc.ends_with(&at_budget), "minted URL: {loc}");
+
+    let over_budget = "a".repeat(common::media::MAX_FILENAME_ENCODED_BYTES + 1);
+    let aimed = with_filename_segment(&loc, &over_budget);
+
+    let resp = app
+        .oneshot(
+            atompub_at(&session, "GET", &aimed)
+                .body(Body::empty())
+                .expect("failed to build atompub GET request"),
+        )
+        .await
+        .unwrap();
+
+    assert_ne!(
+        resp.status(),
+        StatusCode::OK,
+        "an over-long segment must never resolve onto the stored name"
+    );
+    // Rejected at the door, so it is a pre-handler 400 rather than a lookup 404.
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
 #[apply(backends)]
 #[tokio::test]
 async fn upload_forbids_other_user(#[case] backend: Backend) {
