@@ -1,5 +1,35 @@
 //! Small shared text-normalization helpers.
 
+use unicode_segmentation::UnicodeSegmentation;
+
+/// Truncates `s` to the longest leading run of **whole grapheme clusters** whose total `cost`
+/// stays within `budget`.
+///
+/// Cutting on cluster boundaries is the point: a byte- or `char`-wise cut can separate a base
+/// character from its combining marks, corrupting Devanagari vowel signs, Arabic harakat, and
+/// emoji ZWJ sequences into mojibake.
+///
+/// `cost` is the caller's because the budget's *unit* differs per use — scalar count for a
+/// slug's character cap, percent-encoded byte length for a media filename's filesystem cap.
+/// Shared so the two do not drift (they were near-identical copies).
+///
+/// Returns an **empty string** when not even the first cluster fits. A caller that cannot use
+/// an empty result must substitute something itself; this function does not guess.
+#[must_use]
+pub fn truncate_by_graphemes(s: &str, budget: usize, cost: impl Fn(&str) -> usize) -> String {
+    let mut out = String::with_capacity(s.len().min(budget));
+    let mut used = 0usize;
+    for grapheme in s.graphemes(true) {
+        let this = cost(grapheme);
+        if used + this > budget {
+            break;
+        }
+        out.push_str(grapheme);
+        used += this;
+    }
+    out
+}
+
 /// Trims `s` and returns the trimmed slice unless it is empty.
 ///
 /// This is the single definition of the codebase's "blank input means absent"

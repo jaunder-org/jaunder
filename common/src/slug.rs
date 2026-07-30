@@ -100,18 +100,11 @@ pub fn slugify_title(title: &str) -> String {
 
     // Trim a trailing '-', then truncate on a grapheme boundary: a cluster (base
     // + its marks) is never split, and the result stays within the
-    // MAX_SLUG_CHARS scalar budget that `from_str` enforces.
+    // MAX_SLUG_CHARS scalar budget that `from_str` enforces. The cluster walk is
+    // shared with the media filename cap (#708), which needs the same cut on a
+    // different budget unit — hence the per-cluster cost function.
     let trimmed = slug.trim_end_matches('-');
-    let mut capped = String::new();
-    let mut count = 0usize;
-    for g in trimmed.graphemes(true) {
-        let glen = g.chars().count();
-        if count + glen > MAX_SLUG_CHARS {
-            break;
-        }
-        capped.push_str(g);
-        count += glen;
-    }
+    let capped = crate::text::truncate_by_graphemes(trimmed, MAX_SLUG_CHARS, |g| g.chars().count());
     let capped = capped.trim_end_matches('-');
 
     if capped.is_empty() {

@@ -345,6 +345,54 @@ async fn upload_then_serve_round_trips_a_filename_needing_encoding(#[case] backe
 
 #[apply(backends)]
 #[tokio::test]
+async fn upload_then_serve_survives_a_name_too_long_to_store(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = create_user_and_session(&state).await.cookie();
+    let storage = TempDir::new().unwrap();
+
+    // 200 `ä` is 400 raw bytes and ~1200 once percent-encoded — far past the filesystem's
+    // 255-byte per-component limit. Before #708 this reached the file write and failed with
+    // an opaque 500; the name is otherwise perfectly legal.
+    let long_name = format!("{}.jpg", "ä".repeat(200));
+    let (status, body) = post_multipart(
+        &state,
+        &storage,
+        "/api/upload_media",
+        MultipartFile {
+            filename: &long_name,
+            content_type: "image/jpeg",
+            bytes: b"long name content",
+        },
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let resp: UploadResponse = serde_json::from_str(&body).expect("response should be valid JSON");
+
+    // Truncated, not rejected — and the extension survived, so the detected content type is
+    // still an image rather than octet-stream.
+    assert!(resp.filename.len() < long_name.len(), "must truncate");
+    assert!(resp.filename.ends_with(".jpg"), "{}", resp.filename);
+    assert_eq!(resp.content_type, "image/jpeg");
+
+    // The point of the test: the file actually landed and is served back at the URL handed
+    // to the client.
+    let app = make_app(&state, &storage);
+    let request = Request::builder()
+        .method("GET")
+        .uri(resp.url.to_string())
+        .body(Body::empty())
+        .expect("failed to build request");
+    let response = app.oneshot(request).await.expect("router oneshot failed");
+    assert_eq!(response.status(), StatusCode::OK, "serving {}", resp.url);
+    let served = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body should be readable");
+    assert_eq!(&served[..], b"long name content");
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn upload_media_rejects_unauthenticated_request(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
