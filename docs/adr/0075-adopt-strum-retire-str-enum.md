@@ -10,9 +10,9 @@ Supersedes ADR-0074 (`StrEnum` derive — the standard string-enum trailer), now
 
 Amended by #746 in five places, marked inline below: the per-enum derive list is
 now one `#[text_enum]` attribute
-(`docs/adr/drafts/text-enum-closed-string-enum-convention.md`). The core
-decision — `strum` owns the token mapping, `Display`, `FromStr`, and variant
-enumeration, and `StrEnum` stays deleted — is unchanged.
+(`docs/adr/0091-text-enum-closed-string-enum-convention.md`). The core decision
+— `strum` owns the token mapping, `Display`, `FromStr`, and variant enumeration,
+and `StrEnum` stays deleted — is unchanged.
 
 ## Context
 

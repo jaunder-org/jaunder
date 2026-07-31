@@ -118,6 +118,7 @@ convention). See the Status column below for each ADR's current status.
 | [0088](adr/0088-promotion-is-the-acceptance-event.md)              | Delegate AtomPub Atom document I/O to `atom_syndication`; retire the fork bridge                             | accepted   |
 | [0089](adr/0089-upstream-atom-document-io.md)                      | Delegate AtomPub Atom document I/O to `atom_syndication`; retire the fork bridge                             | accepted   |
 | [0090](adr/0090-media-references-extracted-at-render.md)           | A post's media references are derived from its sanitized HTML, never supplied                                | accepted   |
+| [0091](adr/0091-text-enum-closed-string-enum-convention.md)        | `#[text_enum]` owns the closed-string-enum convention                                                        | accepted   |
 
 <!-- adr-table:end -->
 
