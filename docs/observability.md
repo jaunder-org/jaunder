@@ -64,12 +64,23 @@ and is uploaded as the `e2e-diagnostics-<backend>-<browser>` CI artifact.
 ## `#[server]` flow coverage (#681)
 
 Which server fns a real browser session actually drives, derived from the traces
-above rather than asserted. Two committed artifacts under `docs/coverage/`:
+above rather than asserted. Three committed artifacts under `docs/coverage/`:
 
-| File                        | Owner        | Contents                                                          |
-| --------------------------- | ------------ | ----------------------------------------------------------------- |
-| `server-fns.json`           | generated    | server fn → the named tests that drove it, plus an orphan bucket  |
-| `server-fns-allowlist.json` | hand-written | one entry per knowingly-uncovered fn: fn name, reason, issue link |
+| File                        | Owner        | Contents                                                          | Compared      |
+| --------------------------- | ------------ | ----------------------------------------------------------------- | ------------- |
+| `server-fns.json`           | generated    | the covered fn set, plus an orphan bucket keyed by reason         | byte-for-byte |
+| `server-fns-evidence.json`  | generated    | server fn → the named tests that drove it                         | no            |
+| `server-fns-allowlist.json` | hand-written | one entry per knowingly-uncovered fn: fn name, reason, issue link | n/a           |
+
+**The split is load-bearing (#745).** The gate asserts the fn _set_; the test
+titles are evidence for a reader. Titles do not reproduce — two runs of the same
+e2e derivation on the same tree disagree, because a test that ends
+mid-navigation leaves its page booting and the boot is truncated at a different
+point each run — so byte-comparing them reddened the build on unrelated PRs. The
+attribution itself is sound; nothing is bound to a test that did not cause it.
+The static lane cross-checks that the two generated files name the same fns, so
+the evidence cannot silently fall out of step; it does **not** check the titles,
+which is how a renamed test can leave a stale one behind (#757).
 
 A fn is identified by the **union** of two signals: its **span name** with a
 matching `code.namespace`, or a request **`uri`** resolving to the fn's declared
@@ -121,13 +132,22 @@ To regenerate after adding a flow:
 
 ```bash
 cargo xtask e2e sqlite chromium            # writes .xtask/diagnostics/e2e-sqlite-chromium/capture-sqlite.tar.gz
-cargo xtask server-fn-coverage regenerate  # rewrites docs/coverage/server-fns.json
-cargo xtask server-fn-coverage verify      # what the e2e lane runs: fails on drift
+cargo xtask server-fn-coverage regenerate  # rewrites server-fns.json AND server-fns-evidence.json
+cargo xtask server-fn-coverage verify      # what the e2e lane runs: fails on snapshot drift
 ```
+
+`regenerate` always writes **both** generated files; `verify` compares only
+`server-fns.json`. Note that a second `cargo xtask e2e sqlite chromium` on an
+unchanged tree replays the cached Nix derivation in seconds and re-lifts the
+same capture, so it cannot be used to confirm that a regenerated artifact is
+stable — that is a statement about _different_ runs, and `nix build --rebuild`
+is what forces one.
 
 **Everything fails closed.** A missing, empty, or unparseable capture is an
 error, never "no uncovered fns" — otherwise the failure mode the gate guards
-against and the failure mode of its own plumbing would look identical.
+against and the failure mode of its own plumbing would look identical. The same
+rule covers a missing or unparseable evidence file: it is an error, not an empty
+one.
 
 **The seed capture is committed, reduced and re-runnable.** The allowlist claims
 each of its entries names a fn the real suite does not drive, so the capture

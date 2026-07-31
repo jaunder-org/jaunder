@@ -882,7 +882,7 @@ git commit -m "test(coverage): make the verify byte-compare reachable without a 
 - Consumes: the issue number from Task 1.
 - Produces: nothing consumed by later tasks.
 
-- [ ] **Step 1: Amend ADR-0081**
+- [x] **Step 1: Amend ADR-0081**
 
 Per spec D7 — amend in place, do not supersede; it is still `Status: proposed`.
 Record:
@@ -905,13 +905,13 @@ Record:
 Use **jaunder-adr** for the mechanics. This edits an existing numbered ADR, so
 the numberless-draft flow does not apply.
 
-- [ ] **Step 2: Update `CONTRIBUTING.md`**
+- [x] **Step 2: Update `CONTRIBUTING.md`**
 
 `CONTRIBUTING.md:533-534,545,548` — the coverage-policy section must name both
 files, state plainly which one the gate compares and which is evidence, and note
 that `regenerate` writes both.
 
-- [ ] **Step 3: Update `docs/observability.md`**
+- [x] **Step 3: Update `docs/observability.md`**
 
 Two edits, not one:
 
@@ -922,7 +922,7 @@ Two edits, not one:
 - `:124-125` — the surrounding prose describing how the snapshot is produced and
   read must name both artifacts too, or it contradicts the amended table.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/adr/0081-empirical-server-fn-flow-coverage.md CONTRIBUTING.md docs/observability.md
