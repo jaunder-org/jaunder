@@ -182,15 +182,36 @@ pub fn execute(number: Option<u64>, cfg: watch::WatchConfig, landing: bool) -> R
         }
     };
 
+    // Establish the subject for real. `resolve` can hand back a well-formed
+    // `Subject` for a PR that does not exist (an explicit number is taken at its
+    // word), and GitHub reports that as a typed GraphQL `NOT_FOUND` on the first
+    // read. Catching it *here* keeps it a failure to establish the subject — exit 2,
+    // nothing to report on — rather than letting it masquerade as the tooling being
+    // broken. Any other error falls through: `watch`/`land` retry and report it.
+    let established = source.snapshot(&subject);
+    if let Err(e) = &established {
+        if matches!(
+            snapshot::resolution_failure(e),
+            snapshot::ResolutionFailure::Bail(_)
+        ) {
+            return Err(anyhow!(
+                "no such pull request: #{} in {}/{}",
+                subject.number,
+                subject.owner,
+                subject.repo
+            ));
+        }
+    }
+
     // The event log streams to stderr as it happens, so `--json` keeps stdout to a
     // single parseable document and a human still sees progress live. The same
     // events are serialized into the report, so nothing here is stderr-only.
     let mut sink = |e: &Event| eprintln!("  {} [{}] {}", e.at, e.kind.as_str(), e.detail);
 
     if landing {
-        // Refuse to land something other than what the caller is looking at. Best
-        // effort: if the PR cannot be read here, `land` re-reads it and reports.
-        if let Ok(snap) = source.snapshot(&subject) {
+        // Refuse to land something other than what the caller is looking at, reusing
+        // the snapshot that established the subject.
+        if let Ok(snap) = &established {
             let dir = std::path::Path::new(".");
             let branch = git::current_branch(dir).ok().flatten();
             let local = git::head_sha(dir).ok().flatten();

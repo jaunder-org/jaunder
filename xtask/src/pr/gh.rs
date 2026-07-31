@@ -70,10 +70,24 @@ pub fn classify(exit: i32, stdout: &str, stderr: &str) -> Result<Value, ApiError
     // A GraphQL error arrives with HTTP 200 and exit 0, carrying `errors[]` beside a
     // null `data`. Checking the exit code alone would report it as success — this is
     // the "the tool lies" case, so the array is checked before anything else.
-    if let Some(errors) = body.as_ref().and_then(|b| b.get("errors")) {
-        if errors.as_array().is_some_and(|a| !a.is_empty()) {
-            return Err(ApiError::GraphQlErrors(errors.to_string()));
+    if let Some(errors) = body
+        .as_ref()
+        .and_then(|b| b.get("errors"))
+        .and_then(Value::as_array)
+        .filter(|a| !a.is_empty())
+    {
+        // GraphQL reports "no such PR" as a typed error inside a 200, not as a 404.
+        // Without this it would read as a generic query failure — i.e. the tooling
+        // being broken — rather than as the subject not existing.
+        if errors
+            .iter()
+            .any(|e| e.get("type").and_then(Value::as_str) == Some("NOT_FOUND"))
+        {
+            return Err(ApiError::NotFound);
         }
+        return Err(ApiError::GraphQlErrors(
+            serde_json::Value::Array(errors.clone()).to_string(),
+        ));
     }
 
     if exit == 0 {
@@ -225,6 +239,16 @@ mod tests {
             ApiError::GraphQlErrors(m) => assert!(m.contains("Something went wrong")),
             other => panic!("expected GraphQlErrors, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn graphql_not_found_classifies_as_not_found_not_a_query_failure() {
+        // Captured verbatim from `gh api graphql` for a nonexistent PR: GitHub
+        // reports a missing subject as a typed GraphQL error, never as a 404.
+        let out = r#"{"data":{"repository":{"pullRequest":null}},"errors":[{"type":"NOT_FOUND","path":["repository","pullRequest"],"message":"Could not resolve to a PullRequest with the number of 999999."}]}"#;
+        assert_eq!(classify(1, out, "").unwrap_err(), ApiError::NotFound);
+        // …and on the exit-0 form of the same response.
+        assert_eq!(classify(0, out, "").unwrap_err(), ApiError::NotFound);
     }
 
     #[test]
