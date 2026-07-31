@@ -41,6 +41,7 @@ mod steps {
     pub mod static_checks;
     pub mod target_arch_placement_check;
     pub mod test_pattern_check;
+    pub mod thin_components;
     pub mod traced_context_check;
 }
 pub use result::{CommandResult, Mode, StepResult};
@@ -348,6 +349,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::proffered_filename_check::run(&mut result);
             steps::no_full_reload_check::run(&mut result);
             steps::target_arch_placement_check::run(&mut result);
+            steps::thin_components::run(&mut result);
             steps::sqlx_newtype_bind_check::run(&mut result);
             steps::sqlx_newtype_decode_check::run(&mut result);
             steps::rendered_html_from_trusted_check::run(&mut result);
@@ -388,6 +390,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::proffered_filename_check::run(&mut result);
             steps::no_full_reload_check::run(&mut result);
             steps::target_arch_placement_check::run(&mut result);
+            steps::thin_components::run(&mut result);
             steps::sqlx_newtype_bind_check::run(&mut result);
             steps::sqlx_newtype_decode_check::run(&mut result);
             steps::rendered_html_from_trusted_check::run(&mut result);

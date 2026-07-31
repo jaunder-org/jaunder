@@ -68,29 +68,7 @@ pub fn InvitesPage() -> impl IntoView {
                                             "Send Invite"
                                         </button>
                                     </ActionForm>
-                                    {move || {
-                                        create_action
-                                            .value()
-                                            .get()
-                                            .map(|r: Result<(), WebError>| match r {
-                                                Ok(()) => {
-                                                    let to = create_action
-                                                        .input()
-                                                        .get()
-                                                        .map(|args| args.recipient_email.to_string())
-                                                        .unwrap_or_default();
-                                                    // Echo the recipient the operator just submitted
-                                                    // (from the action's input) to confirm delivery.
-                                                    view! {
-                                                        <p class="j-form-note">"Invitation emailed to " {to} "."</p>
-                                                    }
-                                                        .into_any()
-                                                }
-                                                Err(e) => {
-                                                    view! { <p class="error">{e.to_string()}</p> }.into_any()
-                                                }
-                                            })
-                                    }}
+                                    <InviteCreateOutcome action=create_action />
                                     <ul>
                                         {list
                                             .into_iter()
@@ -106,6 +84,35 @@ pub fn InvitesPage() -> impl IntoView {
                 </Suspense>
             </div>
         </div>
+    }
+}
+
+/// The create-invite feedback line: on success a "Invitation emailed to …" note that
+/// echoes the recipient the operator just submitted (read back from the action's own
+/// input, since the server fn returns nothing), on failure the error.
+///
+/// Split out of [`InvitesPage`] (#306) so that page's `view!` carries only the
+/// invite-only / list-loaded decisions.
+#[component]
+fn InviteCreateOutcome(action: ServerAction<Create>) -> impl IntoView {
+    view! {
+        {move || {
+            action
+                .value()
+                .get()
+                .map(|r: Result<(), WebError>| match r {
+                    Ok(()) => {
+                        let to = action
+                            .input()
+                            .get()
+                            .map(|args| args.recipient_email.to_string())
+                            .unwrap_or_default();
+                        view! { <p class="j-form-note">"Invitation emailed to " {to} "."</p> }
+                            .into_any()
+                    }
+                    Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
+                })
+        }}
     }
 }
 

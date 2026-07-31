@@ -45,37 +45,57 @@ pub fn SubscribeButton(username: Username) -> impl IntoView {
                     if !show {
                         return ().into_any();
                     }
-                    if subscribed {
-                        view! {
-                            <ActionForm action=unsubscribe>
-                                <input
-                                    type="hidden"
-                                    name="author_username"
-                                    value=username.to_string()
-                                />
-                                <button type="submit" class="j-btn">
-                                    "Unsubscribe"
-                                </button>
-                            </ActionForm>
-                        }
-                            .into_any()
-                    } else {
-                        view! {
-                            <ActionForm action=subscribe>
-                                <input
-                                    type="hidden"
-                                    name="author_username"
-                                    value=username.to_string()
-                                />
-                                <button type="submit" class="j-btn is-primary">
-                                    "Subscribe"
-                                </button>
-                            </ActionForm>
-                        }
-                            .into_any()
+                    view! {
+                        <SubscriptionToggle
+                            username=username
+                            subscribed=subscribed
+                            subscribe=subscribe
+                            unsubscribe=unsubscribe
+                        />
                     }
+                        .into_any()
                 })
             }}
         </Suspense>
+    }
+}
+
+/// The one form the resolved state paints: `Unsubscribe` when the viewer already
+/// subscribes to `username`, `Subscribe` otherwise.
+///
+/// Split out of [`SubscribeButton`] (#306) so the parent's `view!` carries only the
+/// "is there anything to show at all" decision; this component owns the
+/// subscribed/not-subscribed branch.
+#[component]
+fn SubscriptionToggle(
+    /// The profile author the form targets.
+    username: Username,
+    /// Whether the viewer is already subscribed to `username`.
+    subscribed: bool,
+    subscribe: ServerAction<Subscribe>,
+    unsubscribe: ServerAction<Unsubscribe>,
+) -> impl IntoView {
+    view! {
+        {if subscribed {
+            view! {
+                <ActionForm action=unsubscribe>
+                    <input type="hidden" name="author_username" value=username.to_string() />
+                    <button type="submit" class="j-btn">
+                        "Unsubscribe"
+                    </button>
+                </ActionForm>
+            }
+                .into_any()
+        } else {
+            view! {
+                <ActionForm action=subscribe>
+                    <input type="hidden" name="author_username" value=username.to_string() />
+                    <button type="submit" class="j-btn is-primary">
+                        "Subscribe"
+                    </button>
+                </ActionForm>
+            }
+                .into_any()
+        }}
     }
 }

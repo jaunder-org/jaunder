@@ -8,6 +8,9 @@
 
 mod api;
 mod format;
+/// The upload widget's host-compiled reactive state and outcome fold (#306,
+/// ADR-0083): ungated and coverage-measured, exercised under an `Owner`.
+mod upload_state;
 
 #[cfg(target_arch = "wasm32")]
 mod component;
@@ -16,6 +19,9 @@ mod component;
 // so a crate-internal item would read as dead code on the host build, where that
 // leaf is compiled out.
 pub use format::format_bytes;
+// Same reason as `format_bytes` above — the wasm-only `component` is the only
+// caller, so these must stay reachable on the host build to avoid `dead_code`.
+pub use upload_state::{UploadCallbacks, UploadOutcome, UploadState};
 
 pub use api::{
     delete, get_usage, list_mine, upload, Delete, DeleteResult, GetUsage, Item, ListMine, Upload,
