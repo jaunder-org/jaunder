@@ -2,7 +2,7 @@
 //! the viewer identity, and the subscription-admission seam. See ADR-0020.
 
 use crate::ids::{AudienceId, ChannelId, UserId};
-use crate::strum_enum::{impl_string_serde_proxy, parse_error};
+use crate::strum_enum::parse_error;
 
 // String-backed enums use the `strum` stack (`AsRefStr`/`Display`/`EnumString`) with
 // the wire token as the snake_case variant name, plus a named `thiserror` parse error
@@ -81,37 +81,18 @@ parse_error!(
 // typed form of the audience-picker's `base`. Composes with named audiences by
 // union except for `Private` (author-only), which is the safe, non-widening
 // `Default` (faithful to the prior empty-string -> author-only fall-through). #499.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    Hash,
-    Default,
-    serde::Serialize,
-    serde::Deserialize,
-    strum::AsRefStr,
-    strum::Display,
-    strum::EnumString,
+#[macros::text_enum(
+    error = InvalidAudienceBase,
+    message = "audience must be \"private\", \"public\", or \"subscribers\""
 )]
-#[serde(into = "String", try_from = "String")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 #[strum(serialize_all = "snake_case")]
-#[strum(parse_err_ty = InvalidAudienceBase, parse_err_fn = audience_base_parse_err)]
 pub enum AudienceBase {
     #[default]
     Private,
     Public,
     Subscribers,
 }
-
-parse_error!(
-    InvalidAudienceBase,
-    audience_base_parse_err,
-    "audience must be \"private\", \"public\", or \"subscribers\""
-);
-
-impl_string_serde_proxy!(AudienceBase);
 
 /// Who is reading. Wider than Layer A needs (only `Anonymous` and the local
 /// channel are constructed today) so non-local channels need no signature change

@@ -1,12 +1,11 @@
-//! Tiny declarative helpers for the residual boilerplate that `strum`-derived
-//! string enums repeat verbatim — the pieces `strum` references but doesn't
-//! generate.
+//! The residual parse-error boilerplate for the `strum` string enums that have not
+//! yet moved to `#[text_enum]`.
 //!
-//! Introduced in #607 once the completed StrEnum→strum migration showed the
-//! blocks repeated across the enums (ADR-0075's "reconsider a shared helper only
-//! with data" condition). These are **not** a return to `StrEnum`: each enum keeps
-//! plain `strum` derives and points its `parse_err_fn` / serde `into`/`try_from`
-//! at what these macros generate.
+//! Introduced in #607 once the completed StrEnum→strum migration showed the blocks
+//! repeated across the enums (ADR-0075's "reconsider a shared helper only with data"
+//! condition). `impl_string_serde_proxy!` lived here too until #746, whose
+//! `#[text_enum]` attribute generates the serde bridge directly and retired the last
+//! of its four users; this module goes with the last `parse_error!` caller.
 
 /// Declares a unit parse-error type — `#[derive(Debug, Clone, Copy, PartialEq, Eq,
 /// thiserror::Error)]` with message `$msg` — plus the private `$parse_fn(&str) ->
@@ -24,28 +23,4 @@ macro_rules! parse_error {
     };
 }
 
-/// Implements the serde `into`/`try_from = "String"` proxy for a `strum` string
-/// enum: `From<$ty> for String` (serialize the token) and `TryFrom<String>`
-/// (deserialize through `FromStr`, surfacing the enum's own named parse error —
-/// `<$ty as FromStr>::Err`). Requires the enum to derive `strum::AsRefStr` +
-/// `strum::EnumString` and carry `#[serde(into = "String", try_from = "String")]`.
-macro_rules! impl_string_serde_proxy {
-    ($ty:ty) => {
-        impl From<$ty> for String {
-            fn from(value: $ty) -> Self {
-                value.as_ref().to_owned()
-            }
-        }
-
-        impl TryFrom<String> for $ty {
-            type Error = <$ty as ::std::str::FromStr>::Err;
-
-            fn try_from(s: String) -> Result<Self, Self::Error> {
-                s.parse()
-            }
-        }
-    };
-}
-
-pub(crate) use impl_string_serde_proxy;
 pub(crate) use parse_error;
