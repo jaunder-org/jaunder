@@ -2,10 +2,17 @@
 
 - Status: accepted
 - Date: 2026-07-22
+- Amended: 2026-07-31
 - Issue: [#607](https://github.com/jaunder-org/jaunder/issues/607)
 
 Supersedes ADR-0074 (`StrEnum` derive — the standard string-enum trailer), now
 `Status: superseded`.
+
+Amended by #746 in four places, marked inline below: the per-enum derive list is
+now one `#[text_enum]` attribute
+(`docs/adr/drafts/text-enum-closed-string-enum-convention.md`). The core
+decision — `strum` owns the token mapping, `Display`, `FromStr`, and variant
+enumeration, and `StrEnum` stays deleted — is unchanged.
 
 ## Context
 
@@ -69,6 +76,11 @@ by #572's shared `FormatToggle`).
   duplication). Each migrated enum keeps its `serde_qs`/wire tests green and
   adds a form-transport round-trip.
 
+_Amended by #746._ `BackupMode` is no longer the precedent — `#[text_enum]` is,
+and `BackupMode` itself adopted it, gaining the named `InvalidBackupMode` this
+paragraph notes it lacked. The paragraph stands as history of what was
+established when.
+
 `BackupMode` is precedent for the mechanical strum derives only; it hand-writes
 `label()` (not `EnumMessage`) and uses strum's default `ParseError` (not
 `parse_err_ty`), and its serde is JSON `site_config` (not `serde_qs` form
@@ -84,6 +96,15 @@ error + one-line `parse_err_fn`); that would recreate the very thing being
 retired. Reconsider a small shared helper only if the completed migration shows
 the pattern repeated and grating.
 
+> _Amended by #746._ That last sentence has now been exercised twice. First by
+> #607 (`parse_error!`, `impl_string_serde_proxy!`); then by #746, which
+> replaced both with the `#[text_enum]` attribute. The prohibition's own
+> parenthetical scopes it to the residual error boilerplate, and #746 does
+> generate that — so this is a real, bounded reversal, argued in the amending
+> ADR under "Why this is not a return to `StrEnum`". What is **not** reversed:
+> `strum` still owns the token mapping, `Display`, `FromStr`, `VariantArray`,
+> and `EnumMessage`, which is what made `StrEnum` worth deleting.
+
 ## Consequences
 
 - **`StrEnum` is deleted** once all users are migrated:
@@ -96,10 +117,19 @@ the pattern repeated and grating.
   the `Type`/`Encode`/`Decode` bridge (delegating to `String`/`&str` via
   `AsRef<str>` + `FromStr`) — one definition, applied per enum, so each stored
   enum binds/decodes as a typed value (like the `StrNewtype` newtypes, #438)
-  rather than a stringly `.as_str()` strip. This is a gap-filler, not a `strum`
-  duplication — it is explicitly NOT a return to a bespoke proc-macro.
-  Introduced with `PostFormat` (#572); reused for the other stored enums in
-  #607.
+  rather than a stringly `.as_str()` strip. Introduced with `PostFormat` (#572);
+  reused for the other stored enums in #607.
+
+  > _Amended by #746._ The final clause of this bullet used to read "This is a
+  > gap-filler, not a `strum` duplication — it is explicitly NOT a return to a
+  > bespoke proc-macro." **The second half is reversed**: the gap-filler is now
+  > proc-macro codegen, reached through `#[text_enum(sqlx)]`, and
+  > `impl_text_column_enum!` is deleted. The first half stands and is why: it
+  > fills a gap `strum` does not cover (`sqlx`'s own `#[derive(Type)]` targets
+  > native DB enums, not dual-backend TEXT tokens), so nothing is duplicated.
+  > Only the spelling changed — and with it, the three drifting copies of that
+  > bridge collapsed to one.
+
 - **Migration is staged.** `PostFormat` migrates first, in #572 (it surfaced the
   need for enumeration + labels via `FormatToggle`). The remaining `StrEnum`
   enums (`common/src/visibility.rs` ×4, `common/src/media.rs`,
@@ -111,6 +141,12 @@ the pattern repeated and grating.
   (`serialize_all` + serde `rename_all`) that must agree — the same duplication
   `BackupMode` already carries. The compile-time duplicate-token check `StrEnum`
   performed is lost; a per-enum round-trip test covers the same ground.
+
+  > _Amended by #746._ This cost is **retired**. `#[text_enum]`'s serde bridge
+  > reads the strum token directly, so `rename_all` is gone from every adopter
+  > and the wire token is declared once, in `serialize_all`. `BackupMode` was
+  > the last carrier.
+
 - **ADR-0074 is superseded** (it never reached `accepted`). Its `str_enum!` →
   `#[derive(StrEnum)]` history remains valid background; its recommendation to
   route new string enums through `StrEnum` no longer holds — new closed string

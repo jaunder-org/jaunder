@@ -1,9 +1,11 @@
 //! The `sqlx-newtype-bind` static check (#438, #686): forbids the
 //! newtype-stripping idioms at `sqlx` bind sites in `storage/src`.
 //!
-//! All three newtype derives now emit an `sqlx::Encode`/`Type`/`Decode` bridge —
-//! `StrNewtype` since #438, `IdNewtype` and `NumNewtype` since #686 — so
-//! `.bind(newtype)` binds the typed value directly and every strip is dead weight
+//! Every domain type that is stored now emits an `sqlx::Encode`/`Type`/`Decode` bridge
+//! from one shared codegen (`macros::sqlx_bridge`) — `StrNewtype` since #438,
+//! `IdNewtype` and `NumNewtype` since #686, and `SqlxBridge` plus the `text_enum`
+//! attribute's stored enums since #746 — so
+//! `.bind(value)` binds the typed value directly and every strip is dead weight
 //! that also re-opens the transposition hazard the newtype exists to close
 //! (ADR-0063 §2). Two idioms are policed:
 //!

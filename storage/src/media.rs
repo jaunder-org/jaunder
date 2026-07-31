@@ -527,9 +527,9 @@ mod tests {
     // table's `source TEXT NOT NULL CHECK (source IN ('upload', 'cached'))` constraint
     // makes a non-token value structurally unstorable (an INSERT is rejected), so the
     // `MediaSource` text-enum bridge `Decode` error branch is unreachable at the DB layer.
-    // That branch is shared with `PostFormat`'s `impl_text_column_enum!` instantiation and
-    // is covered by its parse-error tests; the unknown-token rejection itself is asserted
-    // in `common::media`'s `media_source_unknown_token_is_rejected_with_message`.
+    // That branch is the shared `macros::text_enum` bridge, exercised by every other
+    // adopting enum; the unknown-token rejection itself is asserted in `common::media`'s
+    // `media_source_unknown_token_is_rejected_with_message`.
 
     #[apply(backends)]
     #[tokio::test]
