@@ -104,18 +104,36 @@ fn heading_title(content: &str) -> String {
     after.to_string()
 }
 
-/// The single status token from a `- Status: <token>` line (leniently, also a
-/// bare `Status:` line), or `""` when none is found.
+/// The status line's 0-based index and the trimmed remainder after its
+/// `- Status:` (or bare `Status:`) prefix.
+///
+/// The single home of "which line is the status line, and what does it say" — the
+/// `adr-format` gate, the table projection, and `adr promote`'s status rewrite all
+/// read it here, so they cannot disagree about an indented line. They previously
+/// disagreed: this parse tolerated indentation and the bare form, while the gate
+/// matched only a column-0 `- Status:`. A rewrite that picked a different line than
+/// the gate would emit a promoted ADR that instantly fails `adr-format`.
+///
+/// The remainder is returned **whole**, not pre-split, because the gate must keep
+/// rejecting `- Status: accepted (superseded)` for carrying more than one token —
+/// a helper that returned only the first token would silently drop that rule. An
+/// empty remainder (`- Status:` with nothing after it) is `Some((i, ""))`, not
+/// `None`, so the gate still reports it as "not a single token" rather than as a
+/// missing line.
+pub(crate) fn status_line(content: &str) -> Option<(usize, &str)> {
+    content.lines().enumerate().find_map(|(i, line)| {
+        let trimmed = line.trim_start();
+        let rest = trimmed
+            .strip_prefix("- Status:")
+            .or_else(|| trimmed.strip_prefix("Status:"))?;
+        Some((i, rest.trim()))
+    })
+}
+
+/// The single status token from the status line, or `""` when there is none.
 fn status_token(content: &str) -> String {
-    let line = content
-        .lines()
-        .map(str::trim_start)
-        .find(|l| l.starts_with("- Status:") || l.starts_with("Status:"))
-        .unwrap_or("");
-    line.trim_start_matches("- Status:")
-        .trim_start_matches("Status:")
-        .split_whitespace()
-        .next()
+    status_line(content)
+        .and_then(|(_, rest)| rest.split_whitespace().next())
         .unwrap_or("")
         .to_string()
 }
@@ -308,10 +326,9 @@ fn file_format_problems(filename: &str, num: u32, content: &str) -> Vec<String> 
         )),
     }
 
-    match content.lines().find(|l| l.starts_with("- Status:")) {
+    match status_line(content) {
         None => problems.push(format!("{filename}: missing a `- Status: <token>` line")),
-        Some(l) => {
-            let rest = l.strip_prefix("- Status:").unwrap_or("").trim();
+        Some((_, rest)) => {
             let tokens: Vec<&str> = rest.split_whitespace().collect();
             if tokens.len() != 1 {
                 problems.push(format!(
@@ -428,6 +445,32 @@ mod tests {
             heading_title("# 0030. Coverage re-anchor by text identity\n"),
             "Coverage re-anchor by text identity"
         );
+    }
+
+    #[test]
+    fn status_line_parses_index_and_remainder_across_forms() {
+        // Indentation and the bare `Status:` form are THE discriminating cases:
+        // they are the only two spellings where the old gate parse (column-0
+        // `- Status:` only) and the old `status_token` parse disagreed. Trailing
+        // whitespace is *not* discriminating — the gate already trimmed — so an
+        // implementation that only handled it would pass a weaker test than this.
+        assert_eq!(
+            status_line("# T\n\n- Status: accepted\n"),
+            Some((2, "accepted"))
+        );
+        assert_eq!(
+            status_line("# T\n\n  - Status: accepted\n"),
+            Some((2, "accepted"))
+        );
+        assert_eq!(
+            status_line("# T\n\nStatus: superseded\n"),
+            Some((2, "superseded"))
+        );
+        // Remainder returned whole, so the gate can still count tokens.
+        assert_eq!(status_line("# T\n\n- Status: a (b)\n"), Some((2, "a (b)")));
+        // Empty remainder is Some(""), not None — "not a single token", not "missing".
+        assert_eq!(status_line("# T\n\n- Status:\n"), Some((2, "")));
+        assert_eq!(status_line("# T\n\nno status\n"), None);
     }
 
     #[test]
