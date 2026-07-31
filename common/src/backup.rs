@@ -13,26 +13,23 @@ use thiserror::Error;
 
 /// How a backup is written to its destination.
 ///
-/// `BackupMode` is the single source of truth for its own string forms: the `strum`
-/// derives (`serialize_all = "snake_case"`, mirroring serde's `rename_all`) supply
-/// variant enumeration (`VARIANTS`), the wire/storage token (`AsRef<str>`), and parsing
-/// (`FromStr`) — all from the variant names, so the admin `<select>` and `site_config`
-/// need no hand-maintained string list. Only [`BackupMode::label`] (UI text) is authored.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Default,
-    Deserialize,
-    Eq,
-    PartialEq,
-    Serialize,
-    strum::VariantArray,
-    strum::AsRefStr,
-    strum::IntoStaticStr,
-    strum::EnumString,
+/// `BackupMode` is the single source of truth for its own string forms: a closed string
+/// enum (`#[text_enum]`, ADR-0075 as amended by #746). `serialize_all = "snake_case"`
+/// supplies the wire/storage token, `VariantArray` the enumeration (`VARIANTS`), and the
+/// attribute injects `AsRef<str>`/`Display`/`FromStr`/`IntoStaticStr` — all from the
+/// variant names, so the admin `<select>` and `site_config` need no hand-maintained
+/// string list. Only [`BackupMode::label`] (UI text) is authored.
+///
+/// The token is now declared **once** (`serialize_all`); it previously had to be
+/// repeated in serde's `rename_all`, since the attribute's serde bridge reads the same
+/// strum token. Adopting it also replaces strum's generic `Matching variant not found`
+/// with the named [`InvalidBackupMode`] — `site_config` JSON is operator-editable, so a
+/// bad value should name the valid ones.
+#[macros::text_enum(
+    error = InvalidBackupMode,
+    message = "backup mode must be \"directory\" or \"archive\""
 )]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, strum::VariantArray)]
 #[strum(serialize_all = "snake_case")]
 pub enum BackupMode {
     /// An expanded directory (`backup-<timestamp>/` holding `manifest.json`, the
@@ -226,6 +223,41 @@ mod tests {
         assert!("floppy".parse::<BackupMode>().is_err());
         // Sanity: both known variants are enumerated.
         assert_eq!(BackupMode::VARIANTS.len(), 2);
+    }
+
+    #[test]
+    fn backup_mode_json_bytes_are_unchanged() {
+        // This is the one enum whose serde `rename_all` was swapped for strum's
+        // `serialize_all` (#746), and it crosses a `#[server]` boundary via
+        // `BackupConfig` — so the literal bytes are pinned, not just their agreement
+        // with `as_ref`.
+        assert_eq!(
+            serde_json::to_string(&BackupMode::Directory).unwrap(),
+            "\"directory\""
+        );
+        assert_eq!(
+            serde_json::to_string(&BackupMode::Archive).unwrap(),
+            "\"archive\""
+        );
+        for m in [BackupMode::Directory, BackupMode::Archive] {
+            let json = serde_json::to_string(&m).unwrap();
+            assert_eq!(serde_json::from_str::<BackupMode>(&json).unwrap(), m);
+        }
+    }
+
+    #[test]
+    fn backup_mode_rejects_unknown_with_the_named_error() {
+        // Before #746 this was strum's generic "Matching variant not found"; the named
+        // error is the point of adopting `#[text_enum]` here, since `site_config` JSON
+        // is operator-editable.
+        let err = "sideways".parse::<BackupMode>().unwrap_err();
+        assert_eq!(err, InvalidBackupMode);
+        assert_eq!(
+            err.to_string(),
+            "backup mode must be \"directory\" or \"archive\""
+        );
+        let de = serde_json::from_str::<BackupMode>("\"sideways\"").unwrap_err();
+        assert!(de.to_string().contains("backup mode must be"));
     }
 
     #[test]
