@@ -103,7 +103,7 @@ AtomPub wire structs (`FeedMeta`, `MediaLinkEntry`) but deliberately stopped at
 that seam.
 
 - [x] **Step 2: Record the number** in
-      `docs/adr/drafts/upstream-atom-document-io.md` — **add** a new bullet to
+      `docs/adr/0089-upstream-atom-document-io.md` — **add** a new bullet to
       the "Consequences" list (the only follow-up bullet there today is about
       archiving the two GitHub forks; do not overwrite it):
 
@@ -884,7 +884,7 @@ upstream — narrow it to the `app:`/RSD documents that remain jaunder's.
 
 Set `- Status: superseded` in `docs/adr/0043-quick-xml-fork-patch.md` and add a
 line under the heading pointing at
-`docs/adr/drafts/upstream-atom-document-io.md`. Then:
+`docs/adr/0089-upstream-atom-document-io.md`. Then:
 
 ```bash
 devtool run -- cargo xtask adr sync-readme

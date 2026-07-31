@@ -5,7 +5,7 @@
 - Issue: [#193](https://github.com/jaunder-org/jaunder/issues/193)
 
 > **Superseded** by
-> [`docs/adr/drafts/upstream-atom-document-io.md`](drafts/upstream-atom-document-io.md)
+> [`docs/adr/0089-upstream-atom-document-io.md`](0089-upstream-atom-document-io.md)
 > (#199, #737). Upstream published `atom_syndication` 0.12.9+ and `rss` 2.1.0 on
 > quick-xml ≥ 0.41, meeting the exit condition below, and the whole apparatus —
 > both `[patch.crates-io]` entries, both flake inputs, the crane vendor
