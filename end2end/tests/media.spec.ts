@@ -1,5 +1,7 @@
 import { test, expect, slowBrowserFirstNavigationTimeoutMs } from "./fixtures";
 import { BASE_URL, goto, register, click, waitForSelector } from "./helpers";
+import { createPostViaApi } from "./posts";
+import type { Page } from "@playwright/test";
 
 test.describe("Media upload and serving", () => {
   test("authenticated user can upload and access media", async ({
@@ -185,5 +187,114 @@ test.describe("Media upload and serving", () => {
       .waitFor({ state: "visible", timeout: 10000 });
     const url = await page.locator(".j-composer input[readonly]").inputValue();
     expect(url).toContain("/media/upload/");
+  });
+});
+
+test.describe("Media delete guard", () => {
+  /** Uploads `name` and returns the upload response (`url`, canonical `filename`). */
+  async function uploadMedia(
+    page: Page,
+    name: string,
+  ): Promise<{ url: string; filename: string }> {
+    const response = await page.request.post(BASE_URL + "/api/media/upload", {
+      multipart: {
+        file: {
+          name,
+          mimeType: "image/jpeg",
+          buffer: Buffer.from("delete guard content"),
+        },
+      },
+    });
+    expect(response.status()).toBe(200);
+    return await response.json();
+  }
+
+  /**
+   * Opens the media library and clicks the row's Delete, accepting the confirm.
+   *
+   * `exact: true` matters: once a refusal renders, the page also holds a
+   * "Force delete <name>" button, and Playwright's `has-text` is a
+   * case-insensitive *substring* — so a looser selector becomes ambiguous in
+   * exactly the state these tests are about.
+   */
+  async function attemptDelete(page: Page): Promise<void> {
+    await click(page, "a[href='/media']");
+    await waitForSelector(page, "button:has-text('Attach media')");
+    page.on("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "Delete", exact: true }).click();
+  }
+
+  test("deleting media referenced by a post is refused, then forced", async ({
+    page,
+  }, testInfo) => {
+    // The whole causal chain, which exists only end to end: rendering the post wrote
+    // its post_media rows, and the guard reads them. No Rust test spans it.
+    await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 30000));
+    const { url } = await uploadMedia(page, "referenced.jpg");
+    const { post_id } = await createPostViaApi(page, {
+      body: `![pic](${url})`,
+    });
+
+    await attemptDelete(page);
+    // Naming the post is part of the contract, not decoration: asserting only the
+    // prefix would pass even if the lookup returned nothing and the guard refused on
+    // its own, leaving the message a dangling "referenced in post(s) .".
+    await expect(
+      page.getByText(
+        new RegExp(`Cannot delete: referenced in post\\(s\\) ${post_id}\\.`),
+      ),
+    ).toBeVisible();
+    // The library labels a row with the *decoded* name.
+    await expect(
+      page.getByRole("link", { name: "referenced.jpg" }),
+    ).toBeVisible();
+
+    await page.getByRole("button", { name: /^Force delete / }).click();
+    await expect(
+      page.getByRole("link", { name: "referenced.jpg" }),
+    ).toHaveCount(0);
+  });
+
+  test("a post embedding the raw filename spelling blocks deletion", async ({
+    page,
+  }, testInfo) => {
+    // The #675 symptom, proved through the guard rather than the parser. The upload
+    // returns the canonical percent-encoded URL; the post embeds the *raw* spelling,
+    // which the old exact-substring scan could not see.
+    await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 30000));
+    const { url } = await uploadMedia(page, "my holiday photo.jpg");
+    const rawUrl = url.replace(/%20/g, " ");
+    expect(rawUrl).not.toBe(url);
+    await createPostViaApi(page, { body: `<img src="${rawUrl}">` });
+
+    await attemptDelete(page);
+    await expect(
+      page.getByText(/Cannot delete: referenced in post/),
+    ).toBeVisible();
+  });
+
+  test("a post embedding the AtomPub member URL blocks deletion", async ({
+    page,
+  }, testInfo) => {
+    // The member URL shares no prefix with the serve URL, so the old exact-URL match
+    // could never have matched it however the filename was spelled.
+    const username = await register(
+      page,
+      slowBrowserFirstNavigationTimeoutMs(testInfo, 30000),
+    );
+    const { url } = await uploadMedia(page, "linked.jpg");
+    // "/media/upload/<p1>/<p2>/<sha>/<name>" splits to 7 parts with a leading "".
+    const parts = url.split("/");
+    const sha = parts[5];
+    const name = parts[6];
+    expect(sha).toHaveLength(64);
+    await createPostViaApi(page, {
+      body: `<a href="/atompub/${username}/media/${sha}/${name}">doc</a>`,
+    });
+
+    await attemptDelete(page);
+    await expect(
+      page.getByText(/Cannot delete: referenced in post/),
+    ).toBeVisible();
   });
 });

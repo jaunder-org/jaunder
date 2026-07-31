@@ -1392,6 +1392,26 @@ git commit -m "fix(media): decide and delete in one statement (#711)"
 
 ### Task 9: End-to-end cover for the refuse/force flow
 
+**Two corrections, recorded during execution.**
+
+1. **`button:has-text("Delete")` is ambiguous in the state these tests create.**
+   Once a refusal renders, the page also carries a `Force delete <name>` button,
+   and Playwright's `has-text` is a case-insensitive _substring_ — so the row
+   control must be selected with
+   `getByRole("button", { name: "Delete", exact: true })`. The existing
+   `media.spec.ts` delete test survives only because its flow never reaches a
+   refusal.
+2. **The AtomPub URL destructure below is off by one.**
+   `/media/upload/<p1>/<p2>/<sha>/<name>` splits into seven parts (leading
+   `""`), putting the digest at index 5 — `[, , , , sha, name]` would bind `p2`
+   as the digest. Indexed explicitly, with a `toHaveLength(64)` assertion so a
+   future re-slice cannot silently pass the wrong segment.
+
+Also strengthened beyond the plan: the refusal assertion pins the referencing
+**post id**, not just the message prefix. Asserting the prefix alone would pass
+even if the lookup returned nothing and the guard refused on its own, leaving a
+dangling "referenced in post(s) .".
+
 The causal chain — render writes the rows, the guard reads them — only exists
 end to end; no Rust test spans it.
 
@@ -1405,7 +1425,7 @@ end to end; no Rust test spans it.
 - Consumes: everything above, including Task 8 Step 5's force control.
 - Produces: e2e test names referenced by the coverage snapshot.
 
-- [ ] **Step 1: Write the failing e2e**
+- [x] **Step 1: Write the failing e2e**
 
 Add to `media.spec.ts`, whose existing imports already cover `BASE_URL`,
 `click`, `waitForSelector`, `register`, and
@@ -1507,19 +1527,19 @@ test("a post embedding the AtomPub member URL blocks deletion", async ({
 The refusal copy is verbatim from `web/src/media/component.rs:264`: "Cannot
 delete: referenced in post(s) {ids}. Use force delete to remove anyway."
 
-- [ ] **Step 2: Run them, verify they fail**
+- [x] **Step 2: Run them, verify they fail**
 
 Run: `devtool run -- cargo xtask e2e-local media.spec.ts` Expected: FAIL —
 before Tasks 2–8 are wired through, deletion succeeds and the refusal text never
 appears.
 
-- [ ] **Step 3: Make them pass**
+- [x] **Step 3: Make them pass**
 
 The behaviour comes from Tasks 2–8, including Task 8 Step 5's force control. If
 a test fails for a UI reason (e.g. the editor escaping the raw URL), fix the
 test, not the guard.
 
-- [ ] **Step 4: Update the coverage snapshot (A21)**
+- [x] **Step 4: Update the coverage snapshot (A21)**
 
 Run: `devtool run -- cargo xtask server-fn-coverage regenerate`
 (`CONTRIBUTING.md:492`)
@@ -1532,7 +1552,7 @@ update.
 
 Run: `devtool run -- cargo xtask e2e sqlite chromium` Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 devtool run -- cargo xtask check
