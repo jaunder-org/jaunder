@@ -8,8 +8,22 @@
 //! 1. its **name** is one of that fn's [`candidate_span_names`] *and* its
 //!    `code.namespace` is that fn's module (the primary signal — needs no URL
 //!    parsing and survives any endpoint rename); or
-//! 2. its **`uri`** path resolves to an inventory fn's *declared endpoint* (the
-//!    complement, and the only signal for a fn carrying no `#[tracing::instrument]`).
+//! 2. its **`uri`** path resolves to an inventory fn's *derived endpoint* (the
+//!    complement).
+//!
+//! **Signal 2 is now masked in practice, and that is worth being explicit about.**
+//! `identify` returns as soon as signal 1 hits, falling through to `uri` only on a
+//! miss — and since #714 *every* server fn carries a span, because the attribute
+//! that declares it also emits the `#[tracing::instrument]`. Signal 2 was once the
+//! only signal for a fn with no instrument attribute; that case can no longer
+//! exist. So a wrong computed endpoint would **not** show up as lost coverage
+//! here: signal 1 would have already claimed the span.
+//!
+//! It is kept anyway, for the reason ADR-0081 records — a single silently
+//! unmatched signal is exactly how this module failed before, and a union of two
+//! is what made that recoverable. What verifies the endpoint instead is
+//! `server_fn_coverage_check`'s seed cross-check, which locates a fn by signal 1
+//! and *then* compares the computed endpoint to the URI a real run requested.
 //!
 //! **The name is matched forward, never inverted**, because this repo has already
 //! had two naming regimes and could have a third. `server-fn-tracing` writes
@@ -46,7 +60,10 @@ use crate::traces::parse::Span;
 /// The `#[server]` route prefix every server-fn request lands under.
 const API_PREFIX: &str = "/api/";
 /// The span attribute `tracing-opentelemetry` records a span's module in.
-const MODULE_ATTR: &str = "code.namespace";
+// `pub(crate)` so the seed cross-check in `server_fn_coverage_check` can locate a
+// fn by the same signal this module uses, rather than restating the attribute name
+// — a second copy is precisely the drift that check exists to catch (#714).
+pub(crate) const MODULE_ATTR: &str = "code.namespace";
 /// The crate prefix `code.namespace` carries but [`ServerFn::module`] does not.
 const CRATE_PREFIX: &str = "web::";
 /// The prefix `#[server]` gives the fn it relocates the annotated body into, so a
@@ -98,7 +115,9 @@ pub struct Coverage {
 ///   explicit `name` is given, because `#[server]` relocates the annotated body
 ///   into a generated `__server_<ident>` fn (`server_fn_macro`'s `to_dummy_ident`).
 /// - `<ident>` — what derivation would yield if `#[server]` stopped relocating.
-fn candidate_span_names(f: &ServerFn) -> [String; 3] {
+// `pub(crate)` for the same reason as [`MODULE_ATTR`]: the seed cross-check must
+// locate a fn by *this* rule, not a paraphrase of it.
+pub(crate) fn candidate_span_names(f: &ServerFn) -> [String; 3] {
     let vertical = f.vertical();
     [
         format!("{EXPLICIT_SPAN_PREFIX}{vertical}.{}", f.ident),
