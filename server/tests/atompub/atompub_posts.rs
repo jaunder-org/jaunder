@@ -1528,13 +1528,8 @@ async fn create_writes_the_entrys_media_rows(#[case] backend: Backend) {
     assert_eq!(response.status(), StatusCode::CREATED);
     let post_id = PostId::from(location_post_id(&response));
 
-    let expected = media_ref_for("photo.jpg");
     assert_eq!(
         fetch_post_media(&base, post_id).await,
-        vec![(
-            expected.source.to_string(),
-            expected.sha256.to_string(),
-            expected.filename.to_string(),
-        )]
+        vec![media_ref_for("photo.jpg")]
     );
 }

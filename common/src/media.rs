@@ -732,6 +732,17 @@ impl PartialOrd for MediaRef {
 /// refuses a deletion that could have proceeded (`force` covers it) or leaves a file
 /// unreclaimed — never the reverse. #744 revisits this.
 ///
+/// **Why this splits `://` and `?`/`#` by hand rather than using `url`.** ADR-0073 makes
+/// the `url` crate the sanctioned normalizer and rules out hand-rolled URL handling, and
+/// [`AbsoluteUrl`][crate::absolute_url::AbsoluteUrl] is where that rule is kept. This is
+/// outside it: `url::Url::parse` requires a base, and the input here is overwhelmingly a
+/// *root-relative* href written by a post author, which it rejects outright — and a base
+/// is exactly the site configuration a pure renderer does not have (see the paragraph
+/// above). What is left after that is not URL normalization at all, only "take the path
+/// part": every segment that carries meaning is then handed to a real chokepoint —
+/// [`ContentHash`], [`MediaSource`], and [`ProfferedFilename`] — which is where the
+/// ADR's single-definition point actually applies.
+///
 /// The filename segment is percent-decoded and re-encoded through [`ProfferedFilename`] —
 /// the same door the serve route uses — so a post addressing the file by its raw name and
 /// one using the canonical encoded spelling converge on the same value. Normalising here,
@@ -971,8 +982,10 @@ pub struct UploadResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::test_support::{parse_content_hash, MEDIA_TEST_SHA256};
     use sha2::{Digest, Sha256};
+
+    use super::*;
 
     /// Drives the whole `NumNewtype`-generated surface of a positive-`i64` (min-1) byte
     /// newtype `T`: parse accept/trim, reject `0`/negative/non-integer with the domain
@@ -1094,7 +1107,7 @@ mod tests {
     /// yields what gets stored.
     fn layout_args(name: &str) -> (ContentHash, Filename) {
         (
-            crate::test_support::parse_content_hash(CANONICAL),
+            parse_content_hash(MEDIA_TEST_SHA256),
             Filename::sanitized(name).expect("a layout-test name is a valid leaf"),
         )
     }
@@ -1103,7 +1116,7 @@ mod tests {
     fn media_path_computation() {
         let (hash, filename) = layout_args("photo.jpg");
         let path = media_path(&MediaSource::Upload, &hash, &filename);
-        assert_eq!(path, format!("upload/e3/b0/{CANONICAL}/photo.jpg"));
+        assert_eq!(path, format!("upload/e3/b0/{MEDIA_TEST_SHA256}/photo.jpg"));
     }
 
     #[test]
@@ -1112,7 +1125,7 @@ mod tests {
         let url = media_url(&MediaSource::Upload, &hash, &filename);
         assert_eq!(
             url,
-            format!("/media/upload/e3/b0/{CANONICAL}/photo.jpg").as_str()
+            format!("/media/upload/e3/b0/{MEDIA_TEST_SHA256}/photo.jpg").as_str()
         );
     }
 
@@ -1146,7 +1159,7 @@ mod tests {
             let path = media_path(&MediaSource::Upload, &hash, &filename);
             assert_eq!(
                 path,
-                format!("upload/e3/b0/{CANONICAL}/{name}"),
+                format!("upload/e3/b0/{MEDIA_TEST_SHA256}/{name}"),
                 "{name} must survive encoding unchanged"
             );
         }
@@ -1174,7 +1187,7 @@ mod tests {
             assert_eq!(filename, encoded, "{raw} must be stored as {encoded}");
             assert_eq!(
                 path,
-                format!("upload/e3/b0/{CANONICAL}/{encoded}"),
+                format!("upload/e3/b0/{MEDIA_TEST_SHA256}/{encoded}"),
                 "{raw} must encode to {encoded}"
             );
         }
@@ -1339,13 +1352,10 @@ mod tests {
         assert!(!is_valid_content_hash(&hash));
     }
 
-    // A realistic lowercase SHA-256 hex digest (the digest of the empty input).
-    const CANONICAL: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
-
     #[test]
     fn content_hash_parses_canonical_digest() {
-        let h: ContentHash = CANONICAL.parse().unwrap();
-        assert_eq!(h, CANONICAL);
+        let h: ContentHash = MEDIA_TEST_SHA256.parse().unwrap();
+        assert_eq!(h, MEDIA_TEST_SHA256);
     }
 
     #[test]
@@ -1366,21 +1376,21 @@ mod tests {
 
     #[test]
     fn content_hash_display_produces_the_canonical_string() {
-        let h: ContentHash = CANONICAL.parse().unwrap();
-        assert_eq!(h.to_string(), CANONICAL);
+        let h: ContentHash = MEDIA_TEST_SHA256.parse().unwrap();
+        assert_eq!(h.to_string(), MEDIA_TEST_SHA256);
     }
 
     #[test]
     fn content_hash_serde_serializes_as_plain_string_and_validates_on_deserialize() {
-        let h: ContentHash = CANONICAL.parse().unwrap();
+        let h: ContentHash = MEDIA_TEST_SHA256.parse().unwrap();
         assert_eq!(
             serde_json::to_string(&h).unwrap(),
-            format!("\"{CANONICAL}\"")
+            format!("\"{MEDIA_TEST_SHA256}\"")
         );
 
         // Deserialize routes through the validating parse.
         assert_eq!(
-            serde_json::from_str::<ContentHash>(&format!("\"{CANONICAL}\"")).unwrap(),
+            serde_json::from_str::<ContentHash>(&format!("\"{MEDIA_TEST_SHA256}\"")).unwrap(),
             h
         );
         // Invalid input is rejected at deserialize time (wire rejection).
@@ -1398,7 +1408,7 @@ mod tests {
         );
         // A real digest round-trips: its hex equals the canonical string form.
         let digest: [u8; 32] = Sha256::digest(b"").into();
-        assert_eq!(ContentHash::from_digest(digest), CANONICAL);
+        assert_eq!(ContentHash::from_digest(digest), MEDIA_TEST_SHA256);
     }
 
     #[test]
@@ -1928,7 +1938,7 @@ mod tests {
         for source in [MediaSource::Upload, MediaSource::Cached] {
             for raw in ["photo.jpg", "my photo.jpg", "ünïcode nàme.png", "100%.jpg"] {
                 let filename = canonical(raw);
-                let hash: ContentHash = CANONICAL.parse().unwrap();
+                let hash: ContentHash = MEDIA_TEST_SHA256.parse().unwrap();
                 let url = media_url(&source, &hash, &filename);
                 assert_eq!(
                     parse_media_url(&url),
@@ -1947,12 +1957,12 @@ mod tests {
     fn parse_media_url_accepts_the_atompub_member_layout_as_upload() {
         // The member URL carries no source segment; the handlers hardcode Upload, so the
         // layout pins it.
-        let url = format!("/atompub/alice/media/{CANONICAL}/photo.jpg");
+        let url = format!("/atompub/alice/media/{MEDIA_TEST_SHA256}/photo.jpg");
         assert_eq!(
             parse_media_url(&url),
             Some(MediaRef {
                 source: MediaSource::Upload,
-                sha256: CANONICAL.parse().unwrap(),
+                sha256: MEDIA_TEST_SHA256.parse().unwrap(),
                 filename: canonical("photo.jpg"),
             })
         );
@@ -1963,8 +1973,8 @@ mod tests {
         // The #675 spelling variance: a post may address the file by its raw name. Both
         // spellings must land on the one stored `Filename`, normalised here on the write
         // path rather than transformed at a comparison point.
-        let raw = format!("/media/upload/e3/b0/{CANONICAL}/my photo.jpg");
-        let encoded = format!("/media/upload/e3/b0/{CANONICAL}/my%20photo.jpg");
+        let raw = format!("/media/upload/e3/b0/{MEDIA_TEST_SHA256}/my photo.jpg");
+        let encoded = format!("/media/upload/e3/b0/{MEDIA_TEST_SHA256}/my%20photo.jpg");
         assert_eq!(parse_media_url(&raw), parse_media_url(&encoded));
         assert_eq!(
             parse_media_url(&raw)
@@ -1979,18 +1989,22 @@ mod tests {
     fn parse_media_url_rejects_a_prefix_that_does_not_match_the_hash() {
         // The serve route 404s a mismatched shard prefix, so such a URL names nothing.
         assert_eq!(
-            parse_media_url(&format!("/media/upload/ff/b0/{CANONICAL}/photo.jpg")),
+            parse_media_url(&format!(
+                "/media/upload/ff/b0/{MEDIA_TEST_SHA256}/photo.jpg"
+            )),
             None
         );
         assert_eq!(
-            parse_media_url(&format!("/media/upload/e3/ff/{CANONICAL}/photo.jpg")),
+            parse_media_url(&format!(
+                "/media/upload/e3/ff/{MEDIA_TEST_SHA256}/photo.jpg"
+            )),
             None
         );
     }
 
     #[test]
     fn parse_media_url_strips_query_and_fragment() {
-        let base = format!("/media/upload/e3/b0/{CANONICAL}/photo.jpg");
+        let base = format!("/media/upload/e3/b0/{MEDIA_TEST_SHA256}/photo.jpg");
         let expected = parse_media_url(&base);
         assert!(expected.is_some());
         assert_eq!(parse_media_url(&format!("{base}?v=2")), expected);
@@ -2003,7 +2017,7 @@ mod tests {
         // Deliberate (#744 revisits it): rendering is pure and has no site config, and the
         // rendered HTML is stored — so a host-dependent parse would be invalidated by a
         // later hostname change. Pinned so nobody "fixes" it silently.
-        let path = format!("/media/upload/e3/b0/{CANONICAL}/photo.jpg");
+        let path = format!("/media/upload/e3/b0/{MEDIA_TEST_SHA256}/photo.jpg");
         let expected = parse_media_url(&path);
         assert!(expected.is_some());
         assert_eq!(
@@ -2021,14 +2035,16 @@ mod tests {
         assert_eq!(parse_media_url("/posts/hello"), None);
         assert_eq!(parse_media_url("/media/upload/e3/b0/short/photo.jpg"), None);
         assert_eq!(
-            parse_media_url(&format!("/media/bogus-source/e3/b0/{CANONICAL}/photo.jpg")),
+            parse_media_url(&format!(
+                "/media/bogus-source/e3/b0/{MEDIA_TEST_SHA256}/photo.jpg"
+            )),
             None,
             "an unknown source token is not a media URL"
         );
         assert_eq!(parse_media_url(""), None);
         assert_eq!(parse_media_url("/media/upload/e3/b0"), None);
         assert_eq!(
-            parse_media_url(&format!("/media/upload/e3/b0/{CANONICAL}/a/b.jpg")),
+            parse_media_url(&format!("/media/upload/e3/b0/{MEDIA_TEST_SHA256}/a/b.jpg")),
             None,
             "the filename is one segment, so a deeper path is not this layout"
         );
@@ -2039,7 +2055,7 @@ mod tests {
         // The ordering exists so a set of references serializes one way for one body:
         // extraction collects into a `BTreeSet`, so this is what makes the written rows
         // deterministic rather than hash-order.
-        let hash: ContentHash = CANONICAL.parse().unwrap();
+        let hash: ContentHash = MEDIA_TEST_SHA256.parse().unwrap();
         let make = |source, name| MediaRef {
             source,
             sha256: hash.clone(),
@@ -2071,7 +2087,7 @@ mod tests {
     fn media_refs_deduplicate_in_a_btree_set() {
         // A post embedding the same image twice must yield one row, without needing
         // dialect-divergent conflict handling at the insert.
-        let hash: ContentHash = CANONICAL.parse().unwrap();
+        let hash: ContentHash = MEDIA_TEST_SHA256.parse().unwrap();
         let one = MediaRef {
             source: MediaSource::Upload,
             sha256: hash,
@@ -2088,7 +2104,7 @@ mod tests {
         // reference — the proffered door is the single arbiter of that.
         let long = "a".repeat(MAX_FILENAME_ENCODED_BYTES + 1);
         assert_eq!(
-            parse_media_url(&format!("/media/upload/e3/b0/{CANONICAL}/{long}")),
+            parse_media_url(&format!("/media/upload/e3/b0/{MEDIA_TEST_SHA256}/{long}")),
             None
         );
     }

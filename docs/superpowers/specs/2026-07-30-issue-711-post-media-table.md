@@ -76,15 +76,27 @@ renders**, so the invariant needs no escape hatch:
 
 ```rust
 pub struct RenderOutput {
-    pub html: RenderedHtml,
+    html: RenderedHtml,     // private, per the correction below
     media: Vec<MediaRef>,   // private — no caller can supply or desynchronise it
 }
 
 impl RenderOutput {
     pub fn render(body: &PostBody, format: &PostFormat) -> Self;  // the only constructor
+    pub fn html(&self) -> &RenderedHtml;
     pub fn media(&self) -> &[MediaRef];
+    pub fn into_html(self) -> RenderedHtml;   // takes the HTML out by consuming the pair
 }
 ```
+
+**Correction, from the ship review.** This sketch originally left `html` public,
+which does not deliver what the surrounding paragraph and the ADR both claim. A
+`pub html` closes the desynchronisation from one side only: nothing supplies a
+wrong reference set, but `input.rendered.html = other_html` swaps the HTML out
+from under the set derived from the original — the same disagreement reached
+from the other side. Both fields are private as built, with `html()` to read and
+`into_html()` to take it out by consuming the pair, so the set cannot outlive
+the HTML it describes. A `compile_fail` doctest pins the reassignment
+specifically.
 
 `CreatePostInput` and `UpdatePostInput` **replace** their
 `rendered_html: RenderedHtml` field with `rendered: RenderOutput`. A value whose
@@ -442,6 +454,25 @@ Consequences of the shape:
   the price of two divergent implementations of one operation — against
   ADR-0053's parity grain. The list only populates a message and does not need
   to be atomic with the decision.
+- **The web surface gains a force control, because it did not have one.** The
+  refusal copy already said "Use force delete to remove anyway" while the only
+  control was a plain Delete with no `force` field — the UI told users to do
+  something it did not offer, and A18's forced path was unreachable. So this
+  issue adds one, rendered in the refusal branch so it appears only once a
+  delete has actually been refused. `DeleteResult` carries only the referencing
+  post ids, so the branch cannot otherwise name the item it must offer a force
+  for; the page remembers the clicked item in a signal. _(Recorded during the
+  ship review: this was implied by A18 but never written down as design.)_
+- **AtomPub's `member_delete` passes `force = true`, exempting it from the
+  guard.** Its current behaviour is an unconditional delete and it has no
+  confirmation surface on which to offer a choice, so preserving that is the
+  smaller change — but it does mean one of the two delete surfaces still removes
+  a referenced record without asking. That is a deliberate carve-out, not an
+  oversight, and it is narrower than today's behaviour rather than wider. Filed
+  as [#755](https://github.com/jaunder-org/jaunder/issues/755): the honest fix
+  is for the member `DELETE` to refuse a referenced record with a `409` and take
+  an explicit override, which is a wire contract change and not this issue's
+  business. _(Recorded during the ship review.)_
 - **Not-found must stay distinguishable from refused.** Today a missing row
   returns `DeleteMediaError::NotFound` (`storage/src/sqlite/media.rs:41`), which
   the web layer surfaces as an error. The conditional statement returns no row
@@ -567,11 +598,25 @@ Each is stated so a conformance review can tell delivered from not.
   such media row exists, distinguishing it from a refusal even though the
   conditional statement returns no row in both cases. Pins that today's
   not-found behaviour survives the rewrite.
-- A17d. **The guard is atomic.** Under sustained concurrent post writes that add
-  and remove references to the same media, repeated
-  `try_delete_media(force = false)` never deletes a row while a live reference
-  exists. Run against both backends; this is the criterion the single-statement
-  design exists to satisfy, and it fails against any two-step check-then-delete.
+- A17d. **The guard holds under sustained concurrency.** With a live reference
+  present throughout and concurrent post writes adding more, repeated
+  `try_delete_media(force = false)` never deletes the row. Run against both
+  backends.
+
+  **Corrected from the ship review — this criterion originally overclaimed**, on
+  both counts. It asked for a writer that _adds and removes_ references, and
+  called the result proof of atomicity. An add/remove churn makes the invariant
+  unobservable from outside the statement: a reference legitimately appearing
+  between the delete and any separate verification read is indistinguishable
+  from a violation, so the test would flake against a **correct** guard. And no
+  stress test can establish atomicity anyway — that needs interleaving hooks SQL
+  does not provide. Atomicity here is **structural**: it is one statement. What
+  this criterion actually establishes is that the statement survives concurrency
+  without `SQLITE_BUSY` (A17e) and that the guard is not ignored under load.
+  That the guard _discriminates_ — refusing when referenced, deleting when not —
+  is A17b's job, and the mutation check (replacing the `NOT EXISTS` with a
+  tautology) is what proves it bites.
+
 - A17e. **No `SQLITE_BUSY` regression.** The concurrency exercise in A17d
   completes on SQLite without a `SQLITE_BUSY` error, confirming this statement's
   shape (correlated subquery in `WHERE`, `RETURNING` only `media`'s own column)

@@ -30,8 +30,8 @@ use common::render::{RenderOutput, RenderedHtml};
 use common::slug::Slug;
 use common::tag::TagLabel;
 use common::test_support::{
-    parse_byte_size, parse_content_hash, parse_display_name, parse_password, parse_post_title,
-    parse_slug, parse_tag_label, parse_username,
+    parse_byte_size, parse_content_hash, parse_display_name, parse_filename, parse_password,
+    parse_post_title, parse_slug, parse_tag_label, parse_username,
 };
 use common::username::Username;
 use common::visibility::AudienceTarget;
@@ -1077,7 +1077,7 @@ impl SeedRawPost {
                 .title
                 .expect("SeedRawPost always autogenerates a title"),
             published_at: input.published_at,
-            rendered_html: input.rendered.html,
+            rendered_html: input.rendered.into_html(),
         })
     }
 
@@ -1093,12 +1093,13 @@ impl SeedRawPost {
     }
 }
 
-/// The content hash every media fixture is stored under: the SHA-256 of the empty
-/// input, so the digest is a real one rather than an invented hex string. Public
-/// because a test spelling the `AtomPub` member layout
+/// The content hash every media fixture is stored under, re-exported from
+/// [`common::test_support`] so `common`'s media-layout tests and this crate's fixtures
+/// share one digest rather than restating it. Re-exported (rather than reached for
+/// directly) because it is part of what a fixture caller expects from this module, next
+/// to [`media_ref_for`]; public because a test spelling the `AtomPub` member layout
 /// (`/atompub/<user>/media/<sha>/<name>`) needs the digest itself, not a serve URL.
-pub const MEDIA_TEST_SHA256: &str =
-    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+pub use common::test_support::MEDIA_TEST_SHA256;
 
 /// The [`MediaRef`] naming the fixture entry called `name`.
 ///
@@ -1168,13 +1169,18 @@ pub async fn media_row_exists(state: &Arc<AppState>, user_id: UserId, media: &Me
         .is_some()
 }
 
-/// A post's `post_media` rows as `(source, sha256, filename)`, ascending — the
+/// A post's `post_media` rows, ascending by `(source, sha256, filename)` — the
 /// persisted form of what its rendered HTML points a reader at.
+///
+/// Each row *is* a [`MediaRef`]: the triple the columns store is exactly what that type
+/// bundles, so callers compare against [`media_ref_for`] rather than against three
+/// re-stringified fields. Parsing here also asserts, on every read, that the stored
+/// columns still satisfy their newtypes' invariants.
 ///
 /// # Panics
 ///
-/// If the query fails.
-pub async fn fetch_post_media(base: &TestBase, post_id: PostId) -> Vec<(String, String, String)> {
+/// If the query fails, or a stored column is not a valid `source`/`sha256`/`filename`.
+pub async fn fetch_post_media(base: &TestBase, post_id: PostId) -> Vec<MediaRef> {
     base.pool()
         .string_triples(&format!(
             "SELECT source, sha256, filename FROM post_media \
@@ -1182,6 +1188,13 @@ pub async fn fetch_post_media(base: &TestBase, post_id: PostId) -> Vec<(String, 
         ))
         .await
         .expect("post_media query should succeed")
+        .into_iter()
+        .map(|(source, sha256, filename)| MediaRef {
+            source: source.parse().expect("stored post_media source is valid"),
+            sha256: parse_content_hash(&sha256),
+            filename: parse_filename(&filename),
+        })
+        .collect()
 }
 
 /// Creates a post through [`perform_post_creation`](crate::perform_post_creation) —

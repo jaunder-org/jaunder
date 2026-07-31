@@ -591,11 +591,21 @@ fn extract_media_refs_with(html: &str, pairs: &[(&str, &str)]) -> Vec<MediaRef> 
 /// let html = render(&"hello".to_owned().into(), &PostFormat::Markdown);
 /// let _ = RenderOutput { html, media: vec![] }; // private field
 /// ```
+/// nor can the HTML be swapped out from under the set that describes it — the same
+/// desynchronisation reached from the other side, which a `pub html` would have left open:
+/// ```compile_fail
+/// # use common::render::{render, PostFormat, RenderOutput};
+/// let mut out = RenderOutput::render(&"hello".to_owned().into(), &PostFormat::Markdown);
+/// out.html = render(&"different".to_owned().into(), &PostFormat::Markdown); // private field
+/// ```
 #[cfg(feature = "sanitize")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RenderOutput {
-    /// The sanitized HTML, as [`render`] produced it.
-    pub html: RenderedHtml,
+    /// The sanitized HTML, as [`render`] produced it. Private for the same reason
+    /// `media` is: a `pub` field here would let a caller assign a *different* HTML over
+    /// the references derived from the original, which is the same desynchronisation the
+    /// private `media` field exists to prevent — reached from the other side.
+    html: RenderedHtml,
     /// What that HTML points a reader at. Private — see the type's docs.
     media: Vec<MediaRef>,
 }
@@ -614,11 +624,27 @@ impl RenderOutput {
         Self { html, media }
     }
 
+    /// The sanitized HTML.
+    #[must_use]
+    pub fn html(&self) -> &RenderedHtml {
+        &self.html
+    }
+
     /// The media the HTML references — sorted and deduplicated, as
     /// [`extract_media_refs`] returns them.
     #[must_use]
     pub fn media(&self) -> &[MediaRef] {
         &self.media
+    }
+
+    /// Consumes the pair, yielding the HTML alone.
+    ///
+    /// The one legitimate way to take the HTML *out*: by consuming the value, the
+    /// reference set it was derived with goes away with it, so nothing is left holding a
+    /// set that no longer describes anything.
+    #[must_use]
+    pub fn into_html(self) -> RenderedHtml {
+        self.html
     }
 }
 
@@ -1619,16 +1645,12 @@ mod tests {
 
     #[cfg(feature = "sanitize")]
     use crate::media::MediaSource;
-
-    /// A realistic lowercase SHA-256 hex digest (the digest of the empty input). The
-    /// same value `media.rs`'s tests use, restated because that one is private to its
-    /// own test module.
     #[cfg(feature = "sanitize")]
-    const CANONICAL: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+    use crate::test_support::MEDIA_TEST_SHA256;
 
     #[cfg(feature = "sanitize")]
     fn media_url_for(name: &str) -> String {
-        format!("/media/upload/e3/b0/{CANONICAL}/{name}")
+        format!("/media/upload/e3/b0/{MEDIA_TEST_SHA256}/{name}")
     }
 
     #[cfg(feature = "sanitize")]
@@ -1667,7 +1689,8 @@ mod tests {
     #[test]
     fn extract_finds_an_atompub_member_url_in_a_link() {
         let body: PostBody =
-            format!("<a href=\"/atompub/alice/media/{CANONICAL}/photo.jpg\">doc</a>").into();
+            format!("<a href=\"/atompub/alice/media/{MEDIA_TEST_SHA256}/photo.jpg\">doc</a>")
+                .into();
         let refs = extract_media_refs(render(&body, &PostFormat::Markdown).as_ref());
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].source, MediaSource::Upload);

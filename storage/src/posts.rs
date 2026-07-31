@@ -851,6 +851,29 @@ pub trait PostDialect: Backend {
     ) -> Result<(), TaggingError>;
 }
 
+/// The single definition of "which of `user_id`'s live posts reference this media" —
+/// the `FROM`/`JOIN`/`WHERE` half of that question, leaving the projection (and any
+/// `ORDER BY`) to whoever splices it in.
+///
+/// Bind order: `$1` `user_id`, `$2` `source`, `$3` `sha256`, `$4` `filename`.
+///
+/// Both places that ask the question use this fragment:
+/// [`PostStorage::list_posts_referencing_media`], which *reports* the references so a
+/// refusal can be explained, and the `NOT EXISTS` guard inside
+/// [`try_delete_media`][crate::media::MediaStorage::try_delete_media], which *makes*
+/// that refusal atomically (#711, spec D8). They have to agree: spelled separately,
+/// widening or narrowing "referenced" in one would leave the guard blocking deletes
+/// the message says are unblocked, or vice versa — a disagreement nothing would catch
+/// at compile time. So it is spelled once, here, in the module that owns `post_media`.
+pub(crate) const POSTS_REFERENCING_MEDIA_FROM_WHERE: &str = "\
+     FROM post_media pm \
+     JOIN posts p ON p.post_id = pm.post_id \
+     WHERE p.user_id = $1 \
+       AND p.deleted_at IS NULL \
+       AND pm.source = $2 \
+       AND pm.sha256 = $3 \
+       AND pm.filename = $4";
+
 /// Generic [`PostStorage`] backed by any [`PostDialect`] database.
 ///
 /// Every read and the non-transactional shared mutations live here, splicing
@@ -1030,28 +1053,21 @@ where
         media: &MediaRef,
     ) -> sqlx::Result<Vec<PostId>> {
         // Identical on both backends, so it stays here rather than becoming a
-        // `PostDialect` const (ADR-0019). No `LIMIT`: see the trait doc.
+        // `PostDialect` const (ADR-0019). No `LIMIT`: see the trait doc. The predicate
+        // itself is `POSTS_REFERENCING_MEDIA_FROM_WHERE`, shared with the delete guard.
         //
         // Decodes straight into `PostId` rather than `i64`-then-convert: an id column
         // decodes as its newtype (ADR-0085, #715), which is also what keeps the `i64`
         // decode bound off this impl.
-        sqlx::query_scalar::<_, PostId>(
-            "SELECT pm.post_id \
-             FROM post_media pm \
-             JOIN posts p ON p.post_id = pm.post_id \
-             WHERE p.user_id = $1 \
-               AND p.deleted_at IS NULL \
-               AND pm.source = $2 \
-               AND pm.sha256 = $3 \
-               AND pm.filename = $4 \
-             ORDER BY pm.post_id",
-        )
-        .bind(user_id)
-        .bind(media.source)
-        .bind(&media.sha256)
-        .bind(&media.filename)
-        .fetch_all(&self.pool)
-        .await
+        let sql =
+            format!("SELECT pm.post_id {POSTS_REFERENCING_MEDIA_FROM_WHERE} ORDER BY pm.post_id");
+        sqlx::query_scalar::<_, PostId>(&sql)
+            .bind(user_id)
+            .bind(media.source)
+            .bind(&media.sha256)
+            .bind(&media.filename)
+            .fetch_all(&self.pool)
+            .await
     }
 
     #[tracing::instrument(
@@ -2082,7 +2098,7 @@ where
     .bind(&input.slug)
     .bind(&input.body)
     .bind(input.format)
-    .bind(&input.rendered.html)
+    .bind(input.rendered.html())
     .bind(now)
     .bind(now)
     .bind(input.published_at)
@@ -2859,14 +2875,9 @@ mod tests {
 
         let post_id = create_post_via_service(&env.state, user, &body).await;
 
-        let expected = media_ref_for("photo.jpg");
         assert_eq!(
             fetch_post_media(&env.base, post_id).await,
-            vec![(
-                expected.source.to_string(),
-                expected.sha256.to_string(),
-                expected.filename.to_string(),
-            )]
+            vec![media_ref_for("photo.jpg")]
         );
         // The recorded triple names the entry the `media` table holds — the join a
         // reference guard reads in the other direction.
@@ -2891,7 +2902,7 @@ mod tests {
         let names: Vec<String> = fetch_post_media(&env.base, post_id)
             .await
             .into_iter()
-            .map(|(_, _, filename)| filename)
+            .map(|media| media.filename.to_string())
             .collect();
         assert!(
             names.contains(&"my%20photo.jpg".to_owned()),
@@ -2933,7 +2944,11 @@ mod tests {
 
         let rows = fetch_post_media(&env.base, post_id).await;
         assert_eq!(rows.len(), 1, "the removed reference is gone: {rows:?}");
-        assert_eq!(rows[0].2, "b.jpg", "the added reference is present");
+        assert_eq!(
+            rows[0],
+            media_ref_for("b.jpg"),
+            "the added reference is present"
+        );
 
         update_post_body_via_service(&env.state, post_id, user, "no media at all").await;
 

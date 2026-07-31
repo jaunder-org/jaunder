@@ -8,6 +8,7 @@ use sqlx::{Database, FromRow, Pool};
 use thiserror::Error;
 
 use crate::backend::Backend;
+use crate::posts::POSTS_REFERENCING_MEDIA_FROM_WHERE;
 use common::ids::UserId;
 use common::pagination::{PageOffset, RowLimit};
 
@@ -344,23 +345,25 @@ where
         // transaction, no locking, and no isolation-level tuning. `RETURNING` is what
         // makes the outcome readable generically — `.rows_affected()` is not callable
         // on `DB::QueryResult`, which is why the delete used to be a dialect method.
-        let removed = sqlx::query(
+        //
+        // The subquery is `POSTS_REFERENCING_MEDIA_FROM_WHERE`, the one definition of
+        // "referenced", shared with `list_posts_referencing_media` — which explains the
+        // refusal this statement decides. Its binds are `$1..=$4` in the same order the
+        // `DELETE`'s own `WHERE` uses them, so the two halves splice without renumbering.
+        let sql = format!(
             "DELETE FROM media \
              WHERE user_id = $1 AND source = $2 AND sha256 = $3 AND filename = $4 \
-               AND ($5 OR NOT EXISTS ( \
-                     SELECT 1 FROM post_media pm \
-                       JOIN posts p ON p.post_id = pm.post_id \
-                      WHERE p.user_id = $1 AND p.deleted_at IS NULL \
-                        AND pm.source = $2 AND pm.sha256 = $3 AND pm.filename = $4)) \
-             RETURNING sha256",
-        )
-        .bind(user_id)
-        .bind(media.source)
-        .bind(&media.sha256)
-        .bind(&media.filename)
-        .bind(force)
-        .fetch_optional(&self.pool)
-        .await?;
+               AND ($5 OR NOT EXISTS (SELECT 1 {POSTS_REFERENCING_MEDIA_FROM_WHERE})) \
+             RETURNING sha256"
+        );
+        let removed = sqlx::query(&sql)
+            .bind(user_id)
+            .bind(media.source)
+            .bind(&media.sha256)
+            .bind(&media.filename)
+            .bind(force)
+            .fetch_optional(&self.pool)
+            .await?;
 
         if removed.is_some() {
             return Ok(TryDeleteOutcome::Deleted);
@@ -440,7 +443,7 @@ mod tests {
     use super::*;
     use crate::test_support::{
         backends, create_post_via_service, media_ref_for, media_row_exists, media_url_for,
-        seed_media, seed_users, Backend, SeedUser, TestEnv,
+        seed_media, seed_users, Backend, SeedUser, TestEnv, MEDIA_TEST_SHA256,
     };
     use common::test_support::{
         parse_byte_size, parse_content_hash, parse_content_type, parse_filename, parse_page_offset,
@@ -449,9 +452,6 @@ mod tests {
     use rstest::*;
     use rstest_reuse::*;
     use std::sync::Arc;
-
-    /// A canonical 64-char lowercase-hex content hash for fixtures.
-    const HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
     /// How many posts the concurrency exercise writes while the guard is hammered, and
     /// how many unforced deletes it attempts against them. Large enough that the two
@@ -465,7 +465,7 @@ mod tests {
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let record = MediaRecord {
             user_id,
-            sha256: parse_content_hash(HASH),
+            sha256: parse_content_hash(MEDIA_TEST_SHA256),
             filename: parse_filename("photo.jpg"),
             source: MediaSource::Upload,
             content_type: parse_content_type("image/jpeg"),
@@ -479,7 +479,7 @@ mod tests {
             .media
             .get_media(
                 user_id,
-                &parse_content_hash(HASH),
+                &parse_content_hash(MEDIA_TEST_SHA256),
                 &parse_filename("photo.jpg"),
                 &MediaSource::Upload,
             )
@@ -487,7 +487,7 @@ mod tests {
             .unwrap()
             .expect("present");
         // `sha256`/`filename` decode straight into their newtypes via the sqlx bridge (#438).
-        assert_eq!(got.sha256, parse_content_hash(HASH));
+        assert_eq!(got.sha256, parse_content_hash(MEDIA_TEST_SHA256));
         assert_eq!(got.filename, parse_filename("photo.jpg"));
     }
 
@@ -506,7 +506,7 @@ mod tests {
             .pool()
             .execute(&format!(
                 "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
-                 VALUES ({}, '{HASH}', '../evil', 'upload', 'image/jpeg', 1)",
+                 VALUES ({}, '{MEDIA_TEST_SHA256}', '../evil', 'upload', 'image/jpeg', 1)",
                 i64::from(user_id)
             ))
             .await
@@ -514,7 +514,7 @@ mod tests {
         let err = env
             .state
             .media
-            .find_by_hash(&parse_content_hash(HASH), &MediaSource::Upload)
+            .find_by_hash(&parse_content_hash(MEDIA_TEST_SHA256), &MediaSource::Upload)
             .await
             .unwrap_err();
         assert!(
@@ -545,7 +545,7 @@ mod tests {
             .pool()
             .execute(&format!(
                 "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
-                 VALUES ({}, '{HASH}', 'photo.jpg', 'upload', 'image/jpeg', -1)",
+                 VALUES ({}, '{MEDIA_TEST_SHA256}', 'photo.jpg', 'upload', 'image/jpeg', -1)",
                 i64::from(user_id)
             ))
             .await
@@ -553,7 +553,7 @@ mod tests {
         let err = env
             .state
             .media
-            .find_by_hash(&parse_content_hash(HASH), &MediaSource::Upload)
+            .find_by_hash(&parse_content_hash(MEDIA_TEST_SHA256), &MediaSource::Upload)
             .await
             .unwrap_err();
         assert!(
@@ -576,7 +576,7 @@ mod tests {
             .pool()
             .execute(&format!(
                 "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
-                 VALUES ({}, '{HASH}', 'photo.jpg', 'upload', 'image/jpeg', -5)",
+                 VALUES ({}, '{MEDIA_TEST_SHA256}', 'photo.jpg', 'upload', 'image/jpeg', -5)",
                 i64::from(user_id)
             ))
             .await
@@ -601,7 +601,7 @@ mod tests {
         // A valid record is stored normally.
         let good = MediaRecord {
             user_id,
-            sha256: parse_content_hash(HASH),
+            sha256: parse_content_hash(MEDIA_TEST_SHA256),
             filename: parse_filename("good.jpg"),
             source: MediaSource::Upload,
             content_type: parse_content_type("image/jpeg"),
@@ -636,7 +636,7 @@ mod tests {
             1,
             "the malformed-sha256 row must be skipped and the valid row kept"
         );
-        assert_eq!(listed[0].sha256, parse_content_hash(HASH));
+        assert_eq!(listed[0].sha256, parse_content_hash(MEDIA_TEST_SHA256));
     }
 
     #[apply(backends)]
@@ -646,7 +646,7 @@ mod tests {
         base.close_pool().await;
         let record = MediaRecord {
             user_id: UserId::from(1),
-            sha256: parse_content_hash(HASH),
+            sha256: parse_content_hash(MEDIA_TEST_SHA256),
             filename: parse_filename("test.jpg"),
             source: MediaSource::Upload,
             content_type: parse_content_type("image/jpeg"),
@@ -667,7 +667,7 @@ mod tests {
             .media
             .get_media(
                 UserId::from(1),
-                &parse_content_hash(HASH),
+                &parse_content_hash(MEDIA_TEST_SHA256),
                 &parse_filename("test.jpg"),
                 &MediaSource::Upload,
             )
@@ -846,7 +846,7 @@ mod tests {
         base.close_pool().await;
         let result = state
             .media
-            .find_by_hash(&parse_content_hash(HASH), &MediaSource::Upload)
+            .find_by_hash(&parse_content_hash(MEDIA_TEST_SHA256), &MediaSource::Upload)
             .await;
         assert!(result.is_err());
     }

@@ -326,19 +326,16 @@ fn MediaDeleteOutcome(
 ///
 /// The button's accessible name contains "Force delete" — the e2e selects on it.
 fn force_delete_form(item: &Item, delete_action: ServerAction<Delete>) -> impl IntoView {
-    // Same two-spellings split as `render_media_row`: the label decodes to the name the
-    // user typed, the hidden field stays the canonical key (#720).
+    // The label decodes to the name the user typed; the key the form submits is
+    // `media_key_fields`'s canonical spelling (#720).
     let display_name = item.filename.decoded().into_owned();
-    let filename_key = item.filename.to_string();
-    let sha256 = item.sha256.to_string();
-    let source = item.source.to_string();
+    // Built before the `view!`, like every other borrow off `item`: `ActionForm` takes its
+    // children as a `'static` closure, so nothing borrowed may be named inside it.
+    let key_fields = media_key_fields(item);
 
     view! {
         <ActionForm action=delete_action>
-            <input type="hidden" name="sha256" value=sha256 />
-            <input type="hidden" name="filename" value=filename_key />
-            <input type="hidden" name="source" value=source />
-            <input type="hidden" name="force" value="true" />
+            {key_fields} <input type="hidden" name="force" value="true" />
             <button
                 type="submit"
                 class="j-btn is-danger"
@@ -350,29 +347,48 @@ fn force_delete_form(item: &Item, delete_action: ServerAction<Delete>) -> impl I
     }
 }
 
+/// The three hidden fields naming a media item to the [`Delete`] server fn — its wire
+/// key `(sha256, filename, source)`. Rendered by both submissions that can carry it,
+/// the row's Delete form and [`force_delete_form`], so the two cannot drift apart.
+///
+/// Each value takes an owned `String` view here: `ContentHash`, `Filename` and
+/// `MediaSource` implement neither Leptos `IntoView` nor `IntoAttributeValue`.
+///
+/// `filename` is the *key* that round-trips to `media::delete(filename: Filename)`, so
+/// it stays the canonical spelling — the other half of the two-roles/two-spellings split
+/// whose cosmetic half is each caller's `display_name` (#720). Decoding the key would
+/// make every delete of an encoding-needing name fail at the wire door — loudly, since
+/// `Filename`'s `FromStr` rejects a raw value, but fail all the same.
+fn media_key_fields(item: &Item) -> impl IntoView {
+    let sha256 = item.sha256.to_string();
+    let filename_key = item.filename.to_string();
+    let source = item.source.to_string();
+
+    view! {
+        <input type="hidden" name="sha256" value=sha256 />
+        <input type="hidden" name="filename" value=filename_key />
+        <input type="hidden" name="source" value=source />
+    }
+}
+
 fn render_media_row(
     item: &Item,
     delete_action: ServerAction<Delete>,
     delete_target: RwSignal<Option<Item>>,
 ) -> impl IntoView {
-    // Same reason as `filename` below: `RootRelativeUrl` is not an `IntoAttributeValue`,
-    // so the `href` gets its `str` view here.
+    // Same reason as `display_name` below: `RootRelativeUrl` is not an
+    // `IntoAttributeValue`, so the `href` gets its `str` view here.
     let url = item.url.to_string();
-    // `Filename` implements neither Leptos `IntoView` nor `IntoAttributeValue`, so both
-    // views are taken as owned Strings (mirroring `item.sha256.to_string()` below).
-    //
-    // Two roles, two spellings (#720). The label is cosmetic and decodes to the name the
-    // user typed; the hidden field is the *key* that round-trips to
-    // `media::delete(filename: Filename)`, so it must stay canonical. Decoding the key
-    // would make every delete of an encoding-needing name fail at the wire door — loudly,
-    // since `Filename`'s `FromStr` rejects a raw value, but fail all the same.
+    // The cosmetic half of the #720 split (see `media_key_fields` for the key half):
+    // the label decodes to the name the user typed.
     let display_name = item.filename.decoded().into_owned();
-    let filename_key = item.filename.to_string();
-    // The ActionForm hidden field needs an owned String; `ContentHash: Display`.
-    let sha256 = item.sha256.to_string();
     let source = item.source.to_string();
     let size_label = format_bytes(item.size_bytes);
     let created_at = item.created_at.to_string();
+    let content_type = item.content_type.to_string();
+    // See `force_delete_form`: `ActionForm`'s children are a `'static` closure, so the
+    // hidden fields are built out here rather than named inside the `view!`.
+    let key_fields = media_key_fields(item);
     // Remembered on click rather than on submit: the refusal branch needs the identity of
     // whatever the response comes back about, and a click the confirm dialog then cancels
     // sets it harmlessly — nothing reads it until a refusal actually arrives.
@@ -385,15 +401,13 @@ fn render_media_row(
                     {display_name}
                 </a>
             </td>
-            <td>{item.content_type.to_string()}</td>
+            <td>{content_type}</td>
             <td>{size_label}</td>
-            <td>{source.clone()}</td>
+            <td>{source}</td>
             <td>{created_at}</td>
             <td>
                 <ActionForm action=delete_action>
-                    <input type="hidden" name="sha256" value=sha256 />
-                    <input type="hidden" name="filename" value=filename_key />
-                    <input type="hidden" name="source" value=source />
+                    {key_fields}
                     <button
                         type="submit"
                         class="j-btn is-danger"

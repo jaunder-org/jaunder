@@ -141,17 +141,26 @@ pub async fn delete(
         filename,
     };
 
-    // Pure reporting: this list only populates the refusal message. The decision is
-    // made by `try_delete_media`, whose guard and delete are one statement, so this
-    // handler holds no check-then-delete window of its own (spec D8).
-    let referenced_in_posts: Vec<PostId> = posts
-        .list_posts_referencing_media(auth.user_id, &media_ref)
-        .await?;
-
+    // The decision is made first and made in SQL: `try_delete_media`'s guard and delete
+    // are one statement, so this handler holds no check-then-delete window of its own
+    // (spec D8).
     let outcome = media
         .try_delete_media(auth.user_id, &media_ref, force.unwrap_or(false))
         .await
         .map_err(InternalError::storage)?;
+
+    // Pure reporting, and only for a refusal — the one outcome that has to be explained.
+    // A successful delete therefore reports an empty list even when it was forced: the
+    // references it overrode did not block it, and the UI reads this field only on the
+    // `deleted == false` branch. Asking unconditionally would spend a second query on
+    // every happy-path delete to fill a field nothing reads.
+    let referenced_in_posts: Vec<PostId> = if outcome == TryDeleteOutcome::RefusedReferenced {
+        posts
+            .list_posts_referencing_media(auth.user_id, &media_ref)
+            .await?
+    } else {
+        Vec::new()
+    };
 
     Ok(DeleteResult {
         deleted: outcome == TryDeleteOutcome::Deleted,
