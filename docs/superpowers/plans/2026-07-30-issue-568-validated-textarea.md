@@ -796,7 +796,8 @@ git commit -m "docs(adr): correct ADR-0065's coverage boundary and direct-bind e
 
 **Interfaces:** none.
 
-- [ ] **Step 1: Confirm every acceptance criterion's grep**
+- [x] **Step 1: Confirm every acceptance criterion's grep** — AC2/3/4/5/7/10 all
+      as expected
 
 Run:
 `rg -n 'error_for\(&v\)' web/src/posts/component.rs web/src/profile/component.rs`
@@ -821,13 +822,15 @@ Run: `rg -n 'field_error|error_for' web/src/forms/component.rs` Expected: only
 `field.error_for(&v)` in the two shells' `on:input` closures — no re-implemented
 validation rule (AC10).
 
-- [ ] **Step 2: Run the full gate**
+- [x] **Step 2: Run the full gate** — PASSED in 800s; `nix-e2e` (all four
+      combos) and `clean-tree` green
 
 Run: `devtool run -- cargo xtask validate` — **foreground**, `timeout: 600000`.
 Background mode gets killed. Expected: PASS across all four
 `{sqlite,postgres}×{chromium,firefox}` combos.
 
-- [ ] **Step 3: Confirm the tree is clean**
+- [x] **Step 3: Confirm the tree is clean** — `validate`'s own `clean-tree` step
+      passed
 
 Run: `git status --porcelain` Expected: **empty**. `cargo xtask check`
 auto-fixes formatting without committing, so a non-empty result means a
