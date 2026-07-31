@@ -63,10 +63,13 @@ pub fn set_draft(entry: &mut Entry, draft: bool) {
         elements.remove("control");
     }
     entry.extensions.retain(|_, elements| !elements.is_empty());
-    // The writer emits `xmlns:*` from `Entry::namespaces`, so this helper owns the
-    // `app` prefix's presence there — declared only while the marker it labels
-    // actually exists.
-    entry.namespaces.remove("app");
+    // The writer emits `xmlns:*` from `Entry::namespaces`, so the declaration has to
+    // track the extensions that need it. Only drop `xmlns:app` once *no* `app:`
+    // extension is left — a parsed entry may carry others besides the control we
+    // just removed, and undeclaring their prefix would emit unbound-prefix XML.
+    if !entry.extensions.contains_key("app") {
+        entry.namespaces.remove("app");
+    }
 
     if draft {
         let draft_ext = Extension {
@@ -207,8 +210,8 @@ pub struct FeedMeta {
     pub previous: Option<AbsoluteUrl>,
 }
 
-/// Builds a `rel`-labelled [`Link`] for a feed-level URL.
-fn feed_link(rel: &str, href: &AbsoluteUrl) -> Link {
+/// Builds a `rel`-labelled [`Link`] — feed paging links and entry `edit` links alike.
+fn rel_link(rel: &str, href: &AbsoluteUrl) -> Link {
     Link {
         rel: rel.to_string(),
         href: href.to_string(),
@@ -227,7 +230,7 @@ fn feed_link(rel: &str, href: &AbsoluteUrl) -> Link {
 ///
 /// Returns [`AtomPubError::Serialize`] if the document cannot be written.
 pub fn render_feed(meta: &FeedMeta, entries: &[Entry]) -> Result<String, AtomPubError> {
-    let mut links = vec![feed_link("self", &meta.self_url)];
+    let mut links = vec![rel_link("self", &meta.self_url)];
     // Order matches the previous hand-rolled writer: first, previous, next.
     for (rel, href) in [
         ("first", &meta.first),
@@ -235,7 +238,7 @@ pub fn render_feed(meta: &FeedMeta, entries: &[Entry]) -> Result<String, AtomPub
         ("next", &meta.next),
     ] {
         if let Some(href) = href.as_ref() {
-            links.push(feed_link(rel, href));
+            links.push(rel_link(rel, href));
         }
     }
 
@@ -299,12 +302,11 @@ pub fn render_media_link_entry(entry: &MediaLinkEntry) -> Result<String, AtomPub
         content: Some(Content {
             content_type: Some(entry.content_type.to_string()),
             src: Some(entry.content_src.to_string()),
-            value: None,
             ..Default::default()
         }),
         links: vec![
-            feed_link("edit", &entry.edit_uri),
-            feed_link("edit-media", &entry.edit_media_uri),
+            rel_link("edit", &entry.edit_uri),
+            rel_link("edit-media", &entry.edit_media_uri),
         ],
         ..Default::default()
     };
@@ -315,7 +317,7 @@ pub fn render_media_link_entry(entry: &MediaLinkEntry) -> Result<String, AtomPub
 #[cfg(test)]
 mod tests {
     use super::*;
-    use atom_syndication::{Category, Content, Link, Text};
+    use atom_syndication::Category;
 
     use crate::test_support::{
         parse_absolute_url, parse_content_type, parse_filename, parse_utc_instant,
@@ -476,6 +478,11 @@ mod tests {
         let (_, value) = content_parts(&entry);
         let value = value.expect("xhtml value");
         assert!(value.contains("&apos;"), "value: {value}");
+
+        // …and survives the serialize leg, so the escaped form is what a client
+        // actually receives — not just what we happen to hold in memory.
+        let out = entry_to_xml(&entry).expect("serialize");
+        assert!(out.contains("&apos;"), "out: {out}");
     }
 
     #[test]
@@ -552,7 +559,10 @@ mod tests {
 
     #[test]
     fn document_without_entry_is_an_error() {
-        assert!(entry_from_xml("<?xml version=\"1.0\"?><other/>").is_err());
+        assert!(matches!(
+            entry_from_xml("<?xml version=\"1.0\"?><other/>"),
+            Err(AtomPubError::Malformed(_))
+        ));
     }
 
     fn sample_entry() -> Entry {
@@ -584,10 +594,13 @@ mod tests {
     }
 
     #[test]
-    fn no_j_slug_means_no_namespace_declared() {
+    fn an_entry_with_no_markers_declares_neither_prefix() {
+        // A prefix is declared exactly while the marker it labels is present, so a
+        // plain entry carries neither declaration.
         let entry = sample_entry();
         let out = entry_to_xml(&entry).expect("serialize");
         assert!(!out.contains("xmlns:j"), "out: {out}");
+        assert!(!out.contains("xmlns:app"), "out: {out}");
     }
 
     #[test]
@@ -788,6 +801,14 @@ mod tests {
             "Entries should not redeclare xmlns; out: {out}"
         );
 
+        // A marker-bearing entry *does* carry its own prefix declaration, because the
+        // writer emits `Entry::namespaces` whether or not the entry is embedded. The
+        // redundancy with the feed root is valid XML and is the accepted delta.
+        let mut marked = sample_entry();
+        set_j_slug(&mut marked, "my-post");
+        let out = render_feed(&meta, &[marked]).expect("serialize");
+        assert!(out.contains("<entry xmlns:j="), "out: {out}");
+
         // Feed closing tag present
         assert!(out.contains("</feed>"), "out: {out}");
     }
@@ -838,26 +859,10 @@ mod tests {
         assert!(out.contains("2026-05-31T12:00:00"), "out: {out}");
     }
 
-    #[test]
-    fn media_link_entry_timestamps_are_serialized_as_rfc3339_utc() {
-        let out = render_media_link_entry(&MediaLinkEntry {
-            id: parse_absolute_url("https://h/atompub/alice/media/abc/pic.png"),
-            title: parse_filename("pic.png"),
-            edit_uri: parse_absolute_url("https://h/atompub/alice/media/abc/pic.png"),
-            edit_media_uri: parse_absolute_url("https://h/media/upload/ab/c0/abc/pic.png"),
-            content_src: parse_absolute_url("https://h/media/upload/ab/c0/abc/pic.png"),
-            content_type: parse_content_type("image/png"),
-            published: parse_utc_instant("2026-06-01T00:00:00Z"),
-            updated: parse_utc_instant("2026-06-02T00:00:00Z"),
-        })
-        .expect("serialize");
-        assert!(out.contains("<published>2026-06-01T00:00:00"), "out: {out}");
-        assert!(out.contains("<updated>2026-06-02T00:00:00"), "out: {out}");
-    }
-
-    #[test]
-    fn render_media_link_entry_references_binary_by_src() {
-        let out = render_media_link_entry(&MediaLinkEntry {
+    /// The media-link sibling of [`sample_entry`]: a PNG member, whose fields the
+    /// individual tests override where the case calls for it.
+    fn sample_media_link_entry() -> MediaLinkEntry {
+        MediaLinkEntry {
             id: parse_absolute_url("https://h/atompub/alice/media/abc/pic.png"),
             title: parse_filename("pic.png"),
             edit_uri: parse_absolute_url("https://h/atompub/alice/media/abc/pic.png"),
@@ -866,15 +871,33 @@ mod tests {
             content_type: parse_content_type("image/png"),
             published: parse_utc_instant("2026-06-01T00:00:00Z"),
             updated: parse_utc_instant("2026-06-01T00:00:00Z"),
+        }
+    }
+
+    #[test]
+    fn media_link_entry_timestamps_are_serialized_as_rfc3339_utc() {
+        let out = render_media_link_entry(&MediaLinkEntry {
+            updated: parse_utc_instant("2026-06-02T00:00:00Z"),
+            ..sample_media_link_entry()
         })
         .expect("serialize");
+        assert!(out.contains("<published>2026-06-01T00:00:00"), "out: {out}");
+        assert!(out.contains("<updated>2026-06-02T00:00:00"), "out: {out}");
+    }
+
+    #[test]
+    fn render_media_link_entry_references_binary_by_src() {
+        let out = render_media_link_entry(&sample_media_link_entry()).expect("serialize");
 
         assert!(out.contains("<entry"), "out: {out}");
-        assert!(out.contains("type=\"image/png\""), "out: {out}");
+        // Upstream writes a paired `<content>`, not the self-closing form the previous
+        // hand-rolled writer emitted — a deliberate, consumer-checked delta.
+        assert!(out.contains(r#"<content type="image/png""#), "out: {out}");
         assert!(
             out.contains("src=\"https://h/media/upload/ab/c0/abc/pic.png\""),
             "out: {out}"
         );
+        assert!(out.contains("</content>"), "out: {out}");
         assert!(out.contains("rel=\"edit-media\""), "out: {out}");
         assert!(out.contains("rel=\"edit\""), "out: {out}");
         assert!(out.contains(">pic.png<"), "out: {out}");
@@ -892,8 +915,7 @@ mod tests {
             edit_media_uri: parse_absolute_url("https://h/media/upload/ab/c0/abc/my%20photo.jpg"),
             content_src: parse_absolute_url("https://h/media/upload/ab/c0/abc/my%20photo.jpg"),
             content_type: parse_content_type("image/jpeg"),
-            published: parse_utc_instant("2026-06-01T00:00:00Z"),
-            updated: parse_utc_instant("2026-06-01T00:00:00Z"),
+            ..sample_media_link_entry()
         })
         .expect("serialize");
 
@@ -916,29 +938,5 @@ mod tests {
         let out = entry_to_xml(&entry).expect("serialize");
         assert!(!out.contains("xmlns:app"), "out: {out}");
         assert!(!out.contains("app:draft"), "out: {out}");
-    }
-
-    #[test]
-    fn media_link_content_carries_type_and_src() {
-        let out = render_media_link_entry(&MediaLinkEntry {
-            id: parse_absolute_url("https://h/atompub/alice/media/abc/pic.png"),
-            title: parse_filename("pic.png"),
-            edit_uri: parse_absolute_url("https://h/atompub/alice/media/abc/pic.png"),
-            edit_media_uri: parse_absolute_url("https://h/media/upload/ab/c0/abc/pic.png"),
-            content_src: parse_absolute_url("https://h/media/upload/ab/c0/abc/pic.png"),
-            content_type: parse_content_type("image/png"),
-            published: parse_utc_instant("2026-06-01T00:00:00Z"),
-            updated: parse_utc_instant("2026-06-01T00:00:00Z"),
-        })
-        .expect("serialize");
-
-        // Upstream writes a paired element, not the self-closing form the previous
-        // hand-rolled writer emitted — a deliberate, consumer-checked delta.
-        assert!(out.contains(r#"<content type="image/png""#), "out: {out}");
-        assert!(
-            out.contains(r#"src="https://h/media/upload/ab/c0/abc/pic.png""#),
-            "out: {out}"
-        );
-        assert!(out.contains("</content>"), "out: {out}");
     }
 }

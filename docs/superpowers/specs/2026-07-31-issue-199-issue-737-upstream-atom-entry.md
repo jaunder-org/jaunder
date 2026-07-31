@@ -250,7 +250,9 @@ Each is observable — a reviewer can check it without reading intent.
   and `src` attributes, both `rel="edit"` and `rel="edit-media"` links, and a
   `<title>` holding the **decoded** filename (#720).
 - B9. `FeedMeta` and `MediaLinkEntry` expose `UtcInstant` fields;
-  `rg '_rfc3339'     common/src/atompub/ server/src/atompub/` returns nothing.
+  `rg '_rfc3339:' common/src server/src` returns nothing. (Match the
+  field-declaration colon — a bare `_rfc3339` also catches `to_rfc3339()` call
+  sites and test names, which this criterion is not about.)
 - B10. A serialization failure maps to a 500, not a 400 — asserted on the
   `From<AtomPubError> for HandlerError` conversion (D9).
 - B11. `common/src/atompub/mod.rs` declares no `From<quick_xml::Error>` and no
