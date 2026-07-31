@@ -333,7 +333,7 @@ pub fn run_gh_raw(args: &[&str]) -> Result<(), ApiError>;
 pub fn rate_limit_reset() -> Option<u64>;
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 The 404 and GraphQL-schema specimens below are **real**, captured live from this
 repo (spec F5). The 401/403/502 bodies are **synthesized** from GitHub's
@@ -453,12 +453,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run: `cargo test --manifest-path xtask/Cargo.toml pr::gh` Expected: FAIL —
-`classify` / `ApiError` not defined.
+`classify` / `ApiError` not defined. **Observed:** 36 compile errors.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 Write `classify` and `enrich_rate_limit` to the signatures above. Every branch
 is pinned by a test, so the tests determine the bodies. Three ordering rules the
@@ -487,12 +487,12 @@ lets `gh pr merge` (which prints a human sentence) succeed.
 `.resources.graphql.reset`, returning `None` on any failure — it must never
 itself become a source of error.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Run: `cargo test --manifest-path xtask/Cargo.toml pr::gh` Expected: PASS (14
-tests)
+tests) — **observed 14 passed.**
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit** — `d85a3ae3`, full `cargo xtask check` green.
 
 ```bash
 git add xtask/src/pr/gh.rs xtask/src/pr/mod.rs

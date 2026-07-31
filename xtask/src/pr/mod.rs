@@ -6,6 +6,7 @@
 //! `snapshot` nothing sees JSON, a string status, or an exit code.
 
 pub mod gh;
+pub mod snapshot;
 
 use serde::{Serialize, Serializer};
 
