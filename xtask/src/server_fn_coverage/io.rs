@@ -95,6 +95,24 @@ pub fn read_snapshot(path: &Path) -> Result<Snapshot> {
     serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
 }
 
+/// The committed evidence file, or an error naming the remedy when it is absent.
+///
+/// Fails closed like [`read_snapshot`], and deliberately **not** like
+/// [`read_allowlist`] below, where missing means empty means nothing is excused.
+/// An empty evidence file is not the same thing: it would disagree with the
+/// snapshot on every covered fn, so `evidence_verdict` would report 54 separate
+/// violations instead of the one fact that matters — the file is not there.
+pub fn read_evidence(path: &Path) -> Result<Evidence> {
+    let raw = std::fs::read_to_string(path).with_context(|| {
+        format!(
+            "reading {} — if it does not exist yet, generate it with `{}`",
+            path.display(),
+            super::REGENERATE_CMD
+        )
+    })?;
+    serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
+}
+
 /// The committed allowlist. A missing file is an empty allowlist — that is the
 /// strict reading (nothing is excused), not a lenient one.
 pub fn read_allowlist(path: &Path) -> Result<Vec<AllowlistEntry>> {
@@ -181,6 +199,24 @@ mod tests {
         let err = read_snapshot(Path::new("/nonexistent-snapshot.json")).unwrap_err();
         let chain = format!("{err:#}");
         assert!(chain.contains(super::super::REGENERATE_CMD), "{chain}");
+    }
+
+    #[test]
+    fn missing_evidence_fails_closed_rather_than_reading_as_empty() {
+        // Deliberately NOT the `read_allowlist` template, where missing means
+        // empty means pass. An empty evidence file disagrees with the snapshot on
+        // every covered fn, which is a confusing way to report "it is gone".
+        let err = read_evidence(Path::new("/nonexistent-evidence.json")).unwrap_err();
+        let chain = format!("{err:#}");
+        assert!(chain.contains(super::super::REGENERATE_CMD), "{chain}");
+    }
+
+    #[test]
+    fn unparseable_evidence_fails_closed() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("evidence.json");
+        std::fs::write(&path, "{not json").expect("write");
+        assert!(read_evidence(&path).is_err());
     }
 
     #[test]

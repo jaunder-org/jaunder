@@ -134,6 +134,51 @@ pub fn render<T: Serialize>(value: &T) -> Result<String> {
     Ok(out)
 }
 
+/// The remedy for either artifact being out of step, as the two steps it really
+/// is: [`REGENERATE_CMD`] fails immediately without a capture, so naming it alone
+/// sends an author into an error instead of a fix.
+const REGENERATE_BOTH: &str =
+    "regenerate both: run `cargo xtask e2e sqlite chromium` to produce a \
+                               capture, then `cargo xtask server-fn-coverage regenerate`";
+
+/// Every way the evidence file disagrees with the snapshot's `covered` names, one
+/// message per name, sorted. Empty means they agree.
+///
+/// Compares **key sets only, in both directions** — never titles. The titles are
+/// the part that does not reproduce (module docs), so comparing them is the bug
+/// #745 fixed; the key sets are measured stable, so comparing them is free.
+///
+/// It mirrors `covered` and not `orphans`. Today every orphan name is also a
+/// covered name, so the distinction is latent — but a fn hit only during the
+/// `_autoPerfSpan` warmup would have an orphan entry and no covered entry, and
+/// requiring evidence for it would demand titles that by definition do not exist.
+///
+/// What this cannot catch is titles that went stale while the key set held —
+/// a renamed or deleted test. That is a known, accepted gap (#757).
+pub fn evidence_verdict(snapshot: &Snapshot, evidence: &Evidence) -> Vec<String> {
+    let mut out = Vec::new();
+
+    for name in &snapshot.covered {
+        if !evidence.covered.contains_key(name) {
+            out.push(format!(
+                "{name}: covered by the snapshot but missing from the evidence file — \
+                 {REGENERATE_BOTH}"
+            ));
+        }
+    }
+    for name in evidence.covered.keys() {
+        if !snapshot.covered.contains(name) {
+            out.push(format!(
+                "{name}: named by the evidence file but not covered by the snapshot — stale \
+                 evidence; {REGENERATE_BOTH}"
+            ));
+        }
+    }
+
+    out.sort();
+    out
+}
+
 /// Every reason the gate should fail, one message per violation, sorted. Empty
 /// means the gate passes. Pure given its inputs, so it is unit-tested directly.
 pub fn verdict(
@@ -350,6 +395,88 @@ mod tests {
             .map(|raw| render(&run_coverage(raw).split().1).expect("renders"))
             .collect();
         assert_ne!(evidence[0], evidence[1]);
+    }
+
+    fn evidence_of(names: &[&str]) -> Evidence {
+        Evidence {
+            covered: names
+                .iter()
+                .map(|k| (k.to_string(), BTreeSet::from(["a test".to_string()])))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn agreeing_key_sets_pass() {
+        let (s, _) = coverage_of(&[("posts::create", &["a test"])]).split();
+        assert!(evidence_verdict(&s, &evidence_of(&["posts::create"])).is_empty());
+    }
+
+    #[test]
+    fn evidence_missing_a_covered_fn_is_a_violation() {
+        let (s, _) =
+            coverage_of(&[("posts::create", &["a test"]), ("tags::list", &["a test"])]).split();
+        let v = evidence_verdict(&s, &evidence_of(&["posts::create"]));
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(v[0].contains("tags::list"), "{}", v[0]);
+        assert!(
+            v[0].contains("missing"),
+            "says which way it drifted: {}",
+            v[0]
+        );
+        assert!(v[0].contains(REGENERATE_CMD), "names the remedy: {}", v[0]);
+        assert!(
+            v[0].contains("cargo xtask e2e sqlite chromium"),
+            "the remedy is two steps — regenerate needs a capture first: {}",
+            v[0]
+        );
+    }
+
+    #[test]
+    fn evidence_naming_a_fn_the_snapshot_does_not_cover_is_a_violation() {
+        // The other direction: stale evidence left behind after a fn stopped
+        // being covered. Both directions, or half the drift is invisible.
+        let (s, _) = coverage_of(&[("posts::create", &["a test"])]).split();
+        let v = evidence_verdict(&s, &evidence_of(&["posts::create", "ghost::fn"]));
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(v[0].contains("ghost::fn"), "{}", v[0]);
+        assert!(
+            v[0].contains("stale"),
+            "distinguishable from the missing-key message: {}",
+            v[0]
+        );
+    }
+
+    #[test]
+    fn evidence_verdict_ignores_orphan_only_names() {
+        // The evidence file mirrors `covered`, not `orphans`. A fn hit only during
+        // the `_autoPerfSpan` warmup has an orphan entry and no covered entry, and
+        // requiring evidence for it would demand titles that do not exist.
+        let s = Snapshot {
+            covered: vec!["posts::create".to_string()],
+            orphans: BTreeMap::from([(
+                "auth::get_session".to_string(),
+                BTreeSet::from(["unknown-parent:1111111111111111".to_string()]),
+            )]),
+        };
+        assert!(evidence_verdict(&s, &evidence_of(&["posts::create"])).is_empty());
+    }
+
+    #[test]
+    fn the_committed_artifacts_agree_with_each_other() {
+        // The rule applied to the real files, not just to fixtures: whatever is in
+        // `docs/coverage/` right now must satisfy the check the static lane runs.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let snapshot = crate::server_fn_coverage::io::read_snapshot(
+            &root.join(crate::server_fn_coverage::io::SNAPSHOT_PATH),
+        )
+        .expect("the committed snapshot parses");
+        let evidence = crate::server_fn_coverage::io::read_evidence(
+            &root.join(crate::server_fn_coverage::io::EVIDENCE_PATH),
+        )
+        .expect("the committed evidence parses");
+        let v = evidence_verdict(&snapshot, &evidence);
+        assert!(v.is_empty(), "committed artifacts disagree: {v:?}");
     }
 
     #[test]

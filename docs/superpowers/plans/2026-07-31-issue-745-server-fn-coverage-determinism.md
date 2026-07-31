@@ -587,7 +587,7 @@ fn check(
 ) -> StepResult;
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `snapshot.rs`'s test module:
 
@@ -722,12 +722,12 @@ The **five** existing `check()` tests —
 file matching their snapshot's `covered` array, so they keep testing what they
 were written to test (spec AC6).
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run: `cargo nextest run -p xtask server_fn_coverage` Expected: FAIL —
 `evidence_verdict` not defined; `check` takes 3 arguments.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 Write `evidence_verdict` to the signature above and thread `evidence_path`
 through `check` and `run`. The tests pin both directions, the orphan-only
@@ -758,11 +758,11 @@ as `verdict`'s, so one failing step reports every reason at once, and extend the
 existing 3-way error `match` (`server_fn_coverage_check.rs:50-65`) to a 4-way
 one including `read_evidence`.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Run: `cargo nextest run -p xtask server_fn_coverage` Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add xtask/src/server_fn_coverage/snapshot.rs xtask/src/server_fn_coverage/mod.rs xtask/src/steps/server_fn_coverage_check.rs

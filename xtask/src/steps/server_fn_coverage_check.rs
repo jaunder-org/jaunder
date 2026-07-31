@@ -23,10 +23,10 @@ use anyhow::Result;
 
 use crate::result::{CommandResult, StepResult};
 use crate::server_fn_coverage::io::{
-    coverage_from_capture, inventory, read_allowlist, read_snapshot, write_evidence,
+    coverage_from_capture, inventory, read_allowlist, read_evidence, read_snapshot, write_evidence,
     write_snapshot, ALLOWLIST_PATH, CAPTURE_PATH, EVIDENCE_PATH, SNAPSHOT_PATH, WEB_SRC,
 };
-use crate::server_fn_coverage::{render, verdict, REGENERATE_CMD};
+use crate::server_fn_coverage::{evidence_verdict, render, verdict, REGENERATE_CMD};
 
 /// The static lane's step name.
 const STATIC_STEP: &str = "server-fn-coverage";
@@ -46,15 +46,21 @@ const AUTHORITATIVE: (&str, &str) = ("sqlite", "chromium");
 /// A missing snapshot, an unscannable `web/src`, or an unparseable artifact is a
 /// **failure**, never a pass: the failure mode this gate guards against and the
 /// failure mode of its own plumbing would otherwise look identical.
-fn check(web_src: &Path, snapshot_path: &Path, allowlist_path: &Path) -> StepResult {
-    let (inventory, snapshot, allowlist) = match (
+fn check(
+    web_src: &Path,
+    snapshot_path: &Path,
+    allowlist_path: &Path,
+    evidence_path: &Path,
+) -> StepResult {
+    let (inventory, snapshot, allowlist, evidence) = match (
         inventory(web_src),
         read_snapshot(snapshot_path),
         read_allowlist(allowlist_path),
+        read_evidence(evidence_path),
     ) {
-        (Ok(i), Ok(s), Ok(a)) => (i, s, a),
-        (i, s, a) => {
-            let detail = [i.err(), s.err(), a.err()]
+        (Ok(i), Ok(s), Ok(a), Ok(e)) => (i, s, a, e),
+        (i, s, a, e) => {
+            let detail = [i.err(), s.err(), a.err(), e.err()]
                 .into_iter()
                 .flatten()
                 .map(|e| format!("{e:#}"))
@@ -64,7 +70,10 @@ fn check(web_src: &Path, snapshot_path: &Path, allowlist_path: &Path) -> StepRes
         }
     };
 
-    let violations = verdict(&inventory, &snapshot, &allowlist);
+    // Both rules in one step, so a failing run reports every reason at once
+    // rather than making an author fix them one gate run at a time.
+    let mut violations = verdict(&inventory, &snapshot, &allowlist);
+    violations.extend(evidence_verdict(&snapshot, &evidence));
     if violations.is_empty() {
         return StepResult::ok(STATIC_STEP).detail(format!(
             "{} server fn(s) accounted for ({} covered, {} allowlisted)",
@@ -83,6 +92,7 @@ pub fn run(result: &mut CommandResult) {
         Path::new(WEB_SRC),
         Path::new(SNAPSHOT_PATH),
         Path::new(ALLOWLIST_PATH),
+        Path::new(EVIDENCE_PATH),
     ));
 }
 
@@ -216,14 +226,35 @@ mod tests {
         std::fs::write(path, json).expect("write json");
     }
 
+    /// Write an evidence file agreeing with `names`, so a test that is not about
+    /// evidence drift does not trip over `evidence_verdict`.
+    fn evidence_for(dir: &Path, names: &[&str]) -> std::path::PathBuf {
+        let path = dir.join("evidence.json");
+        let entries: Vec<String> = names
+            .iter()
+            .map(|n| format!(r#""{n}":["a test"]"#))
+            .collect();
+        write_json(
+            &path,
+            &format!(r#"{{"covered":{{{}}}}}"#, entries.join(",")),
+        );
+        path
+    }
+
     #[test]
     fn static_lane_passes_when_every_fn_is_covered() {
         let tmp = tempfile::tempdir().expect("tempdir");
         web_src_with(tmp.path(), &["create_post"]);
         let snap = tmp.path().join("snap.json");
         write_json(&snap, r#"{"covered":["posts::create_post"],"orphans":{}}"#);
+        let ev = evidence_for(tmp.path(), &["posts::create_post"]);
 
-        let step = check(tmp.path(), &snap, &tmp.path().join("absent-allowlist.json"));
+        let step = check(
+            tmp.path(),
+            &snap,
+            &tmp.path().join("absent-allowlist.json"),
+            &ev,
+        );
         assert!(step.ok, "{:?}", step.detail);
         assert!(step.detail.unwrap_or_default().contains("1 server fn"));
     }
@@ -236,8 +267,14 @@ mod tests {
         web_src_with(tmp.path(), &["create_post", "brand_new_uncovered_fn"]);
         let snap = tmp.path().join("snap.json");
         write_json(&snap, r#"{"covered":["posts::create_post"],"orphans":{}}"#);
+        let ev = evidence_for(tmp.path(), &["posts::create_post"]);
 
-        let step = check(tmp.path(), &snap, &tmp.path().join("absent-allowlist.json"));
+        let step = check(
+            tmp.path(),
+            &snap,
+            &tmp.path().join("absent-allowlist.json"),
+            &ev,
+        );
         assert!(!step.ok);
         let detail = step.detail.unwrap_or_default();
         assert!(detail.contains("brand_new_uncovered_fn"), "{detail}");
@@ -249,14 +286,79 @@ mod tests {
         web_src_with(tmp.path(), &["no_flow_yet"]);
         let snap = tmp.path().join("snap.json");
         write_json(&snap, r#"{"covered":[],"orphans":{}}"#);
+        let ev = evidence_for(tmp.path(), &[]);
         let allow = tmp.path().join("allow.json");
         write_json(
             &allow,
             r##"[{"server_fn":"posts::no_flow_yet","reason":"no UI surface yet","issue":"#700"}]"##,
         );
 
-        let step = check(tmp.path(), &snap, &allow);
+        let step = check(tmp.path(), &snap, &allow, &ev);
         assert!(step.ok, "{:?}", step.detail);
+    }
+
+    #[test]
+    fn static_lane_fails_when_the_evidence_is_missing_a_covered_fn() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        web_src_with(tmp.path(), &["create_post"]);
+        let snap = tmp.path().join("snap.json");
+        write_json(&snap, r#"{"covered":["posts::create_post"],"orphans":{}}"#);
+        let ev = evidence_for(tmp.path(), &[]);
+
+        let step = check(
+            tmp.path(),
+            &snap,
+            &tmp.path().join("absent-allowlist.json"),
+            &ev,
+        );
+        assert!(!step.ok);
+        let detail = step.detail.unwrap_or_default();
+        assert!(detail.contains("posts::create_post"), "{detail}");
+        assert!(detail.contains("missing from the evidence"), "{detail}");
+    }
+
+    #[test]
+    fn static_lane_fails_when_the_evidence_names_an_uncovered_fn() {
+        // The other direction, at the fixture-file level: stale evidence naming a
+        // fn the snapshot no longer covers.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        web_src_with(tmp.path(), &["create_post"]);
+        let snap = tmp.path().join("snap.json");
+        write_json(&snap, r#"{"covered":["posts::create_post"],"orphans":{}}"#);
+        let ev = evidence_for(tmp.path(), &["posts::create_post", "posts::ghost"]);
+
+        let step = check(
+            tmp.path(),
+            &snap,
+            &tmp.path().join("absent-allowlist.json"),
+            &ev,
+        );
+        assert!(!step.ok);
+        let detail = step.detail.unwrap_or_default();
+        assert!(detail.contains("posts::ghost"), "{detail}");
+        assert!(detail.contains("stale evidence"), "{detail}");
+    }
+
+    #[test]
+    fn static_lane_fails_closed_on_a_missing_evidence_file() {
+        // The plumbing's own failure must not look like "nothing uncovered".
+        let tmp = tempfile::tempdir().expect("tempdir");
+        web_src_with(tmp.path(), &["create_post"]);
+        let snap = tmp.path().join("snap.json");
+        write_json(&snap, r#"{"covered":["posts::create_post"],"orphans":{}}"#);
+
+        let step = check(
+            tmp.path(),
+            &snap,
+            &tmp.path().join("absent-allowlist.json"),
+            &tmp.path().join("absent-evidence.json"),
+        );
+        assert!(!step.ok);
+        let detail = step.detail.unwrap_or_default();
+        assert!(
+            detail.contains(REGENERATE_CMD),
+            "names the remedy: {detail}"
+        );
     }
 
     #[test]
@@ -264,11 +366,13 @@ mod tests {
         // The plumbing's own failure must not look like "nothing uncovered".
         let tmp = tempfile::tempdir().expect("tempdir");
         web_src_with(tmp.path(), &["create_post"]);
+        let ev = evidence_for(tmp.path(), &["posts::create_post"]);
 
         let step = check(
             tmp.path(),
             &tmp.path().join("absent-snapshot.json"),
             &tmp.path().join("absent-allowlist.json"),
+            &ev,
         );
         assert!(!step.ok);
         let detail = step.detail.unwrap_or_default();
@@ -284,8 +388,14 @@ mod tests {
         web_src_with(tmp.path(), &["create_post"]);
         let snap = tmp.path().join("snap.json");
         write_json(&snap, "{not json");
+        let ev = evidence_for(tmp.path(), &["posts::create_post"]);
 
-        let step = check(tmp.path(), &snap, &tmp.path().join("absent-allowlist.json"));
+        let step = check(
+            tmp.path(),
+            &snap,
+            &tmp.path().join("absent-allowlist.json"),
+            &ev,
+        );
         assert!(!step.ok);
     }
 
