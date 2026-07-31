@@ -11,6 +11,7 @@ mod files;
 pub mod git;
 mod ids;
 mod nix_build;
+pub mod pr;
 mod result;
 mod server_fn_coverage;
 mod server_fns;
