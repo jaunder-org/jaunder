@@ -23,6 +23,7 @@ use super::xml::{write_empty_element, write_link, write_text_element};
 use super::{AtomPubError, APP_NS, ATOM_NS, J_NS};
 use crate::absolute_url::AbsoluteUrl;
 use crate::media::{ContentType, Filename};
+use crate::time::UtcInstant;
 
 // ---------------------------------------------------------------------------
 // Draft flag (app:control/app:draft) helpers
@@ -528,8 +529,8 @@ pub struct FeedMeta {
     pub id: AbsoluteUrl,
     /// Human-readable collection title.
     pub title: String,
-    /// Feed `updated` timestamp, RFC 3339.
-    pub updated_rfc3339: String,
+    /// Feed `updated` timestamp.
+    pub updated: UtcInstant,
     /// `rel="self"` href (the absolute collection URL for this page).
     pub self_url: AbsoluteUrl,
     /// `rel="first"` href, when paging.
@@ -562,7 +563,7 @@ pub fn render_feed(meta: &FeedMeta, entries: &[Entry]) -> String {
 
     write_text_element(&mut writer, "id", &meta.id);
     write_text_element(&mut writer, "title", &meta.title);
-    write_text_element(&mut writer, "updated", &meta.updated_rfc3339);
+    write_text_element(&mut writer, "updated", &meta.updated.value().to_rfc3339());
     write_link(&mut writer, "self", &meta.self_url);
     if let Some(href) = &meta.first {
         write_link(&mut writer, "first", href);
@@ -602,10 +603,10 @@ pub struct MediaLinkEntry {
     pub content_src: AbsoluteUrl,
     /// MIME type of the binary.
     pub content_type: ContentType,
-    /// Publication timestamp, RFC 3339.
-    pub published_rfc3339: String,
-    /// Last-update timestamp, RFC 3339.
-    pub updated_rfc3339: String,
+    /// Publication timestamp.
+    pub published: UtcInstant,
+    /// Last-update timestamp.
+    pub updated: UtcInstant,
 }
 
 /// Serializes a [`MediaLinkEntry`] to a standalone `<entry>` document.
@@ -624,8 +625,12 @@ pub fn render_media_link_entry(entry: &MediaLinkEntry) -> String {
     // The one display surface in this document: the title shows the name the user typed,
     // while every URL below keeps the canonical stored spelling (#720).
     write_text_element(&mut writer, "title", &entry.title.decoded());
-    write_text_element(&mut writer, "updated", &entry.updated_rfc3339);
-    write_text_element(&mut writer, "published", &entry.published_rfc3339);
+    write_text_element(&mut writer, "updated", &entry.updated.value().to_rfc3339());
+    write_text_element(
+        &mut writer,
+        "published",
+        &entry.published.value().to_rfc3339(),
+    );
 
     let content_attrs = [
         ("type", entry.content_type.as_ref()),
@@ -643,7 +648,9 @@ pub fn render_media_link_entry(entry: &MediaLinkEntry) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{parse_absolute_url, parse_content_type, parse_filename};
+    use crate::test_support::{
+        parse_absolute_url, parse_content_type, parse_filename, parse_utc_instant,
+    };
 
     fn content_parts(entry: &Entry) -> (Option<&str>, Option<&str>) {
         match entry.content() {
@@ -958,7 +965,7 @@ mod tests {
         let meta = FeedMeta {
             id: parse_absolute_url("https://example.com/atompub/alice/posts"),
             title: "Alice's Posts".to_string(),
-            updated_rfc3339: "2026-05-31T12:00:00Z".to_string(),
+            updated: parse_utc_instant("2026-05-31T12:00:00Z"),
             self_url: parse_absolute_url("https://example.com/atompub/alice/posts"),
             first: Some(parse_absolute_url(
                 "https://example.com/atompub/alice/posts?page=1",
@@ -1014,7 +1021,7 @@ mod tests {
         let meta = FeedMeta {
             id: parse_absolute_url("https://example.com/atompub/bob/posts"),
             title: "Bob's Posts".to_string(),
-            updated_rfc3339: "2026-05-31T13:00:00Z".to_string(),
+            updated: parse_utc_instant("2026-05-31T13:00:00Z"),
             self_url: parse_absolute_url("https://example.com/atompub/bob/posts"),
             first: None,
             next: None,
@@ -1038,6 +1045,37 @@ mod tests {
     }
 
     #[test]
+    fn feed_meta_updated_is_serialized_as_rfc3339_utc() {
+        let meta = FeedMeta {
+            id: parse_absolute_url("https://example.com/atompub/alice/posts"),
+            title: "Alice's Posts".to_string(),
+            updated: parse_utc_instant("2026-05-31T12:00:00Z"),
+            self_url: parse_absolute_url("https://example.com/atompub/alice/posts"),
+            first: None,
+            next: None,
+            previous: None,
+        };
+        let out = render_feed(&meta, &[]);
+        assert!(out.contains("2026-05-31T12:00:00"), "out: {out}");
+    }
+
+    #[test]
+    fn media_link_entry_timestamps_are_serialized_as_rfc3339_utc() {
+        let out = render_media_link_entry(&MediaLinkEntry {
+            id: parse_absolute_url("https://h/atompub/alice/media/abc/pic.png"),
+            title: parse_filename("pic.png"),
+            edit_uri: parse_absolute_url("https://h/atompub/alice/media/abc/pic.png"),
+            edit_media_uri: parse_absolute_url("https://h/media/upload/ab/c0/abc/pic.png"),
+            content_src: parse_absolute_url("https://h/media/upload/ab/c0/abc/pic.png"),
+            content_type: parse_content_type("image/png"),
+            published: parse_utc_instant("2026-06-01T00:00:00Z"),
+            updated: parse_utc_instant("2026-06-02T00:00:00Z"),
+        });
+        assert!(out.contains("<published>2026-06-01T00:00:00"), "out: {out}");
+        assert!(out.contains("<updated>2026-06-02T00:00:00"), "out: {out}");
+    }
+
+    #[test]
     fn render_media_link_entry_references_binary_by_src() {
         let out = render_media_link_entry(&MediaLinkEntry {
             id: parse_absolute_url("https://h/atompub/alice/media/abc/pic.png"),
@@ -1046,8 +1084,8 @@ mod tests {
             edit_media_uri: parse_absolute_url("https://h/media/upload/ab/c0/abc/pic.png"),
             content_src: parse_absolute_url("https://h/media/upload/ab/c0/abc/pic.png"),
             content_type: parse_content_type("image/png"),
-            published_rfc3339: "2026-06-01T00:00:00Z".to_string(),
-            updated_rfc3339: "2026-06-01T00:00:00Z".to_string(),
+            published: parse_utc_instant("2026-06-01T00:00:00Z"),
+            updated: parse_utc_instant("2026-06-01T00:00:00Z"),
         });
 
         assert!(out.contains("<entry"), "out: {out}");
@@ -1073,8 +1111,8 @@ mod tests {
             edit_media_uri: parse_absolute_url("https://h/media/upload/ab/c0/abc/my%20photo.jpg"),
             content_src: parse_absolute_url("https://h/media/upload/ab/c0/abc/my%20photo.jpg"),
             content_type: parse_content_type("image/jpeg"),
-            published_rfc3339: "2026-06-01T00:00:00Z".to_string(),
-            updated_rfc3339: "2026-06-01T00:00:00Z".to_string(),
+            published: parse_utc_instant("2026-06-01T00:00:00Z"),
+            updated: parse_utc_instant("2026-06-01T00:00:00Z"),
         });
 
         assert!(out.contains("<title>my photo.jpg</title>"), "out: {out}");

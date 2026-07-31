@@ -16,6 +16,7 @@ use common::etag::ETag;
 use common::ids::PostId;
 use common::pagination::PageSize;
 use common::tag::TagLabel;
+use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::ViewerIdentity;
 use storage::{
@@ -186,15 +187,15 @@ pub async fn collection_get(
 
     let entries: Vec<_> = records.iter().map(|p| post_to_entry(p, &base)).collect();
 
-    let updated_rfc3339 = records.first().map_or_else(
-        || chrono::Utc::now().to_rfc3339(),
-        |p| p.updated_at.to_rfc3339(),
+    let updated = records.first().map_or_else(
+        || UtcInstant::from(chrono::Utc::now()),
+        |p| p.updated_at.into(),
     );
 
     let meta = FeedMeta {
         id: collection_url.clone(),
         title: format!("{username}'s posts"),
-        updated_rfc3339,
+        updated,
         self_url: collection_url.clone(),
         first: Some(collection_url),
         next,

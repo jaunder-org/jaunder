@@ -14,6 +14,7 @@ use common::absolute_url::{compose, AbsoluteUrl};
 use common::atompub::{render_media_link_entry, MediaLinkEntry};
 use common::media::{media_url, ContentHash, Filename, MediaSource, ProfferedFilename};
 use common::root_relative_url::RootRelativeUrl;
+use common::time::UtcInstant;
 use common::username::Username;
 use storage::{MediaRecord, MediaStorage, SiteConfigStorage};
 use web::auth::AuthUser;
@@ -52,7 +53,7 @@ fn media_link_entry(
         url
     };
     let edit = compose(base, &edit_path);
-    let timestamp = record.created_at.to_rfc3339();
+    let timestamp = UtcInstant::from(record.created_at);
     MediaLinkEntry {
         id: edit.clone(),
         title: record.filename.clone(),
@@ -60,8 +61,8 @@ fn media_link_entry(
         edit_media_uri: binary.clone(),
         content_src: binary,
         content_type: record.content_type.clone(),
-        published_rfc3339: timestamp.clone(),
-        updated_rfc3339: timestamp,
+        published: timestamp,
+        updated: timestamp,
     }
 }
 

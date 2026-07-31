@@ -145,7 +145,7 @@ which stages the promoted file itself. Carry the edit forward uncommitted.
   `Entry::write_to` / `Feed::write_to` reachable, and `WriteConfig` exported
   from the crate root. All later tasks depend on this.
 
-- [ ] **Step 1: Delete the patch block and bump the requirements**
+- [x] **Step 1: Delete the patch block and bump the requirements**
 
 In `Cargo.toml`, remove the entire `# TEMPORARY (jaunder #193 / ADR-0043)`
 comment and the `[patch.crates-io]` section.
@@ -163,7 +163,7 @@ Copy this verbatim — **only the version numbers change**. `rss`'s `builders` a
 `rss::extension::atom::AtomExtension`), and `default-features = false` on
 `atom_syndication` is spec A5.
 
-- [ ] **Step 2: Delete the Nix vendoring**
+- [x] **Step 2: Delete the Nix vendoring**
 
 Remove the `atom-fork` and `rss-fork` flake inputs, their entries in the outputs
 function's argument list, and the whole
@@ -171,13 +171,13 @@ function's argument list, and the whole
 `overrideVendorGitCheckout`. Any `cargoVendorDir` reference in the crane arg
 sets goes too — crane falls back to its own default vendoring.
 
-- [ ] **Step 3: Drop the sources allowance**
+- [x] **Step 3: Drop the sources allowance**
 
 In `deny.toml`, remove `jaunder-org` from `[sources.allow-org].github` (and the
 `# TEMPORARY` comment above it). If the list becomes empty, remove the
 `[sources.allow-org]` table rather than leaving `github = []`.
 
-- [ ] **Step 4: Regenerate the lockfiles**
+- [x] **Step 4: Regenerate the lockfiles**
 
 ```bash
 devtool run -- cargo tree -i quick-xml
@@ -211,7 +211,7 @@ files, so an unstaged new/changed file is invisible to the build:
 git add -A
 ```
 
-- [ ] **Step 5: Verify the dependency graph**
+- [x] **Step 5: Verify the dependency graph**
 
 ```bash
 cargo tree -i quick-xml
@@ -221,7 +221,7 @@ Expected: exactly one `quick-xml v0.41.x`, with `atom_syndication v0.12.10` and
 `rss v2.1.x` among its dependents and **no**
 `(git+https://github.com/jaunder-org/...)` source annotations anywhere.
 
-- [ ] **Step 6: Verify the build and the advisories**
+- [x] **Step 6: Verify the build and the advisories**
 
 ```bash
 devtool run -- cargo xtask check --no-test
@@ -230,7 +230,7 @@ devtool run -- cargo xtask check --no-test
 Expected: PASS. If `rss` 2.1 changed an API used by `common/src/feed/rss.rs`,
 fix the call sites here — that is in scope for this task.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add Cargo.toml Cargo.lock common/Cargo.toml flake.nix flake.lock deny.toml
