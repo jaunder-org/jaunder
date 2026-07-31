@@ -198,6 +198,14 @@ on naming. An unenforced convention is what allowed that, so the convention is
 now a gate: `server-fn-tracing`, in `cargo xtask check` and
 `cargo xtask validate`.
 
+> **Partly superseded (2026-07-30, #714/#722):** the span-name half of this
+> addendum no longer describes the code. `server-fn-tracing` survives, but only
+> as the recordable-type allowlist and its sibling default-denies — it neither
+> writes nor checks the span name, and it has no fix mode at all. The name is
+> derived by `#[macros::server]` instead. The **values** and the **rule** are
+> unchanged; the text below is the original, correct-for-its-time rationale for
+> who maintained them. See the 2026-07-30 addendum.
+
 ### The span
 
 Every `#[server]` fn in `web/src` carries `#[tracing::instrument]`, placed
@@ -300,3 +308,84 @@ its own PII review of the `WebError` `Display` chain — a different question fr
 span presence. Follow-ups filed as **#684** (path-based `#[server]` matching,
 which unblocks dropping the vestigial fn-ident nouns) and **#685** (`login`'s
 un-newtyped `label`).
+
+## Addendum (2026-07-30): the span name is macro-derived, and `server_fn` retires (issues #714, #722)
+
+The #511 addendum made the span name a pure function of source location and
+identifier, then had **the gate write it into the source**. #714 moves the
+derivation into `#[macros::server]` (`macros/src/server_fn.rs`), which emits
+`#[::tracing::instrument(name = "web.<vertical>.<ident>")]` — the same value,
+from the same inputs, by the same rule. This resolves
+[#722](https://github.com/jaunder-org/jaunder/issues/722), which asked the
+general question: when a literal restates what the source already encodes, do
+you derive it or generate-and-gate it?
+
+### Why derivation was rejected in #511, and why it is available now
+
+Letting `#[tracing::instrument]` name the span itself was never an option on a
+`#[server]` fn. `#[server]` relocates the annotated body into a generated fn
+named `__server_<ident>` (`server_fn_macro-0.8.10/src/lib.rs:1578`), and the
+instrument attribute — which must sit inside `#[server]` to wrap the server-side
+body at all — derives its name from whatever fn it ends up on. Plain derivation
+therefore yields `__server_create`: a macro-internal name, unusable as an
+operator-facing span. That coupling is what forced an explicit `name = "…"`, and
+having forced it, #511 gave the literal to the gate to maintain.
+`#[macros::server]` breaks the coupling from the other side — it computes a
+readable name from the file path and ident and writes it into its own expansion
+— so the span name no longer depends on what `#[server]` calls its generated fn.
+
+Superseded from the #511 addendum, item by item:
+
+- **Nothing writes the name into the source, and nothing checks it there.**
+  `Mode::Fix` for span names is gone; `cargo xtask check` no longer rewrites
+  anything under `web/src` (see ADR-0082's #714 amendments).
+- **The greppability payoff is deliberately given up.** #511 argued that landing
+  the derived name in the source let "an operator reading a span name still grep
+  for the literal". After #714 the literal exists only after macro expansion.
+  That is a real loss, accepted because a string nobody writes cannot drift.
+- **Presence is no longer a _reported_ failure — it is not representable.** A
+  `#[macros::server]` fn always carries the instrument attribute, so the "a
+  missing `#[tracing::instrument]` stays a reported failure" rule has nothing
+  left to report.
+- **`fields(…)`, `level`, `err`, and `ret` are rejected by the macro**, not
+  tolerated or allowlisted by the gate. #511 held `fields(…)` value expressions
+  to the recordable allowlist to close the `skip(email)` +
+  `fields(who = %email)` hole; the macro closes it by construction instead, so
+  the value-expression allowlist is deleted with it. The explicit-`level`
+  tolerance goes the same way — no site set one. Re-admitting `fields` means
+  re-admitting the value allowlist in the same change.
+- **The placement rule narrows the derivation's input.** #511 noted
+  `web/src/posts/api/listing.rs` yields `posts`, not `api`. #714 forbids that
+  file shape outright: every `#[server]` fn lives in `web/src/<vertical>/api.rs`
+  (ADR-0070), so the vertical is the only segment there is.
+
+What `server-fn-tracing` retains is the substance: the `RECORDABLE_TYPES`
+default-deny over every parameter, the nameless-parameter rule, and default-deny
+on any argument it does not model. It now reads `skip(…)`/`skip_all` from
+`#[macros::server(…)]`, since no `#[tracing::instrument]` survives in source.
+The macro's own key list is a second, independent default-deny, so adding a key
+there cannot silently widen what may be recorded.
+
+### `server_fn` as a log field is retired
+
+The structured error boundary emitted a `server_fn` field naming the failing
+function, taken from the `boundary!` label. It is deleted along with the label
+(`boundary!` itself is gone; `#[macros::server]` wraps every body in
+`crate::error::server_boundary` unconditionally). The field was redundant with
+span context and strictly less precise: the failure event is raised inside
+`web.<vertical>.<ident>`, whereas the bare label was the fn ident alone — which,
+after #684 shed the vertical nouns, is ambiguous across verticals (three
+`create`s).
+
+The redundancy is a property of both configured sinks, not a hope:
+
+- The JSON formatter renders current span and span list by default
+  (`display_current_span`/`display_span_list` are `true` —
+  `tracing-subscriber-0.3.23/src/fmt/format/json.rs:334-342`).
+- The plain-text `Format<Full>` walks `ctx.event_scope()` unconditionally
+  (`format/mod.rs:985-1000`) — no flag guards it.
+
+So no operator loses the function's identity on any sink. The other five fields
+(`error.kind`, `error.class`, `error.public`, `error.source`, `error.context`)
+are genuine per-failure data and are unchanged, as are the PII rules governing
+them. No event's existence or level changes; one duplicated field goes.

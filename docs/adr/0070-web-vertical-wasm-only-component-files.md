@@ -1,6 +1,9 @@
 # ADR-0070: web verticals split host/wasm at the file level — wasm-only `component.rs`
 
 - Status: accepted
+- Note: amended 2026-07-30 (#714) — a vertical's `#[server]` fns live in its
+  `api.rs` and never in a submodule; `timeline` gains `api.rs`/`server.rs`; see
+  the amendments under Decision points 1 and 5
 - Note: amended 2026-07-18 (#530) — `#[server]` endpoints and wire types move
   from `mod.rs` to `api.rs`; `mod.rs` is module wiring only
 - Note: amended 2026-07-18 (#527) — the shared leaf widgets (`avatar`, `icon`,
@@ -61,6 +64,25 @@ single crate.
      `#[cfg(feature = "server")]` support-import gate for the bodies. The
      `mod.rs` re-exports keep external call-site and registrar paths
      (`web::<vertical>::<Leaf>`) stable.
+
+     > **Amended (#714):** this is now a **placement rule**, not a habit — a
+     > vertical's `#[server]` fns live in its `api.rs` and **never in a
+     > submodule**. `#[macros::server]` derives the wire endpoint and the
+     > ADR-0011 span name from `(vertical, ident)` and hard-errors on any file
+     > that is not `web/src/<vertical>/api.rs`. The rule is what makes that pair
+     > a **primary key enforced by rustc**: the vertical is unique because it is
+     > a directory, and the ident is unique within it because Rust forbids two
+     > items of one name in one module. Without it the pair is a lossy
+     > projection — only the first segment under `web/src` is taken, so
+     > `posts/api.rs` and `posts/api/listing.rs` shared a vertical, and the
+     > compiler could not catch a same-named fn in both: a glob re-export lets
+     > one item silently shadow the other, so the pair compiles and the loser
+     > 404s (#358). The cost is real and stated rather than hidden — a vertical
+     > that outgrows one `api.rs` cannot split its server fns into submodules.
+     > The escape hatch is module-path derivation (`/posts/listing/<ident>`),
+     > which would be a deliberate URL change at that point rather than a silent
+     > collision. See ADR-0082.
+
    - `server.rs` — host-only support for the `#[server]` bodies, declared
      `#[cfg(feature = "server")] mod server;`.
    - `component.rs` — the `#[component]` UI and all browser-bound code, declared
@@ -97,6 +119,20 @@ single crate.
    > `render()` twin the projector calls, host-tested) + wasm-only
    > `component.rs` — and `ui/` is dissolved. Shared presentation leaves are
    > therefore top-level modules, not a `ui/` sub-tree.
+
+   > **Amended (#714):** `timeline` is no longer a **server-less** vertical. It
+   > gained `api.rs` (the five cursor-paginated timeline queries) and
+   > `server.rs` (their `fetch_*` helpers), completing the four-file layout
+   > point 1 prescribes. Its server-less state was **historical, not
+   > principled**: this point created `timeline` as one of the "new vertical
+   > dirs where none exists" when `pages/` dissolved, and the data-fetching
+   > simply stayed where it was — in `posts/api/listing.rs`, the one file that
+   > violated the placement rule above. The move deletes that file, and the
+   > `pub use listing::*;` glob that made shadowing possible with it, removing
+   > the mechanism rather than guarding it; the price is five wire URLs and five
+   > span names moving from `posts` to `timeline`. The wire types were never an
+   > obstacle: `TimelinePage` and `TimelinePostSummary` are defined in
+   > `common::seed` and merely **re-exported** through `posts`, not owned by it.
 
 6. **ADR-0055's retained principles carry forward unchanged**: pure,
    host-testable logic (validation, form/signal state of the `Field<T>` kind,

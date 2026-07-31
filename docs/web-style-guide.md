@@ -179,8 +179,18 @@ web/src/feature/
 ```
 
 A **server-less** vertical — one with no `#[server]` fns or wire types of its
-own (e.g. `timeline/`, which re-uses another vertical's DTOs) — omits `api.rs`
-too, keeping just `mod.rs` + its pure host-tested and/or wasm-only UI files.
+own (e.g. `cockpit/` and `home/`, which call other verticals' server fns) —
+omits `api.rs` too, keeping just `mod.rs` + its pure host-tested and/or
+wasm-only UI files.
+
+**A vertical's `#[server]` fns live in its `api.rs`, never in a submodule**
+(#714). `#[macros::server]` derives the wire endpoint and the span name from
+`(vertical, ident)` and hard-errors on any file that is not
+`web/src/<vertical>/api.rs` — which is what makes that pair a primary key
+**rustc** enforces, rather than one a gate checks. A vertical that outgrows one
+`api.rs` therefore cannot split its server fns out; see
+[ADR-0070](adr/0070-web-vertical-wasm-only-component-files.md) point 1 and
+[ADR-0082](adr/0082-server-fn-wire-namespace.md) for the escape hatch.
 
 `mod.rs` declares and re-exports — nothing else:
 
@@ -205,10 +215,27 @@ touches consumers. At the top of `api.rs`:
 use super::server::*;   // all server-only helpers come into scope here
 ```
 
-Every `#[server]` body is wrapped with `boundary!("function_name", { ... })`. No
-per-import `#[cfg(feature = "server")]` annotations appear inside function
-bodies — the `#[server]` proc-macro already cfg-gates bodies to SSR, and the
-single grouped import covers all server-only imports in one place.
+Server fns are declared `#[macros::server]` — spelled fully-qualified and never
+`use`d, so it cannot be mistaken for leptos's own `#[server]`. It derives the
+wire endpoint (`/<vertical>/<ident>`), the ADR-0011 span name
+(`web.<vertical>.<ident>`), and the error-boundary wrap around the body, so none
+of the three is written by hand:
+
+```rust
+#[macros::server(skip(name))]
+pub async fn rename(audience_id: AudienceId, name: AudienceName) -> WebResult<()> {
+    let user = require_auth().await?;
+    // ... full implementation here; no boundary wrapper to write
+    Ok(())
+}
+```
+
+It accepts `input = …` (forwarded to `#[server]`) and `skip(…)`/`skip_all`
+(forwarded to `#[tracing::instrument]`). `endpoint` and `name` are rejected —
+they are derived — as are `fields`, `level`, `err`, `ret`, and any unrecognized
+key. No per-import `#[cfg(feature = "server")]` annotations appear inside
+function bodies — the `#[server]` proc-macro already cfg-gates bodies to SSR,
+and the single grouped import covers all server-only imports in one place.
 
 `server.rs` is only created when the module has genuine private helpers worth
 naming (multi-step transactions, helpers shared across multiple server

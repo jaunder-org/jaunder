@@ -23,6 +23,13 @@
 > `#[cfg(feature = "server")]`, now grouped as the single support block in
 > `api.rs`.
 
+> **Further superseded (2026-07-30, #714):** the `boundary!` macro this ADR
+> introduced is **deleted**, and with it the hand-written label it took. Server
+> fns now carry `#[macros::server]`, which emits both attributes and wraps the
+> body in `crate::error::server_boundary` itself, so the boundary cannot be
+> omitted and there is no label to keep in sync. The section below is retained
+> as the record of why the wrapper existed, not as instruction.
+
 ## Context and Problem Statement
 
 Each feature module in `web/src/` (e.g. `auth.rs`, `posts.rs`, `profile.rs`)
@@ -100,7 +107,7 @@ Key properties:
   naming — complex helpers, multi-step transactions, tests. Small modules may
   not need one.
 
-### The `boundary!` Macro
+### The `boundary!` Macro (deleted 2026-07-30 by #714)
 
 The `web_server_fn!` macro previously handled cfg-gating (now redundant) and
 `server_boundary` wrapping (still needed for tracing and error context). It is
@@ -114,7 +121,9 @@ macro_rules! boundary {
 }
 ```
 
-Every `#[server]` body is wrapped with `boundary!("function_name", { ... })`.
+Every `#[server]` body **was** wrapped with
+`boundary!("function_name", { ... })` by hand. Since #714 the wrap is emitted by
+`#[macros::server]` and the label is gone.
 
 ### Auth Re-export Surface
 

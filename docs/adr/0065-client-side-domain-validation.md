@@ -107,10 +107,10 @@ pre-validation using the same newtype `FromStr` — never a re-implemented rule.
 - Typing a `#[server]` arg moves that value's validation into arg-**decode**: a
   malformed value (only reachable by a non-browser client, since the disabled
   button gates the browser) now fails _before_ the fn body — surfacing as a
-  generic transport/decode error and skipping the body's `boundary!` telemetry
-  and rejection metrics. Accepted: that's the defense-in-depth path, not the
-  user path. Args that stay `String` (secrets like `password`) still parse in
-  the body, so their rejection telemetry is unchanged.
+  generic transport/decode error and skipping the body's error-boundary
+  telemetry and rejection metrics. Accepted: that's the defense-in-depth path,
+  not the user path. Args that stay `String` (secrets like `password`) still
+  parse in the body, so their rejection telemetry is unchanged.
 - What this rules out: re-implementing a newtype's validation in the client;
   typing a wire arg **without** client pre-validation (which would expose the
   generic-error UX); and treating "localized" as i18n (out of scope).

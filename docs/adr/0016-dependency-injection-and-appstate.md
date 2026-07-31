@@ -181,20 +181,20 @@ load-correlated race that surfaced as flaky hydration timeouts. Server functions
 had only worked around this by an unwritten convention of reading context
 **before** any await; three fns that violated it were the bugs.
 
-**Resolution.** Every server-fn body routes through `server_boundary` (the
-`boundary!` macro). `server_boundary` now runs the body inside a
-`reactive_graph` `ScopedFuture` (`new_untracked`) **when an owner is current** —
-which holds a _strong_ owner reference (keeping the context alive) and
-re-applies it on each poll. This makes `expect_context` in a server function
-reliable **regardless of await ordering**, so the per-trait Leptos-context DI is
-sound as written, and the "read context first" convention is retired (its
-explanatory comments are corrected, not its code). The wrap is guarded on
-`Owner::current().is_some()`: `ScopedFuture::new_untracked` captures
-`Owner::current().unwrap_or_default()`, so wrapping with no current owner would
-capture an _empty_ owner and lose context deterministically — strictly worse
-than the race. The guarantee is proven by the deterministic `owner_lifetime`
-tests in `web/src/error.rs` (the mechanism, the fix, and the empty-owner trap),
-not by the flaky e2e.
+**Resolution.** Every server-fn body routes through `server_boundary` (then via
+the `boundary!` macro; since #714 via the wrap `#[macros::server]` emits).
+`server_boundary` now runs the body inside a `reactive_graph` `ScopedFuture`
+(`new_untracked`) **when an owner is current** — which holds a _strong_ owner
+reference (keeping the context alive) and re-applies it on each poll. This makes
+`expect_context` in a server function reliable **regardless of await ordering**,
+so the per-trait Leptos-context DI is sound as written, and the "read context
+first" convention is retired (its explanatory comments are corrected, not its
+code). The wrap is guarded on `Owner::current().is_some()`:
+`ScopedFuture::new_untracked` captures `Owner::current().unwrap_or_default()`,
+so wrapping with no current owner would capture an _empty_ owner and lose
+context deterministically — strictly worse than the race. The guarantee is
+proven by the deterministic `owner_lifetime` tests in `web/src/error.rs` (the
+mechanism, the fix, and the empty-owner trap), not by the flaky e2e.
 
 ## Addendum (2026-06-28): owner capture at the `Resource` layer (#124)
 
@@ -221,7 +221,7 @@ capturing the live owner and holding a strong ref across every poll, exactly
 create a `Resource` in `web`; a static guard (clippy `disallowed-methods` if it
 binds, else a scanning test) fails the gate on any raw `Resource::new` in
 `web/src`, so the wrapper is non-optional with **zero per-handler boilerplate**
-— server fns keep `boundary!` + `expect_context` unchanged. Proven by
+— server fns keep their error boundary + `expect_context` unchanged. Proven by
 deterministic `owner_lifetime`-style tests (context survives an owner strong-ref
 drop before first poll via `server_resource`; the raw constructor loses it), not
 by the flaky e2e. `Action::new` is assessed for the same exposure and given a
@@ -250,7 +250,7 @@ for the future's lifetime: at entry it walks `Owner::current()` to the root via
 keeps the resulting handles alive alongside the `ScopedFuture`. With the whole
 ancestry pinned, every post-await reactive-context read resolves — **independent
 of read ordering**, so server-fn bodies need no read-before-await discipline and
-keep `boundary!` + `expect_context` unchanged (**zero per-handler
+keep their error boundary + `expect_context` unchanged (**zero per-handler
 boilerplate**). This _eliminates_ the post-await-read failure class structurally
 rather than policing it with a lint. Proven by deterministic `owner_lifetime`
 tests (`server_boundary_keeps_ancestor_context_alive_across_await` is red before
