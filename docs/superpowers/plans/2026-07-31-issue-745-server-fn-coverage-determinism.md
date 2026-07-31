@@ -940,7 +940,7 @@ git commit -m "docs(coverage): record the compared/evidence split and correct #7
 - Consumes: the spec's Problem section.
 - Produces: nothing.
 
-- [ ] **Step 1: Comment on #745**
+- [x] **Step 1: Comment on #745**
 
 Post the corrected mechanism before the PR merges (spec AC12), stating:
 
