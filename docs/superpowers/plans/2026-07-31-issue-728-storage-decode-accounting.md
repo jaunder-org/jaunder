@@ -30,8 +30,9 @@ resilience or `go_live_pass`'s `last_tick` handling (spec D9).
       tuple; see spec D7 (`expect_used` is denied workspace-wide)
 - [x] **T3** — `posts.rs` decodes `FeedPath` per-row, keeping skip-on-corrupt
       (A4, D9)
-- [ ] **T4** — Gate: `category` + duplicate-key check (A8, D6)
-- [ ] **T5** — Gate: derive self-check (A1a)
+- [x] **T4** — Gate: `category` + duplicate-key check (A8, D6) — plus the
+      `deferred-newtype` category, whose reason must name an issue
+- [x] **T5** — Gate: derive self-check (A1a)
 - [ ] **T6** — _rebase onto #746_ — **blocking stop**
 - [ ] **T7** — `TargetKind` adopts `TextEnum`; `get_post_audiences` decodes it
       (A7) — needs T6
@@ -41,8 +42,9 @@ resilience or `go_live_pass`'s `last_tick` handling (spec D9).
       — needs T6, T8
 - [ ] **T10** — Gate: struct-literal field-position rule + peel set (A2) — needs
       **T9**
-- [ ] **T11** — Gate inventory: run under the new rule, record the raw site list
-      — needs T6
+- [x] **T11** — Gate inventory: run under the new rule, record the raw site list
+      — **ran early, pre-#746; 129 sites, stop-and-report fired. See "T11
+      result" below. Re-run after T9/T10 for the final number.**
 - [ ] **T12** — Gate: approve-set + `APPROVED_FOREIGN` + `ALLOWLIST` (A1, A1b,
       A3, A12) — needs T11
 - [ ] **T13** — Module doc + ADR-0085 amendment (A10, D8) — needs T12
@@ -408,6 +410,38 @@ with its target.
 **Done when:** the real entry count is known and written down. If it materially
 exceeds the spec's ~39 estimate, stop and report before proceeding — that is a
 signal the rule is over-biting, not a licence to write 150 entries.
+
+### T11 result (run 2026-07-31, pre-#746, probe reverted)
+
+**129 sites — the stop-and-report condition fired.** The rule is over-biting,
+and the inventory says exactly how. Only ~36 of the 129 are genuine primitives.
+
+| Cause                                                                                                                                                      | Sites | Verdict                      |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- | ---------------------------- |
+| Composite row targets treated as leaves — `PostRow` ×21, `SessionRow`/`UserRow`/`InviteRow`/`MediaRow`/`CacheTuple`/`UserRecordParts` ×~14                 | ~35   | **Spec gap — see below**     |
+| fn-return rule 3 over-bite — `Result<Vec<FeedEventRecord>,_>` ×13, `Result<Option<SmtpConfig>,_>` ×4, `Result<Vec<ColumnInfo>,_>` ×3, `sqlx::Result<_>` ×4 | ~24   | Bigger than D2a assumed      |
+| `DateTime<Utc>` in various wrappers                                                                                                                        | ~22   | One `APPROVED_FOREIGN` entry |
+| Enums bridged by `impl_text_column_enum!` not a derive — `PostFormat`, `MediaSource`                                                                       | ~3    | **Dissolves with #746**      |
+| Genuine primitives — `String` 18, `bool` 11, `&str` 2, `(String,)` 3, `(String,String)` 1                                                                  | ~36   | Real allowlist entries       |
+
+**Spec gap found (blocks T12).** D1 says "every **leaf** type must be approved",
+but a `#[derive(FromRow)]` struct or a tuple alias is **not a leaf** — it is a
+composite whose fields/elements the gate _already polices separately_
+(`visit_item_struct`, `visit_item_type`). Approving it by delegation is not a
+loophole: every part is still checked, at the declaration, which is where the
+newtype belongs. Without this, `PostRow` alone costs 21 meaningless entries and
+the allowlist becomes mostly noise.
+
+**D2a is understated.** The fn-return over-bite is ~24 sites, not the one or two
+named. The `smtp.rs` and `test_support.rs` ones are `SiteConfigStorage::get`,
+not row reads at all; the `feed_events` and `ColumnInfo` ones are the
+struct-literal sites T9/T10 remove. So the residue after T7–T10 is small, but
+the ordering is now load-bearing rather than tidy: **T12 cannot be sized until
+T9 and T10 have landed.**
+
+**Confirms the #746 dependency is load-bearing**, not bookkeeping: `PostFormat`
+and `MediaSource` are flagged today purely because their bridge comes from a
+macro invocation rather than a derive.
 
 ---
 
