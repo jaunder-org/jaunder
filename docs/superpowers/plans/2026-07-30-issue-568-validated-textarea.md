@@ -559,7 +559,7 @@ specifically `posts.spec.ts:36` (create with a summary), `:63` (over-long
 summary shows inline error and gates submit), `:81` (clearing a summary on edit
 persists as empty).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit** — `bfc75508`
 
 ```bash
 git add web/src/posts/component.rs end2end/tests/selectors.ts end2end/tests/posts.spec.ts end2end/tests/posts.ts
@@ -580,7 +580,7 @@ git commit -m "refactor(web/posts): adopt ValidatedTextarea for the three summar
   `common::bio::Bio`, `common::display_name::DisplayName`.
 - Produces: nothing consumed downstream.
 
-- [ ] **Step 1: Replace the form markup**
+- [x] **Step 1: Replace the form markup**
 
 Inside the `Ok(data)` arm, the returned `view!` currently renders a `<p>`
 username line, a hand-wired `display_name` `<label>`+`<input>`+error, a
@@ -625,7 +625,8 @@ the resource-seeding `.set(...)` calls (`:34-41`) are all unchanged. Import
 `ValidatedInput` and `ValidatedTextarea` from `crate::forms` alongside the
 existing `Field` import (`:2`).
 
-- [ ] **Step 2: Verify the old chrome is gone**
+- [x] **Step 2: Verify the old chrome is gone** — two hits, both in
+      `DefaultPostFormatControl`; no `error_for`
 
 Run: `rg -n 'j-field-label|j-field-val|error_for' web/src/profile/component.rs`
 Expected: **two hits, both inside `DefaultPostFormatControl`** (its label and
@@ -633,7 +634,7 @@ its `<select>`), and **no** `error_for` — both fields now route through the
 widgets. (Line numbers shift when Step 1 rewrites ~90 lines above them; check
 the count and location, not the numbers.)
 
-- [ ] **Step 3: Run the profile e2e**
+- [x] **Step 3: Run the profile e2e** — 7 passed
 
 Run: `devtool run -- cargo xtask e2e-local profile.spec.ts` Expected: PASS — all
 six field tests: `:13`, `:34`, `:53` (display name) and `:82`, `:104`, `:151`

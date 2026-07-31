@@ -1,5 +1,5 @@
 use crate::error::WebError;
-use crate::forms::Field;
+use crate::forms::{Field, ValidatedInput, ValidatedTextarea};
 use crate::topbar::Topbar;
 use common::bio::Bio;
 use common::display_name::DisplayName;
@@ -51,58 +51,35 @@ pub fn ProfilePage() -> impl IntoView {
                                 // resource; a stored display name is always valid, so the
                                 // optional field stays valid.
                                 view! {
-                                    <p>"Username: " {data.username.to_string()}</p>
-                                    <label>
-                                        "Display Name"
-                                        <input
-                                            type="text"
-                                            name="display_name"
-                                            prop:value=dn_field.value
-                                            on:input=move |ev| {
-                                                let v = event_target_value(&ev);
-                                                dn_field.value.set(v.clone());
-                                                dn_field.error.set(dn_field.error_for(&v));
-                                            }
-                                            on:blur=move |_| dn_field.touch()
-                                        />
-                                    </label>
-                                    {move || {
-                                        dn_field
-                                            .is_touched()
-                                            .then(|| dn_field.error.get())
-                                            .flatten()
-                                            .map(|msg| view! { <p class="error">{msg}</p> })
-                                    }}
-                                    <label>
-                                        "Bio"
-                                        <textarea
-                                            name="bio"
-                                            prop:value=bio_field.value
-                                            on:input=move |ev| {
-                                                let v = event_target_value(&ev);
-                                                bio_field.value.set(v.clone());
-                                                bio_field.error.set(bio_field.error_for(&v));
-                                            }
-                                            on:blur=move |_| bio_field.touch()
-                                        />
-                                    </label>
-                                    {move || {
-                                        bio_field
-                                            .is_touched()
-                                            .then(|| bio_field.error.get())
-                                            .flatten()
-                                            .map(|msg| view! { <p class="error">{msg}</p> })
-                                    }}
-                                    <button
-                                        type="button"
-                                        class="j-btn is-primary"
-                                        prop:disabled=move || {
-                                            !dn_field.is_valid() || !bio_field.is_valid()
-                                        }
-                                        on:click=submit
-                                    >
-                                        "Update Profile"
-                                    </button>
+                                    <div class="j-card">
+                                        <div class="j-card-head">
+                                            <div>
+                                                <h2>"Profile"</h2>
+                                                <div class="j-sub">"Your display name and bio."</div>
+                                            </div>
+                                        </div>
+                                        <div class="j-form-body">
+                                            <p>"Username: " {data.username.to_string()}</p>
+                                            <ValidatedInput<
+                                            DisplayName,
+                                        > label="Display Name" name="display_name" field=dn_field />
+                                            <ValidatedTextarea<
+                                            Bio,
+                                        > label="Bio" name="bio" field=bio_field />
+                                        </div>
+                                        <div class="j-form-actions">
+                                            <button
+                                                type="button"
+                                                class="j-btn is-primary"
+                                                prop:disabled=move || {
+                                                    !dn_field.is_valid() || !bio_field.is_valid()
+                                                }
+                                                on:click=submit
+                                            >
+                                                "Update Profile"
+                                            </button>
+                                        </div>
+                                    </div>
                                     <DefaultPostFormatControl />
                                 }
                                     .into_any()
