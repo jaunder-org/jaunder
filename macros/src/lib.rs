@@ -315,7 +315,7 @@ pub fn sqlx_bridge_derive(item: TokenStream) -> TokenStream {
 /// author keeps the non-uniform derives (`VariantArray`, `EnumMessage`, `Default`, …) and
 /// `serialize_all`. `strum` does all the actual token/`Display`/`FromStr` work.
 ///
-/// # It must be the item's first attribute
+/// # It must be the item's first *active* attribute
 ///
 /// An attribute macro only receives the attributes written **below** it; anything above
 /// has already been expanded and stripped. So a uniform derive written above this
@@ -323,11 +323,22 @@ pub fn sqlx_bridge_derive(item: TokenStream) -> TokenStream {
 /// `E0119` (conflicting implementations) or `E0592` (duplicate definitions). Put
 /// `#[text_enum(…)]` first and that cannot happen.
 ///
-/// # The adopting crate must depend on `strum`
+/// A `///` doc comment above it is fine, and is how the adopting enums are written: doc
+/// attributes are inert, so they neither expand nor collide — they simply stack onto the
+/// enum along with the injected derives.
 ///
-/// The injected derives are emitted as `::strum::…`, so `strum` must be a dependency of
-/// the crate under exactly that name. Without it the error is "cannot find derive macro
-/// in this scope", which does not point back here.
+/// # The adopting crate must depend on `strum` and `serde`
+///
+/// The injected derives are emitted as `::strum::…` and the serde bridge as `::serde::…`,
+/// so both must be dependencies of the crate under exactly those names. The serde bridge
+/// is unconditional — there is no opt-out — because every closed string enum in this repo
+/// either crosses the wire already or is one field away from doing so. Without the
+/// dependencies the error is "cannot find derive macro in this scope" or an unresolved
+/// `::serde` path, neither of which points back here.
+///
+/// The generated error type is always `pub`, regardless of the enum's own visibility: it
+/// is registered by name across crate boundaries (`host`'s `validation_from!`), so a
+/// private one would be useless.
 #[proc_macro_attribute]
 pub fn text_enum(attr: TokenStream, item: TokenStream) -> TokenStream {
     let item = proc_macro2::TokenStream::from(item);
@@ -417,22 +428,31 @@ mod tests {
         assert!(require_newtype_shape(&input, "StrNewtype", "struct X(String)").is_ok());
     }
 
+    /// Asserts the rejection *and* that its message names the macro — deliberately
+    /// stronger than `require_newtype_shape`'s tests above, which assert only `is_err()`
+    /// and so would pass on an anonymous diagnostic.
+    fn assert_rejected_naming_macro(input: &DeriveInput) {
+        let err = require_enum_shape(input, "text_enum", "enum X { A }")
+            .expect_err("this shape must be rejected");
+        assert!(
+            err.to_string().contains("text_enum"),
+            "the diagnostic must name the macro, got: {err}"
+        );
+    }
+
     #[test]
     fn require_enum_shape_rejects_a_struct() {
-        let input: DeriveInput = parse_quote! { struct S(String); };
-        assert!(require_enum_shape(&input, "text_enum", "enum X { A }").is_err());
+        assert_rejected_naming_macro(&parse_quote! { struct S(String); });
     }
 
     #[test]
     fn require_enum_shape_rejects_a_non_unit_variant() {
-        let input: DeriveInput = parse_quote! { enum X { A(u8) } };
-        assert!(require_enum_shape(&input, "text_enum", "enum X { A }").is_err());
+        assert_rejected_naming_macro(&parse_quote! { enum X { A(u8) } });
     }
 
     #[test]
     fn require_enum_shape_rejects_a_generic_enum() {
-        let input: DeriveInput = parse_quote! { enum X<T> { A(T) } };
-        assert!(require_enum_shape(&input, "text_enum", "enum X { A }").is_err());
+        assert_rejected_naming_macro(&parse_quote! { enum X<T> { A(T) } });
     }
 
     #[test]

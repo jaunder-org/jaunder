@@ -105,7 +105,7 @@ fn injected_derives(input: &DeriveInput) -> TokenStream {
                 .ok()
         })
         .flatten()
-        .filter_map(|p| p.segments.last().map(|s| s.ident.to_string()))
+        .filter_map(|p| strum_derive_name(&p))
         .collect();
 
     let missing = UNIFORM_DERIVES
@@ -121,6 +121,31 @@ fn injected_derives(input: &DeriveInput) -> TokenStream {
         quote! {}
     } else {
         quote! { #[derive(#(#missing),*)] }
+    }
+}
+
+/// The derive's name **if it could plausibly be strum's** — a bare `Display`, or a path
+/// ending `strum::Display`. `None` for anything else.
+///
+/// Matching the last segment alone would be wrong: an author's
+/// `#[derive(derive_more::Display)]` would silently suppress `::strum::Display`, and the
+/// enum would quietly lose the token `Display` this macro exists to guarantee. Declining
+/// to suppress instead lets the real conflict surface as a duplicate-impl error, which
+/// is loud and points at the two derives that actually clash.
+///
+/// A bare `Display` still suppresses, because `use strum::Display` makes that spelling
+/// legitimate and nothing here can tell the two apart.
+fn strum_derive_name(path: &Path) -> Option<String> {
+    let last = path.segments.last()?.ident.to_string();
+    let qualifier = path
+        .segments
+        .len()
+        .checked_sub(2)
+        .map(|i| &path.segments[i]);
+    match qualifier {
+        None => Some(last),
+        Some(q) if q.ident == "strum" => Some(last),
+        Some(_) => None,
     }
 }
 
@@ -306,12 +331,7 @@ fn parse_opts(attr: TokenStream) -> syn::Result<Opts> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sqlx_bridge::tests::norm;
-
-    /// Same normalization for a literal needle written in source form.
-    fn norm_s(s: &str) -> String {
-        s.chars().filter(|c| !c.is_whitespace()).collect()
-    }
+    use crate::sqlx_bridge::tests::{norm, norm_s};
 
     /// Parse `attr` and `item` from source text and run the expansion.
     fn expand_str(attr: &str, item: &str) -> TokenStream {
@@ -474,6 +494,29 @@ mod tests {
         ));
         assert!(out.contains("::strum::VariantArray"));
         assert!(out.contains("serialize_all=\"snake_case\""));
+    }
+
+    #[test]
+    fn a_same_named_derive_from_another_crate_does_not_suppress_strums() {
+        // `derive_more::Display` is not strum's; suppressing on the last segment alone
+        // would silently drop the token `Display` this macro exists to guarantee.
+        let out = norm(&expand_str(
+            r#"error = InvalidX, message = "b""#,
+            "#[derive(derive_more::Display)] pub enum X { A }",
+        ));
+        assert!(
+            out.contains(&norm_s("::strum::Display")),
+            "strum's Display must still be injected"
+        );
+    }
+
+    #[test]
+    fn a_strum_qualified_derive_does_suppress() {
+        let out = norm(&expand_str(
+            r#"error = InvalidX, message = "b""#,
+            "#[derive(strum::Display)] pub enum X { A }",
+        ));
+        assert!(!out.contains(&norm_s("::strum::Display")));
     }
 
     #[test]

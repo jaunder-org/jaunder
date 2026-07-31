@@ -8,7 +8,7 @@
 Supersedes ADR-0074 (`StrEnum` derive — the standard string-enum trailer), now
 `Status: superseded`.
 
-Amended by #746 in four places, marked inline below: the per-enum derive list is
+Amended by #746 in five places, marked inline below: the per-enum derive list is
 now one `#[text_enum]` attribute
 (`docs/adr/drafts/text-enum-closed-string-enum-convention.md`). The core
 decision — `strum` owns the token mapping, `Display`, `FromStr`, and variant
@@ -66,6 +66,13 @@ by #572's shared `FormatToggle`).
 - The named error is a `thiserror` unit struct
   (`#[derive(… Error)] #[error("…")]`), matching the repo's existing convention
   (`InvalidBackupSchedule`, `common/backup.rs`).
+
+  > _Amended by #746._ Still a **unit struct**, but no longer `thiserror`:
+  > `#[text_enum]` generates it with a hand-written `Display` + `Error`, as
+  > `NumNewtype`'s error already did, so an adopting crate needs no dependency
+  > beyond the `strum` the injected derives require. The observable shape is
+  > unchanged, which is what `host`'s `validation_from!` depends on.
+
 - serde routes through an owned-`String` proxy
   (`#[serde(into = "String", try_from = "String")]` + `From`/`TryFrom` impls)
   where an enum crosses the `serde_qs` **form-transport** boundary (server-fn

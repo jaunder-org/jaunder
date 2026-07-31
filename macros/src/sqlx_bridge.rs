@@ -111,10 +111,12 @@ pub(crate) mod tests {
     /// Whitespace-stripped rendering, so assertions survive `TokenStream`'s spacing.
     /// Note: this also strips spaces *inside* string literals.
     pub(crate) fn norm(t: &TokenStream) -> String {
-        t.to_string()
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect()
+        norm_s(&t.to_string())
+    }
+
+    /// [`norm`] for a needle written in source form.
+    pub(crate) fn norm_s(s: &str) -> String {
+        s.chars().filter(|c| !c.is_whitespace()).collect()
     }
 
     fn spec_for(name: &syn::Ident) -> BridgeSpec<'_> {

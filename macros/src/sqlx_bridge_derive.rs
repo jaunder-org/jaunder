@@ -50,7 +50,11 @@ mod tests {
         assert!(out.contains("::sqlx::Type<DB>forRenderedHtml"));
         assert!(out.contains("::sqlx::Encode<'q,DB>forRenderedHtml"));
         assert!(out.contains("::sqlx::Decode<'r,DB>forRenderedHtml"));
+        // Bare `From` is in the list deliberately: it subsumes `FromStr`/`TryFrom` and
+        // catches any inbound constructor spelling, which is the whole point of this
+        // derive existing separately from `StrNewtype`.
         for forbidden in [
+            "From",
             "FromStr",
             "TryFrom",
             "Deserialize",
@@ -60,7 +64,6 @@ mod tests {
         ] {
             assert!(!out.contains(forbidden), "{forbidden} must not be emitted");
         }
-        assert!(!out.contains("From<::std::string::String>forRenderedHtml"));
     }
 
     #[test]
