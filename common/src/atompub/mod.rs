@@ -3,10 +3,12 @@
 //! This module models `AtomPub` entities **independently of any CMS or storage
 //! layer** — it deals only in plain data (strings, enums, small structs). The
 //! mapping between these wire types and Jaunder's `Post`/`Media` records lives
-//! at a boundary in the `server` crate, not here. The intent is that this
-//! module could later be contributed upstream to `atom_syndication` or
-//! extracted as a standalone `atompub` crate without dragging Jaunder types
-//! along.
+//! at a boundary in the `server` crate, not here.
+//!
+//! The Atom documents themselves are `atom_syndication`'s to read and write
+//! (see [`entry`]). What this module still serializes by hand is the part of
+//! RFC 5023 that is *not* Atom: the service document, the categories document,
+//! and RSD — none of which upstream models.
 
 mod xml;
 
@@ -60,21 +62,9 @@ impl From<atom_syndication::Error> for AtomPubError {
     }
 }
 
-impl From<std::io::Error> for AtomPubError {
-    fn from(e: std::io::Error) -> Self {
-        AtomPubError::Malformed(e.to_string())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn io_error_converts_to_malformed() {
-        let err: AtomPubError = std::io::Error::other("boom").into();
-        assert!(matches!(err, AtomPubError::Malformed(msg) if msg.contains("boom")));
-    }
 
     #[test]
     fn atom_error_converts_to_malformed() {

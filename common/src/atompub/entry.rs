@@ -1,16 +1,22 @@
-//! Standalone Atom entry (`<entry>`) read/write for `AtomPub`.
+//! Standalone Atom entry (`<entry>`) and collection `<feed>` read/write for `AtomPub`.
 //!
-//! The data model is `atom_syndication::Entry` — a complete, public Atom entry
-//! struct. We do **not** reuse `atom_syndication`'s XML I/O, because its
-//! entry-level read/write traits are crate-private; it can only handle whole
-//! `<feed>` documents, while `AtomPub` exchanges *standalone* `<entry>` documents
-//! (POST to create, PUT to edit, GET a member). So the XML reading and writing
-//! is done here with `quick-xml`, populating and reading the canonical
-//! `atom_syndication::Entry`.
+//! The data model *and* the XML I/O are `atom_syndication`'s: `Entry::read_from`
+//! and `Entry::write_to` handle the standalone `<entry>` documents `AtomPub`
+//! exchanges (POST to create, PUT to edit, GET a member), and `Feed::write_to`
+//! handles the collection. Bare-entry I/O was crate-private until
+//! `atom_syndication` 0.12.10, which is why this module once carried its own
+//! `quick-xml` reader and writers.
 //!
-//! The one piece `atom_syndication` does not model first-class is the Atom
-//! Publishing Protocol control element `app:control/app:draft`; it is stored in
-//! the entry's extension map and accessed via [`is_draft`] / [`set_draft`].
+//! What remains here is what upstream does not model: the Atom Publishing
+//! Protocol control element `app:control/app:draft` (RFC 5023 §B) and jaunder's
+//! own `j:slug` (ADR-0023), both stored in the entry's extension map and reached
+//! through [`is_draft`] / [`set_draft`] / [`j_slug`] / [`set_j_slug`] — plus the
+//! two wire structs, [`FeedMeta`] and [`MediaLinkEntry`], that describe documents
+//! assembled from more than one Atom element.
+//!
+//! Each marker helper also owns its namespace prefix in `Entry::namespaces`,
+//! because that map is what the writer turns into `xmlns:*` declarations: a
+//! prefix is declared exactly while the marker it labels is present.
 
 use std::collections::BTreeMap;
 
