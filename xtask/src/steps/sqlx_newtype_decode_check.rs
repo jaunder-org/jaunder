@@ -89,6 +89,110 @@ use crate::result::{CommandResult, StepResult};
 /// Source root scanned recursively for `.rs` files.
 const POLICED_ROOT: &str = "storage/src";
 
+/// The derive crate whose `#[proc_macro_derive]`s this gate must account for.
+const MACROS_LIB: &str = "macros/src/lib.rs";
+
+/// Derives that emit the shared sqlx bridge (`macros/src/sqlx_bridge.rs::bridge`), so a
+/// type carrying one is a legitimate decode target.
+///
+/// **This is the gate's model of the newtype families, and a wrong model fails closed** —
+/// a family missing here means every decode into those types is unrecognised, so the gate
+/// bites rather than waving them through. That is the whole reason reading *declaration*
+/// spellings is legitimate under ADR-0085 while reading *violation* spellings is not: an
+/// incomplete approval detector is loud, an incomplete violation detector is silent.
+///
+/// Failing closed is safe but noisy — a forgotten family would produce dozens of confusing
+/// failures at once. [`derive_enumeration_problems`] turns that into a single clear message.
+const BRIDGE_DERIVES: &[&str] = &["StrNewtype", "IdNewtype", "NumNewtype"];
+
+/// Derives in the same crate that deliberately emit **no** sqlx bridge, and why.
+///
+/// Empty today — every derive in `macros/` is a newtype family. It exists so that adding a
+/// non-bridge derive is a deliberate one-line statement rather than a silent omission.
+const NON_BRIDGE_DERIVES: &[(&str, &str)] = &[];
+
+/// Every `#[proc_macro_derive(Name)]` declared in `source`, or the parse error.
+///
+/// Deliberately **not** "which derives reach `sqlx_bridge::bridge()`". That is not a
+/// property `syn` can decide: the call is two hops deep through a module-shadowing local
+/// function, and for `StrNewtype` it is conditional on the derive's own attributes
+/// (`no_sqlx` / `secret` suppress it), so "reaches `bridge()`" is not static at all.
+/// Enumerating the declarations and forcing each into one of two lists gets the same
+/// guarantee from something that can actually be read.
+fn declared_derives(source: &str) -> Result<Vec<String>, String> {
+    let file = syn::parse_file(source).map_err(|e| format!("cannot parse as Rust: {e}"))?;
+    let mut out = Vec::new();
+    for item in &file.items {
+        let syn::Item::Fn(f) = item else { continue };
+        for attr in &f.attrs {
+            if !attr.path().is_ident("proc_macro_derive") {
+                continue;
+            }
+            // `#[proc_macro_derive(Name)]` or `#[proc_macro_derive(Name, attributes(..))]`
+            // — the derive's name is the first ident in the list either way.
+            if let Ok(list) = attr.meta.require_list() {
+                if let Some(name) = list.tokens.clone().into_iter().find_map(|t| match t {
+                    proc_macro2::TokenTree::Ident(i) => Some(i.to_string()),
+                    _ => None,
+                }) {
+                    out.push(name);
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Failures where the gate's derive lists and the derive crate disagree, in either
+/// direction.
+///
+/// A derive the gate has never heard of is the dangerous case (its types silently stop
+/// being approved); a listed derive that no longer exists is the stale case (the model has
+/// drifted). Both are one clear message here instead of a scatter of decode failures.
+fn derive_enumeration_problems(source: &str) -> Vec<String> {
+    let declared = match declared_derives(source) {
+        Ok(d) => d,
+        Err(e) => {
+            return vec![format!(
+                "{MACROS_LIB}: {e} — this gate's approved-type set is derived from the derives \
+                 declared here, so a file it cannot parse silently shrinks what it approves."
+            )]
+        }
+    };
+    let mut lines = Vec::new();
+    for name in &declared {
+        let known = BRIDGE_DERIVES.contains(&name.as_str())
+            || NON_BRIDGE_DERIVES.iter().any(|(n, _)| n == name);
+        if !known {
+            lines.push(format!(
+                "{MACROS_LIB}: `#[derive({name})]` is declared but this gate does not know it. If \
+                 it emits the sqlx bridge, add it to BRIDGE_DERIVES so types carrying it are \
+                 approved decode targets; if it does not, add it to NON_BRIDGE_DERIVES with a \
+                 reason. Leaving it out is not neutral — every decode into a `{name}` type would \
+                 fail as unrecognised."
+            ));
+        }
+    }
+    for name in BRIDGE_DERIVES {
+        if !declared.iter().any(|d| d == name) {
+            lines.push(format!(
+                "{MACROS_LIB}: BRIDGE_DERIVES lists `{name}`, which is no longer declared there. \
+                 Delete it — a stale entry means this gate is approving types on the strength of \
+                 a derive that does not exist."
+            ));
+        }
+    }
+    for (name, _) in NON_BRIDGE_DERIVES {
+        if !declared.iter().any(|d| d == name) {
+            lines.push(format!(
+                "{MACROS_LIB}: NON_BRIDGE_DERIVES lists `{name}`, which is no longer declared \
+                 there. Delete it."
+            ));
+        }
+    }
+    lines
+}
+
 /// A decode exempt from the guard, keyed by (file, function, target, what) — all
 /// reflow-stable, none positional — plus how many identical sites that key covers.
 ///
@@ -724,6 +828,17 @@ pub fn run(result: &mut CommandResult) {
         }
     }
 
+    // The derive crate is read the same way and fails the same way: this gate's model of
+    // the newtype families comes from it, so a file it cannot read is a model it cannot
+    // check.
+    match std::fs::read_to_string(MACROS_LIB) {
+        Ok(s) => unreadable.extend(derive_enumeration_problems(&s)),
+        Err(e) => unreadable.push(format!(
+            "{MACROS_LIB}: cannot read: {e} — this gate's approved-type set is derived from the \
+             derives declared there, so it fails rather than assuming its own list is current."
+        )),
+    }
+
     let detail = match (problems(&scanned), unreadable.is_empty()) {
         (None, true) => {
             result.push(StepResult::ok("sqlx-newtype-decode"));
@@ -1031,6 +1146,72 @@ mod tests {
         let detail = problems(&[("storage/src/broken.rs".to_string(), "fn f( {{{".to_string())])
             .expect("an unparsed file must fail");
         assert!(detail.contains("invisible to this gate"), "{detail}");
+    }
+
+    // ---- the gate's model of the derive crate polices itself ----
+
+    /// A derive crate declaring exactly `names`.
+    fn macros_lib(names: &[&str]) -> String {
+        names
+            .iter()
+            .map(|n| {
+                format!("#[proc_macro_derive({n}, attributes(x))]\npub fn f(item: TokenStream) -> TokenStream {{ item }}\n")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_shipped_derive_list_matches_the_macros_crate() {
+        // The real enforcement is in `run`, which reads macros/src/lib.rs on every gate
+        // invocation. Pinning the current three here means a drift shows up as a message
+        // about the derive list rather than as thirty unrelated decode failures.
+        assert!(
+            derive_enumeration_problems(&macros_lib(BRIDGE_DERIVES)).is_empty(),
+            "{:?}",
+            derive_enumeration_problems(&macros_lib(BRIDGE_DERIVES))
+        );
+    }
+
+    #[test]
+    fn a_derive_the_gate_has_never_heard_of_is_one_clear_failure() {
+        // #746's `TextEnum` arrives exactly this way. Failing closed is correct but noisy;
+        // this message is what makes the cause obvious.
+        let src = macros_lib(&["StrNewtype", "IdNewtype", "NumNewtype", "TextEnum"]);
+        let problems = derive_enumeration_problems(&src);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("TextEnum"), "{problems:?}");
+        assert!(
+            problems[0].contains("BRIDGE_DERIVES"),
+            "the message must name the fix: {problems:?}"
+        );
+    }
+
+    #[test]
+    fn a_listed_derive_that_no_longer_exists_is_a_failure() {
+        // The stale direction: the gate would otherwise keep approving types on the
+        // strength of a derive that has been deleted.
+        let src = macros_lib(&["StrNewtype", "IdNewtype"]);
+        let problems = derive_enumeration_problems(&src);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("NumNewtype"), "{problems:?}");
+    }
+
+    #[test]
+    fn an_unparseable_derive_crate_is_a_failure_not_a_skip() {
+        let problems = derive_enumeration_problems("pub fn f( {{{");
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("silently shrinks"), "{problems:?}");
+    }
+
+    #[test]
+    fn derive_names_are_read_from_both_attribute_spellings() {
+        // `#[proc_macro_derive(IdNewtype)]` has no `attributes(..)` trailer; the name is
+        // the first ident either way.
+        let src = "#[proc_macro_derive(IdNewtype)]\npub fn a(i: TokenStream) -> TokenStream { i }\n\
+                   #[proc_macro_derive(StrNewtype, attributes(str_newtype))]\npub fn b(i: TokenStream) -> TokenStream { i }\n";
+        let mut got = declared_derives(src).expect("parses");
+        got.sort();
+        assert_eq!(got, vec!["IdNewtype".to_string(), "StrNewtype".to_string()]);
     }
 
     // ---- the allowlist polices itself ----
