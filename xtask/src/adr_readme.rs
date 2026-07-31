@@ -21,14 +21,20 @@ pub const ADR_DIR: &str = "docs/adr";
 pub const BEGIN: &str = "<!-- adr-table:begin -->";
 pub const END: &str = "<!-- adr-table:end -->";
 
-/// The recognized ADR status tokens (the canonical status cell is exactly one).
-pub const STATUS_VOCAB: [&str; 5] = [
-    "proposed",
-    "accepted",
-    "superseded",
-    "deprecated",
-    "rejected",
-];
+/// The status tokens legal on a **numbered** ADR (the canonical status cell is
+/// exactly one of these).
+///
+/// `proposed` is absent by design: numbering is the acceptance event, so a numbered
+/// ADR has been accepted. A *draft* may still say `proposed` — drafts are invisible
+/// to this gate (numberless, and in a subdirectory `adr_files` never descends into),
+/// and `adr promote` rewrites the token as it assigns the number.
+///
+/// There is deliberately no five-token constant alongside this one. Nothing ever
+/// validated a draft in code, so the draft vocabulary lives where it is actually
+/// consulted — `docs/adr/template.md` and the `jaunder-adr` skill. Keeping a wider
+/// set here would also make the out-of-vocabulary message below advertise
+/// `proposed` as legal while the rule above rejects it.
+const NUMBERED_STATUS_VOCAB: [&str; 4] = ["accepted", "superseded", "deprecated", "rejected"];
 
 /// An ADR file projected to its table-relevant fields. `title` is the heading
 /// text with the `ADR-NNNN:` / `NNNN.` prefix stripped (used only to seed a new
@@ -104,18 +110,71 @@ fn heading_title(content: &str) -> String {
     after.to_string()
 }
 
-/// The single status token from a `- Status: <token>` line (leniently, also a
-/// bare `Status:` line), or `""` when none is found.
+/// The status token a draft carries until promotion numbers it, and the token
+/// promotion writes in its place. Spelled once here because the gate, the table
+/// projection and `adr promote`'s rewrite all test against them.
+pub(crate) const PROPOSED: &str = "proposed";
+pub(crate) const ACCEPTED: &str = "accepted";
+
+/// An ADR's status line, located once for every consumer.
+pub(crate) struct StatusLine<'a> {
+    /// Byte span of the line within the document, excluding its terminator — so a
+    /// rewriter can splice a replacement in without recomputing where the line
+    /// starts, and the gate can quote the line verbatim.
+    pub span: std::ops::Range<usize>,
+    /// The trimmed remainder after the `- Status:` / `Status:` prefix, returned
+    /// **whole** rather than pre-split: the gate must keep rejecting
+    /// `- Status: accepted (superseded)` for carrying more than one token, and a
+    /// helper that yielded only the first token would silently drop that rule. An
+    /// empty remainder (`- Status:` with nothing after it) is `Some` with `rest`
+    /// empty, so the gate reports "not a single token" rather than "missing".
+    pub rest: &'a str,
+    /// Whether the line is in canonical form — `- Status:` at column 0. Locating a
+    /// non-canonical line is deliberate (so the rewrite and the gate always agree
+    /// on *which* line is the status line, even a misindented one), but accepting
+    /// it is not: `adr-format` requires the canonical spelling, exactly as it did
+    /// before the parses were unified.
+    pub canonical: bool,
+}
+
+/// Locate `content`'s status line: the first line whose `trim_start` begins
+/// `- Status:` or a bare `Status:`.
+///
+/// The single home of "which line is the status line, and what does it say" — the
+/// `adr-format` gate, the table projection, and `adr promote`'s status rewrite all
+/// read it here, so they cannot disagree. They previously disagreed: this parse
+/// tolerated indentation and the bare form, while the gate matched only a column-0
+/// `- Status:`. A rewrite that picked a different line than the gate would emit a
+/// promoted ADR that instantly fails `adr-format`.
+///
+/// Locating leniently and *judging* strictly is the point: agreement on the line is
+/// a parsing concern, canonical spelling is a policy one, and [`StatusLine`] hands
+/// each consumer the part it owns.
+pub(crate) fn status_line(content: &str) -> Option<StatusLine<'_>> {
+    let mut offset = 0;
+    for line in content.split_inclusive('\n') {
+        let bare = line.strip_suffix('\n').unwrap_or(line);
+        let bare = bare.strip_suffix('\r').unwrap_or(bare);
+        let trimmed = bare.trim_start();
+        if let Some(rest) = trimmed
+            .strip_prefix("- Status:")
+            .or_else(|| trimmed.strip_prefix("Status:"))
+        {
+            return Some(StatusLine {
+                span: offset..offset + bare.len(),
+                rest: rest.trim(),
+                canonical: bare.starts_with("- Status:"),
+            });
+        }
+        offset += line.len();
+    }
+    None
+}
+
+/// The single status token from the status line, or `""` when there is none.
 fn status_token(content: &str) -> String {
-    let line = content
-        .lines()
-        .map(str::trim_start)
-        .find(|l| l.starts_with("- Status:") || l.starts_with("Status:"))
-        .unwrap_or("");
-    line.trim_start_matches("- Status:")
-        .trim_start_matches("Status:")
-        .split_whitespace()
-        .next()
+    status_line(content)
+        .and_then(|s| s.rest.split_whitespace().next())
         .unwrap_or("")
         .to_string()
 }
@@ -292,8 +351,9 @@ pub fn sync_readme() -> StepResult {
 
 /// The `adr-format` problems for one ADR file: the line-1 heading must be
 /// `# ADR-NNNN: <nonempty>` with `NNNN` matching the filename number, and a
-/// `- Status: <token>` line must exist with a single token from [`STATUS_VOCAB`]
-/// and nothing trailing. `filename`/`num` come from the directory entry.
+/// `- Status: <token>` line must exist with a single token from
+/// [`NUMBERED_STATUS_VOCAB`] and nothing trailing. `filename`/`num` come from the
+/// directory entry.
 fn file_format_problems(filename: &str, num: u32, content: &str) -> Vec<String> {
     let mut problems = Vec::new();
 
@@ -308,18 +368,33 @@ fn file_format_problems(filename: &str, num: u32, content: &str) -> Vec<String> 
         )),
     }
 
-    match content.lines().find(|l| l.starts_with("- Status:")) {
+    match status_line(content) {
         None => problems.push(format!("{filename}: missing a `- Status: <token>` line")),
-        Some(l) => {
-            let rest = l.strip_prefix("- Status:").unwrap_or("").trim();
+        // A non-canonical line is located but not tolerated. Unifying the parse was
+        // about the gate and the rewrite agreeing on *which* line; it must not
+        // quietly widen what the gate accepts, which before the unification was a
+        // column-0 `- Status:` and nothing else.
+        Some(status) if !status.canonical => problems.push(format!(
+            "{filename}: status line must be `- Status: <token>` at column 0 (found `{}`)",
+            &content[status.span]
+        )),
+        Some(status) => {
+            let rest = status.rest;
             let tokens: Vec<&str> = rest.split_whitespace().collect();
             if tokens.len() != 1 {
                 problems.push(format!(
                     "{filename}: `- Status:` must be a single token with nothing trailing (found `{rest}`)"
                 ));
-            } else if !STATUS_VOCAB.contains(&tokens[0]) {
+            } else if tokens[0] == PROPOSED {
+                // Special-cased ahead of the membership check so the diagnosis names
+                // the fix rather than a list the reader has to reason about.
                 problems.push(format!(
-                    "{filename}: status `{}` is not one of {STATUS_VOCAB:?}",
+                    "{filename}: status is `proposed`, but numbering is the acceptance \
+                     event — a decision still under consideration belongs in docs/adr/drafts/"
+                ));
+            } else if !NUMBERED_STATUS_VOCAB.contains(&tokens[0]) {
+                problems.push(format!(
+                    "{filename}: status `{}` is not one of {NUMBERED_STATUS_VOCAB:?}",
                     tokens[0]
                 ));
             }
@@ -431,6 +506,71 @@ mod tests {
     }
 
     #[test]
+    fn status_line_spans_the_line_and_judges_canonicity() {
+        // `(span-as-text, rest, canonical)` — asserting on the sliced span rather
+        // than raw offsets keeps expectations readable and still pins the span.
+        fn parsed(content: &str) -> Option<(&str, &str, bool)> {
+            status_line(content).map(|s| (&content[s.span], s.rest, s.canonical))
+        }
+
+        // Indentation and the bare `Status:` form are THE discriminating cases:
+        // they are the only two spellings where the old gate parse (column-0
+        // `- Status:` only) and the old `status_token` parse disagreed. Trailing
+        // whitespace is *not* discriminating — the gate already trimmed — so an
+        // implementation that only handled it would pass a weaker test than this.
+        assert_eq!(
+            parsed("# T\n\n- Status: accepted\n"),
+            Some(("- Status: accepted", "accepted", true))
+        );
+        // Located, but NOT canonical: the rewrite still finds these, the gate still
+        // rejects them. Separating the two judgements is the whole point.
+        assert_eq!(
+            parsed("# T\n\n  - Status: accepted\n"),
+            Some(("  - Status: accepted", "accepted", false))
+        );
+        assert_eq!(
+            parsed("# T\n\nStatus: superseded\n"),
+            Some(("Status: superseded", "superseded", false))
+        );
+        // Remainder returned whole, so the gate can still count tokens.
+        assert_eq!(
+            parsed("# T\n\n- Status: a (b)\n"),
+            Some(("- Status: a (b)", "a (b)", true))
+        );
+        // Empty remainder is Some(""), not None — "not a single token", not "missing".
+        assert_eq!(parsed("# T\n\n- Status:\n"), Some(("- Status:", "", true)));
+        // The span excludes the terminator, including a CRLF's `\r`.
+        assert_eq!(
+            parsed("# T\r\n\r\n- Status: accepted\r\n"),
+            Some(("- Status: accepted", "accepted", true))
+        );
+        // Unterminated final line.
+        assert_eq!(
+            parsed("# T\n\n- Status: accepted"),
+            Some(("- Status: accepted", "accepted", true))
+        );
+        assert_eq!(parsed("# T\n\nno status\n"), None);
+    }
+
+    #[test]
+    fn file_format_problems_rejects_a_non_canonical_status_line() {
+        // Unifying the parse must not widen what the gate accepts. Before the
+        // unification an indented or bare-`Status:` line was reported (as a missing
+        // status line); it must still be reported, or the refactor smuggled in a
+        // loosening. Teeth: delete the `canonical` arm and both of these go green.
+        for body in [
+            "# ADR-0007: Auth\n\n  - Status: accepted\n",
+            "# ADR-0007: Auth\n\nStatus: accepted\n",
+        ] {
+            let problems = file_format_problems("0007-a.md", 7, body);
+            assert!(
+                problems.iter().any(|p| p.contains("at column 0")),
+                "{body:?} -> {problems:?}"
+            );
+        }
+    }
+
+    #[test]
     fn status_token_reads_list_and_bare_forms() {
         assert_eq!(
             status_token("# T\n\n- Status: accepted\n- Note: x\n"),
@@ -518,6 +658,46 @@ mod tests {
         }];
         // The preserved title is the curated one, so desired == current: a no-op.
         assert_eq!(resolved_rows(&entries, &existing), existing);
+    }
+
+    #[test]
+    fn file_format_problems_rejects_proposed_on_a_numbered_adr() {
+        // The message must name the remedy (the drafts pen), not just the rule —
+        // "proposed is illegal" without "put it in drafts/" tells the reader what
+        // they may not do and nothing about what they should.
+        let problems =
+            file_format_problems("0007-a.md", 7, "# ADR-0007: Auth\n\n- Status: proposed\n");
+        assert!(
+            problems.iter().any(|p| p.contains("docs/adr/drafts/")),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
+    fn file_format_problems_accepts_every_numbered_token() {
+        for token in NUMBERED_STATUS_VOCAB {
+            let body = format!("# ADR-0007: Auth\n\n- Status: {token}\n");
+            let problems = file_format_problems("0007-a.md", 7, &body);
+            assert!(problems.is_empty(), "{token}: {problems:?}");
+        }
+    }
+
+    #[test]
+    fn out_of_vocab_message_no_longer_advertises_proposed() {
+        // Teeth: with the old five-token constant this message rendered `"proposed"`
+        // verbatim (it formats the vocab with `{:?}`), so a numbered ADR would be
+        // told `proposed` is legal by this rule while the rule above rejected it.
+        // Restore STATUS_VOCAB here and this fails.
+        let problems =
+            file_format_problems("0007-a.md", 7, "# ADR-0007: Auth\n\n- Status: accpeted\n");
+        assert!(
+            problems.iter().any(|p| p.contains("not one of")),
+            "{problems:?}"
+        );
+        assert!(
+            !problems.iter().any(|p| p.contains("\"proposed\"")),
+            "{problems:?}"
+        );
     }
 
     #[test]

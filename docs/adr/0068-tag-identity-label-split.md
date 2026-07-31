@@ -1,6 +1,6 @@
 # ADR-0068: A domain value with a canonical identity and a preserved label is two newtypes, not one
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-14
 - Issue: [#409](https://github.com/jaunder-org/jaunder/issues/409)
 

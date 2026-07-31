@@ -1,6 +1,6 @@
 # ADR-0066: Guard the server-fn test registrar with an xtask check
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-13
 - Issue: [#426](https://github.com/jaunder-org/jaunder/issues/426)
 

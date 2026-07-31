@@ -1,6 +1,6 @@
 # ADR-0065: Typed `#[server]` wire args with client-side pre-validation via the shared newtype
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-12
 - Issue: [#414](https://github.com/jaunder-org/jaunder/issues/414)
 - Note: amended 2026-07-30 (#568) — the coverage boundary is re-pointed at

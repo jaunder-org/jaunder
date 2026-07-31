@@ -128,16 +128,20 @@ draft by its `docs/adr/drafts/<slug>.md` path. See
 
 At ship, after the final rebase onto `main`, run `cargo xtask adr promote` (via
 `devtool run -- …`): for each draft it assigns the next free number, moves it to
-`docs/adr/NNNN-<slug>.md`, rewrites its path-form references, syncs the README
-table, and stages the result — so the number is assigned as late as possible and
-the ADR's first appearance in git history is already collision-free. If a
-collision still surfaces between that commit and the merge, re-rebase, re-run,
-and **amend the commit that introduced the ADR** — never a fixup commit.
+`docs/adr/NNNN-<slug>.md`, rewrites its path-form references, records its
+acceptance in the status line, syncs the README table, and stages the result —
+so the number is assigned as late as possible and the ADR's first appearance in
+git history is already collision-free. If a collision still surfaces between
+that commit and the merge, re-rebase, re-run, and **amend the commit that
+introduced the ADR** — never a fixup commit.
 
 ADRs are `docs/adr/NNNN-slug.md` with a canonical `# ADR-NNNN: <title>` heading
-and a single-token `- Status: <token>` line (one of
-proposed/accepted/superseded/deprecated/rejected). They are indexed in the table
-in `docs/README.md`, whose number, link, and status cells are **generated** from
+and a single-token `- Status: <token>` line. A **numbered** ADR carries one of
+accepted/superseded/deprecated/rejected — never `proposed`, because numbering
+_is_ the acceptance event: a decision still under consideration has no number
+and lives in `docs/adr/drafts/`, and `adr promote` rewrites a draft's `proposed`
+to `accepted` as it assigns the number. They are indexed in the table in
+`docs/README.md`, whose number, link, and status cells are **generated** from
 `docs/adr/`: the `adr-format` and `adr-readme-parity` steps of
 `cargo xtask check`/`validate` fail on a non-canonical heading/status or a table
 that has drifted from the directory (recovery: `cargo xtask adr sync-readme`,

@@ -2,8 +2,11 @@
 //! `identifier-collisions`:
 //!
 //! - **`adr-format`** — every `docs/adr/NNNN-*.md` matches the canonical heading
-//!   (`# ADR-NNNN: <title>`) and status (`- Status: <token>`) style. Logically
-//!   upstream of parity: a malformed ADR can't be projected into a table row.
+//!   (`# ADR-NNNN: <title>`) and status (`- Status: <token>`) style, with the
+//!   token one of `NUMBERED_STATUS_VOCAB`. `proposed` is rejected outright: a
+//!   numbered ADR has been accepted by construction, so a decision still under
+//!   consideration belongs in `docs/adr/drafts/`. Logically upstream of parity: a
+//!   malformed ADR can't be projected into a table row.
 //! - **`adr-readme-parity`** — the README table's number/link/status cells and
 //!   row set match `docs/adr/`. Titles are hand-owned and not compared.
 //!

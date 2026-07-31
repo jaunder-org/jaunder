@@ -1,6 +1,6 @@
 # ADR-0072: Timestamps cross the web boundary as a `UtcInstant` newtype (chrono is already in the wasm bundle)
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-19
 - Issue: [#91](https://github.com/jaunder-org/jaunder/issues/91)
 

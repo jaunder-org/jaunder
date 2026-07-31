@@ -90,17 +90,17 @@ convention). See the Status column below for each ADR's current status.
 | [0060](adr/0060-web-invalidator-revalidation-idiom.md)             | web revalidation goes through the `Invalidator` primitive, not `action.version()`                            | accepted   |
 | [0061](adr/0061-web-keyed-list-reactive-store.md)                  | Web keyed lists render via a reactive Store, patch-fed                                                       | accepted   |
 | [0062](adr/0062-macros-crate-proc-macro-home.md)                   | A `macros` crate as the workspace's proc-macro home                                                          | accepted   |
-| [0063](adr/0063-domain-value-newtype-convention.md)                | Domain-value newtypes — when to introduce one, and the standard trailer                                      | proposed   |
+| [0063](adr/0063-domain-value-newtype-convention.md)                | Domain-value newtypes — when to introduce one, and the standard trailer                                      | accepted   |
 | [0064](adr/0064-backup-target-auto-derivation.md)                  | Backup target set auto-derived from the live schema; restore defers FK checks                                | accepted   |
-| [0065](adr/0065-client-side-domain-validation.md)                  | Typed `#[server]` wire args with client-side pre-validation via the shared newtype                           | proposed   |
-| [0066](adr/0066-server-fn-test-registrar-guard.md)                 | Guard the server-fn test registrar with an xtask check                                                       | proposed   |
+| [0065](adr/0065-client-side-domain-validation.md)                  | Typed `#[server]` wire args with client-side pre-validation via the shared newtype                           | accepted   |
+| [0066](adr/0066-server-fn-test-registrar-guard.md)                 | Guard the server-fn test registrar with an xtask check                                                       | accepted   |
 | [0067](adr/0067-server-integration-tests-one-binary.md)            | Server integration tests are one binary                                                                      | accepted   |
-| [0068](adr/0068-tag-identity-label-split.md)                       | A domain value with a canonical identity and a preserved label is two newtypes, not one                      | proposed   |
+| [0068](adr/0068-tag-identity-label-split.md)                       | A domain value with a canonical identity and a preserved label is two newtypes, not one                      | accepted   |
 | [0069](adr/0069-client-crate-wasm-only-home.md)                    | `client` crate — the wasm-only browser-infrastructure home                                                   | accepted   |
 | [0070](adr/0070-web-vertical-wasm-only-component-files.md)         | web verticals split host/wasm at the file level — wasm-only `component.rs`                                   | accepted   |
 | [0071](adr/0071-sqlx-string-newtype-bridge.md)                     | Transparent sqlx bridge for domain newtypes                                                                  | accepted   |
-| [0072](adr/0072-timestamps-cross-boundary-as-utcinstant.md)        | Timestamps cross the web boundary as a `UtcInstant` newtype (chrono is already in the wasm bundle)           | proposed   |
-| [0073](adr/0073-url-crate-for-absolute-url-normalization.md)       | The `url` crate is the sanctioned absolute-URL normalizer, and it enters the `common`/wasm graph             | proposed   |
+| [0072](adr/0072-timestamps-cross-boundary-as-utcinstant.md)        | Timestamps cross the web boundary as a `UtcInstant` newtype (chrono is already in the wasm bundle)           | accepted   |
+| [0073](adr/0073-url-crate-for-absolute-url-normalization.md)       | The `url` crate is the sanctioned absolute-URL normalizer, and it enters the `common`/wasm graph             | accepted   |
 | [0074](adr/0074-str-enum-trailer.md)                               | `StrEnum` derive — the standard string-enum trailer                                                          | superseded |
 | [0075](adr/0075-adopt-strum-retire-str-enum.md)                    | Adopt `strum` for closed string enums; retire the bespoke `StrEnum` derive                                   | accepted   |
 | [0076](adr/0076-no-full-load-spa-navigation.md)                    | No in-app full document loads; `~`-prefixed SPA user namespace                                               | accepted   |
@@ -108,13 +108,14 @@ convention). See the Status column below for each ADR's current status.
 | [0078](adr/0078-reactive-store-domain-newtype-fields.md)           | Domain newtypes in reactive-store rows via the `Patch` derive's `#[patch]` escape hatch                      | accepted   |
 | [0079](adr/0079-rendered-html-sanitization.md)                     | `RenderedHtml` carries a sanitization invariant, via two named doors                                         | accepted   |
 | [0080](adr/0080-media-path-naming-correspondence.md)               | Media path naming — one layout, percent-encoded, URL-identical on disk                                       | accepted   |
-| [0081](adr/0081-empirical-server-fn-flow-coverage.md)              | Server-fn flow coverage is derived from e2e traces, not asserted                                             | proposed   |
-| [0082](adr/0082-server-fn-wire-namespace.md)                       | Server-fn wire URLs are `/api/<vertical>/<op>`, derived and macro-written                                    | proposed   |
+| [0081](adr/0081-empirical-server-fn-flow-coverage.md)              | Server-fn flow coverage is derived from e2e traces, not asserted                                             | accepted   |
+| [0082](adr/0082-server-fn-wire-namespace.md)                       | Server-fn wire URLs are `/api/<vertical>/<op>`, derived and macro-written                                    | accepted   |
 | [0083](adr/0083-reactive-paint-fold.md)                            | Reactive components paint from a host-tested decision fold                                                   | accepted   |
-| [0084](adr/0084-media-filename-encoded-canonical.md)               | Media filename — the encoded form is canonical, with a proffered inbound twin                                | proposed   |
-| [0085](adr/0085-static-type-safety-gates-enumerate.md)             | Static type-safety gates enumerate, they do not search                                                       | proposed   |
-| [0086](adr/0086-enforced-thin-component-budget.md)                 | Component thinness is enforced, not assumed                                                                  | proposed   |
+| [0084](adr/0084-media-filename-encoded-canonical.md)               | Media filename — the encoded form is canonical, with a proffered inbound twin                                | accepted   |
+| [0085](adr/0085-static-type-safety-gates-enumerate.md)             | Static type-safety gates enumerate, they do not search                                                       | accepted   |
+| [0086](adr/0086-enforced-thin-component-budget.md)                 | Component thinness is enforced, not assumed                                                                  | accepted   |
 | [0087](adr/0087-xtask-github-pr-observation.md)                    | xtask observes the CI/merge system, with `gh` as its transport                                               | accepted   |
+| [0088](adr/0088-promotion-is-the-acceptance-event.md)              | Promotion is the acceptance event                                                                            | accepted   |
 
 <!-- adr-table:end -->
 
