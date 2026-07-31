@@ -484,11 +484,11 @@ mod tests {
 
     /// The ADR-0011 span must be in scope when the boundary logs a failure.
     ///
-    /// This is the premise of #714: the `boundary!` label is redundant *because*
-    /// the enclosing `#[tracing::instrument]` span already names the failing fn on
-    /// the very same event — and more precisely, since a bare ident like `create`
-    /// is ambiguous across verticals. If this ever fails, the label carries
-    /// information the span does not and deleting it loses observability.
+    /// This was the premise of #714, which deleted the `boundary!` label: it was
+    /// redundant *because* the enclosing `#[tracing::instrument]` span already names
+    /// the failing fn on the very same event — and more precisely, since a bare
+    /// ident like `create` is ambiguous across verticals. If this ever fails, that
+    /// premise is gone and the deletion cost observability.
     ///
     /// Deliberately uses a hand-written `#[tracing::instrument]` rather than
     /// `#[macros::server]`: the property under test is `tracing`'s, not the macro's,

@@ -2,7 +2,8 @@
 //! `email` verification, `password_reset`). Extracted to avoid copy-pasting the
 //! same base-URL guard and timed-send-with-metrics block into every vertical.
 //!
-//! These run inside a `boundary!` block, so they propagate the domain
+//! These run inside the `error::server_boundary` wrapper `#[macros::server]` emits
+//! around every server-fn body, so they propagate the domain
 //! [`InternalError`] (converted to the public `WebError` at the boundary), not
 //! `WebError` directly.
 

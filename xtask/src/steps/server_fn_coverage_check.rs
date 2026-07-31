@@ -164,20 +164,20 @@ pub fn verify_after_combo(result: &mut CommandResult, backend: &str, browser: &s
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::retired_server_fn;
 
     /// The vertical the fixture tree writes its fns in.
     const VERTICAL: &str = "posts";
 
-    /// A `web/src`-shaped tree with one `#[server]` fn per ident given, all in the
-    /// [`VERTICAL`] vertical — a fn at the crate root has no vertical, so its
+    /// A `web/src`-shaped tree with one `#[macros::server]` fn per ident given, all
+    /// in the [`VERTICAL`] vertical — a fn at the crate root has no vertical, so its
     /// coverage key would be a degenerate `::<ident>` and pin nothing about the
-    /// real artifacts. The endpoints are the `<vertical>/<ident>` the gate derives.
+    /// real artifacts. The endpoints are the `<vertical>/<ident>` the gate derives
+    /// from that placement.
     fn web_src_with(dir: &Path, idents: &[&str]) {
         let src: String = idents
             .iter()
-            .map(|i| {
-                format!("#[server(endpoint = \"/{VERTICAL}/{i}\")]\npub async fn {i}() {{}}\n")
-            })
+            .map(|i| format!("#[macros::server]\npub async fn {i}() {{}}\n"))
             .collect();
         let vertical = dir.join(VERTICAL);
         std::fs::create_dir_all(&vertical).expect("create the vertical's dir");
@@ -574,6 +574,23 @@ mod tests {
         .unwrap_err();
         let chain = format!("{err:#}");
         assert!(chain.contains("nonexistent"), "{chain}");
-        assert!(chain.contains("#[server]"), "{chain}");
+        assert!(chain.contains("#[macros::server]"), "{chain}");
+    }
+
+    #[test]
+    fn a_fn_in_the_retired_spelling_is_not_in_the_inventory() {
+        // #714 narrowed the shared enumerator to `#[macros::server]`. An inventory
+        // that silently dropped every fn would make the whole gate vacuous, which is
+        // why `enumeration_of_web_src_matches_the_registrar` (in the registrar gate)
+        // asserts the real tree still enumerates; here we only pin the narrowing.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let vertical = tmp.path().join(VERTICAL);
+        std::fs::create_dir_all(&vertical).expect("create the vertical's dir");
+        std::fs::write(
+            vertical.join("api.rs"),
+            retired_server_fn("(endpoint = \"/posts/create\")", "pub async fn create() {}"),
+        )
+        .expect("write source");
+        assert!(inventory(tmp.path()).expect("inventory scans").is_empty());
     }
 }
