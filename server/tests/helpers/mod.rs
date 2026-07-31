@@ -89,6 +89,20 @@ pub fn ensure_server_fns_registered() {
     });
 }
 
+/// How many `#[server]` fns the list above registers.
+///
+/// Kept beside that list deliberately — a `macro_rules!` that both registered and
+/// counted would hide the `register_explicit::<…>()` calls inside a token stream,
+/// and `server_fn_registrar_check` finds them by parsing this file with `syn`. It
+/// would then enumerate **zero** entries and pass, which is the fail-open this
+/// whole area exists to prevent.
+///
+/// So the chain is: the registrar gate proves this list covers every `#[server]`
+/// fn in `web/src`; this constant tracks the list; and
+/// `server_fn_wire::every_server_fn_path_is_api_vertical_ident_and_distinct`
+/// checks itself against the constant. Each link is short enough to keep honest.
+pub const REGISTERED_SERVER_FN_COUNT: usize = 55;
+
 /// Returns a `PathBuf` pointing to a temporary directory usable as a storage
 /// root.  The caller is responsible for keeping the `TempDir` alive; this
 /// function returns the inner path for convenience when lifetime management is

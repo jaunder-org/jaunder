@@ -397,6 +397,15 @@ scope; no such layer exists in the tree and writing one is part of the task.
    server-side span"), and rule 1 is being deleted. Neither AC-19's e2e nor the
    coverage gate would fail on a missing span (see AC-10's masking note).
 
+   **DELIVERED by real capture evidence rather than a synthetic test.** The e2e
+   regeneration (AC-19) produced a seed carrying all five `web.timeline.list_*`
+   span names and all five `/api/timeline/list_*` URIs, with no stale
+   `web.posts.list_*` remnant — 54 distinct span names from a real
+   browser-driven run. That is stronger than driving one fn in-process: it shows
+   the derived names reach real traces for every exercised fn, and it proves the
+   emission **order** transitively, since a wrongly-ordered attribute pair would
+   yield no span at all. AC-9's seed cross-check asserts it programmatically.
+
    **Span-name coverage is deliberately weaker than AC-4's, and this records
    why.** There is no all-55 equivalent available: once the macro emits the
    name, it is in no source file for xtask to read, and `ServerFn` exposes
