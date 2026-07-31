@@ -190,8 +190,9 @@ dependencies = [
 
 [[package]]
 name = "atom_syndication"
-version = "0.12.8"
-source = "git+https://github.com/jaunder-org/atom.git?rev=2462e3798295047ba35078b9634bcd129e887ffe#2462e3798295047ba35078b9634bcd129e887ffe"
+version = "0.12.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d48d93a31c932d58b9fd68664a904ae5b74bea37f06c5f68d5bec92f0cdd106d"
 dependencies = [
  "chrono",
  "derive_builder",
@@ -3568,8 +3569,9 @@ dependencies = [
 
 [[package]]
 name = "rss"
-version = "2.0.13"
-source = "git+https://github.com/jaunder-org/rss.git?rev=60b2a81445160af85ab94a23774c74e6616decfe#60b2a81445160af85ab94a23774c74e6616decfe"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc13570823abc675c60d7837f1fe7daaf18dd181a3cacb3c6ba7a062eef581c0"
 dependencies = [
  "atom_syndication",
  "derive_builder",
