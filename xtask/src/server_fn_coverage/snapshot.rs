@@ -25,8 +25,8 @@
 //! **No provenance fields.** The snapshot records coverage and nothing else — no
 //! commit, no timestamp. A recorded commit is necessarily an ancestor of the
 //! commit under test, so with fail-on-any-difference the gate would be red
-//! forever. Keys are ordered and rendering is stable, so an unchanged run is
-//! byte-identical and drift comparison can be total.
+//! forever. Every collection is `BTreeMap`/`BTreeSet` and rendering is stable,
+//! so an unchanged run is byte-identical and drift comparison can be total.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -48,11 +48,17 @@ pub const REGENERATE_CMD: &str = "cargo xtask server-fn-coverage regenerate";
 /// the same way.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Snapshot {
-    /// The `<vertical>::<ident>` names driven by at least one e2e flow, sorted.
+    /// The `<vertical>::<ident>` names driven by at least one e2e flow.
     ///
     /// A *set*, not a map to test titles, because the set is what [`verdict`]
     /// asserts and the set is what reproduces. The titles live in [`Evidence`].
-    pub covered: Vec<String>,
+    ///
+    /// `BTreeSet` rather than `Vec` so sortedness and uniqueness are properties
+    /// of the type rather than of every construction site — it serializes to the
+    /// same JSON array, and the artifact is byte-compared, so an unsorted or
+    /// duplicated `Vec` would have been a drift failure diagnosed as coverage
+    /// drift.
+    pub covered: BTreeSet<String>,
     /// `<vertical>::<ident>` → the distinct reasons its unattributed hits ended
     /// with. Reported, not failed: a non-empty bucket means the harness stopped
     /// attributing somewhere, which is worth seeing — and the reason is what makes
@@ -88,8 +94,6 @@ impl Coverage {
     pub fn split(self) -> (Snapshot, Evidence) {
         (
             Snapshot {
-                // `BTreeMap` keys already iterate in sorted order, so this is a
-                // move into a `Vec` that happens to be sorted, not a re-sort.
                 covered: self.covered.keys().cloned().collect(),
                 orphans: self.orphans,
             },
@@ -125,9 +129,9 @@ pub struct AllowlistEntry {
 /// That is the exact false verdict this gate exists to prevent, so the error
 /// propagates.
 pub fn render<T: Serialize>(value: &T) -> Result<String> {
-    // `BTreeMap`/`BTreeSet` serialize in key order and `covered` is sorted on
-    // construction, so `to_string_pretty` — itself deterministic — renders equal
-    // values byte-identically.
+    // Every collection in both artifacts is a `BTreeMap`/`BTreeSet`, so they
+    // serialize in key order, and `to_string_pretty` is itself deterministic —
+    // equal values render byte-identically without anyone remembering to sort.
     let mut out = serde_json::to_string_pretty(value)
         .context("serializing the server-fn coverage artifact")?;
     out.push('\n');
@@ -215,7 +219,7 @@ pub fn verdict(
         // compares the computed endpoint against URIs observed in a real captured
         // run — ground truth produced by the macro's actual expansion, not a second
         // restatement of the rule.
-        let covered = snapshot.covered.iter().any(|c| c == &qualified);
+        let covered = snapshot.covered.contains(&qualified);
         let entry = allowed.get(qualified.as_str());
 
         match (covered, entry) {
@@ -294,11 +298,7 @@ mod tests {
 
     fn covered_with(idents: &[&str]) -> Snapshot {
         Snapshot {
-            covered: {
-                let mut names: Vec<String> = idents.iter().map(|i| qual(i)).collect();
-                names.sort();
-                names
-            },
+            covered: idents.iter().map(|i| qual(i)).collect(),
             orphans: BTreeMap::new(),
         }
     }
@@ -389,12 +389,16 @@ mod tests {
     #[test]
     fn the_runs_disagree_only_in_the_evidence() {
         // The complement: prove the difference asserted above is real and lands
-        // entirely in the uncompared artifact.
+        // entirely in the uncompared artifact. Pairwise, not just [0] vs [1] —
+        // otherwise two of the three fixtures could be evidence-identical and
+        // this would still pass, leaving the third carrying no weight.
         let evidence: Vec<String> = [RUN_A, RUN_B, RUN_C]
             .iter()
             .map(|raw| render(&run_coverage(raw).split().1).expect("renders"))
             .collect();
         assert_ne!(evidence[0], evidence[1]);
+        assert_ne!(evidence[1], evidence[2]);
+        assert_ne!(evidence[0], evidence[2]);
     }
 
     fn evidence_of(names: &[&str]) -> Evidence {
@@ -453,7 +457,7 @@ mod tests {
         // the `_autoPerfSpan` warmup has an orphan entry and no covered entry, and
         // requiring evidence for it would demand titles that do not exist.
         let s = Snapshot {
-            covered: vec!["posts::create".to_string()],
+            covered: BTreeSet::from(["posts::create".to_string()]),
             orphans: BTreeMap::from([(
                 "auth::get_session".to_string(),
                 BTreeSet::from(["unknown-parent:1111111111111111".to_string()]),
@@ -477,12 +481,22 @@ mod tests {
         .expect("the committed evidence parses");
         let v = evidence_verdict(&snapshot, &evidence);
         assert!(v.is_empty(), "committed artifacts disagree: {v:?}");
+
+        // AC1 against the REAL artifact, not only a synthetic fixture: the shape
+        // guard is worthless if it is never pointed at the file that could
+        // actually acquire a title.
+        for name in &snapshot.covered {
+            assert!(
+                is_qualified(name),
+                "the committed snapshot holds a non-qualified name: {name}"
+            );
+        }
     }
 
     #[test]
     fn split_puts_names_in_the_snapshot_and_titles_in_the_evidence() {
         let (s, e) = coverage_of(&[("posts::create", &["a test"])]).split();
-        assert_eq!(s.covered, vec!["posts::create".to_string()]);
+        assert_eq!(s.covered, BTreeSet::from(["posts::create".to_string()]));
         assert_eq!(
             e.covered.get("posts::create").expect("key present"),
             &BTreeSet::from(["a test".to_string()])
@@ -515,11 +529,11 @@ mod tests {
         assert!(!is_qualified("posts::"));
     }
 
-    #[test]
-    fn split_orders_snapshot_names_regardless_of_insertion_order() {
-        let (s, _) = coverage_of(&[("z::fn", &["t"]), ("a::fn", &["t"])]).split();
-        assert_eq!(s.covered, vec!["a::fn".to_string(), "z::fn".to_string()]);
-    }
+    // There was a `split_orders_snapshot_names_regardless_of_insertion_order`
+    // test here while `Snapshot.covered` was a `Vec`. `BTreeSet` makes ordering a
+    // property of the type, so the test policed nothing the compiler did not
+    // already guarantee. `render_is_byte_stable_across_equal_values` still pins
+    // the property that actually matters to a byte-compared artifact.
 
     #[test]
     fn render_is_byte_stable_across_equal_values() {
@@ -654,7 +668,7 @@ mod tests {
             })
             .collect();
         let snapshot = Snapshot {
-            covered: vec!["posts::create".to_string()],
+            covered: BTreeSet::from(["posts::create".to_string()]),
             orphans: BTreeMap::new(),
         };
 

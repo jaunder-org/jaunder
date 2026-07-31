@@ -85,6 +85,15 @@ pub fn coverage_from_capture(tarball: &Path, inventory: &[ServerFn]) -> Result<C
 
 /// The committed snapshot, or an error naming the remedy when it is absent.
 pub fn read_snapshot(path: &Path) -> Result<Snapshot> {
+    read_artifact(path)
+}
+
+/// Read a generated coverage artifact, or fail naming the remedy.
+///
+/// Shared by both so they cannot acquire different read semantics — the mirror
+/// of [`write_artifact`], and the reason both fail closed rather than one of
+/// them quietly adopting [`read_allowlist`]'s missing-is-empty rule.
+fn read_artifact<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     let raw = std::fs::read_to_string(path).with_context(|| {
         format!(
             "reading {} — if it does not exist yet, generate it with `{}`",
@@ -100,17 +109,10 @@ pub fn read_snapshot(path: &Path) -> Result<Snapshot> {
 /// Fails closed like [`read_snapshot`], and deliberately **not** like
 /// [`read_allowlist`] below, where missing means empty means nothing is excused.
 /// An empty evidence file is not the same thing: it would disagree with the
-/// snapshot on every covered fn, so `evidence_verdict` would report 54 separate
-/// violations instead of the one fact that matters — the file is not there.
+/// snapshot on every covered fn, so `evidence_verdict` would report one
+/// violation per fn instead of the single fact that matters — it is not there.
 pub fn read_evidence(path: &Path) -> Result<Evidence> {
-    let raw = std::fs::read_to_string(path).with_context(|| {
-        format!(
-            "reading {} — if it does not exist yet, generate it with `{}`",
-            path.display(),
-            super::REGENERATE_CMD
-        )
-    })?;
-    serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
+    read_artifact(path)
 }
 
 /// The committed allowlist. A missing file is an empty allowlist — that is the

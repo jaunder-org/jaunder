@@ -46,11 +46,15 @@ const AUTHORITATIVE: (&str, &str) = ("sqlite", "chromium");
 /// A missing snapshot, an unscannable `web/src`, or an unparseable artifact is a
 /// **failure**, never a pass: the failure mode this gate guards against and the
 /// failure mode of its own plumbing would otherwise look identical.
+/// The two generated artifacts are adjacent in this signature and in
+/// [`regenerate_or_verify`]'s, so the pair reads the same way in both. They are
+/// all `&Path`, so a transposition is a silent swap rather than a type error —
+/// keeping one order is what makes it noticeable.
 fn check(
     web_src: &Path,
     snapshot_path: &Path,
-    allowlist_path: &Path,
     evidence_path: &Path,
+    allowlist_path: &Path,
 ) -> StepResult {
     let (inventory, snapshot, allowlist, evidence) = match (
         inventory(web_src),
@@ -91,8 +95,8 @@ pub fn run(result: &mut CommandResult) {
     result.push(check(
         Path::new(WEB_SRC),
         Path::new(SNAPSHOT_PATH),
-        Path::new(ALLOWLIST_PATH),
         Path::new(EVIDENCE_PATH),
+        Path::new(ALLOWLIST_PATH),
     ));
 }
 
@@ -252,8 +256,8 @@ mod tests {
         let step = check(
             tmp.path(),
             &snap,
-            &tmp.path().join("absent-allowlist.json"),
             &ev,
+            &tmp.path().join("absent-allowlist.json"),
         );
         assert!(step.ok, "{:?}", step.detail);
         assert!(step.detail.unwrap_or_default().contains("1 server fn"));
@@ -272,8 +276,8 @@ mod tests {
         let step = check(
             tmp.path(),
             &snap,
-            &tmp.path().join("absent-allowlist.json"),
             &ev,
+            &tmp.path().join("absent-allowlist.json"),
         );
         assert!(!step.ok);
         let detail = step.detail.unwrap_or_default();
@@ -293,7 +297,7 @@ mod tests {
             r##"[{"server_fn":"posts::no_flow_yet","reason":"no UI surface yet","issue":"#700"}]"##,
         );
 
-        let step = check(tmp.path(), &snap, &allow, &ev);
+        let step = check(tmp.path(), &snap, &ev, &allow);
         assert!(step.ok, "{:?}", step.detail);
     }
 
@@ -308,8 +312,8 @@ mod tests {
         let step = check(
             tmp.path(),
             &snap,
-            &tmp.path().join("absent-allowlist.json"),
             &ev,
+            &tmp.path().join("absent-allowlist.json"),
         );
         assert!(!step.ok);
         let detail = step.detail.unwrap_or_default();
@@ -330,13 +334,20 @@ mod tests {
         let step = check(
             tmp.path(),
             &snap,
-            &tmp.path().join("absent-allowlist.json"),
             &ev,
+            &tmp.path().join("absent-allowlist.json"),
         );
         assert!(!step.ok);
         let detail = step.detail.unwrap_or_default();
         assert!(detail.contains("posts::ghost"), "{detail}");
         assert!(detail.contains("stale evidence"), "{detail}");
+        // The remedy travels with BOTH directions, not just the missing-key one:
+        // an author who hits the stale direction needs the same two steps.
+        assert!(detail.contains(REGENERATE_CMD), "{detail}");
+        assert!(
+            detail.contains("cargo xtask e2e sqlite chromium"),
+            "{detail}"
+        );
     }
 
     #[test]
@@ -350,8 +361,8 @@ mod tests {
         let step = check(
             tmp.path(),
             &snap,
-            &tmp.path().join("absent-allowlist.json"),
             &tmp.path().join("absent-evidence.json"),
+            &tmp.path().join("absent-allowlist.json"),
         );
         assert!(!step.ok);
         let detail = step.detail.unwrap_or_default();
@@ -371,8 +382,8 @@ mod tests {
         let step = check(
             tmp.path(),
             &tmp.path().join("absent-snapshot.json"),
-            &tmp.path().join("absent-allowlist.json"),
             &ev,
+            &tmp.path().join("absent-allowlist.json"),
         );
         assert!(!step.ok);
         let detail = step.detail.unwrap_or_default();
@@ -393,8 +404,8 @@ mod tests {
         let step = check(
             tmp.path(),
             &snap,
-            &tmp.path().join("absent-allowlist.json"),
             &ev,
+            &tmp.path().join("absent-allowlist.json"),
         );
         assert!(!step.ok);
     }
