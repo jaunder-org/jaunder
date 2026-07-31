@@ -32,7 +32,7 @@ for `superseded`.
      `proposed`.
 - [x] 4. Pass B rewrites the status token; the summary reports the transition.
 - [x] 5. Round-trip composition test + the promoted-README-row assertion.
-- [ ] 6. Update the docs the change falsifies.
+- [x] 6. Update the docs the change falsifies.
 
 **Key risks / decisions.**
 

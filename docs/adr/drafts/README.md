@@ -18,7 +18,11 @@ Everything in this directory except this `README.md` is gitignored, so a draft
 
 1. Copy [`../template.md`](../template.md) to `docs/adr/drafts/<slug>.md`.
 2. Keep the draft heading exactly `# ADR-DRAFT: <Title>` — `promote` swaps the
-   `DRAFT` token for the assigned number.
+   `DRAFT` token for the assigned number. Leave `- Status: proposed` alone: this
+   pen **is** the proposed state, and `promote` rewrites the token to `accepted`
+   when it numbers the file, because numbering is the acceptance event. Set the
+   status by hand only to say something else — a draft marked `superseded` or
+   `rejected` is a deliberate claim and survives promotion untouched.
 3. Reference the draft **by path** (`docs/adr/drafts/<slug>.md`) from any code
    or prose that needs it. There is no bare `ADR-DRAFT` token — use the path so
    `promote` can rewrite it to the real number.
@@ -45,9 +49,10 @@ $ cargo xtask adr promote
 ```
 
 For each draft this assigns the next free number, moves it to
-`docs/adr/NNNN-<slug>.md`, rewrites its path-form references, syncs the README
-table, and stages the result. The ADR's first appearance in git history is
-already correctly numbered.
+`docs/adr/NNNN-<slug>.md`, rewrites its path-form references, rewrites a
+`proposed` status to `accepted`, syncs the README table, and stages the result.
+The ADR's first appearance in git history is already correctly numbered and
+correctly statused.
 
 If a collision still surfaces between your ship commit and your merge,
 re-rebase, re-run, and **amend the commit that introduced the ADR** — never add
