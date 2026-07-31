@@ -361,8 +361,8 @@ and in `server/src/atompub/media.rs`, replace
 Both files need `use common::time::UtcInstant;` added.
 
 Note when executing: a bare `cargo nextest run -p jaunder` fails the six
-`case_2_postgres` media tests with `ConnectionRefused` — that is the harness, not
-the code. Re-run under `devtool pg run -- cargo nextest run -p jaunder`.
+`case_2_postgres` media tests with `ConnectionRefused` — that is the harness,
+not the code. Re-run under `devtool pg run -- cargo nextest run -p jaunder`.
 
 - [x] **Step 4: Run the tests, verify they pass**
 
@@ -413,7 +413,7 @@ Task 6 uses `AtomPubError::Serialize` explicitly via `.map_err(...)`; it must
 **not** rely on the `From` impl for writes, because that impl yields `Malformed`
 (→ 400).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `common/src/atompub/mod.rs`:
 
@@ -447,7 +447,7 @@ fn serialization_failure_is_internal_not_bad_request() {
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 ```bash
 devtool run -- cargo nextest run -p common atompub
@@ -456,7 +456,7 @@ devtool run -- cargo nextest run -p jaunder atompub
 
 Expected: FAIL — no variant `Serialize`; no `From<atom_syndication::Error>`.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 Add the `Serialize` variant with
 `#[error("failed to serialize AtomPub document: {0}")]`, add the
@@ -466,11 +466,11 @@ make the `HandlerError` conversion match on the variant — `Malformed` →
 Take the error by value (`err`) rather than discarding it with `_`, since the
 internal arm logs it.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Same two commands. Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 devtool run -- cargo xtask check
@@ -496,7 +496,7 @@ git commit -m "feat(atompub): distinguish serialization failure from malformed i
 - Produces: `pub fn entry_from_xml(xml: &str) -> Result<Entry, AtomPubError>` —
   signature unchanged.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 **Keep `non_scalar_char_ref_is_an_error` as-is** — its assertion still holds
 (`&#xD800;` reaches `gref.resolve_char_ref()`, which errors on a surrogate →
@@ -628,7 +628,7 @@ and after re-parsing:
 Keep every other existing reader test unchanged — they are the regression net
 for D2.
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 ```bash
 devtool run -- cargo nextest run -p common atompub::entry
@@ -637,7 +637,7 @@ devtool run -- cargo nextest run -p common atompub::entry
 Expected: FAIL — the new strictness tests fail because the bespoke reader
 tolerates all three inputs.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 Replace the body with a delegation to upstream, then delete every helper listed
 in **Files**:
@@ -665,7 +665,7 @@ mapping to `Malformed`). If `parses_id_and_timestamps` or the xhtml tests fail
 on whitespace, adjust the assertion to `contains` rather than reintroducing a
 trim.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 ```bash
 devtool run -- cargo nextest run -p common atompub::entry
@@ -675,7 +675,7 @@ devtool run -- cargo nextest run -p jaunder atompub
 Expected: PASS. The `server` run matters here — `mapping.rs` has ~15 tests
 driving `entry_from_xml`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 devtool run -- cargo xtask check
@@ -721,7 +721,7 @@ fn post_entry_response(
 ) -> Result<Response, HandlerError>;
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Update every existing serializer test to unwrap the new `Result`
 (`entry_to_xml(&entry).expect("serialize")`), then add:
@@ -764,7 +764,7 @@ entry", since a duplicated or dropped entry still passes. Add:
     assert_eq!(out.matches("<entry").count(), 2, "out: {out}");
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 ```bash
 devtool run -- cargo nextest run -p common atompub::entry
@@ -772,7 +772,7 @@ devtool run -- cargo nextest run -p common atompub::entry
 
 Expected: FAIL — `entry_to_xml` returns `String`, so `.expect` does not compile.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 Signatures per **Interfaces**. Each writer builds the upstream model and calls
 `write_to`, mapping the error explicitly:
@@ -822,7 +822,7 @@ At the call sites, add `?` and change `post_entry_response` to return
 `Result<Response, HandlerError>`, propagating at its two callers (`posts.rs:418`
 and `:428`).
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 ```bash
 devtool run -- cargo nextest run -p common atompub
@@ -831,7 +831,7 @@ devtool run -- cargo nextest run -p jaunder
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 devtool run -- cargo xtask check
@@ -856,7 +856,7 @@ git commit -m "refactor(atompub): write entries and feeds via atom_syndication (
 - Consumes: everything above.
 - Produces: nothing consumed downstream.
 
-- [ ] **Step 1: Verify the remaining `From` impl is genuinely unused**
+- [x] **Step 1: Verify the remaining `From` impl is genuinely unused**
 
 ```bash
 rg -n 'std::io::Error' common/src/atompub/
@@ -866,7 +866,7 @@ Expected: no `?`-driven use remains — `service.rs`/`categories.rs` discard
 writer errors with `let _ =`. If a use survives, keep the impl and note why.
 (`From<quick_xml::Error>` was already deleted in Task 5, where it was orphaned.)
 
-- [ ] **Step 2: Delete it and fix the docs**
+- [x] **Step 2: Delete it and fix the docs**
 
 Remove `impl From<std::io::Error> for AtomPubError` and the now-orphaned
 `io_error_converts_to_malformed` test.
@@ -880,7 +880,7 @@ outright (spec C4).
 Adjust `mod.rs`'s module doc where it claims the module could be contributed
 upstream — narrow it to the `app:`/RSD documents that remain jaunder's.
 
-- [ ] **Step 3: Flip ADR-0043 and re-sync the table**
+- [x] **Step 3: Flip ADR-0043 and re-sync the table**
 
 Set `- Status: superseded` in `docs/adr/0043-quick-xml-fork-patch.md` and add a
 line under the heading pointing at
@@ -893,7 +893,7 @@ devtool run -- cargo xtask adr sync-readme
 Expected: `docs/README.md`'s status cell for 0043 updates. The
 `adr-readme-parity` gate fails the commit if it drifts.
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 ```bash
 devtool run -- cargo nextest run -p common atompub
@@ -901,7 +901,7 @@ devtool run -- cargo nextest run -p common atompub
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 devtool run -- cargo xtask check
@@ -920,7 +920,7 @@ the touched markdown first, or expect a restage.
 
 **Interfaces:** consumes the whole branch.
 
-- [ ] **Step 1: The static/coverage gate**
+- [x] **Step 1: The static/coverage gate**
 
 ```bash
 devtool run -- cargo xtask validate --no-e2e
@@ -931,7 +931,7 @@ backgrounded gate runs get killed. `xtask check` auto-fixes formatting but does
 not commit, so check `git status --porcelain` afterwards and fold any reformat
 into the relevant commit.
 
-- [ ] **Step 2: The AtomPub e2e**
+- [x] **Step 2: The AtomPub e2e**
 
 ```bash
 devtool run -- cargo xtask e2e-local atompub.spec.ts
@@ -940,7 +940,7 @@ devtool run -- cargo xtask e2e-local atompub.spec.ts
 Expected: PASS. Before running, confirm no stale server holds port 3000
 (`ss -ltn 'sport = :3000'`) — a stale server yields a false negative.
 
-- [ ] **Step 3: Confirm the acceptance criteria mechanically**
+- [x] **Step 3: Confirm the acceptance criteria mechanically**
 
 ```bash
 rg -n 'patch.crates-io' Cargo.toml
@@ -951,7 +951,8 @@ rg -n '_rfc3339' common/src/atompub/ server/src/atompub/
 
 Expected: all four return nothing (spec A1, A2, B1, B9).
 
-- [ ] **Step 4: Commit any residue**
+- [x] **Step 4: Commit any residue** — none. The gate left the tree clean; the
+      only uncommitted file was this plan.
 
 Only if Step 1 left formatting changes:
 
