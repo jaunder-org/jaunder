@@ -5,6 +5,8 @@
 //! pure state machine over those values, and `watch`/`land` drive the loop. Above
 //! `snapshot` nothing sees JSON, a string status, or an exit code.
 
+pub mod gh;
+
 use serde::{Serialize, Serializer};
 
 use crate::result::{CommandResult, StepResult};

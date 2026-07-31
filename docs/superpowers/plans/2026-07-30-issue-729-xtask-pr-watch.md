@@ -166,7 +166,7 @@ pub struct PrReport {
 pub fn into_result(command: &str, report: PrReport) -> CommandResult;
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 All six live in `xtask/src/pr/mod.rs` so `cargo test … pr::` runs them.
 
@@ -236,12 +236,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run: `cargo test --manifest-path xtask/Cargo.toml pr::` Expected: FAIL — module
-`pr` does not exist.
+`pr` does not exist. **Observed:** 22 unresolved-name errors.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 Add `pub mod pr;` to `xtask/src/lib.rs` beside the existing flat `mod`
 declarations (`:5-21`). Write the types above in `xtask/src/pr/mod.rs`. Add to
@@ -267,11 +267,12 @@ informational payloads (`result.rs:139-146`) printing outcome, PR + head SHA,
 and `pointer` when present. Elapsed time comes from the envelope's
 `duration_ms`, which Task 7's `finalize()` call populates.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Run: `cargo test --manifest-path xtask/Cargo.toml pr::` Expected: PASS (6 tests)
+— **observed 6 passed.**
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit** — `85aabd6a`, full `cargo xtask check` green.
 
 ```bash
 git add xtask/src/pr/mod.rs xtask/src/result.rs xtask/src/lib.rs
