@@ -1,7 +1,7 @@
 # Plan — #741: promotion sets `accepted`; `proposed` illegal on a numbered ADR
 
 - Spec:
-  [2026-07-31-issue-741-adr-accepted-on-promotion.md](../specs/2026-07-31-issue-741-adr-accepted-on-promotion.md)
+  [2026-07-31-issue-741-adr-accepted-on-promotion-spec.md](2026-07-31-issue-741-adr-accepted-on-promotion-spec.md)
 - Issue: [#741](https://github.com/jaunder-org/jaunder/issues/741)
 - Branch: `worktree-issue-741-adr-accepted-on-promotion` (base tag
   `wt-base-issue-741`)
