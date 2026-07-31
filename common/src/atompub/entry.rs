@@ -1,17 +1,20 @@
-//! Standalone Atom entry (`<entry>`) and collection `<feed>` read/write for `AtomPub`.
+//! Writing the Atom documents `AtomPub` exchanges: the standalone `<entry>`
+//! (POST to create, PUT to edit, GET a member), the collection `<feed>`, and the
+//! RFC 5023 §9.6 media-link entry.
 //!
-//! The data model *and* the XML I/O are `atom_syndication`'s: `Entry::read_from`
-//! and `Entry::write_to` handle the standalone `<entry>` documents `AtomPub`
-//! exchanges (POST to create, PUT to edit, GET a member), and `Feed::write_to`
-//! handles the collection. Bare-entry I/O was crate-private until
+//! The data model *and* the XML are `atom_syndication`'s — `Entry::write_to` and
+//! `Feed::write_to` do the serializing. Bare-entry I/O was crate-private until
 //! `atom_syndication` 0.12.10, which is why this module once carried its own
 //! `quick-xml` reader and writers.
 //!
-//! What remains here is what upstream does not model: the Atom Publishing
-//! Protocol control element `app:control/app:draft` (RFC 5023 §B) and jaunder's
-//! own `j:slug` (ADR-0023), both stored in the entry's extension map and reached
+//! **There is no reader here.** Parsing is `Entry::from_str` at the call site;
+//! a wrapper would be a rename of `parse` and nothing else.
+//!
+//! What remains is what upstream does not model: the Atom Publishing Protocol
+//! control element `app:control/app:draft` (RFC 5023 §B) and jaunder's own
+//! `j:slug` (ADR-0023), both stored in the entry's extension map and reached
 //! through [`is_draft`] / [`set_draft`] / [`j_slug`] / [`set_j_slug`] — plus the
-//! two wire structs, [`FeedMeta`] and [`MediaLinkEntry`], that describe documents
+//! two wire structs, [`FeedMeta`] and [`MediaLinkEntry`], describing documents
 //! assembled from more than one Atom element.
 //!
 //! Each marker helper also owns its namespace prefix in `Entry::namespaces`,
@@ -139,39 +142,18 @@ pub fn set_j_slug(entry: &mut Entry, slug: &str) {
 }
 
 // ---------------------------------------------------------------------------
-// Parsing
-// ---------------------------------------------------------------------------
-
-/// Parses a standalone `AtomPub` `<entry>` document into an [`Entry`].
-///
-/// Server-owned fields a client omits (id, dates, links) are simply left at
-/// their defaults; this reader captures whatever the document provides.
-///
-/// # Errors
-///
-/// Returns [`AtomPubError::Malformed`] when the bytes are not a well-formed
-/// `<entry>` document, when the root element is not `<entry>`, or when a field
-/// upstream validates — a timestamp, or an atomTextConstruct's `type` — is
-/// out of spec.
-pub fn entry_from_xml(xml: &str) -> Result<Entry, AtomPubError> {
-    Ok(xml.parse::<Entry>()?)
-}
-
-// ---------------------------------------------------------------------------
 // Serialization
 // ---------------------------------------------------------------------------
 
 /// Decodes what an `atom_syndication` writer produced into a `String`.
 ///
 /// Both failure modes are unreachable in practice — a `Vec<u8>` has no I/O to
-/// fail, and upstream emits UTF-8 — but neither is expressible as infallible, so
-/// they surface as [`AtomPubError::Serialize`]. That variant, not `Malformed`,
-/// is what keeps a server-side write failure off the client-facing `400` path.
+/// fail, and upstream emits UTF-8 — but neither is expressible as infallible.
 fn to_xml_string(
     written: Result<Vec<u8>, atom_syndication::Error>,
 ) -> Result<String, AtomPubError> {
-    let bytes = written.map_err(|e| AtomPubError::Serialize(e.to_string()))?;
-    String::from_utf8(bytes).map_err(|e| AtomPubError::Serialize(e.to_string()))
+    let bytes = written.map_err(|e| AtomPubError::new(e.to_string()))?;
+    String::from_utf8(bytes).map_err(|e| AtomPubError::new(e.to_string()))
 }
 
 /// Serializes an [`Entry`] to a standalone `AtomPub` `<entry>` document.
@@ -182,7 +164,7 @@ fn to_xml_string(
 ///
 /// # Errors
 ///
-/// Returns [`AtomPubError::Serialize`] if the document cannot be written.
+/// Returns [`AtomPubError`] if the document cannot be written.
 pub fn entry_to_xml(entry: &Entry) -> Result<String, AtomPubError> {
     to_xml_string(entry.write_to(Vec::new()))
 }
@@ -226,7 +208,7 @@ fn rel_link(rel: &str, href: &AbsoluteUrl) -> Link {
 ///
 /// # Errors
 ///
-/// Returns [`AtomPubError::Serialize`] if the document cannot be written.
+/// Returns [`AtomPubError`] if the document cannot be written.
 pub fn render_feed(meta: &FeedMeta, entries: &[Entry]) -> Result<String, AtomPubError> {
     let mut links = vec![rel_link("self", &meta.self_url)];
     // Order matches the previous hand-rolled writer: first, previous, next.
@@ -286,7 +268,7 @@ pub struct MediaLinkEntry {
 ///
 /// # Errors
 ///
-/// Returns [`AtomPubError::Serialize`] if the document cannot be written.
+/// Returns [`AtomPubError`] if the document cannot be written.
 pub fn render_media_link_entry(entry: &MediaLinkEntry) -> Result<String, AtomPubError> {
     let atom_entry = Entry {
         id: entry.id.to_string(),
@@ -351,7 +333,7 @@ mod tests {
   <category term="rust"/>
   <app:control><app:draft>yes</app:draft></app:control>
 </entry>"#;
-        let entry = entry_from_xml(xml).expect("parse");
+        let entry = xml.parse::<Entry>().expect("parse");
         assert_eq!(entry.title().as_str(), "Hello");
         assert_eq!(entry.summary().map(Text::as_str), Some("sum"));
         assert_eq!(content_parts(&entry), (Some("html"), Some("<p>hi</p>")));
@@ -370,7 +352,7 @@ mod tests {
         let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
   <title>x&bogus;y</title>
 </entry>"#;
-        let entry = entry_from_xml(xml).expect("parse");
+        let entry = xml.parse::<Entry>().expect("parse");
         assert_eq!(entry.title().as_str(), "x&bogus;y");
     }
 
@@ -380,10 +362,7 @@ mod tests {
   <title>T</title>
   <updated>not-a-date</updated>
 </entry>"#;
-        assert!(matches!(
-            entry_from_xml(xml),
-            Err(AtomPubError::Malformed(_))
-        ));
+        assert!(xml.parse::<Entry>().is_err());
     }
 
     #[test]
@@ -392,10 +371,7 @@ mod tests {
         let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
   <title type="text/markdown">T</title>
 </entry>"#;
-        assert!(matches!(
-            entry_from_xml(xml),
-            Err(AtomPubError::Malformed(_))
-        ));
+        assert!(xml.parse::<Entry>().is_err());
     }
 
     #[test]
@@ -407,7 +383,7 @@ mod tests {
   <title>T</title>
   <content type="text/org">* heading</content>
 </entry>"#;
-        let entry = entry_from_xml(xml).expect("parse");
+        let entry = xml.parse::<Entry>().expect("parse");
         assert_eq!(content_parts(&entry), (Some("text/org"), Some("* heading")));
     }
 
@@ -419,7 +395,7 @@ mod tests {
         let xml = r#"<entry xmlns:atom="http://www.w3.org/2005/Atom">
   <atom:title>T</atom:title>
 </entry>"#;
-        let entry = entry_from_xml(xml).expect("parse");
+        let entry = xml.parse::<Entry>().expect("parse");
         assert_ne!(entry.title().as_str(), "T");
     }
 
@@ -431,7 +407,7 @@ mod tests {
   <title>X</title>
   <content type="xhtml"><div>it's</div></content>
 </entry>"#;
-        let entry = entry_from_xml(xml).expect("parse");
+        let entry = xml.parse::<Entry>().expect("parse");
         let (_, value) = content_parts(&entry);
         let value = value.expect("xhtml value");
         assert!(value.contains("&apos;"), "value: {value}");
@@ -450,17 +426,14 @@ mod tests {
   <title>X</title>
   <content type="xhtml"><div>b &amp; c</div></content>
 </entry>"#;
-        let entry = entry_from_xml(xml).expect("parse");
+        let entry = xml.parse::<Entry>().expect("parse");
         let (_, value) = content_parts(&entry);
         assert!(value.expect("xhtml value").contains("&amp;"));
     }
 
     #[test]
     fn document_without_entry_is_an_error() {
-        assert!(matches!(
-            entry_from_xml("<?xml version=\"1.0\"?><other/>"),
-            Err(AtomPubError::Malformed(_))
-        ));
+        assert!("<?xml version=\"1.0\"?><other/>".parse::<Entry>().is_err());
     }
 
     fn sample_entry() -> Entry {
@@ -605,7 +578,7 @@ mod tests {
         set_j_slug(&mut entry, "my-post");
 
         let out = entry_to_xml(&entry).expect("serialize");
-        let parsed = entry_from_xml(&out).expect("re-parse");
+        let parsed = out.parse::<Entry>().expect("re-parse");
         assert!(is_draft(&parsed), "draft flag lost; xml: {out}");
         assert_eq!(parsed.title().as_str(), "RT");
         assert_eq!(parsed.summary().map(Text::as_str), Some("s"));

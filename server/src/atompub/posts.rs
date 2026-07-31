@@ -11,7 +11,7 @@ use axum::Extension;
 use serde::{Deserialize, Serialize};
 
 use common::absolute_url::{compose, AbsoluteUrl};
-use common::atompub::{entry_from_xml, entry_to_xml, render_feed, FeedMeta};
+use common::atompub::{entry_to_xml, render_feed, Entry, FeedMeta};
 use common::etag::ETag;
 use common::ids::PostId;
 use common::pagination::PageSize;
@@ -358,7 +358,7 @@ pub async fn collection_post(
         site_config,
     } = services;
     super::require_user_match(&auth_user, &username)?;
-    let entry = entry_from_xml(&body)?;
+    let entry: Entry = body.parse()?;
     let default_format =
         storage::get_default_post_format(user_config.as_ref(), auth_user.user_id).await?;
     let fields = entry_to_post_fields(&entry, default_format);
@@ -490,7 +490,7 @@ pub async fn member_put(
         return Err(HandlerError::PreconditionFailed);
     }
 
-    let entry = entry_from_xml(&body)?;
+    let entry: Entry = body.parse()?;
     let default_format =
         storage::get_default_post_format(user_config.as_ref(), auth_user.user_id).await?;
     let fields = entry_to_post_fields(&entry, default_format);

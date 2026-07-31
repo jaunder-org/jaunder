@@ -264,7 +264,7 @@ mod tests {
   <content type="html">&lt;p&gt;HTML content&lt;/p&gt;</content>
 </entry>"#;
 
-        let entry = common::atompub::entry_from_xml(xml).expect("parse entry");
+        let entry = xml.parse::<Entry>().expect("parse entry");
         let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
 
         assert_eq!(fields.format, PostFormat::Html);
@@ -282,7 +282,7 @@ mod tests {
   <content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">xhtml</div></content>
 </entry>"#;
 
-        let entry = common::atompub::entry_from_xml(xml).expect("parse entry");
+        let entry = xml.parse::<Entry>().expect("parse entry");
         let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
 
         assert_eq!(fields.format, PostFormat::Html);
@@ -298,7 +298,7 @@ mod tests {
   <content type="text"># Markdown</content>
 </entry>"#;
 
-        let entry = common::atompub::entry_from_xml(xml).expect("parse entry");
+        let entry = xml.parse::<Entry>().expect("parse entry");
         let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
 
         assert_eq!(fields.format, PostFormat::Markdown);
@@ -315,7 +315,7 @@ mod tests {
   <content type="text/org">* Org body</content>
 </entry>"#;
 
-        let entry = common::atompub::entry_from_xml(xml).expect("parse entry");
+        let entry = xml.parse::<Entry>().expect("parse entry");
         // Default is Markdown, but the explicit media type selects Org.
         let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
 
@@ -333,7 +333,7 @@ mod tests {
   <content type="text/markdown"># Markdown body</content>
 </entry>"#;
 
-        let entry = common::atompub::entry_from_xml(xml).expect("parse entry");
+        let entry = xml.parse::<Entry>().expect("parse entry");
         // Default is Org, but the explicit media type selects Markdown.
         let fields = entry_to_post_fields(&entry, PostFormat::Org);
 
@@ -351,7 +351,7 @@ mod tests {
   <content>some text</content>
 </entry>"#;
 
-        let entry = common::atompub::entry_from_xml(xml).expect("parse entry");
+        let entry = xml.parse::<Entry>().expect("parse entry");
         let fields = entry_to_post_fields(&entry, PostFormat::Org);
 
         assert_eq!(fields.format, PostFormat::Org);
@@ -367,7 +367,7 @@ mod tests {
   <updated>2026-05-31T00:00:00Z</updated>
 </entry>"#;
 
-        let entry = common::atompub::entry_from_xml(xml).expect("parse entry");
+        let entry = xml.parse::<Entry>().expect("parse entry");
         let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
 
         assert_eq!(fields.body, "");
@@ -384,7 +384,7 @@ mod tests {
   <summary>This is a summary</summary>
 </entry>"#;
 
-        let entry = common::atompub::entry_from_xml(xml).expect("parse entry");
+        let entry = xml.parse::<Entry>().expect("parse entry");
         let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
 
         assert_eq!(
@@ -402,7 +402,7 @@ mod tests {
   <updated>2026-05-31T00:00:00Z</updated>
 </entry>"#;
 
-        let entry = common::atompub::entry_from_xml(xml).expect("parse entry");
+        let entry = xml.parse::<Entry>().expect("parse entry");
         let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
 
         assert_eq!(fields.summary, None);
@@ -419,7 +419,7 @@ mod tests {
   <category term="programming"/>
 </entry>"#;
 
-        let entry = common::atompub::entry_from_xml(xml).expect("parse entry");
+        let entry = xml.parse::<Entry>().expect("parse entry");
         let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
 
         assert_eq!(fields.categories, vec!["rust", "programming"]);
@@ -434,7 +434,7 @@ mod tests {
   <updated>2026-05-31T00:00:00Z</updated>
 </entry>"#;
 
-        let entry = common::atompub::entry_from_xml(xml).expect("parse entry");
+        let entry = xml.parse::<Entry>().expect("parse entry");
         let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
 
         assert_eq!(fields.categories, Vec::<TagLabel>::new());
@@ -454,7 +454,7 @@ mod tests {
   <category term="not a tag"/>
 </entry>"#;
 
-        let entry = common::atompub::entry_from_xml(xml).expect("parse entry");
+        let entry = xml.parse::<Entry>().expect("parse entry");
         let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
 
         assert_eq!(fields.categories, vec!["rust".parse::<TagLabel>().unwrap()]);
@@ -472,7 +472,7 @@ mod tests {
   </app:control>
 </entry>"#;
 
-        let entry = common::atompub::entry_from_xml(xml).expect("parse entry");
+        let entry = xml.parse::<Entry>().expect("parse entry");
         let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
 
         assert!(fields.is_draft);
@@ -487,7 +487,7 @@ mod tests {
   <updated>2026-05-31T00:00:00Z</updated>
 </entry>"#;
 
-        let entry = common::atompub::entry_from_xml(xml).expect("parse entry");
+        let entry = xml.parse::<Entry>().expect("parse entry");
         let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
 
         assert!(!fields.is_draft);
@@ -503,7 +503,7 @@ mod tests {
   <content type="text">body</content>
 </entry>"#;
 
-        let entry = common::atompub::entry_from_xml(xml).expect("parse entry");
+        let entry = xml.parse::<Entry>().expect("parse entry");
         let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
 
         assert_eq!(fields.title.as_deref(), Some("My Post Title"));
@@ -518,7 +518,7 @@ mod tests {
   <content type="text">body</content>
 </entry>"#;
 
-        let entry = common::atompub::entry_from_xml(xml).expect("parse entry");
+        let entry = xml.parse::<Entry>().expect("parse entry");
         let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
 
         assert_eq!(fields.title, None);
