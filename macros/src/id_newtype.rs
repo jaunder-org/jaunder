@@ -90,8 +90,28 @@ pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
 /// transposition guarantee (ADR-0063 §2) — so unlike the string bridge it does not route
 /// through a validating `FromStr`, and unlike `NumNewtype`'s it does not re-run a bound.
 fn sqlx_impls(name: &syn::Ident) -> proc_macro2::TokenStream {
-    let convert = quote! {
-        ::core::result::Result::Ok(#name(v))
-    };
-    crate::sqlx_bridge::bridge(name, &quote! { i64 }, &convert)
+    crate::sqlx_bridge::bridge(&crate::sqlx_bridge::BridgeSpec {
+        name,
+        type_inner: quote! { i64 },
+        encode_inner: quote! { i64 },
+        to_inner: quote! { &self.0 },
+        decode_inner: quote! { i64 },
+        convert: quote! { ::core::result::Result::Ok(#name(v)) },
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn id_bridge_uses_i64_for_all_three_inners_and_wraps_infallibly() {
+        let n = quote::format_ident!("UserId");
+        let out = crate::sqlx_bridge::tests::norm(&sqlx_impls(&n));
+        assert!(out.contains("<i64as::sqlx::Type<DB>>::type_info()"));
+        assert!(out.contains("letinner:&i64=&self.0;"));
+        assert!(out.contains("<i64as::sqlx::Decode<'r,DB>>::decode(value)?"));
+        assert!(out.contains("::core::result::Result::Ok(UserId(v))"));
+        assert!(!out.contains("str"), "an id never touches the string path");
+    }
 }

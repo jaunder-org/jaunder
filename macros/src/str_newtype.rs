@@ -311,21 +311,35 @@ fn sqlx_inner() -> proc_macro2::TokenStream {
 /// rejected rather than silently admitted; the `?` folds the `FromStr::Err` (all our
 /// newtype errors derive `thiserror::Error`) into `sqlx::error::BoxDynError`.
 fn sqlx_impls(name: &syn::Ident) -> proc_macro2::TokenStream {
-    let convert = quote! {
-        ::core::result::Result::Ok(<#name as ::core::str::FromStr>::from_str(&v)?)
-    };
-    crate::sqlx_bridge::bridge(name, &sqlx_inner(), &convert)
+    crate::sqlx_bridge::bridge(&crate::sqlx_bridge::BridgeSpec {
+        name,
+        type_inner: sqlx_inner(),
+        encode_inner: sqlx_inner(),
+        to_inner: quote! { &self.0 },
+        decode_inner: sqlx_inner(),
+        convert: quote! {
+            ::core::result::Result::Ok(<#name as ::core::str::FromStr>::from_str(&v)?)
+        },
+    })
 }
 
 /// The **infallible sqlx bridge**: as `sqlx_impls`, but `Decode` wraps the decoded
 /// `String` via the type's infallible `From<String>` (no validation to run).
 fn sqlx_impls_infallible(name: &syn::Ident) -> proc_macro2::TokenStream {
-    let convert = quote! {
-        ::core::result::Result::Ok(
-            <#name as ::core::convert::From<::std::string::String>>::from(v),
-        )
-    };
-    crate::sqlx_bridge::bridge(name, &sqlx_inner(), &convert)
+    crate::sqlx_bridge::bridge(&crate::sqlx_bridge::BridgeSpec {
+        name,
+        type_inner: sqlx_inner(),
+        encode_inner: sqlx_inner(),
+        to_inner: quote! { &self.0 },
+        // Stays `String`: the `From<String>` chokepoint takes the decoded value by
+        // value, so borrowing here would add an allocation, not remove one.
+        decode_inner: sqlx_inner(),
+        convert: quote! {
+            ::core::result::Result::Ok(
+                <#name as ::core::convert::From<::std::string::String>>::from(v),
+            )
+        },
+    })
 }
 
 /// The **tight secret surface** (ADR-0063 secret exception, as amended by #403): a

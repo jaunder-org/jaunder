@@ -101,12 +101,18 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
 ///
 /// Like `IdNewtype`'s, this bridge is unconditional — there is no opt-out attribute.
 fn sqlx_impls(name: &Ident, inner: &Type) -> TokenStream {
-    let convert = quote! {
-        ::core::result::Result::Ok(
-            <#name as ::core::convert::TryFrom<#inner>>::try_from(v)?,
-        )
-    };
-    crate::sqlx_bridge::bridge(name, &quote! { #inner }, &convert)
+    crate::sqlx_bridge::bridge(&crate::sqlx_bridge::BridgeSpec {
+        name,
+        type_inner: quote! { #inner },
+        encode_inner: quote! { #inner },
+        to_inner: quote! { &self.0 },
+        decode_inner: quote! { #inner },
+        convert: quote! {
+            ::core::result::Result::Ok(
+                <#name as ::core::convert::TryFrom<#inner>>::try_from(v)?,
+            )
+        },
+    })
 }
 
 /// The self-contained error type: a hand-written `Display` + `Error` (no `thiserror`), so
@@ -432,4 +438,20 @@ fn parse_opts(input: &DeriveInput) -> syn::Result<Opts> {
         error,
         clamp,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn num_bridge_uses_the_declared_inner_for_all_three_and_checks_bounds() {
+        let n = quote::format_ident!("FeedMinItems");
+        let inner: Type = syn::parse_quote! { i32 };
+        let out = crate::sqlx_bridge::tests::norm(&sqlx_impls(&n, &inner));
+        assert!(out.contains("<i32as::sqlx::Type<DB>>::type_info()"));
+        assert!(out.contains("letinner:&i32=&self.0;"));
+        assert!(out.contains("<i32as::sqlx::Decode<'r,DB>>::decode(value)?"));
+        assert!(out.contains("<FeedMinItemsas::core::convert::TryFrom<i32>>::try_from(v)?"));
+    }
 }
