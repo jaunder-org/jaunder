@@ -2189,12 +2189,17 @@ pub(crate) async fn replace_post_media<DB>(
 where
     DB: PostDialect,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    // `MediaSource`/`ContentHash`/`Filename` all bind as themselves through their
-    // `String`-delegating sqlx bridges (ADR-0071 / the `db_enum` text-column bridge),
-    // which is what this pair makes available on the generic backend. The
-    // `sqlx-newtype-bind` gate forbids stripping any of them to `&str` here.
+    // `MediaSource`/`ContentHash`/`Filename` all bind as themselves through the shared
+    // sqlx bridge (ADR-0071), which is what these bounds make available on the generic
+    // backend. The `sqlx-newtype-bind` gate forbids stripping any of them to `&str` here.
+    //
+    // The newtypes delegate `Encode` to `String`; `MediaSource` delegates to `&'q str`,
+    // because a `#[text_enum]` token is a `&'static str` and encoding it needs no
+    // allocation (#746 D4). Hence both pairs — the `&'q str` one is the same bound the
+    // other generic binders in this module already carry.
     String: sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
+    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
