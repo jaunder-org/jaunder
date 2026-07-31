@@ -17,7 +17,7 @@ strum's derives and generates the named error, serde, and (opt-in) the bridge.
 0.8.6 (SQLite + Postgres), `cargo nextest`, `cargo xtask`.
 
 **Spec:**
-[`docs/superpowers/specs/2026-07-31-issue-746-text-enum-derive.md`](../specs/2026-07-31-issue-746-text-enum-derive.md).
+[`docs/archive/2026-07-31-issue-746-text-enum-derive-spec.md`](2026-07-31-issue-746-text-enum-derive-spec.md).
 The plan is "how"; the spec is "what/why". Decisions are cited as **D1**…**D12**
 and acceptance criteria as **AC-n** — do not re-derive them here.
 
