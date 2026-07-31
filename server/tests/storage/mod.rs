@@ -1,7 +1,6 @@
 use chrono::{Datelike, Utc};
 use common::ids::{AudienceId, ChannelId, FeedEventId, PostId, UserId};
 use common::password::Password;
-use common::post_body::PostBody;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::test_support::{
@@ -22,9 +21,9 @@ use storage::{
     AudienceError, ConfirmPasswordResetError, CreatePostError, CreateUserError, DbConnectOptions,
     FeedCacheRow, GoLivePost, ListByTagError, PostCursor, PostFormat, PostRecord, PostUpdate,
     PostgresSubscriptionStorage, ProfileUpdate, PublishUpdate, RegisterWithInviteError,
-    RenderOutput, RenderedPostContent, RenderedPostUpdate, SessionAuthError,
-    SqliteSubscriptionStorage, SubscriptionStorage, TaggingError, UpdatePostError, UpdatePostInput,
-    UseEmailVerificationError, UseInviteError, UsePasswordResetError, UserAuthError,
+    RenderedPostContent, RenderedPostUpdate, SessionAuthError, SqliteSubscriptionStorage,
+    SubscriptionStorage, TaggingError, UpdatePostError, UseEmailVerificationError, UseInviteError,
+    UsePasswordResetError, UserAuthError,
 };
 use tempfile::TempDir;
 
@@ -39,7 +38,7 @@ use rstest_reuse::*;
 use crate::helpers::create_session_for;
 use storage::test_support::{
     backends, fp, recorded_postgres_url, seed_users, sqlite_url, template_postgres_url, Backend,
-    PostgresDbGuard, SeedRawPost, SeedUser, TestEnv,
+    PostgresDbGuard, SeedRawPost, SeedUser, TestEnv, UpdateRawPost,
 };
 
 // The Postgres-backed cases below (the `::postgres` expansion of each
@@ -2266,18 +2265,10 @@ async fn post_update_writes_revision_and_updates_record(#[case] backend: Backend
 
     let post_id = SeedRawPost::new(user_id).draft().seed(state).await.post_id;
 
-    let body: PostBody = "updated body".into();
-    let update_input = UpdatePostInput {
-        title: Some("Updated Title".into()),
-        slug: "update-test".parse().unwrap(),
-        body: body.clone(),
-        format: PostFormat::Org,
-        rendered: RenderOutput::render(&body, &PostFormat::Org),
-        unpublish: true,
-        explicit_published_at: None,
-        summary: None,
-        audiences: vec![AudienceTarget::Public],
-    };
+    let update_input = UpdateRawPost::new("update-test")
+        .format(PostFormat::Org)
+        .unpublish()
+        .build();
     let record = state
         .posts
         .update_post(post_id, user_id, &update_input)
@@ -2294,18 +2285,7 @@ async fn post_update_writes_revision_and_updates_record(#[case] backend: Backend
 async fn post_update_not_found_returns_error(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let body: PostBody = "body".into();
-    let update_input = UpdatePostInput {
-        title: Some("Title".into()),
-        slug: "nope".parse().unwrap(),
-        body: body.clone(),
-        format: PostFormat::Markdown,
-        rendered: RenderOutput::render(&body, &PostFormat::Markdown),
-        unpublish: true,
-        explicit_published_at: None,
-        summary: None,
-        audiences: vec![AudienceTarget::Public],
-    };
+    let update_input = UpdateRawPost::new("nope").unpublish().build();
     let err = state
         .posts
         .update_post(PostId::from(9999), UserId::from(1), &update_input)
@@ -2327,23 +2307,16 @@ async fn post_update_by_non_owner_returns_unauthorized(#[case] backend: Backend)
 
     let post_id = SeedRawPost::new(owner).draft().seed(state).await.post_id;
 
-    let body: PostBody = "Nope".into();
     let err = state
         .posts
         .update_post(
             post_id,
             other,
-            &UpdatePostInput {
-                title: Some("Hijacked".into()),
-                slug: "hijacked".parse().unwrap(),
-                body: body.clone(),
-                format: PostFormat::Markdown,
-                rendered: RenderOutput::render(&body, &PostFormat::Markdown),
-                unpublish: true,
-                explicit_published_at: None,
-                summary: None,
-                audiences: vec![AudienceTarget::Public],
-            },
+            &UpdateRawPost::new("hijacked")
+                .title("Hijacked")
+                .body("Nope")
+                .unpublish()
+                .build(),
         )
         .await
         .expect_err("non-owner update must fail");
@@ -2537,22 +2510,24 @@ async fn post_audiences_are_persisted_and_replaced(#[case] backend: Backend) {
         "create should persist one public and one named row"
     );
 
+    // Every update below is the same edit with different targeting, so they share a base
+    // and vary only `audiences`.
+    let edit = UpdateRawPost::new("audience-post")
+        .title("Post audience-post")
+        .body("body text")
+        .unpublish();
+
     // Update to [Private] → zero rows.
-    let body: PostBody = "body text".into();
-    let update_private = UpdatePostInput {
-        title: Some("Post audience-post".into()),
-        slug: "audience-post".parse().unwrap(),
-        body: body.clone(),
-        format: PostFormat::Markdown,
-        rendered: RenderOutput::render(&body, &PostFormat::Markdown),
-        unpublish: true,
-        explicit_published_at: None,
-        summary: None,
-        audiences: vec![AudienceTarget::Private],
-    };
     state
         .posts
-        .update_post(post_id, author, &update_private)
+        .update_post(
+            post_id,
+            author,
+            &edit
+                .clone()
+                .audiences(vec![AudienceTarget::Private])
+                .build(),
+        )
         .await
         .unwrap();
     assert!(
@@ -2561,13 +2536,9 @@ async fn post_audiences_are_persisted_and_replaced(#[case] backend: Backend) {
     );
 
     // Update to [] (empty) → also zero rows (equivalent to private).
-    let update_empty = UpdatePostInput {
-        audiences: vec![],
-        ..update_private.clone()
-    };
     state
         .posts
-        .update_post(post_id, author, &update_empty)
+        .update_post(post_id, author, &edit.clone().audiences(vec![]).build())
         .await
         .unwrap();
     assert!(
@@ -2576,13 +2547,13 @@ async fn post_audiences_are_persisted_and_replaced(#[case] backend: Backend) {
     );
 
     // Update to [Subscribers] → one subscribers row.
-    let update_subs = UpdatePostInput {
-        audiences: vec![AudienceTarget::Subscribers],
-        ..update_private.clone()
-    };
     state
         .posts
-        .update_post(post_id, author, &update_subs)
+        .update_post(
+            post_id,
+            author,
+            &edit.audiences(vec![AudienceTarget::Subscribers]).build(),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -2628,22 +2599,23 @@ async fn get_post_audiences_round_trips(#[case] backend: Backend) {
         "should read back the Public + Named union"
     );
 
+    // One edit, two targetings.
+    let edit = UpdateRawPost::new("round-trip")
+        .title("Post round-trip")
+        .body("body text")
+        .unpublish();
+
     // Subscribers-only.
-    let body: PostBody = "body text".into();
-    let update_subs = UpdatePostInput {
-        title: Some("Post round-trip".into()),
-        slug: "round-trip".parse().unwrap(),
-        body: body.clone(),
-        format: PostFormat::Markdown,
-        rendered: RenderOutput::render(&body, &PostFormat::Markdown),
-        unpublish: true,
-        explicit_published_at: None,
-        summary: None,
-        audiences: vec![AudienceTarget::Subscribers],
-    };
     state
         .posts
-        .update_post(post_id, author, &update_subs)
+        .update_post(
+            post_id,
+            author,
+            &edit
+                .clone()
+                .audiences(vec![AudienceTarget::Subscribers])
+                .build(),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -2653,13 +2625,13 @@ async fn get_post_audiences_round_trips(#[case] backend: Backend) {
     );
 
     // Private / empty → no rows → empty vec.
-    let update_private = UpdatePostInput {
-        audiences: vec![AudienceTarget::Private],
-        ..update_subs.clone()
-    };
     state
         .posts
-        .update_post(post_id, author, &update_private)
+        .update_post(
+            post_id,
+            author,
+            &edit.audiences(vec![AudienceTarget::Private]).build(),
+        )
         .await
         .unwrap();
     assert!(
@@ -4239,23 +4211,16 @@ async fn post_update_invalid_slug(#[case] backend: Backend) {
         .await
         .post_id;
 
-    let body: PostBody = "Updated content".into();
     let update_result = state
         .posts
         .update_post(
             post_id,
             user,
-            &UpdatePostInput {
-                title: Some("Updated".into()),
-                slug: "second-slug".parse().unwrap(),
-                body: body.clone(),
-                format: PostFormat::Markdown,
-                rendered: RenderOutput::render(&body, &PostFormat::Markdown),
-                unpublish: true,
-                explicit_published_at: None,
-                summary: None,
-                audiences: vec![AudienceTarget::Public],
-            },
+            &UpdateRawPost::new("second-slug")
+                .title("Updated")
+                .body("Updated content")
+                .unpublish()
+                .build(),
         )
         .await;
 
@@ -4594,23 +4559,15 @@ async fn update_soft_deleted_post(#[case] backend: Backend) {
         .expect("soft_delete_post failed");
 
     // Try to update - should fail with NotFound since we're using post_id that doesn't exist in the update logic
-    let body: PostBody = "New content".into();
     let _result = state
         .posts
         .update_post(
             post_id,
             user,
-            &UpdatePostInput {
-                title: Some("Updated".into()),
-                slug: "updated-slug".parse().unwrap(),
-                body: body.clone(),
-                format: PostFormat::Markdown,
-                rendered: RenderOutput::render(&body, &PostFormat::Markdown),
-                unpublish: false,
-                explicit_published_at: None,
-                summary: None,
-                audiences: vec![AudienceTarget::Public],
-            },
+            &UpdateRawPost::new("updated-slug")
+                .title("Updated")
+                .body("New content")
+                .build(),
         )
         .await;
 
@@ -4725,23 +4682,15 @@ async fn post_revisions_created(#[case] backend: Backend) {
 
     let post_id = SeedRawPost::new(user).draft().seed(state).await.post_id;
 
-    let body: PostBody = "Updated content".into();
     let result = state
         .posts
         .update_post(
             post_id,
             user,
-            &UpdatePostInput {
-                title: Some("Updated".into()),
-                slug: "revision-test".parse().unwrap(),
-                body: body.clone(),
-                format: PostFormat::Markdown,
-                rendered: RenderOutput::render(&body, &PostFormat::Markdown),
-                unpublish: false,
-                explicit_published_at: None,
-                summary: None,
-                audiences: vec![AudienceTarget::Public],
-            },
+            &UpdateRawPost::new("revision-test")
+                .title("Updated")
+                .body("Updated content")
+                .build(),
         )
         .await
         .expect("update_post failed");

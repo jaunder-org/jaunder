@@ -2487,7 +2487,7 @@ mod tests {
     use crate::test_support::{
         backends, create_draft_via_service, create_post_via_service, fetch_post_media,
         media_ref_for, media_row_exists, media_url_for, seed_media, seed_users,
-        update_post_body_via_service, Backend, CloseablePool, SeedRawPost, SeedUser,
+        update_post_body_via_service, Backend, CloseablePool, SeedRawPost, SeedUser, UpdateRawPost,
         MEDIA_TEST_SHA256,
     };
     use common::test_support::{
@@ -2705,17 +2705,12 @@ mod tests {
             .await
             .post_id;
 
-        let body: PostBody = "Test body".into();
-        let update = |summary| UpdatePostInput {
-            title: Some("Test Title".into()),
-            slug: parse_slug("summary-edit"),
-            body: body.clone(),
-            format: PostFormat::Markdown,
-            rendered: RenderOutput::render(&body, &PostFormat::Markdown),
-            unpublish: false,
-            explicit_published_at: None,
-            summary,
-            audiences: vec![AudienceTarget::Public],
+        let update = |summary: Option<PostSummary>| {
+            UpdateRawPost::new("summary-edit")
+                .title("Test Title")
+                .body("Test body")
+                .summary(summary)
+                .build()
         };
 
         // An edit replaces the summary.

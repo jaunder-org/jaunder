@@ -14,7 +14,7 @@
 #![expect(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::media::MediaRecord;
-use crate::posts::{CreatePostError, CreatePostInput};
+use crate::posts::{CreatePostError, CreatePostInput, UpdatePostInput};
 use crate::sql::quote_identifier;
 use crate::{AppState, DbConnectOptions, PostFormat, PostRecord, SiteConfigStorage};
 use async_trait::async_trait;
@@ -1090,6 +1090,119 @@ impl SeedRawPost {
         self.create(state)
             .await
             .expect("seed raw post should be created")
+    }
+}
+
+/// Builder for an [`UpdatePostInput`] — the edit-side sibling of [`SeedRawPost`], with the
+/// same defaults-plus-overrides shape. `UpdatePostInput` has nine fields and an update test
+/// typically varies one or two, so every call site used to spell the other seven; this
+/// builder defaults them and a test overrides only what it means.
+///
+/// Defaults: title `"Updated Title"`, body `"updated body"`, Markdown, no summary, `[Public]`,
+/// and **no change to publication** (`unpublish: false`, `explicit_published_at: None`) — so
+/// a test that unpublishes says so with [`unpublish`][Self::unpublish]. The slug is the one
+/// required argument because an update's slug is what collides (or does not) with a sibling
+/// post, so no default could be right.
+///
+/// `rendered` has no setter: [`build`][Self::build] derives it from `body`/`format` with the
+/// production [`RenderOutput::render`], exactly as `SeedRawPost` does, so no call site
+/// re-spells the render and no input can carry a reference set that disagrees with its HTML
+/// (#711).
+///
+/// `Clone` is load-bearing: the audience tests vary one field off a shared base, which is
+/// what their `..base.clone()` struct-update spreads used to express.
+#[derive(Clone)]
+pub struct UpdateRawPost {
+    title: Option<PostTitle>,
+    slug: Slug,
+    body: PostBody,
+    format: PostFormat,
+    unpublish: bool,
+    explicit_published_at: Option<DateTime<Utc>>,
+    summary: Option<PostSummary>,
+    audiences: Vec<AudienceTarget>,
+}
+
+impl UpdateRawPost {
+    /// A titled, Public, Markdown edit at `slug` that leaves publication alone.
+    #[must_use]
+    pub fn new(slug: impl AsRef<str>) -> Self {
+        Self {
+            title: Some(parse_post_title("Updated Title")),
+            slug: parse_slug(slug.as_ref()),
+            body: "updated body".to_owned().into(),
+            format: PostFormat::Markdown,
+            unpublish: false,
+            explicit_published_at: None,
+            summary: None,
+            audiences: vec![AudienceTarget::Public],
+        }
+    }
+
+    /// Override the title a test reads back.
+    #[must_use]
+    pub fn title(mut self, title: &str) -> Self {
+        self.title = Some(parse_post_title(title));
+        self
+    }
+
+    /// Override the body (the rendered HTML and its media references re-derive from it).
+    #[must_use]
+    pub fn body(mut self, body: impl Into<PostBody>) -> Self {
+        self.body = body.into();
+        self
+    }
+
+    /// Override the markup format (the rendered HTML re-derives accordingly).
+    #[must_use]
+    pub fn format(mut self, format: PostFormat) -> Self {
+        self.format = format;
+        self
+    }
+
+    /// Clear `published_at` back to NULL (draft / unschedule).
+    #[must_use]
+    pub fn unpublish(mut self) -> Self {
+        self.unpublish = true;
+        self
+    }
+
+    // No `published_at` setter: no update test backdates or schedules one, and a builder
+    // method nothing calls is a guess about a future caller. `explicit_published_at` stays
+    // in the built input (the field is part of `UpdatePostInput`), defaulted to `None`;
+    // add the setter alongside the first test that needs it.
+
+    /// Set — or, with `None`, clear — the summary/excerpt. Takes `impl Into<Option<_>>` so a
+    /// test that only ever sets one reads like [`SeedRawPost::summary`], while the
+    /// set-then-clear test passes its `Option` straight through.
+    #[must_use]
+    pub fn summary(mut self, summary: impl Into<Option<PostSummary>>) -> Self {
+        self.summary = summary.into();
+        self
+    }
+
+    /// Replace the audience targeting (default `[Public]`).
+    #[must_use]
+    pub fn audiences(mut self, audiences: Vec<AudienceTarget>) -> Self {
+        self.audiences = audiences;
+        self
+    }
+
+    /// Resolve into the [`UpdatePostInput`] to hand `update_post`, rendering `body` here.
+    #[must_use]
+    pub fn build(self) -> UpdatePostInput {
+        let rendered = RenderOutput::render(&self.body, &self.format);
+        UpdatePostInput {
+            title: self.title,
+            slug: self.slug,
+            body: self.body,
+            format: self.format,
+            rendered,
+            unpublish: self.unpublish,
+            explicit_published_at: self.explicit_published_at,
+            summary: self.summary,
+            audiences: self.audiences,
+        }
     }
 }
 

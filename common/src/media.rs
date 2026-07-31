@@ -88,7 +88,7 @@ use crate::strum_enum::{impl_string_serde_proxy, parse_error};
 /// fn takes_hash(_: common::media::ContentHash) {}
 /// takes_hash("abc".to_string()); // a String is not a ContentHash
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq, Hash, StrNewtype)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, StrNewtype)]
 pub struct ContentHash(String);
 
 /// Error returned when a string cannot be parsed as a [`ContentHash`].
@@ -188,7 +188,7 @@ impl ContentHash {
 /// fn takes_filename(_: common::media::Filename) {}
 /// takes_filename("a".to_string()); // a String is not a Filename
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq, Hash, StrNewtype)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, StrNewtype)]
 pub struct Filename(String);
 
 /// Error returned when a string is not a usable media filename leaf.
@@ -541,6 +541,8 @@ pub fn is_valid_content_hash(hash: &str) -> bool {
     Debug,
     PartialEq,
     Eq,
+    PartialOrd,
+    Ord,
     Hash,
     serde::Serialize,
     serde::Deserialize,
@@ -670,7 +672,14 @@ pub fn media_url(
 ///
 /// Carries no `user_id`: a URL does not name an owner, and the same entry can be referenced
 /// from any post. Consumers that need ownership join through the referencing post (#711).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+///
+/// Ordered so a set of references has one deterministic serialization — extraction collects
+/// into a `BTreeSet`, which gives dedup and a stable row order in one move, so callers
+/// writing those rows get a byte-identical result for a byte-identical body. The order is
+/// the derived one: field by field, in declaration order, each member ordering as its inner
+/// value. (#761 asks whether the newtype derives should carry `Ord` in their standard
+/// trailer, rather than each type opting in as `ByteSize` and these three now do.)
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MediaRef {
     /// Which storage root the entry lives under.
     pub source: MediaSource,
@@ -678,37 +687,6 @@ pub struct MediaRef {
     pub sha256: ContentHash,
     /// The canonical, percent-encoded filename segment (ADR-0080, #720).
     pub filename: Filename,
-}
-
-impl MediaRef {
-    /// The lexicographic ordering key: the same triple, as string views.
-    fn order_key(&self) -> (&str, &str, &str) {
-        (
-            self.source.as_ref(),
-            self.sha256.as_ref(),
-            self.filename.as_ref(),
-        )
-    }
-}
-
-// Ordered so a set of references has one deterministic serialization — extraction collects
-// into a `BTreeSet`, which gives dedup and a stable row order in one move, and callers
-// writing those rows get a byte-identical result for a byte-identical body.
-//
-// Implemented here rather than derived because none of the three members is `Ord`, and
-// giving `MediaSource`/`ContentHash`/`Filename` an ordering apiece would push a trait onto
-// three widely-shared domain types to serve one local need. The key is their string views,
-// so the order is the obvious lexicographic one.
-impl Ord for MediaRef {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.order_key().cmp(&other.order_key())
-    }
-}
-
-impl PartialOrd for MediaRef {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
 }
 
 /// Parses a media URL into the [`MediaRef`] it names, or `None` if it names none.
@@ -2067,20 +2045,26 @@ mod tests {
             make(MediaSource::Upload, "a.jpg") < make(MediaSource::Upload, "b.jpg"),
             "filename orders last"
         );
-        // `cached` sorts before `upload`, so the source dominates the filename.
+        // The source dominates the filename. Which source sorts first is the *derived*
+        // order — by variant declaration, so `Upload` before `Cached` — not the
+        // lexicographic order of their tokens, which would put `cached` first. Nothing
+        // depends on the direction; the ordering exists only so one body yields one
+        // byte-identical set of rows.
         assert!(
-            make(MediaSource::Cached, "z.jpg") < make(MediaSource::Upload, "a.jpg"),
+            make(MediaSource::Upload, "z.jpg") < make(MediaSource::Cached, "a.jpg"),
             "source orders first"
         );
 
         let mut sorted = [
-            make(MediaSource::Upload, "b.jpg"),
             make(MediaSource::Cached, "z.jpg"),
+            make(MediaSource::Upload, "b.jpg"),
             make(MediaSource::Upload, "a.jpg"),
         ];
         sorted.sort();
         let names: Vec<&str> = sorted.iter().map(|r| r.filename.as_ref()).collect();
-        assert_eq!(names, ["z.jpg", "a.jpg", "b.jpg"]);
+        // Both `Upload`s first (source dominates), `a` before `b` within them, and the
+        // `Cached` one last regardless of its filename sorting first.
+        assert_eq!(names, ["a.jpg", "b.jpg", "z.jpg"]);
     }
 
     #[test]
