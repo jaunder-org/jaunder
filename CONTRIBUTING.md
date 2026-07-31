@@ -389,7 +389,7 @@ Jaunder uses OpenTelemetry for deep performance analysis (see
   **Running `land` is the merge approval**; invoked from the PR's own branch it
   refuses whenever your local HEAD differs from the PR head at all — ahead,
   behind, or diverged — since what would merge is then not what you are looking
-  at. See [the ADR](docs/adr/drafts/xtask-github-pr-observation.md) for why `gh`
+  at. See [the ADR](docs/adr/0087-xtask-github-pr-observation.md) for why `gh`
   is the transport and why the required-check set is read from the ruleset per
   run.
 

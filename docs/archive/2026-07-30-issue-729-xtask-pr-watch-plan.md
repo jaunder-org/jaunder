@@ -1810,13 +1810,13 @@ git commit -m "feat(xtask): wire pr watch/land into the CLI with remote-derived 
 
 **Files:**
 
-- Create: `docs/adr/drafts/xtask-github-pr-observation.md` (numberless —
+- Create: `docs/adr/0086-xtask-github-pr-observation.md` (numberless —
   `cargo xtask adr promote` numbers it at ship, per ADR-0048)
 
 **Interfaces:** none (documentation).
 
 - [x] **Step 1: Write the ADR draft** —
-      `docs/adr/drafts/xtask-github-pr-observation.md`.
+      `docs/adr/0086-xtask-github-pr-observation.md`.
 
 Follow `docs/adr/template.md`. **The H1 must be exactly `# ADR-DRAFT: <Title>`
 and the status must be lowercase `accepted`** — `adr_readme.rs:25-31` defines
