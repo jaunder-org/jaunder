@@ -10,36 +10,27 @@ use crate::post_title::PostTitle;
 
 /// The format/markup language used to author a post body.
 ///
-/// A `strum` string enum (ADR: `docs/adr/0075-adopt-strum-retire-str-enum.md`):
+/// A closed string enum (`#[text_enum]`, ADR-0075 as amended by #746):
 /// `serialize_all = "snake_case"` gives the wire/DB token, `VariantArray` the
-/// enumeration, `EnumMessage` the editor label (absent = not user-authored), and
-/// `parse_err_ty` the named `InvalidPostFormat`.
+/// enumeration, and `EnumMessage` the editor label (absent = not user-authored). The
+/// attribute injects strum's token/`Display`/`FromStr` derives and generates the named
+/// `InvalidPostFormat`, the serde bridge, and — via `sqlx` — the typed TEXT column.
 ///
-/// serde routes through an owned-`String` proxy (`into`/`try_from`), NOT the derived
-/// enum (de)serializer: deserialize goes `String` → `FromStr`, so an invalid token
-/// surfaces the domain `InvalidPostFormat` message (asserted at the web boundary,
-/// `server/tests/web/web_posts.rs`) rather than serde's generic "unknown variant", and
-/// so `serde_qs` form transport decodes a bare form value. It also single-sources the
-/// wire token in `as_str`/`serialize_all` (no `rename_all`).
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    Hash,
-    Default,
-    serde::Serialize,
-    serde::Deserialize,
-    strum::VariantArray,
-    strum::AsRefStr,
-    strum::Display,
-    strum::EnumString,
-    strum::EnumMessage,
+/// serde is the attribute's own bridge, NOT the derived enum (de)serializer: deserialize
+/// goes `String` → `FromStr`, so an invalid token surfaces the domain
+/// `InvalidPostFormat` message (asserted at the web boundary,
+/// `server/tests/web/web_posts.rs`) rather than serde's generic "unknown variant", and so
+/// `serde_qs` form transport decodes a bare form value. The wire token is single-sourced
+/// in `serialize_all` (no `rename_all`).
+#[macros::text_enum(
+    sqlx,
+    error = InvalidPostFormat,
+    message = "post format must be \"markdown\", \"org\", or \"html\""
 )]
-#[serde(into = "String", try_from = "String")]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, Default, strum::VariantArray, strum::EnumMessage,
+)]
 #[strum(serialize_all = "snake_case")]
-#[strum(parse_err_ty = InvalidPostFormat, parse_err_fn = post_format_parse_err)]
 pub enum PostFormat {
     /// CommonMark/GitHub-flavored Markdown.
     #[default]
@@ -52,20 +43,6 @@ pub enum PostFormat {
     /// so it carries no editor `message` and is filtered out of format toggles.
     Html,
 }
-
-crate::strum_enum::parse_error!(
-    InvalidPostFormat,
-    post_format_parse_err,
-    "post format must be \"markdown\", \"org\", or \"html\""
-);
-
-// serde `into`/`try_from = "String"` proxy so a bad token surfaces the named
-// `InvalidPostFormat` message (deserialize routes through `FromStr`).
-crate::strum_enum::impl_string_serde_proxy!(PostFormat);
-
-// Typed `sqlx` bind/decode (feature = "sqlx"): stores/loads the TEXT token as a
-// `PostFormat` value, like the newtypes (#438) — not a stringly `.to_string()` strip.
-crate::db_enum::impl_text_column_enum!(PostFormat);
 
 /// HTML that is **safe to emit unescaped** — the type's invariant is "contains no
 /// active markup", established by scrubbing against an allowlist. Before #445 this

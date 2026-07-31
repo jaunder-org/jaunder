@@ -63,7 +63,6 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::root_relative_url::RootRelativeUrl;
-use crate::strum_enum::{impl_string_serde_proxy, parse_error};
 
 /// A validated media content hash: exactly 64 lowercase hex characters
 /// (`[0-9a-f]{64}`), the canonical `format!("{digest:x}")` form of a SHA-256
@@ -528,49 +527,25 @@ pub fn is_valid_content_hash(hash: &str) -> bool {
 }
 
 /// Source of a media record — the provenance segment of the storage layout
-/// (`upload` vs a remote `cached` file). A `strum` string enum (ADR-0075):
-/// `serialize_all = "snake_case"` gives the wire/DB token
-/// (`upload`/`cached`), with a named `InvalidMediaSource` parse error via
-/// `parse_err_ty`/`parse_err_fn`. serde routes through an owned-`String` proxy
-/// (`into`/`try_from`) so a bad wire value surfaces the domain error (the
-/// `#[server]` media DTO/wire args, #577); `impl_text_column_enum!` gives the
-/// typed `sqlx` bind/decode for the stored TEXT token.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    serde::Serialize,
-    serde::Deserialize,
-    strum::AsRefStr,
-    strum::Display,
-    strum::EnumString,
+/// (`upload` vs a remote `cached` file). A closed string enum (`#[text_enum]`,
+/// ADR-0075 as amended by #746): `serialize_all = "snake_case"` gives the wire/DB
+/// token (`upload`/`cached`), and the attribute generates the named
+/// `InvalidMediaSource` parse error, the serde bridge — so a bad wire value surfaces
+/// the domain error at the `#[server]` media DTO/wire args (#577) — and, via `sqlx`,
+/// the typed bind/decode for the stored TEXT token.
+#[macros::text_enum(
+    sqlx,
+    error = InvalidMediaSource,
+    message = "media source must be \"upload\" or \"cached\""
 )]
-#[serde(into = "String", try_from = "String")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[strum(serialize_all = "snake_case")]
-#[strum(parse_err_ty = InvalidMediaSource, parse_err_fn = media_source_parse_err)]
 pub enum MediaSource {
     /// File uploaded directly by a local user.
     Upload,
     /// Remote file cached locally by the system.
     Cached,
 }
-
-parse_error!(
-    InvalidMediaSource,
-    media_source_parse_err,
-    "media source must be \"upload\" or \"cached\""
-);
-
-impl_string_serde_proxy!(MediaSource);
-
-// Typed `sqlx` bind/decode (feature = "sqlx"): stores/loads the TEXT token as a
-// `MediaSource` value, not a stringly `.as_str()`/`.parse()` strip.
-crate::db_enum::impl_text_column_enum!(MediaSource);
 
 /// The percent-encode set for the filename segment of a media path: everything
 /// [`NON_ALPHANUMERIC`] encodes, minus the RFC 3986 *unreserved* marks `-._~`.
