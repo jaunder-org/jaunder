@@ -36,7 +36,6 @@ pub mod site;
 pub mod slug;
 pub mod smtp_password;
 pub mod smtp_username;
-mod strum_enum;
 pub mod tag;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

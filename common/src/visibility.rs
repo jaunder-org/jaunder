@@ -2,80 +2,49 @@
 //! the viewer identity, and the subscription-admission seam. See ADR-0020.
 
 use crate::ids::{AudienceId, ChannelId, UserId};
-use crate::strum_enum::parse_error;
 
-// String-backed enums use the `strum` stack (`AsRefStr`/`Display`/`EnumString`) with
-// the wire token as the snake_case variant name, plus a named `thiserror` parse error
-// via `parse_err_ty`/`parse_err_fn`. Wire-facing enums add serde (`into`/`try_from`
-// String) so a bad wire value surfaces the named error; DB-bound enums that are stored
-// as their token adopt `crate::db_enum::impl_text_column_enum!`, while FK-normalized
-// enums bind their name as a typed `&'static str` (`IntoStaticStr`).
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, Hash, strum::AsRefStr, strum::Display, strum::EnumString,
-)]
+// Every string-backed enum here is a closed string enum (`#[text_enum]`, ADR-0075 as
+// amended by #746): the attribute injects strum's `AsRefStr`/`Display`/`EnumString`/
+// `IntoStaticStr` with the wire token as the snake_case variant name, and generates the
+// named parse error plus the serde bridge. `AudienceBase` is wire-facing; the three
+// below are FK-normalized — storage binds their token as a typed `&'static str` into a
+// lookup column and parses it back.
+//
+// Those three gain `Serialize`/`Deserialize` they do not currently need, which is the
+// price of one convention rather than two (#746 D12). Note the cost: their tokens are a
+// *storage encoding*, and the absence of serde used to be a compile-time barrier before
+// they could become a wire contract. If that barrier is ever wanted back, the fix is a
+// `no_serde` option on the attribute, not an exemption from it.
+#[macros::text_enum(error = InvalidChannel, message = "channel must be \"local\"")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[strum(serialize_all = "snake_case")]
-#[strum(parse_err_ty = InvalidChannel, parse_err_fn = channel_parse_err)]
 pub enum Channel {
     Local,
 }
 
-parse_error!(
-    InvalidChannel,
-    channel_parse_err,
-    "channel must be \"local\""
-);
-
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    Hash,
-    strum::AsRefStr,
-    strum::Display,
-    strum::EnumString,
-    strum::IntoStaticStr,
+#[macros::text_enum(
+    error = InvalidSubscriptionStatus,
+    message = "subscription status must be \"active\", \"pending\", or \"blocked\""
 )]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[strum(serialize_all = "snake_case")]
-#[strum(parse_err_ty = InvalidSubscriptionStatus, parse_err_fn = subscription_status_parse_err)]
 pub enum SubscriptionStatus {
     Active,
     Pending,
     Blocked,
 }
 
-parse_error!(
-    InvalidSubscriptionStatus,
-    subscription_status_parse_err,
-    "subscription status must be \"active\", \"pending\", or \"blocked\""
-);
-
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    Hash,
-    strum::AsRefStr,
-    strum::Display,
-    strum::EnumString,
-    strum::IntoStaticStr,
+#[macros::text_enum(
+    error = InvalidTargetKind,
+    message = "audience target kind must be \"public\", \"subscribers\", or \"named\""
 )]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[strum(serialize_all = "snake_case")]
-#[strum(parse_err_ty = InvalidTargetKind, parse_err_fn = target_kind_parse_err)]
 pub enum TargetKind {
     Public,
     Subscribers,
     Named,
 }
-
-parse_error!(
-    InvalidTargetKind,
-    target_kind_parse_err,
-    "audience target kind must be \"public\", \"subscribers\", or \"named\""
-);
 
 // The mutually-exclusive built-in audience base chosen in the editor / API — the
 // typed form of the audience-picker's `base`. Composes with named audiences by
@@ -294,6 +263,38 @@ mod tests {
         ] {
             assert_eq!(b.to_string(), b.as_ref());
             assert_eq!(AudienceBase::try_from(b.as_ref()), Ok(b));
+        }
+    }
+
+    #[test]
+    fn fk_enums_round_trip_through_serde() {
+        // These three gained serde with #746 D12 and had no serde coverage before, so
+        // without this a broken `Serialize` would pass every other assertion here.
+        assert_eq!(
+            serde_json::from_str::<Channel>(&serde_json::to_string(&Channel::Local).unwrap())
+                .unwrap(),
+            Channel::Local
+        );
+        for s in [
+            SubscriptionStatus::Active,
+            SubscriptionStatus::Pending,
+            SubscriptionStatus::Blocked,
+        ] {
+            let json = serde_json::to_string(&s).unwrap();
+            assert_eq!(json, format!("\"{}\"", s.as_ref()));
+            assert_eq!(
+                serde_json::from_str::<SubscriptionStatus>(&json).unwrap(),
+                s
+            );
+        }
+        for k in [
+            TargetKind::Public,
+            TargetKind::Subscribers,
+            TargetKind::Named,
+        ] {
+            let json = serde_json::to_string(&k).unwrap();
+            assert_eq!(json, format!("\"{}\"", k.as_ref()));
+            assert_eq!(serde_json::from_str::<TargetKind>(&json).unwrap(), k);
         }
     }
 
