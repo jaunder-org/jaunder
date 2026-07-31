@@ -18,7 +18,7 @@ use crate::audiences::{self, list_mine};
 use crate::avatar::Avatar;
 use crate::error::WebError;
 use crate::feed_discovery::{FeedDiscovery, RsdDiscovery};
-use crate::forms::Field;
+use crate::forms::{Field, ValidatedTextarea};
 use crate::media::MediaUpload;
 // `Get`/`Update` are deliberately absent from this list: naming the generated
 // structs here would shadow the identically-named `leptos::prelude` traits this
@@ -566,27 +566,14 @@ pub fn PostCreateForm(
                     />
                     <MediaUpload show_result=true />
                     <div style="margin-top:10px">
-                        <label class="j-field-label">"Summary"</label>
-                        <textarea
-                            id="compose-summary"
-                            class="j-field-val"
-                            rows=3
+                        <ValidatedTextarea<
+                        PostSummary,
+                    >
+                            label="Summary"
+                            name="summary"
+                            field=summary_field
                             placeholder="Optional summary or excerpt"
-                            prop:value=summary_field.value
-                            on:input=move |ev| {
-                                let v = event_target_value(&ev);
-                                summary_field.value.set(v.clone());
-                                summary_field.error.set(summary_field.error_for(&v));
-                            }
-                            on:blur=move |_| summary_field.touch()
                         />
-                        {move || {
-                            summary_field
-                                .is_touched()
-                                .then(|| summary_field.error.get())
-                                .flatten()
-                                .map(|msg| view! { <p class="error">{msg}</p> })
-                        }}
                     </div>
                     <TagInput tags=tags />
                     <div class="j-composer-toolbar">
@@ -687,30 +674,14 @@ pub fn PostCreateForm(
                             }}
                         </div>
                         <div style="margin-top:10px">
-                            <label class="j-field-label" for="compose-summary">
-                                "Summary"
-                            </label>
-                            <textarea
-                                id="compose-summary"
+                            <ValidatedTextarea<
+                            PostSummary,
+                        >
+                                label="Summary"
                                 name="summary"
+                                field=summary_field
                                 placeholder="Optional summary or excerpt"
-                                class="j-field-val"
-                                rows=3
-                                prop:value=summary_field.value
-                                on:input=move |ev| {
-                                    let v = event_target_value(&ev);
-                                    summary_field.value.set(v.clone());
-                                    summary_field.error.set(summary_field.error_for(&v));
-                                }
-                                on:blur=move |_| summary_field.touch()
                             />
-                            {move || {
-                                summary_field
-                                    .is_touched()
-                                    .then(|| summary_field.error.get())
-                                    .flatten()
-                                    .map(|msg| view! { <p class="error">{msg}</p> })
-                            }}
                         </div>
                         <div style="margin-top:10px">
                             <TagInput tags=tags />
@@ -1267,30 +1238,14 @@ pub fn EditPostPage() -> impl IntoView {
                                                 }
                                             })}
                                         <div style="margin-top:10px">
-                                            <label class="j-field-label" for="edit-summary">
-                                                "Summary"
-                                            </label>
-                                            <textarea
-                                                id="edit-summary"
+                                            <ValidatedTextarea<
+                                            PostSummary,
+                                        >
+                                                label="Summary"
                                                 name="summary"
+                                                field=summary_field
                                                 placeholder="Optional summary or excerpt"
-                                                class="j-field-val"
-                                                rows=3
-                                                prop:value=summary_field.value
-                                                on:input=move |ev| {
-                                                    let v = event_target_value(&ev);
-                                                    summary_field.value.set(v.clone());
-                                                    summary_field.error.set(summary_field.error_for(&v));
-                                                }
-                                                on:blur=move |_| summary_field.touch()
                                             />
-                                            {move || {
-                                                summary_field
-                                                    .is_touched()
-                                                    .then(|| summary_field.error.get())
-                                                    .flatten()
-                                                    .map(|msg| view! { <p class="error">{msg}</p> })
-                                            }}
                                         </div>
                                         <div style="margin-top:10px">
                                             <TagInput tags=post_tags />

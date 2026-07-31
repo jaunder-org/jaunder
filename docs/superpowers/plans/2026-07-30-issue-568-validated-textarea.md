@@ -489,7 +489,7 @@ git commit -m "feat(web/forms): add ValidatedTextarea<T> (#568)"
 **This task is atomic** — the markup change removes the ids the current
 selectors key on, so both halves land in one commit.
 
-- [ ] **Step 1: Replace all three site bodies**
+- [x] **Step 1: Replace all three site bodies**
 
 Each site currently spans a `<label class="j-field-label">`, a `<textarea>`, and
 a touched-gated error block. Replace all three of those with a single call,
@@ -516,7 +516,7 @@ for submission (all composers dispatch typed args, `posts/component.rs:508`,
 Import `ValidatedTextarea` alongside the existing `crate::forms::Field` import
 at the top of the file.
 
-- [ ] **Step 2: Add the shared selector**
+- [x] **Step 2: Add the shared selector**
 
 In `end2end/tests/selectors.ts`, inside the `SEL` object:
 
@@ -525,7 +525,7 @@ In `end2end/tests/selectors.ts`, inside the `SEL` object:
   postSummary: 'textarea[name="summary"]',
 ```
 
-- [ ] **Step 3: Swap the selectors**
+- [x] **Step 3: Swap the selectors**
 
 Replace every `"#compose-summary"` and `"#edit-summary"` literal with
 `SEL.postSummary`:
@@ -542,7 +542,8 @@ Replace every `"#compose-summary"` and `"#edit-summary"` literal with
   `await page.fill(SEL.postSummary, opts.summary);` (`SEL` is already imported
   at `posts.ts:13`)
 
-- [ ] **Step 4: Verify no id survives, and the name landed**
+- [x] **Step 4: Verify no id survives, and the name landed** — no id hits; three
+      `name="summary"`
 
 Run: `rg -n 'compose-summary|edit-summary' web/src end2end` Expected: **no
 output**.
@@ -551,7 +552,7 @@ Run: `rg -n 'name="summary"' web/src/posts/component.rs` Expected: **three
 hits** — one per site. This is the only check on AC6; no e2e drives the compact
 composer's summary (that is Task 1's first follow-up).
 
-- [ ] **Step 5: Run the posts e2e**
+- [x] **Step 5: Run the posts e2e** — 34 passed
 
 Run: `devtool run -- cargo xtask e2e-local posts.spec.ts` Expected: PASS —
 specifically `posts.spec.ts:36` (create with a summary), `:63` (over-long
