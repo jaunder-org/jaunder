@@ -574,7 +574,10 @@ pub trait PrSource {
 pub struct GhSource;   // the real impl; `resolve` lands in Task 7
 ```
 
-- [ ] **Step 1: Write `PR_QUERY` first**
+- [x] **Step 1: Write `PR_QUERY` first** — validated live against PR 727;
+      `mergeStateStatus` needs no preview header. `headRefName` was added beyond the
+      listed fields, because the Task 6 divergence guard needs the PR's head ref and
+      nothing else supplies it.
 
 The capture in Step 2 runs this document, so it must exist before the fixtures
 do. Write `PR_QUERY` as one GraphQL document requesting, per F4:
@@ -586,7 +589,7 @@ do. Write `PR_QUERY` as one GraphQL document requesting, per F4:
   `head_sha` and `head_committed_at`
 - `statusCheckRollup { contexts(first:100) { nodes { ... on CheckRun { name conclusion status detailsUrl startedAt completedAt } ... on StatusContext { context state targetUrl createdAt } } } }`
 
-- [ ] **Step 2: Capture the fixtures** (the only live-network step in the whole
+- [x] **Step 2: Capture the fixtures** (the only live-network step in the whole
       plan)
 
 ```bash
@@ -633,7 +636,7 @@ Put a comment at the head of the test module naming **all three** as
 synthesized, so a later reader does not treat a hand-edit as evidence about
 GitHub's shape.
 
-- [ ] **Step 3: Write the failing tests**
+- [x] **Step 3: Write the failing tests**
 
 ```rust
 #[cfg(test)]
@@ -739,12 +742,13 @@ mod tests {
 }
 ```
 
-- [ ] **Step 4: Run the tests, verify they fail**
+- [x] **Step 4: Run the tests, verify they fail**
 
 Run: `cargo test --manifest-path xtask/Cargo.toml pr::snapshot` Expected: FAIL —
-`parse_snapshot` / `parse_required_checks` not defined.
+`parse_snapshot` / `parse_required_checks` not defined. **Observed** exactly that.
 
-- [ ] **Step 5: Implement against the tests**
+- [x] **Step 5: Implement against the tests** — the fieldless state enums are
+      `Copy` (a first pass without it hit a move-after-use in `parse_check`).
 
 Write the three parse functions to the signatures above. Every branch is pinned
 by the tests, so the tests determine the bodies. Two rules they encode:
@@ -762,12 +766,12 @@ Declare the `PrSource` trait and a unit `GhSource` implementing `snapshot` /
 `resolve` as `unimplemented!("Task 7")` — **no test calls it yet**, and Task 7
 replaces it.
 
-- [ ] **Step 6: Run the tests, verify they pass**
+- [x] **Step 6: Run the tests, verify they pass**
 
 Run: `cargo test --manifest-path xtask/Cargo.toml pr::snapshot` Expected: PASS
-(11 tests)
+(11 tests) — **observed 11 passed.**
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit** — `5099098d`, full `cargo xtask check` green.
 
 ```bash
 git add xtask/src/pr/snapshot.rs xtask/src/pr/testdata xtask/src/pr/mod.rs

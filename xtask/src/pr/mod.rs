@@ -5,8 +5,11 @@
 //! pure state machine over those values, and `watch`/`land` drive the loop. Above
 //! `snapshot` nothing sees JSON, a string status, or an exit code.
 
+pub mod decide;
 pub mod gh;
 pub mod snapshot;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 use serde::{Serialize, Serializer};
 
