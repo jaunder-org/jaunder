@@ -202,7 +202,7 @@ pub async fn collection_get(
         previous: None,
     };
 
-    let xml = render_feed(&meta, &entries);
+    let xml = render_feed(&meta, &entries)?;
     Ok(([(header::CONTENT_TYPE, FEED_CONTENT_TYPE)], xml).into_response())
 }
 
@@ -269,7 +269,7 @@ pub async fn member_get(
     .await?;
     let base = required_base_url(site_config.as_ref()).await?;
     let entry = post_to_entry(&post, &base);
-    let xml = entry_to_xml(&entry);
+    let xml = entry_to_xml(&entry)?;
     Ok((
         [
             (header::CONTENT_TYPE, ENTRY_CONTENT_TYPE.to_string()),
@@ -416,7 +416,7 @@ pub async fn collection_post(
             .get_post_by_id(post_id, &viewer)
             .await?
             .ok_or(HandlerError::NotFound)?;
-        return Ok(post_entry_response(StatusCode::OK, &post, &base, &username));
+        return post_entry_response(StatusCode::OK, &post, &base, &username);
     }
 
     // Fresh create: a non-conflict error propagates via `?`.
@@ -426,12 +426,7 @@ pub async fn collection_post(
         .get_post_by_id(created.post_id, &viewer)
         .await?
         .ok_or(HandlerError::Internal)?;
-    Ok(post_entry_response(
-        StatusCode::CREATED,
-        &post,
-        &base,
-        &username,
-    ))
+    post_entry_response(StatusCode::CREATED, &post, &base, &username)
 }
 
 /// Builds a member-entry response (used by create `201` and the idempotent-replay
@@ -441,11 +436,11 @@ fn post_entry_response(
     post: &PostRecord,
     base: &AbsoluteUrl,
     username: &Username,
-) -> Response {
+) -> Result<Response, HandlerError> {
     let location_path = format!("/atompub/{username}/posts/{}", post.post_id);
     let location = compose(base, &location_path);
-    let xml = entry_to_xml(&post_to_entry(post, base));
-    (
+    let xml = entry_to_xml(&post_to_entry(post, base))?;
+    Ok((
         status,
         [
             (header::CONTENT_TYPE, ENTRY_CONTENT_TYPE.to_string()),
@@ -454,7 +449,7 @@ fn post_entry_response(
         ],
         xml,
     )
-        .into_response()
+        .into_response())
 }
 
 /// `PUT /atompub/{username}/posts/{post_id}` — replace a post from an `AtomPub` entry.
@@ -539,7 +534,7 @@ pub async fn member_put(
 
     let base = required_base_url(site_config.as_ref()).await?;
     let entry_out = post_to_entry(&post, &base);
-    let xml = entry_to_xml(&entry_out);
+    let xml = entry_to_xml(&entry_out)?;
 
     Ok((
         StatusCode::OK,

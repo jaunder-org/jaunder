@@ -3,8 +3,9 @@
 //! `write_text_element` was previously defined identically in `entry.rs` and
 //! `service.rs`, and several serializers hand-rolled their own empty-element
 //! writes. Centralizing them here removes that duplication and keeps element
-//! and escaping behavior consistent across the entry, feed, service,
-//! categories, and media-link serializers.
+//! and escaping behavior consistent across the service and categories
+//! serializers. (The Atom documents — entry, feed, media-link — no longer pass
+//! through here at all: `atom_syndication` writes them.)
 //!
 //! Every serializer writes into an in-memory `Writer<Vec<u8>>`, whose only
 //! failure mode is real I/O — which a `Vec<u8>` never produces. These helpers
@@ -38,9 +39,4 @@ pub(super) fn write_empty_element<V: AsRef<str>>(
         start.push_attribute((*key, value.as_ref()));
     }
     let _ = writer.write_event(Event::Empty(start));
-}
-
-/// Writes a self-closing `<link rel="..." href="..."/>` element.
-pub(super) fn write_link(writer: &mut Writer<Vec<u8>>, rel: &str, href: &str) {
-    write_empty_element(writer, "link", &[("rel", rel), ("href", href)]);
 }

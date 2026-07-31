@@ -121,7 +121,7 @@ pub async fn collection_post(
 
     let base = required_base_url(site_config.as_ref()).await?;
     let entry = media_link_entry(&record, &base, &username);
-    let xml = render_media_link_entry(&entry);
+    let xml = render_media_link_entry(&entry)?;
     let status = if existed {
         StatusCode::OK
     } else {
@@ -165,7 +165,7 @@ pub async fn member_get(
 
     let base = required_base_url(site_config.as_ref()).await?;
     let entry = media_link_entry(&record, &base, &username);
-    let xml = render_media_link_entry(&entry);
+    let xml = render_media_link_entry(&entry)?;
     Ok(([(header::CONTENT_TYPE, ENTRY_CONTENT_TYPE)], xml).into_response())
 }
 

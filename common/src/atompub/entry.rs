@@ -15,12 +15,9 @@
 use std::collections::BTreeMap;
 
 use atom_syndication::extension::Extension;
-use atom_syndication::Entry;
-use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
-use quick_xml::Writer;
+use atom_syndication::{Content, Entry, Feed, Link, Text};
 
-use super::xml::{write_empty_element, write_link, write_text_element};
-use super::{AtomPubError, APP_NS, ATOM_NS, J_NS};
+use super::{AtomPubError, APP_NS, J_NS};
 use crate::absolute_url::AbsoluteUrl;
 use crate::media::{ContentType, Filename};
 use crate::time::UtcInstant;
@@ -60,6 +57,10 @@ pub fn set_draft(entry: &mut Entry, draft: bool) {
         elements.remove("control");
     }
     entry.extensions.retain(|_, elements| !elements.is_empty());
+    // The writer emits `xmlns:*` from `Entry::namespaces`, so this helper owns the
+    // `app` prefix's presence there — declared only while the marker it labels
+    // actually exists.
+    entry.namespaces.remove("app");
 
     if draft {
         let draft_ext = Extension {
@@ -81,6 +82,9 @@ pub fn set_draft(entry: &mut Entry, draft: bool) {
             .entry("app".to_string())
             .or_default()
             .insert("control".to_string(), vec![control]);
+        entry
+            .namespaces
+            .insert("app".to_string(), APP_NS.to_string());
     }
 }
 
@@ -120,6 +124,9 @@ pub fn set_j_slug(entry: &mut Entry, slug: &str) {
         .entry("j".to_string())
         .or_default()
         .insert("slug".to_string(), vec![ext]);
+    // As with `set_draft`, this helper owns its prefix's `xmlns:j` declaration.
+    // There is no clearing counterpart: a slug is set on every outgoing entry.
+    entry.namespaces.insert("j".to_string(), J_NS.to_string());
 }
 
 // ---------------------------------------------------------------------------
@@ -145,79 +152,32 @@ pub fn entry_from_xml(xml: &str) -> Result<Entry, AtomPubError> {
 // Serialization
 // ---------------------------------------------------------------------------
 
+/// Runs an `atom_syndication` writer over an in-memory buffer and decodes the
+/// result.
+///
+/// Both failure modes are unreachable in practice — a `Vec<u8>` has no I/O to
+/// fail, and upstream emits UTF-8 — but neither is expressible as infallible, so
+/// they surface as [`AtomPubError::Serialize`]. That variant, not `Malformed`,
+/// is what keeps a server-side write failure off the client-facing `400` path.
+fn to_xml_string<W>(write: W) -> Result<String, AtomPubError>
+where
+    W: FnOnce(Vec<u8>) -> Result<Vec<u8>, atom_syndication::Error>,
+{
+    let bytes = write(Vec::new()).map_err(|e| AtomPubError::Serialize(e.to_string()))?;
+    String::from_utf8(bytes).map_err(|e| AtomPubError::Serialize(e.to_string()))
+}
+
 /// Serializes an [`Entry`] to a standalone `AtomPub` `<entry>` document.
 ///
 /// Emits whatever the entry carries: id, title, dates, summary, content (with
-/// its `type`), all links, all categories, and the draft marker when set.
+/// its `type`), all links, all categories, and any extension markers — the
+/// draft flag and `j:slug` among them.
 ///
-/// Serialization writes into an in-memory buffer, which cannot fail, so this is
-/// infallible and returns a `String` directly.
-#[must_use]
-pub fn entry_to_xml(entry: &Entry) -> String {
-    let mut writer = Writer::new(Vec::new());
-    let _ = writer.write_event(Event::Decl(BytesDecl::new("1.0", Some("utf-8"), None)));
-    write_entry(&mut writer, entry, true);
-    String::from_utf8_lossy(&writer.into_inner()).into_owned()
-}
-
-/// Writes an `<entry>…</entry>` element to the provided writer.
+/// # Errors
 ///
-/// # Parameters
-///
-/// - `writer`: The XML writer to emit events to.
-/// - `entry`: The entry to serialize.
-/// - `declare_namespaces`: If `true`, emits `xmlns` and `xmlns:app` attributes on
-///   the entry element. If `false`, assumes the namespaces are already declared
-///   by an enclosing element (e.g., a `<feed>`).
-///
-/// Writes into an in-memory buffer, so it is infallible.
-fn write_entry(writer: &mut Writer<Vec<u8>>, entry: &Entry, declare_namespaces: bool) {
-    let draft = is_draft(entry);
-    let mut root = BytesStart::new("entry");
-    if declare_namespaces {
-        root.push_attribute(("xmlns", ATOM_NS));
-        if draft {
-            root.push_attribute(("xmlns:app", APP_NS));
-        }
-        if j_slug(entry).is_some() {
-            root.push_attribute(("xmlns:j", J_NS));
-        }
-    }
-    let _ = writer.write_event(Event::Start(root));
-
-    write_text_element(writer, "id", entry.id());
-    write_text_element(writer, "title", entry.title().as_str());
-    write_text_element(writer, "updated", &entry.updated().to_rfc3339());
-    if let Some(published) = entry.published() {
-        write_text_element(writer, "published", &published.to_rfc3339());
-    }
-    if let Some(summary) = entry.summary() {
-        write_text_element(writer, "summary", summary.as_str());
-    }
-    if let Some(content) = entry.content() {
-        let mut start = BytesStart::new("content");
-        start.push_attribute(("type", content.content_type().unwrap_or("text")));
-        let _ = writer.write_event(Event::Start(start));
-        let _ = writer.write_event(Event::Text(BytesText::new(content.value().unwrap_or(""))));
-        let _ = writer.write_event(Event::End(BytesEnd::new("content")));
-    }
-    for link in entry.links() {
-        write_link(writer, link.rel(), link.href());
-    }
-    for category in entry.categories() {
-        write_empty_element(writer, "category", &[("term", category.term())]);
-    }
-    if draft {
-        let _ = writer.write_event(Event::Start(BytesStart::new("app:control")));
-        write_text_element(writer, "app:draft", "yes");
-        let _ = writer.write_event(Event::End(BytesEnd::new("app:control")));
-    }
-    // Read-only server slug (ADR-0023): emitted on every outgoing entry.
-    if let Some(slug) = j_slug(entry) {
-        write_text_element(writer, "j:slug", &slug);
-    }
-
-    let _ = writer.write_event(Event::End(BytesEnd::new("entry")));
+/// Returns [`AtomPubError::Serialize`] if the document cannot be written.
+pub fn entry_to_xml(entry: &Entry) -> Result<String, AtomPubError> {
+    to_xml_string(|w| entry.write_to(w))
 }
 
 /// Feed-level metadata for an `AtomPub` collection document.
@@ -241,46 +201,52 @@ pub struct FeedMeta {
     pub previous: Option<AbsoluteUrl>,
 }
 
+/// Builds a `rel`-labelled [`Link`] for a feed-level URL.
+fn feed_link(rel: &str, href: &AbsoluteUrl) -> Link {
+    Link {
+        rel: rel.to_string(),
+        href: href.to_string(),
+        ..Default::default()
+    }
+}
+
 /// Serializes a collection `<feed>` wrapping the given entries, with RFC 5005
 /// paging links.
 ///
-/// The entries are embedded without redeclaring the Atom namespace; the `<feed>`
-/// root declares both `xmlns` and `xmlns:app`.
+/// The `<feed>` root declares `xmlns` plus the `app` and `j` prefixes; the
+/// embedded entries inherit the default namespace from it rather than
+/// redeclaring it.
 ///
-/// Writes into an in-memory buffer, so it is infallible.
-#[must_use]
-pub fn render_feed(meta: &FeedMeta, entries: &[Entry]) -> String {
-    let mut writer = Writer::new(Vec::new());
-    let _ = writer.write_event(Event::Decl(BytesDecl::new("1.0", Some("utf-8"), None)));
-
-    let mut root = BytesStart::new("feed");
-    root.push_attribute(("xmlns", ATOM_NS));
-    root.push_attribute(("xmlns:app", APP_NS));
-    // Every embedded entry carries a read-only j:slug (ADR-0023) and is written
-    // with declare_namespaces=false, so the feed root declares xmlns:j for them.
-    root.push_attribute(("xmlns:j", J_NS));
-    let _ = writer.write_event(Event::Start(root));
-
-    write_text_element(&mut writer, "id", &meta.id);
-    write_text_element(&mut writer, "title", &meta.title);
-    write_text_element(&mut writer, "updated", &meta.updated.value().to_rfc3339());
-    write_link(&mut writer, "self", &meta.self_url);
-    if let Some(href) = &meta.first {
-        write_link(&mut writer, "first", href);
-    }
-    if let Some(href) = &meta.previous {
-        write_link(&mut writer, "previous", href);
-    }
-    if let Some(href) = &meta.next {
-        write_link(&mut writer, "next", href);
+/// # Errors
+///
+/// Returns [`AtomPubError::Serialize`] if the document cannot be written.
+pub fn render_feed(meta: &FeedMeta, entries: &[Entry]) -> Result<String, AtomPubError> {
+    let mut links = vec![feed_link("self", &meta.self_url)];
+    // Order matches the previous hand-rolled writer: first, previous, next.
+    for (rel, href) in [
+        ("first", &meta.first),
+        ("previous", &meta.previous),
+        ("next", &meta.next),
+    ] {
+        if let Some(href) = href.as_ref() {
+            links.push(feed_link(rel, href));
+        }
     }
 
-    for entry in entries {
-        write_entry(&mut writer, entry, false);
-    }
+    let feed = Feed {
+        id: meta.id.to_string(),
+        title: Text::plain(meta.title.clone()),
+        updated: meta.updated.value().fixed_offset(),
+        links,
+        entries: entries.to_vec(),
+        namespaces: BTreeMap::from([
+            ("app".to_string(), APP_NS.to_string()),
+            ("j".to_string(), J_NS.to_string()),
+        ]),
+        ..Default::default()
+    };
 
-    let _ = writer.write_event(Event::End(BytesEnd::new("feed")));
-    String::from_utf8_lossy(&writer.into_inner()).into_owned()
+    to_xml_string(|w| feed.write_to(w))
 }
 
 /// A media-link entry (RFC 5023 §9.6): the Atom `<entry>` a server returns for
@@ -311,38 +277,33 @@ pub struct MediaLinkEntry {
 
 /// Serializes a [`MediaLinkEntry`] to a standalone `<entry>` document.
 ///
-/// Writes into an in-memory buffer, so it is infallible.
-#[must_use]
-pub fn render_media_link_entry(entry: &MediaLinkEntry) -> String {
-    let mut writer = Writer::new(Vec::new());
-    let _ = writer.write_event(Event::Decl(BytesDecl::new("1.0", Some("utf-8"), None)));
+/// # Errors
+///
+/// Returns [`AtomPubError::Serialize`] if the document cannot be written.
+pub fn render_media_link_entry(entry: &MediaLinkEntry) -> Result<String, AtomPubError> {
+    let atom_entry = Entry {
+        id: entry.id.to_string(),
+        // The one display surface in this document: the title shows the name the user
+        // typed, while every URL below keeps the canonical stored spelling (#720).
+        title: Text::plain(entry.title.decoded()),
+        updated: entry.updated.value().fixed_offset(),
+        published: Some(entry.published.value().fixed_offset()),
+        // A media-link entry references the binary rather than embedding it, so the
+        // content carries `src` and no value (RFC 5023 §9.6).
+        content: Some(Content {
+            content_type: Some(entry.content_type.to_string()),
+            src: Some(entry.content_src.to_string()),
+            value: None,
+            ..Default::default()
+        }),
+        links: vec![
+            feed_link("edit", &entry.edit_uri),
+            feed_link("edit-media", &entry.edit_media_uri),
+        ],
+        ..Default::default()
+    };
 
-    let mut root = BytesStart::new("entry");
-    root.push_attribute(("xmlns", ATOM_NS));
-    let _ = writer.write_event(Event::Start(root));
-
-    write_text_element(&mut writer, "id", &entry.id);
-    // The one display surface in this document: the title shows the name the user typed,
-    // while every URL below keeps the canonical stored spelling (#720).
-    write_text_element(&mut writer, "title", &entry.title.decoded());
-    write_text_element(&mut writer, "updated", &entry.updated.value().to_rfc3339());
-    write_text_element(
-        &mut writer,
-        "published",
-        &entry.published.value().to_rfc3339(),
-    );
-
-    let content_attrs = [
-        ("type", entry.content_type.as_ref()),
-        ("src", entry.content_src.as_ref()),
-    ];
-    write_empty_element(&mut writer, "content", &content_attrs);
-
-    write_link(&mut writer, "edit", &entry.edit_uri);
-    write_link(&mut writer, "edit-media", &entry.edit_media_uri);
-
-    let _ = writer.write_event(Event::End(BytesEnd::new("entry")));
-    String::from_utf8_lossy(&writer.into_inner()).into_owned()
+    to_xml_string(|w| atom_entry.write_to(w))
 }
 
 #[cfg(test)]
@@ -608,7 +569,7 @@ mod tests {
     fn j_slug_is_serialized_with_namespace() {
         let mut entry = sample_entry();
         set_j_slug(&mut entry, "my-post");
-        let out = entry_to_xml(&entry);
+        let out = entry_to_xml(&entry).expect("serialize");
         assert!(
             out.contains(r#"xmlns:j="https://jaunder.org/ns/atompub""#),
             "out: {out}"
@@ -619,7 +580,7 @@ mod tests {
     #[test]
     fn no_j_slug_means_no_namespace_declared() {
         let entry = sample_entry();
-        let out = entry_to_xml(&entry);
+        let out = entry_to_xml(&entry).expect("serialize");
         assert!(!out.contains("xmlns:j"), "out: {out}");
     }
 
@@ -651,7 +612,7 @@ mod tests {
         entry.published =
             Some(chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z").unwrap());
 
-        let out = entry_to_xml(&entry);
+        let out = entry_to_xml(&entry).expect("serialize");
         assert!(out.contains("type=\"text\""), "out: {out}");
         assert!(out.contains("rel=\"edit\""), "out: {out}");
         assert!(out.contains("rel=\"alternate\""), "out: {out}");
@@ -670,7 +631,7 @@ mod tests {
             value: Some("<p>x</p>".to_string()),
             ..Default::default()
         });
-        let out = entry_to_xml(&entry);
+        let out = entry_to_xml(&entry).expect("serialize");
         assert!(out.contains("app:draft"), "out: {out}");
         assert!(out.contains("yes"), "out: {out}");
         assert!(out.contains("type=\"html\""), "out: {out}");
@@ -685,7 +646,7 @@ mod tests {
             value: Some("<div><p>hi</p></div>".to_string()),
             ..Default::default()
         });
-        let out = entry_to_xml(&entry);
+        let out = entry_to_xml(&entry).expect("serialize");
         assert!(out.contains("type=\"xhtml\""), "out: {out}");
     }
 
@@ -719,7 +680,7 @@ mod tests {
         set_draft(&mut entry, true);
         set_j_slug(&mut entry, "my-post");
 
-        let out = entry_to_xml(&entry);
+        let out = entry_to_xml(&entry).expect("serialize");
         let parsed = entry_from_xml(&out).expect("re-parse");
         assert!(is_draft(&parsed), "draft flag lost; xml: {out}");
         assert_eq!(parsed.title().as_str(), "RT");
@@ -757,7 +718,9 @@ mod tests {
         assert!(is_draft(&entry));
         set_draft(&mut entry, false);
         assert!(!is_draft(&entry));
-        assert!(!entry_to_xml(&entry).contains("app:draft"));
+        assert!(!entry_to_xml(&entry)
+            .expect("serialize")
+            .contains("app:draft"));
     }
 
     #[test]
@@ -786,7 +749,7 @@ mod tests {
             )),
         };
 
-        let out = render_feed(&meta, &[entry1, entry2]);
+        let out = render_feed(&meta, &[entry1, entry2]).expect("serialize");
 
         // Feed structure and metadata
         assert!(out.contains("<feed"), "out: {out}");
@@ -805,9 +768,11 @@ mod tests {
         assert!(out.contains("page=2"), "out: {out}");
         assert!(out.contains("page=0"), "out: {out}");
 
-        // Entry titles present
+        // Entry titles present — and exactly one <entry> per input, since the titles
+        // alone would still pass if an entry were dropped or duplicated.
         assert!(out.contains(">First<"), "out: {out}");
         assert!(out.contains(">Second<"), "out: {out}");
+        assert_eq!(out.matches("<entry").count(), 2, "out: {out}");
 
         // Embedded entries should NOT redeclare the Atom namespace on their own
         // They should not have xmlns="..." as an attribute on the entry element
@@ -836,7 +801,7 @@ mod tests {
             previous: None,
         };
 
-        let out = render_feed(&meta, &[entry]);
+        let out = render_feed(&meta, &[entry]).expect("serialize");
 
         // Required elements present
         assert!(out.contains("<feed"), "out: {out}");
@@ -863,7 +828,7 @@ mod tests {
             next: None,
             previous: None,
         };
-        let out = render_feed(&meta, &[]);
+        let out = render_feed(&meta, &[]).expect("serialize");
         assert!(out.contains("2026-05-31T12:00:00"), "out: {out}");
     }
 
@@ -878,7 +843,8 @@ mod tests {
             content_type: parse_content_type("image/png"),
             published: parse_utc_instant("2026-06-01T00:00:00Z"),
             updated: parse_utc_instant("2026-06-02T00:00:00Z"),
-        });
+        })
+        .expect("serialize");
         assert!(out.contains("<published>2026-06-01T00:00:00"), "out: {out}");
         assert!(out.contains("<updated>2026-06-02T00:00:00"), "out: {out}");
     }
@@ -894,7 +860,8 @@ mod tests {
             content_type: parse_content_type("image/png"),
             published: parse_utc_instant("2026-06-01T00:00:00Z"),
             updated: parse_utc_instant("2026-06-01T00:00:00Z"),
-        });
+        })
+        .expect("serialize");
 
         assert!(out.contains("<entry"), "out: {out}");
         assert!(out.contains("type=\"image/png\""), "out: {out}");
@@ -921,10 +888,51 @@ mod tests {
             content_type: parse_content_type("image/jpeg"),
             published: parse_utc_instant("2026-06-01T00:00:00Z"),
             updated: parse_utc_instant("2026-06-01T00:00:00Z"),
-        });
+        })
+        .expect("serialize");
 
         assert!(out.contains("<title>my photo.jpg</title>"), "out: {out}");
         // The URLs keep the canonical spelling — one value, two views.
         assert!(out.contains("/my%20photo.jpg\""), "out: {out}");
+    }
+
+    #[test]
+    fn draft_entry_declares_the_app_namespace_and_clearing_removes_it() {
+        let mut entry = sample_entry();
+        set_draft(&mut entry, true);
+        let out = entry_to_xml(&entry).expect("serialize");
+        assert!(
+            out.contains(r#"xmlns:app="http://www.w3.org/2007/app""#),
+            "out: {out}"
+        );
+
+        set_draft(&mut entry, false);
+        let out = entry_to_xml(&entry).expect("serialize");
+        assert!(!out.contains("xmlns:app"), "out: {out}");
+        assert!(!out.contains("app:draft"), "out: {out}");
+    }
+
+    #[test]
+    fn media_link_content_carries_type_and_src() {
+        let out = render_media_link_entry(&MediaLinkEntry {
+            id: parse_absolute_url("https://h/atompub/alice/media/abc/pic.png"),
+            title: parse_filename("pic.png"),
+            edit_uri: parse_absolute_url("https://h/atompub/alice/media/abc/pic.png"),
+            edit_media_uri: parse_absolute_url("https://h/media/upload/ab/c0/abc/pic.png"),
+            content_src: parse_absolute_url("https://h/media/upload/ab/c0/abc/pic.png"),
+            content_type: parse_content_type("image/png"),
+            published: parse_utc_instant("2026-06-01T00:00:00Z"),
+            updated: parse_utc_instant("2026-06-01T00:00:00Z"),
+        })
+        .expect("serialize");
+
+        // Upstream writes a paired element, not the self-closing form the previous
+        // hand-rolled writer emitted — a deliberate, consumer-checked delta.
+        assert!(out.contains(r#"<content type="image/png""#), "out: {out}");
+        assert!(
+            out.contains(r#"src="https://h/media/upload/ab/c0/abc/pic.png""#),
+            "out: {out}"
+        );
+        assert!(out.contains("</content>"), "out: {out}");
     }
 }
