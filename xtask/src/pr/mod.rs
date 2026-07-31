@@ -18,8 +18,8 @@ use serde::{Serialize, Serializer};
 
 use crate::git;
 use crate::result::{CommandResult, StepResult};
+use gh::ApiError;
 use snapshot::PrSource;
-use watch::Clock;
 
 /// A pull request number. A newtype because it is threaded through every layer and
 /// is transposable with the other bare integers around it (queue position, run id).
@@ -149,15 +149,75 @@ pub struct PrReport {
     pub events: Vec<Event>,
 }
 
+/// What the local repository says about where the caller is standing.
+///
+/// Passed in rather than read inside, so the divergence guard and the exit-2 messages
+/// are reachable from a test instead of only from a real checkout.
+#[derive(Debug, Clone, Default)]
+pub struct GitFacts {
+    pub branch: Option<String>,
+    pub head_sha: Option<String>,
+}
+
+impl GitFacts {
+    fn read(dir: &std::path::Path) -> Self {
+        Self {
+            branch: git::current_branch(dir).ok().flatten(),
+            head_sha: git::head_sha(dir).ok().flatten(),
+        }
+    }
+}
+
 /// Drive one `pr watch` / `pr land` invocation against the real GitHub.
 ///
-/// Returns `Err` only when the *subject* could not be established — there is nothing
-/// to report on, so that becomes exit 2. Everything else, including the tooling
-/// failing outright, comes back as a `PrReport`.
+/// A four-line shim over [`execute_with`]: everything with a decision in it lives
+/// there, where a fake source, armer, and clock can reach it.
 pub fn execute(number: Option<u64>, cfg: watch::WatchConfig, landing: bool) -> Result<PrReport> {
-    let source = snapshot::GhSource;
-    let clock = watch::SystemClock;
+    // The event log streams to stderr as it happens, so `--json` keeps stdout to a
+    // single parseable document and a human still sees progress live. The same events
+    // are serialized into the report, so nothing here is stderr-only.
+    let mut sink = |e: &Event| eprintln!("  {} [{}] {}", e.at, e.kind.as_str(), e.detail);
+    execute_with(
+        &snapshot::GhSource,
+        &land::GhArmer,
+        &watch::SystemClock,
+        Invocation {
+            git: &GitFacts::read(std::path::Path::new(".")),
+            number,
+            cfg,
+            landing,
+        },
+        &mut sink,
+    )
+}
 
+/// One invocation's inputs, as a value rather than a parameter list.
+pub struct Invocation<'a> {
+    pub git: &'a GitFacts,
+    pub number: Option<u64>,
+    pub cfg: watch::WatchConfig,
+    /// `true` for `pr land` — the only mode that may mutate anything.
+    pub landing: bool,
+}
+
+/// Establish the subject, guard it, and hand off to `watch` or `land`.
+///
+/// Returns `Err` only when the *subject* could not be established, or when landing is
+/// refused — there is nothing to report on, so those become exit 2. Everything else,
+/// including the tooling failing outright, comes back as a `PrReport`.
+pub fn execute_with<S: PrSource, A: land::PrArmer, C: watch::Clock>(
+    source: &S,
+    armer: &A,
+    clock: &C,
+    inv: Invocation<'_>,
+    sink: &mut dyn FnMut(&Event),
+) -> Result<PrReport> {
+    let Invocation {
+        git: git_facts,
+        number,
+        cfg,
+        landing,
+    } = inv;
     let subject = match source.resolve(number.map(PrNumber)) {
         Ok(s) => s,
         Err(e) => {
@@ -168,9 +228,9 @@ pub fn execute(number: Option<u64>, cfg: watch::WatchConfig, landing: bool) -> R
                 // unhelpful for the first three.
                 snapshot::ResolutionFailure::Bail(msg) => Err(anyhow!(
                     "{msg}{}",
-                    match git::current_branch(std::path::Path::new(".")) {
-                        Ok(Some(branch)) => format!(" (searched for branch `{branch}`)"),
-                        _ => " (no branch checked out)".to_string(),
+                    match &git_facts.branch {
+                        Some(branch) => format!(" (searched for branch `{branch}`)"),
+                        None => " (no branch checked out)".to_string(),
                     }
                 )),
                 snapshot::ResolutionFailure::Report(outcome) => Ok(PrReport {
@@ -194,15 +254,21 @@ pub fn execute(number: Option<u64>, cfg: watch::WatchConfig, landing: bool) -> R
     // broken. Any other error falls through: `watch`/`land` retry and report it.
     // A transient blip on the very first read should not decide anything, so give it
     // a few tries before drawing a conclusion from it.
+    //
+    // Rate limits are retried too, not just `is_transient` errors: `watch`'s loop
+    // rides them out, so `land` bailing on the same condition would make the two
+    // commands disagree about what a 403 means.
     let mut established = source.snapshot(&subject);
     for _ in 1..3 {
-        match &established {
-            Err(e) if e.is_transient() => {
-                clock.sleep_secs(2);
-                established = source.snapshot(&subject);
-            }
+        let wait = match &established {
+            Err(ApiError::RateLimited { reset_unix }) => reset_unix
+                .map(|r| r.saturating_sub(clock.now_unix()).min(60))
+                .unwrap_or(5),
+            Err(e) if e.is_transient() => 2,
             _ => break,
-        }
+        };
+        clock.sleep_secs(wait.max(1));
+        established = source.snapshot(&subject);
     }
     if let Err(e) = &established {
         if matches!(
@@ -217,11 +283,6 @@ pub fn execute(number: Option<u64>, cfg: watch::WatchConfig, landing: bool) -> R
             ));
         }
     }
-
-    // The event log streams to stderr as it happens, so `--json` keeps stdout to a
-    // single parseable document and a human still sees progress live. The same
-    // events are serialized into the report, so nothing here is stderr-only.
-    let mut sink = |e: &Event| eprintln!("  {} [{}] {}", e.at, e.kind.as_str(), e.detail);
 
     if landing {
         // Refuse to land something other than what the caller is looking at, reusing
@@ -246,27 +307,17 @@ pub fn execute(number: Option<u64>, cfg: watch::WatchConfig, landing: bool) -> R
                 })
             }
         };
-        let dir = std::path::Path::new(".");
-        let branch = git::current_branch(dir).ok().flatten();
-        let local = git::head_sha(dir).ok().flatten();
         if let land::GuardVerdict::Diverged { local, remote } = land::divergence_guard(
-            branch.as_deref(),
-            local.as_deref(),
+            git_facts.branch.as_deref(),
+            git_facts.head_sha.as_deref(),
             &snap.head_ref,
             &snap.head_sha,
         ) {
             return Err(anyhow!(land::divergence_message(&local, &remote)));
         }
-        return Ok(land::land(
-            &source,
-            &land::GhArmer,
-            &clock,
-            &subject,
-            cfg,
-            &mut sink,
-        ));
+        return Ok(land::land(source, armer, clock, &subject, cfg, sink));
     }
-    Ok(watch::watch(&source, &clock, &subject, cfg, &mut sink))
+    Ok(watch::watch(source, clock, &subject, cfg, sink))
 }
 
 /// Wrap a report in the command envelope.
@@ -291,6 +342,159 @@ pub fn into_result(command: &str, report: PrReport) -> CommandResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pr::gh::ApiError as E;
+    use crate::pr::land::PrArmer;
+    use crate::pr::test_support::*;
+
+    /// An armer that records calls and never fails, so "did anything get armed?" is
+    /// assertable at this layer too.
+    struct SpyArmer {
+        calls: std::cell::Cell<u32>,
+    }
+
+    impl SpyArmer {
+        fn new() -> Self {
+            Self {
+                calls: std::cell::Cell::new(0),
+            }
+        }
+    }
+
+    impl PrArmer for SpyArmer {
+        fn arm_auto_merge(&self, _: &Subject) -> std::result::Result<(), ApiError> {
+            self.calls.set(self.calls.get() + 1);
+            Ok(())
+        }
+    }
+
+    fn invocation(git: &GitFacts, landing: bool) -> Invocation<'_> {
+        Invocation {
+            git,
+            number: Some(731),
+            cfg: cfg(),
+            landing,
+        }
+    }
+
+    #[test]
+    fn a_nonexistent_pr_bails_to_exit_two_with_no_report() {
+        // The subject could not be established, so there is nothing to report *on* —
+        // and an `Err` here is what `main.rs` turns into exit 2.
+        let src = FakeSource::new(vec![Err(E::NotFound)], queue_rules());
+        let git = GitFacts::default();
+        let err = execute_with(
+            &src,
+            &SpyArmer::new(),
+            &clock(),
+            invocation(&git, false),
+            &mut |_| {},
+        )
+        .expect_err("a missing PR must not produce a report");
+        assert!(err.to_string().contains("no such pull request"), "{err}");
+    }
+
+    #[test]
+    fn broken_tooling_during_resolution_is_a_report_not_an_exit_two() {
+        // "`gh` is broken" is more actionable than "no such PR", and it is what
+        // actually happened — so it must survive as a readable outcome.
+        let src = FakeSource::new(vec![], queue_rules()).with_resolve_error(E::GhMissing);
+        let git = GitFacts::default();
+        let report = execute_with(
+            &src,
+            &SpyArmer::new(),
+            &clock(),
+            invocation(&git, false),
+            &mut |_| {},
+        )
+        .expect("a tooling failure is a report, never an Err");
+        assert_eq!(report.outcome, Outcome::WatcherError);
+    }
+
+    #[test]
+    fn a_failed_resolution_names_the_branch_it_searched_for() {
+        let src = FakeSource::new(vec![], queue_rules()).with_resolve_error(E::NotFound);
+        let git = GitFacts {
+            branch: Some("feature".into()),
+            head_sha: Some("abc".into()),
+        };
+        let err = execute_with(
+            &src,
+            &SpyArmer::new(),
+            &clock(),
+            Invocation {
+                git: &git,
+                number: None,
+                cfg: cfg(),
+                landing: false,
+            },
+            &mut |_| {},
+        )
+        .expect_err("no PR for the branch must bail");
+        assert!(err.to_string().contains("feature"), "{err}");
+    }
+
+    #[test]
+    fn landing_from_the_prs_branch_with_local_commits_refuses() {
+        // Exit 2, no report, and — critically — nothing armed.
+        let src = FakeSource::new(vec![Ok(open_pending())], queue_rules());
+        let armer = SpyArmer::new();
+        let git = GitFacts {
+            // `open_pending()` has head_ref "feature" and head_sha "abc".
+            branch: Some("feature".into()),
+            head_sha: Some("local-only".into()),
+        };
+        let err = execute_with(&src, &armer, &clock(), invocation(&git, true), &mut |_| {})
+            .expect_err("divergence must refuse, not report");
+        assert!(err.to_string().contains("local-only"), "{err}");
+        assert!(err.to_string().contains("abc"), "{err}");
+        assert_eq!(armer.calls.get(), 0, "nothing may be armed after a refusal");
+    }
+
+    #[test]
+    fn landing_with_an_unreadable_head_refuses_to_arm() {
+        // The guard is unevaluable, so it must fail closed. Five errors exhausts the
+        // pre-flight retries.
+        let src = FakeSource::new(
+            (0..5).map(|_| Err(E::Transport("down".into()))).collect(),
+            queue_rules(),
+        );
+        let armer = SpyArmer::new();
+        let git = GitFacts::default();
+        let report = execute_with(&src, &armer, &clock(), invocation(&git, true), &mut |_| {})
+            .expect("a tooling failure is a report");
+        assert_eq!(report.outcome, Outcome::WatcherError);
+        assert_eq!(armer.calls.get(), 0, "must not arm what it cannot read");
+        assert!(report.detail.unwrap().contains("nothing was armed"));
+    }
+
+    #[test]
+    fn a_transient_first_read_is_retried_rather_than_believed() {
+        let src = FakeSource::new(
+            vec![Err(E::Transport("blip".into())), Ok(merged_snapshot())],
+            queue_rules(),
+        );
+        let git = GitFacts::default();
+        let report = execute_with(
+            &src,
+            &SpyArmer::new(),
+            &clock(),
+            invocation(&git, false),
+            &mut |_| {},
+        )
+        .expect("a blip must not bail");
+        assert_eq!(report.outcome, Outcome::Merged);
+    }
+
+    #[test]
+    fn watching_never_arms_anything() {
+        // The structural guarantee behind the observe/act split: no `watch` path can
+        // reach the armer, whatever it is handed.
+        let src = FakeSource::new(vec![Ok(merged_snapshot())], queue_rules());
+        let armer = SpyArmer::new();
+        let git = GitFacts::default();
+        execute_with(&src, &armer, &clock(), invocation(&git, false), &mut |_| {}).unwrap();
+        assert_eq!(armer.calls.get(), 0);
+    }
 
     fn report(outcome: Outcome) -> PrReport {
         PrReport {

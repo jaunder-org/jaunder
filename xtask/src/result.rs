@@ -153,7 +153,12 @@ impl CommandResult {
         // point. The event log already streamed to stderr as it happened, so this is
         // the summary, not a replay of it.
         if let Some(pr) = &self.pr {
-            println!("PR #{} @ {} — {}", pr.pr, pr.head_sha, pr.outcome);
+            // The head SHA is empty when the very first read failed, so it is only
+            // shown when it says something.
+            match pr.head_sha.as_str() {
+                "" => println!("PR #{} — {}", pr.pr, pr.outcome),
+                sha => println!("PR #{} @ {sha} — {}", pr.pr, pr.outcome),
+            }
             if let Some(phase) = &pr.phase {
                 println!("  phase: {phase}");
             }
@@ -161,7 +166,14 @@ impl CommandResult {
                 println!("  {detail}");
             }
             if let Some(pointer) = &pr.pointer {
-                println!("  see: {pointer}");
+                // `merged` carries a commit OID, everything else a URL — labelling
+                // both "see:" made the OID read like a broken link.
+                let label = if pr.outcome.is_merged() {
+                    "merge commit"
+                } else {
+                    "see"
+                };
+                println!("  {label}: {pointer}");
             }
         }
         let verdict = if self.ok { "PASSED" } else { "FAILED" };

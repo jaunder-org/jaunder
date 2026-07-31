@@ -100,6 +100,11 @@ pub fn needs_ejection_probe(snap: &PrSnapshot, req: &RequiredChecks) -> bool {
 /// The run's branch name carries the **base** SHA, not the head, so recency cannot be
 /// read off the name. Comparing against `head_committed_at` is what stops a failed
 /// merge-group run from a previous push reporting as a fresh ejection.
+/// Compared as strings, which is exact for the timestamps GitHub actually returns:
+/// REST `created_at` and GraphQL `committedDate` are both Z-normalised, fixed-width
+/// RFC 3339 with no fractional seconds, so lexical order is chronological order. If
+/// either side ever gains fractional seconds or a numeric offset, parse instead —
+/// this would go silently wrong rather than fail.
 fn is_ejection(run: &RunRef, snap: &PrSnapshot) -> bool {
     run.conclusion == "failure" && run.created_at > snap.head_committed_at
 }

@@ -227,6 +227,13 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
             );
         }
 
+        // Give GitHub a beat before believing the arm did not take. Reading back
+        // immediately races its own write: `autoMergeRequest`/`isInMergeQueue` may not
+        // have surfaced yet, and reporting `watcher-error` for a PR that is in fact
+        // armed and about to merge is exactly the false signal this command exists to
+        // eliminate. Through the injected clock, so tests stay instant.
+        clock.sleep_secs(cfg.interval_secs);
+
         let after = match source.snapshot(subject) {
             Ok(s) => s,
             Err(e) => {
@@ -249,8 +256,25 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
             return result;
         }
 
-        // Something may have gone terminal between arming and verifying.
-        let after_ejection = probe(source, subject, &after, &req).unwrap_or(None);
+        // Something may have gone terminal between arming and verifying. Same
+        // fail-closed rule as the prologue: an unreadable probe must not degrade to
+        // "no ejection found" and let the loop arm again.
+        let after_ejection = match probe(source, subject, &after, &req) {
+            Ok(run) => run,
+            Err(e) => {
+                return report(
+                    subject,
+                    head_sha,
+                    Outcome::WatcherError,
+                    Some(format!(
+                        "could not re-check for an ejection after arming: {}",
+                        e.detail()
+                    )),
+                    None,
+                    events,
+                )
+            }
+        };
         if let Step::Terminal {
             outcome,
             detail,

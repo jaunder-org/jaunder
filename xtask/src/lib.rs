@@ -202,10 +202,10 @@ pub enum PrCommand {
         /// PR number. Omitted: the open PR whose head is the current branch.
         number: Option<u64>,
         /// Seconds between polls.
-        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(5..))]
+        #[arg(long, value_name = "SECONDS", default_value_t = 30, value_parser = clap::value_parser!(u64).range(5..))]
         interval: u64,
         /// Minutes to watch before reporting `timed-out`.
-        #[arg(long, default_value_t = 90, value_parser = clap::value_parser!(u64).range(1..))]
+        #[arg(long, value_name = "MINUTES", default_value_t = 90, value_parser = clap::value_parser!(u64).range(1..))]
         timeout: u64,
         /// Take one snapshot and report, instead of looping. Can report `pending`.
         #[arg(long)]
@@ -223,10 +223,10 @@ pub enum PrCommand {
         /// PR number. Omitted: the open PR whose head is the current branch.
         number: Option<u64>,
         /// Seconds between polls.
-        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(5..))]
+        #[arg(long, value_name = "SECONDS", default_value_t = 30, value_parser = clap::value_parser!(u64).range(5..))]
         interval: u64,
         /// Minutes to watch before reporting `timed-out`.
-        #[arg(long, default_value_t = 90, value_parser = clap::value_parser!(u64).range(1..))]
+        #[arg(long, value_name = "MINUTES", default_value_t = 90, value_parser = clap::value_parser!(u64).range(1..))]
         timeout: u64,
     },
 }

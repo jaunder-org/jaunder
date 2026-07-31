@@ -171,6 +171,7 @@ pub struct FakeSource {
     last: RefCell<Option<Result<PrSnapshot, ApiError>>>,
     req: RequiredChecks,
     ejection: Result<Option<RunRef>, ApiError>,
+    resolve: Result<Subject, ApiError>,
 }
 
 impl FakeSource {
@@ -180,7 +181,15 @@ impl FakeSource {
             last: RefCell::new(None),
             req,
             ejection: Ok(None),
+            resolve: Ok(subject()),
         }
+    }
+
+    /// Make subject resolution fail, so `execute_with`'s exit-2-vs-report split is
+    /// reachable from a test.
+    pub fn with_resolve_error(mut self, err: ApiError) -> Self {
+        self.resolve = Err(err);
+        self
     }
 
     /// What the merge-group probe finds. Without this the probe path is only ever
@@ -199,7 +208,7 @@ impl FakeSource {
 
 impl PrSource for FakeSource {
     fn resolve(&self, _requested: Option<PrNumber>) -> Result<Subject, ApiError> {
-        unreachable!("FakeSource is always handed a Subject directly")
+        self.resolve.clone()
     }
 
     fn snapshot(&self, _subject: &Subject) -> Result<PrSnapshot, ApiError> {

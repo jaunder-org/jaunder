@@ -105,10 +105,14 @@ fn check_state_label(snap: &PrSnapshot, name: &str) -> String {
 /// what it deliberately omits: elapsed time, poll count, `updatedAt`, and any check
 /// the ruleset does not require. Anything that ticks on its own would turn this from
 /// a change-emitter into a per-poll emitter.
-#[derive(PartialEq, Eq)]
 struct Rendered {
     phase: Phase,
-    /// `(required context name, its resolved state)`, in ruleset order.
+    /// `(required context name, its resolved state)`, in **ruleset order**.
+    ///
+    /// Compared positionally against the previous poll's vector, which is sound only
+    /// because the ruleset is fetched once and cached for the life of the watch. If
+    /// that ever becomes a per-poll read, pair by name instead — otherwise a reordered
+    /// or resized ruleset would silently mis-attribute states to contexts.
     checks: Vec<(String, String)>,
     queue: String,
     warn: Option<String>,
@@ -170,23 +174,35 @@ pub fn watch<S: PrSource, C: Clock>(
     let mut strikes = 0u32;
     let mut head_sha = String::new();
     let mut prev: Option<Rendered> = None;
+    let mut ever_read = false;
 
     loop {
         let now = clock.now_unix();
         if now >= deadline {
             let at = clock.now_rfc3339();
-            em.emit(
-                at,
-                now,
-                EventKind::Terminal,
-                "budget expired with no terminal state".into(),
-            );
+            // Which terminal state this is turns on whether we ever managed to read
+            // the PR at all. Riding out a rate limit that never clears reaches the
+            // deadline having learned nothing — reporting that as `timed-out`
+            // ("GitHub never finished") would send an agent looking at the queue when
+            // the truth is we could not see. That conflation is the whole defect.
+            let (outcome, detail) = if ever_read {
+                (
+                    Outcome::TimedOut,
+                    "the watch budget expired; GitHub never finished",
+                )
+            } else {
+                (
+                    Outcome::WatcherError,
+                    "the watch budget expired without a single successful read",
+                )
+            };
+            em.emit(at, now, EventKind::Terminal, outcome.as_str().into());
             return finish(
                 subject,
                 head_sha,
                 Terminal {
-                    outcome: Outcome::TimedOut,
-                    detail: Some("the watch budget expired; GitHub never finished".into()),
+                    outcome,
+                    detail: Some(detail.into()),
                     pointer: None,
                     phase: None,
                 },
@@ -215,6 +231,7 @@ pub fn watch<S: PrSource, C: Clock>(
         let (req, snap, ejection) = match polled {
             Ok(v) => {
                 strikes = 0;
+                ever_read = true;
                 v
             }
             Err(e) => {
@@ -289,6 +306,19 @@ pub fn watch<S: PrSource, C: Clock>(
         };
 
         head_sha = snap.head_sha.clone();
+        // An empty required set is silently permissive — nothing can ever be
+        // `checks-failed` and the watch just runs to the budget. That happens for a
+        // fork, a repo with no ruleset, or a token lacking the scope, all of which
+        // return HTTP 200. Say so once rather than letting it look like patience.
+        if required.is_none() && req.contexts.is_empty() {
+            em.emit(
+                clock.now_rfc3339(),
+                now,
+                EventKind::Warning,
+                "the branch ruleset lists no required checks — nothing here can gate a merge"
+                    .into(),
+            );
+        }
         required = Some(req.clone());
 
         let step = decide::classify(&snap, &req, ejection.as_ref(), &progress);
