@@ -30,7 +30,7 @@ for `superseded`.
 - [x] 2. Extract the shared `status_line` parse — pure refactor.
 - [x] 3. `NUMBERED_STATUS_VOCAB` replaces `STATUS_VOCAB`; the gate rejects
      `proposed`.
-- [ ] 4. Pass B rewrites the status token; the summary reports the transition.
+- [x] 4. Pass B rewrites the status token; the summary reports the transition.
 - [ ] 5. Round-trip composition test + the promoted-README-row assertion.
 - [ ] 6. Update the docs the change falsifies.
 

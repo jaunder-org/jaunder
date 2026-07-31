@@ -11,10 +11,12 @@
 //!   repo-wide; bare `ADR-NNNN` references are rewritten only in branch-touched
 //!   files, so `main`'s references to the other number are never clobbered.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use crate::adr_readme;
 use crate::doc_links;
 use crate::git;
 use crate::ids;
@@ -82,6 +84,37 @@ pub fn strip_one_level(body: &str) -> String {
     }
     out.push_str(&body[cursor..]);
     out
+}
+
+/// Rewrite a `proposed` status token to `accepted`, in place — the acceptance event
+/// that promotion *is*, finally written down. `None` when there is no status line or
+/// its token is something else.
+///
+/// Only `proposed` moves. `superseded`, `rejected` and `deprecated` on a draft are
+/// deliberate authorial statements — an ADR written to record a reversal, or to
+/// document a decision already dead — and promotion must not overwrite an author's
+/// explicit claim with a default.
+///
+/// The edit is scoped to the status line's byte span (located via the one shared
+/// [`adr_readme::status_line`] parse) and replaces only the token within it, so the
+/// line's indentation, prefix and any trailing content survive, and prose elsewhere
+/// in the draft that happens to contain the word "proposed" is untouched.
+pub fn rewrite_status(body: &str) -> Option<String> {
+    let (index, rest) = adr_readme::status_line(body)?;
+    if rest != "proposed" {
+        return None;
+    }
+    // Byte span of the target line, excluding its terminator. `split_inclusive`
+    // counts lines exactly as `status_line`'s `lines()` did, so `index` lines up.
+    let start: usize = body.split_inclusive('\n').take(index).map(str::len).sum();
+    let len = body[start..].find('\n').unwrap_or(body.len() - start);
+    let line = &body[start..start + len];
+    Some(format!(
+        "{}{}{}",
+        &body[..start],
+        line.replacen("proposed", "accepted", 1),
+        &body[start + len..]
+    ))
 }
 
 /// Replace bare `ADR-NNNN` references for `old` -> `new`. The padded `ADR-` prefix
@@ -248,9 +281,10 @@ pub fn promote() -> StepResult {
 }
 
 /// Number every draft in `docs/adr/drafts`, graduate it into
-/// `docs/adr/NNNN-<slug>.md`, rewrite its path-form references, sync the README
-/// table, and stage the result. Numbers are assigned at ship (post-rebase), so
-/// the ADR's first appearance in git history is already collision-free.
+/// `docs/adr/NNNN-<slug>.md`, record its acceptance in the status line, rewrite its
+/// path-form references, sync the README table, and stage the result. Numbers are
+/// assigned at ship (post-rebase), so the ADR's first appearance in git history is
+/// already collision-free.
 ///
 /// Unlike `renumber`, the source is an *untracked* draft: it is written under its
 /// number, the draft is dropped, and the result is staged with `git add` (no
@@ -275,9 +309,14 @@ fn run_promote(repo: &Path) -> Result<String> {
     }
 
     // Pass B — graduate each draft (heading token `ADR-DRAFT` -> `ADR-NNNN`,
-    // write it under its number, drop the draft) and stage it. Staging first
-    // makes the path-form rewrite below see cross-references between graduated
-    // drafts (which now live in tracked files).
+    // status `proposed` -> `accepted`, write it under its number, drop the draft)
+    // and stage it. Staging first makes the path-form rewrite below see
+    // cross-references between graduated drafts (which now live in tracked files).
+    //
+    // Which drafts had their status rewritten, so Pass C — which owns the summary —
+    // can report the transition. Keyed by slug rather than carried as a parallel
+    // vector, so the two passes cannot drift out of step.
+    let mut accepted_here: BTreeSet<String> = BTreeSet::new();
     for (slug, num, new_name) in &assigned {
         let draft_rel = format!("{DRAFTS_DIR}/{slug}.md");
         let new_rel = format!("{ADR_DIR}/{new_name}");
@@ -288,7 +327,15 @@ fn run_promote(repo: &Path) -> Result<String> {
         // rewritten at the same moment — not after Pass C, which would see targets
         // that have already been rewritten to their assigned numbers.
         let relinked = strip_one_level(&numbered);
-        std::fs::write(repo.join(&new_rel), relinked)
+        // Numbering is the acceptance event; record it in the status line.
+        let graduated = match rewrite_status(&relinked) {
+            Some(accepted) => {
+                accepted_here.insert(slug.clone());
+                accepted
+            }
+            None => relinked,
+        };
+        std::fs::write(repo.join(&new_rel), graduated)
             .with_context(|| format!("writing {new_rel}"))?;
         std::fs::remove_file(repo.join(&draft_rel))
             .with_context(|| format!("removing {draft_rel}"))?;
@@ -307,7 +354,14 @@ fn run_promote(repo: &Path) -> Result<String> {
             rewrite_file(repo, &file, |c| rewrite_stem(c, &draft_stem, &new_stem))?;
             git::add(repo, &file)?;
         }
-        summary.push(format!("{DRAFTS_DIR}/{slug}.md -> {ADR_DIR}/{new_name}"));
+        let status_note = if accepted_here.contains(slug) {
+            " (status: proposed -> accepted)"
+        } else {
+            ""
+        };
+        summary.push(format!(
+            "{DRAFTS_DIR}/{slug}.md -> {ADR_DIR}/{new_name}{status_note}"
+        ));
     }
 
     // Keep the README table in lockstep: each graduated ADR adds a row, seeded
@@ -520,6 +574,108 @@ mod tests {
         assert!(!summary.contains("warning"), "premature check: {summary}");
         let bbb = std::fs::read_to_string(tmp.join("docs/adr/0003-bbb.md")).unwrap();
         assert!(bbb.contains("](0002-aaa.md)"), "bbb: {bbb}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn promote_sets_accepted_on_a_proposed_draft() {
+        let tmp = promote_repo("status-proposed");
+        write(
+            &tmp,
+            "docs/adr/drafts/d.md",
+            "# ADR-DRAFT: D\n\n- Status: proposed\n",
+        );
+        run_promote(&tmp).unwrap();
+        let body = std::fs::read_to_string(tmp.join("docs/adr/0002-d.md")).unwrap();
+        assert!(body.contains("- Status: accepted"), "body: {body}");
+        assert!(!body.contains("proposed"), "body: {body}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn promote_preserves_a_deliberate_status() {
+        // `superseded`/`rejected` on a draft are authorial statements, not the
+        // template default — promotion must not flatten them to `accepted`.
+        for (tag, token) in [("sup", "superseded"), ("rej", "rejected")] {
+            let tmp = promote_repo(tag);
+            let draft = format!("# ADR-DRAFT: D\n\n- Status: {token}\n");
+            write(&tmp, "docs/adr/drafts/d.md", &draft);
+            run_promote(&tmp).unwrap();
+            let body = std::fs::read_to_string(tmp.join("docs/adr/0002-d.md")).unwrap();
+            assert!(body.contains(&format!("- Status: {token}")), "body: {body}");
+            assert!(!body.contains("accepted"), "{token} body: {body}");
+            let _ = std::fs::remove_dir_all(&tmp);
+        }
+    }
+
+    #[test]
+    fn promote_rewrites_an_indented_status_line() {
+        // The discriminating case for the shared `status_line` parse: an
+        // implementation that matched a column-0 `- Status:` literal passes
+        // `promote_sets_accepted_on_a_proposed_draft` and fails here, leaving a
+        // promoted ADR that `adr-format` immediately rejects.
+        let tmp = promote_repo("status-indented");
+        write(
+            &tmp,
+            "docs/adr/drafts/d.md",
+            "# ADR-DRAFT: D\n\n  - Status: proposed\n",
+        );
+        run_promote(&tmp).unwrap();
+        let body = std::fs::read_to_string(tmp.join("docs/adr/0002-d.md")).unwrap();
+        assert!(body.contains("  - Status: accepted"), "body: {body}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn promote_leaves_the_word_proposed_in_prose() {
+        // Token-scoped and line-anchored: a whole-body `replace("proposed", …)`
+        // passes every other test in this group and corrupts the prose here.
+        let tmp = promote_repo("status-prose");
+        write(
+            &tmp,
+            "docs/adr/drafts/d.md",
+            "# ADR-DRAFT: D\n\n- Status: proposed\n\nWe proposed X in an earlier cycle.\n",
+        );
+        run_promote(&tmp).unwrap();
+        let body = std::fs::read_to_string(tmp.join("docs/adr/0002-d.md")).unwrap();
+        assert!(body.contains("- Status: accepted"), "body: {body}");
+        assert!(
+            body.contains("We proposed X in an earlier cycle."),
+            "prose must survive: {body}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn promote_summary_names_the_status_transition() {
+        // Assert the `(status: …)` clause ALONE — never the whole summary. Pass C
+        // always pushes the path pair in (see the standing warning above), so a
+        // `summary.contains("0002-d.md")` assertion passes no matter what the
+        // status code does.
+        let tmp = promote_repo("status-summary");
+        write(
+            &tmp,
+            "docs/adr/drafts/d.md",
+            "# ADR-DRAFT: D\n\n- Status: proposed\n",
+        );
+        let summary = run_promote(&tmp).unwrap();
+        assert!(
+            summary.contains("(status: proposed -> accepted)"),
+            "summary: {summary}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn promote_summary_is_silent_for_an_already_accepted_draft() {
+        let tmp = promote_repo("status-silent");
+        write(
+            &tmp,
+            "docs/adr/drafts/d.md",
+            "# ADR-DRAFT: D\n\n- Status: accepted\n",
+        );
+        let summary = run_promote(&tmp).unwrap();
+        assert!(!summary.contains("status:"), "summary: {summary}");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
