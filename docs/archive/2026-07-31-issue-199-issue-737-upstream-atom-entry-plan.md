@@ -17,7 +17,7 @@ jaunder's own extension helpers and the two wire structs.
 `chrono`, Nix/crane, `cargo xtask`.
 
 **Spec:**
-[`docs/superpowers/specs/2026-07-31-issue-199-issue-737-upstream-atom-entry.md`](../specs/2026-07-31-issue-199-issue-737-upstream-atom-entry.md)
+[`docs/archive/2026-07-31-issue-199-issue-737-upstream-atom-entry-spec.md`](2026-07-31-issue-199-issue-737-upstream-atom-entry-spec.md)
 — the "what" and "why". This plan is the "how" and does not restate it.
 
 ## Review header
