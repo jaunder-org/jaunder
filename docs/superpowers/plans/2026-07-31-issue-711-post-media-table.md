@@ -887,18 +887,18 @@ pub async fn update_post_body_via_service(
 Build these on the existing builders and `TestBase::execute` / `scalar_i64`
 (`:90`, `:109`) rather than hand-rolling connections.
 
-- [ ] **Step 1: Write the migrations**
+- [x] **Step 1: Write the migrations**
 
 Exactly as spec D7 — SQLite `INTEGER`; Postgres `BIGINT` **and**
 `DEFERRABLE INITIALLY IMMEDIATE`; both with the
 `(post_id, source, sha256, filename)` primary key and the
 `(sha256, filename, source)` lookup index. `git add` both files immediately.
 
-- [ ] **Step 2: Add the shared fixtures**
+- [x] **Step 2: Add the shared fixtures**
 
 The full set above. One definition, reused by Tasks 6–8.
 
-- [ ] **Step 3: Write the failing tests**
+- [x] **Step 3: Write the failing tests**
 
 In `storage/src/posts.rs`'s test module:
 
@@ -981,12 +981,12 @@ async fn publishing_a_draft_preserves_its_media_rows(#[case] backend: Backend) {
 }
 ```
 
-- [ ] **Step 4: Run the tests, verify they fail**
+- [x] **Step 4: Run the tests, verify they fail**
 
 Run: `devtool run -- cargo nextest run -p storage media_rows` Expected: FAIL —
 no `post_media` table.
 
-- [ ] **Step 5: Implement**
+- [x] **Step 5: Implement**
 
 `replace_post_media` mirrors `replace_post_audiences` exactly
 (delete-all-then-insert on the caller's connection; real bounds copied from
@@ -996,7 +996,7 @@ and in both dialects' `update_post`, **immediately beside** the existing
 `BEGIN IMMEDIATE` transaction — they are the same concern (a post's child rows)
 and should not be separated.
 
-- [ ] **Step 6: Cover the AtomPub creation path (A14, second half)**
+- [x] **Step 6: Cover the AtomPub creation path (A14, second half)**
 
 Step 3 covers the web path. A14 asks for _both_, and AtomPub reaches storage
 through `server/src/atompub/posts.rs:382` — a path no `storage` test touches.
@@ -1016,11 +1016,11 @@ single expected row.
 
 Run: `devtool run -- cargo nextest run -p jaunder atompub` Expected: PASS
 
-- [ ] **Step 7: Run the tests, verify they pass**
+- [x] **Step 7: Run the tests, verify they pass**
 
 Run: `devtool run -- cargo nextest run -p storage -p jaunder` Expected: PASS
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 devtool run -- cargo xtask check
@@ -1533,14 +1533,22 @@ git commit -m "test(e2e): cover the media delete guard end to end (#711)"
 
 ---
 
-### Task 10: Backup golden list
+### Task 10: Backup golden list — DONE as part of Task 6
+
+**Planning error, recorded.** This could never have been a separate commit. The
+moment `0025_create_post_media.sql` lands,
+`backup_covers_every_table_or_deliberately_excludes_it` fails on all three of
+its assertions, so a Task 6 commit that omitted this would have failed its own
+gate. The two must land together, and did: the golden list, the schema comment
+(21 → 22) and `live_count` (23 → 24) were all updated in the Task 6 commit. The
+steps below are kept for the record; all three parts are verified applied.
 
 **Files:**
 
 - Modify: `storage/src/backup.rs` — golden list `:699-724`, schema comment
   `:730`, `live_count` assertion `:747`
 
-- [ ] **Step 1: Run the drift test, verify it fails**
+- [x] **Step 1: Run the drift test, verify it fails**
 
 The relevant test is `backup_covers_every_table_or_deliberately_excludes_it`
 (`:681`), **not** `backup_table_set_drops_internal_and_denylisted_and_sorts`
@@ -1555,7 +1563,7 @@ to `TABLES_EXCLUDED_FROM_BACKUP`" (`:727`).
 That failure is the proof `post_media` is auto-discovered and travels with
 backup; the list is a tripwire, not a registration.
 
-- [ ] **Step 2: Update all three places**
+- [x] **Step 2: Update all three places**
 
 1. Add `post_media` to the golden list (`:699-724`) in sorted position — the
    list is asserted sorted, and `"post_media" < "posts"`.
@@ -1566,11 +1574,11 @@ backup; the list is a tripwire, not a registration.
 Steps 2 and 3 are easy to miss: the test fails at the golden-list assertion
 first, so fixing only that leaves a second failure behind it.
 
-- [ ] **Step 3: Run it, verify it passes**
+- [x] **Step 3: Run it, verify it passes**
 
 Run: `devtool run -- cargo nextest run -p storage backup` Expected: PASS
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 devtool run -- cargo xtask check

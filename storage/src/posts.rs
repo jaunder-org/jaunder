@@ -7,6 +7,7 @@ use thiserror::Error;
 
 use common::feed::FeedPath;
 use common::ids::{AudienceId, ChannelId, PostId, RevisionId, TagId, UserId};
+use common::media::MediaRef;
 use common::pagination::RowLimit;
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
@@ -797,6 +798,12 @@ pub trait PostDialect: Backend {
     /// Inserts one `post_audiences` row, resolving the target-kind name to its
     /// `kind_id` via a subquery. Bind order: `post_id, audience_id, kind_name`.
     const INSERT_POST_AUDIENCE: &'static str;
+
+    /// Deletes every `post_media` row for a post. Bind order: `post_id`.
+    const DELETE_POST_MEDIA: &'static str;
+    /// Inserts one `post_media` row. Bind order:
+    /// `post_id, source, sha256, filename`.
+    const INSERT_POST_MEDIA: &'static str;
 
     /// Update a post and record a revision, returning the updated record.
     async fn update_post(
@@ -2035,6 +2042,7 @@ where
     })?;
 
     replace_post_audiences::<DB>(conn, post_id, &input.audiences).await?;
+    replace_post_media::<DB>(conn, post_id, input.rendered.media()).await?;
 
     // Register the idempotency key in the same transaction as the post. This
     // INSERT has its own unique-violation mapping — a `(user_id, key)` clash is
@@ -2086,6 +2094,50 @@ where
                 .execute(&mut *conn)
                 .await?;
         }
+    }
+    Ok(())
+}
+
+/// Replaces a post's `post_media` rows to exactly match `media`.
+///
+/// Deletes every existing row for `post_id`, then inserts one per reference, so an
+/// edit that *removes* an embed removes its row. Runs on the caller's executor so it
+/// shares the create/update transaction — the sibling of [`replace_post_audiences`],
+/// and kept beside it at every call site because they are one concern: a post's child
+/// rows (#711).
+///
+/// `media` is [`RenderOutput::media`](common::render::RenderOutput::media), which is
+/// already deduplicated and sorted, so the composite primary key can never be violated
+/// and no dialect-divergent conflict handling is needed.
+pub(crate) async fn replace_post_media<DB>(
+    conn: &mut DB::Connection,
+    post_id: PostId,
+    media: &[MediaRef],
+) -> sqlx::Result<()>
+where
+    DB: PostDialect,
+    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    // `MediaSource`/`ContentHash`/`Filename` all bind as themselves through their
+    // `String`-delegating sqlx bridges (ADR-0071 / the `db_enum` text-column bridge),
+    // which is what this pair makes available on the generic backend. The
+    // `sqlx-newtype-bind` gate forbids stripping any of them to `&str` here.
+    String: sqlx::Type<DB>,
+    for<'q> String: sqlx::Encode<'q, DB>,
+    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
+    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+{
+    sqlx::query(DB::DELETE_POST_MEDIA)
+        .bind(post_id)
+        .execute(&mut *conn)
+        .await?;
+    for reference in media {
+        sqlx::query(DB::INSERT_POST_MEDIA)
+            .bind(post_id)
+            .bind(reference.source)
+            .bind(&reference.sha256)
+            .bind(&reference.filename)
+            .execute(&mut *conn)
+            .await?;
     }
     Ok(())
 }
@@ -2361,7 +2413,10 @@ where
 mod tests {
     use super::*;
     use crate::test_support::{
-        backends, seed_users, Backend, CloseablePool, SeedRawPost, SeedUser,
+        backends, create_draft_via_service, create_post_via_service, fetch_post_media,
+        media_ref_for, media_row_exists, media_url_for, seed_media, seed_users,
+        update_post_body_via_service, Backend, CloseablePool, SeedRawPost, SeedUser,
+        MEDIA_TEST_SHA256,
     };
     use common::test_support::{
         parse_post_summary, parse_row_limit, parse_slug, parse_tag, parse_tag_label,
@@ -2729,6 +2784,136 @@ mod tests {
             .publish_post(PostId::from(1), UserId::from(1))
             .await;
         assert!(matches!(result, Err(UpdatePostError::Internal(_))));
+    }
+
+    // -----------------------------------------------------------------------
+    // post_media: what a post's rendered HTML points a reader at (#711)
+    // -----------------------------------------------------------------------
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn create_post_writes_its_media_rows(#[case] backend: Backend) {
+        // A11, and the web half of A14: `create_post_via_service` is the entry point
+        // `web::posts::create` uses, so this drives render -> extract -> write through
+        // the product's own path rather than a synthetic input.
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(&env.state).await;
+        let uploaded = seed_media(&env.state, user, "photo.jpg").await;
+        let body = format!("<img src=\"{}\">", media_url_for("photo.jpg"));
+
+        let post_id = create_post_via_service(&env.state, user, &body).await;
+
+        let expected = media_ref_for("photo.jpg");
+        assert_eq!(
+            fetch_post_media(&env.base, post_id).await,
+            vec![(
+                expected.source.to_string(),
+                expected.sha256.to_string(),
+                expected.filename.to_string(),
+            )]
+        );
+        // The recorded triple names the entry the `media` table holds — the join a
+        // reference guard reads in the other direction.
+        assert!(media_row_exists(&env.state, user, &uploaded).await);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn create_post_records_a_raw_filename_and_a_member_url(#[case] backend: Backend) {
+        // A2, A3 at the persistence level — the issue's two headline spellings become
+        // rows: a URL bearing the name a person types resolves to the stored encoded
+        // spelling, and the AtomPub member layout (which carries no source segment)
+        // is recognised too.
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(&env.state).await;
+        let raw = media_url_for("my photo.jpg").replace("%20", " ");
+        let member = format!("/atompub/alice/media/{MEDIA_TEST_SHA256}/photo.jpg");
+        let body = format!("<img src=\"{raw}\"><a href=\"{member}\">doc</a>");
+
+        let post_id = create_post_via_service(&env.state, user, &body).await;
+
+        let names: Vec<String> = fetch_post_media(&env.base, post_id)
+            .await
+            .into_iter()
+            .map(|(_, _, filename)| filename)
+            .collect();
+        assert!(
+            names.contains(&"my%20photo.jpg".to_owned()),
+            "raw spelling must be canonicalised: {names:?}"
+        );
+        assert!(
+            names.contains(&"photo.jpg".to_owned()),
+            "member URL must be recorded: {names:?}"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn a_post_referencing_nothing_writes_no_media_rows(#[case] backend: Backend) {
+        // A13 — no false positives: prose that names no file writes no rows.
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(&env.state).await;
+
+        let post_id = create_post_via_service(&env.state, user, "just some prose").await;
+
+        assert!(fetch_post_media(&env.base, post_id).await.is_empty());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn updating_a_post_replaces_its_media_rows(#[case] backend: Backend) {
+        // A12, both directions — an edit that swaps one embed for another removes the
+        // old row and adds the new one, and an edit that removes every embed empties
+        // the set. This is why `replace_post_media` deletes before inserting.
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(&env.state).await;
+        let a = media_url_for("a.jpg");
+        let b = media_url_for("b.jpg");
+        let post_id =
+            create_post_via_service(&env.state, user, &format!("<img src=\"{a}\">")).await;
+
+        update_post_body_via_service(&env.state, post_id, user, &format!("<img src=\"{b}\">"))
+            .await;
+
+        let rows = fetch_post_media(&env.base, post_id).await;
+        assert_eq!(rows.len(), 1, "the removed reference is gone: {rows:?}");
+        assert_eq!(rows[0].2, "b.jpg", "the added reference is present");
+
+        update_post_body_via_service(&env.state, post_id, user, "no media at all").await;
+
+        assert!(fetch_post_media(&env.base, post_id).await.is_empty());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn publishing_a_draft_preserves_its_media_rows(#[case] backend: Backend) {
+        // A15 and the row half of A15b — publication is not an edit, so it must leave
+        // the child rows alone. This fails against any design that routes publication
+        // through `update_post`, which would rewrite them from whatever input the
+        // publish call happened to carry. It lives here rather than beside the other
+        // `publish_post` tests because it needs `post_media` to exist.
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(&env.state).await;
+        let body = format!("<img src=\"{}\">", media_url_for("photo.jpg"));
+        let post_id = create_draft_via_service(&env.state, user, &body).await;
+        let before = fetch_post_media(&env.base, post_id).await;
+        assert_eq!(
+            before.len(),
+            1,
+            "precondition: the draft records its reference"
+        );
+
+        env.state
+            .posts
+            .publish_post(post_id, user)
+            .await
+            .expect("publish succeeds");
+
+        assert_eq!(
+            fetch_post_media(&env.base, post_id).await,
+            before,
+            "rows survive publication"
+        );
     }
 
     #[apply(backends)]

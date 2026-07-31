@@ -13,6 +13,7 @@
 // else clippy-pedantic flags is fixed in place rather than suppressed. (#94)
 #![expect(clippy::unwrap_used, clippy::expect_used)]
 
+use crate::media::MediaRecord;
 use crate::posts::{CreatePostError, CreatePostInput};
 use crate::sql::quote_identifier;
 use crate::{AppState, DbConnectOptions, PostFormat, PostRecord, SiteConfigStorage};
@@ -21,6 +22,7 @@ use chrono::{DateTime, Utc};
 use common::feed::FeedPath;
 use common::ids::{PostId, UserId};
 use common::mailer::{MailSender, NoopMailSender};
+use common::media::{detect_content_type, media_url, Filename, MediaRef, MediaSource};
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
@@ -28,8 +30,8 @@ use common::render::{RenderOutput, RenderedHtml};
 use common::slug::Slug;
 use common::tag::TagLabel;
 use common::test_support::{
-    parse_display_name, parse_password, parse_post_title, parse_slug, parse_tag_label,
-    parse_username,
+    parse_byte_size, parse_content_hash, parse_display_name, parse_password, parse_post_title,
+    parse_slug, parse_tag_label, parse_username,
 };
 use common::username::Username;
 use common::visibility::AudienceTarget;
@@ -110,6 +112,23 @@ impl CloseablePool {
         match self {
             CloseablePool::Sqlite(pool) => sqlx::query_scalar(sql).fetch_one(pool).await,
             CloseablePool::Postgres(pool) => sqlx::query_scalar(sql).fetch_one(pool).await,
+        }
+    }
+
+    /// Fetches every row of a three-`TEXT`-column query — the multi-row sibling of
+    /// [`scalar_i64`](CloseablePool::scalar_i64), for inspecting a child table whose
+    /// identity is a string triple (`post_media`).
+    ///
+    /// # Errors
+    ///
+    /// Returns the `sqlx::Error` if the query fails.
+    pub async fn string_triples(
+        &self,
+        sql: &str,
+    ) -> Result<Vec<(String, String, String)>, sqlx::Error> {
+        match self {
+            CloseablePool::Sqlite(pool) => sqlx::query_as(sql).fetch_all(pool).await,
+            CloseablePool::Postgres(pool) => sqlx::query_as(sql).fetch_all(pool).await,
         }
     }
 
@@ -1072,6 +1091,183 @@ impl SeedRawPost {
             .await
             .expect("seed raw post should be created")
     }
+}
+
+/// The content hash every media fixture is stored under: the SHA-256 of the empty
+/// input, so the digest is a real one rather than an invented hex string. Public
+/// because a test spelling the `AtomPub` member layout
+/// (`/atompub/<user>/media/<sha>/<name>`) needs the digest itself, not a serve URL.
+pub const MEDIA_TEST_SHA256: &str =
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+/// The [`MediaRef`] naming the fixture entry called `name`.
+///
+/// `name` is the **raw** name a person types; it goes through
+/// [`Filename::sanitized`] — the upload-intake door — so a fixture spelling
+/// `"my photo.jpg"` yields the stored `my%20photo.jpg` and a test never hand-encodes.
+///
+/// # Panics
+///
+/// If `name` is not a usable filename leaf.
+#[must_use]
+pub fn media_ref_for(name: &str) -> MediaRef {
+    MediaRef {
+        source: MediaSource::Upload,
+        sha256: parse_content_hash(MEDIA_TEST_SHA256),
+        filename: Filename::sanitized(name).expect("valid test media filename"),
+    }
+}
+
+/// The canonical serve URL for `name` under the shared test digest — the single place
+/// a test spells a media URL, composed by the production [`media_url`] rather than by
+/// re-writing the layout.
+#[must_use]
+pub fn media_url_for(name: &str) -> String {
+    let media = media_ref_for(name);
+    media_url(&media.source, &media.sha256, &media.filename).to_string()
+}
+
+/// Seeds a `media` row owned by `user_id` for the fixture entry called `name`, and
+/// returns the [`MediaRef`] naming it — the entry a post's `post_media` row resolves
+/// to. Content type is derived from the name, as the real upload path derives it.
+///
+/// # Panics
+///
+/// If the row cannot be created — happy-path setup only, like [`SeedUser::seed`].
+pub async fn seed_media(state: &Arc<AppState>, user_id: UserId, name: &str) -> MediaRef {
+    let media = media_ref_for(name);
+    state
+        .media
+        .create_media(&MediaRecord {
+            user_id,
+            sha256: media.sha256.clone(),
+            filename: media.filename.clone(),
+            source: media.source,
+            content_type: detect_content_type(&media.filename),
+            size_bytes: parse_byte_size("1"),
+            source_url: None,
+            created_at: Utc::now(),
+        })
+        .await
+        .expect("seed media should be created");
+    media
+}
+
+/// Whether a `media` row exists for `user_id` and `media` — the ownership-scoped
+/// existence question, asked through the real store rather than raw SQL.
+///
+/// # Panics
+///
+/// If the lookup fails.
+pub async fn media_row_exists(state: &Arc<AppState>, user_id: UserId, media: &MediaRef) -> bool {
+    state
+        .media
+        .get_media(user_id, &media.sha256, &media.filename, &media.source)
+        .await
+        .expect("media lookup should succeed")
+        .is_some()
+}
+
+/// A post's `post_media` rows as `(source, sha256, filename)`, ascending — the
+/// persisted form of what its rendered HTML points a reader at.
+///
+/// # Panics
+///
+/// If the query fails.
+pub async fn fetch_post_media(base: &TestBase, post_id: PostId) -> Vec<(String, String, String)> {
+    base.pool()
+        .string_triples(&format!(
+            "SELECT source, sha256, filename FROM post_media \
+             WHERE post_id = {post_id} ORDER BY source, sha256, filename"
+        ))
+        .await
+        .expect("post_media query should succeed")
+}
+
+/// Creates a post through [`perform_post_creation`](crate::perform_post_creation) —
+/// the same entry point `web::posts::create` uses — so a test exercises the product's
+/// own path (render, extract, write) rather than a synthetic [`CreatePostInput`].
+///
+/// # Panics
+///
+/// If the post cannot be created.
+pub async fn create_post_via_service(state: &Arc<AppState>, user_id: UserId, body: &str) -> PostId {
+    create_via_service(state, user_id, body, Some(Utc::now())).await
+}
+
+/// The unpublished twin of [`create_post_via_service`] — the draft a publication test
+/// needs, created the same way.
+///
+/// # Panics
+///
+/// If the post cannot be created.
+pub async fn create_draft_via_service(
+    state: &Arc<AppState>,
+    user_id: UserId,
+    body: &str,
+) -> PostId {
+    create_via_service(state, user_id, body, None).await
+}
+
+/// Shared body of the two service-layer creators: everything but `published_at` is
+/// fixed (public, Markdown, title derived from the body), as the two differ in exactly
+/// that one field.
+async fn create_via_service(
+    state: &Arc<AppState>,
+    user_id: UserId,
+    body: &str,
+    published_at: Option<DateTime<Utc>>,
+) -> PostId {
+    crate::perform_post_creation(
+        state.posts.as_ref(),
+        crate::PostCreation {
+            user_id,
+            body: PostBody::from(body),
+            title: None,
+            format: PostFormat::Markdown,
+            slug_override: None,
+            published_at,
+            max_attempts: 100,
+            summary: None,
+            audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
+        },
+    )
+    .await
+    .expect("post creation via the service path should succeed")
+    .post_id
+}
+
+/// Edits a post's body through [`perform_post_update`](crate::perform_post_update) —
+/// the service-layer twin of [`create_post_via_service`], so an edit's re-render and
+/// re-extraction run exactly as the product runs them. Publication state is left
+/// as-is.
+///
+/// # Panics
+///
+/// If the update fails.
+pub async fn update_post_body_via_service(
+    state: &Arc<AppState>,
+    post_id: PostId,
+    editor_user_id: UserId,
+    body: &str,
+) {
+    crate::perform_post_update(
+        state.posts.as_ref(),
+        crate::PostUpdate {
+            post_id,
+            editor_user_id,
+            body: PostBody::from(body),
+            title: None,
+            format: PostFormat::Markdown,
+            slug_override: None,
+            publish: crate::PublishUpdate::Publish { at: None },
+            summary: None,
+            audiences: vec![AudienceTarget::Public],
+        },
+    )
+    .await
+    .expect("post update via the service path should succeed");
 }
 
 /// An in-memory [`SiteConfigStorage`] for tests that need a facade over site
