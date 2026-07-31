@@ -6,7 +6,7 @@
 > tracking.
 
 **Spec:**
-[`docs/superpowers/specs/2026-07-30-issue-729-xtask-pr-watch.md`](../specs/2026-07-30-issue-729-xtask-pr-watch.md)
+[`docs/archive/2026-07-30-issue-729-xtask-pr-watch-spec.md`](2026-07-30-issue-729-xtask-pr-watch-spec.md)
 — referenced by decision (D1–D13) and acceptance criterion (A1–A16). **The plan
 is "how"; the spec is "what/why." Do not re-derive spec rationale here — read it
 there.**

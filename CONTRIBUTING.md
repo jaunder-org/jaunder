@@ -376,19 +376,22 @@ Jaunder uses OpenTelemetry for deep performance analysis (see
   ```
 
   It reports exactly one outcome — `merged`, `checks-failed`, `ejected`,
-  `conflicted`, `closed-unmerged`, `stale`, `timed-out`, or `watcher-error` —
-  and they never collapse into one another: `timed-out` means GitHub never
-  finished, `watcher-error` means the tooling could not tell you. **Exit is 0
-  only for `merged`**; branch on `pr.outcome` in `--json` (or in
-  `.xtask/last-result.json`), not on the exit code. Progress streams to stderr
-  as it happens and is also serialized into `pr.events`.
+  `conflicted`, `closed-unmerged`, `stale`, `timed-out`, or `watcher-error`,
+  plus `pending` when `--once` catches a PR mid-flight — and they never collapse
+  into one another: `timed-out` means GitHub never finished, `watcher-error`
+  means the tooling could not tell you. **Exit is 0 only for `merged`**; branch
+  on `pr.outcome` in `--json` (or in `.xtask/last-result.json`), not on the exit
+  code. Progress streams to stderr as it happens and is also serialized into
+  `pr.events`.
 
   `watch` only observes — it never merges, re-runs a job, rebases, or
   re-enqueues after an ejection, because each of those is a judgement call.
-  **Running `land` is the merge approval**; it refuses if you invoke it from the
-  PR's own branch with unpushed commits. See
-  [the ADR](docs/adr/drafts/xtask-github-pr-observation.md) for why `gh` is the
-  transport and why the required-check set is read from the ruleset per run.
+  **Running `land` is the merge approval**; invoked from the PR's own branch it
+  refuses whenever your local HEAD differs from the PR head at all — ahead,
+  behind, or diverged — since what would merge is then not what you are looking
+  at. See [the ADR](docs/adr/drafts/xtask-github-pr-observation.md) for why `gh`
+  is the transport and why the required-check set is read from the ruleset per
+  run.
 
 ### Targeted Rust tests
 
