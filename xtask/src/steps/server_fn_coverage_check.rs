@@ -23,10 +23,12 @@ use anyhow::Result;
 
 use crate::result::{CommandResult, StepResult};
 use crate::server_fn_coverage::io::{
-    coverage_from_capture, inventory, read_allowlist, read_snapshot, write_snapshot,
-    ALLOWLIST_PATH, CAPTURE_PATH, SNAPSHOT_PATH, WEB_SRC,
+    coverage_from_capture, inventory, read_allowlist, read_artifact, write_artifact,
+    ALLOWLIST_PATH, CAPTURE_PATH, EVIDENCE_PATH, SNAPSHOT_PATH, WEB_SRC,
 };
-use crate::server_fn_coverage::{render, verdict, Snapshot, REGENERATE_CMD};
+use crate::server_fn_coverage::{
+    evidence_verdict, render, verdict, Evidence, Snapshot, REGENERATE_CMD,
+};
 
 /// The static lane's step name.
 const STATIC_STEP: &str = "server-fn-coverage";
@@ -46,15 +48,25 @@ const AUTHORITATIVE: (&str, &str) = ("sqlite", "chromium");
 /// A missing snapshot, an unscannable `web/src`, or an unparseable artifact is a
 /// **failure**, never a pass: the failure mode this gate guards against and the
 /// failure mode of its own plumbing would otherwise look identical.
-fn check(web_src: &Path, snapshot_path: &Path, allowlist_path: &Path) -> StepResult {
-    let (inventory, snapshot, allowlist) = match (
+/// The two generated artifacts are adjacent in this signature and in
+/// [`regenerate_or_verify`]'s, so the pair reads the same way in both. They are
+/// all `&Path`, so a transposition is a silent swap rather than a type error —
+/// keeping one order is what makes it noticeable.
+fn check(
+    web_src: &Path,
+    snapshot_path: &Path,
+    evidence_path: &Path,
+    allowlist_path: &Path,
+) -> StepResult {
+    let (inventory, snapshot, allowlist, evidence) = match (
         inventory(web_src),
-        read_snapshot(snapshot_path),
+        read_artifact::<Snapshot>(snapshot_path),
         read_allowlist(allowlist_path),
+        read_artifact::<Evidence>(evidence_path),
     ) {
-        (Ok(i), Ok(s), Ok(a)) => (i, s, a),
-        (i, s, a) => {
-            let detail = [i.err(), s.err(), a.err()]
+        (Ok(i), Ok(s), Ok(a), Ok(e)) => (i, s, a, e),
+        (i, s, a, e) => {
+            let detail = [i.err(), s.err(), a.err(), e.err()]
                 .into_iter()
                 .flatten()
                 .map(|e| format!("{e:#}"))
@@ -64,7 +76,10 @@ fn check(web_src: &Path, snapshot_path: &Path, allowlist_path: &Path) -> StepRes
         }
     };
 
-    let violations = verdict(&inventory, &snapshot, &allowlist);
+    // Both rules in one step, so a failing run reports every reason at once
+    // rather than making an author fix them one gate run at a time.
+    let mut violations = verdict(&inventory, &snapshot, &allowlist);
+    violations.extend(evidence_verdict(&snapshot, &evidence));
     if violations.is_empty() {
         return StepResult::ok(STATIC_STEP).detail(format!(
             "{} server fn(s) accounted for ({} covered, {} allowlisted)",
@@ -82,6 +97,7 @@ pub fn run(result: &mut CommandResult) {
     result.push(check(
         Path::new(WEB_SRC),
         Path::new(SNAPSHOT_PATH),
+        Path::new(EVIDENCE_PATH),
         Path::new(ALLOWLIST_PATH),
     ));
 }
@@ -95,6 +111,7 @@ fn regenerate_or_verify(
     web_src: &Path,
     capture: &Path,
     snapshot_path: &Path,
+    evidence_path: &Path,
     regenerate: bool,
 ) -> Result<StepResult> {
     let name = if regenerate {
@@ -104,22 +121,48 @@ fn regenerate_or_verify(
     };
     let inventory = inventory(web_src)?;
     let coverage = coverage_from_capture(capture, &inventory)?;
-    let snapshot = Snapshot::from(coverage);
+    let (snapshot, evidence) = coverage.split();
     let covered = snapshot.covered.len();
 
     if regenerate {
         let orphans = snapshot.orphans.len();
-        write_snapshot(snapshot_path, &snapshot)?;
+        // Both, always: `evidence_verdict` fails on a key-set disagreement, so
+        // writing one without the other would redden the very next static check.
+        write_artifact(snapshot_path, &snapshot)?;
+        write_artifact(evidence_path, &evidence)?;
         return Ok(StepResult::ok(name).detail(format!(
-            "{covered} covered, {orphans} fn(s) with unattributed hits → {}",
-            snapshot_path.display()
+            "{covered} covered, {orphans} fn(s) with unattributed hits → {} + {}",
+            snapshot_path.display(),
+            evidence_path.display()
         )));
     }
 
-    // A missing snapshot reads as empty, so it mismatches and fails — the strict
-    // reading, not a lenient one.
+    // Only the snapshot is compared. The evidence file is a timing-dependent
+    // observation (see `snapshot.rs`'s module docs) and comparing it is exactly
+    // the bug #745 fixed.
     let committed = std::fs::read_to_string(snapshot_path).unwrap_or_default();
-    if committed == render(&snapshot)? {
+    compare_rendered(
+        name,
+        &committed,
+        &render(&snapshot)?,
+        snapshot_path,
+        covered,
+    )
+}
+
+/// The verify verdict for bytes already derived — pure over its inputs, so the
+/// drift branch is testable without a capture tarball.
+///
+/// A missing snapshot reaches here as an empty `committed`, which never equals
+/// rendered output and so fails — the strict reading, not a lenient one.
+fn compare_rendered(
+    name: &'static str,
+    committed: &str,
+    rendered: &str,
+    snapshot_path: &Path,
+    covered: usize,
+) -> Result<StepResult> {
+    if committed == rendered {
         return Ok(StepResult::ok(name).detail(format!("{covered} covered; snapshot current")));
     }
     Ok(StepResult::fail(name).detail(format!(
@@ -130,13 +173,14 @@ fn regenerate_or_verify(
 }
 
 /// Derive coverage from an e2e capture over the repo's real roots, and either
-/// rewrite the committed snapshot (`regenerate`) or fail on any difference from
-/// it (`verify`).
+/// rewrite the committed artifacts (`regenerate`) or fail on any difference from
+/// the committed snapshot (`verify`).
 pub fn from_capture(capture: &Path, regenerate: bool) -> Result<StepResult> {
     regenerate_or_verify(
         Path::new(WEB_SRC),
         capture,
         Path::new(SNAPSHOT_PATH),
+        Path::new(EVIDENCE_PATH),
         regenerate,
     )
 }
@@ -188,17 +232,35 @@ mod tests {
         std::fs::write(path, json).expect("write json");
     }
 
+    /// Write an evidence file agreeing with `names`, so a test that is not about
+    /// evidence drift does not trip over `evidence_verdict`.
+    fn evidence_for(dir: &Path, names: &[&str]) -> std::path::PathBuf {
+        let path = dir.join("evidence.json");
+        let entries: Vec<String> = names
+            .iter()
+            .map(|n| format!(r#""{n}":["a test"]"#))
+            .collect();
+        write_json(
+            &path,
+            &format!(r#"{{"covered":{{{}}}}}"#, entries.join(",")),
+        );
+        path
+    }
+
     #[test]
     fn static_lane_passes_when_every_fn_is_covered() {
         let tmp = tempfile::tempdir().expect("tempdir");
         web_src_with(tmp.path(), &["create_post"]);
         let snap = tmp.path().join("snap.json");
-        write_json(
-            &snap,
-            r#"{"covered":{"posts::create_post":["creates a post"]},"orphans":{}}"#,
-        );
+        write_json(&snap, r#"{"covered":["posts::create_post"],"orphans":{}}"#);
+        let ev = evidence_for(tmp.path(), &["posts::create_post"]);
 
-        let step = check(tmp.path(), &snap, &tmp.path().join("absent-allowlist.json"));
+        let step = check(
+            tmp.path(),
+            &snap,
+            &ev,
+            &tmp.path().join("absent-allowlist.json"),
+        );
         assert!(step.ok, "{:?}", step.detail);
         assert!(step.detail.unwrap_or_default().contains("1 server fn"));
     }
@@ -210,12 +272,15 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         web_src_with(tmp.path(), &["create_post", "brand_new_uncovered_fn"]);
         let snap = tmp.path().join("snap.json");
-        write_json(
-            &snap,
-            r#"{"covered":{"posts::create_post":["creates a post"]},"orphans":{}}"#,
-        );
+        write_json(&snap, r#"{"covered":["posts::create_post"],"orphans":{}}"#);
+        let ev = evidence_for(tmp.path(), &["posts::create_post"]);
 
-        let step = check(tmp.path(), &snap, &tmp.path().join("absent-allowlist.json"));
+        let step = check(
+            tmp.path(),
+            &snap,
+            &ev,
+            &tmp.path().join("absent-allowlist.json"),
+        );
         assert!(!step.ok);
         let detail = step.detail.unwrap_or_default();
         assert!(detail.contains("brand_new_uncovered_fn"), "{detail}");
@@ -226,15 +291,87 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         web_src_with(tmp.path(), &["no_flow_yet"]);
         let snap = tmp.path().join("snap.json");
-        write_json(&snap, r#"{"covered":{},"orphans":{}}"#);
+        write_json(&snap, r#"{"covered":[],"orphans":{}}"#);
+        let ev = evidence_for(tmp.path(), &[]);
         let allow = tmp.path().join("allow.json");
         write_json(
             &allow,
             r##"[{"server_fn":"posts::no_flow_yet","reason":"no UI surface yet","issue":"#700"}]"##,
         );
 
-        let step = check(tmp.path(), &snap, &allow);
+        let step = check(tmp.path(), &snap, &ev, &allow);
         assert!(step.ok, "{:?}", step.detail);
+    }
+
+    #[test]
+    fn static_lane_fails_when_the_evidence_is_missing_a_covered_fn() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        web_src_with(tmp.path(), &["create_post"]);
+        let snap = tmp.path().join("snap.json");
+        write_json(&snap, r#"{"covered":["posts::create_post"],"orphans":{}}"#);
+        let ev = evidence_for(tmp.path(), &[]);
+
+        let step = check(
+            tmp.path(),
+            &snap,
+            &ev,
+            &tmp.path().join("absent-allowlist.json"),
+        );
+        assert!(!step.ok);
+        let detail = step.detail.unwrap_or_default();
+        assert!(detail.contains("posts::create_post"), "{detail}");
+        assert!(detail.contains("missing from the evidence"), "{detail}");
+    }
+
+    #[test]
+    fn static_lane_fails_when_the_evidence_names_an_uncovered_fn() {
+        // The other direction, at the fixture-file level: stale evidence naming a
+        // fn the snapshot no longer covers.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        web_src_with(tmp.path(), &["create_post"]);
+        let snap = tmp.path().join("snap.json");
+        write_json(&snap, r#"{"covered":["posts::create_post"],"orphans":{}}"#);
+        let ev = evidence_for(tmp.path(), &["posts::create_post", "posts::ghost"]);
+
+        let step = check(
+            tmp.path(),
+            &snap,
+            &ev,
+            &tmp.path().join("absent-allowlist.json"),
+        );
+        assert!(!step.ok);
+        let detail = step.detail.unwrap_or_default();
+        assert!(detail.contains("posts::ghost"), "{detail}");
+        assert!(detail.contains("stale evidence"), "{detail}");
+        // The remedy travels with BOTH directions, not just the missing-key one:
+        // an author who hits the stale direction needs the same two steps.
+        assert!(detail.contains(REGENERATE_CMD), "{detail}");
+        assert!(
+            detail.contains("cargo xtask e2e sqlite chromium"),
+            "{detail}"
+        );
+    }
+
+    #[test]
+    fn static_lane_fails_closed_on_a_missing_evidence_file() {
+        // The plumbing's own failure must not look like "nothing uncovered".
+        let tmp = tempfile::tempdir().expect("tempdir");
+        web_src_with(tmp.path(), &["create_post"]);
+        let snap = tmp.path().join("snap.json");
+        write_json(&snap, r#"{"covered":["posts::create_post"],"orphans":{}}"#);
+
+        let step = check(
+            tmp.path(),
+            &snap,
+            &tmp.path().join("absent-evidence.json"),
+            &tmp.path().join("absent-allowlist.json"),
+        );
+        assert!(!step.ok);
+        let detail = step.detail.unwrap_or_default();
+        assert!(
+            detail.contains(REGENERATE_CMD),
+            "names the remedy: {detail}"
+        );
     }
 
     #[test]
@@ -242,10 +379,12 @@ mod tests {
         // The plumbing's own failure must not look like "nothing uncovered".
         let tmp = tempfile::tempdir().expect("tempdir");
         web_src_with(tmp.path(), &["create_post"]);
+        let ev = evidence_for(tmp.path(), &["posts::create_post"]);
 
         let step = check(
             tmp.path(),
             &tmp.path().join("absent-snapshot.json"),
+            &ev,
             &tmp.path().join("absent-allowlist.json"),
         );
         assert!(!step.ok);
@@ -262,9 +401,89 @@ mod tests {
         web_src_with(tmp.path(), &["create_post"]);
         let snap = tmp.path().join("snap.json");
         write_json(&snap, "{not json");
+        let ev = evidence_for(tmp.path(), &["posts::create_post"]);
 
-        let step = check(tmp.path(), &snap, &tmp.path().join("absent-allowlist.json"));
+        let step = check(
+            tmp.path(),
+            &snap,
+            &ev,
+            &tmp.path().join("absent-allowlist.json"),
+        );
         assert!(!step.ok);
+    }
+
+    // ── The e2e lane's byte-compare ─────────────────────────────────────────
+    //
+    // These reach `compare_rendered` directly. Before it was extracted the only
+    // way in was `regenerate_or_verify`, which needs a real ~2 MB capture
+    // tarball, so the drift branch — the thing the whole e2e lane exists to do —
+    // had no test at all.
+
+    #[test]
+    fn identical_bytes_verify_clean() {
+        let step = compare_rendered(
+            VERIFY_STEP,
+            "same\n",
+            "same\n",
+            Path::new("docs/coverage/server-fns.json"),
+            54,
+        )
+        .expect("compares");
+        assert!(step.ok, "{:?}", step.detail);
+        assert!(step.detail.unwrap_or_default().contains("54 covered"));
+    }
+
+    #[test]
+    fn any_byte_difference_is_drift() {
+        // Byte equality, not parsed equality: a hand-edit that happens to parse
+        // equal is still drift, which is what makes the committed artifact
+        // provably what regeneration produces.
+        let step = compare_rendered(
+            VERIFY_STEP,
+            "a\n",
+            "b\n",
+            Path::new("docs/coverage/server-fns.json"),
+            54,
+        )
+        .expect("compares");
+        assert!(!step.ok);
+        let detail = step.detail.unwrap_or_default();
+        assert!(detail.contains("docs/coverage/server-fns.json"), "{detail}");
+        assert!(
+            detail.contains(REGENERATE_CMD),
+            "names the remedy: {detail}"
+        );
+    }
+
+    #[test]
+    fn a_missing_committed_file_reads_as_empty_and_therefore_drifts() {
+        // `regenerate_or_verify` passes `unwrap_or_default()` for an unreadable
+        // file; empty never equals rendered output, so it fails — the strict
+        // reading, not a lenient one.
+        let step = compare_rendered(
+            VERIFY_STEP,
+            "",
+            "anything\n",
+            Path::new("docs/coverage/server-fns.json"),
+            0,
+        )
+        .expect("compares");
+        assert!(!step.ok);
+    }
+
+    #[test]
+    fn whitespace_only_difference_is_still_drift() {
+        // The failure mode a parsed comparison would wave through: same value,
+        // different bytes. This is exactly what byte-comparison is for.
+        let step = compare_rendered(
+            VERIFY_STEP,
+            "{\n  \"covered\": []\n}\n",
+            "{\n    \"covered\": []\n}\n",
+            Path::new("docs/coverage/server-fns.json"),
+            0,
+        )
+        .expect("compares");
+        assert!(!step.ok, "reformatted-but-equal must still be drift");
     }
 
     #[test]
@@ -355,10 +574,11 @@ mod tests {
         // The fixture must still be the evidence behind the committed snapshot:
         // every fn the snapshot calls covered is covered in the reduced capture too.
         let coverage = seed_coverage();
-        let snapshot = read_snapshot(&repo_root().join(SNAPSHOT_PATH)).expect("snapshot parses");
+        let snapshot =
+            read_artifact::<Snapshot>(&repo_root().join(SNAPSHOT_PATH)).expect("snapshot parses");
         let missing: Vec<&String> = snapshot
             .covered
-            .keys()
+            .iter()
             .filter(|fnname| !coverage.covered.contains_key(*fnname))
             .collect();
         assert!(
@@ -652,6 +872,7 @@ mod tests {
             tmp.path(),
             Path::new("/nonexistent-capture.tar.gz"),
             &tmp.path().join("snap.json"),
+            &tmp.path().join("evidence.json"),
             false,
         )
         .unwrap_err();
@@ -666,6 +887,7 @@ mod tests {
             &tmp.path().join("nonexistent"),
             Path::new("/nonexistent-capture.tar.gz"),
             &tmp.path().join("snap.json"),
+            &tmp.path().join("evidence.json"),
             false,
         )
         .unwrap_err();

@@ -533,9 +533,24 @@ per-commit knob.
 **`#[server]` flow coverage is a separate gate** (#681, ADR — _empirical
 server-fn flow coverage_). Line coverage says a fn's body ran under _some_ test;
 this says a real browser session actually drove the endpoint. It is derived from
-the `sqlite × chromium` e2e run's OTLP traces, and the result is committed as
-`docs/coverage/server-fns.json` (generated — do not hand-edit) plus
-`docs/coverage/server-fns-allowlist.json` (hand-maintained).
+the `sqlite × chromium` e2e run's OTLP traces, and committed as three files:
+
+| file                                      | what it holds                                          | compared?              |
+| ----------------------------------------- | ------------------------------------------------------ | ---------------------- |
+| `docs/coverage/server-fns.json`           | the covered `<vertical>::<ident>` set + orphan reasons | **yes**, byte-for-byte |
+| `docs/coverage/server-fns-evidence.json`  | which tests drove each fn                              | no                     |
+| `docs/coverage/server-fns-allowlist.json` | knowingly-uncovered fns                                | n/a (hand-maintained)  |
+
+The first two are generated — do not hand-edit; `regenerate` writes both, and
+the static lane fails if their key sets disagree.
+
+**Only the fn set is compared, and that is deliberate (#745).** The verdict has
+never read a test title, and the titles are not reproducible: two runs of the
+same e2e derivation on the same tree disagree about them, because a test that
+ends mid-navigation leaves its page booting and the boot is truncated at a
+different point each run. Byte-comparing them made the gate go red on PRs that
+changed nothing. Nothing is misattributed — see ADR-0081 before concluding there
+is a trace-propagation bug.
 
 **Adding a `#[server]` fn therefore requires one of two things**, or the fast
 lane reddens immediately — `server-fn-coverage` runs in `cargo xtask check` and

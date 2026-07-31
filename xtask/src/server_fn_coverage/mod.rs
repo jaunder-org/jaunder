@@ -12,4 +12,6 @@ pub mod io;
 pub mod snapshot;
 
 pub use extract::{extract, Coverage};
-pub use snapshot::{render, verdict, AllowlistEntry, Snapshot, REGENERATE_CMD};
+pub use snapshot::{
+    evidence_verdict, render, verdict, AllowlistEntry, Evidence, Snapshot, REGENERATE_CMD,
+};

@@ -109,9 +109,44 @@ Concretely:
   closes over the ids, and a static check rejects raw `newContext(` in
   `end2end/tests`. The failure mode this prevents is **silent under-reporting**:
   the suite still passes, the snapshot just quietly shrinks.
-- The result is **committed** as a snapshot, checked cheaply in the static lane
-  and regenerated (fail-on-drift) in the e2e lane, because traces exist only in
-  the latter.
+- The result is **committed**, checked cheaply in the static lane and
+  regenerated (fail-on-drift) in the e2e lane, because traces exist only in the
+  latter.
+- **It is committed as two files, and only one of them is compared (#745).**
+  `docs/coverage/server-fns.json` carries the covered `<vertical>::<ident>` set
+  plus the orphan reason sets and is byte-compared;
+  `docs/coverage/server-fns-evidence.json` carries the per-test titles,
+  regenerated beside it and never compared. The static lane cross-checks that
+  their key sets agree, in both directions.
+
+  This was originally one file. Splitting it is not tidying — the single file
+  **could not converge**, and the reason matters for anyone tempted to merge
+  them back:
+  - **Only the fn set was ever asserted.** The verdict has never read a test
+    title; the titles were load-bearing for red/green solely because the whole
+    file was byte-compared.
+  - **The titles are not reproducible.** Across four forced re-executions of
+    `checks.x86_64-linux.e2e-sqlite-chromium` on one tree, the covered key set
+    (54) and the orphan reason sets were identical every time, while the title
+    sets moved. Three of those runs are committed as testdata under
+    `xtask/src/server_fn_coverage/testdata/determinism/`, with a test asserting
+    they project to one byte-identical snapshot — so this claim is checkable in
+    milliseconds rather than by re-running the e2e matrix.
+  - **Nothing is misattributed.** Every hit is attributed to the test whose
+    browser context actually issued the request. What varies is _post-assertion
+    trailing traffic_: a test that ends mid-navigation leaves its page booting,
+    and the boot is truncated at a different point each run. Do not go looking
+    for a trace-propagation bug — there isn't one.
+  - **A time-window rule does not fix it.** Refusing hits that begin after a
+    test's span closed was implemented and measured: it removes the wide-margin
+    cases and exposes narrow ones (a `tags::list` hit at +31 ms in one run and
+    −90 ms in others), so it relocates the race rather than removing it. It is
+    the same objection this ADR already raises against time-window correlation.
+
+  The accepted cost: the evidence file's titles can go stale unnoticed, because
+  only its key set is checked — a renamed or deleted test leaves a wrong title
+  in a green tree. Whether that file is worth its weight at all is **#757**.
+
 - A fn may be **uncovered only via an explicit allowlist entry** carrying a
   reason and a filed issue.
 
@@ -120,7 +155,10 @@ Concretely:
 - Flow documentation (#601) can state coverage as a checked fact rather than a
   promise; its "pinned by" anchors become claims verified against this snapshot.
   #310's traceability matrix gains a substrate, so the two converge on one
-  mapping instead of two.
+  mapping instead of two. **Half of that survives the #745 split and half does
+  not:** _whether_ a fn is covered remains a checked fact in the compared
+  snapshot, but _which flow_ covers it now lives in the uncompared evidence file
+  and is a promise again — accurate when regenerated, unpoliced thereafter.
 - A new `#[server]` fn cannot land silently untested: absent from the snapshot
   and the allowlist, it reddens the fast lane without needing an e2e run.
 - This commits us to keeping the e2e trace export working. If the capture
@@ -134,8 +172,12 @@ Concretely:
 - It adds a standing obligation on **e2e authors**, not just on server-fn
   authors: a new browser context must be traced. That is why the constraint is a
   gate rather than a convention — the cost of forgetting is invisible.
-- The snapshot is a generated file under review: test-title edits produce diff
-  churn. That is accepted as the signal working, confined to one file.
+- The artifacts are generated files under review: test-title edits produce diff
+  churn. That is accepted as the signal working, and since #745 it is confined
+  to the **uncompared** file — so it is a diff to read past, never a red build.
+  (It previously read "confined to one file", which was true of the layout but
+  missed the consequence that mattered: while that one file was compared,
+  unrelated title churn could and did turn the gate red.)
 - It does **not** commit us to union aggregation across the e2e matrix. One
   combo is authoritative because neither backend nor browser changes which
   server fns the UI invokes; if that assumption breaks it surfaces as snapshot
