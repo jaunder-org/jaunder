@@ -117,6 +117,7 @@ convention). See the Status column below for each ADR's current status.
 | [0087](adr/0087-xtask-github-pr-observation.md)                    | xtask observes the CI/merge system, with `gh` as its transport                                               | accepted   |
 | [0088](adr/0088-promotion-is-the-acceptance-event.md)              | Delegate AtomPub Atom document I/O to `atom_syndication`; retire the fork bridge                             | accepted   |
 | [0089](adr/0089-upstream-atom-document-io.md)                      | Delegate AtomPub Atom document I/O to `atom_syndication`; retire the fork bridge                             | accepted   |
+| [0090](adr/0090-media-references-extracted-at-render.md)           | A post's media references are derived from its sanitized HTML, never supplied                                | accepted   |
 
 <!-- adr-table:end -->
 

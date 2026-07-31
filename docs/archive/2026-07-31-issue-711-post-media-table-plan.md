@@ -6,9 +6,9 @@
 
 **Spec:** `docs/superpowers/specs/2026-07-30-issue-711-post-media-table.md` —
 the "what/why". This plan is the "how" and does not restate it. Decisions are
-cited as D1–D9, criteria as A1–A21. **ADR draft:**
-`docs/adr/drafts/media-references-extracted-at-render.md` (numberless;
-`cargo xtask adr promote` numbers it at ship). **Issue:**
+cited as D1–D9, criteria as A1–A21. **ADR:**
+`docs/adr/0090-media-references-extracted-at-render.md` (drafted numberless during
+this cycle; numbered and accepted at ship by `cargo xtask adr promote`). **Issue:**
 [#711](https://github.com/jaunder-org/jaunder/issues/711)
 
 **Goal:** Record which posts reference which media in a `post_media` table
