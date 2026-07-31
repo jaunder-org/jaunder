@@ -399,6 +399,80 @@ mod tests {
         assert!(!step.ok);
     }
 
+    // ── The e2e lane's byte-compare ─────────────────────────────────────────
+    //
+    // These reach `compare_rendered` directly. Before it was extracted the only
+    // way in was `regenerate_or_verify`, which needs a real ~2 MB capture
+    // tarball, so the drift branch — the thing the whole e2e lane exists to do —
+    // had no test at all.
+
+    #[test]
+    fn identical_bytes_verify_clean() {
+        let step = compare_rendered(
+            VERIFY_STEP,
+            "same\n",
+            "same\n",
+            Path::new("docs/coverage/server-fns.json"),
+            54,
+        )
+        .expect("compares");
+        assert!(step.ok, "{:?}", step.detail);
+        assert!(step.detail.unwrap_or_default().contains("54 covered"));
+    }
+
+    #[test]
+    fn any_byte_difference_is_drift() {
+        // Byte equality, not parsed equality: a hand-edit that happens to parse
+        // equal is still drift, which is what makes the committed artifact
+        // provably what regeneration produces.
+        let step = compare_rendered(
+            VERIFY_STEP,
+            "a\n",
+            "b\n",
+            Path::new("docs/coverage/server-fns.json"),
+            54,
+        )
+        .expect("compares");
+        assert!(!step.ok);
+        let detail = step.detail.unwrap_or_default();
+        assert!(detail.contains("docs/coverage/server-fns.json"), "{detail}");
+        assert!(
+            detail.contains(REGENERATE_CMD),
+            "names the remedy: {detail}"
+        );
+    }
+
+    #[test]
+    fn a_missing_committed_file_reads_as_empty_and_therefore_drifts() {
+        // `regenerate_or_verify` passes `unwrap_or_default()` for an unreadable
+        // file; empty never equals rendered output, so it fails — the strict
+        // reading, not a lenient one.
+        let step = compare_rendered(
+            VERIFY_STEP,
+            "",
+            "anything\n",
+            Path::new("docs/coverage/server-fns.json"),
+            0,
+        )
+        .expect("compares");
+        assert!(!step.ok);
+    }
+
+    #[test]
+    fn whitespace_only_difference_is_still_drift() {
+        // The failure mode a parsed comparison would wave through: same value,
+        // different bytes. This is exactly what byte-comparison is for.
+        let step = compare_rendered(
+            VERIFY_STEP,
+            "{\n  \"covered\": []\n}\n",
+            "{\n    \"covered\": []\n}\n",
+            Path::new("docs/coverage/server-fns.json"),
+            0,
+        )
+        .expect("compares");
+        assert!(!step.ok, "reformatted-but-equal must still be drift");
+    }
+
     #[test]
     fn e2e_lane_is_a_no_op_for_a_non_authoritative_combo() {
         // D8: only the sqlite × chromium combo has an uncollided capture.

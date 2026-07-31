@@ -797,7 +797,7 @@ fn compare_rendered(
 ) -> StepResult;
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```rust
 #[test]
@@ -845,22 +845,22 @@ fn a_missing_committed_file_reads_as_empty_and_therefore_drifts() {
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run: `cargo nextest run -p xtask server_fn_coverage` Expected: FAIL —
 `compare_rendered` not defined.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 Extract the existing comparison from `regenerate_or_verify`
 (`server_fn_coverage_check.rs:121-129`) into `compare_rendered` and call it from
 there. Behaviour is unchanged — this is a seam, not new logic.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Run: `cargo nextest run -p xtask server_fn_coverage` Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add xtask/src/steps/server_fn_coverage_check.rs
