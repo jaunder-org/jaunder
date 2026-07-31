@@ -52,6 +52,26 @@ pub fn working_tree_status(dir: &Path) -> Result<String> {
     output(dir, &["status", "--porcelain"])
 }
 
+/// The checked-out branch, or `None` when HEAD is detached (`--show-current`
+/// prints nothing there). Used by `pr land` to tell "I am standing on this PR's
+/// branch" from "I am elsewhere".
+pub fn current_branch(dir: &Path) -> Result<Option<String>> {
+    let name = output(dir, &["branch", "--show-current"])?;
+    Ok((!name.is_empty()).then_some(name))
+}
+
+/// The local HEAD commit, or `None` in a repo with no commits yet (exit 128).
+pub fn head_sha(dir: &Path) -> Result<Option<String>> {
+    output_or(dir, &["rev-parse", "HEAD"], 128)
+}
+
+/// A remote's URL, or `None` when that remote is not configured. Read through
+/// `config --get` rather than `remote get-url` so the unset case reuses the
+/// exit-1-is-a-valid-nothing path already established here.
+pub fn remote_url(dir: &Path, name: &str) -> Result<Option<String>> {
+    config_get(dir, &format!("remote.{name}.url"))
+}
+
 /// Current `core.hooksPath`, or `None` when unset/blank (see [`config_get`]).
 pub fn hooks_path(dir: &Path) -> Result<Option<String>> {
     config_get(dir, "core.hooksPath")
@@ -315,6 +335,26 @@ mod tests {
         assert!(ensure_hooks_path(&dir).unwrap(), "first call sets it");
         assert!(!ensure_hooks_path(&dir).unwrap(), "second call is a no-op");
         assert_eq!(hooks_path(&dir).unwrap(), Some(HOOKS_PATH.to_string()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn current_branch_head_sha_and_remote_read_a_real_repo() {
+        let dir = temp_repo("readers");
+        commit(&dir, "seed.txt", "x\n");
+        assert!(current_branch(&dir).unwrap().is_some());
+        let sha = head_sha(&dir).unwrap().expect("a seeded repo has a HEAD");
+        assert_eq!(sha.len(), 40, "full sha, not abbreviated");
+        assert_eq!(
+            remote_url(&dir, "origin").unwrap(),
+            None,
+            "a throwaway repo has no remote"
+        );
+        config_set(&dir, "remote.origin.url", "git@github.com:o/r.git").unwrap();
+        assert_eq!(
+            remote_url(&dir, "origin").unwrap(),
+            Some("git@github.com:o/r.git".to_string())
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

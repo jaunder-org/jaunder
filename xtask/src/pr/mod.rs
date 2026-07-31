@@ -13,9 +13,12 @@ pub mod snapshot;
 pub(crate) mod test_support;
 pub mod watch;
 
+use anyhow::{anyhow, Result};
 use serde::{Serialize, Serializer};
 
+use crate::git;
 use crate::result::{CommandResult, StepResult};
+use snapshot::PrSource;
 
 /// A pull request number. A newtype because it is threaded through every layer and
 /// is transposable with the other bare integers around it (queue position, run id).
@@ -103,6 +106,20 @@ pub enum EventKind {
     Terminal,
 }
 
+impl EventKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EventKind::Phase => "phase",
+            EventKind::Check => "check",
+            EventKind::Queue => "queue",
+            EventKind::Heartbeat => "heartbeat",
+            EventKind::PollError => "poll-error",
+            EventKind::Warning => "warning",
+            EventKind::Terminal => "terminal",
+        }
+    }
+}
+
 /// One entry in the single event log. The same values are rendered live to stderr
 /// and serialized into `PrReport::events`, so a human watching and an agent reading
 /// `--json` afterwards see the identical timeline — including the absorbed failures
@@ -138,6 +155,66 @@ pub struct PrReport {
 /// is what keeps `ok`, `exit_code()`, and `pr.outcome` from disagreeing — and is why
 /// neither `push` nor `exit_code` needed to change. Push a second step here and the
 /// sidecar starts reporting `ok: true` for a failed watch.
+/// Drive one `pr watch` / `pr land` invocation against the real GitHub.
+///
+/// Returns `Err` only when the *subject* could not be established — there is nothing
+/// to report on, so that becomes exit 2. Everything else, including the tooling
+/// failing outright, comes back as a `PrReport`.
+pub fn execute(number: Option<u64>, cfg: watch::WatchConfig, landing: bool) -> Result<PrReport> {
+    let source = snapshot::GhSource;
+    let clock = watch::SystemClock;
+
+    let subject = match source.resolve(number.map(PrNumber)) {
+        Ok(s) => s,
+        Err(e) => {
+            return match snapshot::resolution_failure(&e) {
+                snapshot::ResolutionFailure::Bail(msg) => Err(anyhow!(msg)),
+                snapshot::ResolutionFailure::Report(outcome) => Ok(PrReport {
+                    outcome,
+                    pr: number.unwrap_or_default(),
+                    head_sha: String::new(),
+                    phase: None,
+                    detail: Some(e.detail()),
+                    pointer: None,
+                    events: Vec::new(),
+                }),
+            }
+        }
+    };
+
+    // The event log streams to stderr as it happens, so `--json` keeps stdout to a
+    // single parseable document and a human still sees progress live. The same
+    // events are serialized into the report, so nothing here is stderr-only.
+    let mut sink = |e: &Event| eprintln!("  {} [{}] {}", e.at, e.kind.as_str(), e.detail);
+
+    if landing {
+        // Refuse to land something other than what the caller is looking at. Best
+        // effort: if the PR cannot be read here, `land` re-reads it and reports.
+        if let Ok(snap) = source.snapshot(&subject) {
+            let dir = std::path::Path::new(".");
+            let branch = git::current_branch(dir).ok().flatten();
+            let local = git::head_sha(dir).ok().flatten();
+            if let land::GuardVerdict::Diverged { local, remote } = land::divergence_guard(
+                branch.as_deref(),
+                local.as_deref(),
+                &snap.head_ref,
+                &snap.head_sha,
+            ) {
+                return Err(anyhow!(land::divergence_message(&local, &remote)));
+            }
+        }
+        return Ok(land::land(
+            &source,
+            &land::GhArmer,
+            &clock,
+            &subject,
+            cfg,
+            &mut sink,
+        ));
+    }
+    Ok(watch::watch(&source, &clock, &subject, cfg, &mut sink))
+}
+
 pub fn into_result(command: &str, report: PrReport) -> CommandResult {
     let mut result = CommandResult::new(command);
     let step = if report.outcome.is_merged() {

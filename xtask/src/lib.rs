@@ -173,6 +173,62 @@ pub enum Command {
     /// same diagnostic-preserving wrapper. For CI's parallel `elisp-integration`
     /// job; local `validate` realizes it via the `e2e` aggregate. Host only.
     ElispIntegration,
+    /// Watch a pull request through checks → merge queue → merged, and report one
+    /// unambiguous outcome (#729). Host-only manual command; needs `gh`.
+    #[command(subcommand)]
+    Pr(PrCommand),
+}
+
+/// `pr` subcommands (#729).
+///
+/// The split is the point: `watch` cannot merge anything, so running `land` **is**
+/// the merge approval. Every other action in the sequence — re-running a red job,
+/// rebasing, re-enqueueing after an ejection — needs a judgement call and stays with
+/// the human; these two only turn the crank.
+#[derive(Subcommand)]
+pub enum PrCommand {
+    /// Observe a PR until it reaches a terminal outcome. Never merges, never
+    /// re-runs a job, never pushes. Reports exactly one of: merged, checks-failed,
+    /// ejected, conflicted, closed-unmerged, stale, timed-out, watcher-error.
+    ///
+    /// Exit is 0 only for `merged`; the outcome itself is in `--json` (and in
+    /// `.xtask/last-result.json`) under `pr.outcome`.
+    #[command(after_help = "EXAMPLES:\n  \
+        cargo xtask pr watch\n  \
+        cargo xtask pr watch 731\n  \
+        cargo xtask --json pr watch 731 --once\n  \
+        cargo xtask pr watch 731 --interval 60 --timeout 30")]
+    Watch {
+        /// PR number. Omitted: the open PR whose head is the current branch.
+        number: Option<u64>,
+        /// Seconds between polls.
+        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(5..))]
+        interval: u64,
+        /// Minutes to watch before reporting `timed-out`.
+        #[arg(long, default_value_t = 90, value_parser = clap::value_parser!(u64).range(1..))]
+        timeout: u64,
+        /// Take one snapshot and report, instead of looping. Can report `pending`.
+        #[arg(long)]
+        once: bool,
+    },
+    /// Arm auto-merge, verify the arm actually took, then watch it to `merged`.
+    ///
+    /// Running this command is the merge approval. It refuses when invoked from the
+    /// PR's own branch with unpushed local commits, and never re-enqueues after an
+    /// ejection — that needs a human to decide the ejection was noise.
+    #[command(after_help = "EXAMPLES:\n  \
+        cargo xtask pr land\n  \
+        cargo xtask pr land 731")]
+    Land {
+        /// PR number. Omitted: the open PR whose head is the current branch.
+        number: Option<u64>,
+        /// Seconds between polls.
+        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(5..))]
+        interval: u64,
+        /// Minutes to watch before reporting `timed-out`.
+        #[arg(long, default_value_t = 90, value_parser = clap::value_parser!(u64).range(1..))]
+        timeout: u64,
+    },
 }
 
 /// `server-fn-coverage` subcommands (#681).
@@ -305,6 +361,8 @@ impl Cli {
                 steps::server_fn_coverage_check::VERIFY_STEP
             }
             Command::ElispIntegration => "elisp-integration",
+            Command::Pr(PrCommand::Watch { .. }) => "pr-watch",
+            Command::Pr(PrCommand::Land { .. }) => "pr-land",
         }
     }
 }
@@ -554,6 +612,50 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             finalize(&mut result, start);
             Ok(result)
         }
+        Command::Pr(sub) => {
+            let start = std::time::Instant::now();
+            let (name, number, cfg, landing) = match sub {
+                PrCommand::Watch {
+                    number,
+                    interval,
+                    timeout,
+                    once,
+                } => (
+                    "pr-watch",
+                    number,
+                    pr::watch::WatchConfig {
+                        interval_secs: interval,
+                        timeout_mins: timeout,
+                        once,
+                        ..Default::default()
+                    },
+                    false,
+                ),
+                PrCommand::Land {
+                    number,
+                    interval,
+                    timeout,
+                } => (
+                    "pr-land",
+                    number,
+                    pr::watch::WatchConfig {
+                        interval_secs: interval,
+                        timeout_mins: timeout,
+                        once: false,
+                        ..Default::default()
+                    },
+                    true,
+                ),
+            };
+            // An `Err` here means the subject could not be established at all (exit
+            // 2, no report). Every other failure — including `gh` being broken — is
+            // a `watcher-error` report, so the outcome that most needs to be legible
+            // always reaches the sidecar.
+            let report = pr::execute(number, cfg, landing)?;
+            let mut result = pr::into_result(name, report);
+            finalize(&mut result, start);
+            Ok(result)
+        }
     }
 }
 
@@ -722,6 +824,83 @@ mod cli_tests {
         assert!(
             Cli::try_parse_from(["xtask", "traces", "analyze", "--top", "0", "x.jsonl"]).is_err()
         );
+    }
+
+    #[test]
+    fn pr_watch_parses_with_defaults_and_optional_number() {
+        let cli = Cli::try_parse_from(["xtask", "pr", "watch"]).unwrap();
+        assert_eq!(cli.command_name(), "pr-watch");
+        match cli.command {
+            Command::Pr(PrCommand::Watch {
+                number,
+                interval,
+                timeout,
+                once,
+            }) => {
+                assert_eq!(number, None);
+                assert_eq!(interval, 30);
+                assert_eq!(timeout, 90);
+                assert!(!once);
+            }
+            _ => panic!("expected pr watch"),
+        }
+    }
+
+    #[test]
+    fn pr_watch_parses_explicit_number_and_flags() {
+        let cli = Cli::try_parse_from([
+            "xtask",
+            "pr",
+            "watch",
+            "731",
+            "--interval",
+            "60",
+            "--timeout",
+            "10",
+            "--once",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Pr(PrCommand::Watch {
+                number,
+                interval,
+                timeout,
+                once,
+            }) => {
+                assert_eq!(number, Some(731));
+                assert_eq!(interval, 60);
+                assert_eq!(timeout, 10);
+                assert!(once);
+            }
+            _ => panic!("expected pr watch"),
+        }
+    }
+
+    #[test]
+    fn pr_land_rejects_once() {
+        // Arming a merge and then immediately not watching it is never intended, and
+        // leaving it legal means someone walks away believing they watched it.
+        assert!(Cli::try_parse_from(["xtask", "pr", "land", "--once"]).is_err());
+    }
+
+    #[test]
+    fn pr_interval_below_the_floor_is_rejected() {
+        assert!(Cli::try_parse_from(["xtask", "pr", "watch", "--interval", "1"]).is_err());
+    }
+
+    #[test]
+    fn pr_land_names_itself() {
+        assert_eq!(
+            Cli::try_parse_from(["xtask", "pr", "land"])
+                .unwrap()
+                .command_name(),
+            "pr-land"
+        );
+    }
+
+    #[test]
+    fn pr_requires_a_subcommand() {
+        assert!(Cli::try_parse_from(["xtask", "pr"]).is_err());
     }
 
     #[test]

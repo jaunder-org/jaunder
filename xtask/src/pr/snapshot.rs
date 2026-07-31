@@ -8,7 +8,7 @@
 use serde_json::Value;
 
 use super::gh::{self, ApiError};
-use super::{PrNumber, Subject};
+use super::{Outcome, PrNumber, Subject};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrState {
@@ -306,11 +306,80 @@ pub trait PrSource {
     fn ejection_run(&self, subject: &Subject) -> Result<Option<RunRef>, ApiError>;
 }
 
+/// Owner and repo from a git remote URL, in either of the two forms git writes.
+/// Deriving this beats hardcoding an org into a tool — invisible until someone forks.
+pub fn parse_remote(url: &str) -> Option<(String, String)> {
+    let url = url.trim().trim_end_matches('/');
+    let path = match url.split_once("://") {
+        Some((_, rest)) => rest.split_once('/')?.1,
+        None => url.split_once(':')?.1,
+    };
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    let (owner, repo) = path.split_once('/')?;
+    (!owner.is_empty() && !repo.is_empty() && !repo.contains('/'))
+        .then(|| (owner.to_string(), repo.to_string()))
+}
+
+/// What a failure during *subject resolution* means for the caller.
+///
+/// The line: failures to **establish** the subject exit 2 with no report — there is
+/// nothing to report *on*. Failures to **observe** an established subject are
+/// `watcher-error` reports. `gh` being broken lands on the report side even during
+/// resolution, because "the tooling is broken" is more actionable than "no such PR"
+/// and is what actually happened.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ResolutionFailure {
+    Bail(String),
+    Report(Outcome),
+}
+
+pub fn resolution_failure(err: &ApiError) -> ResolutionFailure {
+    match err {
+        ApiError::NotFound => ResolutionFailure::Bail(
+            "no open PR found — pass a PR number, or run from the PR's branch in a \
+             repo with a GitHub remote"
+                .into(),
+        ),
+        _ => ResolutionFailure::Report(Outcome::WatcherError),
+    }
+}
+
 pub struct GhSource;
 
 impl PrSource for GhSource {
-    fn resolve(&self, _requested: Option<PrNumber>) -> Result<Subject, ApiError> {
-        unimplemented!("Task 7")
+    fn resolve(&self, requested: Option<PrNumber>) -> Result<Subject, ApiError> {
+        let dir = std::path::Path::new(".");
+        let url = crate::git::remote_url(dir, "origin")
+            .ok()
+            .flatten()
+            .ok_or(ApiError::NotFound)?;
+        let (owner, repo) = parse_remote(&url).ok_or(ApiError::NotFound)?;
+        let number = match requested {
+            Some(n) => n,
+            None => {
+                let branch = crate::git::current_branch(dir)
+                    .ok()
+                    .flatten()
+                    .ok_or(ApiError::NotFound)?;
+                let slug = format!("{owner}/{repo}");
+                let found = gh::run_gh(&[
+                    "pr", "list", "--head", &branch, "--state", "open", "--repo", &slug, "--json",
+                    "number",
+                ])?;
+                let n = found
+                    .as_array()
+                    .and_then(|a| a.first())
+                    .and_then(|o| o.get("number"))
+                    .and_then(Value::as_u64)
+                    .ok_or(ApiError::NotFound)?;
+                PrNumber(n)
+            }
+        };
+        Ok(Subject {
+            owner,
+            repo,
+            number,
+        })
     }
 
     fn snapshot(&self, subject: &Subject) -> Result<PrSnapshot, ApiError> {
@@ -453,6 +522,57 @@ mod tests {
         let picked = parse_ejection_run(&fixture!("runs-merge-group.json"), PrNumber(646)).unwrap();
         assert_eq!(picked.conclusion, "success");
         assert!(picked.url.contains("/actions/runs/"));
+    }
+
+    #[test]
+    fn remote_urls_parse_to_owner_and_repo() {
+        for url in [
+            "git@github.com:jaunder-org/jaunder.git",
+            "https://github.com/jaunder-org/jaunder.git",
+            "https://github.com/jaunder-org/jaunder",
+        ] {
+            assert_eq!(
+                parse_remote(url),
+                Some(("jaunder-org".into(), "jaunder".into())),
+                "{url}"
+            );
+        }
+        assert_eq!(parse_remote("not-a-remote"), None);
+        assert_eq!(parse_remote(""), None);
+    }
+
+    #[test]
+    fn no_hardcoded_repo_literal_in_the_module() {
+        // Reintroducing the org as a string literal breaks this. The needle is built
+        // at runtime rather than written out, or this file would match itself.
+        let needle = format!("{0}jaunder-org/jaunder{0}", '"');
+        assert!(
+            !include_str!("snapshot.rs").contains(&needle),
+            "repo identity must come from the git remote, not a literal"
+        );
+    }
+
+    #[test]
+    fn resolution_failures_split_exit_two_from_watcher_error() {
+        // Failures to ESTABLISH the subject exit 2; tooling failures are reports.
+        assert!(matches!(
+            resolution_failure(&ApiError::NotFound),
+            ResolutionFailure::Bail(_)
+        ));
+        for tooling in [
+            ApiError::GhMissing,
+            ApiError::Unauthenticated,
+            ApiError::RateLimited { reset_unix: None },
+            ApiError::Transport("x".into()),
+            ApiError::Malformed("x".into()),
+            ApiError::GraphQlErrors("x".into()),
+        ] {
+            assert_eq!(
+                resolution_failure(&tooling),
+                ResolutionFailure::Report(Outcome::WatcherError),
+                "{tooling:?} is the tooling breaking, not a missing subject"
+            );
+        }
     }
 
     #[test]

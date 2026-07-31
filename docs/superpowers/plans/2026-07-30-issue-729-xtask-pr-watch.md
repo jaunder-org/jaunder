@@ -1334,10 +1334,11 @@ mod tests {
 }
 ```
 
-- [x] **Step 3: Run the tests, verify they fail** — **deviation, recorded honestly:**
-      tests and implementation were written into `watch.rs` in one pass, so there was
-      no separate red run for this task. The first execution failed 1 of 13 (see
-      Step 5), which is the only red signal this task produced.
+- [x] **Step 3: Run the tests, verify they fail** — **deviation, recorded
+      honestly:** tests and implementation were written into `watch.rs` in one
+      pass, so there was no separate red run for this task. The first execution
+      failed 1 of 13 (see Step 5), which is the only red signal this task
+      produced.
 
 - [x] **Step 4: Implement against the tests**
 
@@ -1364,10 +1365,10 @@ tests determine the body. Four rules the tests encode:
 subject to the same strike/rate-limit logic, not a separate path. `SystemClock`
 implements `Clock` over `std::time` and `std::thread::sleep`.
 
-- [x] **Step 5: Run the tests, verify they pass** — **13** tests (the plan's 12 plus
-      `unix_seconds_format_as_rfc3339_utc`: the event log needs real timestamps and
-      xtask has no date crate, so `SystemClock` formats them itself and the algorithm
-      is pinned against four known epochs).
+- [x] **Step 5: Run the tests, verify they pass** — **13** tests (the plan's 12
+      plus `unix_seconds_format_as_rfc3339_utc`: the event log needs real
+      timestamps and xtask has no date crate, so `SystemClock` formats them
+      itself and the algorithm is pinned against four known epochs).
 
       First run: 12 passed, `a_queue_position_change_emits_per_change` failed with 3
       Queue events. Real defect — the terminal poll also emitted the PR *leaving* the
@@ -1424,7 +1425,7 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
 ) -> PrReport;
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```rust
 #[cfg(test)]
@@ -1541,12 +1542,10 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail** — **same deviation as Task 5:**
+      tests and implementation were written in one pass, so no separate red run.
 
-Run: `cargo test --manifest-path xtask/Cargo.toml pr::land` Expected: FAIL —
-`land` / `divergence_guard` not defined.
-
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 Write `divergence_guard`, `divergence_message`, and `land` to the signatures
 above. Every branch is pinned by a test, so the tests determine the bodies.
@@ -1565,12 +1564,12 @@ Three rules they encode:
   as `ApiError::Malformed`. It ignores stdout and the exit code entirely;
   verification is the next snapshot (D9 / the issue's point 4).
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Run: `cargo test --manifest-path xtask/Cargo.toml pr::land` Expected: PASS (10
-tests)
+tests) — **observed 10 passed, first run.**
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit** — `f62ca064`, full `cargo xtask check` green.
 
 ```bash
 git add xtask/src/pr/land.rs xtask/src/pr/mod.rs
