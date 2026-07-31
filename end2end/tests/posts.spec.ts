@@ -46,7 +46,7 @@ test("authenticated user can create a post with a summary", async ({
 
   await expect(page.locator(SEL.topbarHeading)).toHaveText("New post");
   await page.fill(SEL.postBody, "# Summary Test\n\nBody text");
-  await page.fill("#compose-summary", "This is a summary");
+  await page.fill(SEL.postSummary, "This is a summary");
   await click(page, SEL.publishButton("true"));
   await waitForSelector(page, SEL.saveSummary);
 
@@ -72,7 +72,7 @@ test("over-long post summary shows an inline error and gates submit", async ({
   await goto(page, "/posts/new");
 
   await page.fill(SEL.postBody, "# Over Cap\n\nBody text");
-  const summaryInput = page.locator("#compose-summary");
+  const summaryInput = page.locator(SEL.postSummary);
   await summaryInput.fill("a".repeat(501));
   await summaryInput.blur();
 
@@ -90,7 +90,7 @@ test("clearing a post summary on edit persists as empty", async ({
   test.slow();
   await goto(page, "/posts/new");
   await page.fill(SEL.postBody, "# Clearable\n\nbody");
-  await page.fill("#compose-summary", "A summary to remove");
+  await page.fill(SEL.postSummary, "A summary to remove");
   await click(page, SEL.publishButton("false"));
   await waitForSelector(page, SEL.saveSummary);
 
@@ -110,16 +110,16 @@ test("clearing a post summary on edit persists as empty", async ({
 
   // Edit: the summary prefills; clear it and save.
   await goto(page, `/posts/${postId}/edit`);
-  await expect(page.locator("#edit-summary")).toHaveValue(
+  await expect(page.locator(SEL.postSummary)).toHaveValue(
     "A summary to remove",
   );
-  await page.fill("#edit-summary", "");
+  await page.fill(SEL.postSummary, "");
   await click(page, SEL.publishButton("false"));
   await waitForSelector(page, SEL.saveSummary);
 
   // Reopen the editor: the summary is now empty (cleared via None-omission).
   await goto(page, `/posts/${postId}/edit`);
-  await expect(page.locator("#edit-summary")).toHaveValue("");
+  await expect(page.locator(SEL.postSummary)).toHaveValue("");
 });
 
 test("authenticated user can save a draft through the UI", async ({

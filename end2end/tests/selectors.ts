@@ -12,6 +12,9 @@ export const SEL = {
   saveSummary: ".j-save-summary",
   /** Post-composer body textarea. */
   postBody: 'textarea[name="body"]',
+  /** Post summary textarea (compose + edit). Keyed on `name` since #568 — the
+   * shared `<ValidatedTextarea>` emits no id. */
+  postSummary: 'textarea[name="summary"]',
   /** Publish/unpublish submit button; `value` is the boolean string. */
   publishButton: (value: string) => `button[name="publish"][value="${value}"]`,
   /** Generic form error message. */

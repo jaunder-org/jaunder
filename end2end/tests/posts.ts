@@ -59,7 +59,7 @@ export async function composePost(
   await goto(page, "/posts/new");
   await page.fill(SEL.postBody, opts.body);
   if (opts.summary !== undefined) {
-    await page.fill("#compose-summary", opts.summary);
+    await page.fill(SEL.postSummary, opts.summary);
   }
   if (opts.slug !== undefined) {
     await page.fill('input[name="slug_override"]', opts.slug);

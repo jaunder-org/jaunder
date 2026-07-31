@@ -31,6 +31,15 @@ test("backup schedule field gates submit until a valid cron is entered", async (
   await scheduleInput.fill("0 30 2 * * *");
   await expect(page.locator(SEL.error)).not.toBeVisible();
   await expect(saveButton).toBeEnabled();
+
+  // #568: the `help` line is the only prop the shared `Labelled` chrome renders with a
+  // generated id, and the control's `aria-describedby` must point at it. Schedule is the
+  // repo's sole `help=` consumer, so without this the wiring is entirely untested.
+  await expect(page.locator("#schedule-help")).toHaveText(/six-field cron/);
+  await expect(scheduleInput).toHaveAttribute(
+    "aria-describedby",
+    "schedule-help",
+  );
 });
 
 // #454: the mode <select> is generated from `BackupMode::VARIANTS` (option text = label,
