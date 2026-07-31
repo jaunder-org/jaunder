@@ -5,7 +5,10 @@
 
 use std::fmt;
 
-// Only `render` takes a `PostBody`, and it is gated on `sanitize`.
+// Only the sanitize-gated half of this module (`render`, the media-reference walk) uses
+// these.
+#[cfg(feature = "sanitize")]
+use crate::media::{parse_media_url, MediaRef};
 #[cfg(feature = "sanitize")]
 use crate::post_body::PostBody;
 use crate::post_summary::PostSummary;
@@ -115,6 +118,22 @@ pub struct RenderedHtml(String);
 /// CSS to mimic or hide UI — an attribute filter narrows the values to `language-*`
 /// tokens and drops everything else. Widening this list is a security decision;
 /// `sanitize_*` tests pin both halves.
+///
+/// # Widening also obliges you to classify the new attributes (#711)
+///
+/// A post's media references are extracted from *this* allowlist's output, so an
+/// attribute permitted here but unknown to the extractor is a silent blind spot in the
+/// `post_media` table — the exact failure mode #711 exists to fix. So every
+/// `(element, attribute)` pair this builder permits must appear in either
+/// [`MEDIA_URL_ATTRS`] (its value names media) or [`KNOWN_INERT_ATTRS`] (it does not,
+/// and here is why). `sanitizer_surface_is_fully_classified` fails the build until each
+/// newly permitted pair is classified, so this cannot be forgotten — but it is a
+/// judgement call, not a formality.
+///
+/// One shape does not fit: a **multi-URL** attribute such as `srcset` carries a list,
+/// and [`MEDIA_URL_ATTRS`] is one attribute → one URL. Permitting it means widening
+/// that table to carry a per-attribute parse mode *first*; classifying it as-is would
+/// silently record a wrong single-URL parse.
 #[cfg(feature = "sanitize")]
 static SANITIZER: std::sync::LazyLock<ammonia::Builder<'static>> = std::sync::LazyLock::new(|| {
     let mut builder = ammonia::Builder::default();
@@ -345,6 +364,211 @@ pub fn render(body: &PostBody, format: &PostFormat) -> RenderedHtml {
         PostFormat::Html => body.to_string(),
     };
     RenderedHtml::sanitize(&html)
+}
+
+// ---------------------------------------------------------------------------
+// Media references in rendered output (#711)
+// ---------------------------------------------------------------------------
+
+/// The `(element, attribute)` pairs whose values name media. Adding an element to
+/// [`SANITIZER`] means adding its URL-bearing attributes here — the walk knows no tag
+/// names of its own, so extending to `<video>`/`<audio>` is a **data edit**
+/// (`("video", "src")`, `("video", "poster")`, `("audio", "src")`, …) with no change to
+/// `extract_media_refs_with`, which `extract_walk_is_table_driven_not_tag_hardcoded`
+/// keeps a checked claim rather than a hope.
+///
+/// One attribute, one URL. A multi-URL attribute such as `srcset` does not fit this
+/// shape and needs the table widened to carry a per-attribute parse mode before it can
+/// be listed here.
+///
+/// Public because it is the contract of [`extract_media_refs`]: what the walk looks at
+/// is data, and reviewable as data. Its counterpart is [`KNOWN_INERT_ATTRS`], and
+/// between them they must cover everything [`SANITIZER`] permits —
+/// `sanitizer_surface_is_fully_classified` enforces that.
+#[cfg(feature = "sanitize")]
+pub const MEDIA_URL_ATTRS: &[(&str, &str)] = &[("a", "href"), ("img", "src")];
+
+/// Permitted pairs deliberately *not* treated as media references. Present so
+/// `sanitizer_surface_is_fully_classified` can tell "considered and excluded" from
+/// "nobody looked" — every pair [`SANITIZER`] permits must be in exactly one of these
+/// two tables, and a newly permitted one fails that test until a human classifies it.
+///
+/// An element of `"*"` means "on every element", which is how the *generic* attributes
+/// (permitted on every tag, so `tags × generic_attributes` pairs) are classified without
+/// writing out that product. The wildcard is an inert-table notion only: the walk in
+/// `extract_media_refs_with` matches element names literally, so `("*", …)` in
+/// [`MEDIA_URL_ATTRS`] would match nothing — pinned by
+/// `media_url_attrs_names_elements_literally`.
+#[cfg(feature = "sanitize")]
+pub const KNOWN_INERT_ATTRS: &[(&str, &str)] = &[
+    // Generic attributes, permitted on every tag: human-language and advisory text.
+    ("*", "lang"),
+    ("*", "title"),
+    // Link metadata that is not itself a link — the language of the *target*.
+    ("a", "hreflang"),
+    // Text direction.
+    ("bdo", "dir"),
+    // Quotation provenance. A URL, but excluded as a deliberate scope call (spec D2):
+    // it says where a quote came from, and no browser fetches, displays or navigates
+    // it, so it points no reader at anything. Revisit deliberately, not by accident.
+    ("blockquote", "cite"),
+    ("del", "cite"),
+    ("ins", "cite"),
+    ("q", "cite"),
+    // Edit timestamps.
+    ("del", "datetime"),
+    ("ins", "datetime"),
+    // Presentational table/column geometry and alignment.
+    ("col", "align"),
+    ("col", "char"),
+    ("col", "charoff"),
+    ("col", "span"),
+    ("colgroup", "align"),
+    ("colgroup", "char"),
+    ("colgroup", "charoff"),
+    ("colgroup", "span"),
+    ("table", "align"),
+    ("table", "char"),
+    ("table", "charoff"),
+    ("table", "summary"),
+    ("tbody", "align"),
+    ("tbody", "char"),
+    ("tbody", "charoff"),
+    ("td", "align"),
+    ("td", "char"),
+    ("td", "charoff"),
+    ("td", "colspan"),
+    ("td", "headers"),
+    ("td", "rowspan"),
+    // `tfoot` is in ammonia's attribute map but not its tag allowlist. Enumerating the
+    // map wholesale is the conservative reading — classifying a pair that cannot occur
+    // costs nothing, while skipping one that can is the hole this table exists to close.
+    ("tfoot", "align"),
+    ("tfoot", "char"),
+    ("tfoot", "charoff"),
+    ("th", "align"),
+    ("th", "char"),
+    ("th", "charoff"),
+    ("th", "colspan"),
+    ("th", "headers"),
+    ("th", "rowspan"),
+    ("th", "scope"),
+    ("thead", "align"),
+    ("thead", "char"),
+    ("thead", "charoff"),
+    ("tr", "align"),
+    ("tr", "char"),
+    ("tr", "charoff"),
+    ("hr", "align"),
+    ("hr", "size"),
+    ("hr", "width"),
+    // Image presentation. `src` is the reference; the rest is geometry and alt text.
+    ("img", "align"),
+    ("img", "alt"),
+    ("img", "height"),
+    ("img", "width"),
+    // List numbering.
+    ("ol", "start"),
+    // `SANITIZER`'s one widening: the `language-*` marker on a fenced code block, whose
+    // values the attribute filter already narrows.
+    ("code", "class"),
+    ("pre", "class"),
+];
+
+/// Extracts the media a sanitized HTML fragment references, deduplicated and sorted.
+///
+/// The input is a [`RenderedHtml`]'s own text (it derefs to `&str`) — the stored,
+/// already-sanitized output. So what is extracted is what a reader is actually pointed
+/// at: a raw `<img>` embedded in a Markdown body counts (both parsers pass raw HTML
+/// through), and anything sanitisation stripped, or that survived only as literal text
+/// inside a code block, does not (spec D2).
+///
+/// Each value is handed to [`parse_media_url`], which decides what names a stored entry;
+/// this function contributes no URL knowledge of its own, only *where in the document*
+/// to look — [`MEDIA_URL_ATTRS`].
+///
+/// The output is sorted and deduplicated (it is collected through a `BTreeSet`), so a
+/// byte-identical body yields a byte-identical set of rows.
+#[cfg(feature = "sanitize")]
+#[must_use]
+pub fn extract_media_refs(html: &str) -> Vec<MediaRef> {
+    extract_media_refs_with(html, MEDIA_URL_ATTRS)
+}
+
+/// Table-driven core of [`extract_media_refs`]; separate so a test can drive it with a
+/// synthetic pair table and prove no tag name is baked into the walk.
+///
+/// Re-parses the sanitized string rather than collecting during ammonia's clean pass
+/// (spec D6): ammonia permits only one attribute filter, the existing one already
+/// enforces the `language-*` class policy, and its ordering against URL-scheme filtering
+/// would have to be verified and then depended on. A second parse of the final string is
+/// the literal reading of "extract from the rendered, sanitized HTML", and yields a pure
+/// `&str -> Vec<MediaRef>` that the coupling test and future reclamation work reuse.
+///
+/// Uses `html5ever`'s tokenizer, not its tree builder: only start tags and their
+/// attributes are needed, and the input is already well-formed sanitizer output.
+#[cfg(feature = "sanitize")]
+fn extract_media_refs_with(html: &str, pairs: &[(&str, &str)]) -> Vec<MediaRef> {
+    use std::cell::RefCell;
+    use std::collections::BTreeSet;
+
+    use html5ever::tendril::StrTendril;
+    use html5ever::tokenizer::{
+        BufferQueue, StartTag, TagToken, Token, TokenSink, TokenSinkResult, Tokenizer,
+        TokenizerOpts,
+    };
+
+    /// Collects the references named by the `(element, attribute)` pairs it was given.
+    /// `TokenSink::process_token` takes `&self`, so the set lives behind a `RefCell`.
+    struct MediaRefSink<'a> {
+        pairs: &'a [(&'a str, &'a str)],
+        refs: RefCell<BTreeSet<MediaRef>>,
+    }
+
+    impl TokenSink for MediaRefSink<'_> {
+        type Handle = ();
+
+        fn process_token(&self, token: Token, _line_number: u64) -> TokenSinkResult<Self::Handle> {
+            let TagToken(tag) = token else {
+                return TokenSinkResult::Continue;
+            };
+            // End tags carry no attributes, and a reference is something the *opening*
+            // tag points at.
+            if tag.kind != StartTag {
+                return TokenSinkResult::Continue;
+            }
+            // Element and attribute names arrive ASCII-lowercased from the tokenizer, so
+            // the tables are matched case-sensitively against a normalized name.
+            let element: &str = &tag.name;
+            self.refs.borrow_mut().extend(
+                tag.attrs
+                    .iter()
+                    .filter(|attr| {
+                        let name: &str = &attr.name.local;
+                        self.pairs
+                            .iter()
+                            .any(|(el, at)| *el == element && *at == name)
+                    })
+                    .filter_map(|attr| parse_media_url(&attr.value)),
+            );
+            TokenSinkResult::Continue
+        }
+    }
+
+    let input = BufferQueue::default();
+    input.push_back(StrTendril::from(html));
+    let tokenizer = Tokenizer::new(
+        MediaRefSink {
+            pairs,
+            refs: RefCell::new(BTreeSet::new()),
+        },
+        TokenizerOpts::default(),
+    );
+    // One `feed` drains the queue: the sink always answers `Continue`, so nothing
+    // suspends tokenization. `end` flushes the tokenizer's final state.
+    let _ = tokenizer.feed(&input);
+    tokenizer.end();
+    tokenizer.sink.refs.take().into_iter().collect()
 }
 
 /// Metadata derived from a post body used for slug generation and display.
@@ -1336,5 +1560,226 @@ mod tests {
                 "idempotent for {body:?}"
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Media references (#711)
+    // -----------------------------------------------------------------------
+
+    #[cfg(feature = "sanitize")]
+    use crate::media::MediaSource;
+
+    /// A realistic lowercase SHA-256 hex digest (the digest of the empty input). The
+    /// same value `media.rs`'s tests use, restated because that one is private to its
+    /// own test module.
+    #[cfg(feature = "sanitize")]
+    const CANONICAL: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+    #[cfg(feature = "sanitize")]
+    fn media_url_for(name: &str) -> String {
+        format!("/media/upload/e3/b0/{CANONICAL}/{name}")
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn extract_finds_a_markdown_image() {
+        // Rendered via the real renderer, so this pins end-to-end behaviour rather than a
+        // hand-written fragment.
+        let body: PostBody = format!("![alt]({})", media_url_for("photo.jpg")).into();
+        let refs = extract_media_refs(render(&body, &PostFormat::Markdown).as_ref());
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].filename.as_ref(), "photo.jpg");
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn extract_finds_a_raw_img_embedded_in_a_markdown_body() {
+        // The rendered-HTML choice (spec D2): raw HTML passes through the Markdown parser.
+        let body: PostBody = format!("<img src=\"{}\">", media_url_for("photo.jpg")).into();
+        let refs = extract_media_refs(render(&body, &PostFormat::Markdown).as_ref());
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].filename.as_ref(), "photo.jpg");
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn extract_finds_a_raw_filename_spelling() {
+        // The #675 regression, at the extractor level: a post addressing the file by the
+        // name a person types must resolve to the stored, encoded spelling.
+        let body: PostBody = format!("<img src=\"{}\">", media_url_for("my photo.jpg")).into();
+        let refs = extract_media_refs(render(&body, &PostFormat::Markdown).as_ref());
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].filename.as_ref(), "my%20photo.jpg");
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn extract_finds_an_atompub_member_url_in_a_link() {
+        let body: PostBody =
+            format!("<a href=\"/atompub/alice/media/{CANONICAL}/photo.jpg\">doc</a>").into();
+        let refs = extract_media_refs(render(&body, &PostFormat::Markdown).as_ref());
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].source, MediaSource::Upload);
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn extract_ignores_media_in_stripped_elements_and_code_blocks() {
+        // Sanitisation removes <video>, so it can never load and is not a reference.
+        let video: PostBody =
+            format!("<video src=\"{}\"></video>", media_url_for("clip.mp4")).into();
+        assert!(extract_media_refs(render(&video, &PostFormat::Markdown).as_ref()).is_empty());
+
+        // A URL displayed as literal text points nobody at anything (spec D2's deliberate
+        // narrowing away from the old substring search over the source body).
+        let fenced: PostBody = format!("```\n{}\n```", media_url_for("photo.jpg")).into();
+        assert!(extract_media_refs(render(&fenced, &PostFormat::Markdown).as_ref()).is_empty());
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn extract_deduplicates_and_sorts() {
+        let one = media_url_for("a.jpg");
+        let two = media_url_for("b.jpg");
+        let body: PostBody =
+            format!("<img src=\"{two}\"><img src=\"{one}\"><img src=\"{one}\">").into();
+        let refs = extract_media_refs(render(&body, &PostFormat::Markdown).as_ref());
+        assert_eq!(refs.len(), 2, "duplicate references collapse to one row");
+        assert!(
+            refs[0] < refs[1],
+            "output is sorted for deterministic writes"
+        );
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn extract_ignores_non_media_links() {
+        let body: PostBody = "<a href=\"https://example.com/page\">x</a>"
+            .to_owned()
+            .into();
+        assert!(extract_media_refs(render(&body, &PostFormat::Markdown).as_ref()).is_empty());
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn extract_walk_is_table_driven_not_tag_hardcoded() {
+        // Drive the walk with a pair absent from MEDIA_URL_ATTRS. This fails if any tag
+        // name is baked into the walk, which is what makes "adding <video> is a data edit"
+        // a checked claim rather than a hope.
+        let html = format!("<span data-src=\"{}\"></span>", media_url_for("photo.jpg"));
+        let refs = extract_media_refs_with(&html, &[("span", "data-src")]);
+        assert_eq!(refs.len(), 1);
+        assert!(
+            extract_media_refs(&html).is_empty(),
+            "the real table does not pick it up"
+        );
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn media_url_attrs_names_elements_literally() {
+        // The `"*"` element is a KNOWN_INERT_ATTRS notion — a way to classify the generic
+        // attributes without writing out `tags × generic_attributes`. The walk compares
+        // element names literally, so a wildcard in MEDIA_URL_ATTRS would match nothing
+        // and silently extract nothing; keep it out of that table.
+        let html = format!("<img src=\"{}\">", media_url_for("photo.jpg"));
+        assert!(
+            extract_media_refs_with(&html, &[("*", "src")]).is_empty(),
+            "the walk must not honour a wildcard element"
+        );
+        assert!(
+            MEDIA_URL_ATTRS.iter().all(|&(element, _)| element != "*"),
+            "MEDIA_URL_ATTRS must name elements literally"
+        );
+    }
+
+    /// Whether `(tag, attr)` appears in either classification table. `KNOWN_INERT_ATTRS`
+    /// honours the `"*"` wildcard element; `MEDIA_URL_ATTRS` does not (see
+    /// `media_url_attrs_names_elements_literally`).
+    #[cfg(feature = "sanitize")]
+    fn is_classified(tag: &str, attr: &str) -> bool {
+        MEDIA_URL_ATTRS
+            .iter()
+            .any(|&(element, attribute)| element == tag && attribute == attr)
+            || KNOWN_INERT_ATTRS.iter().any(|&(element, attribute)| {
+                (element == "*" || element == tag) && attribute == attr
+            })
+    }
+
+    /// Permitted `(element, attribute)` pairs appearing in neither classification table.
+    ///
+    /// The enumeration is `tags × generic_attributes ∪ tag_attributes` — `generic_attributes`
+    /// applies to every tag, so omitting that product would leave a hole. It is deliberately
+    /// *not* filtered by any URL-attribute predicate: ammonia's `is_url_attr` is private, and
+    /// a hand-written substitute would not recognise `srcset` as URL-bearing — the exact
+    /// attribute this coupling is most likely to be widened with. So the assertion is
+    /// inverted: every permitted pair must be classified, whether or not it looks like a URL.
+    #[cfg(feature = "sanitize")]
+    fn unclassified_sanitizer_pairs(builder: &ammonia::Builder<'_>) -> Vec<(String, String)> {
+        let tags = builder.clone_tags();
+        let generic_attributes = builder.clone_generic_attributes();
+        let tag_attributes = builder.clone_tag_attributes();
+
+        let generic_pairs = tags
+            .iter()
+            .flat_map(|tag| generic_attributes.iter().map(move |attr| (*tag, *attr)));
+        let specific_pairs = tag_attributes
+            .iter()
+            .flat_map(|(tag, attrs)| attrs.iter().map(move |attr| (*tag, *attr)));
+
+        let mut unclassified: Vec<(String, String)> = generic_pairs
+            .chain(specific_pairs)
+            .filter(|&(tag, attr)| !is_classified(tag, attr))
+            .map(|(tag, attr)| (tag.to_owned(), attr.to_owned()))
+            .collect();
+        // Sorted so a failure reads the same on every run — the two ammonia collections are
+        // hash sets, so iteration order is not stable.
+        unclassified.sort();
+        unclassified
+    }
+
+    /// Fails when `SANITIZER` permits an `(element, attribute)` pair that neither
+    /// `MEDIA_URL_ATTRS` nor `KNOWN_INERT_ATTRS` mentions — i.e. someone widened the
+    /// allowlist without saying whether the new attribute's value names media.
+    ///
+    /// To resolve: classify each reported pair. Into `MEDIA_URL_ATTRS` if its value is a
+    /// URL a reader is pointed at, otherwise into `KNOWN_INERT_ATTRS` with a one-line
+    /// reason. Silence is not an option, which is the whole point: separating the
+    /// extractor's surface from the sanitiser's allowlist would otherwise recreate #711's
+    /// own failure mode — widen the sanitiser, forget the extractor, and `post_media`
+    /// quietly acquires a blind spot.
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn sanitizer_surface_is_fully_classified() {
+        let unclassified = unclassified_sanitizer_pairs(&SANITIZER);
+        assert!(
+            unclassified.is_empty(),
+            "SANITIZER permits {unclassified:?}, which appear in neither MEDIA_URL_ATTRS nor \
+             KNOWN_INERT_ATTRS. Classify each: add it to MEDIA_URL_ATTRS if its value names \
+             media, otherwise to KNOWN_INERT_ATTRS with a reason."
+        );
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn sanitizer_coupling_test_bites_when_the_allowlist_widens() {
+        // Prove the guard can fail. A widened builder with an unclassified URL-bearing
+        // attribute must be reported — otherwise the check above is decorative.
+        let mut widened = ammonia::Builder::default();
+        widened.add_tags(["video"]);
+        widened.add_tag_attributes("video", ["src"]);
+        // A *generic* attribute too: it applies to every tag, so it is only reported if
+        // the enumeration really forms `tags × generic_attributes`. Without that product
+        // the check would look healthy while missing a whole axis.
+        widened.add_generic_attributes(["data-poster"]);
+        let unclassified = unclassified_sanitizer_pairs(&widened);
+        assert!(
+            unclassified.contains(&("video".to_owned(), "src".to_owned())),
+            "the coupling check must flag a newly permitted, unclassified pair"
+        );
+        assert!(
+            unclassified.contains(&("img".to_owned(), "data-poster".to_owned())),
+            "a newly permitted generic attribute must be flagged on every tag"
+        );
     }
 }

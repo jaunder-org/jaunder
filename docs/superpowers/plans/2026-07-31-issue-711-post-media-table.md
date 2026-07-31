@@ -187,7 +187,7 @@ pub struct MediaRef {
 pub fn parse_media_url(url: &str) -> Option<MediaRef>;
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `common/src/media.rs`'s `#[cfg(test)] mod tests`:
 
@@ -284,12 +284,12 @@ fn parse_media_url_rejects_non_media_paths() {
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run: `devtool run -- cargo nextest run -p common parse_media_url` Expected: FAIL
 — `parse_media_url` / `MediaRef` not defined.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 Write `MediaRef` and `parse_media_url` to the signatures above. Every branch is
 pinned: both layouts, prefix mismatch, query/fragment, host-blindness,
@@ -303,11 +303,11 @@ Two constraints the tests cannot state:
 - Derive the layout by _parsing_ what `media_path` composes; do not re-spell it
   as a literal, per `media_path`'s "single definition" doc comment.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Run: `devtool run -- cargo nextest run -p common parse_media_url` Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 devtool run -- cargo xtask check
@@ -351,14 +351,14 @@ pub fn extract_media_refs(html: &str) -> Vec<MediaRef>;
 fn extract_media_refs_with(html: &str, pairs: &[(&str, &str)]) -> Vec<MediaRef>;
 ```
 
-- [ ] **Step 1: Add the dependency**
+- [x] **Step 1: Add the dependency**
 
 `Cargo.toml` workspace deps: `html5ever = "0.39"` (the version already in
 `Cargo.lock` via ammonia, so the Nix vendor is reused). `common/Cargo.toml`:
 `html5ever = { workspace = true, optional = true }`, and extend
 `sanitize = ["dep:ammonia", "dep:html5ever"]`.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 Add to `common/src/render.rs`'s `#[cfg(test)] mod tests`. `CANONICAL` is defined
 in `media.rs`'s test module and is **not** in scope here — add a local
@@ -480,12 +480,12 @@ fn sanitizer_coupling_test_bites_when_the_allowlist_widens() {
 }
 ````
 
-- [ ] **Step 3: Run the tests, verify they fail**
+- [x] **Step 3: Run the tests, verify they fail**
 
 Run: `devtool run -- cargo nextest run -p common --features sanitize extract`
 Expected: FAIL — `extract_media_refs` not defined.
 
-- [ ] **Step 4: Implement against the tests**
+- [x] **Step 4: Implement against the tests**
 
 `extract_media_refs_with` tokenises with `html5ever`'s **tokenizer** (not the
 tree builder — only start tags and their attributes are needed), and for each
@@ -503,12 +503,12 @@ Populate `KNOWN_INERT_ATTRS` with every currently permitted pair that isn't
 `blockquote`/`del`/`ins`/`q`, which D2 excludes as a deliberate scope call —
 each with a short reason comment.
 
-- [ ] **Step 5: Run the tests, verify they pass**
+- [x] **Step 5: Run the tests, verify they pass**
 
 Run: `devtool run -- cargo nextest run -p common --features sanitize` Expected:
 PASS
 
-- [ ] **Step 6: Write the D3 documentation (A9c)**
+- [x] **Step 6: Write the D3 documentation (A9c)**
 
 Three obligations, all load-bearing:
 
@@ -524,13 +524,13 @@ Three obligations, all load-bearing:
 3. `sanitizer_surface_is_fully_classified`'s doc comment states what a failure
    means and how to resolve it, consistent with the assert message.
 
-- [ ] **Step 7: Verify wasm still builds**
+- [x] **Step 7: Verify wasm still builds**
 
 `common` compiles for wasm without `sanitize`; the new dep must not leak. Run:
 `devtool run -- cargo clippy -p common --target wasm32-unknown-unknown -- -D warnings`
 Expected: PASS
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 devtool run -- cargo xtask check

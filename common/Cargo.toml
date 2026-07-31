@@ -12,6 +12,7 @@ base64.workspace = true
 email_address.workspace = true
 chrono = { workspace = true, features = ["serde"] }
 croner.workspace = true
+html5ever = { workspace = true, optional = true }
 macros = { path = "../macros" }
 orgize.workspace = true
 percent-encoding.workspace = true
@@ -44,7 +45,11 @@ sqlx = ["dep:sqlx"]
 # `sqlx` — rendering is not persistence, and one flag controlling both would make
 # this list misleading. `render()` is gated on it, so with the feature off the fn
 # does not exist rather than existing and silently not sanitizing.
-sanitize = ["dep:ammonia"]
+#
+# `html5ever` rides the same flag: `extract_media_refs` re-parses the sanitized output
+# (#711), so it is meaningless without the sanitizer and must stay out of the wasm graph
+# for the same reason `ammonia` does.
+sanitize = ["dep:ammonia", "dep:html5ever"]
 test-utils = ["cheap-kdf"]
 cheap-kdf = []
 # Compiles `common::test_support` (shared test fixtures) for downstream test crates;

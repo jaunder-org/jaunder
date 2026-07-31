@@ -74,6 +74,10 @@ lettre = { version = "0.11", default-features = false, features = ["tokio1", "to
 orgize = "0.10.0-alpha.10"
 pulldown-cmark = "0.13"
 ammonia = "4"
+# Version-matched to ammonia 4's transitive `html5ever` (Cargo.lock) so the media-reference
+# walk re-parses ammonia's own output with the same tokenizer, reusing the existing vendor
+# rather than pulling a second copy (#711).
+html5ever = "0.39"
 thiserror = "2.0.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
