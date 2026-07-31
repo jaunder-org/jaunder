@@ -28,7 +28,7 @@ resilience or `go_live_pass`'s `last_tick` handling (spec D9).
       **#751** (adjacent same-typed columns)
 - [x] **T2** — `FeedPath::parts()` accessor (D7) — returns `Option`, not a bare
       tuple; see spec D7 (`expect_used` is denied workspace-wide)
-- [ ] **T3** — `posts.rs` decodes `FeedPath` per-row, keeping skip-on-corrupt
+- [x] **T3** — `posts.rs` decodes `FeedPath` per-row, keeping skip-on-corrupt
       (A4, D9)
 - [ ] **T4** — Gate: `category` + duplicate-key check (A8, D6)
 - [ ] **T5** — Gate: derive self-check (A1a)

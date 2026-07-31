@@ -112,8 +112,84 @@ struct Allowed {
     what: &'static str,
     /// How many identical decodes this entry covers.
     count: usize,
+    /// What kind of exemption this is. Grouping only — see [`Category`].
+    category: Category,
     /// Why this decode legitimately yields a primitive.
     reason: &'static str,
+}
+
+/// What kind of exemption an [`Allowed`] entry is, so the failure output can be read by
+/// rationale instead of by file.
+///
+/// **Nothing in the matching rule or the count check branches on this.** It exists because
+/// the allowlist's whole value is that a human reads it, and a flat list where a third of
+/// the entries are variations of "a name out of `information_schema`" is a list people skim
+/// — which is how a region exemption sneaks in wearing a dozen costumes. An enum rather
+/// than a string so a typo is a compile error and the grouping order is total.
+///
+/// [`Category::DeferredNewtype`] is the one that carries an obligation: it means "this
+/// *should* be a domain type and is not yet", so its reason must name a tracking issue —
+/// enforced in [`problems`]. That makes the allowlist a worklist rather than a graveyard:
+/// `DeferredNewtype` entries are the remaining unwrapped storage values, and the gate's own
+/// staleness check deletes each one as it gets typed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Category {
+    /// `COUNT(*)`, `SELECT EXISTS(…)`, and other cardinality probes.
+    CountOrExists,
+    /// Names and versions read out of the database's own catalog.
+    SchemaIntrospection,
+    /// A blob the storage layer deliberately does not interpret — raw JSON, a cached
+    /// response body.
+    OpaquePayload,
+    /// A value that is *deliberately* stored lossily, so the domain type would claim more
+    /// than the column holds.
+    DeliberateLossy,
+    /// Not an sqlx decode at all — the gate's population is defined structurally, so it
+    /// reaches a few constructs that are not row reads. See the module doc's over-bite
+    /// note.
+    NotADecodeTarget,
+    /// Test scaffolding whose type comes from a generic helper's signature.
+    TestScaffolding,
+    /// **Residue, not a verdict.** This should be a domain type; the fix is a vertical
+    /// tracked elsewhere. The reason must name the issue.
+    DeferredNewtype,
+}
+
+impl Category {
+    /// Every variant, so the failure footer can group in a stable, total order without a
+    /// `HashMap` iteration order or a hand-kept second list.
+    const ALL: &'static [Self] = &[
+        Self::CountOrExists,
+        Self::SchemaIntrospection,
+        Self::OpaquePayload,
+        Self::DeliberateLossy,
+        Self::NotADecodeTarget,
+        Self::TestScaffolding,
+        Self::DeferredNewtype,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::CountOrExists => "count-or-exists",
+            Self::SchemaIntrospection => "schema-introspection",
+            Self::OpaquePayload => "opaque-payload",
+            Self::DeliberateLossy => "deliberate-lossy",
+            Self::NotADecodeTarget => "not-a-decode-target",
+            Self::TestScaffolding => "test-scaffolding",
+            Self::DeferredNewtype => "deferred-newtype",
+        }
+    }
+}
+
+/// Whether `reason` names a tracking issue (`#` followed by at least one digit).
+///
+/// Only [`Category::DeferredNewtype`] requires one. A deferred entry whose reason names no
+/// issue is a TODO with no owner — the shape that turns an allowlist into a graveyard.
+fn names_an_issue(reason: &str) -> bool {
+    reason
+        .split('#')
+        .skip(1)
+        .any(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
 }
 
 /// Every decode that is genuinely primitive, each with its reason.
@@ -128,6 +204,7 @@ const ALLOWLIST: &[Allowed] = &[
         target: "i64",
         what: "\"SELECTCOUNT(*)FROMsqlite_masterWHEREtype='table'ANDnameNOTLIKE'sqlite_%'\"",
         count: 1,
+        category: Category::CountOrExists,
         reason: "COUNT(*) of live SQLite tables, checked against the backup manifest",
     },
     Allowed {
@@ -136,6 +213,7 @@ const ALLOWLIST: &[Allowed] = &[
         target: "i64",
         what: "\"SELECTCOUNT(*)FROMinformation_schema.tables\\WHEREtable_schema='public'ANDtable_type='BASETABLE'\"",
         count: 1,
+        category: Category::CountOrExists,
         reason: "COUNT(*) of live Postgres tables, the dialect twin of the SQLite arm above",
     },
     Allowed {
@@ -144,6 +222,7 @@ const ALLOWLIST: &[Allowed] = &[
         target: "i64",
         what: "&format!(\"SELECTCOUNT(*)FROM{table}\")",
         count: 2,
+        category: Category::CountOrExists,
         reason: "COUNT(*) per seeded lookup table; the two dialect arms are byte-identical",
     },
     Allowed {
@@ -152,6 +231,7 @@ const ALLOWLIST: &[Allowed] = &[
         target: "i64",
         what: "&format!(\"SELECTEXISTS(SELECT1FROM{}LIMIT1)\",crate::sql::quote_identifier(&table))",
         count: 1,
+        category: Category::CountOrExists,
         reason: "SELECT EXISTS(…) decoded as i64 — SQLite has no bool; the Postgres twin decodes bool",
     },
     Allowed {
@@ -160,6 +240,7 @@ const ALLOWLIST: &[Allowed] = &[
         target: "i64",
         what: "\"SELECTCOUNT(*)FROMpg_constraint\\WHEREcontype='f'ANDconnamespace='public'::regnamespace\\ANDNOTcondeferrable\"",
         count: 1,
+        category: Category::CountOrExists,
         reason: "COUNT(*) of non-deferrable FK constraints",
     },
     Allowed {
@@ -168,6 +249,7 @@ const ALLOWLIST: &[Allowed] = &[
         target: "Option<i64>",
         what: "\"SELECTMAX(version)FROM_sqlx_migrations\"",
         count: 1,
+        category: Category::SchemaIntrospection,
         reason: "MAX(version) migration version, NULL on an empty migrations table",
     },
     Allowed {
@@ -176,6 +258,7 @@ const ALLOWLIST: &[Allowed] = &[
         target: "Option<i64>",
         what: "\"SELECTMAX(version)FROM_sqlx_migrations\"",
         count: 1,
+        category: Category::SchemaIntrospection,
         reason: "MAX(version) migration version, the dialect twin of the Postgres one",
     },
     Allowed {
@@ -184,6 +267,7 @@ const ALLOWLIST: &[Allowed] = &[
         target: "Result<i64,sqlx::Error>",
         what: "sql",
         count: 2,
+        category: Category::TestScaffolding,
         reason: "Generic test scalar helper; SQL is a runtime &str and the type comes from the fn return",
     },
     Allowed {
@@ -192,6 +276,7 @@ const ALLOWLIST: &[Allowed] = &[
         target: "(i64,)",
         what: "DB::IS_ACTIVE_SUBSCRIBER",
         count: 1,
+        category: Category::CountOrExists,
         reason: "Existence flag, not an id — subscriptions.rs's own bound comment says so",
     },
     Allowed {
@@ -200,6 +285,7 @@ const ALLOWLIST: &[Allowed] = &[
         target: "i64",
         what: "\"attempts\"",
         count: 1,
+        category: Category::CountOrExists,
         reason: "attempts retry counter, narrowed to i32 for the record field",
     },
 ];
@@ -533,6 +619,8 @@ pub fn problems(scanned: &[(String, String)]) -> Option<String> {
         }
     }
 
+    lines.extend(allowlist_self_problems(ALLOWLIST));
+
     if lines.is_empty() {
         return None;
     }
@@ -540,16 +628,69 @@ pub fn problems(scanned: &[(String, String)]) -> Option<String> {
         "  recovery: this gate enumerates rather than searching — it has no idea which columns \
          are ids, and deliberately so, because every audit that searched for the id-ish spelling \
          missed the sites spelled another way (#686, #715). Every i64-family decode is therefore \
-         either typed or listed. Currently exempt:"
+         either typed or listed. Currently exempt, by rationale:"
             .to_string(),
     );
-    for a in ALLOWLIST {
-        lines.push(format!(
-            "    - {}::{} `{}` ×{}: {}",
-            a.file, a.function, a.target, a.count, a.reason
-        ));
+    for category in Category::ALL {
+        let mut group = ALLOWLIST
+            .iter()
+            .filter(|a| a.category == *category)
+            .peekable();
+        if group.peek().is_none() {
+            continue;
+        }
+        lines.push(format!("    [{}]", category.label()));
+        for a in group {
+            lines.push(format!(
+                "      - {}::{} `{}` ×{}: {}",
+                a.file, a.function, a.target, a.count, a.reason
+            ));
+        }
     }
     Some(lines.join("\n"))
+}
+
+/// Faults in an allowlist itself, independent of the tree.
+///
+/// A gate that polices the source but not its own exemption list is blind in the one place
+/// it can least afford to be — the same rule as failing on an unparseable file, applied
+/// inward (ADR-0085 principle 6).
+///
+/// Takes the list rather than reading [`ALLOWLIST`] directly so the tests drive *this*
+/// function with synthetic entries instead of re-implementing the rule beside it.
+fn allowlist_self_problems(allowlist: &[Allowed]) -> Vec<String> {
+    let mut lines = Vec::new();
+
+    // Duplicate keys. Matching is `.any(…)` and the count check is per-entry, so two
+    // entries with the same key each declaring 1 would BOTH pass while double-covering a
+    // single site — and deleting the decode would then need two edits to go green, which
+    // is exactly how a stale exemption survives.
+    for (i, a) in allowlist.iter().enumerate() {
+        if let Some(dup) = allowlist[..i].iter().find(|b| {
+            (b.file, b.function, b.target, b.what) == (a.file, a.function, a.target, a.what)
+        }) {
+            lines.push(format!(
+                "{}::{} `{}`: two allowlist entries share one key ({} and {}). Merge them into \
+                 one entry and state the combined multiplicity in `count` — two entries covering \
+                 one site can never go stale together.",
+                a.file, a.function, a.target, dup.reason, a.reason
+            ));
+        }
+    }
+
+    // A deferred entry with no issue is a TODO with no owner.
+    for a in allowlist {
+        if a.category == Category::DeferredNewtype && !names_an_issue(a.reason) {
+            lines.push(format!(
+                "{}::{} `{}`: a `deferred-newtype` entry must name the issue tracking the fix \
+                 (e.g. \"…, deferred to #750\"). Without one this is not deferred work, it is an \
+                 exemption with a sympathetic label.",
+                a.file, a.function, a.target
+            ));
+        }
+    }
+
+    lines
 }
 
 /// Scan every Rust file under [`POLICED_ROOT`] and push the result step. A missing
@@ -890,6 +1031,102 @@ mod tests {
         let detail = problems(&[("storage/src/broken.rs".to_string(), "fn f( {{{".to_string())])
             .expect("an unparsed file must fail");
         assert!(detail.contains("invisible to this gate"), "{detail}");
+    }
+
+    // ---- the allowlist polices itself ----
+
+    /// An entry with everything but the field under test held fixed.
+    fn entry(what: &'static str, category: Category, reason: &'static str) -> Allowed {
+        Allowed {
+            file: "users.rs",
+            function: "f",
+            target: "i64",
+            what,
+            count: 1,
+            category,
+            reason,
+        }
+    }
+
+    #[test]
+    fn the_category_field_changes_nothing_about_matching_or_counting() {
+        // A8's falsifiable form. "No code path branches on `category`" cannot be asserted
+        // from a test, but its observable consequence can: two entries that differ ONLY in
+        // category must behave identically for both the match and the duplicate check.
+        let a = entry("\"SELECTCOUNT(*)\"", Category::CountOrExists, "a count");
+        let b = entry("\"SELECTCOUNT(*)\"", Category::OpaquePayload, "a count");
+        let site = DecodeSite {
+            function: "f".to_string(),
+            target: "i64".to_string(),
+            what: "\"SELECTCOUNT(*)\"".to_string(),
+            line: 1,
+        };
+        let path = "storage/src/users.rs";
+        assert_eq!(
+            entry_matches(&a, path, &site),
+            entry_matches(&b, path, &site),
+            "category must not affect whether an entry covers a site"
+        );
+        // …and differing only in category does NOT make two entries distinct, so it cannot
+        // be used to sneak a second entry past the duplicate check.
+        assert_eq!(
+            allowlist_self_problems(&[a, b]).len(),
+            1,
+            "same key, still a duplicate"
+        );
+    }
+
+    #[test]
+    fn category_drives_only_the_deferred_obligation() {
+        // The precise claim: `category` is inert for matching and counting, but it is NOT
+        // decoration — `DeferredNewtype` alone carries the name-your-issue obligation.
+        let ok = entry("\"a\"", Category::CountOrExists, "a count");
+        assert!(allowlist_self_problems(std::slice::from_ref(&ok)).is_empty());
+        let deferred = entry("\"a\"", Category::DeferredNewtype, "should be a newtype");
+        assert_eq!(
+            allowlist_self_problems(std::slice::from_ref(&deferred)).len(),
+            1,
+            "a deferred entry naming no issue must fail"
+        );
+    }
+
+    #[test]
+    fn two_entries_with_one_key_are_a_failure() {
+        let a = entry("\"SELECTCOUNT(*)\"", Category::CountOrExists, "first");
+        let b = entry("\"SELECTCOUNT(*)\"", Category::CountOrExists, "second");
+        assert_eq!(allowlist_self_problems(&[a, b]).len(), 1);
+    }
+
+    #[test]
+    fn distinct_keys_are_not_duplicates() {
+        let a = entry("\"SELECTCOUNT(*)\"", Category::CountOrExists, "first");
+        let b = entry("\"SELECTMAX(v)\"", Category::CountOrExists, "second");
+        assert!(allowlist_self_problems(&[a, b]).is_empty());
+    }
+
+    #[test]
+    fn the_shipped_allowlist_has_no_self_faults() {
+        // The self-checks run on every gate invocation, so a bad entry would fail the gate
+        // on a clean tree. Pin it here too, where the message is about the allowlist rather
+        // than about whatever else was failing.
+        assert!(
+            allowlist_self_problems(ALLOWLIST).is_empty(),
+            "{:?}",
+            allowlist_self_problems(ALLOWLIST)
+        );
+    }
+
+    #[test]
+    fn a_deferred_newtype_entry_must_name_its_issue() {
+        assert!(names_an_issue(
+            "subscriber_ref should be a newtype, deferred to #750"
+        ));
+        assert!(!names_an_issue(
+            "subscriber_ref should be a newtype one day"
+        ));
+        // A bare `#` with no number is a false positive waiting to happen — a reason that
+        // says "the # column" must not count as a tracking reference.
+        assert!(!names_an_issue("the # column is opaque"));
     }
 
     #[test]
