@@ -316,9 +316,11 @@ fn sqlx_impls(name: &syn::Ident) -> proc_macro2::TokenStream {
         type_inner: sqlx_inner(),
         encode_inner: sqlx_inner(),
         to_inner: quote! { &self.0 },
-        decode_inner: sqlx_inner(),
+        // Borrowed: `FromStr` parses from a `&str` and builds its own `String`, so
+        // decoding an owned one here would allocate it only to drop it (#746 D3).
+        decode_inner: quote! { &'r str },
         convert: quote! {
-            ::core::result::Result::Ok(<#name as ::core::str::FromStr>::from_str(&v)?)
+            ::core::result::Result::Ok(<#name as ::core::str::FromStr>::from_str(v)?)
         },
     })
 }
@@ -454,4 +456,46 @@ fn parse_opts(input: &DeriveInput) -> syn::Result<Opts> {
         sqlx,
         no_sqlx,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sqlx_bridge::tests::norm;
+
+    #[test]
+    fn validating_bridge_decodes_a_borrowed_str_without_allocating() {
+        let n = quote::format_ident!("Slug");
+        let out = norm(&sqlx_impls(&n));
+        assert!(out.contains("<&'rstras::sqlx::Decode<'r,DB>>::decode(value)?"));
+        assert!(
+            out.contains("::from_str(v)?"),
+            "must parse the borrowed str directly"
+        );
+        assert!(
+            !out.contains("::from_str(&v)"),
+            "the &v form re-borrows an owned String"
+        );
+        assert!(!out.contains("to_owned"));
+    }
+
+    #[test]
+    fn validating_bridge_keeps_string_for_type_and_encode() {
+        let n = quote::format_ident!("Slug");
+        let out = norm(&sqlx_impls(&n));
+        assert!(out.contains("<::std::string::Stringas::sqlx::Type<DB>>::type_info()"));
+        assert!(out.contains("letinner:&::std::string::String=&self.0;"));
+    }
+
+    #[test]
+    fn infallible_bridge_is_untouched_on_all_three_inners() {
+        // `PostBody`'s `From<String>` MOVES the value, so borrowing here would ADD an
+        // allocation rather than remove one. Standing guard for the #758 boundary.
+        let n = quote::format_ident!("PostBody");
+        let out = norm(&sqlx_impls_infallible(&n));
+        assert!(out.contains("<::std::string::Stringas::sqlx::Type<DB>>::type_info()"));
+        assert!(out.contains("letinner:&::std::string::String=&self.0;"));
+        assert!(out.contains("<::std::string::Stringas::sqlx::Decode<'r,DB>>::decode(value)?"));
+        assert!(!out.contains("&'rstras::sqlx::Decode"));
+    }
 }
