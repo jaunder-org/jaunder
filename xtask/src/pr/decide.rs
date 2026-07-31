@@ -33,7 +33,6 @@ impl Phase {
 #[derive(Debug, Clone, Default)]
 pub struct Progress {
     pub was_queued: bool,
-    pub last_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,10 +135,10 @@ pub fn classify(
             None,
         );
     }
-    if let Some((name, entry)) =
-        required_states(snap, req).find(|(_, e)| e.is_some_and(|e| e.state == CheckState::Failure))
-    {
-        let entry = entry.expect("find matched a Some");
+    if let Some((name, entry)) = required_states(snap, req).find_map(|(name, e)| {
+        e.filter(|e| e.state == CheckState::Failure)
+            .map(|e| (name, e))
+    }) {
         return terminal(
             Outcome::ChecksFailed,
             Some(format!("required check failed: {name}")),
@@ -437,10 +436,7 @@ mod tests {
     fn vanished_queue_entry_with_no_run_warns_and_continues() {
         // A manual dequeue folds back into the loop — loudly, since a human is often
         // about to re-enqueue and terminating would abandon a still-useful watch.
-        let progress = Progress {
-            was_queued: true,
-            last_fingerprint: None,
-        };
+        let progress = Progress { was_queued: true };
         match classify(&open(green()), &queue_rules(), None, &progress) {
             Step::Continue { warn, .. } => assert!(warn.unwrap().contains("found none")),
             other => panic!("expected a warning continue, got {other:?}"),

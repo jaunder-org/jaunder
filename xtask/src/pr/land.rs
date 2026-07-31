@@ -5,7 +5,7 @@
 
 use super::decide::{self, Progress, Step};
 use super::gh::{self, ApiError};
-use super::snapshot::PrSource;
+use super::snapshot::{PrSnapshot, PrSource, RequiredChecks, RunRef};
 use super::watch::{self, Clock, WatchConfig};
 use super::{Event, EventKind, Outcome, PrReport, Subject};
 
@@ -62,6 +62,24 @@ pub fn divergence_message(local: &str, remote: &str) -> String {
          what would merge is not what you are looking at. Push, or pass the PR \
          number from outside its branch."
     )
+}
+
+/// The merge-group probe, in the one state where ejection is possible.
+///
+/// `land` must not arm a PR it cannot prove was *not* ejected, so a probe failure
+/// propagates rather than degrading to "no ejection found" — the difference between
+/// refusing to re-enqueue and silently re-enqueueing a failing PR.
+fn probe<S: PrSource>(
+    source: &S,
+    subject: &Subject,
+    snap: &PrSnapshot,
+    req: &RequiredChecks,
+) -> Result<Option<RunRef>, ApiError> {
+    if decide::needs_ejection_probe(snap, req) {
+        source.ejection_run(subject)
+    } else {
+        Ok(None)
+    }
 }
 
 fn push(
@@ -138,11 +156,31 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
             )
         }
     };
+    // Including the ejection probe. Without it an already-ejected PR — open, green,
+    // unqueued — classifies as merely not-yet-armed, and `land` would re-enqueue it:
+    // the one action this tool explicitly refuses, because requeuing a genuinely
+    // failing PR loops forever.
+    let ejection = match probe(source, subject, &snap, &req) {
+        Ok(run) => run,
+        Err(e) => {
+            return report(
+                subject,
+                snap.head_sha,
+                Outcome::WatcherError,
+                Some(format!(
+                    "could not check for a prior ejection, so refusing to arm: {}",
+                    e.detail()
+                )),
+                None,
+                events,
+            )
+        }
+    };
     if let Step::Terminal {
         outcome,
         detail,
         pointer,
-    } = decide::classify(&snap, &req, None, &Progress::default())
+    } = decide::classify(&snap, &req, ejection.as_ref(), &Progress::default())
     {
         push(
             &mut events,
@@ -212,11 +250,12 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
         }
 
         // Something may have gone terminal between arming and verifying.
+        let after_ejection = probe(source, subject, &after, &req).unwrap_or(None);
         if let Step::Terminal {
             outcome,
             detail,
             pointer,
-        } = decide::classify(&after, &req, None, &Progress::default())
+        } = decide::classify(&after, &req, after_ejection.as_ref(), &Progress::default())
         {
             push(
                 &mut events,
@@ -365,6 +404,31 @@ mod tests {
         let report = land(&src, &armer, &clock(), &subject(), cfg(), &mut |_| {});
         assert_eq!(report.outcome, Outcome::Conflicted);
         assert_eq!(armer.calls.get(), 0, "never arm a PR that cannot merge");
+    }
+
+    #[test]
+    fn an_already_ejected_pr_is_reported_and_never_re_armed() {
+        // Re-enqueueing after an ejection is the one action the tool refuses: a
+        // genuinely failing PR would loop forever. Without the prologue probe this PR
+        // (open, green, unqueued) reads as merely unarmed and gets re-enqueued.
+        let src = FakeSource::new(vec![Ok(open(green()))], queue_rules())
+            .with_ejection(Some(ejection("2026-07-30T14:30:00Z")));
+        let armer = CountingArmer::new();
+        let report = land(&src, &armer, &clock(), &subject(), cfg(), &mut |_| {});
+        assert_eq!(report.outcome, Outcome::Ejected);
+        assert_eq!(armer.calls.get(), 0, "must not re-enqueue an ejected PR");
+    }
+
+    #[test]
+    fn an_unreadable_ejection_probe_refuses_to_arm() {
+        // "Cannot prove it was not ejected" must fail closed, not proceed.
+        let src = FakeSource::new(vec![Ok(open(green()))], queue_rules())
+            .with_ejection_error(ApiError::Transport("probe down".into()));
+        let armer = CountingArmer::new();
+        let report = land(&src, &armer, &clock(), &subject(), cfg(), &mut |_| {});
+        assert_eq!(report.outcome, Outcome::WatcherError);
+        assert_eq!(armer.calls.get(), 0);
+        assert!(report.detail.unwrap().contains("refusing to arm"));
     }
 
     #[test]

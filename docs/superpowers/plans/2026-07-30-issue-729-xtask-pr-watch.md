@@ -1874,12 +1874,12 @@ and `doc-links` green. **Observed green.**
 
 **Interfaces:** none (configuration + documentation).
 
-- [ ] **Step 1: Add `gh` to the devShell**
+- [x] **Step 1: Add `gh` to the devShell**
 
 In `flake.nix`'s `devOnly` list, add `pkgs.gh` — **not** `ciInputs`, since these
 are host-only manual commands (spec D2), the same status as `traces analyze`.
 
-- [ ] **Step 2: Correct the merge-queue runbook**
+- [x] **Step 2: Correct the merge-queue runbook**
 
 `docs/ci-merge-queue.md:190` currently reads "Under the queue an OOM-ejected PR
 is auto-requeued". Per spec F3 the live `merge_queue` rule has **no requeue
@@ -1888,16 +1888,20 @@ claim and adjust the surrounding rollback-trigger paragraph so it still reads
 correctly. Add a pointer to `cargo xtask pr watch` as the way to observe queue
 state.
 
-- [ ] **Step 3: Document the commands**
+- [x] **Step 3: Document the commands**
 
 `CONTRIBUTING.md`: add a bullet in the manual-tools section (beside the
 `audit-wasm` and `traces analyze` bullets) covering `cargo xtask pr watch [N]` /
 `pr land [N]`, the flags, the outcomes, and that `land` is the merge approval.
 
-`CLAUDE.md`: one row in the xtask Commands table. Keep it terse — CLAUDE.md must
-not duplicate CONTRIBUTING.
+> **Correction: `CLAUDE.md` is untracked too.** `git ls-files CLAUDE.md` returns
+> nothing and the file does not exist in this worktree — it is in the same class as
+> `.claude/skills/jaunder-ship/SKILL.md` (spec F10), not a tracked doc. Both the spec
+> (D12/A13) and this plan listed it as branch-verifiable; that was wrong. It **moves
+> to Task 10**, edited at the main checkout and verified by inspection. Nothing about
+> it can appear in the PR diff.
 
-- [ ] **Step 4: Verify the tree still gates**
+- [x] **Step 4: Verify the tree still gates**
 
 Run: `devtool run -- cargo xtask check --no-test` Expected: PASS — `doc-links`
 green.
@@ -1905,11 +1909,12 @@ green.
 Run: `git status --porcelain` Expected: only the intended files (the gate's Fix
 mode auto-formats; re-stage if so).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit** — `8907bc74` (three tracked files; `CLAUDE.md` deferred to
+      Task 10 per the correction above).
 
 ```bash
-prettier -w docs/ci-merge-queue.md CONTRIBUTING.md CLAUDE.md
-git add flake.nix docs/ci-merge-queue.md CONTRIBUTING.md CLAUDE.md
+prettier -w docs/ci-merge-queue.md CONTRIBUTING.md
+git add flake.nix docs/ci-merge-queue.md CONTRIBUTING.md
 git commit -m "docs: point the merge-queue protocol at cargo xtask pr watch (#729)"
 ```
 

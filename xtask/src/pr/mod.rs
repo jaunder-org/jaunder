@@ -19,6 +19,7 @@ use serde::{Serialize, Serializer};
 use crate::git;
 use crate::result::{CommandResult, StepResult};
 use snapshot::PrSource;
+use watch::Clock;
 
 /// A pull request number. A newtype because it is threaded through every layer and
 /// is transposable with the other bare integers around it (queue position, run id).
@@ -148,13 +149,6 @@ pub struct PrReport {
     pub events: Vec<Event>,
 }
 
-/// Wrap a report in the command envelope.
-///
-/// The single pushed step is not incidental: `CommandResult::push` recomputes `ok`
-/// from the step vector, so pushing exactly one step whose `ok` mirrors the outcome
-/// is what keeps `ok`, `exit_code()`, and `pr.outcome` from disagreeing — and is why
-/// neither `push` nor `exit_code` needed to change. Push a second step here and the
-/// sidecar starts reporting `ok: true` for a failed watch.
 /// Drive one `pr watch` / `pr land` invocation against the real GitHub.
 ///
 /// Returns `Err` only when the *subject* could not be established — there is nothing
@@ -168,7 +162,17 @@ pub fn execute(number: Option<u64>, cfg: watch::WatchConfig, landing: bool) -> R
         Ok(s) => s,
         Err(e) => {
             return match snapshot::resolution_failure(&e) {
-                snapshot::ResolutionFailure::Bail(msg) => Err(anyhow!(msg)),
+                // Name what was actually searched for. `resolve` collapses four
+                // distinct causes into `NotFound` — no remote, an unparseable remote,
+                // detached HEAD, no open PR for the branch — and "no open PR found" is
+                // unhelpful for the first three.
+                snapshot::ResolutionFailure::Bail(msg) => Err(anyhow!(
+                    "{msg}{}",
+                    match git::current_branch(std::path::Path::new(".")) {
+                        Ok(Some(branch)) => format!(" (searched for branch `{branch}`)"),
+                        _ => " (no branch checked out)".to_string(),
+                    }
+                )),
                 snapshot::ResolutionFailure::Report(outcome) => Ok(PrReport {
                     outcome,
                     pr: number.unwrap_or_default(),
@@ -178,7 +182,7 @@ pub fn execute(number: Option<u64>, cfg: watch::WatchConfig, landing: bool) -> R
                     pointer: None,
                     events: Vec::new(),
                 }),
-            }
+            };
         }
     };
 
@@ -188,7 +192,18 @@ pub fn execute(number: Option<u64>, cfg: watch::WatchConfig, landing: bool) -> R
     // read. Catching it *here* keeps it a failure to establish the subject — exit 2,
     // nothing to report on — rather than letting it masquerade as the tooling being
     // broken. Any other error falls through: `watch`/`land` retry and report it.
-    let established = source.snapshot(&subject);
+    // A transient blip on the very first read should not decide anything, so give it
+    // a few tries before drawing a conclusion from it.
+    let mut established = source.snapshot(&subject);
+    for _ in 1..3 {
+        match &established {
+            Err(e) if e.is_transient() => {
+                clock.sleep_secs(2);
+                established = source.snapshot(&subject);
+            }
+            _ => break,
+        }
+    }
     if let Err(e) = &established {
         if matches!(
             snapshot::resolution_failure(e),
@@ -210,19 +225,37 @@ pub fn execute(number: Option<u64>, cfg: watch::WatchConfig, landing: bool) -> R
 
     if landing {
         // Refuse to land something other than what the caller is looking at, reusing
-        // the snapshot that established the subject.
-        if let Ok(snap) = &established {
-            let dir = std::path::Path::new(".");
-            let branch = git::current_branch(dir).ok().flatten();
-            let local = git::head_sha(dir).ok().flatten();
-            if let land::GuardVerdict::Diverged { local, remote } = land::divergence_guard(
-                branch.as_deref(),
-                local.as_deref(),
-                &snap.head_ref,
-                &snap.head_sha,
-            ) {
-                return Err(anyhow!(land::divergence_message(&local, &remote)));
+        // the snapshot that established the subject. The guard must **fail closed**:
+        // if the PR head cannot be read, the check is unevaluable, and proceeding
+        // would arm a merge on exactly the condition the guard exists to catch.
+        let snap = match &established {
+            Ok(snap) => snap,
+            Err(e) => {
+                return Ok(PrReport {
+                    outcome: Outcome::WatcherError,
+                    pr: subject.number.0,
+                    head_sha: String::new(),
+                    phase: None,
+                    detail: Some(format!(
+                        "could not read the PR head, so the divergence guard could not \
+                         run and nothing was armed: {}",
+                        e.detail()
+                    )),
+                    pointer: None,
+                    events: Vec::new(),
+                })
             }
+        };
+        let dir = std::path::Path::new(".");
+        let branch = git::current_branch(dir).ok().flatten();
+        let local = git::head_sha(dir).ok().flatten();
+        if let land::GuardVerdict::Diverged { local, remote } = land::divergence_guard(
+            branch.as_deref(),
+            local.as_deref(),
+            &snap.head_ref,
+            &snap.head_sha,
+        ) {
+            return Err(anyhow!(land::divergence_message(&local, &remote)));
         }
         return Ok(land::land(
             &source,
@@ -236,6 +269,13 @@ pub fn execute(number: Option<u64>, cfg: watch::WatchConfig, landing: bool) -> R
     Ok(watch::watch(&source, &clock, &subject, cfg, &mut sink))
 }
 
+/// Wrap a report in the command envelope.
+///
+/// The single pushed step is not incidental: `CommandResult::push` recomputes `ok`
+/// from the step vector, so pushing exactly one step whose `ok` mirrors the outcome
+/// is what keeps `ok`, `exit_code()`, and `pr.outcome` from disagreeing — and is why
+/// neither `push` nor `exit_code` needed to change. Push a second step here and the
+/// sidecar starts reporting `ok: true` for a failed watch.
 pub fn into_result(command: &str, report: PrReport) -> CommandResult {
     let mut result = CommandResult::new(command);
     let step = if report.outcome.is_merged() {

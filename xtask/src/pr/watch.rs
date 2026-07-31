@@ -11,7 +11,7 @@
 
 use super::decide::{self, Phase, Progress, Step};
 use super::gh::ApiError;
-use super::snapshot::{PrSnapshot, PrSource, RequiredChecks, RunRef};
+use super::snapshot::{CheckState, PrSnapshot, PrSource, RequiredChecks, RunRef};
 use super::{Event, EventKind, Outcome, PrReport, Subject};
 
 pub trait Clock {
@@ -82,43 +82,51 @@ impl Default for WatchConfig {
     }
 }
 
-/// What changed since the last poll, in the only terms worth emitting.
+/// How a required context reads in the event log.
 ///
-/// Deliberately excludes anything that ticks on its own — elapsed time, poll count,
-/// `updatedAt` — and anything not required by the ruleset. Including a self-ticking
-/// field is what turns a change-emitter into a per-poll emitter.
-pub(crate) fn fingerprint(snap: &PrSnapshot, req: &RequiredChecks, phase: Phase) -> String {
-    let mut parts = vec![phase.as_str().to_string()];
-    let mut checks: Vec<String> = req
-        .contexts
-        .iter()
-        .map(|name| {
-            format!(
-                "{name}={:?}",
-                decide::resolve_context(&snap.checks, name).map(|e| e.state)
-            )
-        })
-        .collect();
-    checks.sort();
-    parts.extend(checks);
-    parts.push(format!(
-        "queue={}:{:?}",
-        snap.queue.in_queue, snap.queue.position
-    ));
-    parts.push(format!("armed={}", snap.auto_merge_armed));
-    parts.join("|")
+/// Not `{:?}` on the `Option<CheckState>`: a human watching stderr should see
+/// `e2e gate: not yet reported`, not `e2e gate: None` — and "has not appeared yet" is
+/// exactly the state the late-appearing aggregate check makes worth naming clearly.
+fn check_state_label(snap: &PrSnapshot, name: &str) -> String {
+    match decide::resolve_context(&snap.checks, name).map(|e| e.state) {
+        None => "not yet reported".into(),
+        Some(CheckState::Pending) => "pending".into(),
+        Some(CheckState::Success) => "success".into(),
+        Some(CheckState::Failure) => "failure".into(),
+    }
 }
 
 /// The previous poll's emitted view, component by component.
 ///
-/// Change detection compares against this rather than against the raw snapshot, so
-/// "what changed" is asked in exactly the terms the event log speaks.
+/// This **is** the change-detection fingerprint, kept decomposed rather than hashed
+/// into one string: emission is per changed component, so comparing component-wise is
+/// what the event log actually needs. Note what it holds — phase, the required
+/// contexts' states, queue membership and position, and the standing warning — and
+/// what it deliberately omits: elapsed time, poll count, `updatedAt`, and any check
+/// the ruleset does not require. Anything that ticks on its own would turn this from
+/// a change-emitter into a per-poll emitter.
+#[derive(PartialEq, Eq)]
 struct Rendered {
     phase: Phase,
     /// `(required context name, its resolved state)`, in ruleset order.
     checks: Vec<(String, String)>,
     queue: String,
     warn: Option<String>,
+}
+
+impl Rendered {
+    fn of(snap: &PrSnapshot, req: &RequiredChecks, phase: Phase, warn: Option<String>) -> Self {
+        Self {
+            phase,
+            checks: req
+                .contexts
+                .iter()
+                .map(|name| (name.clone(), check_state_label(snap, name)))
+                .collect(),
+            queue: format!("{}:{:?}", snap.queue.in_queue, snap.queue.position),
+            warn,
+        }
+    }
 }
 
 /// Everything the loop carries between polls, kept in one place so the emit logic can
@@ -148,7 +156,9 @@ pub fn watch<S: PrSource, C: Clock>(
     sink: &mut dyn FnMut(&Event),
 ) -> PrReport {
     let start = clock.now_unix();
-    let deadline = start + cfg.timeout_mins * 60;
+    // Saturating: `--timeout` has no upper bound, and an absurd value should mean
+    // "effectively forever", not a debug-build overflow panic.
+    let deadline = start.saturating_add(cfg.timeout_mins.saturating_mul(60));
     let mut em = Emitter {
         events: Vec::new(),
         sink,
@@ -174,10 +184,12 @@ pub fn watch<S: PrSource, C: Clock>(
             return finish(
                 subject,
                 head_sha,
-                Outcome::TimedOut,
-                Some("the watch budget expired; GitHub never finished".into()),
-                None,
-                None,
+                Terminal {
+                    outcome: Outcome::TimedOut,
+                    detail: Some("the watch budget expired; GitHub never finished".into()),
+                    pointer: None,
+                    phase: None,
+                },
                 em.events,
             );
         }
@@ -213,44 +225,61 @@ pub fn watch<S: PrSource, C: Clock>(
                 // the hand-rolled watchers look healthy while they were blind.
                 em.emit(at, now, EventKind::PollError, e.detail());
 
-                if let ApiError::RateLimited { reset_unix } = e {
-                    // Not a strike: GitHub says when it clears. Wait it out if the
-                    // budget allows, otherwise say so now rather than burning 90
-                    // minutes discovering it.
-                    match reset_unix {
-                        Some(reset) if reset < deadline && !cfg.once => {
-                            clock.sleep_secs(reset.saturating_sub(now).max(1));
-                            continue;
-                        }
-                        _ => {
-                            return finish(
-                                subject,
-                                head_sha,
-                                Outcome::WatcherError,
-                                Some(format!(
-                                    "rate limited beyond the watch budget: {}",
+                // Rate limiting is not a strike *when we know when it clears*: GitHub
+                // says so, and waiting is strictly better than spending five strikes
+                // over two minutes on a condition known to last twelve.
+                if let ApiError::RateLimited {
+                    reset_unix: Some(reset),
+                } = e
+                {
+                    if reset >= deadline {
+                        // Waiting would consume the whole budget and still not get an
+                        // answer. Say so now instead of discovering it in 90 minutes.
+                        return finish(
+                            subject,
+                            head_sha,
+                            Terminal {
+                                outcome: Outcome::WatcherError,
+                                detail: Some(format!(
+                                    "rate limited past the watch budget: {}",
                                     e.detail()
                                 )),
-                                None,
-                                None,
-                                em.events,
-                            )
-                        }
+                                pointer: None,
+                                phase: None,
+                            },
+                            em.events,
+                        );
+                    }
+                    if !cfg.once {
+                        // A reset already in the past means the window has cleared;
+                        // resume on the normal interval rather than spinning at one
+                        // poll per second against a stale timestamp.
+                        clock.sleep_secs(reset.saturating_sub(now).max(cfg.interval_secs));
+                        continue;
                     }
                 }
 
+                // Everything else — including a rate limit whose reset we could not
+                // learn (a secondary limit, or the `rate_limit` probe itself failing)
+                // — goes through the strike budget. Treating an unattributed 403 as
+                // terminal would end a 90-minute watch on one bad poll.
                 strikes += 1;
-                if !e.is_transient() || strikes >= cfg.max_strikes || cfg.once {
+                if !e.is_transient() && !matches!(e, ApiError::RateLimited { .. })
+                    || strikes >= cfg.max_strikes
+                    || cfg.once
+                {
                     return finish(
                         subject,
                         head_sha,
-                        Outcome::WatcherError,
-                        Some(format!(
-                            "giving up after {strikes} failure(s): {}",
-                            e.detail()
-                        )),
-                        None,
-                        None,
+                        Terminal {
+                            outcome: Outcome::WatcherError,
+                            detail: Some(format!(
+                                "giving up after {strikes} failure(s): {}",
+                                e.detail()
+                            )),
+                            pointer: None,
+                            phase: None,
+                        },
                         em.events,
                     );
                 }
@@ -270,24 +299,11 @@ pub fn watch<S: PrSource, C: Clock>(
 
         // Emit per changed component, not per poll. The first poll emits the whole
         // current state so the log opens with where things stand.
-        let checks: Vec<(String, String)> = req
-            .contexts
-            .iter()
-            .map(|name| {
-                (
-                    name.clone(),
-                    format!(
-                        "{:?}",
-                        decide::resolve_context(&snap.checks, name).map(|e| e.state)
-                    ),
-                )
-            })
-            .collect();
-        let queue = format!("{}:{:?}", snap.queue.in_queue, snap.queue.position);
         let warn = match &step {
             Step::Continue { warn, .. } => warn.clone(),
             Step::Terminal { .. } => None,
         };
+        let current = Rendered::of(&snap, &req, phase, warn);
         let now = clock.now_unix();
         let at = clock.now_rfc3339();
 
@@ -299,7 +315,7 @@ pub fn watch<S: PrSource, C: Clock>(
             _ if terminal => {}
             None => {
                 em.emit(at.clone(), now, EventKind::Phase, phase.as_str().into());
-                for (name, state) in &checks {
+                for (name, state) in &current.checks {
                     em.emit(
                         at.clone(),
                         now,
@@ -315,7 +331,7 @@ pub fn watch<S: PrSource, C: Clock>(
                 if before.phase != phase {
                     em.emit(at.clone(), now, EventKind::Phase, phase.as_str().into());
                 }
-                for ((name, state), (_, prev_state)) in checks.iter().zip(&before.checks) {
+                for ((name, state), (_, prev_state)) in current.checks.iter().zip(&before.checks) {
                     if state != prev_state {
                         em.emit(
                             at.clone(),
@@ -325,27 +341,21 @@ pub fn watch<S: PrSource, C: Clock>(
                         );
                     }
                 }
-                if queue != before.queue {
+                if current.queue != before.queue {
                     em.emit(at.clone(), now, EventKind::Queue, queue_detail(&snap));
                 }
             }
         }
-        if let Some(text) = warn.as_ref().filter(|_| !terminal) {
+        if let Some(text) = current.warn.as_ref().filter(|_| !terminal) {
             if prev.as_ref().and_then(|p| p.warn.as_ref()) != Some(text) {
                 em.emit(at.clone(), now, EventKind::Warning, text.clone());
             }
         }
-        prev = Some(Rendered {
-            phase,
-            checks,
-            queue,
-            warn,
-        });
+        prev = Some(current);
 
         // History the pure machine cannot derive: an entry that is gone now was only
         // ever visible as a transition.
         progress.was_queued |= snap.queue.in_queue;
-        progress.last_fingerprint = Some(fingerprint(&snap, &req, phase));
 
         if let Step::Terminal {
             outcome,
@@ -354,17 +364,29 @@ pub fn watch<S: PrSource, C: Clock>(
         } = step
         {
             em.emit(at, now, EventKind::Terminal, outcome.as_str().into());
-            return finish(subject, head_sha, outcome, detail, pointer, None, em.events);
+            return finish(
+                subject,
+                head_sha,
+                Terminal {
+                    outcome,
+                    detail,
+                    pointer,
+                    phase: None,
+                },
+                em.events,
+            );
         }
 
         if cfg.once {
             return finish(
                 subject,
                 head_sha,
-                Outcome::Pending,
-                None,
-                None,
-                Some(phase.as_str().into()),
+                Terminal {
+                    outcome: Outcome::Pending,
+                    detail: None,
+                    pointer: None,
+                    phase: Some(phase.as_str().into()),
+                },
                 em.events,
             );
         }
@@ -397,23 +419,23 @@ fn queue_detail(snap: &PrSnapshot) -> String {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn finish(
-    subject: &Subject,
-    head_sha: String,
+/// How a watch ended, before it is joined with the subject and the event log.
+struct Terminal {
     outcome: Outcome,
     detail: Option<String>,
     pointer: Option<String>,
+    /// Only ever `Some` for `Pending`, which `--once` alone can produce.
     phase: Option<String>,
-    events: Vec<Event>,
-) -> PrReport {
+}
+
+fn finish(subject: &Subject, head_sha: String, end: Terminal, events: Vec<Event>) -> PrReport {
     PrReport {
-        outcome,
+        outcome: end.outcome,
         pr: subject.number.0,
         head_sha,
-        phase,
-        detail,
-        pointer,
+        phase: end.phase,
+        detail: end.detail,
+        pointer: end.pointer,
         events,
     }
 }
@@ -566,23 +588,99 @@ mod tests {
     }
 
     #[test]
-    fn fingerprint_ignores_non_required_checks_but_tracks_the_queue() {
-        let mut extra = queued_at(3);
-        let base = fingerprint(&extra, &queue_rules(), Phase::Queued);
-        extra.checks.push(check(
+    fn a_non_required_check_changing_emits_nothing() {
+        // The counterpart to the queue test above, through the real loop: change
+        // detection must ignore checks the ruleset does not require, or every
+        // unrelated lint job would produce an event.
+        let mut noisy = queued_at(3);
+        noisy.checks.push(check(
             "optional-lint",
             CheckState::Failure,
             "2026-07-30T14:05:00Z",
         ));
-        assert_eq!(
-            fingerprint(&extra, &queue_rules(), Phase::Queued),
-            base,
-            "a non-required check must not move the fingerprint"
+        let src = FakeSource::new(
+            vec![Ok(queued_at(3)), Ok(noisy), Ok(merged_snapshot())],
+            queue_rules(),
         );
-        assert_ne!(
-            fingerprint(&queued_at(2), &queue_rules(), Phase::Queued),
-            base,
-            "a queue position change must move the fingerprint"
+        let report = watch(&src, &clock(), &subject(), cfg(), &mut |_| {});
+        assert_eq!(
+            report
+                .events
+                .iter()
+                .filter(|e| e.kind == EventKind::Check)
+                .count(),
+            2,
+            "only the two required contexts, emitted once on the first poll"
+        );
+    }
+
+    #[test]
+    fn checks_render_as_words_not_debug_output() {
+        // A human reads this stream live; `Some(Pending)` / `None` is not a report.
+        let src = FakeSource::new(
+            vec![Ok(open_pending()), Ok(merged_snapshot())],
+            queue_rules(),
+        );
+        let report = watch(&src, &clock(), &subject(), cfg(), &mut |_| {});
+        let checks: Vec<&str> = report
+            .events
+            .iter()
+            .filter(|e| e.kind == EventKind::Check)
+            .map(|e| e.detail.as_str())
+            .collect();
+        assert!(
+            checks.iter().any(|d| d.ends_with(": pending")),
+            "{checks:?}"
+        );
+        assert!(
+            !checks
+                .iter()
+                .any(|d| d.contains("Some(") || d.contains("None")),
+            "{checks:?}"
+        );
+    }
+
+    #[test]
+    fn an_ejected_pr_is_reported_through_the_loop_not_just_the_rule() {
+        // The probe wiring — `needs_ejection_probe` → `ejection_run` → `classify` —
+        // has to be exercised end-to-end, or a dropped result would pass every test
+        // in `decide`. The PR is green, open, and unqueued, with a failed merge-group
+        // run newer than its head: reachable with no prior sight of the queue entry.
+        let src = FakeSource::new(vec![Ok(open(green()))], queue_rules())
+            .with_ejection(Some(ejection("2026-07-30T14:30:00Z")));
+        let report = watch(&src, &clock(), &subject(), cfg(), &mut |_| {});
+        assert_eq!(report.outcome, Outcome::Ejected);
+        assert!(report.pointer.unwrap().contains("/actions/runs/"));
+    }
+
+    #[test]
+    fn a_probe_failure_is_a_poll_error_never_a_silent_not_ejected() {
+        // Swallowing the probe error would read as "no ejection found", which is the
+        // silent-failure shape this command exists to eliminate.
+        let src = FakeSource::new(vec![Ok(open(green()))], queue_rules())
+            .with_ejection_error(ApiError::Transport("probe down".into()));
+        let report = watch(&src, &clock(), &subject(), cfg(), &mut |_| {});
+        assert_eq!(report.outcome, Outcome::WatcherError);
+        assert!(report
+            .events
+            .iter()
+            .any(|e| e.kind == EventKind::PollError && e.detail.contains("probe down")));
+    }
+
+    #[test]
+    fn an_unattributed_rate_limit_is_absorbed_not_terminal() {
+        // A secondary rate limit carries no reset (the `rate_limit` probe can fail
+        // too). One such 403 must not end a 90-minute watch.
+        let src = FakeSource::new(
+            vec![
+                Err(ApiError::RateLimited { reset_unix: None }),
+                Ok(merged_snapshot()),
+            ],
+            queue_rules(),
+        );
+        assert_eq!(
+            watch(&src, &clock(), &subject(), cfg(), &mut |_| {}).outcome,
+            Outcome::Merged
         );
     }
 

@@ -200,9 +200,16 @@ pub fn parse_snapshot(v: &Value) -> Result<PrSnapshot, ApiError> {
                 .and_then(|e| e.get("position"))
                 .and_then(Value::as_u64),
         },
-        head_sha: owned(head, &["oid"]).unwrap_or_default(),
+        // Both are load-bearing and must never default. An empty `head_committed_at`
+        // would make *every* failed merge-group run compare newer, reporting a stale
+        // run from a previous push as a fresh ejection; an empty `head_sha` would
+        // blind the divergence guard. A missing one is a broken response, not a PR
+        // with no head.
+        head_sha: owned(head, &["oid"])
+            .ok_or_else(|| ApiError::Malformed("head commit has no oid".into()))?,
         head_ref: owned(pr, &["headRefName"]).unwrap_or_default(),
-        head_committed_at: owned(head, &["committedDate"]).unwrap_or_default(),
+        head_committed_at: owned(head, &["committedDate"])
+            .ok_or_else(|| ApiError::Malformed("head commit has no committedDate".into()))?,
         checks,
     })
 }
@@ -579,5 +586,21 @@ mod tests {
     fn malformed_payload_is_an_api_error_not_a_panic() {
         let bad = serde_json::json!({ "data": { "repository": null } });
         assert!(matches!(parse_snapshot(&bad), Err(ApiError::Malformed(_))));
+    }
+
+    #[test]
+    fn a_head_commit_without_a_timestamp_is_malformed_not_defaulted() {
+        // Defaulting `head_committed_at` to "" would make every failed merge-group run
+        // compare newer than the head — a false `ejected` reached through a door the
+        // recency test does not cover.
+        let mut v = fixture!("pr-open-green.json");
+        v["data"]["repository"]["pullRequest"]["commits"]["nodes"][0]["commit"]["committedDate"] =
+            serde_json::Value::Null;
+        assert!(matches!(parse_snapshot(&v), Err(ApiError::Malformed(_))));
+
+        let mut v = fixture!("pr-open-green.json");
+        v["data"]["repository"]["pullRequest"]["commits"]["nodes"][0]["commit"]["oid"] =
+            serde_json::Value::Null;
+        assert!(matches!(parse_snapshot(&v), Err(ApiError::Malformed(_))));
     }
 }

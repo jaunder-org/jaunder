@@ -28,7 +28,7 @@ assumed. They are recorded because several contradict the issue body.
 | F7  | `octocrab = "0.54"` alone resolves to **211 crates** (xtask's current lockfile: **93**), adding `tokio`, `hyper`, `rustls`, `ring`. Its **only** `merge_queue` match is an unrelated webhook payload struct; its GraphQL surface is `graphql<R: DeserializeOwned>(body)` (`lib.rs:1456`) — hand-written query, self-defined structs                  | measured lockfile + vendored source                                |
 | F8  | xtask is **excluded from the Nix coverage derivation's source**, so `xtask/` is not coverage-measured; its tests run in the host suite via `steps::host_tests`                                                                                                                                                                                       | `CLAUDE.md` invariant, flake source filter                         |
 | F9  | `CommandResult::exit_code()` is binary (`result.rs:95`); `main.rs:28` uses `2` for the `Err` path. `CommandResult::push()` (`result.rs:90–93`) **recomputes `ok` from the step vector on every push**                                                                                                                                                | `xtask/src/result.rs`, `xtask/src/main.rs`                         |
-| F10 | **`.claude/` is entirely untracked** — `git ls-files .claude` returns nothing, and the directory does not exist inside this worktree. `.claude/skills/jaunder-ship/SKILL.md` exists only at the main checkout                                                                                                                                        | `git ls-files`                                                     |
+| F10 | **`.claude/` and `CLAUDE.md` are entirely untracked** — `git ls-files` returns nothing for either, and neither exists inside this worktree; both live only at the main checkout. (`CLAUDE.md` was assumed tracked when this spec was written; corrected during Task 9.) | `git ls-files` |
 | F11 | Merge-group runs are named `gh-readonly-queue/main/pr-<N>-<BASE_sha>` — the suffix is the **base** SHA (previous `main` tip), **not** the PR head. `?branch=` needs an exact name, so prefix matching requires `?event=merge_group`                                                                                                                  | `gh api /repos/jaunder-org/jaunder/actions/runs?event=merge_group` |
 
 ## Decisions
@@ -394,7 +394,7 @@ at ship), covering the four decisions a future reader would otherwise excavate:
 | `docs/ci-merge-queue.md`                                           | **Correct the false "auto-requeued" claim** (F3, line 190) and point at the command                                                                                                                                              |
 | `CONTRIBUTING.md`                                                  | Add `pr watch` / `pr land` to the manual-tools section beside `audit-wasm` and `traces`                                                                                                                                          |
 | `flake.nix` `devOnly`                                              | Add `pkgs.gh` (F6)                                                                                                                                                                                                               |
-| `CLAUDE.md` xtask section                                          | One line in the command table — it is the agent-facing doc, and agent re-derivation is the whole motivation                                                                                                                      |
+| **(out of tree)** `CLAUDE.md` xtask section | One line in the command table — it is the agent-facing doc, and agent re-derivation is the whole motivation. Untracked (F10), so same handling as the skill: edited at the main checkout, verified by inspection |
 
 **The `jaunder-ship` row is deliberately out of the tracked tree.** Per F10,
 `.claude/` is untracked and absent from this worktree entirely, so that edit
@@ -523,14 +523,15 @@ rejected at parse time (clap, exit 2).
 can return `pending { phase }`.
 
 **A13 (branch-verifiable).** In the PR diff: `docs/ci-merge-queue.md` no longer
-claims ejected PRs are auto-requeued; `CONTRIBUTING.md` and `CLAUDE.md` document
-`pr watch` / `pr land`; `flake.nix` lists `pkgs.gh` in `devOnly`.
+claims ejected PRs are auto-requeued; `CONTRIBUTING.md` documents `pr watch` /
+`pr land`; `flake.nix` lists `pkgs.gh` in `devOnly`.
 
 **A13b (out of tree, verified by inspection).**
 `.claude/skills/jaunder-ship/SKILL.md` steps 7–8 reference the commands rather
 than describing the protocol, and no longer instruct keeping the branch current
-with `main`. Per F10 this cannot appear in the diff; it is confirmed by reading
-the file at the main checkout, and is done last (D12).
+with `main`; `CLAUDE.md`'s xtask command table gains a `pr watch` / `pr land`
+row. Per F10 **neither** can appear in the diff; both are confirmed by reading
+the files at the main checkout, and are done last (D12).
 
 **A14.** `cargo xtask validate` is green, and `cargo xtask pr watch --help`
 documents `--interval <SECONDS>`, `--timeout <MINUTES>`, `--once`, and the

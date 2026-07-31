@@ -144,12 +144,18 @@ pub fn enrich_rate_limit(err: ApiError, reset: Option<u64>) -> ApiError {
     }
 }
 
+/// Cap an error blob for display, cutting on a **character** boundary.
+///
+/// Byte slicing would panic on any multi-byte character straddling the cut — and this
+/// runs on exactly the failure paths (`Malformed`, `Transport`) where the text is
+/// least predictable: `gh` prints `…`/`✓`, proxies return UTF-8 HTML, GitHub messages
+/// use curly quotes. A panic here would kill the process with no report at all, which
+/// is the one thing this command must never do.
 fn truncate(s: &str) -> String {
     let s = s.trim();
-    if s.len() <= 300 {
-        s.to_string()
-    } else {
-        format!("{}…", &s[..300])
+    match s.char_indices().nth(300) {
+        None => s.to_string(),
+        Some((cut, _)) => format!("{}…", &s[..cut]),
     }
 }
 
@@ -166,10 +172,20 @@ fn spawn(args: &[&str]) -> Result<(i32, String, String), ApiError> {
     }
 }
 
+/// Look up the reset time only when it can matter. `enrich_rate_limit` discards it for
+/// every other variant, so calling it eagerly would spawn a second `gh` on every 404
+/// and every transport blip.
+fn with_reset(err: ApiError) -> ApiError {
+    match err {
+        ApiError::RateLimited { .. } => enrich_rate_limit(err, rate_limit_reset()),
+        other => other,
+    }
+}
+
 /// A JSON-producing `gh api` call.
 pub fn run_gh(args: &[&str]) -> Result<Value, ApiError> {
     let (exit, out, err) = spawn(args)?;
-    classify(exit, &out, &err).map_err(|e| enrich_rate_limit(e, rate_limit_reset()))
+    classify(exit, &out, &err).map_err(with_reset)
 }
 
 /// A `gh` call whose stdout is prose, not JSON — `gh pr merge` prints a human
@@ -184,21 +200,27 @@ pub fn run_gh_raw(args: &[&str]) -> Result<(), ApiError> {
     // in practice; it exists so this cannot silently succeed on a failure.
     match classify(exit, &out, &err) {
         Ok(_) => Err(ApiError::Transport(format!("gh exited {exit}"))),
-        Err(e) => Err(enrich_rate_limit(e, rate_limit_reset())),
+        Err(e) => Err(with_reset(e)),
     }
 }
 
-/// The GraphQL rate-limit reset epoch, via the REST `rate_limit` endpoint — which is
-/// unmetered, so it still answers while GraphQL is limited. Best-effort: any failure
-/// yields `None` rather than becoming an error of its own.
+/// When the exhausted rate-limit bucket resets, via the REST `rate_limit` endpoint —
+/// which is unmetered, so it still answers while another bucket is limited.
+///
+/// Reads **whichever bucket is actually exhausted**: this module's calls span both
+/// `graphql` (the PR snapshot) and `core` (the ruleset, workflow runs, `pr list`), so
+/// hardcoding one would hand back the wrong reset for half of them. Best-effort — any
+/// failure yields `None` rather than becoming an error of its own.
 pub fn rate_limit_reset() -> Option<u64> {
     let (exit, out, err) = spawn(&["api", "rate_limit"]).ok()?;
-    classify(exit, &out, &err)
-        .ok()?
-        .get("resources")?
-        .get("graphql")?
-        .get("reset")?
-        .as_u64()
+    let resources = classify(exit, &out, &err).ok()?;
+    let resources = resources.get("resources")?;
+    ["graphql", "core"]
+        .iter()
+        .filter_map(|bucket| resources.get(bucket))
+        .filter(|b| b.get("remaining").and_then(Value::as_u64) == Some(0))
+        .filter_map(|b| b.get("reset").and_then(Value::as_u64))
+        .max()
 }
 
 #[cfg(test)]
@@ -330,6 +352,23 @@ mod tests {
     fn unparseable_success_body_is_malformed() {
         assert!(matches!(
             classify(0, "not json", "").unwrap_err(),
+            ApiError::Malformed(_)
+        ));
+    }
+
+    #[test]
+    fn a_long_multibyte_error_body_truncates_without_panicking() {
+        // Byte-slicing at 300 would land mid-character and panic, taking the whole
+        // process — and the report — with it. `…` is 3 bytes, so a 200-char string of
+        // them is 600 bytes with no char boundary at 300.
+        let blob = "…".repeat(200);
+        match classify(1, "", &blob).unwrap_err() {
+            ApiError::Transport(m) => assert!(m.ends_with('…')),
+            other => panic!("expected Transport, got {other:?}"),
+        }
+        // And the same on the malformed-body path.
+        assert!(matches!(
+            classify(0, &blob, "").unwrap_err(),
             ApiError::Malformed(_)
         ));
     }

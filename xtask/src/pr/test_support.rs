@@ -170,7 +170,7 @@ pub struct FakeSource {
     snaps: RefCell<VecDeque<Result<PrSnapshot, ApiError>>>,
     last: RefCell<Option<Result<PrSnapshot, ApiError>>>,
     req: RequiredChecks,
-    ejection: Option<RunRef>,
+    ejection: Result<Option<RunRef>, ApiError>,
 }
 
 impl FakeSource {
@@ -179,8 +179,21 @@ impl FakeSource {
             snaps: RefCell::new(snaps.into()),
             last: RefCell::new(None),
             req,
-            ejection: None,
+            ejection: Ok(None),
         }
+    }
+
+    /// What the merge-group probe finds. Without this the probe path is only ever
+    /// driven with `None`, so a dropped result would pass the whole suite.
+    pub fn with_ejection(mut self, run: Option<RunRef>) -> Self {
+        self.ejection = Ok(run);
+        self
+    }
+
+    /// Make the probe itself fail, so "probe failure is a poll failure" is testable.
+    pub fn with_ejection_error(mut self, err: ApiError) -> Self {
+        self.ejection = Err(err);
+        self
     }
 }
 
@@ -205,6 +218,6 @@ impl PrSource for FakeSource {
     }
 
     fn ejection_run(&self, _subject: &Subject) -> Result<Option<RunRef>, ApiError> {
-        Ok(self.ejection.clone())
+        self.ejection.clone()
     }
 }
