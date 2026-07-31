@@ -10,6 +10,7 @@ pub mod gh;
 pub mod snapshot;
 #[cfg(test)]
 pub(crate) mod test_support;
+pub mod watch;
 
 use serde::{Serialize, Serializer};
 

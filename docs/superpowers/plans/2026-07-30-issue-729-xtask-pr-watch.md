@@ -575,9 +575,9 @@ pub struct GhSource;   // the real impl; `resolve` lands in Task 7
 ```
 
 - [x] **Step 1: Write `PR_QUERY` first** — validated live against PR 727;
-      `mergeStateStatus` needs no preview header. `headRefName` was added beyond the
-      listed fields, because the Task 6 divergence guard needs the PR's head ref and
-      nothing else supplies it.
+      `mergeStateStatus` needs no preview header. `headRefName` was added beyond
+      the listed fields, because the Task 6 divergence guard needs the PR's head
+      ref and nothing else supplies it.
 
 The capture in Step 2 runs this document, so it must exist before the fixtures
 do. Write `PR_QUERY` as one GraphQL document requesting, per F4:
@@ -745,7 +745,8 @@ mod tests {
 - [x] **Step 4: Run the tests, verify they fail**
 
 Run: `cargo test --manifest-path xtask/Cargo.toml pr::snapshot` Expected: FAIL —
-`parse_snapshot` / `parse_required_checks` not defined. **Observed** exactly that.
+`parse_snapshot` / `parse_required_checks` not defined. **Observed** exactly
+that.
 
 - [x] **Step 5: Implement against the tests** — the fieldless state enums are
       `Copy` (a first pass without it hit a move-after-use in `parse_check`).
@@ -851,13 +852,14 @@ pub fn classify(snap: &PrSnapshot, req: &RequiredChecks,
                 ejection: Option<&RunRef>, progress: &Progress) -> Step;
 ```
 
-- [ ] **Step 1: Write `test_support.rs`**
+- [x] **Step 1: Write `test_support.rs`** — `subject()` deferred to Task 5, where it
+      is first used: an unused helper would trip `-D warnings` at this commit boundary.
 
 Write every builder above. This file has no tests of its own; it is exercised by
 Tasks 4–6. Declare it `#[cfg(test)] pub(crate) mod test_support;` in `pr/mod.rs`
 so it compiles only under `cargo test`.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 ```rust
 #[cfg(test)]
@@ -1066,12 +1068,14 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Run the tests, verify they fail**
+- [x] **Step 3: Run the tests, verify they fail**
 
 Run: `cargo test --manifest-path xtask/Cargo.toml pr::decide` Expected: FAIL —
-`classify` / `Step` / `Phase` not defined.
+`classify` / `Step` / `Phase` not defined. **Observed** exactly that.
 
-- [ ] **Step 4: Implement against the tests**
+- [x] **Step 4: Implement against the tests** — `resolve_context` additionally
+      resolves an **in-flight** duplicate over a completed one (a re-run in progress
+      means the context is unsettled), which the plan left to the implementer.
 
 Write `resolve_context`, `needs_ejection_probe`, and `classify` to the
 signatures above. Every branch is pinned by a test, so the tests determine the
@@ -1081,12 +1085,12 @@ phase states, in this order**: `Merged` → `ClosedUnmerged` → `Conflicted` �
 `conflict_outranks_a_failed_check` pins the one case where the order is
 observable.
 
-- [ ] **Step 5: Run the tests, verify they pass**
+- [x] **Step 5: Run the tests, verify they pass**
 
 Run: `cargo test --manifest-path xtask/Cargo.toml pr::decide` Expected: PASS (19
-tests)
+tests) — **observed 19 passed.**
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit** — `301cf804`, full `cargo xtask check` green.
 
 ```bash
 git add xtask/src/pr/decide.rs xtask/src/pr/test_support.rs xtask/src/pr/mod.rs

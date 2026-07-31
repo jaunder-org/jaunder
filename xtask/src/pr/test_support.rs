@@ -5,10 +5,16 @@
 //! the same snapshots. This is the same idiom as the crate-level
 //! [`crate::test_support`], scoped to `pr`.
 
+use std::cell::RefCell;
+use std::collections::VecDeque;
+
+use super::gh::ApiError;
 use super::snapshot::{
-    CheckEntry, CheckState, MergeStateStatus, Mergeable, PrSnapshot, PrState, QueueState,
+    CheckEntry, CheckState, MergeStateStatus, Mergeable, PrSnapshot, PrSource, PrState, QueueState,
     RequiredChecks, RunRef,
 };
+use super::watch::{Clock, WatchConfig};
+use super::{PrNumber, Subject};
 
 /// The live ruleset: two required contexts, non-strict, merge queue present.
 pub fn queue_rules() -> RequiredChecks {
@@ -117,5 +123,88 @@ pub fn ejection(created_at: &str) -> RunRef {
         url: "https://github.com/o/r/actions/runs/9".into(),
         created_at: created_at.into(),
         conclusion: "failure".into(),
+    }
+}
+
+pub fn subject() -> Subject {
+    Subject {
+        owner: "o".into(),
+        repo: "r".into(),
+        number: PrNumber(731),
+    }
+}
+
+/// A virtual clock: `sleep` advances time instead of blocking, so a test of the
+/// 90-minute budget runs in microseconds.
+pub struct FakeClock {
+    pub now: RefCell<u64>,
+}
+
+impl Clock for FakeClock {
+    fn now_unix(&self) -> u64 {
+        *self.now.borrow()
+    }
+    fn now_rfc3339(&self) -> String {
+        format!("T+{}", self.now_unix())
+    }
+    fn sleep_secs(&self, secs: u64) {
+        *self.now.borrow_mut() += secs;
+    }
+}
+
+pub fn clock() -> FakeClock {
+    FakeClock {
+        now: RefCell::new(0),
+    }
+}
+
+pub fn cfg() -> WatchConfig {
+    WatchConfig::default()
+}
+
+/// A scripted `PrSource`.
+///
+/// Once the script runs out it **repeats its last value forever**, so a budget-expiry
+/// test can script a single snapshot and still poll all the way to the timeout.
+pub struct FakeSource {
+    snaps: RefCell<VecDeque<Result<PrSnapshot, ApiError>>>,
+    last: RefCell<Option<Result<PrSnapshot, ApiError>>>,
+    req: RequiredChecks,
+    ejection: Option<RunRef>,
+}
+
+impl FakeSource {
+    pub fn new(snaps: Vec<Result<PrSnapshot, ApiError>>, req: RequiredChecks) -> Self {
+        Self {
+            snaps: RefCell::new(snaps.into()),
+            last: RefCell::new(None),
+            req,
+            ejection: None,
+        }
+    }
+}
+
+impl PrSource for FakeSource {
+    fn resolve(&self, _requested: Option<PrNumber>) -> Result<Subject, ApiError> {
+        unreachable!("FakeSource is always handed a Subject directly")
+    }
+
+    fn snapshot(&self, _subject: &Subject) -> Result<PrSnapshot, ApiError> {
+        if let Some(next) = self.snaps.borrow_mut().pop_front() {
+            *self.last.borrow_mut() = Some(next.clone());
+            return next;
+        }
+        self.last
+            .borrow()
+            .clone()
+            .expect("FakeSource was scripted with at least one snapshot")
+    }
+
+    fn required_checks(&self, _subject: &Subject) -> Result<RequiredChecks, ApiError> {
+        Ok(self.req.clone())
+    }
+
+    fn ejection_run(&self, _subject: &Subject) -> Result<Option<RunRef>, ApiError> {
+        Ok(self.ejection.clone())
     }
 }
