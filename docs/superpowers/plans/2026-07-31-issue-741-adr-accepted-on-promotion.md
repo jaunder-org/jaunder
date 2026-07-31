@@ -31,7 +31,7 @@ for `superseded`.
 - [x] 3. `NUMBERED_STATUS_VOCAB` replaces `STATUS_VOCAB`; the gate rejects
      `proposed`.
 - [x] 4. Pass B rewrites the status token; the summary reports the transition.
-- [ ] 5. Round-trip composition test + the promoted-README-row assertion.
+- [x] 5. Round-trip composition test + the promoted-README-row assertion.
 - [ ] 6. Update the docs the change falsifies.
 
 **Key risks / decisions.**

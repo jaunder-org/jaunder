@@ -578,6 +578,30 @@ mod tests {
     }
 
     #[test]
+    fn a_promoted_template_draft_passes_adr_format() {
+        // The composition test. The status rewrite and the `adr-format` gate are
+        // each green in isolation while disagreeing about which line is the status
+        // line, so only running them end-to-end proves they agree.
+        //
+        // Teeth: drop the `rewrite_status` call from Pass B and THIS fails — the
+        // promoted file is still `proposed`, which the gate rejects — where the
+        // unit tests would merely report their own narrower loss.
+        let tmp = promote_repo("round-trip");
+        write(
+            &tmp,
+            "docs/adr/drafts/d.md",
+            "# ADR-DRAFT: D\n\n- Status: proposed\n- Date: 2026-07-31\n",
+        );
+        run_promote(&tmp).unwrap();
+        let problems = crate::adr_readme::format_problems(&tmp);
+        assert!(
+            problems.is_empty(),
+            "promoted tree must be clean: {problems:?}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
     fn promote_sets_accepted_on_a_proposed_draft() {
         let tmp = promote_repo("status-proposed");
         write(
@@ -902,6 +926,14 @@ mod tests {
             "readme: {readme}"
         );
         assert!(readme.contains("| My Decision |"), "seeded title");
+        // The generated status cell reflects the acceptance the promotion just
+        // recorded. This is the only coverage of a *newly promoted* ADR's README
+        // status cell — `promote_repo` writes no README, so the round-trip test
+        // takes promote's markerless branch and never renders a row at all.
+        assert!(
+            readme.contains("| My Decision | accepted |"),
+            "readme: {readme}"
+        );
 
         // The graduated file and the README are staged, ready to commit.
         let staged = git_stdout(&tmp, &["diff", "--cached", "--name-only"]);
