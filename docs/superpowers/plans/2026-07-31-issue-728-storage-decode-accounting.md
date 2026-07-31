@@ -464,6 +464,18 @@ other.
 3. **`is_approved(ty)`** replaces `is_i64_family`: walk to leaves, require every
    leaf approved. Recurse `Path` generics, `Tuple`, `Reference`, `Paren`,
    `Group`, **`Slice`, `Array`** (the last two are today's gap).
+   - **`Result<T, E>` recurses into `T` only** — the error arm is never decoded,
+     so `BackupError`/`SmtpConfigError` must not be asked to be column types.
+     T11 hit this on every fn-return site.
+   - **Composite delegation (spec D1).** A named `#[derive(FromRow)]` struct or
+     tuple alias **declared under a policed root** is approved — its fields and
+     elements are separately policed by `visit_item_struct`/`visit_item_type`,
+     so this is a second population, not a promise. Without it `PostRow` alone
+     costs 21 entries (T11). A composite declared **outside** the roots has had
+     no field checked, so it fails. Requires a second declaration scan
+     collecting `FromRow` struct and tuple-alias idents per root — separate from
+     the bridge-derive scan, since these are approved for a different reason.
+   - Inline tuples need no delegation; leaf recursion already walks them.
 4. **`APPROVED_FOREIGN`** — `&[(&str, &str)]` of (ident, reason), from T11's
    inventory.
 5. **`ALLOWLIST`** — one entry per remaining site. Reasons that must be
@@ -483,6 +495,14 @@ other.
 `String`, `bool`, `i64`, `Uuid`, `NaiveDate` each fail with no special-casing;
 `&[u8]` and `[u8; 32]` are reached; `Vec<(String, Option<PostId>)>` fails on its
 `String` leaf while `Vec<(Slug, Option<PostId>)>` passes.
+
+Delegation (A1c) needs its own three, because a wrong delegation is a silent
+hole rather than noise:
+
+- a `FromRow` struct declared in-root is approved as a target **while a `String`
+  field of it still fails** — proving delegation delegates rather than excuses;
+- the same struct declared **outside** the roots fails as unrecognised;
+- `Result<T, E>` with an unapproved `E` and an approved `T` passes.
 
 **Run:**
 `cargo nextest run --manifest-path xtask/Cargo.toml sqlx_newtype_decode` → PASS,

@@ -131,6 +131,38 @@ Recursion to reach leaves goes through `Vec`/`Option`/`Result`/references/tuples
 targets would slip through. No such decode exists today; closed now rather than
 inherited.
 
+**`Result<T, E>` recurses into `T` only.** The error arm is never decoded from a
+column, so demanding `BackupError` or `SmtpConfigError` be an approved column
+type would be nonsense. The T11 inventory hit this on every fn-return site.
+
+#### Composite targets are approved by delegation, not by being leaves
+
+**A named composite whose parts this gate already polices is approved.** That is
+a `#[derive(sqlx::FromRow)]` struct or a tuple `type` alias — `PostRow`,
+`CacheTuple`, `SessionRow`, `UserRow`, `InviteRow`, `MediaRow`,
+`FeedEventRecord` after D4.
+
+This is a **correction**, not a relaxation. The first draft of this rule said
+"every _leaf_ type must be approved" and treated these as leaves, which the T11
+inventory showed produces ~35 meaningless entries — 21 for `PostRow` alone —
+drowning the ~36 real ones in the artifact whose only value is that a human
+reads it.
+
+Delegation is safe because it is not a promise, it is a **second policed
+population**: `visit_item_struct` and `visit_item_type` already check every
+field of a `FromRow` struct and every element of a tuple alias, at the
+declaration, which is where the newtype belongs. `PostRow` is approved _because_
+its twelve fields were each checked, not instead of.
+
+**The delegation only holds where the check does.** A composite is approved this
+way **only if it is declared under a root this gate polices**. One declared
+elsewhere — another crate, a dependency — has had no field checked, so approving
+it would be an unbacked promise: it is unrecognised, and fails. Same fail-closed
+discipline as everything else here.
+
+Inline tuples (`Vec<(String, Option<AudienceId>)>`) need no delegation — leaf
+recursion already walks into their elements. Only _named_ composites do.
+
 #### Accepted residual, stated honestly
 
 Type identity cannot catch **adjacent same-typed columns**. `DateTime<Utc>` is
@@ -420,27 +452,33 @@ rule, not to a list of sites, and no acceptance criterion is phrased as a count.
    type declared with each of the four derives is approved; a decode into an
    undeclared type fails; `String`, `bool`, `i64`, `Uuid` and `NaiveDate` all
    fail with no special-casing.
-2. **A1a — Self-check.** The gate fails with one clear message if its list of
+2. **A1c — Composite delegation.** A `#[derive(FromRow)]` struct or tuple alias
+   declared under a policed root is approved, and its fields/elements are still
+   individually policed — proven by a test where the composite passes while a
+   `String` field of it fails. A composite declared **outside** the policed
+   roots fails, since no field of it was checked. `Result<T, E>` recurses into
+   `T` only, so an unapproved error type does not fail the decode.
+3. **A1a — Self-check.** The gate fails with one clear message if its list of
    bridge-emitting derives does not match the derives in `macros/` that call
    `sqlx_bridge::bridge()`. Unit-tested by feeding a mismatched pair.
-3. **A1b — Leaf recursion.** `&[u8]` and `[u8; 32]` targets are reached
+4. **A1b — Leaf recursion.** `&[u8]` and `[u8; 32]` targets are reached
    (`Type::Slice`/`Type::Array`), unit-tested.
-4. **A2 — Field position.** A `.get`/`try_get` in struct-literal field position
+5. **A2 — Field position.** A `.get`/`try_get` in struct-literal field position
    with no turbofish fails with a message naming the fix; the peel set is
    unit-tested (`?`, `.await`, parens bite; `.unwrap()` does not).
    `struct_literal_row_get_is_not_collected` is deleted along with the
    module-doc claim it encoded.
-5. **A3 — Accounting.** `cargo xtask check` is green, and every decode the gate
+6. **A3 — Accounting.** `cargo xtask check` is green, and every decode the gate
    can read is either approved or named by an allowlist entry, verified by the
    staleness check plus the new duplicate-key check. _Not_ claimed: coverage of
    the unreadable classes, which are excluded by construction and stated in the
    module doc.
-6. **A4 — `posts.rs:1685`.** `feed_urls_needing_catchup` decodes `feed_url` as
+7. **A4 — `posts.rs:1685`.** `feed_urls_needing_catchup` decodes `feed_url` as
    `FeedPath` (per-row, per D9); the `FeedPath::canonical` rebuild is gone; the
    `common::feed::parse` re-parse is replaced by D7's accessor. A test proves
    one unparseable row is skipped and the scan still returns the other feeds —
    the D9 no-wedge property.
-7. **A5 — `FeedEventStatus`.** Lives in `common/src/feed/`, carries the ADR-0075
+8. **A5 — `FeedEventStatus`.** Lives in `common/src/feed/`, carries the ADR-0075
    strum stack and `#[derive(macros::TextEnum)]`; `server/src/feed/worker.rs`'s
    import is updated (or `storage` re-exports). `parse_status` and
    `parse_status_handles_all_statuses` are gone, replaced by a
@@ -448,22 +486,22 @@ rule, not to a list of sites, and no acceptance criterion is phrased as a count.
    with `#[sqlx(rename = "feed_url")]`; neither `postgres/feed_events.rs` nor
    `sqlite/feed_events.rs` contains a `.get`/`try_get` (the `try_get("id")`
    **moves into** `ClaimedRow`'s impl — it does not disappear).
-8. **A6 — Corrupt-row behaviour preserved exactly.**
+9. **A6 — Corrupt-row behaviour preserved exactly.**
    `claim_purges_rows_with_unparseable_feed_url` passes unchanged. A new test
    proves a derive failure on a **non**-`feed_url` column propagates as an error
    and does **not** delete the row — the D4 narrow-purge property.
-9. **A7 — `TargetKind`.** `get_post_audiences` decodes `tk.name` as
-   `TargetKind`, so an unrecognised kind is a decode error rather than a
-   silently shortened result; `visibility.rs`'s comment is updated. **The mapper
-   is not simply deleted**: `audience_target_from_row` (`posts.rs:1859-1866`)
-   drops a row for _two_ reasons — an unrecognised kind **and** a `named` kind
-   whose `audience_id` is NULL. Only the first is this issue's business; the
-   NULL case keeps its current behaviour and its existing assertion
-   (`posts.rs:2305`).
-10. **A8 — Categories.** `Allowed` carries `category` and the footer groups by
+10. **A7 — `TargetKind`.** `get_post_audiences` decodes `tk.name` as
+    `TargetKind`, so an unrecognised kind is a decode error rather than a
+    silently shortened result; `visibility.rs`'s comment is updated. **The
+    mapper is not simply deleted**: `audience_target_from_row`
+    (`posts.rs:1859-1866`) drops a row for _two_ reasons — an unrecognised kind
+    **and** a `named` kind whose `audience_id` is NULL. Only the first is this
+    issue's business; the NULL case keeps its current behaviour and its existing
+    assertion (`posts.rs:2305`).
+11. **A8 — Categories.** `Allowed` carries `category` and the footer groups by
     it. Proven behaviourally: two entries identical but for `category` produce
     identical match and count results.
-11. **A9 — The gate bites on a reverted fix.** Each a _named one-line revert_,
+12. **A9 — The gate bites on a reverted fix.** Each a _named one-line revert_,
     with the four observed failure messages recorded in the commit message
     (durable in the repo), not only the PR body:
     - A4: retype the per-row `try_get` to `::<String, _>`
@@ -471,17 +509,17 @@ rule, not to a list of sites, and no acceptance criterion is phrased as a count.
       turbofish no longer exists — the mapper it lived in is deleted by D4)
     - A7: retype the `rows` `let` to `Vec<(String, Option<AudienceId>)>`
     - A2: drop one `ColumnInfo` turbofish
-12. **A10 — ADR-0085 amended** per D8, including the re-stated surviving
+13. **A10 — ADR-0085 amended** per D8, including the re-stated surviving
     unreadable classes.
-13. **A11 — Follow-ups filed.** (a) a `SubscriberRef` newtype issue, referenced
+14. **A11 — Follow-ups filed.** (a) a `SubscriberRef` newtype issue, referenced
     by the `subscriptions.rs` entry's reason; (b) an issue for the adjacent
     same-typed column transposition class of D1, referenced from the ADR
     amendment.
-14. **A12 — Verdicts for the issue's named sites.** Each string target #728
+15. **A12 — Verdicts for the issue's named sites.** Each string target #728
     lists carries an entry or a fix, explicitly including `helpers.rs`
     `SessionRow` position 4 (the deliberate lossy `SessionLabel`, category
     `deliberate-lossy`).
-15. **A13 — Coverage.** The coverage gate is green. `ClaimedRow`'s error arms
+16. **A13 — Coverage.** The coverage gate is green. `ClaimedRow`'s error arms
     are reachable from A6's tests; anything genuinely unreachable carries a
     `cov:ignore` with a written reason.
 
