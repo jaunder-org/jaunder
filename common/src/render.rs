@@ -99,7 +99,7 @@ crate::db_enum::impl_text_column_enum!(PostFormat);
 /// // no inbound `From<String>` (only the outbound `From<RenderedHtml> for String`)
 /// let _: common::render::RenderedHtml = "<p>x</p>".to_string().into();
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, macros::SqlxBridge)]
 pub struct RenderedHtml(String);
 
 impl RenderedHtml {
@@ -193,12 +193,22 @@ impl PartialEq<&str> for RenderedHtml {
     }
 }
 
+// ## Storage: why the decode does not sanitize
+//
+// The bridge itself is `#[derive(SqlxBridge)]` on the type above (#746) — the shared
+// codegen every stored newtype and enum uses. The reasoning below is why this type may
+// use a *plain* bridge at all, and is the thing to re-read before changing that.
+//
 // Write-side sqlx bridge (#502): `RenderedHtml` is a first-class TEXT bind parameter,
 // delegating to the inner `String` — so storage binds it directly (`.bind(&rendered_html)`)
-// rather than via an `.as_ref()` str-strip.
+// rather than via an `.as_ref()` str-strip. `Type::compatible` delegates to `String`'s
+// rather than taking the trait default, which would accept only the exact `type_info` and
+// reject an equally-valid `VARCHAR` column; the shared bridge does this for every caller.
 //
 // `Decode` (#445) constructs the private field directly — it needs neither door, since
-// this impl lives in the same module as the type. So the `rendered_html` column decodes
+// the derive expands in the same module as the type. Neither door is involved: this is not
+// new outside data (so not `sanitize`), and routing it through `from_trusted` would put a
+// gate-policed door on a path the gate cannot inspect. So the `rendered_html` column decodes
 // straight into `RenderedHtml`, like every other domain column (#438/#572), and
 // `build_post_record` no longer rebuilds via `from_trusted`.
 //
@@ -219,54 +229,6 @@ impl PartialEq<&str> for RenderedHtml {
 // against a write path that forgot to sanitize — which the gate already catches — at the
 // cost of an html5ever parse on every post read, forever. Revisit only if an instance ever
 // accumulates rows written by a pre-#445 build.
-#[cfg(feature = "sqlx")]
-const _: () = {
-    impl<DB: sqlx::Database> sqlx::Type<DB> for RenderedHtml
-    where
-        String: sqlx::Type<DB>,
-    {
-        fn type_info() -> <DB as sqlx::Database>::TypeInfo {
-            <String as sqlx::Type<DB>>::type_info()
-        }
-        // Delegated like every other newtype bridge (#438/#572). Previously omitted
-        // because `compatible` is consulted only on the decode path, which did not
-        // exist; the trait default would accept only the exact `type_info`, rejecting
-        // an equally-valid `VARCHAR` column.
-        fn compatible(ty: &<DB as sqlx::Database>::TypeInfo) -> bool {
-            <String as sqlx::Type<DB>>::compatible(ty)
-        }
-    }
-
-    impl<'r, DB: sqlx::Database> sqlx::Decode<'r, DB> for RenderedHtml
-    where
-        String: sqlx::Decode<'r, DB>,
-    {
-        fn decode(
-            value: <DB as sqlx::Database>::ValueRef<'r>,
-        ) -> Result<Self, sqlx::error::BoxDynError> {
-            // `Self(..)` — the private constructor, reachable because this impl lives
-            // in the type's own module. Neither door is involved: this is not new
-            // outside data (so not `sanitize`), and routing it through `from_trusted`
-            // would put a gate-policed door on a path the gate cannot inspect.
-            <String as sqlx::Decode<'r, DB>>::decode(value).map(Self)
-        }
-    }
-
-    impl<'q, DB: sqlx::Database> sqlx::Encode<'q, DB> for RenderedHtml
-    where
-        String: sqlx::Encode<'q, DB>,
-    {
-        fn encode_by_ref(
-            &self,
-            buf: &mut <DB as sqlx::Database>::ArgumentBuffer<'q>,
-        ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
-            <String as sqlx::Encode<'q, DB>>::encode_by_ref(&self.0, buf)
-        }
-        fn size_hint(&self) -> usize {
-            <String as sqlx::Encode<'q, DB>>::size_hint(&self.0)
-        }
-    }
-};
 
 // ---------------------------------------------------------------------------
 // Pure rendering, and the media references in its output (#711)

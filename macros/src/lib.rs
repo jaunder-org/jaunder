@@ -9,6 +9,7 @@ mod id_newtype;
 mod num_newtype;
 mod server_fn;
 mod sqlx_bridge;
+mod sqlx_bridge_derive;
 mod str_newtype;
 
 /// Derives the ADR-0063 **string-newtype trailer** for a `struct X(String)`: `Display`,
@@ -272,6 +273,26 @@ pub fn server(args: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 // cov:ignore-stop
+
+/// Emits **only** the `sqlx` storage bridge (`Type`/`Encode`/`Decode`) for a
+/// `struct X(Inner)` — no trailer, no serde, no constructor. For a type that is stored as
+/// its inner but whose construction is deliberately not the derive's business.
+///
+/// # The generated `Decode` is an inbound door that re-establishes no invariant
+///
+/// It wraps whatever the column holds, straight into `Self(..)`, with no validation and no
+/// normalization. That is correct only for a type whose invariant is *inherited* from the
+/// fact that we wrote the row ourselves. A type whose invariant must hold for arbitrary
+/// bytes — anything reachable from outside — must either establish it on the way in through
+/// its own door, or not use this derive.
+///
+/// `RenderedHtml` (`common/src/render.rs`) is the motivating case, and its module documents
+/// exactly why a sanitizing decode was rejected there and when to revisit that.
+#[proc_macro_derive(SqlxBridge)]
+pub fn sqlx_bridge_derive(item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as DeriveInput);
+    sqlx_bridge_derive::expand(&input).into()
+}
 
 /// Validates that `input` is a **non-generic** single-field tuple struct (`struct X(T)`) —
 /// the shape both newtype derives require — returning a spanned error (rendered as
