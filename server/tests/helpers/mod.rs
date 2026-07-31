@@ -58,11 +58,11 @@ pub fn ensure_server_fns_registered() {
         server_fn::axum::register_explicit::<web::posts::Update>();
         server_fn::axum::register_explicit::<web::posts::ListDrafts>();
         server_fn::axum::register_explicit::<web::posts::Publish>();
-        server_fn::axum::register_explicit::<web::posts::ListByUser>();
-        server_fn::axum::register_explicit::<web::posts::ListLocalTimeline>();
-        server_fn::axum::register_explicit::<web::posts::ListHomeFeed>();
-        server_fn::axum::register_explicit::<web::posts::ListByTag>();
-        server_fn::axum::register_explicit::<web::posts::ListByUserAndTag>();
+        server_fn::axum::register_explicit::<web::timeline::ListByUser>();
+        server_fn::axum::register_explicit::<web::timeline::ListLocalTimeline>();
+        server_fn::axum::register_explicit::<web::timeline::ListHomeFeed>();
+        server_fn::axum::register_explicit::<web::timeline::ListByTag>();
+        server_fn::axum::register_explicit::<web::timeline::ListByUserAndTag>();
         server_fn::axum::register_explicit::<web::posts::Delete>();
         server_fn::axum::register_explicit::<web::posts::Unpublish>();
         server_fn::axum::register_explicit::<web::posts::GetDefaultAudienceSelection>();

@@ -39,9 +39,9 @@ use crate::soft_path::SoftPath;
 use std::sync::Arc;
 use storage::{fetch_post_record, PostStorage, UserStorage};
 use web::app::{render_head, render_shell, PREPAINT_SCRIPT};
-use web::posts::{
+use web::posts::post_response;
+use web::timeline::{
     fetch_local_timeline, fetch_posts_by_tag, fetch_user_posts, fetch_user_posts_by_tag,
-    post_response,
 };
 
 /// The static SPA shell (`index.html`) the projector falls back to when a public

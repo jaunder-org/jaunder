@@ -1,18 +1,13 @@
 //! Posts wire types and `#[server]` endpoints (ADR-0070, amended #530).
 //!
 //! The single-post lifecycle DTOs and their `#[server]` fns live here; the
-//! timeline/listing surface is in the [`listing`] submodule and re-exported.
+//! cursor-paginated listing surface is its own vertical (`crate::timeline`).
 //! `posts/mod.rs` is wiring only and re-exports these under the stable
 //! `crate::posts::…` paths that external call sites and the server-fn registrar
 //! depend on.
 
 use leptos::server_fn::codec::Json;
 use serde::{Deserialize, Serialize};
-
-/// Timeline/listing endpoints, split out from the single-post lifecycle below.
-/// Re-exported so `crate::posts::list_*` keep resolving.
-mod listing;
-pub use listing::*;
 
 use common::{
     ids::PostId,

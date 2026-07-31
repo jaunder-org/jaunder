@@ -2,10 +2,10 @@
 //!
 //! This module is **wiring only**: module declarations and re-exports, no items
 //! of its own. The single-post lifecycle `#[server]` endpoints and wire types
-//! live in [`api`] (with the timeline/listing surface in its `listing`
-//! submodule); host-only marshalling for the `#[server]` bodies lives in the
-//! `server` leaf. Re-exports keep the stable `crate::posts::…` paths external
-//! call sites and the server-fn registrar depend on.
+//! live in [`api`]; host-only marshalling for the `#[server]` bodies lives in
+//! the `server` leaf. The cursor-paginated listing surface is its own vertical
+//! (`crate::timeline`). Re-exports keep the stable `crate::posts::…` paths
+//! external call sites and the server-fn registrar depend on.
 
 mod api;
 
@@ -50,27 +50,18 @@ pub use page_state::{
 // registrar keep the stable `crate::posts::…` paths despite living in `api.rs`.
 pub use api::{
     create, delete, get, get_audience_selection, get_default_audience_selection, get_preview,
-    list_by_tag, list_by_user, list_by_user_and_tag, list_drafts, list_home_feed,
-    list_local_timeline, publish, unpublish, update, Create, CreateArgs, CreateResult, Delete,
-    DraftSummary, Get, GetAudienceSelection, GetDefaultAudienceSelection, GetPreview, ListByTag,
-    ListByUser, ListByUserAndTag, ListDrafts, ListHomeFeed, ListLocalTimeline, Publish,
-    PublishResult, Unpublish, Update, UpdateArgs, UpdateResult,
-};
-
-// Server-only shared fetch helpers, consumed by the `server` crate's public
-// projector (one query, no drift). Re-exported from `api` (their home is its
-// `listing` submodule).
-#[cfg(feature = "server")]
-pub use api::{
-    fetch_local_timeline, fetch_posts_by_tag, fetch_user_posts, fetch_user_posts_by_tag,
+    list_drafts, publish, unpublish, update, Create, CreateArgs, CreateResult, Delete,
+    DraftSummary, Get, GetAudienceSelection, GetDefaultAudienceSelection, GetPreview, ListDrafts,
+    Publish, PublishResult, Unpublish, Update, UpdateArgs, UpdateResult,
 };
 
 // Re-exported for the `server` crate's public projector, which maps the fetched
-// record the same way this vertical does (one projection, no drift). `post_response`
-// is a wire-type builder that stays in `web`; the projector imports the effectful
-// `fetch_post_record` straight from `storage`.
+// record the same way this vertical does (one projection, no drift), and for
+// `crate::timeline`, whose listing queries project their rows through the same
+// summary builder. `post_response` is a wire-type builder that stays in `web`;
+// the projector imports the effectful `fetch_post_record` straight from `storage`.
 #[cfg(feature = "server")]
-pub use server::post_response;
+pub use server::{post_response, timeline_post_summary};
 
 // The wasm-only reactive UI (ADR-0070): the post widgets and the routed page
 // components (moved from `pages/`, #323). Re-exported so the `pages/` router keeps
