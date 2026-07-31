@@ -3,6 +3,9 @@
 - Status: proposed
 - Date: 2026-07-12
 - Issue: [#414](https://github.com/jaunder-org/jaunder/issues/414)
+- Note: amended 2026-07-30 (#568) — the coverage boundary is re-pointed at
+  ADR-0070 (the widgets are wasm-only and never host-compile), and
+  `<ValidatedTextarea<T>>` joins `<ValidatedInput<T>>` as a default renderer
 
 ## Context
 
@@ -54,14 +57,19 @@ pre-validation using the same newtype `FromStr` — never a re-implemented rule.
   `field.parsed() -> Option<T>`. Because empty is valid, `is_valid()` leaves
   submit **enabled** for a blank optional field while still gating a non-empty
   invalid entry. First adopter: `slug_override` (#408).
-- **Rendering: component or direct bind.** The `<ValidatedInput<T>>` component
-  is the default renderer for a standard labelled field (and for `ActionForm`
-  name/value submission). A form with a bespoke layout or a programmatic
-  `.dispatch(...)` (e.g. the post compose/edit forms) may bind the same
-  `Field<T>` **directly** to its own `<input>` — `prop:value=field.value`, an
-  `on:input` that sets `field.error = field.error_for(&v)`, `on:blur` →
-  `field.touch()`, and the touched-gated inline error — keeping the single
-  validation source without the component's fixed markup.
+- **Rendering: component or direct bind.** _Amended by #568._ The
+  `<ValidatedInput<T>>` and `<ValidatedTextarea<T>>` components are the default
+  renderers for a standard labelled field (and for `ActionForm` name/value
+  submission); both share one private `Labelled` chrome. A form with a bespoke
+  layout or a programmatic `.dispatch(...)` may bind the same `Field<T>`
+  **directly** to its own `<input>` — `prop:value=field.value`, an `on:input`
+  that sets `field.error = field.error_for(&v)`, `on:blur` → `field.touch()`,
+  and the touched-gated inline error — keeping the single validation source
+  without the component's fixed markup. The canonical direct-bind example is now
+  the backup destination field (`web/src/backup/component.rs`), which needs a
+  placeholder and bespoke classes the shared components cannot yet express
+  (#450); the post compose/edit forms, which this bullet previously cited, moved
+  onto the shared components in #568.
 - **Defense-in-depth.** The typed-arg `Deserialize` still validates server-side;
   because legitimate clients pre-validate, the generic-`ServerFunction`-error
   path is only reachable by a malformed/malicious request.
@@ -69,12 +77,17 @@ pre-validation using the same newtype `FromStr` — never a re-implemented rule.
   (ADR-0063), so it **cannot** be a typed wire arg; its arg stays `String`
   (parsed on entry) but it still gets client-side pre-validation via its
   `FromStr`.
-- **Coverage boundary (ADR-0056, superseding 0055 — no `target_arch` gating).**
-  `field_error<T>` host-compiles and is coverage-measured (host-tested).
-  `<ValidatedInput<T>>` is a `#[component]`, host-compiling as dead-but-exempt
-  (ADR-0050 syntactic exemption). `Field<T>`'s methods are **signal-only** (they
-  build no `Effect`/`Resource`), so — like `Invalidator::{new, notify, track}` —
-  they are **host-tested under an `Owner`**, coverage-measured, _not_
+- **Coverage boundary (ADR-0070 — web verticals split host/wasm at the file
+  level).** _Amended by #568._ This bullet previously cited ADR-0056 and claimed
+  `<ValidatedInput<T>>` host-compiles as dead-but-exempt; ADR-0056 is superseded
+  by ADR-0070 and the code follows ADR-0070. `field_error<T>` host-compiles and
+  is coverage-measured (host-tested). The widgets — `<ValidatedInput<T>>`,
+  `<ValidatedTextarea<T>>`, and the shared `Labelled` chrome — live in a
+  `#[cfg(target_arch = "wasm32")]`-gated `forms/component.rs` and **never
+  host-compile**, so they carry no coverage obligation and need no exemption
+  marker. `Field<T>`'s methods are **signal-only** (they build no
+  `Effect`/`Resource`), so — like `Invalidator::{new, notify, track}` — they are
+  **host-tested under an `Owner`**, coverage-measured, _not_
   `#[client_only]`-exempted; the marker is reserved for genuinely
   `Effect`/`Resource`-building helpers. The component's rendering/interaction is
   exercised via e2e.

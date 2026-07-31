@@ -732,7 +732,7 @@ changes.
 Run: `devtool run -- cargo xtask e2e-local profile.spec.ts` Expected: PASS — in
 particular `:127` "default post format round-trips through the typed dispatch".
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit** — `67d507e9`
 
 ```bash
 git add web/src/profile/component.rs
@@ -749,7 +749,7 @@ git commit -m "style(web/profile): give the default-format control the standard 
 
 **Interfaces:** none.
 
-- [ ] **Step 1: Correct the coverage-boundary bullet (`:72-80`)**
+- [x] **Step 1: Correct the coverage-boundary bullet (`:72-80`)**
 
 The bullet is headed "(ADR-0056, superseding 0055 — no `target_arch` gating)"
 and claims `<ValidatedInput<T>>` "host-compil[es] as dead-but-exempt".
@@ -766,7 +766,7 @@ so they carry no coverage obligation and need no exemption marker; their
 rendering and interaction are exercised via e2e. Leave the `field_error<T>` and
 `Field<T>` sentences untouched — both are still host-compiled and host-tested.
 
-- [ ] **Step 2: Refresh the direct-bind example (`:57-64`)**
+- [x] **Step 2: Refresh the direct-bind example (`:57-64`)**
 
 The bullet cites "the post compose/edit forms" as the canonical direct-bind site
 — precisely what this issue converts. Replace that parenthetical with a site
@@ -776,7 +776,7 @@ that is still direct-bind after this work: the backup destination field
 sites #450 covers. Add `<ValidatedTextarea<T>>` alongside `<ValidatedInput<T>>`
 as a default renderer in the first sentence.
 
-- [ ] **Step 3: Prettier the prose before staging**
+- [x] **Step 3: Prettier the prose before staging**
 
 Run: `devtool run -- prettier -w docs/adr/0065-client-side-domain-validation.md`
 Expected: PASS.
