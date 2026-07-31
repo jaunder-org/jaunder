@@ -2,7 +2,7 @@
 
 - Issue: [#741](https://github.com/jaunder-org/jaunder/issues/741)
 - Milestone: none
-- Governing ADR: `docs/adr/drafts/promotion-is-the-acceptance-event.md`
+- Governing ADR: `docs/adr/0088-promotion-is-the-acceptance-event.md`
   (authored by this issue; numbered at ship)
 - Related: [#742](https://github.com/jaunder-org/jaunder/issues/742) (relocates
   promotion to merge; blocked by this)
