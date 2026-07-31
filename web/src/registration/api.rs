@@ -16,7 +16,6 @@ use common::password::ProfferedPassword;
 use common::registration::RegistrationPolicy;
 use common::token::RawToken;
 use common::username::Username;
-use leptos::prelude::*;
 
 // One grouped `feature = "server"` support block for the `#[server]` bodies.
 // `set_session_cookie` is auth's — registration logs the freshly-created user in
@@ -29,6 +28,7 @@ use {
     common::password::Password,
     common::session_label::SessionLabel,
     host::invite::InviteCode,
+    leptos::prelude::*,
     std::sync::Arc,
     storage::{AtomicOps, SessionStorage, SiteConfigStorage, UserStorage},
     tracing::Instrument,
@@ -37,102 +37,96 @@ use {
 /// Returns the site's current registration policy — one of
 /// [`RegistrationPolicy::Open`], [`RegistrationPolicy::InviteOnly`], or
 /// [`RegistrationPolicy::Closed`].
-#[server(endpoint = "/registration/get_policy")]
-#[tracing::instrument(name = "web.registration.get_policy")]
+#[macros::server]
 pub async fn get_policy() -> WebResult<RegistrationPolicy> {
-    boundary!("get_policy", {
-        let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
-        let policy = site_config.get_registration_policy().await?;
-        Ok(policy)
-    })
+    let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
+    let policy = site_config.get_registration_policy().await?;
+    Ok(policy)
 }
 
 /// Registers a new user.  Returns the freshly minted session [`RawToken`] on
 /// success and sets the `session` cookie.
-#[server(endpoint = "/registration/register")]
-#[tracing::instrument(name = "web.registration.register", skip(password, invite_code))]
+#[macros::server(skip(password, invite_code))]
 pub async fn register(
     username: Username,
     password: ProfferedPassword,
     invite_code: Option<ProfferedInviteCode>,
 ) -> WebResult<RawToken> {
-    boundary!("register", {
-        let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
-        let users = expect_context::<Arc<dyn UserStorage>>();
-        let atomic = expect_context::<Arc<dyn AtomicOps>>();
-        let sessions = expect_context::<Arc<dyn SessionStorage>>();
-        // `username` / `password` arrive already validated: typed wire args whose
-        // serde bridge routes through their validating `FromStr` (a too-short
-        // password is rejected at deserialization), client-pre-validated via
-        // `<ValidatedInput<_>>` (ADR-0065). `ProfferedPassword` is the inbound-secret
-        // twin of the serde-free `Password` (ADR-0063); convert into it here.
-        let password = Password::try_from(password)?;
-        let policy = site_config
-            .get_registration_policy()
-            .instrument(tracing::info_span!(
-                "web.registration.register.get_registration_policy"
-            ))
-            .await?;
+    let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
+    let users = expect_context::<Arc<dyn UserStorage>>();
+    let atomic = expect_context::<Arc<dyn AtomicOps>>();
+    let sessions = expect_context::<Arc<dyn SessionStorage>>();
+    // `username` / `password` arrive already validated: typed wire args whose
+    // serde bridge routes through their validating `FromStr` (a too-short
+    // password is rejected at deserialization), client-pre-validated via
+    // `<ValidatedInput<_>>` (ADR-0065). `ProfferedPassword` is the inbound-secret
+    // twin of the serde-free `Password` (ADR-0063); convert into it here.
+    let password = Password::try_from(password)?;
+    let policy = site_config
+        .get_registration_policy()
+        .instrument(tracing::info_span!(
+            "web.registration.register.get_registration_policy"
+        ))
+        .await?;
 
-        let metric_policy = match &policy {
-            RegistrationPolicy::Open => host::metrics::RegistrationPolicy::Open,
-            RegistrationPolicy::InviteOnly => host::metrics::RegistrationPolicy::InviteOnly,
-            RegistrationPolicy::Closed => host::metrics::RegistrationPolicy::Closed,
-        };
-        let user_id_result: Result<UserId, InternalError> = match policy {
-            RegistrationPolicy::Open => users
-                .create_user(&username, &password, None, false)
-                .instrument(tracing::info_span!(
-                    "web.registration.register.create_user_open"
-                ))
-                .await
-                .map_err(Into::into),
-            RegistrationPolicy::InviteOnly => {
-                // The client sends `None` for a blank field; a present code arrives already
-                // shape-validated (deserialized through `ProfferedInviteCode`).
-                match invite_code {
-                    Some(proffered) => {
-                        let code = InviteCode::try_from(proffered)
-                            .map_err(|_| InternalError::validation("invalid invite code"))?;
-                        let result = atomic
-                            .create_user_with_invite(&username, &password, None, false, &code)
-                            .instrument(tracing::info_span!(
-                                "web.registration.register.create_user_invite"
-                            ))
-                            .await
-                            .map_err(Into::into);
-                        // A successful invite registration redeems the code.
-                        if result.is_ok() {
-                            host::metrics::invite(host::metrics::InviteEvent::Redeemed);
-                        }
-                        result
+    let metric_policy = match &policy {
+        RegistrationPolicy::Open => host::metrics::RegistrationPolicy::Open,
+        RegistrationPolicy::InviteOnly => host::metrics::RegistrationPolicy::InviteOnly,
+        RegistrationPolicy::Closed => host::metrics::RegistrationPolicy::Closed,
+    };
+    let user_id_result: Result<UserId, InternalError> = match policy {
+        RegistrationPolicy::Open => users
+            .create_user(&username, &password, None, false)
+            .instrument(tracing::info_span!(
+                "web.registration.register.create_user_open"
+            ))
+            .await
+            .map_err(Into::into),
+        RegistrationPolicy::InviteOnly => {
+            // The client sends `None` for a blank field; a present code arrives already
+            // shape-validated (deserialized through `ProfferedInviteCode`).
+            match invite_code {
+                Some(proffered) => {
+                    let code = InviteCode::try_from(proffered)
+                        .map_err(|_| InternalError::validation("invalid invite code"))?;
+                    let result = atomic
+                        .create_user_with_invite(&username, &password, None, false, &code)
+                        .instrument(tracing::info_span!(
+                            "web.registration.register.create_user_invite"
+                        ))
+                        .await
+                        .map_err(Into::into);
+                    // A successful invite registration redeems the code.
+                    if result.is_ok() {
+                        host::metrics::invite(host::metrics::InviteEvent::Redeemed);
                     }
-                    None => Err(InternalError::validation("invite code required")),
+                    result
                 }
+                None => Err(InternalError::validation("invite code required")),
             }
-            RegistrationPolicy::Closed => Err(InternalError::validation("registration is closed")),
-        };
-        host::metrics::registration(
-            host::metrics::RegistrationSource::Web,
-            metric_policy,
-            if user_id_result.is_ok() {
-                host::metrics::RegistrationResult::Ok
-            } else {
-                host::metrics::RegistrationResult::Rejected
-            },
-        );
-        let user_id = user_id_result?;
+        }
+        RegistrationPolicy::Closed => Err(InternalError::validation("registration is closed")),
+    };
+    host::metrics::registration(
+        host::metrics::RegistrationSource::Web,
+        metric_policy,
+        if user_id_result.is_ok() {
+            host::metrics::RegistrationResult::Ok
+        } else {
+            host::metrics::RegistrationResult::Rejected
+        },
+    );
+    let user_id = user_id_result?;
 
-        let signup_label = SessionLabel::from_lossy("Sign-up session");
-        let raw_token = sessions
-            .create_session(user_id, &signup_label)
-            .instrument(tracing::info_span!(
-                "web.registration.register.create_session"
-            ))
-            .await?;
+    let signup_label = SessionLabel::from_lossy("Sign-up session");
+    let raw_token = sessions
+        .create_session(user_id, &signup_label)
+        .instrument(tracing::info_span!(
+            "web.registration.register.create_session"
+        ))
+        .await?;
 
-        set_session_cookie(&raw_token);
-        leptos_axum::redirect("/");
-        Ok(raw_token)
-    })
+    set_session_cookie(&raw_token);
+    leptos_axum::redirect("/");
+    Ok(raw_token)
 }

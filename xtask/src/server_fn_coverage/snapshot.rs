@@ -106,33 +106,22 @@ pub fn verdict(
 
     for f in inventory {
         let qualified = f.qualified();
-        // Endpoint drift. The URI signal matches `/api/<endpoint>`, so the endpoint
-        // has to be derivable from the fn or that signal silently never fires.
+        // There is no endpoint-drift check here any more, and its absence is
+        // deliberate rather than an oversight.
         //
-        // Since #684 the scheme is `<vertical>/<ident>` — the vertical being the
-        // module's first segment, exactly as the derived span name uses it (see
-        // `extract::candidate_span_names`). `/api/` is one flat namespace under a
-        // single wildcard route, so the vertical is what keeps three verticals'
-        // `create` apart; a bare `<ident>` would collide.
+        // It used to compare each fn's *declared* `endpoint = "…"` against the
+        // derived `<vertical>/<ident>`, which was a real cross-check while an author
+        // wrote that literal by hand. Since #714 nothing declares it: the inventory
+        // computes `endpoint` with the very expression this check compared it to
+        // (`server_fns.rs`), so both arms — a missing endpoint, and a declared one
+        // that disagrees — became unreachable by construction. A comparison of a
+        // value against itself passes for the wrong reason, which is worse than no
+        // comparison at all.
         //
-        // A bare `#[server]` (no endpoint) still counts as drift: its generated path
-        // carries a `CARGO_MANIFEST_DIR`-derived hash suffix, so it is not
-        // `/api/<anything>` we can predict.
-        let expected = format!("{}/{}", f.vertical(), f.ident);
-        match f.endpoint.as_deref() {
-            None => out.push(format!(
-                "{qualified}: bare #[server] with no `endpoint = \"…\"` — its generated path \
-                 carries a hash suffix, so coverage cannot match it by URI; add \
-                 `endpoint = \"/{expected}\"`"
-            )),
-            Some(ep) if ep != expected => out.push(format!(
-                "{qualified}: declared endpoint `{ep}` does not match the derived `{expected}` — \
-                 intentional renames are fine, but update this gate's expectations deliberately \
-                 rather than by accident"
-            )),
-            Some(_) => {}
-        }
-
+        // What replaces it is `server_fn_coverage_check`'s seed cross-check, which
+        // compares the computed endpoint against URIs observed in a real captured
+        // run — ground truth produced by the macro's actual expansion, not a second
+        // restatement of the rule.
         let covered = snapshot.covered.contains_key(&qualified);
         let entry = allowed.get(qualified.as_str());
 
@@ -312,22 +301,12 @@ mod tests {
         assert!(v[0].contains("no longer needed"), "{}", v[0]);
     }
 
-    #[test]
-    fn endpoint_not_matching_fn_name_is_a_violation() {
-        let mut renamed = fnf("get_post");
-        renamed.endpoint = Some("fetch_post".into());
-        let v = verdict(&[renamed], &covered_with(&["get_post"]), &[]);
-        assert!(v.iter().any(|m| m.contains("get_post")), "{v:?}");
-    }
-
-    #[test]
-    fn bare_server_attr_without_endpoint_is_drift() {
-        let mut bare = fnf("thing");
-        bare.endpoint = None;
-        let v = verdict(&[bare], &covered_with(&["thing"]), &[]);
-        assert!(v.iter().any(|m| m.contains("thing")), "{v:?}");
-    }
-
+    /// The two endpoint-drift tests that stood here were deleted with the check
+    /// they covered (#714). They built a `ServerFn` by hand with a deliberately
+    /// wrong `endpoint`, which no enumeration can now produce — the inventory
+    /// derives that field. Keeping them would have meant asserting that a
+    /// hand-corrupted value is reported, while the real code path could not reach
+    /// the branch: a green test proving nothing about the tree.
     #[test]
     fn snapshot_entry_for_an_unknown_fn_is_stale() {
         let v = verdict(&inv(&["a"]), &covered_with(&["a", "ghost"]), &[]);

@@ -25,7 +25,10 @@ instead of duplicating project policy.
   splits into `mod.rs` (wiring/re-exports), `api.rs` (`#[server]` fns + wire
   types), optional `server.rs` (host-only support), and a wasm-only
   `component.rs` (`#[component]` UI); pure host-tested render twins live in an
-  extra leaf (`render.rs`) per ADR-0070
+  extra leaf (`render.rs`) per ADR-0070. **A vertical's `#[server]` fns live in
+  its `api.rs` and never in a submodule** — `#[macros::server]` derives the wire
+  endpoint and the span name from `(vertical, ident)` and hard-errors anywhere
+  else, which is what makes that pair a key **rustc** enforces (ADR-0082)
 
 ## Development setup
 
@@ -220,11 +223,14 @@ CI**. When `cargo xtask validate` is green, you may push.
 | `cargo xtask validate --no-e2e` | static (verify-only) + coverage — the pre-push gate (the `.githooks/pre-push` hook runs this)                                                   | never mutates |
 | `cargo xtask validate`          | + e2e (all four `{sqlite,postgres}×{chromium,firefox}` combos) — the full local gate                                                            | never mutates |
 
-`check` is the inner-loop fixer: it auto-fixes formatting and (in Fix mode)
-auto-heals the coverage baseline when a change only removes or covers gaps.
-`validate` is the strict, never-mutating gate. Both commands write a
-machine-readable result to `.xtask/last-result.json` and a `xtask-done:`
-completion line to stderr.
+`check` is the inner-loop fixer: it auto-fixes **formatting**, and nothing else.
+It has no coverage baseline to heal — the coverage gate is stateless (ADR-0050),
+as stated above — and since #714 no gate rewrites `web/src` either: the endpoint
+and span-name literals a gate used to write are now derived by
+`#[macros::server]`, so there is nothing left in source to correct. `validate`
+is the strict, never-mutating gate. Both commands write a machine-readable
+result to `.xtask/last-result.json` and a `xtask-done:` completion line to
+stderr.
 
 CI does **not** run `cargo xtask validate` as a single job. It runs
 `cargo xtask validate --no-e2e` (static + clippy + coverage) in one job, plus a
@@ -549,9 +555,12 @@ Two further properties are worth knowing before you fight the gate:
 - **The ratchet cannot loosen.** An allowlist entry for a fn the snapshot shows
   as **covered** is itself a failure, so entries must be deleted once a flow
   covers the fn rather than accumulating.
-- **Endpoint drift fails loudly.** A bare `#[server]` (no `endpoint = "…"`) is
-  rejected, because its generated path carries a hash suffix that the URI signal
-  can never match — as is an `endpoint` that does not equal the fn name.
+- **Endpoint drift is no longer writable.** `#[macros::server]` derives the
+  endpoint from the fn's file path and identifier (#714, ADR-0082), so there is
+  no bare `#[server]` to reject and no hand-written literal that can disagree
+  with the fn. The gate computes the same value the macro does, and the
+  committed seed capture is cross-checked against real captured traffic so the
+  two derivations cannot silently diverge.
 
 When a test needs a second browser context, use the `tracedContext` fixture,
 never `browser.newContext()`. The `traced-context` check enforces this: a raw
@@ -770,9 +779,13 @@ nix build .#checks.x86_64-linux.postgres-integration
 - Leptos components should only render data; business logic belongs in server
   functions or pure transformation functions.
 - API methods are automatically prefixed with `/api`.
-- Define `#[server]` functions in the relevant `web/src/*.rs` module, such as
-  `web/src/auth.rs`. Use `#[cfg(feature = "server")]` for server-only imports
-  and logic in those files.
+- Define `#[server]` functions in their vertical's `api.rs`
+  (`web/src/<vertical>/api.rs`, e.g. `web/src/auth/api.rs`) and declare them
+  `#[macros::server]` — spelled fully-qualified, never `use`d. It derives the
+  wire endpoint, the ADR-0011 span name, and the error-boundary wrap, and
+  hard-errors on any other file. Use a single grouped
+  `#[cfg(feature = "server")]` block for server-only imports; the bodies
+  themselves carry no cfgs.
 - Convert storage errors to `leptos::prelude::ServerFnError` using
   `.map_err(|e| ServerFnError::new(e.to_string()))`.
 - Use `require_auth().await?` at the start of any server function that requires

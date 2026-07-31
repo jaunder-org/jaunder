@@ -56,9 +56,9 @@ verified against the source rather than assumed:
 
 The #303 crate split, by contrast, moves _away_ from the canonical shape (three
 crates, not one) and carries irreducible build-wiring cost: leptos feature
-unification across crates, relocating the `#[server]` macro + `boundary!` +
-shared types, re-registering server fns, and re-pointing the projector / `csr` /
-cargo-flow / Nix / xtask.
+unification across crates, relocating the `#[server]` macro, the error boundary
+and the shared types, re-registering server fns, and re-pointing the projector /
+`csr` / cargo-flow / Nix / xtask.
 
 ## Decision
 

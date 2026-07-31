@@ -1,5 +1,5 @@
-//! The `server-fn-registrar` static check (#426): every `#[server]`-annotated fn
-//! in the `web` crate must be named in the test registrar
+//! The `server-fn-registrar` static check (#426): every `#[macros::server]`-annotated
+//! fn in the `web` crate must be named in the test registrar
 //! (`ensure_server_fns_registered()` in `server/tests/helpers/mod.rs`).
 //!
 //! The integration/router test binaries link `web`/`jaunder` as rlibs, where
@@ -12,12 +12,20 @@
 //!
 //! **Enumeration** is shared with the `server-fn-tracing` gate (#511) via
 //! [`crate::web_server_fns`]: it parses each `web/src/**/*.rs` with `syn` and
-//! collects free fns carrying a `#[server]` attribute. This gate then maps each fn
-//! ident to its generated type name (`PascalCase(ident)`). The repo uses only the
-//! `#[server(endpoint = "…")]` form, so that mapping is exact; an unexpected
-//! positional-rename form (`#[server(SomeName)]`) is a **hard error** rather than a
-//! silent mis-name. That judgment stays here rather than in the shared enumerator —
-//! it is about *this* gate's type-name mapping, and means nothing to the tracing gate.
+//! collects free fns carrying a `#[macros::server]` attribute. This gate then maps
+//! each fn ident to its generated type name (`PascalCase(ident)`). The macro never
+//! renames the generated type, so that mapping is exact; an unexpected
+//! positional-rename form (`#[macros::server(SomeName)]`) is a **hard error** rather
+//! than a silent mis-name. That judgment stays here rather than in the shared
+//! enumerator — it is about *this* gate's type-name mapping, and means nothing to
+//! the tracing gate.
+//!
+//! This gate also owns the **enumeration-count assertion**
+//! (`enumeration_of_web_src_matches_the_registrar`): the one test that reads the real
+//! `web/src` tree and asserts the enumeration is non-empty and agrees with the
+//! registrar. Every server-fn gate answers "no problems" on an empty enumeration, so
+//! a predicate that stopped matching would be a silent green across all of them —
+//! this is what makes that loud.
 //!
 //! **Matching is on `(vertical, leaf)`** (#684), where the vertical is the first
 //! path segment under `web/src` ([`crate::web_server_fns::vertical_of`]). The full
@@ -53,18 +61,18 @@ use crate::web_server_fns::{self, WEB_SRC};
 /// The single canonical registrar the enumerated fns must appear in.
 const REGISTRAR: &str = "server/tests/helpers/mod.rs";
 
-/// A `#[server]` fn discovered in a `web` source file: the generated type name
-/// (`PascalCase` of the fn ident) and the 1-based line of its `#[server]` attr.
+/// A `#[macros::server]` fn discovered in a `web` source file: the generated type
+/// name (`PascalCase` of the fn ident) and the 1-based line of its attribute.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ServerFn {
     name: String,
     line: usize,
 }
 
-/// Every `#[server]` fn in one source file, or an error describing why the file
-/// could not be enumerated. `Err` on a `syn` parse failure, or on the
-/// unsupported `#[server(SomeName)]` positional-rename form — both would let an
-/// unregistered fn slip through, so they fail the gate rather than pass silently.
+/// Every `#[macros::server]` fn in one source file, or an error describing why the
+/// file could not be enumerated. `Err` on a `syn` parse failure, or on the
+/// unsupported `#[macros::server(SomeName)]` positional-rename form — both would let
+/// an unregistered fn slip through, so they fail the gate rather than pass silently.
 ///
 /// A thin adapter over the shared [`web_server_fns::server_fns_in`]: the walk is
 /// common to both server-fn gates, the `PascalCase` type-name mapping is this
@@ -81,9 +89,9 @@ fn server_fns_in(src: &str) -> Result<Vec<ServerFn>, String> {
             }),
             Ok(false) => {
                 return Err(format!(
-                    "line {}: unsupported #[server(...)] form (a positional type rename?) — \
-                     the registrar gate assumes endpoint-only naming so the generated type is \
-                     PascalCase(fn); rename via `endpoint =` or extend the gate",
+                    "line {}: unsupported #[macros::server(...)] form (a positional type \
+                     rename?) — the registrar gate assumes the generated type is \
+                     PascalCase(fn), which the macro never renames; extend the gate",
                     f.line
                 ))
             }
@@ -93,20 +101,36 @@ fn server_fns_in(src: &str) -> Result<Vec<ServerFn>, String> {
     Ok(fns)
 }
 
-/// Whether a `#[server]` attribute leaves the generated type at its default name
-/// (`PascalCase(fn)`). True for the bare `#[server]` and for a list of only
-/// `key = value` arguments (`endpoint = "…"`, `input = Json`, …). A bare
-/// positional argument (`#[server(SomeName)]`) renames the type → `Ok(false)`;
-/// an argument list we cannot parse as `Meta` → `Err`. Both are hard errors at
-/// the call site.
+/// Whether a `#[macros::server]` attribute leaves the generated type at its default
+/// name (`PascalCase(fn)`). True for the bare attribute and for a list of only
+/// `key = value` arguments (`input = Json`, …) plus the span's `skip(...)` /
+/// `skip_all`. A bare positional argument (`#[macros::server(SomeName)]`) renames
+/// the type → `Ok(false)`; an argument list we cannot parse as `Meta` → `Err`. Both
+/// are hard errors at the call site.
+///
+/// The `skip`/`skip_all` arguments are filtered out before the test rather than
+/// exempted inside it: `skip(name)` is a `Meta::List` and `skip_all` a `Meta::Path`,
+/// the two shapes this test rejects as positional renames, but neither reaches
+/// `#[server]` at all. Filtering only those two leaves the detection intact, so
+/// `#[macros::server(SomeName)]` is still caught.
 fn server_fn_default_named(attr: &syn::Attribute) -> Result<bool, String> {
     match web_server_fns::server_attr_args(attr)? {
-        // The bare `#[server]` keeps the default name.
+        // The bare attribute keeps the default name.
         None => Ok(true),
         // Only `key = value` args (NameValue) keep it; a bare path arg is a
         // positional rename.
-        Some(args) => Ok(args.iter().all(|m| matches!(m, Meta::NameValue(_)))),
+        Some(args) => Ok(args
+            .iter()
+            .filter(|m| !routed_to_instrument(m))
+            .all(|m| matches!(m, Meta::NameValue(_)))),
     }
+}
+
+/// Whether `#[macros::server]` forwards this argument to `#[tracing::instrument]`
+/// rather than to `#[server]` (`macros/src/server_fn.rs`'s `route`). Those two say
+/// nothing about the generated type's name, so the naming test must not read them.
+fn routed_to_instrument(arg: &Meta) -> bool {
+    arg.path().is_ident("skip") || arg.path().is_ident("skip_all")
 }
 
 /// `snake_case` fn ident → `PascalCase` generated type name
@@ -323,6 +347,7 @@ pub fn run(result: &mut CommandResult) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::retired_server_fn;
 
     /// Wrap registrar statements in a fn so `syn::parse_file` accepts them — the
     /// real registrar's `register_explicit` calls live inside
@@ -333,7 +358,7 @@ mod tests {
 
     #[test]
     fn extracts_pascalcase_name_and_line() {
-        let src = "#[server(endpoint = \"/create_post\")]\npub async fn create_post() {}\n";
+        let src = "#[macros::server]\npub async fn create_post() {}\n";
         let fns = server_fns_in(src).unwrap();
         assert_eq!(fns.len(), 1);
         assert_eq!(fns[0].name, "CreatePost");
@@ -353,26 +378,78 @@ mod tests {
     }
 
     #[test]
-    fn bare_server_attr_uses_default_name() {
-        let src = "#[server]\npub async fn save() {}\n";
+    fn bare_attr_uses_default_name() {
+        let src = "#[macros::server]\npub async fn save() {}\n";
         assert_eq!(server_fns_in(src).unwrap()[0].name, "Save");
-    }
-
-    #[test]
-    fn endpoint_and_input_forms_are_accepted() {
-        let src = "#[server(endpoint = \"/x\", input = Json)]\npub async fn x() {}\n";
-        assert_eq!(server_fns_in(src).unwrap()[0].name, "X");
-    }
-
-    #[test]
-    fn positional_rename_form_is_a_hard_error() {
-        let src = "#[server(MyThing)]\npub async fn my_thing() {}\n";
-        assert!(server_fns_in(src).is_err());
     }
 
     #[test]
     fn syn_parse_failure_is_an_error() {
         assert!(server_fns_in("fn broken( {{{ not valid").is_err());
+    }
+
+    #[test]
+    fn the_retired_spelling_does_not_enumerate() {
+        // #714 narrowed the shared predicate to `#[macros::server]`. A fn still
+        // wearing leptos's `#[server]` yields no entries here — which is why
+        // `enumeration_of_web_src_matches_the_registrar` below exists: on its own,
+        // "no entries" is indistinguishable from "everything is registered".
+        let declared = retired_server_fn("(endpoint = \"/x\")", "pub async fn create_post() {}");
+        assert!(server_fns_in(&declared).unwrap().is_empty());
+        let bare = retired_server_fn("", "pub async fn save() {}");
+        assert!(server_fns_in(&bare).unwrap().is_empty());
+    }
+
+    #[test]
+    fn span_arguments_are_not_read_as_a_positional_rename() {
+        // `skip_all` is a `Meta::Path` and `skip(name)` a `Meta::List` — the two
+        // shapes the naming test rejects as positional renames. They belong to the
+        // span, not to `#[server]`, so the fn must still map to its default
+        // `PascalCase` type. `input = …` does reach `#[server]` and is accepted.
+        let all = "#[macros::server(skip_all)]\npub async fn create_post() {}\n";
+        assert_eq!(server_fns_in(all).unwrap()[0].name, "CreatePost");
+        let some = "#[macros::server(skip(name))]\npub async fn rename() {}\n";
+        assert_eq!(server_fns_in(some).unwrap()[0].name, "Rename");
+        let both = "#[macros::server(input = MultipartFormData, skip_all)]\n\
+                    pub async fn upload() {}\n";
+        assert_eq!(server_fns_in(both).unwrap()[0].name, "Upload");
+    }
+
+    #[test]
+    fn a_positional_rename_is_a_hard_error() {
+        // Filtering `skip`/`skip_all` out of the naming test must not switch the
+        // detection off — only those two are exempt.
+        let src = "#[macros::server(MyThing)]\npub async fn my_thing() {}\n";
+        assert!(server_fns_in(src).is_err());
+    }
+
+    #[test]
+    fn problems_is_none_for_registered_fns() {
+        let sources = vec![
+            (
+                "web/src/audiences/api.rs".to_string(),
+                "#[macros::server(skip(name))]\npub async fn rename() {}\n".to_string(),
+            ),
+            (
+                "web/src/posts/api.rs".to_string(),
+                "#[macros::server(skip_all)]\npub async fn create() {}\n".to_string(),
+            ),
+        ];
+        let registrar = wrap_reg(
+            "server_fn::axum::register_explicit::<web::audiences::Rename>();\n\
+             server_fn::axum::register_explicit::<web::posts::Create>();",
+        );
+        assert_eq!(problems(&sources, &registrar), None);
+    }
+
+    #[test]
+    fn an_unregistered_fn_is_flagged_by_its_vertical_qualified_type() {
+        let sources = vec![(
+            "web/src/audiences/api.rs".to_string(),
+            "#[macros::server(skip_all)]\npub async fn rename() {}\n".to_string(),
+        )];
+        let detail = problems(&sources, &wrap_reg("")).expect("unregistered is a problem");
+        assert!(detail.contains("`web::audiences::Rename`"), "{detail}");
     }
 
     /// The `(vertical, leaf)` pairs a registrar body registers, ignoring the
@@ -426,8 +503,7 @@ mod tests {
     fn problems_flags_an_unregistered_fn_by_name_and_path() {
         let sources = vec![(
             "web/src/media/mod.rs".to_string(),
-            "#[server(endpoint = \"/list_my_media\")]\npub async fn list_my_media() {}\n"
-                .to_string(),
+            "#[macros::server]\npub async fn list_my_media() {}\n".to_string(),
         )];
         let registrar = wrap_reg("server_fn::axum::register_explicit::<web::posts::CreatePost>();");
         let detail = problems(&sources, &registrar).expect("a problem");
@@ -439,7 +515,7 @@ mod tests {
     fn problems_is_none_when_registrar_covers_every_fn() {
         let sources = vec![(
             "web/src/posts/mod.rs".to_string(),
-            "#[server(endpoint = \"/create_post\")]\npub async fn create_post() {}\n".to_string(),
+            "#[macros::server]\npub async fn create_post() {}\n".to_string(),
         )];
         let registrar = wrap_reg("server_fn::axum::register_explicit::<web::posts::CreatePost>();");
         assert_eq!(problems(&sources, &registrar), None);
@@ -452,8 +528,7 @@ mod tests {
         // matches and the glob re-export needs no resolution.
         let sources = vec![(
             "web/src/posts/api/listing.rs".to_string(),
-            "#[server(endpoint = \"/list_home_feed\")]\npub async fn list_home_feed() {}\n"
-                .to_string(),
+            "#[macros::server]\npub async fn list_home_feed() {}\n".to_string(),
         )];
         let registrar =
             wrap_reg("server_fn::axum::register_explicit::<web::posts::ListHomeFeed>();");
@@ -464,7 +539,7 @@ mod tests {
     fn problems_surfaces_a_hard_error_with_the_file() {
         let sources = vec![(
             "web/src/posts/api.rs".to_string(),
-            "#[server(MyThing)]\npub async fn my_thing() {}\n".to_string(),
+            "#[macros::server(MyThing)]\npub async fn my_thing() {}\n".to_string(),
         )];
         let detail = problems(&sources, "").expect("a hard error is reported");
         assert!(detail.contains("web/src/posts/api.rs"));
@@ -479,12 +554,11 @@ mod tests {
         let sources = vec![
             (
                 "web/src/posts/api.rs".to_string(),
-                "#[server(endpoint = \"/posts/create\")]\npub async fn create() {}\n".to_string(),
+                "#[macros::server]\npub async fn create() {}\n".to_string(),
             ),
             (
                 "web/src/audiences/api.rs".to_string(),
-                "#[server(endpoint = \"/audiences/create\")]\npub async fn create() {}\n"
-                    .to_string(),
+                "#[macros::server]\npub async fn create() {}\n".to_string(),
             ),
         ];
         let registrar = wrap_reg(
@@ -499,12 +573,11 @@ mod tests {
         let sources = vec![
             (
                 "web/src/posts/api.rs".to_string(),
-                "#[server(endpoint = \"/posts/create\")]\npub async fn create() {}\n".to_string(),
+                "#[macros::server]\npub async fn create() {}\n".to_string(),
             ),
             (
                 "web/src/audiences/api.rs".to_string(),
-                "#[server(endpoint = \"/audiences/create\")]\npub async fn create() {}\n"
-                    .to_string(),
+                "#[macros::server]\npub async fn create() {}\n".to_string(),
             ),
         ];
         let registrar = wrap_reg("server_fn::axum::register_explicit::<web::audiences::Create>();");
@@ -529,12 +602,11 @@ mod tests {
         let sources = vec![
             (
                 "web/src/posts/api.rs".to_string(),
-                "#[server(endpoint = \"/posts/create\")]\npub async fn create() {}\n".to_string(),
+                "#[macros::server]\npub async fn create() {}\n".to_string(),
             ),
             (
                 "web/src/posts/api/listing.rs".to_string(),
-                "#[server(endpoint = \"/posts/create_other\")]\npub async fn create() {}\n"
-                    .to_string(),
+                "#[macros::server]\npub async fn create() {}\n".to_string(),
             ),
         ];
         let registrar = wrap_reg("server_fn::axum::register_explicit::<web::posts::Create>();");
@@ -550,7 +622,7 @@ mod tests {
     fn a_registrar_entry_that_is_not_web_vertical_leaf_is_reported_as_malformed() {
         let sources = vec![(
             "web/src/posts/api.rs".to_string(),
-            "#[server(endpoint = \"/posts/create\")]\npub async fn create() {}\n".to_string(),
+            "#[macros::server]\npub async fn create() {}\n".to_string(),
         )];
         // Four segments — `api` is a private module, so this path is not nameable.
         let registrar =
@@ -563,7 +635,7 @@ mod tests {
     fn a_two_segment_registrar_entry_is_reported_as_malformed() {
         let sources = vec![(
             "web/src/posts/api.rs".to_string(),
-            "#[server(endpoint = \"/posts/create\")]\npub async fn create() {}\n".to_string(),
+            "#[macros::server]\npub async fn create() {}\n".to_string(),
         )];
         let registrar = wrap_reg("server_fn::axum::register_explicit::<posts::Create>();");
         let detail = problems(&sources, &registrar).expect("malformed entry is reported");
@@ -574,10 +646,60 @@ mod tests {
     fn a_server_fn_directly_under_web_src_is_an_error() {
         let sources = vec![(
             "web/src/loose.rs".to_string(),
-            "#[server(endpoint = \"/x\")]\npub async fn x() {}\n".to_string(),
+            "#[macros::server]\npub async fn x() {}\n".to_string(),
         )];
         let detail = problems(&sources, &wrap_reg("")).expect("no vertical is an error");
         assert!(detail.contains("web/src/loose.rs"), "{detail}");
         assert!(detail.contains("vertical"), "{detail}");
+    }
+
+    // --- the enumeration itself (#714) ---
+
+    /// The real `web/src` tree enumerates to a non-empty list, and that list has
+    /// exactly as many fns as the registrar has entries.
+    ///
+    /// This is the only test that reads the actual tree, and it is what makes the
+    /// shared predicate falsifiable. Every gate built on
+    /// [`web_server_fns::server_fns_in`] — this one, tracing, coverage — reports "no
+    /// problems" when the enumeration is empty, so a predicate that stopped matching
+    /// the attribute in use would turn all of them green at once while checking
+    /// nothing. Every other test in this file feeds the enumerator a source string,
+    /// which cannot notice that.
+    ///
+    /// The comparison is against the **deduped** entry count:
+    /// [`registered_entries`] returns a `BTreeSet`, so a `register_explicit` line
+    /// written twice contributes one entry. That is deliberate — a duplicated
+    /// registration is harmless (it registers the same type) and must not redden the
+    /// gate.
+    #[test]
+    fn enumeration_of_web_src_matches_the_registrar() {
+        // The test binary's cwd is the `xtask` package, not the repo root.
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let web = web_server_fns::read_web_sources(&root.join(WEB_SRC)).expect("web/src scans");
+        assert!(web.read_errors.is_empty(), "{:?}", web.read_errors);
+        let enumerated: usize = web
+            .sources
+            .iter()
+            .map(|(path, src)| {
+                server_fns_in(src)
+                    .unwrap_or_else(|e| panic!("{path}: {e}"))
+                    .len()
+            })
+            .sum();
+        assert!(
+            enumerated > 0,
+            "no #[macros::server] fn found under {WEB_SRC} — the enumeration predicate no longer \
+             matches the attribute in use, which silently passes every server-fn gate"
+        );
+
+        let registrar_src = std::fs::read_to_string(root.join(REGISTRAR)).expect("registrar reads");
+        let (registered, malformed) = registered_entries(&registrar_src);
+        assert!(malformed.is_empty(), "{malformed:?}");
+        assert_eq!(
+            enumerated,
+            registered.len(),
+            "{enumerated} enumerated #[macros::server] fns vs {} distinct registrar entries",
+            registered.len()
+        );
     }
 }

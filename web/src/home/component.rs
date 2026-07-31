@@ -6,8 +6,7 @@
 use leptos::prelude::*;
 
 use crate::feed_discovery::FeedDiscovery;
-use crate::posts::list_local_timeline;
-use crate::timeline::{wire_timeline_resolve, TimelineGate, TimelineState};
+use crate::timeline::{list_local_timeline, wire_timeline_resolve, TimelineGate, TimelineState};
 use common::feed::FeedSurface;
 use common::pagination::PageSize;
 use common::seed::PageSeed;

@@ -113,7 +113,6 @@ pub(crate) fn project(kind: ErrorKind, public_message: &str) -> WebError {
 /// Returns `Err(WebError)` if the wrapped future returns an `InternalError`.
 #[cfg(feature = "server")]
 pub async fn server_boundary<T>(
-    server_fn: &'static str,
     future: impl std::future::Future<Output = InternalResult<T>>,
 ) -> WebResult<T> {
     match future.await {
@@ -121,7 +120,7 @@ pub async fn server_boundary<T>(
         Err(error) => {
             // The carrier owns its own observability (structured log + metric);
             // `web` only performs the wire projection.
-            error.emit_boundary_failure(server_fn);
+            error.emit_boundary_failure();
             Err(project(error.kind(), error.public_message()))
         }
     }
@@ -247,7 +246,7 @@ mod tests {
     #[cfg(feature = "server")]
     #[tokio::test]
     async fn server_boundary_logs_and_returns_public_error() {
-        let result: Result<(), WebError> = server_boundary("test_fn", async {
+        let result: Result<(), WebError> = server_boundary(async {
             Err(InternalError::storage(OuterError {
                 source: SourceError,
             }))
@@ -302,7 +301,7 @@ mod tests {
             .finish();
         let _guard = tracing::subscriber::set_default(subscriber);
 
-        let result = server_boundary("test_fn", async {
+        let result = server_boundary(async {
             Err::<(), _>(InternalError::server(OuterError {
                 source: SourceError,
             }))
@@ -349,7 +348,7 @@ mod tests {
     #[cfg(feature = "server")]
     #[tokio::test]
     async fn server_boundary_passes_through_ok_value() {
-        let result: WebResult<u32> = server_boundary("test_fn", async { Ok(42) }).await;
+        let result: WebResult<u32> = server_boundary(async { Ok(42) }).await;
         assert_eq!(result, Ok(42));
     }
 
@@ -454,24 +453,22 @@ mod tests {
     #[tokio::test]
     async fn server_boundary_err_path_projects_the_same_wire_error() {
         let result: WebResult<()> =
-            server_boundary("test_fn", async { Err(InternalError::not_found("Post")) }).await;
+            server_boundary(async { Err(InternalError::not_found("Post")) }).await;
         assert_eq!(result, Err(WebError::not_found("Post")));
     }
 
     #[cfg(feature = "server")]
     #[tokio::test]
     async fn server_boundary_logs_client_at_debug_and_returns_public() {
-        let result: WebResult<()> = server_boundary("test_fn", async {
-            Err(InternalError::validation("bad input"))
-        })
-        .await;
+        let result: WebResult<()> =
+            server_boundary(async { Err(InternalError::validation("bad input")) }).await;
         assert_eq!(result, Err(WebError::validation("bad input")));
     }
 
     #[cfg(feature = "server")]
     #[tokio::test]
     async fn server_boundary_logs_external_at_warn_and_returns_public() {
-        let result: WebResult<()> = server_boundary("test_fn", async {
+        let result: WebResult<()> = server_boundary(async {
             Err(InternalError::external(OuterError {
                 source: SourceError,
             }))
@@ -482,6 +479,76 @@ mod tests {
             Err(WebError::Server {
                 message: "server operation failed".to_string()
             })
+        );
+    }
+
+    /// The ADR-0011 span must be in scope when the boundary logs a failure.
+    ///
+    /// This was the premise of #714, which deleted the `boundary!` label: it was
+    /// redundant *because* the enclosing `#[tracing::instrument]` span already names
+    /// the failing fn on the very same event — and more precisely, since a bare
+    /// ident like `create` is ambiguous across verticals. If this ever fails, that
+    /// premise is gone and the deletion cost observability.
+    ///
+    /// Deliberately uses a hand-written `#[tracing::instrument]` rather than
+    /// `#[macros::server]`: the property under test is `tracing`'s, not the macro's,
+    /// and this fixture must remain valid wherever it lives.
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn boundary_failure_event_carries_the_enclosing_instrument_span() {
+        use std::sync::{Arc, Mutex};
+        use tracing_subscriber::layer::{Context, Layer};
+        use tracing_subscriber::prelude::*;
+        use tracing_subscriber::registry::LookupSpan;
+
+        /// Records the span-scope names in effect for each event.
+        struct ScopeRecorder(Arc<Mutex<Vec<Vec<String>>>>);
+
+        impl<S> Layer<S> for ScopeRecorder
+        where
+            S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+        {
+            fn on_event(&self, event: &tracing::Event<'_>, ctx: Context<'_, S>) {
+                let names = ctx
+                    .event_scope(event)
+                    .map(|scope| {
+                        scope
+                            .from_root()
+                            .map(|s| s.metadata().name().to_string())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                self.0.lock().expect("scope recorder mutex").push(names);
+            }
+        }
+
+        // Stands in for a `#[server]` fn: same attribute, same boundary call.
+        #[tracing::instrument(name = "web.example.do_thing")]
+        async fn do_thing() -> WebResult<()> {
+            server_boundary(async {
+                Err(InternalError::server(OuterError {
+                    source: SourceError,
+                }))
+            })
+            .await
+        }
+
+        let events: Arc<Mutex<Vec<Vec<String>>>> = Arc::default();
+        let subscriber = tracing_subscriber::registry().with(ScopeRecorder(Arc::clone(&events)));
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        assert!(
+            do_thing().await.is_err(),
+            "the fixture must take the failure path"
+        );
+
+        let recorded = events.lock().expect("scope recorder mutex").clone();
+        assert!(
+            recorded
+                .iter()
+                .any(|scope| scope.iter().any(|n| n == "web.example.do_thing")),
+            "the boundary failure event must be emitted inside the instrument span; \
+             recorded scopes: {recorded:?}"
         );
     }
 }

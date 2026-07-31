@@ -164,20 +164,20 @@ pub fn verify_after_combo(result: &mut CommandResult, backend: &str, browser: &s
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::retired_server_fn;
 
     /// The vertical the fixture tree writes its fns in.
     const VERTICAL: &str = "posts";
 
-    /// A `web/src`-shaped tree with one `#[server]` fn per ident given, all in the
-    /// [`VERTICAL`] vertical — a fn at the crate root has no vertical, so its
+    /// A `web/src`-shaped tree with one `#[macros::server]` fn per ident given, all
+    /// in the [`VERTICAL`] vertical — a fn at the crate root has no vertical, so its
     /// coverage key would be a degenerate `::<ident>` and pin nothing about the
-    /// real artifacts. The endpoints are the `<vertical>/<ident>` the gate derives.
+    /// real artifacts. The endpoints are the `<vertical>/<ident>` the gate derives
+    /// from that placement.
     fn web_src_with(dir: &Path, idents: &[&str]) {
         let src: String = idents
             .iter()
-            .map(|i| {
-                format!("#[server(endpoint = \"/{VERTICAL}/{i}\")]\npub async fn {i}() {{}}\n")
-            })
+            .map(|i| format!("#[macros::server]\npub async fn {i}() {{}}\n"))
             .collect();
         let vertical = dir.join(VERTICAL);
         std::fs::create_dir_all(&vertical).expect("create the vertical's dir");
@@ -371,6 +371,103 @@ mod tests {
     /// finds got there by the span-name signal alone. Erased rather than dropped:
     /// removing the request spans would break the ancestor chains an instrument span
     /// is attributed through, and the lane would look dead for the wrong reason.
+    /// The derived endpoint matches what a real run actually requested (#714).
+    ///
+    /// This is the only live verification that the macro's derivation and xtask's
+    /// copy of the same rule agree. A mechanical cross-check is impossible: xtask
+    /// is its own workspace with no `web` dependency, so it can never read
+    /// `ServerFn::PATH`. What it *can* do is compare its computed value against
+    /// URIs a browser actually requested, which is ground truth produced by the
+    /// macro's real expansion rather than a second statement of the rule.
+    ///
+    /// **Presence is established by span name + module, never by the endpoint
+    /// being checked.** Looking a computed endpoint up among the seed's URIs and
+    /// skipping the misses would make the drift case *identical to* the skipped
+    /// case — a wrong derivation would simply be "absent" and pass in silence.
+    /// That exact failure is on the record: `extract.rs`'s module doc describes a
+    /// matcher that matched nothing and did so silently. So the fn is located by
+    /// signal 1, and only then is its URI compared.
+    ///
+    /// The matched count is asserted too, so the check cannot quietly shrink to
+    /// nothing and keep passing.
+    #[test]
+    fn the_derived_endpoint_matches_the_uri_a_real_run_requested() {
+        let inv = inventory(&repo_root().join(WEB_SRC)).expect("inventory enumerates");
+        let spans = seed_spans();
+        let by_id: std::collections::HashMap<&str, &crate::traces::parse::Span> =
+            spans.iter().map(|s| (s.span_id.as_str(), s)).collect();
+
+        let mut matched = 0usize;
+        let mut mismatches: Vec<String> = Vec::new();
+
+        for span in &spans {
+            // Signal 1 — span name plus `code.namespace`. Independent of the URI,
+            // which is the value under test.
+            let namespace = crate::traces::parse::get_attr(
+                &span.raw,
+                crate::server_fn_coverage::extract::MODULE_ATTR,
+            );
+            if namespace.is_empty() {
+                continue;
+            }
+            let relative = namespace
+                .strip_prefix("web::")
+                .unwrap_or(namespace.as_str());
+            let Some(f) = inv.iter().find(|f| {
+                relative == f.module
+                    && crate::server_fn_coverage::extract::candidate_span_names(f)
+                        .contains(&span.name)
+            }) else {
+                continue;
+            };
+
+            // The instrument span carries the module; the *request* span carries the
+            // URI — two different spans, the fn's being a descendant of the HTTP
+            // one. So walk up to the nearest ancestor that has a URI, the same
+            // two-hop shape `extract` attributes through.
+            let mut cursor = span;
+            let mut hops = 0;
+            let observed = loop {
+                if !cursor.uri.is_empty() {
+                    break Some(cursor.uri.clone());
+                }
+                hops += 1;
+                if hops > 8 {
+                    break None;
+                }
+                match by_id.get(cursor.parent_span_id.as_str()) {
+                    Some(parent) => cursor = parent,
+                    None => break None,
+                }
+            };
+            let Some(observed) = observed else { continue };
+
+            let expected = format!("/api/{}", f.endpoint.as_deref().unwrap_or_default());
+            let without_query = observed.split('?').next().unwrap_or(&observed);
+            let path = without_query
+                .find("/api/")
+                .map_or(without_query, |at| &without_query[at..]);
+            if path != expected {
+                mismatches.push(format!(
+                    "{}: derived `{expected}` but a real run requested `{path}`",
+                    f.qualified()
+                ));
+            }
+            matched += 1;
+        }
+
+        assert!(
+            mismatches.is_empty(),
+            "the computed endpoint disagrees with the captured traffic: {mismatches:?}"
+        );
+        assert!(
+            matched >= 50,
+            "only {matched} span(s) were located by name+module and carried a URI — the \
+             cross-check has gone nearly vacuous, which is how it would silently stop \
+             verifying anything"
+        );
+    }
+
     fn seed_spans_without_uris() -> Vec<crate::traces::parse::Span> {
         let mut spans = seed_spans();
         for span in &mut spans {
@@ -574,6 +671,23 @@ mod tests {
         .unwrap_err();
         let chain = format!("{err:#}");
         assert!(chain.contains("nonexistent"), "{chain}");
-        assert!(chain.contains("#[server]"), "{chain}");
+        assert!(chain.contains("#[macros::server]"), "{chain}");
+    }
+
+    #[test]
+    fn a_fn_in_the_retired_spelling_is_not_in_the_inventory() {
+        // #714 narrowed the shared enumerator to `#[macros::server]`. An inventory
+        // that silently dropped every fn would make the whole gate vacuous, which is
+        // why `enumeration_of_web_src_matches_the_registrar` (in the registrar gate)
+        // asserts the real tree still enumerates; here we only pin the narrowing.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let vertical = tmp.path().join(VERTICAL);
+        std::fs::create_dir_all(&vertical).expect("create the vertical's dir");
+        std::fs::write(
+            vertical.join("api.rs"),
+            retired_server_fn("(endpoint = \"/posts/create\")", "pub async fn create() {}"),
+        )
+        .expect("write source");
+        assert!(inventory(tmp.path()).expect("inventory scans").is_empty());
     }
 }

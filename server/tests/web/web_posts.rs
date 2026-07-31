@@ -711,7 +711,7 @@ async fn list_user_posts_form(
     }
     post_form(
         state,
-        <web::posts::ListByUser as ServerFn>::PATH,
+        <web::timeline::ListByUser as ServerFn>::PATH,
         parts.join("&"),
         cookie,
     )
@@ -726,7 +726,7 @@ async fn list_posts_by_tag_form(
     let body = format!("tag={tag}&limit=50");
     post_form(
         state,
-        <web::posts::ListByTag as ServerFn>::PATH,
+        <web::timeline::ListByTag as ServerFn>::PATH,
         body,
         cookie,
     )
@@ -742,7 +742,7 @@ async fn list_user_posts_by_tag_form(
     let body = format!("username={username}&tag={tag}&limit=50");
     post_form(
         state,
-        <web::posts::ListByUserAndTag as ServerFn>::PATH,
+        <web::timeline::ListByUserAndTag as ServerFn>::PATH,
         body,
         cookie,
     )
@@ -763,7 +763,7 @@ async fn list_local_timeline_form(
     }
     post_form(
         state,
-        <web::posts::ListLocalTimeline as ServerFn>::PATH,
+        <web::timeline::ListLocalTimeline as ServerFn>::PATH,
         parts.join("&"),
         cookie,
     )
@@ -784,7 +784,7 @@ async fn list_home_feed_form(
     }
     post_form(
         state,
-        <web::posts::ListHomeFeed as ServerFn>::PATH,
+        <web::timeline::ListHomeFeed as ServerFn>::PATH,
         parts.join("&"),
         cookie,
     )
@@ -1328,17 +1328,17 @@ async fn publish_post_rejects_non_author(#[case] backend: Backend) {
     "cursor_created_at=bad-time&cursor_post_id=10&limit=10"
 )]
 #[case::list_user_posts(
-    <web::posts::ListByUser as ServerFn>::PATH,
+    <web::timeline::ListByUser as ServerFn>::PATH,
     "username=author&cursor_created_at=2026-04-16T10:11:12%2B00:00&limit=10",
     "username=author&cursor_created_at=bad-time&cursor_post_id=12&limit=10"
 )]
 #[case::list_local_timeline(
-    <web::posts::ListLocalTimeline as ServerFn>::PATH,
+    <web::timeline::ListLocalTimeline as ServerFn>::PATH,
     "cursor_created_at=2026-04-16T10:11:12%2B00:00&limit=10",
     "cursor_created_at=bad-time&cursor_post_id=12&limit=10"
 )]
 #[case::list_home_feed(
-    <web::posts::ListHomeFeed as ServerFn>::PATH,
+    <web::timeline::ListHomeFeed as ServerFn>::PATH,
     "cursor_created_at=2026-04-16T10:11:12%2B00:00&limit=10",
     "cursor_created_at=bad-time&cursor_post_id=12&limit=10"
 )]

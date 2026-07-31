@@ -119,15 +119,24 @@ whether the public message comes from the error alone or needs supplementing.
 storage `From` impls delegate to, so the "masked-validation-with-source" shape
 exists in exactly one place.
 
-The `#[server]` boundary (`boundary!`) splits: the leptos owner-pinning half
-(`ScopedFuture`, ancestor-owner hold — ADR-0016 #89/#124/#138) stays in `web`;
-the log + metric half becomes a `host` carrier method. `web` keeps only
+The `#[server]` boundary (`server_boundary`) splits: the leptos owner-pinning
+half (`ScopedFuture`, ancestor-owner hold — ADR-0016 #89/#124/#138) stays in
+`web`; the log + metric half becomes a `host` carrier method. `web` keeps only
 `WebError`, the projection, and the owner-pinning.
 
 > **Update (#594):** the owner-pinning half was later retired. With no component
 > SSR, the owner-pinning was vestigial, so `server_boundary` no longer holds any
 > owner — `web` now keeps only `WebError` and the projection. See the ADR-0016
 > #594 addendum.
+
+> **Update (#714):** the `boundary!` macro that invoked `server_boundary` is
+> deleted; `#[macros::server]` emits the wrap itself, so no body can skip it.
+> The split above is unchanged, but the `host` carrier method
+> (`emit_boundary_failure`) loses its `server_fn` parameter and log field —
+> redundant with the enclosing `web.<vertical>.<ident>` span, which both
+> configured formatters render. The five error fields (`error.kind`,
+> `error.class`, `error.public`, `error.source`, `error.context`) are unchanged.
+> See the ADR-0011 #714 addendum.
 
 ### `host` floor invariant (extends ADR-0058)
 

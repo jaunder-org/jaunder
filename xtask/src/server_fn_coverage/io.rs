@@ -15,7 +15,7 @@ use crate::files;
 use crate::server_fns::{module_path_of, server_fns_in, ServerFn};
 use crate::traces::parse::{parse_spans, Filters};
 
-/// The `web` crate source root, scanned for the `#[server]` inventory.
+/// The `web` crate source root, scanned for the `#[macros::server]` inventory.
 pub const WEB_SRC: &str = "web/src";
 /// The committed, generated coverage snapshot.
 pub const SNAPSHOT_PATH: &str = "docs/coverage/server-fns.json";
@@ -24,12 +24,12 @@ pub const ALLOWLIST_PATH: &str = "docs/coverage/server-fns-allowlist.json";
 /// Where `cargo xtask e2e sqlite chromium` lifts the authoritative capture.
 pub const CAPTURE_PATH: &str = ".xtask/diagnostics/e2e-sqlite-chromium/capture-sqlite.tar.gz";
 
-/// Every `#[server]` fn under `web/src`, sorted by qualified name. A file that cannot be
-/// enumerated is a hard error: a file we cannot read could hide a fn, and an
-/// under-counted inventory is exactly a false pass.
+/// Every `#[macros::server]` fn under `web/src`, sorted by qualified name. A file
+/// that cannot be enumerated is a hard error: a file we cannot read could hide a fn,
+/// and an under-counted inventory is exactly a false pass.
 pub fn inventory(root: &Path) -> Result<Vec<ServerFn>> {
     let files = files::with_extension(root, "rs")
-        .with_context(|| format!("scanning {} for #[server] fns", root.display()))?;
+        .with_context(|| format!("scanning {} for #[macros::server] fns", root.display()))?;
 
     let mut out = Vec::new();
     for path in &files {

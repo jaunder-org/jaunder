@@ -7,6 +7,7 @@ use syn::{parse_macro_input, Data, DeriveInput, Fields};
 
 mod id_newtype;
 mod num_newtype;
+mod server_fn;
 mod sqlx_bridge;
 mod str_newtype;
 
@@ -227,6 +228,50 @@ pub fn num_newtype_derive(item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as DeriveInput);
     num_newtype::expand(&input).into()
 }
+
+/// Declares a jaunder `#[server]` fn, deriving everything about it that the source
+/// already determines (#714).
+///
+/// From the fn's file path and identifier it derives the wire endpoint
+/// (`/<vertical>/<ident>`) and the ADR-0011 span name (`web.<vertical>.<ident>`),
+/// and it wraps the body in `error::server_boundary` so operator detail cannot
+/// reach the client. None of the three can drift from the fn, because none of them
+/// is written down.
+///
+/// Write it fully qualified — `#[macros::server]`, never `use`d — so it cannot be
+/// confused with leptos's `#[server]`, which this expands to.
+///
+/// ```ignore
+/// #[macros::server(skip(name))]
+/// pub async fn rename(audience_id: AudienceId, name: AudienceName) -> WebResult<()> {
+///     …
+/// }
+/// ```
+///
+/// Accepts `input = …` (forwarded to `#[server]`) and `skip(...)` / `skip_all`
+/// (forwarded to `#[tracing::instrument]`). Everything else — including `endpoint`,
+/// `name`, and `fields(...)` — is a hard error; see [`server_fn::derive`].
+///
+/// **Placement is enforced.** The fn must live in `web/src/<vertical>/api.rs`; a
+/// submodule is a compile error, because `(vertical, ident)` would stop being
+/// unique and two fns could silently derive one wire URL (#358).
+// cov:ignore-start — the only proc-macro-context code in this crate.
+// `Span::call_site().file()` panics outside a live expansion, so nothing in this
+// fn is reachable from `cargo test`. Every decision lives in `server_fn::expand` /
+// `::derive`, which take the path as a plain parameter and are unit-tested branch
+// by branch; this shell only fetches the path and renders the error.
+#[proc_macro_attribute]
+pub fn server(args: TokenStream, item: TokenStream) -> TokenStream {
+    let file = proc_macro::Span::call_site().file();
+    let args = parse_macro_input!(args with
+        syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated);
+    let item = parse_macro_input!(item as syn::ItemFn);
+    match server_fn::expand(&file, &args.into_iter().collect::<Vec<_>>(), item) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
+}
+// cov:ignore-stop
 
 /// Validates that `input` is a **non-generic** single-field tuple struct (`struct X(T)`) —
 /// the shape both newtype derives require — returning a spanned error (rendered as

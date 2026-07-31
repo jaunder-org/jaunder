@@ -81,6 +81,15 @@ Reject **A** (leaves the duplication and its own rot) and **B** (no
 every call site and the coverage-measured `macros` crate — disproportionate for
 a gate-caught guarantee).
 
+_Amended by #714._ **B**'s principal cost is now paid. It wanted "a wrapper
+attribute macro in the `macros` crate", which did not exist; #714 builds one —
+`#[macros::server]` — for unrelated reasons, and every server fn already carries
+it. Reopening **B** is
+[#731](https://github.com/jaunder-org/jaunder/issues/731), which records the
+constraint that must survive any retirement: this gate is also the uniqueness
+guard, so it may be dropped only if the placement rule stays enforced or that
+check is re-homed.
+
 ## Consequences
 
 - A new `#[server]` fn in `web` that is not registered fails `cargo xtask check`
@@ -100,11 +109,23 @@ a gate-caught guarantee).
   list from `api` only, so a duplicate added in `<vertical>/server.rs` never
   reaches a `pub use` conflict either.
 
-  Such a pair would also collide at the `endpoint` level — since #684 that is
-  enforced independently by the `server-fn-endpoint` gate, which derives
-  `/<vertical>/<ident>`. Two guards, not one; neither is redundant, because a
-  `list_mine`/`listMine` pair shares a leaf (`ListMine`) while deriving
-  _distinct_ endpoints, so only this gate catches it.
+  Such a pair would also collide at the `endpoint` level, and after #714 that
+  collision is a **compile error**: the placement rule puts every `#[server]` fn
+  in `web/src/<vertical>/api.rs` (ADR-0070), so a duplicate `(vertical, leaf)`
+  means two items of one name in one module, and the glob re-export that let one
+  silently shadow the other is itself deleted. This gate's duplicate check —
+  together with the runtime pairwise-distinctness assertion over every generated
+  `ServerFn::PATH` (`server/tests/web/server_fn_wire.rs`, which is independent
+  of xtask's enumeration) — is therefore belt-and-braces rather than the
+  guarantee.
+
+  _Amended by #714._ This paragraph previously read that the endpoint collision
+  was "since #684 … enforced independently by the `server-fn-endpoint` gate" —
+  "Two guards, not one; neither is redundant, because a `list_mine`/`listMine`
+  pair shares a leaf (`ListMine`) while deriving _distinct_ endpoints, so only
+  this gate catches it." That gate is deleted (ADR-0082), so this is now the
+  only **gate** on the duplicate case; what replaced it is the compiler rather
+  than a second gate.
 
   _Amended by #684._ This bullet previously called leaf collision an "accepted
   limitation … benign", describing it as something that could let an
@@ -114,5 +135,15 @@ a gate-caught guarantee).
 - The gate assumes the `#[server(endpoint = "…")]` form (no positional type
   rename); it treats an unexpected positional-rename form as a hard error so the
   assumption cannot silently break the PascalCase mapping.
+
+  _Amended by #714._ The source form is now `#[macros::server(…)]`, which takes
+  tracing arguments (`skip_all`, `skip(…)`) alongside the one argument it
+  forwards to `#[server]` (`input = …`). Those are `Meta::Path` and `Meta::List`
+  respectively, so the positional-rename hard error would fire on 16 of the 55
+  sites. The gate therefore considers **only the arguments routed to
+  `#[server]`**. Since `input = …` is the sole routed argument and is a
+  `Meta::NameValue`, the narrowing preserves positional-rename detection rather
+  than defeating it.
+
 - Relocating the router tests to integration keeps `server/src/lib.rs` free of a
   registrar; future router-level assertions belong in the integration suite.

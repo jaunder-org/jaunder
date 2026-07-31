@@ -1,20 +1,45 @@
-//! The timeline vertical (#329, ADR-0070): shared cursor-paginated timeline
-//! machinery used by the public Local timeline (`home`) and the authed `/app`
-//! cockpit. Module wiring only.
+//! The timeline vertical (#329, ADR-0070): the cursor-paginated listing
+//! endpoints and the shared timeline machinery used by the public Local timeline
+//! (`home`), the authed `/app` cockpit, and the user/tag pages. Module wiring
+//! only.
 //!
-//! A server-less vertical — no `#[server]` fns or wire types of its own (it
-//! re-uses `crate::posts::{TimelinePage, TimelinePostSummary, PostCard}`), so
-//! there is no `api.rs`/`server.rs`: the host-tested `state` and `render` leaves,
-//! and the wasm-only `component`. Since #671 `state` holds the reactive
+//! The `#[server]` listing fns live in the `api` leaf and their host-only storage
+//! queries in `server` — the vertical owned neither until #714, which moved them
+//! out of `posts/api/listing.rs` so that `(vertical, ident)` could be a key the
+//! compiler enforces. The wire types they exchange
+//! (`TimelinePage`/`TimelinePostSummary`) are defined in `common::seed` and
+//! reached through `crate::posts`.
+//!
+//! Alongside them sit the pure host-tested `state` and `render` leaves and the
+//! wasm-only reactive `component`. Since #671 `state` holds the reactive
 //! `TimelineState` signal bundle as well as the pure value model — both
 //! host-compiled and coverage-measured, the bundle exercised under an `Owner` —
 //! leaving `component` only what cannot run on the host (`spawn_local`, `view!`).
-//! The `pub use` keeps those items reachable on the host build, where `component`
-//! is compiled out.
+//!
+//! The `pub use` blocks keep the stable `crate::timeline::…` paths — the ones call
+//! sites and the server-fn registrar depend on — and keep the pure items reachable
+//! on the host build, where `component` is compiled out.
+
+mod api;
+
+#[cfg(feature = "server")]
+mod server;
 
 pub(crate) mod render;
 mod state;
 pub use state::{LoadStatus, NoIdentity, TimelineCursor, TimelinePaint, TimelineState};
+
+pub use api::{
+    list_by_tag, list_by_user, list_by_user_and_tag, list_home_feed, list_local_timeline,
+    ListByTag, ListByUser, ListByUserAndTag, ListHomeFeed, ListLocalTimeline,
+};
+
+// Server-only shared fetch helpers, consumed by the `server` crate's public
+// projector (one query, no drift).
+#[cfg(feature = "server")]
+pub use server::{
+    fetch_local_timeline, fetch_posts_by_tag, fetch_user_posts, fetch_user_posts_by_tag,
+};
 
 #[cfg(target_arch = "wasm32")]
 mod component;

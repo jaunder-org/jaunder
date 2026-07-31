@@ -1,7 +1,7 @@
 //! The `proffered-secret` static check (#400, #315): pins each **inbound-secret**
 //! newtype — `common::invite::ProfferedInviteCode` and
-//! `common::password::ProfferedPassword` — to `#[server]` function **parameter**
-//! positions.
+//! `common::password::ProfferedPassword` — to `#[macros::server]` function
+//! **parameter** positions.
 //!
 //! An inbound secret is the serde-capable *inbound* half of an ADR-0063
 //! inbound-secret type split (`#[str_newtype(secret, serde)]`): a client submits
@@ -9,9 +9,10 @@
 //! sent server→client. Serde traits encode *operations*, not a *direction*, so the
 //! type itself cannot express "inbound only" — this guard enforces it structurally.
 //! In any policed source file, a mention of such a type is a violation unless it is
-//! a `use` import, a comment, or sits in the parameter list of a `#[server]`-
-//! attributed `fn`. A return-type position (`-> … ProfferedPassword`) is always a
-//! violation, even inside a `#[server]` fn. The owner files that define and convert
+//! a `use` import, a comment, or sits in the parameter list of a
+//! `#[macros::server]`-attributed `fn`. A return-type position
+//! (`-> … ProfferedPassword`) is always a violation, even inside a server fn. The
+//! owner files that define and convert
 //! each type are exempt.
 
 use std::path::Path;
@@ -19,12 +20,12 @@ use std::path::Path;
 use crate::files;
 use crate::result::{CommandResult, StepResult};
 
-/// An inbound-secret type the guard pins to `#[server]` parameter positions.
+/// An inbound-secret type the guard pins to `#[macros::server]` parameter positions.
 struct PolicedType {
     /// The type's identifier, matched whole-word.
     name: &'static str,
     /// The file(s) that define and convert the type — the places it is *supposed*
-    /// to appear outside a `#[server]` parameter list, so they are exempt wholesale.
+    /// to appear outside a server-fn parameter list, so they are exempt wholesale.
     owner_files: &'static [&'static str],
 }
 
@@ -73,13 +74,13 @@ fn type_index(line: &str, type_name: &str) -> Option<usize> {
 }
 
 /// 1-based line numbers of every whole-word `type_name` mention that is not an
-/// allowed occurrence: a `use` import, a comment, or a `#[server]` fn parameter.
+/// allowed occurrence: a `use` import, a comment, or a server-fn parameter.
 ///
-/// The scan tracks a small state machine — a `#[server]` attribute arms
+/// The scan tracks a small state machine — a `#[macros::server]` attribute arms
 /// `pending_server`; the next `fn` signature opens the parameter region, which
 /// closes at the first `)`, `->`, or `{`. A mention that sits **after** a `->` on
 /// its line is a return position (a parameter never does), so a single-line
-/// `#[server]` fn that *returns* the type is still caught while one that takes it
+/// server fn that *returns* the type is still caught while one that takes it
 /// as a *parameter* stays clean. Pure given the source, so it is unit-tested
 /// directly.
 ///
@@ -93,7 +94,14 @@ fn violations(source: &str, type_name: &str) -> Vec<usize> {
     let mut in_server_params = false;
     for (i, raw) in source.lines().enumerate() {
         let t = raw.trim();
-        if t.starts_with("#[server") {
+        // `#[macros::server]` is the one spelling that arms the region (#714). This
+        // scan is independent of `web_server_fns`'s enumeration — it is a text state
+        // machine, not a syn walk — so it knows the attribute separately. Getting
+        // that wrong does not fail open in the usual way: every `Proffered*`
+        // parameter would suddenly read as sitting *outside* a server fn, so the gate
+        // goes loudly red rather than quietly green. That is the right direction for
+        // a secrets guard, but it is still a second place the attribute is named.
+        if t.starts_with("#[macros::server") {
             pending_server = true;
         }
         if pending_server && t.contains("fn ") {
@@ -136,16 +144,18 @@ pub fn problems(scanned: &[(String, String)]) -> Option<String> {
             }
             for ln in violations(source, policed.name) {
                 type_lines.push(format!(
-                    "{path}:{ln}: `{}` outside a #[server] fn parameter — an inbound secret must \
-                     never be returned or stored where it can reach a client (ADR-0063)",
+                    "{path}:{ln}: `{}` outside a #[macros::server] fn parameter — an inbound \
+                     secret must never be returned or stored where it can reach a client \
+                     (ADR-0063)",
                     policed.name
                 ));
             }
         }
         if !type_lines.is_empty() {
             type_lines.push(format!(
-                "  recovery: `{}` may appear only as a #[server] fn parameter (convert it to its \
-                 serde-free domain type inside the boundary). It is defined and converted in {}; \
+                "  recovery: `{}` may appear only as a #[macros::server] fn parameter (convert it \
+                 to its serde-free domain type inside the boundary). It is defined and converted \
+                 in {}; \
                  nowhere else may name it in a return type, field, or binding.",
                 policed.name,
                 policed.owner_files.join(" + "),
@@ -190,9 +200,10 @@ pub fn run(result: &mut CommandResult) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::retired_server_fn;
 
     const SERVER_PARAM: &str = "\
-#[server(endpoint = \"/register\")]
+#[macros::server(skip_all)]
 pub async fn register(
     username: Username,
     password: ProfferedPassword,
@@ -202,13 +213,13 @@ pub async fn register(
 }
 ";
     const SERVER_RETURN: &str = "\
-#[server(endpoint = \"/mint\")]
+#[macros::server]
 pub async fn mint() -> WebResult<ProfferedInviteCode> {
     todo!()
 }
 ";
     const PASSWORD_RETURN: &str = "\
-#[server(endpoint = \"/echo\")]
+#[macros::server]
 pub async fn echo() -> WebResult<ProfferedPassword> {
     todo!()
 }
@@ -232,6 +243,22 @@ use common::invite::ProfferedInviteCode;
         assert!(violations(SERVER_PARAM, "ProfferedPassword").is_empty());
     }
 
+    /// Only `#[macros::server]` arms the parameter region (#714). A fn still wearing
+    /// the retired leptos `#[server]` is not a server fn as far as this repo is
+    /// concerned, so its `Proffered*` parameters are flagged like any other fn's.
+    ///
+    /// This is the safe direction for a secrets guard — the narrowing makes the gate
+    /// louder, never quieter — but it is a second place the attribute is named, so
+    /// pin it.
+    #[test]
+    fn the_retired_spelling_does_not_arm_the_parameter_region() {
+        let source = retired_server_fn(
+            "(endpoint = \"/register\")",
+            "pub async fn register(\n    code: ProfferedInviteCode,\n) -> WebResult<()> {",
+        );
+        assert_eq!(violations(&source, "ProfferedInviteCode"), vec![3]);
+    }
+
     #[test]
     fn server_fn_return_is_flagged() {
         assert_eq!(violations(SERVER_RETURN, "ProfferedInviteCode"), vec![2]);
@@ -245,7 +272,7 @@ use common::invite::ProfferedInviteCode;
 
     #[test]
     fn non_server_fn_parameter_is_flagged() {
-        // No `#[server]` attribute, so the parameter region never opens.
+        // No server-fn attribute, so the parameter region never opens.
         assert_eq!(violations(PLAIN_FN_PARAM, "ProfferedInviteCode"), vec![1]);
     }
 
@@ -259,7 +286,7 @@ use common::invite::ProfferedInviteCode;
         // The `->` is present but the type sits *before* it (a parameter), so the
         // return-position heuristic must not flag it.
         let src = "\
-#[server(endpoint = \"/f\")]
+#[macros::server(skip_all)]
 pub async fn f(code: ProfferedPassword) -> WebResult<()> { todo!() }
 ";
         assert!(violations(src, "ProfferedPassword").is_empty());
@@ -298,7 +325,7 @@ pub struct Dto {
             .expect("a problem");
         assert!(detail.contains("web/src/x.rs:2"));
         assert!(detail.contains("`ProfferedPassword`"));
-        assert!(detail.contains("only as a #[server] fn parameter"));
+        assert!(detail.contains("only as a #[macros::server] fn parameter"));
     }
 
     #[test]

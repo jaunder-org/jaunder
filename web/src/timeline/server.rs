@@ -1,35 +1,29 @@
-//! Timeline / listing post surface: the cursor-paginated `#[server]` endpoints
-//! that return [`TimelinePage`]s (user posts, local timeline, home feed, and
-//! the by-tag variants), split out from the single-post lifecycle in
-//! [`super`]. `#[server]` functions register by their `endpoint` string, not
-//! their module path, so this relocation has no routing impact.
+//! Host-only support for the timeline vertical: the cursor-paginated storage
+//! queries behind the `#[server]` endpoints in [`super::api`].
+//!
+//! Each `fetch_*` is shared by its server fn and the `server` crate's public
+//! projector (anonymous viewer) — one query, no drift — and every one of them
+//! assembles its page through [`page_from_rows`], so the over-fetch/has-more
+//! rule is spelled exactly once.
 
-use leptos::prelude::*;
-
+use common::ids::{PostId, UserId};
+use common::pagination::PageSize;
 use common::seed::TimelinePage;
-use common::{ids::PostId, pagination::PageSize, tag::Tag, time::UtcInstant, username::Username};
-
-use crate::error::WebResult;
-
-#[cfg(feature = "server")]
-use {
-    crate::auth::require_auth,
-    crate::error::{InternalError, InternalResult},
-    crate::posts::server::timeline_post_summary,
-    crate::viewer::viewer_identity,
-    common::ids::UserId,
-    common::visibility::{viewer_user_id, ViewerIdentity},
-    std::sync::Arc,
-    storage::{
-        list_by_tag_rows, parse_post_cursor, to_post_cursor, PostCursor, PostRecord, PostStorage,
-        UserStorage,
-    },
+use common::tag::Tag;
+use common::time::UtcInstant;
+use common::username::Username;
+use common::visibility::{viewer_user_id, ViewerIdentity};
+use storage::{
+    list_by_tag_rows, parse_post_cursor, to_post_cursor, PostCursor, PostRecord, PostStorage,
+    UserStorage,
 };
+
+use crate::error::{InternalError, InternalResult};
+use crate::posts::timeline_post_summary;
 
 /// Assemble a cursor-paginated [`TimelinePage`] from one over-fetched row set
 /// (`page_size + 1` rows detect `has_more`). Shared by every `fetch_*` below.
-#[cfg(feature = "server")]
-fn page_from_rows(
+pub(super) fn page_from_rows(
     mut rows: Vec<PostRecord>,
     page_size: PageSize,
     viewer_user_id: Option<UserId>,
@@ -58,7 +52,6 @@ fn page_from_rows(
 ///
 /// Returns a validation error for an unparseable cursor, or a storage error if
 /// the listing query fails.
-#[cfg(feature = "server")]
 pub async fn fetch_user_posts(
     posts: &dyn PostStorage,
     viewer: &ViewerIdentity,
@@ -88,7 +81,6 @@ pub async fn fetch_user_posts(
 ///
 /// Returns a validation error for an unparseable cursor, or a storage error if
 /// the listing query fails.
-#[cfg(feature = "server")]
 pub async fn fetch_local_timeline(
     posts: &dyn PostStorage,
     viewer: &ViewerIdentity,
@@ -109,84 +101,6 @@ pub async fn fetch_local_timeline(
     Ok(page_from_rows(rows, page_size, viewer_user_id(viewer)))
 }
 
-/// Lists published, non-deleted posts for a user using cursor pagination.
-#[server(endpoint = "/posts/list_by_user")]
-#[tracing::instrument(name = "web.posts.list_by_user")]
-pub async fn list_by_user(
-    username: Username,
-    cursor_created_at: Option<UtcInstant>,
-    cursor_post_id: Option<PostId>,
-    limit: Option<PageSize>,
-) -> WebResult<TimelinePage> {
-    boundary!("list_by_user", {
-        let posts = expect_context::<Arc<dyn PostStorage>>();
-        let viewer = viewer_identity().await;
-        fetch_user_posts(
-            posts.as_ref(),
-            &viewer,
-            &username,
-            cursor_created_at.map(UtcInstant::value),
-            cursor_post_id,
-            limit,
-        )
-        .await
-    })
-}
-
-/// Lists published, non-deleted posts across all users using cursor pagination.
-#[server(endpoint = "/posts/list_local_timeline")]
-#[tracing::instrument(name = "web.posts.list_local_timeline")]
-pub async fn list_local_timeline(
-    cursor_created_at: Option<UtcInstant>,
-    cursor_post_id: Option<PostId>,
-    limit: Option<PageSize>,
-) -> WebResult<TimelinePage> {
-    boundary!("list_local_timeline", {
-        let posts = expect_context::<Arc<dyn PostStorage>>();
-        let viewer = viewer_identity().await;
-        fetch_local_timeline(
-            posts.as_ref(),
-            &viewer,
-            cursor_created_at.map(UtcInstant::value),
-            cursor_post_id,
-            limit,
-        )
-        .await
-    })
-}
-
-/// Lists published, non-deleted posts by the authenticated user using cursor pagination.
-#[server(endpoint = "/posts/list_home_feed")]
-#[tracing::instrument(name = "web.posts.list_home_feed")]
-pub async fn list_home_feed(
-    cursor_created_at: Option<UtcInstant>,
-    cursor_post_id: Option<PostId>,
-    limit: Option<PageSize>,
-) -> WebResult<TimelinePage> {
-    boundary!("list_home_feed", {
-        let auth = require_auth().await?;
-        let posts = expect_context::<Arc<dyn PostStorage>>();
-
-        let cursor = parse_post_cursor(cursor_created_at.map(UtcInstant::value), cursor_post_id)?;
-        let viewer = viewer_identity().await;
-        let page_size = limit.unwrap_or_default();
-
-        let rows = posts
-            .list_published_by_user(
-                &auth.username,
-                cursor.as_ref(),
-                page_size.fetch_limit(),
-                &viewer,
-                chrono::Utc::now(),
-            )
-            .await?;
-
-        // Was a hand-rolled copy of `page_from_rows` — the second place the has-more
-        // rule was spelled out, and the one that could drift from the shared helper.
-        Ok(page_from_rows(rows, page_size, Some(auth.user_id)))
-    })
-}
-
 /// The shared "posts site-wide carrying a tag" query, used by both the
 /// `list_by_tag` server fn and the public projector (anonymous viewer).
 ///
@@ -194,7 +108,6 @@ pub async fn list_home_feed(
 ///
 /// Returns a validation error for an unparseable cursor, or a storage error if
 /// the listing query fails.
-#[cfg(feature = "server")]
 pub async fn fetch_posts_by_tag(
     posts: &dyn PostStorage,
     viewer: &ViewerIdentity,
@@ -226,7 +139,6 @@ pub async fn fetch_posts_by_tag(
 ///
 /// Returns a validation error for an unparseable cursor, a not-found error for
 /// an unknown user, or a storage error.
-#[cfg(feature = "server")]
 pub async fn fetch_user_posts_by_tag(
     posts: &dyn PostStorage,
     users: &dyn UserStorage,
@@ -254,58 +166,6 @@ pub async fn fetch_user_posts_by_tag(
             .await,
     )?;
     Ok(page_from_rows(rows, page_size, viewer_user_id(viewer)))
-}
-
-/// Lists published, non-deleted posts site-wide carrying `tag`.
-#[server(endpoint = "/posts/list_by_tag")]
-#[tracing::instrument(name = "web.posts.list_by_tag")]
-pub async fn list_by_tag(
-    tag: Tag,
-    cursor_created_at: Option<UtcInstant>,
-    cursor_post_id: Option<PostId>,
-    limit: Option<PageSize>,
-) -> WebResult<TimelinePage> {
-    boundary!("list_by_tag", {
-        let posts = expect_context::<Arc<dyn PostStorage>>();
-        let viewer = viewer_identity().await;
-        fetch_posts_by_tag(
-            posts.as_ref(),
-            &viewer,
-            &tag,
-            cursor_created_at.map(UtcInstant::value),
-            cursor_post_id,
-            limit,
-        )
-        .await
-    })
-}
-
-/// Lists published, non-deleted posts by `username` carrying `tag`.
-#[server(endpoint = "/posts/list_by_user_and_tag")]
-#[tracing::instrument(name = "web.posts.list_by_user_and_tag")]
-pub async fn list_by_user_and_tag(
-    username: Username,
-    tag: Tag,
-    cursor_created_at: Option<UtcInstant>,
-    cursor_post_id: Option<PostId>,
-    limit: Option<PageSize>,
-) -> WebResult<TimelinePage> {
-    boundary!("list_by_user_and_tag", {
-        let posts = expect_context::<Arc<dyn PostStorage>>();
-        let users = expect_context::<Arc<dyn UserStorage>>();
-        let viewer = viewer_identity().await;
-        let cursor = parse_post_cursor(cursor_created_at.map(UtcInstant::value), cursor_post_id)?;
-        fetch_user_posts_by_tag(
-            posts.as_ref(),
-            users.as_ref(),
-            &viewer,
-            &username,
-            &tag,
-            cursor,
-            limit,
-        )
-        .await
-    })
 }
 
 #[cfg(all(test, feature = "server"))]

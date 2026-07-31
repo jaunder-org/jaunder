@@ -1,0 +1,323 @@
+//! The derivation behind `#[macros::server]` (#714).
+//!
+//! A `#[server]` fn used to carry three hand-or-gate-maintained literals that all
+//! restate what the source already says: the wire `endpoint`, the ADR-0011 span
+//! `name`, and the `boundary!` label. This module computes all three from the one
+//! thing that cannot drift — the fn's location and identifier.
+//!
+//! **Everything here takes the file path as a parameter.** `proc_macro`'s
+//! `Span::call_site().file()` panics outside a live macro expansion, so any logic
+//! that called it would be unreachable from `cargo test`. Keeping the derivation
+//! pure and letting the thin shell in [`crate`] supply the path is what makes the
+//! error paths testable at all — and this crate is coverage-measured, so
+//! "untestable" would mean "unshippable".
+
+use quote::quote;
+
+/// Where a `#[server]` fn must live, relative to the repository root. The vertical
+/// is the single path segment between this marker and `api.rs`.
+const WEB_SRC: &str = "web/src/";
+
+/// The file a vertical's `#[server]` fns must live in.
+const API_FILE: &str = "api.rs";
+
+/// What `#[macros::server]` derives for one fn.
+pub(crate) struct Derived {
+    /// The wire endpoint, e.g. `/audiences/rename`.
+    pub endpoint: String,
+    /// The ADR-0011 span name, e.g. `web.audiences.rename`.
+    pub span_name: String,
+    /// Arguments forwarded verbatim to `#[server]` (only `input = …`).
+    pub server_args: Vec<syn::Meta>,
+    /// Arguments forwarded verbatim to `#[tracing::instrument]` (`skip`/`skip_all`).
+    pub instrument_args: Vec<syn::Meta>,
+}
+
+/// The vertical owning `file`, or an error naming the placement rule.
+///
+/// Matched **relative to the [`WEB_SRC`] marker** rather than from the start of the
+/// path, so a `--remap-path-prefix` build (Nix) derives the same vertical as a host
+/// build. Mirrors `xtask/src/web_server_fns.rs`'s `vertical_of`, which keys the
+/// gates on the same rule.
+fn vertical_of(file: &str, ident: &syn::Ident) -> Result<String, syn::Error> {
+    let Some((_, relative)) = file.split_once(WEB_SRC) else {
+        return Err(syn::Error::new(
+            ident.span(),
+            format!("#[macros::server] is only for `{WEB_SRC}<vertical>/{API_FILE}`; this file ({file}) is not under `{WEB_SRC}`"),
+        ));
+    };
+    let segments: Vec<&str> = relative.split('/').collect();
+    match segments.as_slice() {
+        [vertical, file_name] if *file_name == API_FILE => Ok((*vertical).to_string()),
+        // A fn directly under `web/src` has no vertical, so there is no honest name
+        // to derive — the same hard error ADR-0082 already requires of the gates.
+        [_] => Err(syn::Error::new(
+            ident.span(),
+            format!("#[macros::server] fn directly under `{WEB_SRC}` has no vertical directory; move it to `{WEB_SRC}<vertical>/{API_FILE}`"),
+        )),
+        // The case that would make `(vertical, ident)` lossy: two same-named fns in
+        // one vertical's submodules derive one endpoint and one span name, and the
+        // compiler cannot catch it (a glob re-export lets one shadow the other, so
+        // the pair compiles and the loser 404s — #358).
+        _ => Err(syn::Error::new(
+            ident.span(),
+            format!("#[macros::server] fns live in `{WEB_SRC}<vertical>/{API_FILE}`, never a submodule; `{file}` would make the derived endpoint ambiguous with another vertical member"),
+        )),
+    }
+}
+
+/// Route one attribute argument to `#[server]` or `#[tracing::instrument]`.
+///
+/// Default-deny: only the three keys actually used across the tree are accepted, so
+/// an argument this macro does not model cannot silently reach either attribute.
+/// `endpoint` and `name` are refused because they are the macro's to derive —
+/// accepting them would reintroduce exactly the drift #714 removes. `fields(…)` is
+/// refused because the PII allowlist that used to police its value expressions
+/// (`skip(email)` + `fields(who = %email)`) is retired along with it; if it ever
+/// returns, it returns together with that check.
+fn route(arg: &syn::Meta, derived: &mut Derived) -> Result<(), syn::Error> {
+    let named = |key: &str| arg.path().is_ident(key);
+
+    if named("endpoint") || named("name") {
+        return Err(syn::Error::new_spanned(
+            arg,
+            format!(
+                "#[macros::server] derives `{}` from the file path and fn ident; remove it",
+                if named("endpoint") {
+                    "endpoint"
+                } else {
+                    "name"
+                }
+            ),
+        ));
+    }
+    if named("fields") {
+        return Err(syn::Error::new_spanned(
+            arg,
+            "#[macros::server] does not accept `fields(...)`: the PII allowlist that \
+             checked its value expressions was retired with it (#714). Reintroducing \
+             `fields` means reintroducing that check.",
+        ));
+    }
+    if named("input") {
+        derived.server_args.push(arg.clone());
+        return Ok(());
+    }
+    if named("skip") || named("skip_all") {
+        derived.instrument_args.push(arg.clone());
+        return Ok(());
+    }
+    Err(syn::Error::new_spanned(
+        arg,
+        "#[macros::server] accepts only `input = …` (forwarded to #[server]) and \
+         `skip(...)` / `skip_all` (forwarded to #[tracing::instrument])",
+    ))
+}
+
+/// Everything `#[macros::server]` derives for one fn, or the first error found.
+pub(crate) fn derive(
+    file: &str,
+    ident: &syn::Ident,
+    args: &[syn::Meta],
+) -> Result<Derived, syn::Error> {
+    let vertical = vertical_of(file, ident)?;
+    let mut derived = Derived {
+        endpoint: format!("/{vertical}/{ident}"),
+        span_name: format!("web.{vertical}.{ident}"),
+        server_args: Vec::new(),
+        instrument_args: Vec::new(),
+    };
+    for arg in args {
+        route(arg, &mut derived)?;
+    }
+    Ok(derived)
+}
+
+/// The full expansion: both attributes, and the body wrapped in the error boundary.
+///
+/// `#[::leptos::server]` is emitted **first** so it stays the outer attribute. That
+/// ordering is load-bearing twice over: it relocates the instrumented body into the
+/// generated `__server_<ident>` fn (so the span wraps the boundary call), and it
+/// discards that body on the wasm client (so the `#[cfg(feature = "server")]`
+/// `server_boundary` never has to exist there).
+///
+/// Paths are absolute because attribute macros are **not** path-hygienic — a bare
+/// `server` would resolve against whatever the call site happened to import.
+pub(crate) fn expand(
+    file: &str,
+    args: &[syn::Meta],
+    mut f: syn::ItemFn,
+) -> Result<proc_macro2::TokenStream, syn::Error> {
+    let Derived {
+        endpoint,
+        span_name,
+        server_args,
+        instrument_args,
+    } = derive(file, &f.sig.ident, args)?;
+
+    let body = &f.block;
+    *f.block = syn::parse_quote!({
+        crate::error::server_boundary(async move #body).await
+    });
+
+    let attrs = &f.attrs;
+    let vis = &f.vis;
+    let sig = &f.sig;
+    let block = &f.block;
+
+    Ok(quote! {
+        #(#attrs)*
+        #[::leptos::server(endpoint = #endpoint #(, #server_args)*)]
+        #[::tracing::instrument(name = #span_name #(, #instrument_args)*)]
+        #vis #sig #block
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{derive, expand, Derived};
+    use syn::parse_quote;
+
+    fn ident(s: &str) -> syn::Ident {
+        syn::Ident::new(s, proc_macro2::Span::call_site())
+    }
+
+    /// `Result::unwrap_err` needs `Debug` on the `Ok` type, and `syn::Meta` only
+    /// implements it under syn's `extra-traits` feature — not worth enabling
+    /// workspace-wide for test ergonomics.
+    fn expect_err(result: Result<Derived, syn::Error>) -> syn::Error {
+        result
+            .err()
+            .expect("expected a rejection, got a successful derivation")
+    }
+
+    #[test]
+    fn derives_endpoint_and_span_name_from_path_and_ident() {
+        let d = derive("web/src/audiences/api.rs", &ident("rename"), &[]).expect("derives");
+        assert_eq!(d.endpoint, "/audiences/rename");
+        assert_eq!(d.span_name, "web.audiences.rename");
+    }
+
+    #[test]
+    fn a_remapped_path_prefix_does_not_change_the_vertical() {
+        // Nix builds may remap the path prefix; matching relative to `web/src/`
+        // keeps the derived values identical to a host build.
+        let d = derive(
+            "/build/src-abc123/web/src/audiences/api.rs",
+            &ident("rename"),
+            &[],
+        )
+        .expect("derives");
+        assert_eq!(d.endpoint, "/audiences/rename");
+        assert_eq!(d.span_name, "web.audiences.rename");
+    }
+
+    #[test]
+    fn forwards_input_to_server_and_skip_all_to_instrument() {
+        let args: Vec<syn::Meta> = vec![
+            parse_quote!(input = MultipartFormData),
+            parse_quote!(skip_all),
+        ];
+        let d = derive("web/src/media/api.rs", &ident("upload"), &args).expect("derives");
+        assert_eq!(d.server_args.len(), 1);
+        assert_eq!(d.instrument_args.len(), 1);
+    }
+
+    #[test]
+    fn forwards_a_skip_list_to_instrument() {
+        let args: Vec<syn::Meta> = vec![parse_quote!(skip(name))];
+        let d = derive("web/src/audiences/api.rs", &ident("rename"), &args).expect("derives");
+        assert_eq!(d.instrument_args.len(), 1);
+        assert!(d.server_args.is_empty());
+    }
+
+    #[test]
+    fn rejects_a_passed_endpoint() {
+        let args: Vec<syn::Meta> = vec![parse_quote!(endpoint = "/x/y")];
+        let e = expect_err(derive("web/src/audiences/api.rs", &ident("rename"), &args));
+        assert!(e.to_string().contains("endpoint"), "{e}");
+    }
+
+    #[test]
+    fn rejects_a_passed_name() {
+        let args: Vec<syn::Meta> = vec![parse_quote!(name = "web.x.y")];
+        let e = expect_err(derive("web/src/audiences/api.rs", &ident("rename"), &args));
+        assert!(e.to_string().contains("name"), "{e}");
+    }
+
+    #[test]
+    fn rejects_fields_because_the_pii_allowlist_no_longer_checks_it() {
+        let args: Vec<syn::Meta> = vec![parse_quote!(fields(who = "x"))];
+        let e = expect_err(derive("web/src/audiences/api.rs", &ident("rename"), &args));
+        assert!(e.to_string().contains("fields"), "{e}");
+    }
+
+    #[test]
+    fn rejects_an_unrecognized_key() {
+        let args: Vec<syn::Meta> = vec![parse_quote!(ret)];
+        let e = expect_err(derive("web/src/audiences/api.rs", &ident("rename"), &args));
+        assert!(e.to_string().contains("skip"), "{e}");
+    }
+
+    #[test]
+    fn rejects_a_path_with_no_web_src_marker() {
+        let e = expect_err(derive("server/src/lib.rs", &ident("rename"), &[]));
+        assert!(e.to_string().contains("web/src"), "{e}");
+    }
+
+    #[test]
+    fn rejects_a_fn_directly_under_web_src() {
+        let e = expect_err(derive("web/src/mail.rs", &ident("send"), &[]));
+        assert!(e.to_string().contains("vertical"), "{e}");
+    }
+
+    #[test]
+    fn rejects_a_nested_submodule() {
+        // The case that makes `(vertical, ident)` lossy — the placement rule exists
+        // for exactly this.
+        let e = expect_err(derive(
+            "web/src/posts/api/listing.rs",
+            &ident("list_by_tag"),
+            &[],
+        ));
+        assert!(e.to_string().contains("submodule"), "{e}");
+    }
+
+    #[test]
+    fn expands_to_absolute_attribute_paths_in_order_with_a_wrapped_body() {
+        let f: syn::ItemFn = parse_quote! {
+            pub async fn rename(name: AudienceName) -> WebResult<()> { do_it().await }
+        };
+        let out = expand("web/src/audiences/api.rs", &[parse_quote!(skip(name))], f)
+            .expect("expands")
+            .to_string();
+
+        // Attribute macros are not path-hygienic, so both paths must be absolute.
+        let server_at = out
+            .find(":: leptos :: server")
+            .expect("emits ::leptos::server");
+        let instrument_at = out
+            .find(":: tracing :: instrument")
+            .expect("emits ::tracing::instrument");
+        // `#[server]` must stay OUTERMOST: it relocates the instrumented body and
+        // discards it on the client.
+        assert!(
+            server_at < instrument_at,
+            "::leptos::server must precede ::tracing::instrument: {out}"
+        );
+
+        assert!(out.contains(r#"endpoint = "/audiences/rename""#), "{out}");
+        assert!(out.contains(r#"name = "web.audiences.rename""#), "{out}");
+        assert!(out.contains("skip (name)"), "{out}");
+        assert!(out.contains("crate :: error :: server_boundary"), "{out}");
+        assert!(out.contains("async move"), "{out}");
+    }
+
+    #[test]
+    fn expand_propagates_a_derive_error() {
+        let f: syn::ItemFn = parse_quote! {
+            pub async fn x() -> WebResult<()> { y().await }
+        };
+        assert!(expand("web/src/posts/api/listing.rs", &[], f).is_err());
+    }
+}

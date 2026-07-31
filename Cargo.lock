@@ -5323,6 +5323,7 @@ dependencies = [
  "leptos_dom",
  "leptos_meta",
  "leptos_router",
+ "macros",
  "reactive_stores",
  "serde",
  "serde_json",

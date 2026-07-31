@@ -299,7 +299,18 @@ impl InternalError {
     /// a single serialized field; promoting each k/v to a span field is deferred
     /// to §4.6 (kq8w.22). Called by `web`'s `server_boundary`; the outward wire
     /// projection stays in `web`.
-    pub fn emit_boundary_failure(&self, server_fn: &'static str) {
+    ///
+    /// **Which server fn failed is not a field here.** The event is emitted inside
+    /// the fn's ADR-0011 `#[tracing::instrument]` span, and both configured sinks
+    /// render span context unconditionally — the JSON formatter via
+    /// `display_current_span`/`display_span_list`, the plain formatter by walking
+    /// `event_scope()`. So the span name (`web.<vertical>.<ident>`) already
+    /// identifies it, and more precisely than a bare ident could: after #684 an
+    /// ident like `create` is ambiguous across verticals. The former `server_fn`
+    /// field duplicated it and was removed in #714;
+    /// `web::error::boundary_failure_event_carries_the_enclosing_instrument_span`
+    /// pins the span-scope premise.
+    pub fn emit_boundary_failure(&self) {
         // Render the preserved cause chain once; empty when there is no source
         // (e.g. pure client errors).
         let source = self
@@ -310,7 +321,6 @@ impl InternalError {
         macro_rules! emit {
             ($macro:ident) => {
                 tracing::$macro!(
-                    server_fn,
                     error.kind = ?self.kind,
                     error.class = ?self.class,
                     error.public = %self.public_message,
@@ -611,14 +621,14 @@ mod tests {
         InternalError::server(OuterError {
             source: SourceError,
         })
-        .emit_boundary_failure("test_fn");
+        .emit_boundary_failure();
         // Client → DEBUG arm, no source (the `None`/`unwrap_or_default` branch).
-        InternalError::validation("bad input").emit_boundary_failure("test_fn");
+        InternalError::validation("bad input").emit_boundary_failure();
         // External → WARN arm.
         InternalError::external(OuterError {
             source: SourceError,
         })
-        .emit_boundary_failure("test_fn");
+        .emit_boundary_failure();
     }
 
     #[test]

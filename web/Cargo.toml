@@ -24,6 +24,7 @@ axum = { workspace = true, optional = true }
 client = { path = "../client" }
 common.workspace = true
 host = { path = "../host", optional = true }
+macros = { path = "../macros" }
 storage = { workspace = true, optional = true }
 http.workspace = true
 cfg-if.workspace = true

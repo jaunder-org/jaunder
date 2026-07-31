@@ -1,5 +1,6 @@
 //! Shared fixtures for xtask's unit tests — the throwaway-git-repo idiom three
-//! modules need (`git`, `adr`, `doc_links`).
+//! modules need (`git`, `adr`, `doc_links`), plus the retired-spelling fixture the
+//! server-fn gates need.
 //!
 //! Every git call here goes through [`crate::git::at`], which scrubs `GIT_DIR` and
 //! friends. That is load-bearing, not defensive: these tests run under the
@@ -9,6 +10,20 @@
 
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
+
+/// A fn wearing the **retired** leptos `#[server]` spelling (#714) — the fixture
+/// every server-fn gate uses to pin that the old spelling no longer enumerates.
+/// `attr_args` is what follows `server` inside the brackets (`""` for the bare
+/// form); `item` is the fn itself.
+///
+/// Assembled from pieces rather than written as one string literal on purpose: a
+/// grep for the retired attribute at the start of a fixture literal is what proves
+/// no gate fixture was left unconverted (#714), and these deliberate negative
+/// fixtures must not read as leftovers. One helper rather than six copies, so that
+/// sweep stays a clean zero and the single exception lives here, named.
+pub fn retired_server_fn(attr_args: &str, item: &str) -> String {
+    format!("#[{}{attr_args}]\n{item}\n", "server")
+}
 
 /// Run git against `dir` with the repo-redirecting env scrubbed.
 pub fn git(dir: &Path, args: &[&str]) -> ExitStatus {

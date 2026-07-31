@@ -11,7 +11,6 @@ use common::display_name::DisplayName;
 use common::email::Email;
 use common::render::PostFormat;
 use common::username::Username;
-use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
 // All server-only imports in one place
@@ -19,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use {
     crate::auth::require_auth,
     crate::error::InternalError,
+    leptos::prelude::*,
     std::sync::Arc,
     storage::{
         get_default_post_format as storage_get_default_post_format,
@@ -38,23 +38,20 @@ pub struct Data {
 }
 
 /// Returns the authenticated user's profile.
-#[server(endpoint = "/profile/get")]
-#[tracing::instrument(name = "web.profile.get")]
+#[macros::server]
 pub async fn get() -> WebResult<Data> {
-    boundary!("get", {
-        let auth = require_auth().await?;
-        let users = expect_context::<Arc<dyn UserStorage>>();
-        let user = users
-            .get_user(auth.user_id)
-            .await?
-            .ok_or_else(|| InternalError::not_found("user"))?;
-        Ok(Data {
-            username: user.username,
-            display_name: user.display_name,
-            bio: user.bio,
-            email: user.email,
-            email_verified: user.email_verified,
-        })
+    let auth = require_auth().await?;
+    let users = expect_context::<Arc<dyn UserStorage>>();
+    let user = users
+        .get_user(auth.user_id)
+        .await?
+        .ok_or_else(|| InternalError::not_found("user"))?;
+    Ok(Data {
+        username: user.username,
+        display_name: user.display_name,
+        bio: user.bio,
+        email: user.email,
+        email_verified: user.email_verified,
     })
 }
 
@@ -64,47 +61,38 @@ pub async fn get() -> WebResult<Data> {
 /// (ADR-0065): `None` clears (the field is omitted), `Some` is already
 /// trimmed/bounded. Both `Option`s model presence, so no `non_empty` shim is
 /// needed — an empty wire value is rejected at decode, clearing goes via omission.
-#[server(endpoint = "/profile/update")]
-#[tracing::instrument(name = "web.profile.update", skip_all)]
+#[macros::server(skip_all)]
 pub async fn update(display_name: Option<DisplayName>, bio: Option<Bio>) -> WebResult<()> {
-    boundary!("update", {
-        let auth = require_auth().await?;
-        let users = expect_context::<Arc<dyn UserStorage>>();
-        users
-            .update_profile(
-                auth.user_id,
-                &ProfileUpdate {
-                    display_name: display_name.as_ref(),
-                    bio: bio.as_ref(),
-                },
-            )
-            .await
-            .map_err(InternalError::storage)
-    })
+    let auth = require_auth().await?;
+    let users = expect_context::<Arc<dyn UserStorage>>();
+    users
+        .update_profile(
+            auth.user_id,
+            &ProfileUpdate {
+                display_name: display_name.as_ref(),
+                bio: bio.as_ref(),
+            },
+        )
+        .await
+        .map_err(InternalError::storage)
 }
 
 /// Retrieves the authenticated user's default post format preference.
-#[server(endpoint = "/profile/get_default_post_format")]
-#[tracing::instrument(name = "web.profile.get_default_post_format")]
+#[macros::server]
 pub async fn get_default_post_format() -> WebResult<PostFormat> {
-    boundary!("get_default_post_format", {
-        let auth = require_auth().await?;
-        let config = expect_context::<Arc<dyn UserConfigStorage>>();
-        let format = storage_get_default_post_format(config.as_ref(), auth.user_id).await?;
-        Ok(format)
-    })
+    let auth = require_auth().await?;
+    let config = expect_context::<Arc<dyn UserConfigStorage>>();
+    let format = storage_get_default_post_format(config.as_ref(), auth.user_id).await?;
+    Ok(format)
 }
 
 /// Sets the authenticated user's default post format preference.
-#[server(endpoint = "/profile/set_default_post_format")]
-#[tracing::instrument(name = "web.profile.set_default_post_format")]
+#[macros::server]
 pub async fn set_default_post_format(format: PostFormat) -> WebResult<()> {
-    boundary!("set_default_post_format", {
-        let auth = require_auth().await?;
-        let config = expect_context::<Arc<dyn UserConfigStorage>>();
-        storage_set_default_post_format(config.as_ref(), auth.user_id, format).await?;
-        Ok(())
-    })
+    let auth = require_auth().await?;
+    let config = expect_context::<Arc<dyn UserConfigStorage>>();
+    storage_set_default_post_format(config.as_ref(), auth.user_id, format).await?;
+    Ok(())
 }
 
 #[cfg(test)]

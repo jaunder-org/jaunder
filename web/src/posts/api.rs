@@ -1,19 +1,13 @@
 //! Posts wire types and `#[server]` endpoints (ADR-0070, amended #530).
 //!
 //! The single-post lifecycle DTOs and their `#[server]` fns live here; the
-//! timeline/listing surface is in the [`listing`] submodule and re-exported.
+//! cursor-paginated listing surface is its own vertical (`crate::timeline`).
 //! `posts/mod.rs` is wiring only and re-exports these under the stable
 //! `crate::posts::…` paths that external call sites and the server-fn registrar
 //! depend on.
 
-use leptos::prelude::*;
 use leptos::server_fn::codec::Json;
 use serde::{Deserialize, Serialize};
-
-/// Timeline/listing endpoints, split out from the single-post lifecycle below.
-/// Re-exported so `crate::posts::list_*` keep resolving.
-mod listing;
-pub use listing::*;
 
 use common::{
     ids::PostId,
@@ -37,7 +31,8 @@ use crate::error::WebResult;
 // The audience-picker DTO and its converters live in `common::visibility` (beside
 // `AudienceBase`/`AudienceTarget`); the server fn bodies below use these two to
 // translate the wire `AudienceSelection` to/from the domain `AudienceTarget`s. The
-// calls are server-only (inside `boundary!`), so the import is gated to match.
+// calls are server-only (inside the macro-supplied boundary), so the import is
+// gated to match.
 #[cfg(feature = "server")]
 use common::visibility::{audience_targets_or_public, targets_to_audience_selection};
 
@@ -51,6 +46,7 @@ use {
     crate::viewer::viewer_identity,
     chrono::Utc,
     common::tag::Tag,
+    leptos::prelude::*,
     std::{collections::BTreeSet, sync::Arc},
     storage::{
         apply_post_tag_diff, fetch_post_record, find_draft_by_permalink_for_user,
@@ -158,8 +154,7 @@ pub struct UpdateArgs {
 /// RFC 3339 wire string; expressible in the `#[server]` signature on both the
 /// server and the wasm client). The browser converts the author's local
 /// `datetime-local` value to UTC before sending.
-#[server(endpoint = "/posts/create", input = Json)]
-#[tracing::instrument(name = "web.posts.create", skip_all)]
+#[macros::server(input = Json, skip_all)]
 pub async fn create(args: CreateArgs) -> WebResult<CreateResult> {
     let CreateArgs {
         body,
@@ -171,141 +166,130 @@ pub async fn create(args: CreateArgs) -> WebResult<CreateResult> {
         summary,
         audience,
     } = args;
-    boundary!("create", {
-        let auth = require_auth().await?;
-        let posts = expect_context::<Arc<dyn PostStorage>>();
+    let auth = require_auth().await?;
+    let posts = expect_context::<Arc<dyn PostStorage>>();
 
-        // The wire delivers `Vec<TagLabel>` directly: each tag is validated at
-        // arg-decode (ADR-0065) and a `TagLabel` is never empty, so the body only
-        // dedups and enforces the per-post cap.
-        let validated_tags = common::tag::parse_and_validate_tags(tags.unwrap_or_default())?;
+    // The wire delivers `Vec<TagLabel>` directly: each tag is validated at
+    // arg-decode (ADR-0065) and a `TagLabel` is never empty, so the body only
+    // dedups and enforces the per-post cap.
+    let validated_tags = common::tag::parse_and_validate_tags(tags.unwrap_or_default())?;
 
-        // Publish + a supplied time = scheduled (future) or backdated (past);
-        // publish + no time = live now; not publishing = draft (NULL).
-        let published_at = if publish {
-            Some(publish_at.map_or_else(Utc::now, UtcInstant::value))
-        } else {
-            None
-        };
-        // `PostSummary`'s `FromStr` already trims and rejects empty at arg-decode
-        // (ADR-0065), so the value is passed through typed — no `non_empty_owned`
-        // normalization needed.
-        let audiences = audience_targets_or_public(audience.as_ref());
+    // Publish + a supplied time = scheduled (future) or backdated (past);
+    // publish + no time = live now; not publishing = draft (NULL).
+    let published_at = if publish {
+        Some(publish_at.map_or_else(Utc::now, UtcInstant::value))
+    } else {
+        None
+    };
+    // `PostSummary`'s `FromStr` already trims and rejects empty at arg-decode
+    // (ADR-0065), so the value is passed through typed — no `non_empty_owned`
+    // normalization needed.
+    let audiences = audience_targets_or_public(audience.as_ref());
 
-        let record = perform_post_creation(
-            posts.as_ref(),
-            PostCreation {
-                user_id: auth.user_id,
-                body,
-                title: None,
-                format,
-                slug_override: slug_override.as_ref(),
-                published_at,
-                max_attempts: 100,
-                summary,
-                audiences,
-                idempotency_key: None,
-            },
-        )
-        .await?;
-
-        let created_at = UtcInstant::from(record.created_at);
-        let published_at = record.published_at.map(UtcInstant::from);
-        // The canonical permalink is always available — for a draft it is the
-        // created_at-based URL the permalink view renders for the author.
-        let permalink = record.permalink();
-
-        let created = CreateResult {
-            post_id: record.post_id,
-            slug: record.slug,
-            created_at,
+    let record = perform_post_creation(
+        posts.as_ref(),
+        PostCreation {
+            user_id: auth.user_id,
+            body,
+            title: None,
+            format,
+            slug_override: slug_override.as_ref(),
             published_at,
-            permalink,
-            summary: record.summary,
-        };
+            max_attempts: 100,
+            summary,
+            audiences,
+            idempotency_key: None,
+        },
+    )
+    .await?;
 
-        for label in &validated_tags {
-            posts.tag_post(created.post_id, label).await?;
-        }
+    let created_at = UtcInstant::from(record.created_at);
+    let published_at = record.published_at.map(UtcInstant::from);
+    // The canonical permalink is always available — for a draft it is the
+    // created_at-based URL the permalink view renders for the author.
+    let permalink = record.permalink();
 
-        let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
-        let tag_post_tags = posts.get_tags_for_post(created.post_id).await?;
-        let tag_slugs: BTreeSet<Tag> = tag_post_tags.iter().map(|t| t.tag_slug.clone()).collect();
-        enqueue_feed_events(feed_events.as_ref(), &auth.username, &tag_slugs)
-            .await
-            .map_err(InternalError::storage)?;
+    let created = CreateResult {
+        post_id: record.post_id,
+        slug: record.slug,
+        created_at,
+        published_at,
+        permalink,
+        summary: record.summary,
+    };
 
-        host::metrics::post(host::metrics::PostEvent::Created);
-        Ok(created)
-    })
+    for label in &validated_tags {
+        posts.tag_post(created.post_id, label).await?;
+    }
+
+    let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
+    let tag_post_tags = posts.get_tags_for_post(created.post_id).await?;
+    let tag_slugs: BTreeSet<Tag> = tag_post_tags.iter().map(|t| t.tag_slug.clone()).collect();
+    enqueue_feed_events(feed_events.as_ref(), &auth.username, &tag_slugs)
+        .await
+        .map_err(InternalError::storage)?;
+
+    host::metrics::post(host::metrics::PostEvent::Created);
+    Ok(created)
 }
 
 /// Retrieves a post by its permalink.
-#[server(endpoint = "/posts/get")]
-#[tracing::instrument(name = "web.posts.get")]
+#[macros::server]
 pub async fn get(username: Username, date: PermalinkDate, slug: Slug) -> WebResult<PostResponse> {
-    boundary!("get", {
-        let posts = expect_context::<Arc<dyn PostStorage>>();
+    let posts = expect_context::<Arc<dyn PostStorage>>();
 
-        let viewer = viewer_identity().await;
-        if let Some(post) =
-            fetch_post_record(posts.as_ref(), &viewer, &username, date, &slug).await?
-        {
-            let is_author = require_auth()
-                .await
-                .is_ok_and(|auth| auth.user_id == post.user_id);
-            return Ok(post_response(post, is_author));
-        }
-
-        // The visibility-filtered lookup above found nothing public at this
-        // permalink. The only remaining legitimate resolution is the author
-        // viewing their own unpublished draft, so require auth and confirm the
-        // requester owns the namespace; everyone else gets an indistinguishable
-        // 404 (never a 403 that would leak the draft's existence).
-        let auth = require_auth()
+    let viewer = viewer_identity().await;
+    if let Some(post) = fetch_post_record(posts.as_ref(), &viewer, &username, date, &slug).await? {
+        let is_author = require_auth()
             .await
-            .map_err(|e| private_post_not_found_error(&e))?;
-        if auth.username != username {
-            return Err(not_found_error());
-        }
+            .is_ok_and(|auth| auth.user_id == post.user_id);
+        return Ok(post_response(post, is_author));
+    }
 
-        let draft = find_draft_by_permalink_for_user(posts.as_ref(), auth.user_id, date, &slug)
-            .await?
-            .ok_or_else(not_found_error)?;
+    // The visibility-filtered lookup above found nothing public at this
+    // permalink. The only remaining legitimate resolution is the author
+    // viewing their own unpublished draft, so require auth and confirm the
+    // requester owns the namespace; everyone else gets an indistinguishable
+    // 404 (never a 403 that would leak the draft's existence).
+    let auth = require_auth()
+        .await
+        .map_err(|e| private_post_not_found_error(&e))?;
+    if auth.username != username {
+        return Err(not_found_error());
+    }
 
-        Ok(post_response(draft, true))
-    })
+    let draft = find_draft_by_permalink_for_user(posts.as_ref(), auth.user_id, date, &slug)
+        .await?
+        .ok_or_else(not_found_error)?;
+
+    Ok(post_response(draft, true))
 }
 
 /// Retrieves a draft preview for the authenticated author.
-#[server(endpoint = "/posts/get_preview")]
-#[tracing::instrument(name = "web.posts.get_preview")]
+#[macros::server]
 pub async fn get_preview(post_id: PostId) -> WebResult<PostResponse> {
-    boundary!("get_preview", {
-        let auth = require_auth()
-            .await
-            .map_err(|e| private_post_not_found_error(&e))?;
-        let posts = expect_context::<Arc<dyn PostStorage>>();
+    let auth = require_auth()
+        .await
+        .map_err(|e| private_post_not_found_error(&e))?;
+    let posts = expect_context::<Arc<dyn PostStorage>>();
 
-        let post = posts
-            .get_post_by_id(post_id, &viewer_identity().await)
-            .await?
-            .ok_or_else(not_found_error)?;
+    let post = posts
+        .get_post_by_id(post_id, &viewer_identity().await)
+        .await?
+        .ok_or_else(not_found_error)?;
 
-        if post.deleted_at.is_some() || post.user_id != auth.user_id {
-            return Err(not_found_error());
-        }
+    if post.deleted_at.is_some() || post.user_id != auth.user_id {
+        return Err(not_found_error());
+    }
 
-        Ok(post_response(post, true))
-    })
+    Ok(post_response(post, true))
 }
 
 /// Updates an existing post for the authenticated author.
 ///
 /// `publish_at` is an optional UTC instant from the editor's datetime control.
 /// See `create` for why it crosses the boundary as a [`UtcInstant`].
-#[server(endpoint = "/posts/update", input = Json)]
-#[tracing::instrument(name = "web.posts.update", skip_all)]
+#[macros::server(input = Json, skip_all)]
 pub async fn update(args: UpdateArgs) -> WebResult<UpdateResult> {
     let UpdateArgs {
         post_id,
@@ -318,291 +302,270 @@ pub async fn update(args: UpdateArgs) -> WebResult<UpdateResult> {
         summary,
         audience,
     } = args;
-    boundary!("update", {
-        let auth = require_auth().await?;
-        let posts = expect_context::<Arc<dyn PostStorage>>();
+    let auth = require_auth().await?;
+    let posts = expect_context::<Arc<dyn PostStorage>>();
 
-        // Load old tags before mutation to union with new tags
-        let old = posts
-            .get_post_by_id(post_id, &viewer_identity().await)
-            .await?;
-        let old_tag_slugs: BTreeSet<Tag> = old
-            .as_ref()
-            .map(|p| p.tags.iter().map(|t| t.tag_slug.clone()).collect())
-            .unwrap_or_default();
-
-        // Validate tags up-front so a malformed input rejects before any
-        // post mutation lands. The wire delivers `Vec<TagLabel>` (validated at
-        // arg-decode per ADR-0065); the body only dedups and caps. `None` leaves
-        // the existing tags untouched.
-        let new_tags = tags.map(common::tag::parse_and_validate_tags).transpose()?;
-
-        // See `create`: the typed `PostSummary` arg is already validated at
-        // decode, so no `non_empty_owned` normalization is applied here.
-        let audiences = audience_targets_or_public(audience.as_ref());
-
-        // A supplied time schedules/backdates; `None` lets storage keep an
-        // existing timestamp or stamp `now` for a not-yet-published post.
-        let publish_at = publish_at.map(UtcInstant::value);
-
-        let record = perform_post_update(
-            posts.as_ref(),
-            PostUpdate {
-                post_id,
-                editor_user_id: auth.user_id,
-                body,
-                title: None,
-                format,
-                slug_override: slug_override.as_ref(),
-                publish: if publish {
-                    PublishUpdate::Publish { at: publish_at }
-                } else {
-                    PublishUpdate::Unpublish
-                },
-                summary,
-                audiences,
-            },
-        )
+    // Load old tags before mutation to union with new tags
+    let old = posts
+        .get_post_by_id(post_id, &viewer_identity().await)
         .await?;
+    let old_tag_slugs: BTreeSet<Tag> = old
+        .as_ref()
+        .map(|p| p.tags.iter().map(|t| t.tag_slug.clone()).collect())
+        .unwrap_or_default();
 
-        if let Some(new_tags) = new_tags {
-            apply_post_tag_diff(posts.as_ref(), post_id, &new_tags).await?;
-        }
+    // Validate tags up-front so a malformed input rejects before any
+    // post mutation lands. The wire delivers `Vec<TagLabel>` (validated at
+    // arg-decode per ADR-0065); the body only dedups and caps. `None` leaves
+    // the existing tags untouched.
+    let new_tags = tags.map(common::tag::parse_and_validate_tags).transpose()?;
 
-        // Fetch current tags after mutation and union with old tags
-        let current_tags = posts.get_tags_for_post(post_id).await?;
-        let mut all_tag_slugs: BTreeSet<Tag> = old_tag_slugs;
-        for tag in current_tags {
-            all_tag_slugs.insert(tag.tag_slug);
-        }
+    // See `create`: the typed `PostSummary` arg is already validated at
+    // decode, so no `non_empty_owned` normalization is applied here.
+    let audiences = audience_targets_or_public(audience.as_ref());
 
-        let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
-        enqueue_feed_events(feed_events.as_ref(), &auth.username, &all_tag_slugs)
-            .await
-            .map_err(InternalError::storage)?;
+    // A supplied time schedules/backdates; `None` lets storage keep an
+    // existing timestamp or stamp `now` for a not-yet-published post.
+    let publish_at = publish_at.map(UtcInstant::value);
 
-        let published_at = record.published_at.map(UtcInstant::from);
-        // The canonical permalink is always available (created_at-based for a draft).
-        let permalink = record.permalink();
-
-        host::metrics::post(host::metrics::PostEvent::Updated);
-        Ok(UpdateResult {
+    let record = perform_post_update(
+        posts.as_ref(),
+        PostUpdate {
             post_id,
-            slug: record.slug,
-            published_at,
-            permalink,
-            summary: record.summary,
-        })
+            editor_user_id: auth.user_id,
+            body,
+            title: None,
+            format,
+            slug_override: slug_override.as_ref(),
+            publish: if publish {
+                PublishUpdate::Publish { at: publish_at }
+            } else {
+                PublishUpdate::Unpublish
+            },
+            summary,
+            audiences,
+        },
+    )
+    .await?;
+
+    if let Some(new_tags) = new_tags {
+        apply_post_tag_diff(posts.as_ref(), post_id, &new_tags).await?;
+    }
+
+    // Fetch current tags after mutation and union with old tags
+    let current_tags = posts.get_tags_for_post(post_id).await?;
+    let mut all_tag_slugs: BTreeSet<Tag> = old_tag_slugs;
+    for tag in current_tags {
+        all_tag_slugs.insert(tag.tag_slug);
+    }
+
+    let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
+    enqueue_feed_events(feed_events.as_ref(), &auth.username, &all_tag_slugs)
+        .await
+        .map_err(InternalError::storage)?;
+
+    let published_at = record.published_at.map(UtcInstant::from);
+    // The canonical permalink is always available (created_at-based for a draft).
+    let permalink = record.permalink();
+
+    host::metrics::post(host::metrics::PostEvent::Updated);
+    Ok(UpdateResult {
+        post_id,
+        slug: record.slug,
+        published_at,
+        permalink,
+        summary: record.summary,
     })
 }
 
 /// Returns the audience-picker selection for a new post: the site-wide
 /// default audience. Used to initialize the editor on the create page.
-#[server(endpoint = "/posts/get_default_audience_selection")]
-#[tracing::instrument(name = "web.posts.get_default_audience_selection")]
+#[macros::server]
 pub async fn get_default_audience_selection() -> WebResult<AudienceSelection> {
-    boundary!("get_default_audience_selection", {
-        let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
-        require_auth().await?;
-        let default = site_config.get_default_audience().await?;
-        Ok(targets_to_audience_selection(std::slice::from_ref(
-            &default,
-        )))
-    })
+    let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
+    require_auth().await?;
+    let default = site_config.get_default_audience().await?;
+    Ok(targets_to_audience_selection(std::slice::from_ref(
+        &default,
+    )))
 }
 
 /// Returns the audience-picker selection for an existing post (its current
 /// targeting). Owner-only. Used to pre-select the editor on the edit page.
-#[server(endpoint = "/posts/get_audience_selection")]
-#[tracing::instrument(name = "web.posts.get_audience_selection")]
+#[macros::server]
 pub async fn get_audience_selection(post_id: PostId) -> WebResult<AudienceSelection> {
-    boundary!("get_audience_selection", {
-        let posts = expect_context::<Arc<dyn PostStorage>>();
-        let auth = require_auth()
-            .await
-            .map_err(|e| private_post_not_found_error(&e))?;
+    let posts = expect_context::<Arc<dyn PostStorage>>();
+    let auth = require_auth()
+        .await
+        .map_err(|e| private_post_not_found_error(&e))?;
 
-        let post = posts
-            .get_post_by_id(post_id, &viewer_identity().await)
-            .await?
-            .ok_or_else(not_found_error)?;
-        if post.deleted_at.is_some() || post.user_id != auth.user_id {
-            return Err(not_found_error());
-        }
+    let post = posts
+        .get_post_by_id(post_id, &viewer_identity().await)
+        .await?
+        .ok_or_else(not_found_error)?;
+    if post.deleted_at.is_some() || post.user_id != auth.user_id {
+        return Err(not_found_error());
+    }
 
-        let targets = posts.get_post_audiences(post_id).await?;
-        Ok(targets_to_audience_selection(&targets))
-    })
+    let targets = posts.get_post_audiences(post_id).await?;
+    Ok(targets_to_audience_selection(&targets))
 }
 
 /// Lists drafts for the authenticated user.
-#[server(endpoint = "/posts/list_drafts")]
-#[tracing::instrument(name = "web.posts.list_drafts")]
+#[macros::server]
 pub async fn list_drafts(
     cursor_created_at: Option<UtcInstant>,
     cursor_post_id: Option<PostId>,
     limit: Option<PageSize>,
 ) -> WebResult<Vec<DraftSummary>> {
-    boundary!("list_drafts", {
-        let auth = require_auth().await?;
-        let posts = expect_context::<Arc<dyn PostStorage>>();
+    let auth = require_auth().await?;
+    let posts = expect_context::<Arc<dyn PostStorage>>();
 
-        let parsed_cursor =
-            parse_post_cursor(cursor_created_at.map(UtcInstant::value), cursor_post_id)?;
-        let page_size = limit.unwrap_or_default();
-        let drafts = posts
-            .list_drafts_by_user(
-                auth.user_id,
-                parsed_cursor.as_ref(),
-                page_size.exact_limit(),
-                chrono::Utc::now(),
-            )
-            .await?;
+    let parsed_cursor =
+        parse_post_cursor(cursor_created_at.map(UtcInstant::value), cursor_post_id)?;
+    let page_size = limit.unwrap_or_default();
+    let drafts = posts
+        .list_drafts_by_user(
+            auth.user_id,
+            parsed_cursor.as_ref(),
+            page_size.exact_limit(),
+            chrono::Utc::now(),
+        )
+        .await?;
 
-        Ok(drafts
-            .into_iter()
-            .map(|draft| {
-                let permalink = draft.permalink();
-                // `list_drafts_by_user` only returns drafts (`published_at`
-                // NULL) and scheduled posts (`published_at` in the future), so
-                // a `Some(published_at)` here is necessarily a scheduled time.
-                let scheduled_at = draft.published_at.map(UtcInstant::from);
-                DraftSummary {
-                    post_id: draft.post_id,
-                    title: draft.title.clone(),
-                    summary_label: draft.fallback_summary_label(),
-                    slug: draft.slug.clone(),
-                    created_at: UtcInstant::from(draft.created_at),
-                    updated_at: UtcInstant::from(draft.updated_at),
-                    scheduled_at,
-                    edit_url: root_relative_path(format!("/posts/{}/edit", draft.post_id)),
-                    permalink,
-                }
-            })
-            .collect())
-    })
+    Ok(drafts
+        .into_iter()
+        .map(|draft| {
+            let permalink = draft.permalink();
+            // `list_drafts_by_user` only returns drafts (`published_at`
+            // NULL) and scheduled posts (`published_at` in the future), so
+            // a `Some(published_at)` here is necessarily a scheduled time.
+            let scheduled_at = draft.published_at.map(UtcInstant::from);
+            DraftSummary {
+                post_id: draft.post_id,
+                title: draft.title.clone(),
+                summary_label: draft.fallback_summary_label(),
+                slug: draft.slug.clone(),
+                created_at: UtcInstant::from(draft.created_at),
+                updated_at: UtcInstant::from(draft.updated_at),
+                scheduled_at,
+                edit_url: root_relative_path(format!("/posts/{}/edit", draft.post_id)),
+                permalink,
+            }
+        })
+        .collect())
 }
 
 /// Publishes an existing draft owned by the authenticated user.
-#[server(endpoint = "/posts/publish")]
-#[tracing::instrument(name = "web.posts.publish")]
+#[macros::server]
 pub async fn publish(post_id: PostId) -> WebResult<PublishResult> {
-    boundary!("publish", {
-        let auth = require_auth().await?;
-        let posts = expect_context::<Arc<dyn PostStorage>>();
+    let auth = require_auth().await?;
+    let posts = expect_context::<Arc<dyn PostStorage>>();
 
-        let existing = posts
-            .get_post_by_id(post_id, &viewer_identity().await)
-            .await?
-            .ok_or_else(|| InternalError::not_found("Post"))?;
+    let existing = posts
+        .get_post_by_id(post_id, &viewer_identity().await)
+        .await?
+        .ok_or_else(|| InternalError::not_found("Post"))?;
 
-        if existing.deleted_at.is_some() || existing.user_id != auth.user_id {
-            return Err(InternalError::not_found("Post"));
-        }
+    if existing.deleted_at.is_some() || existing.user_id != auth.user_id {
+        return Err(InternalError::not_found("Post"));
+    }
 
-        // Preserve the post's existing audience targeting across publication
-        // (chosen in the editor); publishing must not silently re-target it.
-        let audiences = posts.get_post_audiences(post_id).await?;
+    // Preserve the post's existing audience targeting across publication
+    // (chosen in the editor); publishing must not silently re-target it.
+    let audiences = posts.get_post_audiences(post_id).await?;
 
-        let updated = posts
-            .update_post(
-                post_id,
-                auth.user_id,
-                &UpdatePostInput {
-                    title: existing.title,
-                    slug: existing.slug,
-                    body: existing.body,
-                    format: existing.format,
-                    rendered_html: existing.rendered_html,
-                    summary: existing.summary,
-                    unpublish: false,
-                    explicit_published_at: None,
-                    audiences,
-                },
-            )
-            .await?;
+    let updated = posts
+        .update_post(
+            post_id,
+            auth.user_id,
+            &UpdatePostInput {
+                title: existing.title,
+                slug: existing.slug,
+                body: existing.body,
+                format: existing.format,
+                rendered_html: existing.rendered_html,
+                summary: existing.summary,
+                unpublish: false,
+                explicit_published_at: None,
+                audiences,
+            },
+        )
+        .await?;
 
-        let published_at = updated
-            .published_at
-            .ok_or_else(|| InternalError::not_found("Post"))?;
+    let published_at = updated
+        .published_at
+        .ok_or_else(|| InternalError::not_found("Post"))?;
 
-        let tag_slugs: BTreeSet<Tag> = updated.tags.iter().map(|t| t.tag_slug.clone()).collect();
-        let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
-        enqueue_feed_events(feed_events.as_ref(), &updated.author_username, &tag_slugs)
-            .await
-            .map_err(InternalError::storage)?;
+    let tag_slugs: BTreeSet<Tag> = updated.tags.iter().map(|t| t.tag_slug.clone()).collect();
+    let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
+    enqueue_feed_events(feed_events.as_ref(), &updated.author_username, &tag_slugs)
+        .await
+        .map_err(InternalError::storage)?;
 
-        host::metrics::post(host::metrics::PostEvent::Published);
-        Ok(PublishResult {
-            post_id: updated.post_id,
-            slug: updated.slug.clone(),
-            published_at: UtcInstant::from(published_at),
-            permalink: updated.permalink(),
-        })
+    host::metrics::post(host::metrics::PostEvent::Published);
+    Ok(PublishResult {
+        post_id: updated.post_id,
+        slug: updated.slug.clone(),
+        published_at: UtcInstant::from(published_at),
+        permalink: updated.permalink(),
     })
 }
 
 /// Soft-deletes a post owned by the authenticated user.
-#[server(endpoint = "/posts/delete")]
-#[tracing::instrument(name = "web.posts.delete")]
+#[macros::server]
 pub async fn delete(post_id: PostId) -> WebResult<()> {
-    boundary!("delete", {
-        let auth = require_auth().await?;
-        let posts = expect_context::<Arc<dyn PostStorage>>();
+    let auth = require_auth().await?;
+    let posts = expect_context::<Arc<dyn PostStorage>>();
 
-        let existing = posts
-            .get_post_by_id(post_id, &viewer_identity().await)
-            .await?
-            .ok_or_else(|| InternalError::not_found("Post"))?;
+    let existing = posts
+        .get_post_by_id(post_id, &viewer_identity().await)
+        .await?
+        .ok_or_else(|| InternalError::not_found("Post"))?;
 
-        if existing.deleted_at.is_some() || existing.user_id != auth.user_id {
-            return Err(InternalError::not_found("Post"));
-        }
+    if existing.deleted_at.is_some() || existing.user_id != auth.user_id {
+        return Err(InternalError::not_found("Post"));
+    }
 
-        posts.soft_delete_post(post_id).await?;
+    posts.soft_delete_post(post_id).await?;
 
-        // Only enqueue feed events for published posts
-        if existing.published_at.is_some() {
-            let tag_slugs: BTreeSet<Tag> =
-                existing.tags.iter().map(|t| t.tag_slug.clone()).collect();
-            let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
-            enqueue_feed_events(feed_events.as_ref(), &existing.author_username, &tag_slugs)
-                .await
-                .map_err(InternalError::storage)?;
-        }
-
-        host::metrics::post(host::metrics::PostEvent::Deleted);
-        Ok(())
-    })
-}
-
-/// Reverts a published post owned by the authenticated user back to draft status.
-#[server(endpoint = "/posts/unpublish")]
-#[tracing::instrument(name = "web.posts.unpublish")]
-pub async fn unpublish(post_id: PostId) -> WebResult<()> {
-    boundary!("unpublish", {
-        let auth = require_auth().await?;
-        let posts = expect_context::<Arc<dyn PostStorage>>();
-
-        let existing = posts
-            .get_post_by_id(post_id, &viewer_identity().await)
-            .await?
-            .ok_or_else(|| InternalError::not_found("Post"))?;
-
-        if existing.deleted_at.is_some() || existing.user_id != auth.user_id {
-            return Err(InternalError::not_found("Post"));
-        }
-
-        posts.unpublish_post(post_id).await?;
-
+    // Only enqueue feed events for published posts
+    if existing.published_at.is_some() {
         let tag_slugs: BTreeSet<Tag> = existing.tags.iter().map(|t| t.tag_slug.clone()).collect();
         let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
         enqueue_feed_events(feed_events.as_ref(), &existing.author_username, &tag_slugs)
             .await
             .map_err(InternalError::storage)?;
+    }
 
-        Ok(())
-    })
+    host::metrics::post(host::metrics::PostEvent::Deleted);
+    Ok(())
+}
+
+/// Reverts a published post owned by the authenticated user back to draft status.
+#[macros::server]
+pub async fn unpublish(post_id: PostId) -> WebResult<()> {
+    let auth = require_auth().await?;
+    let posts = expect_context::<Arc<dyn PostStorage>>();
+
+    let existing = posts
+        .get_post_by_id(post_id, &viewer_identity().await)
+        .await?
+        .ok_or_else(|| InternalError::not_found("Post"))?;
+
+    if existing.deleted_at.is_some() || existing.user_id != auth.user_id {
+        return Err(InternalError::not_found("Post"));
+    }
+
+    posts.unpublish_post(post_id).await?;
+
+    let tag_slugs: BTreeSet<Tag> = existing.tags.iter().map(|t| t.tag_slug.clone()).collect();
+    let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
+    enqueue_feed_events(feed_events.as_ref(), &existing.author_username, &tag_slugs)
+        .await
+        .map_err(InternalError::storage)?;
+
+    Ok(())
 }
 
 #[cfg(test)]
