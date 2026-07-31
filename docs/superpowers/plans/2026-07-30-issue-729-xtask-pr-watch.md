@@ -1895,11 +1895,11 @@ state.
 `pr land [N]`, the flags, the outcomes, and that `land` is the merge approval.
 
 > **Correction: `CLAUDE.md` is untracked too.** `git ls-files CLAUDE.md` returns
-> nothing and the file does not exist in this worktree — it is in the same class as
-> `.claude/skills/jaunder-ship/SKILL.md` (spec F10), not a tracked doc. Both the spec
-> (D12/A13) and this plan listed it as branch-verifiable; that was wrong. It **moves
-> to Task 10**, edited at the main checkout and verified by inspection. Nothing about
-> it can appear in the PR diff.
+> nothing and the file does not exist in this worktree — it is in the same class
+> as `.claude/skills/jaunder-ship/SKILL.md` (spec F10), not a tracked doc. Both
+> the spec (D12/A13) and this plan listed it as branch-verifiable; that was
+> wrong. It **moves to Task 10**, edited at the main checkout and verified by
+> inspection. Nothing about it can appear in the PR diff.
 
 - [x] **Step 4: Verify the tree still gates**
 
@@ -1909,8 +1909,8 @@ green.
 Run: `git status --porcelain` Expected: only the intended files (the gate's Fix
 mode auto-formats; re-stage if so).
 
-- [x] **Step 5: Commit** — `8907bc74` (three tracked files; `CLAUDE.md` deferred to
-      Task 10 per the correction above).
+- [x] **Step 5: Commit** — `8907bc74` (three tracked files; `CLAUDE.md` deferred
+      to Task 10 per the correction above).
 
 ```bash
 prettier -w docs/ci-merge-queue.md CONTRIBUTING.md
@@ -1943,7 +1943,13 @@ Run: `devtool run -- cargo xtask pr watch 999999` Expected: exit **2**, no `pr`
 key in `.xtask/last-result.json` — D13's subject-cannot-be-established boundary,
 observed end-to-end.
 
-- [ ] **Step 2: Rewrite `jaunder-ship` step 7**
+- [ ] **Step 2: Add the `CLAUDE.md` command-table row**
+
+Untracked (see the Task 9 correction), so it belongs here rather than in the PR
+diff. One terse row for `pr watch` / `pr land` in the xtask Commands table —
+CLAUDE.md must not duplicate CONTRIBUTING.
+
+- [ ] **Step 3: Rewrite `jaunder-ship` step 7**
 
 Replace the `gh pr checks <N> --watch` prose and the rebase-on-every-advance
 instruction with `cargo xtask pr watch <N>`. **Remove the "keep current with
@@ -1972,6 +1978,33 @@ Expected: the two new commands present; no surviving `gh pr checks … --watch`.
       there as A1's evidence.
 
 ---
+
+## Deliverable-boundary review (after Task 7)
+
+A cold `code-review` pass over `wt-base-issue-729..HEAD` at the point the
+command first worked end-to-end. One blocker and nine should-fixes; all
+addressed in `81911ea1`, each with a regression test:
+
+| #           | Finding                                                                                                                                                                     | Fix                                                                            |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| 1 (BLOCKER) | `truncate` byte-sliced at 300 → **panic** on multi-byte input, on exactly the failure paths that must always produce a report                                               | cut on a char boundary                                                         |
+| 2           | `head_committed_at` defaulted to `""`, so **every** failed merge-group run compared newer → false `ejected` through a door A6's test did not cover                          | missing `oid`/`committedDate` is now `Malformed`                               |
+| 3           | A transient blip skipped `land`'s divergence guard entirely and armed anyway — the guard failed **open**                                                                    | retry, then fail closed: unreadable head ⇒ never arm                           |
+| 4           | `land` passed `ejection: None`, so it would **re-enqueue an already-ejected PR** — the one action D1 forbids and the help text promises it won't                            | probe in the prologue; a probe failure refuses to arm                          |
+| 5           | A rate limit with no known reset (secondary limits carry none) ended a 90-minute watch on one 403                                                                           | unattributed limits go through the strike budget                               |
+| 6           | `#[allow(clippy::too_many_arguments)]` — a lint suppression, which needs explicit approval                                                                                  | `finish` takes a `Terminal` struct instead                                     |
+| 7           | `fingerprint` was computed, stored, and **never read** — two competing definitions of "what changed"                                                                        | deleted; `Rendered` is the fingerprint, and its test now runs through the loop |
+| 8           | The ejection probe was never exercised through the loop — a dropped result would pass every test                                                                            | `FakeSource::with_ejection`/`with_ejection_error` + two loop-level tests       |
+| 9           | The exit-2 message did not name what was searched for                                                                                                                       | names the branch (or says there is none)                                       |
+| 11–17       | eager `rate_limit_reset` on every error; wrong rate-limit bucket; `--timeout` overflow; mis-attached doc comment; `expect` in production; `{:?}` leaking into the human log | all fixed                                                                      |
+
+Confirmed sound and left alone: the D5/A16 single-`StepResult` invariant, the
+`Result`-free return types that make A3 structural, D6's central rule (there is
+no success branch for `classify` to take), D9's disjunction predicate, and A8.
+
+Not fixed, deliberately: the base branch `main` is hardcoded in two places (spec
+D6/D10 say so). A PR targeting another base would read main's ruleset — out of
+scope here, worth an issue if the repo ever grows a second long-lived base.
 
 ## Self-review
 
