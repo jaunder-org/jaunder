@@ -582,6 +582,23 @@ pub trait PostStorage: Send + Sync {
         input: &UpdatePostInput,
     ) -> Result<PostRecord, UpdatePostError>;
 
+    /// Publishes a draft: sets `published_at` to now if it is NULL, leaving an
+    /// already-published post's timestamp untouched. Changes nothing else — not
+    /// the body, rendered HTML, format, slug, summary, audiences or media rows.
+    /// Publication is not an edit, so it does not go through `update_post` and
+    /// records no revision (#711).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UpdatePostError::NotFound`] if the post does not exist or is
+    /// soft-deleted, or [`UpdatePostError::Unauthorized`] if `user_id` does not
+    /// own it.
+    async fn publish_post(
+        &self,
+        post_id: PostId,
+        user_id: UserId,
+    ) -> Result<PostRecord, UpdatePostError>;
+
     /// Marks a post as deleted without removing it from the database.
     async fn soft_delete_post(&self, post_id: PostId) -> sqlx::Result<()>;
 
@@ -1023,6 +1040,73 @@ where
         input: &UpdatePostInput,
     ) -> Result<PostRecord, UpdatePostError> {
         DB::update_post(&self.pool, post_id, editor_user_id, input).await
+    }
+
+    #[tracing::instrument(
+        name = "storage.posts.publish",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn publish_post(
+        &self,
+        post_id: PostId,
+        user_id: UserId,
+    ) -> Result<PostRecord, UpdatePostError> {
+        // No dialect split (ADR-0019): ownership and liveness are the UPDATE's own
+        // predicate rather than a preceding SELECT, so there is no check-then-write
+        // window for `update_post`'s `FOR UPDATE` / `BEGIN IMMEDIATE` locking to
+        // close, and one statement writes the single column publication touches.
+        let published = sqlx::query_scalar::<_, PostId>(
+            "UPDATE posts
+                SET published_at = COALESCE(published_at, $1),
+                    updated_at = $1
+              WHERE post_id = $2 AND user_id = $3 AND deleted_at IS NULL
+          RETURNING post_id",
+        )
+        .bind(Utc::now())
+        .bind(post_id)
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if published.is_none() {
+            // Nothing matched, so the post is either gone or someone else's. One read
+            // tells the two apart for the caller's error; nothing was written, so
+            // there is no state to unwind. A live row here is necessarily owned by
+            // another user — the UPDATE would have matched otherwise.
+            // Selects `post_id`, not `user_id`: the question is pure existence, and the
+            // owner's identity is never read — a live row is necessarily someone else's,
+            // as argued above. Decoding an id column into its newtype rather than `i64`
+            // is the ADR-0085 convention (#715).
+            let live = sqlx::query_scalar::<_, PostId>(
+                "SELECT post_id FROM posts WHERE post_id = $1 AND deleted_at IS NULL",
+            )
+            .bind(post_id)
+            .fetch_optional(&self.pool)
+            .await?;
+            return Err(if live.is_some() {
+                UpdatePostError::Unauthorized
+            } else {
+                UpdatePostError::NotFound
+            });
+        }
+
+        // Re-read through the record projection so `tags` and `author_username` come
+        // back populated. Owner-only, so no viewer resolution.
+        let sql = format!(
+            "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                    p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
+                    {tags} AS tags
+             FROM posts p
+             JOIN users u ON p.user_id = u.user_id
+             WHERE p.post_id = $1",
+            tags = DB::TAGS_SUBQUERY,
+        );
+        let row = sqlx::query_as::<_, PostRow>(&sql)
+            .bind(post_id)
+            .fetch_one(&self.pool)
+            .await?;
+        post_record_from_row(row).map_err(UpdatePostError::Internal)
     }
 
     #[tracing::instrument(
@@ -2270,7 +2354,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, Backend, CloseablePool, SeedRawPost, SeedUser};
+    use crate::test_support::{
+        backends, seed_users, Backend, CloseablePool, SeedRawPost, SeedUser,
+    };
     use common::test_support::{
         parse_post_summary, parse_row_limit, parse_slug, parse_tag, parse_tag_label,
         parse_username, permalink_date,
@@ -2515,6 +2601,127 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(cleared.summary, None);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn publish_post_changes_only_the_publication_timestamp(#[case] backend: Backend) {
+        // Publishing is not an edit (#711): it stamps `published_at` and touches
+        // nothing else — body, rendered HTML, format, slug, title, summary, tags and
+        // audience targeting all survive. Routing publication through `update_post`
+        // is what used to rewrite the whole row (and would clobber its child rows).
+        let env = backend.setup().await;
+        let user = SeedUser::new().seed(&env.state).await;
+        let posts = &*env.state.posts;
+        let seeded = SeedRawPost::new(user.user_id)
+            .draft()
+            .summary(parse_post_summary("the summary"))
+            .tags(["Rust"])
+            .seed(&env.state)
+            .await;
+        let before = posts
+            .get_post_by_id(seeded.post_id, &ViewerIdentity::Anonymous)
+            .await
+            .unwrap()
+            .unwrap();
+        let audiences_before = posts.get_post_audiences(seeded.post_id).await.unwrap();
+
+        let after = posts
+            .publish_post(seeded.post_id, user.user_id)
+            .await
+            .expect("publish succeeds");
+
+        assert!(after.published_at.is_some(), "the draft is now published");
+        assert_eq!(after.author_username, user.username);
+        assert_eq!(after.title, before.title);
+        assert_eq!(after.slug, before.slug);
+        assert_eq!(after.body, before.body);
+        assert_eq!(after.format, before.format);
+        assert_eq!(after.rendered_html, before.rendered_html);
+        assert_eq!(after.summary, before.summary);
+        assert_eq!(after.created_at, before.created_at);
+        assert_eq!(after.tags.len(), 1);
+        assert_eq!(after.tags[0].tag_slug, "rust");
+        assert_eq!(
+            posts.get_post_audiences(seeded.post_id).await.unwrap(),
+            audiences_before
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn publish_post_keeps_an_already_published_timestamp(#[case] backend: Backend) {
+        // COALESCE, not overwrite: the permalink is derived from `published_at`, so
+        // re-publishing must not restamp it.
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let posts = &*env.state.posts;
+        let post_id = SeedRawPost::new(user_id)
+            .draft()
+            .seed(&env.state)
+            .await
+            .post_id;
+
+        let first = posts.publish_post(post_id, user_id).await.unwrap();
+        let second = posts.publish_post(post_id, user_id).await.unwrap();
+
+        assert!(first.published_at.is_some());
+        assert_eq!(
+            first.published_at, second.published_at,
+            "republishing must not restamp"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn publish_post_rejects_a_missing_foreign_or_deleted_post(#[case] backend: Backend) {
+        // The ownership/liveness guard `update_post` applies, applied to publication:
+        // a post that is gone reads as NotFound, someone else's live post as
+        // Unauthorized (both mask as a 404 at the web boundary).
+        let env = backend.setup().await;
+        let [owner, stranger] = seed_users::<2>(&env.state).await;
+        let posts = &*env.state.posts;
+        let post_id = SeedRawPost::new(owner)
+            .draft()
+            .seed(&env.state)
+            .await
+            .post_id;
+
+        assert!(matches!(
+            posts.publish_post(PostId::from(999_999), owner).await,
+            Err(UpdatePostError::NotFound)
+        ));
+        assert!(matches!(
+            posts.publish_post(post_id, stranger).await,
+            Err(UpdatePostError::Unauthorized)
+        ));
+        // The rejected publish wrote nothing: the post is still a draft.
+        assert!(posts
+            .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
+            .await
+            .unwrap()
+            .unwrap()
+            .published_at
+            .is_none());
+
+        posts.soft_delete_post(post_id).await.unwrap();
+        assert!(matches!(
+            posts.publish_post(post_id, owner).await,
+            Err(UpdatePostError::NotFound)
+        ));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn publish_post_with_closed_pool_returns_error(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        env.base.close_pool().await;
+        let result = env
+            .state
+            .posts
+            .publish_post(PostId::from(1), UserId::from(1))
+            .await;
+        assert!(matches!(result, Err(UpdatePostError::Internal(_))));
     }
 
     #[apply(backends)]

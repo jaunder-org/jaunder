@@ -575,7 +575,7 @@ async fn publish_post(
 ) -> Result<PostRecord, UpdatePostError>;
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `storage/src/posts.rs`'s test module, using the existing seeding builders:
 
@@ -641,12 +641,12 @@ Match `SeedPost`'s real field names and constructor
 (`storage/src/test_support.rs:796-847`) rather than the illustrative
 `SeedPost::for_user` above.
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run: `devtool run -- cargo nextest run -p storage publish_post` Expected: FAIL —
 `publish_post` not defined.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Per dialect, inside a transaction: the ownership/not-deleted check `update_post`
 already performs (`sqlite/posts.rs:43-51`; `postgres/posts.rs:41-52`, which uses
@@ -660,7 +660,7 @@ UPDATE posts SET published_at = COALESCE(published_at, $1), updated_at = $1
 then re-read the record with the existing record query so tags and
 `author_username` are populated. Write no child rows of any kind.
 
-- [ ] **Step 4: Rewire `web::posts::publish`**
+- [x] **Step 4: Rewire `web::posts::publish`**
 
 Replace the `get_post_by_id` + `get_post_audiences` + `update_post` sequence
 (`web/src/posts/api.rs:494-523`) with a single `publish_post` call. The
@@ -669,11 +669,11 @@ here. Keep the `published_at`-missing guard (`:525-527`), the feed-event enqueue
 (`:530-533`), and the `host::metrics::post` call (`:535`) — all read from the
 returned record.
 
-- [ ] **Step 5: Run the tests, verify they pass**
+- [x] **Step 5: Run the tests, verify they pass**
 
 Run: `devtool run -- cargo nextest run -p storage -p web` Expected: PASS
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 devtool run -- cargo xtask check
