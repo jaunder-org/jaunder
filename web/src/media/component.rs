@@ -124,6 +124,11 @@ fn uploaded_url_view(url: RootRelativeUrl) -> impl IntoView {
 pub fn MediaPage() -> impl IntoView {
     let delete_action = ServerAction::<Delete>::new();
     let upload_version = RwSignal::new(0u32);
+    // Which item the last Delete click was about. `DeleteResult` carries only the
+    // referencing post ids, so the refusal branch cannot otherwise name the item it
+    // must offer a force-delete for, and `ServerAction::input()` reverts to `None` the
+    // moment the action resolves — which is exactly when the refusal renders.
+    let delete_target = RwSignal::new(Option::<Item>::None);
 
     let usage = Resource::new(
         move || (delete_action.version().get(), upload_version.get()),
@@ -152,8 +157,12 @@ pub fn MediaPage() -> impl IntoView {
                 />
             </div>
             <MediaUsagePanel usage=usage />
-            <MediaListPanel media_list=media_list delete_action=delete_action />
-            <MediaDeleteOutcome delete_action=delete_action />
+            <MediaListPanel
+                media_list=media_list
+                delete_action=delete_action
+                delete_target=delete_target
+            />
+            <MediaDeleteOutcome delete_action=delete_action delete_target=delete_target />
         </div>
     }
 }
@@ -218,6 +227,8 @@ fn MediaListPanel(
     media_list: Resource<WebResult<Vec<Item>>>,
     /// Threaded through to each row's delete form.
     delete_action: ServerAction<Delete>,
+    /// Set by a row's Delete click so a refusal can name the item it was about.
+    delete_target: RwSignal<Option<Item>>,
 ) -> impl IntoView {
     view! {
         <Suspense fallback=|| {
@@ -244,7 +255,11 @@ fn MediaListPanel(
                                 <tbody>
                                     {items
                                         .into_iter()
-                                        .map(|item| render_media_row(&item, delete_action))
+                                        .map(|item| render_media_row(
+                                            &item,
+                                            delete_action,
+                                            delete_target,
+                                        ))
                                         .collect::<Vec<_>>()}
                                 </tbody>
                             </table>
@@ -262,7 +277,11 @@ fn MediaListPanel(
 /// refusal naming the posts, or the error. Nothing until the action has a value.
 /// Split out of [`MediaPage`] (#306); this component owns that three-way decision.
 #[component]
-fn MediaDeleteOutcome(delete_action: ServerAction<Delete>) -> impl IntoView {
+fn MediaDeleteOutcome(
+    delete_action: ServerAction<Delete>,
+    /// The item the refused delete was about, so the refusal can offer a force.
+    delete_target: RwSignal<Option<Item>>,
+) -> impl IntoView {
     view! {
         {move || {
             delete_action
@@ -285,6 +304,11 @@ fn MediaDeleteOutcome(delete_action: ServerAction<Delete>) -> impl IntoView {
                                     "Cannot delete: referenced in post(s) {ids}. Use force delete to remove anyway.",
                                 )}
                             </p>
+                            {move || {
+                                delete_target
+                                    .get()
+                                    .map(|item| force_delete_form(&item, delete_action))
+                            }}
                         }
                             .into_any()
                     }
@@ -294,7 +318,43 @@ fn MediaDeleteOutcome(delete_action: ServerAction<Delete>) -> impl IntoView {
     }
 }
 
-fn render_media_row(item: &Item, delete_action: ServerAction<Delete>) -> impl IntoView {
+/// The force-delete submission, rendered only in the refusal branch — the control the
+/// refusal message tells the user to reach for. It is the same `Delete` server fn as the
+/// row's button plus a `force` field, which the handler reads as
+/// `try_delete_media(…, force = true)`: the guard is overridden, the row goes, and the
+/// posts that embed it keep serving the file (which stays on disk).
+///
+/// The button's accessible name contains "Force delete" — the e2e selects on it.
+fn force_delete_form(item: &Item, delete_action: ServerAction<Delete>) -> impl IntoView {
+    // Same two-spellings split as `render_media_row`: the label decodes to the name the
+    // user typed, the hidden field stays the canonical key (#720).
+    let display_name = item.filename.decoded().into_owned();
+    let filename_key = item.filename.to_string();
+    let sha256 = item.sha256.to_string();
+    let source = item.source.to_string();
+
+    view! {
+        <ActionForm action=delete_action>
+            <input type="hidden" name="sha256" value=sha256 />
+            <input type="hidden" name="filename" value=filename_key />
+            <input type="hidden" name="source" value=source />
+            <input type="hidden" name="force" value="true" />
+            <button
+                type="submit"
+                class="j-btn is-danger"
+                onclick="return confirm('Delete anyway? Posts that embed this item will keep pointing at it.')"
+            >
+                {format!("Force delete {display_name}")}
+            </button>
+        </ActionForm>
+    }
+}
+
+fn render_media_row(
+    item: &Item,
+    delete_action: ServerAction<Delete>,
+    delete_target: RwSignal<Option<Item>>,
+) -> impl IntoView {
     // Same reason as `filename` below: `RootRelativeUrl` is not an `IntoAttributeValue`,
     // so the `href` gets its `str` view here.
     let url = item.url.to_string();
@@ -313,6 +373,10 @@ fn render_media_row(item: &Item, delete_action: ServerAction<Delete>) -> impl In
     let source = item.source.to_string();
     let size_label = format_bytes(item.size_bytes);
     let created_at = item.created_at.to_string();
+    // Remembered on click rather than on submit: the refusal branch needs the identity of
+    // whatever the response comes back about, and a click the confirm dialog then cancels
+    // sets it harmlessly — nothing reads it until a refusal actually arrives.
+    let target = item.clone();
 
     view! {
         <tr>
@@ -334,6 +398,7 @@ fn render_media_row(item: &Item, delete_action: ServerAction<Delete>) -> impl In
                         type="submit"
                         class="j-btn is-danger"
                         onclick="return confirm('Delete this media item?')"
+                        on:click=move |_| delete_target.set(Some(target.clone()))
                     >
                         "Delete"
                     </button>

@@ -1031,7 +1031,11 @@ where
     ) -> sqlx::Result<Vec<PostId>> {
         // Identical on both backends, so it stays here rather than becoming a
         // `PostDialect` const (ADR-0019). No `LIMIT`: see the trait doc.
-        let ids: Vec<i64> = sqlx::query_scalar(
+        //
+        // Decodes straight into `PostId` rather than `i64`-then-convert: an id column
+        // decodes as its newtype (ADR-0085, #715), which is also what keeps the `i64`
+        // decode bound off this impl.
+        sqlx::query_scalar::<_, PostId>(
             "SELECT pm.post_id \
              FROM post_media pm \
              JOIN posts p ON p.post_id = pm.post_id \
@@ -1047,8 +1051,7 @@ where
         .bind(&media.sha256)
         .bind(&media.filename)
         .fetch_all(&self.pool)
-        .await?;
-        Ok(ids.into_iter().map(PostId::from).collect())
+        .await
     }
 
     #[tracing::instrument(

@@ -1220,7 +1220,7 @@ unconditional delete that must not change.
 > distinguishable" bullet contradicts that signature; this is the resolution,
 > not drift.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```rust
 #[apply(backends)]
@@ -1318,12 +1318,12 @@ async fn try_delete_media_holds_under_concurrent_reference_writes(#[case] backen
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run: `devtool run -- cargo nextest run -p storage try_delete_media` Expected:
 FAIL — `try_delete_media` not defined.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 The conditional statement from spec D8, run with `fetch_optional`. Implement it
 in the **generic** `MediaStore` impl, not the dialect:
@@ -1336,7 +1336,7 @@ two impls, and update that doc comment, which currently explains why
 On no row returned, classify with one existence check on `media`: present →
 `RefusedReferenced`; absent → `Err(NotFound)`.
 
-- [ ] **Step 4: Run the tests; if `SQLITE_BUSY` appears, take the fallback**
+- [x] **Step 4: Run the tests; if `SQLITE_BUSY` appears, take the fallback**
 
 Run: `devtool run -- cargo nextest run -p storage try_delete_media` Expected:
 PASS
@@ -1351,7 +1351,7 @@ which branch was taken in the commit message**, and if it was the fallback, add
 a comment at the SQLite impl citing `sessions.rs:19` so the next reader knows it
 was measured, not assumed.
 
-- [ ] **Step 5: Add the force-delete affordance**
+- [x] **Step 5: Add the force-delete affordance**
 
 **This is production UI work, and A18 cannot be met without it.**
 `web/src/media/component.rs:264` already tells the user "Use force delete to
@@ -1366,7 +1366,7 @@ branch at `:250-276` where the referencing post IDs are shown, so it appears
 only once a delete has actually been refused. Give it an accessible name
 containing "Force delete" — Task 9's e2e selects on it.
 
-- [ ] **Step 6: Rewire the handler**
+- [x] **Step 6: Rewire the handler**
 
 `web/src/media/api.rs::delete` becomes: build the `MediaRef`, call
 `list_posts_referencing_media` for the message, call `try_delete_media` for the
@@ -1375,12 +1375,12 @@ decision, map the outcome onto the unchanged `DeleteResult`. Remove the
 `viewer_identity` call. `server/src/atompub/media.rs:187` moves to
 `try_delete_media(…, force = true)`.
 
-- [ ] **Step 7: Run the tests, verify they pass**
+- [x] **Step 7: Run the tests, verify they pass**
 
 Run: `devtool run -- cargo nextest run -p storage -p web -p jaunder` Expected:
 PASS
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 devtool run -- cargo xtask check

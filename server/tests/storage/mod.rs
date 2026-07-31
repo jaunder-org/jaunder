@@ -5277,8 +5277,8 @@ async fn update_rendered_post_not_found_returns_storage_error(#[case] backend: B
 
 // ── MediaStorage tests ────────────────────────────────────────────────────────
 
-use common::media::MediaSource;
-use storage::{CreateMediaError, DeleteMediaError, MediaRecord};
+use common::media::{MediaRef, MediaSource};
+use storage::{CreateMediaError, DeleteMediaError, MediaRecord, TryDeleteOutcome};
 
 fn make_media_record(
     user_id: UserId,
@@ -5487,16 +5487,20 @@ async fn delete_media_removes_record(#[case] backend: Backend) {
         parse_content_hash("cccc1234cccc1234cccc1234cccc1234cccc1234cccc1234cccc1234cccc1234");
     let record = make_media_record(user_id, &sha256, "del.jpg", MediaSource::Upload);
     state.media.create_media(&record).await.unwrap();
-    state
+    let outcome = state
         .media
-        .delete_media(
+        .try_delete_media(
             user_id,
-            &sha256,
-            &parse_filename("del.jpg"),
-            &MediaSource::Upload,
+            &MediaRef {
+                source: MediaSource::Upload,
+                sha256: sha256.clone(),
+                filename: parse_filename("del.jpg"),
+            },
+            false,
         )
         .await
         .unwrap();
+    assert_eq!(outcome, TryDeleteOutcome::Deleted);
 
     let fetched = state
         .media
@@ -5522,11 +5526,14 @@ async fn delete_nonexistent_returns_not_found(#[case] backend: Backend) {
         parse_content_hash("dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234");
     let err = state
         .media
-        .delete_media(
+        .try_delete_media(
             user_id,
-            &sha256,
-            &parse_filename("ghost.jpg"),
-            &MediaSource::Upload,
+            &MediaRef {
+                source: MediaSource::Upload,
+                sha256: sha256.clone(),
+                filename: parse_filename("ghost.jpg"),
+            },
+            false,
         )
         .await
         .unwrap_err();
