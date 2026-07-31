@@ -1810,13 +1810,13 @@ git commit -m "feat(xtask): wire pr watch/land into the CLI with remote-derived 
 
 **Files:**
 
-- Create: `docs/adr/0086-xtask-github-pr-observation.md` (numberless —
+- Create: `docs/adr/0087-xtask-github-pr-observation.md` (numberless —
   `cargo xtask adr promote` numbers it at ship, per ADR-0048)
 
 **Interfaces:** none (documentation).
 
 - [x] **Step 1: Write the ADR draft** —
-      `docs/adr/0086-xtask-github-pr-observation.md`.
+      `docs/adr/0087-xtask-github-pr-observation.md`.
 
 Follow `docs/adr/template.md`. **The H1 must be exactly `# ADR-DRAFT: <Title>`
 and the status must be lowercase `accepted`** — `adr_readme.rs:25-31` defines
@@ -1925,6 +1925,14 @@ git commit -m "docs: point the merge-queue protocol at cargo xtask pr watch (#72
 > **Both halves happen at ship, after the PR exists and the flag names are
 > final.** Neither produces a reviewable diff: the smoke run is a manual
 > exercise (D11 forbids networked tests) and `.claude/` is untracked (F10).
+
+> **Correction — the out-of-tree edits wait until the tool has MERGED**, not merely
+> until the PR is open. `.claude/skills/` and `CLAUDE.md` are untracked and shared by
+> every concurrent session, including ones working in worktrees branched from `main`.
+> Rewriting `jaunder-ship` to say "use `cargo xtask pr watch`" while the command exists
+> only on this branch would instruct those sessions to run something their tree does
+> not have. The edits are therefore the **last** thing done, after the merge lands.
+> (Task 10 Step 1's smoke run has no such constraint and ran during Task 7.)
 
 **Files:**
 
