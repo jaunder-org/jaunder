@@ -1,15 +1,32 @@
-//! The committed coverage snapshot, the hand-maintained allowlist, and the
+//! The committed coverage artifacts, the hand-maintained allowlist, and the
 //! verdict that turns them into build failures (#681).
 //!
-//! **Two files, deliberately separate.** The generator rewrites the snapshot on
-//! every e2e run; the allowlist is hand-written. Folding the allowlist into the
-//! snapshot would let regeneration clobber it.
+//! **Three files, deliberately separate.** The generator rewrites the snapshot
+//! and the evidence on every e2e run; the allowlist is hand-written. Folding the
+//! allowlist into either would let regeneration clobber it.
+//!
+//! **The snapshot is what the gate asserts; the evidence is what a reader wants
+//! (#745).** [`verdict`] has only ever consulted the *set* of covered fns —
+//! never a test title — so the titles were load-bearing for red/green solely
+//! because the whole file was byte-compared. And the titles are the one part
+//! that does not reproduce: measured across four forced re-executions of the
+//! authoritative e2e check on one tree, the covered key set and the orphan
+//! reason sets were identical every time while the title sets moved. The cause
+//! is not misattribution — every hit really is attributed to the test whose
+//! browser context issued it — but *post-assertion trailing traffic*: a test
+//! that ends mid-navigation leaves its page booting, and how far that boot gets
+//! before teardown differs run to run.
+//!
+//! So [`Snapshot`] carries the covered names and the orphan reasons and is
+//! byte-compared; [`Evidence`] carries the titles and is regenerated but never
+//! compared. [`verdict`] cross-checks their key sets, which *are* stable, so the
+//! evidence cannot silently fall out of step — see `evidence_verdict`.
 //!
 //! **No provenance fields.** The snapshot records coverage and nothing else — no
 //! commit, no timestamp. A recorded commit is necessarily an ancestor of the
 //! commit under test, so with fail-on-any-difference the gate would be red
-//! forever. Keys are `BTreeMap`-ordered and rendering is stable, so an unchanged
-//! run is byte-identical and drift comparison can be total.
+//! forever. Keys are ordered and rendering is stable, so an unchanged run is
+//! byte-identical and drift comparison can be total.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -23,15 +40,19 @@ use crate::server_fns::ServerFn;
 /// the gate needs no external context.
 pub const REGENERATE_CMD: &str = "cargo xtask server-fn-coverage regenerate";
 
-/// Which tests exercised each server fn, as committed to `docs/coverage/`.
+/// Which server fns a real browser session drove, as committed to
+/// `docs/coverage/server-fns.json`. **This is the byte-compared artifact.**
 ///
-/// Keyed by [`ServerFn::qualified`] — `<vertical>::<ident>` — as is the
-/// allowlist's `server_fn` field, so the two files and the inventory all name a fn
+/// Named by [`ServerFn::qualified`] — `<vertical>::<ident>` — as is the
+/// allowlist's `server_fn` field, so all three files and the inventory name a fn
 /// the same way.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Snapshot {
-    /// `<vertical>::<ident>` → the tests that drove it, sorted.
-    pub covered: BTreeMap<String, Vec<String>>,
+    /// The `<vertical>::<ident>` names driven by at least one e2e flow, sorted.
+    ///
+    /// A *set*, not a map to test titles, because the set is what [`verdict`]
+    /// asserts and the set is what reproduces. The titles live in [`Evidence`].
+    pub covered: Vec<String>,
     /// `<vertical>::<ident>` → the distinct reasons its unattributed hits ended
     /// with. Reported, not failed: a non-empty bucket means the harness stopped
     /// attributing somewhere, which is worth seeing — and the reason is what makes
@@ -44,16 +65,38 @@ pub struct Snapshot {
     pub orphans: BTreeMap<String, BTreeSet<String>>,
 }
 
-impl From<Coverage> for Snapshot {
-    fn from(c: Coverage) -> Self {
-        Self {
-            covered: c
-                .covered
-                .into_iter()
-                .map(|(k, v)| (k, v.into_iter().collect::<Vec<_>>()))
-                .collect(),
-            orphans: c.orphans,
-        }
+/// Which tests drove each server fn, as committed to
+/// `docs/coverage/server-fns-evidence.json`. **Never compared** — regenerated
+/// alongside the snapshot and read only by humans.
+///
+/// It is uncompared because it does not reproduce (see the module docs), and it
+/// is still *committed* because ADR-0081 leans on being able to see which flow
+/// backs each fn without running the suite. The cost of that trade is that a
+/// title can go stale unnoticed: `evidence_verdict` checks only the key set.
+/// Whether it is worth its weight at all is #757.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Evidence {
+    /// `<vertical>::<ident>` → the tests that drove it, sorted.
+    pub covered: BTreeMap<String, BTreeSet<String>>,
+}
+
+impl Coverage {
+    /// The two committed artifacts. One constructor rather than two `From` impls,
+    /// so neither can be built without the other and drift into disagreement —
+    /// the disagreement `evidence_verdict` exists to catch is then only reachable
+    /// through the filesystem, never through this seam.
+    pub fn split(self) -> (Snapshot, Evidence) {
+        (
+            Snapshot {
+                // `BTreeMap` keys already iterate in sorted order, so this is a
+                // move into a `Vec` that happens to be sorted, not a re-sort.
+                covered: self.covered.keys().cloned().collect(),
+                orphans: self.orphans,
+            },
+            Evidence {
+                covered: self.covered,
+            },
+        )
     }
 }
 
@@ -69,19 +112,24 @@ pub struct AllowlistEntry {
     pub issue: String,
 }
 
-/// Render a snapshot to the exact bytes committed: stably-ordered, pretty-printed
-/// JSON with a trailing newline.
+/// Render a coverage artifact to the exact bytes committed: stably-ordered,
+/// pretty-printed JSON with a trailing newline.
+///
+/// Generic over both artifacts so they share one rendering contract. The evidence
+/// file is not compared, but an unstable rendering would still churn its git diff
+/// on every regenerate with no gate to catch it.
 ///
 /// Fallible rather than lossy. A serialization failure used to fall back to an empty
 /// `{"covered":{},"orphans":{}}`, which `regenerate` would then *write*: the committed
 /// snapshot would say nothing is covered, and the next `verify` would agree with it.
 /// That is the exact false verdict this gate exists to prevent, so the error
 /// propagates.
-pub fn render(snapshot: &Snapshot) -> Result<String> {
-    // BTreeMap serializes in key order, and `to_string_pretty` is deterministic,
-    // so equal snapshots render byte-identically.
-    let mut out = serde_json::to_string_pretty(snapshot)
-        .context("serializing the server-fn coverage snapshot")?;
+pub fn render<T: Serialize>(value: &T) -> Result<String> {
+    // `BTreeMap`/`BTreeSet` serialize in key order and `covered` is sorted on
+    // construction, so `to_string_pretty` — itself deterministic — renders equal
+    // values byte-identically.
+    let mut out = serde_json::to_string_pretty(value)
+        .context("serializing the server-fn coverage artifact")?;
     out.push('\n');
     Ok(out)
 }
@@ -122,7 +170,7 @@ pub fn verdict(
         // compares the computed endpoint against URIs observed in a real captured
         // run — ground truth produced by the macro's actual expansion, not a second
         // restatement of the rule.
-        let covered = snapshot.covered.contains_key(&qualified);
+        let covered = snapshot.covered.iter().any(|c| c == &qualified);
         let entry = allowed.get(qualified.as_str());
 
         match (covered, entry) {
@@ -149,7 +197,7 @@ pub fn verdict(
     }
 
     // A snapshot or allowlist naming something the inventory does not is stale.
-    for name in snapshot.covered.keys() {
+    for name in &snapshot.covered {
         if !inventory_names.contains(name) {
             out.push(format!(
                 "{name}: present in the snapshot but is not a #[server] fn — regenerate \
@@ -201,12 +249,41 @@ mod tests {
 
     fn covered_with(idents: &[&str]) -> Snapshot {
         Snapshot {
-            covered: idents
+            covered: {
+                let mut names: Vec<String> = idents.iter().map(|i| qual(i)).collect();
+                names.sort();
+                names
+            },
+            orphans: BTreeMap::new(),
+        }
+    }
+
+    /// A [`Coverage`] over `(qualified name, test titles)` pairs, the input side
+    /// of [`Coverage::split`].
+    fn coverage_of(pairs: &[(&str, &[&str])]) -> Coverage {
+        Coverage {
+            covered: pairs
                 .iter()
-                .map(|i| (qual(i), vec!["a test".to_string()]))
+                .map(|(k, ts)| (k.to_string(), ts.iter().map(|t| t.to_string()).collect()))
                 .collect(),
             orphans: BTreeMap::new(),
         }
+    }
+
+    /// `^[a-z_][a-z0-9_]*::[a-z0-9_]+$` — hand-rolled because `xtask` has no
+    /// `regex` dependency and one shape assertion does not justify adding one.
+    fn is_qualified(name: &str) -> bool {
+        let Some((vertical, ident)) = name.split_once("::") else {
+            return false;
+        };
+        let word = |s: &str| {
+            !s.is_empty()
+                && s.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        };
+        word(vertical)
+            && word(ident)
+            && vertical.starts_with(|c: char| c.is_ascii_lowercase() || c == '_')
     }
 
     fn entry(server_fn: &str, reason: &str, issue: &str) -> AllowlistEntry {
@@ -218,27 +295,72 @@ mod tests {
     }
 
     #[test]
-    fn render_is_byte_stable_across_equal_snapshots() {
-        let a = covered_with(&["b_fn", "a_fn"]);
-        let b = covered_with(&["a_fn", "b_fn"]);
+    fn split_puts_names_in_the_snapshot_and_titles_in_the_evidence() {
+        let (s, e) = coverage_of(&[("posts::create", &["a test"])]).split();
+        assert_eq!(s.covered, vec!["posts::create".to_string()]);
+        assert_eq!(
+            e.covered.get("posts::create").expect("key present"),
+            &BTreeSet::from(["a test".to_string()])
+        );
+    }
+
+    #[test]
+    fn the_compared_snapshot_carries_no_test_titles() {
+        // AC1, and the point of the whole split. A title and a qualified name are
+        // the same TYPE, so nothing at the `render` seam can tell them apart by
+        // type — the guard has to be about SHAPE.
+        let (s, _) =
+            coverage_of(&[("posts::create", &["authenticated user can create a post"])]).split();
+        let rendered = render(&s).expect("renders");
+        assert!(!rendered.contains("authenticated user"), "{rendered}");
+        for name in &s.covered {
+            assert!(is_qualified(name), "not a qualified name: {name}");
+        }
+    }
+
+    #[test]
+    fn the_qualified_name_guard_rejects_what_it_must() {
+        // The guard above is only worth having if it bites.
+        assert!(is_qualified("posts::create"));
+        assert!(is_qualified("_private::fn2"));
+        assert!(!is_qualified("authenticated user can create a post"));
+        assert!(!is_qualified("Posts::create"));
+        assert!(!is_qualified("posts::api::create"));
+        assert!(!is_qualified("create"));
+        assert!(!is_qualified("posts::"));
+    }
+
+    #[test]
+    fn split_orders_snapshot_names_regardless_of_insertion_order() {
+        let (s, _) = coverage_of(&[("z::fn", &["t"]), ("a::fn", &["t"])]).split();
+        assert_eq!(s.covered, vec!["a::fn".to_string(), "z::fn".to_string()]);
+    }
+
+    #[test]
+    fn render_is_byte_stable_across_equal_values() {
+        let (a, _) = coverage_of(&[("b::fn", &["t"]), ("a::fn", &["t"])]).split();
+        let (b, _) = coverage_of(&[("a::fn", &["t"]), ("b::fn", &["t"])]).split();
         assert_eq!(render(&a).expect("renders"), render(&b).expect("renders"));
     }
 
     #[test]
-    fn render_sorts_keys_regardless_of_insertion_order() {
-        let mut s = Snapshot::default();
-        s.covered.insert("z_fn".into(), vec!["t".into()]);
-        s.covered.insert("a_fn".into(), vec!["t".into()]);
-        let out = render(&s).expect("renders");
-        let (a, z) = (out.find("a_fn"), out.find("z_fn"));
-        assert!(a < z, "keys must render in sorted order: {out}");
+    fn render_ends_with_a_newline() {
+        // Both artifacts: the evidence file is not compared, but an unstable
+        // rendering would still churn its git diff on every regenerate.
+        let (s, e) = coverage_of(&[("a::fn", &["t"])]).split();
+        assert!(render(&s).expect("renders").ends_with('\n'));
+        assert!(render(&e).expect("renders").ends_with('\n'));
     }
 
     #[test]
-    fn render_ends_with_a_newline() {
-        assert!(render(&Snapshot::default())
-            .expect("renders")
-            .ends_with('\n'));
+    fn both_artifacts_round_trip_through_json() {
+        let (s, e) = coverage_of(&[("a::fn", &["t"]), ("b::fn", &["u"])]).split();
+        let s2: Snapshot =
+            serde_json::from_str(&render(&s).expect("renders")).expect("round-trips");
+        let e2: Evidence =
+            serde_json::from_str(&render(&e).expect("renders")).expect("round-trips");
+        assert_eq!(s, s2);
+        assert_eq!(e, e2);
     }
 
     #[test]
@@ -347,12 +469,7 @@ mod tests {
             })
             .collect();
         let snapshot = Snapshot {
-            covered: [(
-                "posts::create".to_string(),
-                vec!["creates a post".to_string()],
-            )]
-            .into_iter()
-            .collect(),
+            covered: vec!["posts::create".to_string()],
             orphans: BTreeMap::new(),
         };
 
@@ -389,13 +506,5 @@ mod tests {
         let v = verdict(&inventory, &Snapshot::default(), &al);
         assert_eq!(v.len(), 1, "{v:?}");
         assert!(v[0].starts_with("posts::delete:"), "{}", v[0]);
-    }
-
-    #[test]
-    fn snapshot_round_trips_through_json() {
-        let s = covered_with(&["a", "b"]);
-        let back: Snapshot =
-            serde_json::from_str(&render(&s).expect("renders")).expect("round-trips");
-        assert_eq!(s, back);
     }
 }

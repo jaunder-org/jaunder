@@ -10,15 +10,18 @@ use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 
-use super::{extract, render, AllowlistEntry, Coverage, Snapshot};
+use super::{extract, render, AllowlistEntry, Coverage, Evidence, Snapshot};
 use crate::files;
 use crate::server_fns::{module_path_of, server_fns_in, ServerFn};
 use crate::traces::parse::{parse_spans, Filters};
 
 /// The `web` crate source root, scanned for the `#[macros::server]` inventory.
 pub const WEB_SRC: &str = "web/src";
-/// The committed, generated coverage snapshot.
+/// The committed, generated coverage snapshot — the byte-compared artifact.
 pub const SNAPSHOT_PATH: &str = "docs/coverage/server-fns.json";
+/// The committed, generated test-title evidence — regenerated beside the
+/// snapshot, never compared (#745).
+pub const EVIDENCE_PATH: &str = "docs/coverage/server-fns-evidence.json";
 /// The committed, hand-maintained allowlist.
 pub const ALLOWLIST_PATH: &str = "docs/coverage/server-fns-allowlist.json";
 /// Where `cargo xtask e2e sqlite chromium` lifts the authoritative capture.
@@ -105,19 +108,42 @@ pub fn read_allowlist(path: &Path) -> Result<Vec<AllowlistEntry>> {
 
 /// Write the snapshot to `path`, creating `docs/coverage/` if needed.
 pub fn write_snapshot(path: &Path, snapshot: &Snapshot) -> Result<()> {
+    write_artifact(path, snapshot)
+}
+
+/// Write the evidence file to `path`, creating `docs/coverage/` if needed.
+pub fn write_evidence(path: &Path, evidence: &Evidence) -> Result<()> {
+    write_artifact(path, evidence)
+}
+
+/// Render `value` and write it, creating the parent directory if needed. Shared
+/// by both artifacts so they cannot acquire different write semantics.
+fn write_artifact<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
     }
-    std::fs::write(path, render(snapshot)?).with_context(|| format!("writing {}", path.display()))
+    std::fs::write(path, render(value)?).with_context(|| format!("writing {}", path.display()))
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
     use super::*;
 
     fn empty_inventory() -> Vec<ServerFn> {
         Vec::new()
+    }
+
+    fn one_entry_coverage() -> Coverage {
+        Coverage {
+            covered: BTreeMap::from([(
+                "posts::create".to_string(),
+                BTreeSet::from(["a test".to_string()]),
+            )]),
+            orphans: BTreeMap::new(),
+        }
     }
 
     #[test]
@@ -155,5 +181,17 @@ mod tests {
         let err = read_snapshot(Path::new("/nonexistent-snapshot.json")).unwrap_err();
         let chain = format!("{err:#}");
         assert!(chain.contains(super::super::REGENERATE_CMD), "{chain}");
+    }
+
+    #[test]
+    fn write_evidence_creates_the_directory_and_renders_stably() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("nested").join("evidence.json");
+        let (_, e) = one_entry_coverage().split();
+        write_evidence(&path, &e).expect("writes");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read"),
+            render(&e).expect("renders")
+        );
     }
 }

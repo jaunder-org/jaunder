@@ -23,10 +23,10 @@ use anyhow::Result;
 
 use crate::result::{CommandResult, StepResult};
 use crate::server_fn_coverage::io::{
-    coverage_from_capture, inventory, read_allowlist, read_snapshot, write_snapshot,
-    ALLOWLIST_PATH, CAPTURE_PATH, SNAPSHOT_PATH, WEB_SRC,
+    coverage_from_capture, inventory, read_allowlist, read_snapshot, write_evidence,
+    write_snapshot, ALLOWLIST_PATH, CAPTURE_PATH, EVIDENCE_PATH, SNAPSHOT_PATH, WEB_SRC,
 };
-use crate::server_fn_coverage::{render, verdict, Snapshot, REGENERATE_CMD};
+use crate::server_fn_coverage::{render, verdict, REGENERATE_CMD};
 
 /// The static lane's step name.
 const STATIC_STEP: &str = "server-fn-coverage";
@@ -95,6 +95,7 @@ fn regenerate_or_verify(
     web_src: &Path,
     capture: &Path,
     snapshot_path: &Path,
+    evidence_path: &Path,
     regenerate: bool,
 ) -> Result<StepResult> {
     let name = if regenerate {
@@ -104,22 +105,48 @@ fn regenerate_or_verify(
     };
     let inventory = inventory(web_src)?;
     let coverage = coverage_from_capture(capture, &inventory)?;
-    let snapshot = Snapshot::from(coverage);
+    let (snapshot, evidence) = coverage.split();
     let covered = snapshot.covered.len();
 
     if regenerate {
         let orphans = snapshot.orphans.len();
+        // Both, always: `evidence_verdict` fails on a key-set disagreement, so
+        // writing one without the other would redden the very next static check.
         write_snapshot(snapshot_path, &snapshot)?;
+        write_evidence(evidence_path, &evidence)?;
         return Ok(StepResult::ok(name).detail(format!(
-            "{covered} covered, {orphans} fn(s) with unattributed hits → {}",
-            snapshot_path.display()
+            "{covered} covered, {orphans} fn(s) with unattributed hits → {} + {}",
+            snapshot_path.display(),
+            evidence_path.display()
         )));
     }
 
-    // A missing snapshot reads as empty, so it mismatches and fails — the strict
-    // reading, not a lenient one.
+    // Only the snapshot is compared. The evidence file is a timing-dependent
+    // observation (see `snapshot.rs`'s module docs) and comparing it is exactly
+    // the bug #745 fixed.
     let committed = std::fs::read_to_string(snapshot_path).unwrap_or_default();
-    if committed == render(&snapshot)? {
+    compare_rendered(
+        name,
+        &committed,
+        &render(&snapshot)?,
+        snapshot_path,
+        covered,
+    )
+}
+
+/// The verify verdict for bytes already derived — pure over its inputs, so the
+/// drift branch is testable without a capture tarball.
+///
+/// A missing snapshot reaches here as an empty `committed`, which never equals
+/// rendered output and so fails — the strict reading, not a lenient one.
+fn compare_rendered(
+    name: &'static str,
+    committed: &str,
+    rendered: &str,
+    snapshot_path: &Path,
+    covered: usize,
+) -> Result<StepResult> {
+    if committed == rendered {
         return Ok(StepResult::ok(name).detail(format!("{covered} covered; snapshot current")));
     }
     Ok(StepResult::fail(name).detail(format!(
@@ -130,13 +157,14 @@ fn regenerate_or_verify(
 }
 
 /// Derive coverage from an e2e capture over the repo's real roots, and either
-/// rewrite the committed snapshot (`regenerate`) or fail on any difference from
-/// it (`verify`).
+/// rewrite the committed artifacts (`regenerate`) or fail on any difference from
+/// the committed snapshot (`verify`).
 pub fn from_capture(capture: &Path, regenerate: bool) -> Result<StepResult> {
     regenerate_or_verify(
         Path::new(WEB_SRC),
         capture,
         Path::new(SNAPSHOT_PATH),
+        Path::new(EVIDENCE_PATH),
         regenerate,
     )
 }
@@ -193,10 +221,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         web_src_with(tmp.path(), &["create_post"]);
         let snap = tmp.path().join("snap.json");
-        write_json(
-            &snap,
-            r#"{"covered":{"posts::create_post":["creates a post"]},"orphans":{}}"#,
-        );
+        write_json(&snap, r#"{"covered":["posts::create_post"],"orphans":{}}"#);
 
         let step = check(tmp.path(), &snap, &tmp.path().join("absent-allowlist.json"));
         assert!(step.ok, "{:?}", step.detail);
@@ -210,10 +235,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         web_src_with(tmp.path(), &["create_post", "brand_new_uncovered_fn"]);
         let snap = tmp.path().join("snap.json");
-        write_json(
-            &snap,
-            r#"{"covered":{"posts::create_post":["creates a post"]},"orphans":{}}"#,
-        );
+        write_json(&snap, r#"{"covered":["posts::create_post"],"orphans":{}}"#);
 
         let step = check(tmp.path(), &snap, &tmp.path().join("absent-allowlist.json"));
         assert!(!step.ok);
@@ -226,7 +248,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         web_src_with(tmp.path(), &["no_flow_yet"]);
         let snap = tmp.path().join("snap.json");
-        write_json(&snap, r#"{"covered":{},"orphans":{}}"#);
+        write_json(&snap, r#"{"covered":[],"orphans":{}}"#);
         let allow = tmp.path().join("allow.json");
         write_json(
             &allow,
@@ -358,7 +380,7 @@ mod tests {
         let snapshot = read_snapshot(&repo_root().join(SNAPSHOT_PATH)).expect("snapshot parses");
         let missing: Vec<&String> = snapshot
             .covered
-            .keys()
+            .iter()
             .filter(|fnname| !coverage.covered.contains_key(*fnname))
             .collect();
         assert!(
@@ -652,6 +674,7 @@ mod tests {
             tmp.path(),
             Path::new("/nonexistent-capture.tar.gz"),
             &tmp.path().join("snap.json"),
+            &tmp.path().join("evidence.json"),
             false,
         )
         .unwrap_err();
@@ -666,6 +689,7 @@ mod tests {
             &tmp.path().join("nonexistent"),
             Path::new("/nonexistent-capture.tar.gz"),
             &tmp.path().join("snap.json"),
+            &tmp.path().join("evidence.json"),
             false,
         )
         .unwrap_err();

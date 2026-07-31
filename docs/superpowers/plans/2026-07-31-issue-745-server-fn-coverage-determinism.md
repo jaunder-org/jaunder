@@ -75,6 +75,19 @@ snapshot's. No change to trace parsing, span identification, or attribution.
 - **Task 2 cannot be verified by re-running the e2e combo** — that replays the
   cached derivation in ~4 s and asserts a file equals itself (spec AC8).
 
+**Re-slices discovered during execution** (recorded rather than silently
+absorbed):
+
+- **`read_evidence` and its fail-closed tests moved from Task 2 to Task 4.** The
+  crate builds with `-D dead-code`, so a reader with no caller fails the gate,
+  and its only caller is Task 4's `check` wiring. Suppressing the lint would
+  have needed explicit approval and would have been the wrong fix. Task 2 keeps
+  `EVIDENCE_PATH`, `write_evidence`, and the types.
+- **`compare_rendered` (Task 5's seam) landed in Task 2.** Extracting it was
+  entangled with routing `regenerate_or_verify` through the new `split()` — the
+  same lines change either way. Task 5 is now its tests only, which is where its
+  value was regardless: the seam without the tests proves nothing.
+
 ---
 
 ### Task 0 (already done — verify, do not redo)
@@ -194,7 +207,7 @@ fn regenerate_or_verify(
 ) -> Result<StepResult>;
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `snapshot.rs`'s test module, replacing
 `render_is_byte_stable_across_equal_snapshots`,
@@ -341,13 +354,13 @@ fn write_evidence_creates_the_directory_and_renders_stably() {
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run: `cargo nextest run -p xtask server_fn_coverage` Expected: FAIL —
 `Coverage::split`, `Evidence`, `read_evidence`, `write_evidence`,
 `EVIDENCE_PATH` not defined.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 Write the types, `Coverage::split`, the generic `render`, and the three `io.rs`
 items to the signatures in **Interfaces**. The tests pin every branch —
@@ -389,7 +402,7 @@ Then update every caller the type change breaks. Exhaustively:
   `verify_from_a_missing_capture_is_an_error` (`:651-657`), and
   `an_unscannable_web_src_is_an_error_not_an_empty_inventory` (`:665-671`).
 
-- [ ] **Step 4: Regenerate both committed artifacts**
+- [x] **Step 4: Regenerate both committed artifacts**
 
 The tree is not buildable until this happens — the committed snapshot is still
 an object of arrays and will not deserialize into the new `Snapshot`.
@@ -402,7 +415,7 @@ cargo xtask server-fn-coverage regenerate
 
 Expected: PASS, detail naming both written paths.
 
-- [ ] **Step 5: Run the tests, verify they pass**
+- [x] **Step 5: Run the tests, verify they pass**
 
 Run: `cargo nextest run -p xtask server_fn_coverage` Expected: PASS — including
 the seed tests that read the real artifacts
@@ -419,7 +432,7 @@ Run: `cargo xtask server-fn-coverage verify` Expected: PASS —
 Do **not** substitute `cargo xtask e2e sqlite chromium`: on an unchanged tree it
 replays the cached derivation in ~4 s and asserts a file equals itself.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add xtask/src/server_fn_coverage/snapshot.rs xtask/src/server_fn_coverage/io.rs xtask/src/server_fn_coverage/mod.rs xtask/src/steps/server_fn_coverage_check.rs docs/coverage/server-fns.json docs/coverage/server-fns-evidence.json
