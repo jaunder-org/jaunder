@@ -504,7 +504,6 @@
       "inline composer: published post appears in timeline without page reload",
       "over-long post summary shows an inline error and gates submit",
       "owner: /app cockpit boots straight into the personalized feed",
-      "owner: jaunder_home_redirect='app' makes the pre-paint script redirect / → /app",
       "published post renders at permalink",
       "scheduling a post shows a Scheduled-for badge on the drafts page",
       "unpublishing from a permalink navigates to /drafts without a full reload",
