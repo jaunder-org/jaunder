@@ -93,7 +93,7 @@ impl PostDialect for Postgres {
         .bind(&input.slug)
         .bind(&input.body)
         .bind(input.format)
-        .bind(&input.rendered_html)
+        .bind(&input.rendered.html)
         // $6 unpublish, $7/$8 explicit_published_at (bound twice: NULL-test
         // then value), $9 now (COALESCE fallback), $10 now (updated_at),
         // $11 summary.

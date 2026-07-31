@@ -24,7 +24,7 @@ use common::mailer::{MailSender, NoopMailSender};
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
-use common::render::{render, RenderedHtml};
+use common::render::{RenderOutput, RenderedHtml};
 use common::slug::Slug;
 use common::tag::TagLabel;
 use common::test_support::{
@@ -1014,14 +1014,14 @@ impl SeedRawPost {
             .slug
             .unwrap_or_else(|| parse_slug(&format!("post-{n}")));
         let title = parse_post_title(&format!("Post {n}"));
-        let rendered_html = render(&self.body, &self.format);
+        let rendered = RenderOutput::render(&self.body, &self.format);
         CreatePostInput {
             user_id: self.user_id,
             title: Some(title),
             slug,
             body: self.body,
             format: self.format,
-            rendered_html,
+            rendered,
             published_at: self.published_at,
             summary: self.summary,
             audiences: self.audiences,
@@ -1058,7 +1058,7 @@ impl SeedRawPost {
                 .title
                 .expect("SeedRawPost always autogenerates a title"),
             published_at: input.published_at,
-            rendered_html: input.rendered_html,
+            rendered_html: input.rendered.html,
         })
     }
 
@@ -1153,11 +1153,14 @@ impl SiteConfigStorage for InMemorySiteConfig {
 #[cfg(test)]
 mod tests {
     use super::{
-        backends, bootstrap_url, parse_password, render, report_drop_outcome, splice_db_name,
+        backends, bootstrap_url, parse_password, report_drop_outcome, splice_db_name,
         AudienceTarget, Backend, CreatePostError, PostFormat, PostSummary, SeedPost, SeedRawPost,
         SeedUser,
     };
     use chrono::Utc;
+    // The free renderer, to pin that the builder's HTML is exactly `render(body)` — the
+    // half of `RenderOutput` the seeded record carries.
+    use common::render::render;
     use common::test_support::parse_row_limit;
     use common::visibility::ViewerIdentity;
     use rstest::*;

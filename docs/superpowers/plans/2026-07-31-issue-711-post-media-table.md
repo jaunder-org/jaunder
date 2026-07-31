@@ -699,6 +699,18 @@ git commit -m "fix(posts): publish without rewriting the post (#711)"
   - `storage/src/posts.rs:2390, 2432, 2489, 2738, 2937, 3126`
   - `server/tests/storage/mod.rs:2271, 2298, 2335, 2540, 2630, 4244, 4598, 4728`
 
+  **Correction, recorded during execution.** This list was built by grepping
+  `rendered_html` rather than by the input types, so it over-counted: of the six
+  `storage/src/posts.rs` entries only **two** are input constructions — the
+  other four are `PostRecord` literals, which keep their own `rendered_html`
+  field and are untouched. `storage/src/test_support.rs` needed two edits, not
+  one (`into_input`, plus the `SeededPost` read-back in `create`). The
+  `server/tests/storage/mod.rs` entries were all real, and nearby struct-update
+  sites (`..update_private.clone()`) ride along because `RenderOutput` is
+  `Clone`. Nothing was missed: the field no longer exists on either struct, so a
+  missed site is a compile error, and `cargo check -p jaunder --all-targets`
+  passes.
+
 **Interfaces:**
 
 - Consumes: `extract_media_refs` (Task 3); `publish_post` (Task 4) — without it,
@@ -727,7 +739,7 @@ impl RenderOutput {
 `CreatePostInput` / `UpdatePostInput`: field `rendered_html: RenderedHtml`
 becomes `rendered: RenderOutput`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `common/src/render.rs` tests:
 
@@ -767,19 +779,19 @@ passing twin proves the type is present and constructible:
 /// ```
 ````
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run:
 `devtool run -- cargo nextest run -p common --features sanitize render_output`
 Expected: FAIL — `RenderOutput` not defined.
 
-- [ ] **Step 3: Implement `RenderOutput`**
+- [x] **Step 3: Implement `RenderOutput`**
 
 `RenderOutput::render` calls the existing free `render` for the HTML, then
 `extract_media_refs` on the result. Keep the free `pub fn render` — Task 3's
 tests and the `sanitize_*` tests use it, and this is a thin composition over it.
 
-- [ ] **Step 4: Thread it through, completing the sweep**
+- [x] **Step 4: Thread it through, completing the sweep**
 
 Change both input structs' field, then work the enumerated list in **Files**
 above. The three `post_service` sites become
@@ -789,7 +801,7 @@ above. The three `post_service` sites become
 render(body)", so that is what they meant. Update every SQL bind of
 `rendered_html` to `input.rendered.html`.
 
-- [ ] **Step 5: Run the tests, verify they pass**
+- [x] **Step 5: Run the tests, verify they pass**
 
 Run: `devtool run -- cargo nextest run -p common -p storage -p web -p jaunder`
 (**all four** — `-p common -p storage` alone never compiles `web`, which is
@@ -798,7 +810,7 @@ where the publish site lives.) Expected: PASS
 Run the doctests, which `cargo doc` does **not** do:
 `devtool run -- cargo test -p common --doc --features sanitize` Expected: PASS
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 devtool run -- cargo xtask check

@@ -571,6 +571,57 @@ fn extract_media_refs_with(html: &str, pairs: &[(&str, &str)]) -> Vec<MediaRef> 
     tokenizer.sink.refs.take().into_iter().collect()
 }
 
+/// A rendered post body and the media it references — derived together, never separately.
+///
+/// The reference set is private and [`RenderOutput::render`] is the only constructor, so a
+/// value whose set disagrees with its HTML is unrepresentable rather than merely
+/// discouraged (spec D1). Everything downstream only *carries* the pair: a post
+/// create/update input on its way to storage cannot substitute a set of its own, correct
+/// or not, and a caller with no way to render has no way to invent one either.
+///
+/// The set is derived, never supplied:
+/// ```
+/// # use common::render::{PostFormat, RenderOutput};
+/// let out = RenderOutput::render(&"hello".to_owned().into(), &PostFormat::Markdown);
+/// assert!(out.media().is_empty());
+/// ```
+/// and a struct literal cannot smuggle one in:
+/// ```compile_fail
+/// # use common::render::{render, PostFormat, RenderOutput};
+/// let html = render(&"hello".to_owned().into(), &PostFormat::Markdown);
+/// let _ = RenderOutput { html, media: vec![] }; // private field
+/// ```
+#[cfg(feature = "sanitize")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RenderOutput {
+    /// The sanitized HTML, as [`render`] produced it.
+    pub html: RenderedHtml,
+    /// What that HTML points a reader at. Private — see the type's docs.
+    media: Vec<MediaRef>,
+}
+
+#[cfg(feature = "sanitize")]
+impl RenderOutput {
+    /// Renders `body` and extracts what the result references, as one step.
+    ///
+    /// A thin composition over [`render`] and [`extract_media_refs`], which stay public in
+    /// their own right — the sanitisation tests and the extractor tests each exercise one
+    /// half, and rendering without needing the references is still a legitimate thing to do.
+    #[must_use]
+    pub fn render(body: &PostBody, format: &PostFormat) -> Self {
+        let html = render(body, format);
+        let media = extract_media_refs(html.as_ref());
+        Self { html, media }
+    }
+
+    /// The media the HTML references — sorted and deduplicated, as
+    /// [`extract_media_refs`] returns them.
+    #[must_use]
+    pub fn media(&self) -> &[MediaRef] {
+        &self.media
+    }
+}
+
 /// Metadata derived from a post body used for slug generation and display.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DerivedPostMetadata {
@@ -1691,6 +1742,25 @@ mod tests {
             MEDIA_URL_ATTRS.iter().all(|&(element, _)| element != "*"),
             "MEDIA_URL_ATTRS must name elements literally"
         );
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn render_output_derives_its_media_from_its_html() {
+        let body: PostBody = format!("<img src=\"{}\">", media_url_for("photo.jpg")).into();
+        let out = RenderOutput::render(&body, &PostFormat::Markdown);
+        assert_eq!(
+            out.media(),
+            extract_media_refs(out.html.as_ref()).as_slice()
+        );
+        assert_eq!(out.media().len(), 1);
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn render_output_media_is_empty_for_a_body_referencing_nothing() {
+        let out = RenderOutput::render(&"plain text".to_owned().into(), &PostFormat::Markdown);
+        assert!(out.media().is_empty());
     }
 
     /// Whether `(tag, attr)` appears in either classification table. `KNOWN_INERT_ATTRS`

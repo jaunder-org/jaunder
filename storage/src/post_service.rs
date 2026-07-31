@@ -15,7 +15,7 @@ use common::ids::{ChannelId, PostId, UserId};
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
-use common::render::{derive_post_metadata, render};
+use common::render::{derive_post_metadata, RenderOutput};
 use common::slug::{slugify_title, InvalidSlug, Slug};
 use common::visibility::AudienceTarget;
 
@@ -76,14 +76,14 @@ pub fn render_post_input(content: RenderedPostContent) -> CreatePostInput {
         audiences,
         idempotency_key,
     } = content;
-    let rendered_html = render(&body, &format);
+    let rendered = RenderOutput::render(&body, &format);
     CreatePostInput {
         user_id,
         title,
         slug,
         body,
         format,
-        rendered_html,
+        rendered,
         published_at,
         summary,
         audiences,
@@ -166,14 +166,14 @@ pub async fn update_rendered_post(
         summary,
         audiences,
     } = update;
-    let rendered_html = render(&body, &format);
+    let rendered = RenderOutput::render(&body, &format);
     let (unpublish, explicit_published_at) = publish.into_inputs();
     let input = UpdatePostInput {
         title,
         slug,
         body,
         format,
-        rendered_html,
+        rendered,
         unpublish,
         explicit_published_at,
         summary,
@@ -328,14 +328,14 @@ pub async fn perform_post_update(
             .map_err(|_| PerformUpdateError::InvalidSlug)?,
     };
 
-    let rendered_html = render(&body, &format);
+    let rendered = RenderOutput::render(&body, &format);
     let (unpublish, explicit_published_at) = publish.into_inputs();
     let input = UpdatePostInput {
         title: metadata.title,
         slug,
         body,
         format,
-        rendered_html,
+        rendered,
         unpublish,
         explicit_published_at,
         summary,

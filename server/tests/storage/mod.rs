@@ -1,6 +1,7 @@
 use chrono::{Datelike, Utc};
 use common::ids::{AudienceId, ChannelId, FeedEventId, PostId, UserId};
 use common::password::Password;
+use common::post_body::PostBody;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::test_support::{
@@ -21,7 +22,7 @@ use storage::{
     AudienceError, ConfirmPasswordResetError, CreatePostError, CreateUserError, DbConnectOptions,
     FeedCacheRow, GoLivePost, ListByTagError, PostCursor, PostFormat, PostRecord, PostUpdate,
     PostgresSubscriptionStorage, ProfileUpdate, PublishUpdate, RegisterWithInviteError,
-    RenderedHtml, RenderedPostContent, RenderedPostUpdate, SessionAuthError,
+    RenderOutput, RenderedPostContent, RenderedPostUpdate, SessionAuthError,
     SqliteSubscriptionStorage, SubscriptionStorage, TaggingError, UpdatePostError, UpdatePostInput,
     UseEmailVerificationError, UseInviteError, UsePasswordResetError, UserAuthError,
 };
@@ -2265,12 +2266,13 @@ async fn post_update_writes_revision_and_updates_record(#[case] backend: Backend
 
     let post_id = SeedRawPost::new(user_id).draft().seed(state).await.post_id;
 
+    let body: PostBody = "updated body".into();
     let update_input = UpdatePostInput {
         title: Some("Updated Title".into()),
         slug: "update-test".parse().unwrap(),
-        body: "updated body".into(),
+        body: body.clone(),
         format: PostFormat::Org,
-        rendered_html: RenderedHtml::from_trusted("<p>updated body</p>"),
+        rendered: RenderOutput::render(&body, &PostFormat::Org),
         unpublish: true,
         explicit_published_at: None,
         summary: None,
@@ -2292,12 +2294,13 @@ async fn post_update_writes_revision_and_updates_record(#[case] backend: Backend
 async fn post_update_not_found_returns_error(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
+    let body: PostBody = "body".into();
     let update_input = UpdatePostInput {
         title: Some("Title".into()),
         slug: "nope".parse().unwrap(),
-        body: "body".into(),
+        body: body.clone(),
         format: PostFormat::Markdown,
-        rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
+        rendered: RenderOutput::render(&body, &PostFormat::Markdown),
         unpublish: true,
         explicit_published_at: None,
         summary: None,
@@ -2324,6 +2327,7 @@ async fn post_update_by_non_owner_returns_unauthorized(#[case] backend: Backend)
 
     let post_id = SeedRawPost::new(owner).draft().seed(state).await.post_id;
 
+    let body: PostBody = "Nope".into();
     let err = state
         .posts
         .update_post(
@@ -2332,9 +2336,9 @@ async fn post_update_by_non_owner_returns_unauthorized(#[case] backend: Backend)
             &UpdatePostInput {
                 title: Some("Hijacked".into()),
                 slug: "hijacked".parse().unwrap(),
-                body: "Nope".into(),
+                body: body.clone(),
                 format: PostFormat::Markdown,
-                rendered_html: RenderedHtml::from_trusted("<p>Nope</p>"),
+                rendered: RenderOutput::render(&body, &PostFormat::Markdown),
                 unpublish: true,
                 explicit_published_at: None,
                 summary: None,
@@ -2534,12 +2538,13 @@ async fn post_audiences_are_persisted_and_replaced(#[case] backend: Backend) {
     );
 
     // Update to [Private] → zero rows.
+    let body: PostBody = "body text".into();
     let update_private = UpdatePostInput {
         title: Some("Post audience-post".into()),
         slug: "audience-post".parse().unwrap(),
-        body: "body text".into(),
+        body: body.clone(),
         format: PostFormat::Markdown,
-        rendered_html: RenderedHtml::from_trusted("<p>body text</p>"),
+        rendered: RenderOutput::render(&body, &PostFormat::Markdown),
         unpublish: true,
         explicit_published_at: None,
         summary: None,
@@ -2624,12 +2629,13 @@ async fn get_post_audiences_round_trips(#[case] backend: Backend) {
     );
 
     // Subscribers-only.
+    let body: PostBody = "body text".into();
     let update_subs = UpdatePostInput {
         title: Some("Post round-trip".into()),
         slug: "round-trip".parse().unwrap(),
-        body: "body text".into(),
+        body: body.clone(),
         format: PostFormat::Markdown,
-        rendered_html: RenderedHtml::from_trusted("<p>body text</p>"),
+        rendered: RenderOutput::render(&body, &PostFormat::Markdown),
         unpublish: true,
         explicit_published_at: None,
         summary: None,
@@ -4233,6 +4239,7 @@ async fn post_update_invalid_slug(#[case] backend: Backend) {
         .await
         .post_id;
 
+    let body: PostBody = "Updated content".into();
     let update_result = state
         .posts
         .update_post(
@@ -4241,9 +4248,9 @@ async fn post_update_invalid_slug(#[case] backend: Backend) {
             &UpdatePostInput {
                 title: Some("Updated".into()),
                 slug: "second-slug".parse().unwrap(),
-                body: "Updated content".into(),
+                body: body.clone(),
                 format: PostFormat::Markdown,
-                rendered_html: RenderedHtml::from_trusted("<p>Updated</p>"),
+                rendered: RenderOutput::render(&body, &PostFormat::Markdown),
                 unpublish: true,
                 explicit_published_at: None,
                 summary: None,
@@ -4587,6 +4594,7 @@ async fn update_soft_deleted_post(#[case] backend: Backend) {
         .expect("soft_delete_post failed");
 
     // Try to update - should fail with NotFound since we're using post_id that doesn't exist in the update logic
+    let body: PostBody = "New content".into();
     let _result = state
         .posts
         .update_post(
@@ -4595,9 +4603,9 @@ async fn update_soft_deleted_post(#[case] backend: Backend) {
             &UpdatePostInput {
                 title: Some("Updated".into()),
                 slug: "updated-slug".parse().unwrap(),
-                body: "New content".into(),
+                body: body.clone(),
                 format: PostFormat::Markdown,
-                rendered_html: RenderedHtml::from_trusted("<p>New</p>"),
+                rendered: RenderOutput::render(&body, &PostFormat::Markdown),
                 unpublish: false,
                 explicit_published_at: None,
                 summary: None,
@@ -4717,6 +4725,7 @@ async fn post_revisions_created(#[case] backend: Backend) {
 
     let post_id = SeedRawPost::new(user).draft().seed(state).await.post_id;
 
+    let body: PostBody = "Updated content".into();
     let result = state
         .posts
         .update_post(
@@ -4725,9 +4734,9 @@ async fn post_revisions_created(#[case] backend: Backend) {
             &UpdatePostInput {
                 title: Some("Updated".into()),
                 slug: "revision-test".parse().unwrap(),
-                body: "Updated content".into(),
+                body: body.clone(),
                 format: PostFormat::Markdown,
-                rendered_html: RenderedHtml::from_trusted("<p>Updated</p>"),
+                rendered: RenderOutput::render(&body, &PostFormat::Markdown),
                 unpublish: false,
                 explicit_published_at: None,
                 summary: None,

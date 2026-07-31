@@ -21,7 +21,7 @@ use host::error::{InternalError, InternalResult};
 use crate::backend::Backend;
 use crate::helpers::{post_record_from_row, PostRow};
 
-pub use common::render::{InvalidPostFormat, PostFormat, RenderedHtml};
+pub use common::render::{InvalidPostFormat, PostFormat, RenderOutput, RenderedHtml};
 
 /// The validated calendar date of a public permalink lookup key. Re-exported from
 /// `common::time` so storage callers and the trait method name the domain type
@@ -210,7 +210,10 @@ pub struct CreatePostInput {
     pub slug: Slug,
     pub body: PostBody,
     pub format: PostFormat,
-    pub rendered_html: RenderedHtml,
+    /// The rendered body together with the media it references — see [`RenderOutput`],
+    /// whose only constructor is rendering, so this input cannot carry a reference set
+    /// that disagrees with its HTML (#711).
+    pub rendered: RenderOutput,
     /// If Some, the post is created in a published state.
     pub published_at: Option<DateTime<Utc>>,
     /// Optional summary/excerpt of the post.
@@ -232,7 +235,10 @@ pub struct UpdatePostInput {
     pub slug: Slug,
     pub body: PostBody,
     pub format: PostFormat,
-    pub rendered_html: RenderedHtml,
+    /// The rendered body together with the media it references — see [`RenderOutput`].
+    /// An edit can remove a reference, so the set must always be the one this HTML
+    /// implies; deriving it is the only way to build one (#711).
+    pub rendered: RenderOutput,
     /// If `true`, clear `published_at` back to NULL (draft / unschedule). Takes
     /// precedence over `explicit_published_at`.
     pub unpublish: bool,
@@ -2013,7 +2019,7 @@ where
     .bind(&input.slug)
     .bind(&input.body)
     .bind(input.format)
-    .bind(&input.rendered_html)
+    .bind(&input.rendered.html)
     .bind(now)
     .bind(now)
     .bind(input.published_at)
@@ -2572,12 +2578,13 @@ mod tests {
             .await
             .post_id;
 
+        let body: PostBody = "Test body".into();
         let update = |summary| UpdatePostInput {
             title: Some("Test Title".into()),
             slug: parse_slug("summary-edit"),
-            body: "Test body".into(),
+            body: body.clone(),
             format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Test body</p>"),
+            rendered: RenderOutput::render(&body, &PostFormat::Markdown),
             unpublish: false,
             explicit_published_at: None,
             summary,
@@ -3139,14 +3146,15 @@ mod tests {
 
         // A post with no title exercises the `None` decode path for
         // `Option<PostTitle>`.
+        let untitled_body: PostBody = "body".into();
         let untitled_id = posts
             .create_post(&CreatePostInput {
                 user_id,
                 title: None,
                 slug: parse_slug("no-title"),
-                body: "body".into(),
+                body: untitled_body.clone(),
                 format: PostFormat::Markdown,
-                rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
+                rendered: RenderOutput::render(&untitled_body, &PostFormat::Markdown),
                 published_at: None,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
