@@ -19,7 +19,7 @@ snapshot's. No change to trace parsing, span identification, or attribution.
 `cargo nextest`.
 
 **Spec:**
-[`docs/superpowers/specs/2026-07-31-issue-745-server-fn-coverage-determinism.md`](../specs/2026-07-31-issue-745-server-fn-coverage-determinism.md)
+[`docs/archive/2026-07-31-issue-745-server-fn-coverage-determinism-spec.md`](2026-07-31-issue-745-server-fn-coverage-determinism-spec.md)
 — read D1–D7 and AC1–AC12 before starting. This plan is "how"; the spec is
 "what/why" and is not restated here.
 

@@ -3,7 +3,7 @@
 **Status:** spec, awaiting approval (revised after cold soundness review)
 **Issue:** [#745](https://github.com/jaunder-org/jaunder/issues/745) **Refs:**
 [#681](https://github.com/jaunder-org/jaunder/issues/681) (the gate),
-[ADR-0081](../../adr/0081-empirical-server-fn-flow-coverage.md),
+[ADR-0081](../adr/0081-empirical-server-fn-flow-coverage.md),
 [#740](https://github.com/jaunder-org/jaunder/pull/740) (where it surfaced, and
 whose `6b0fad2c` workaround this cycle undoes)
 
