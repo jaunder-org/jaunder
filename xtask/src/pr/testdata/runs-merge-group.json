@@ -1,0 +1,69 @@
+{
+  "total_count": 41,
+  "workflow_runs": [
+    {
+      "id": 30581543928,
+      "name": "CI",
+      "head_branch": "gh-readonly-queue/main/pr-727-9f3631ee1df4fdd72e1f5ebfccf25fb2b01d10f2",
+      "head_sha": "d32fb9902fd19f483028272765fed0902484e2fc",
+      "event": "merge_group",
+      "status": "completed",
+      "conclusion": "success",
+      "workflow_id": 301669744,
+      "url": "https://api.github.com/repos/jaunder-org/jaunder/actions/runs/30581543928",
+      "html_url": "https://github.com/jaunder-org/jaunder/actions/runs/30581543928",
+      "created_at": "2026-07-30T20:59:26Z",
+      "updated_at": "2026-07-30T21:13:47Z",
+      "run_attempt": 1,
+      "run_started_at": "2026-07-30T20:59:26Z"
+    },
+    {
+      "id": 30120914770,
+      "name": "CI",
+      "head_branch": "gh-readonly-queue/main/pr-646-158968865f91ac7b3537cbf1a6b58cb0e0d1d62a",
+      "head_sha": "15f7646d88cbfc8c6b25ea57d95b56c6ade53755",
+      "event": "merge_group",
+      "status": "completed",
+      "conclusion": "success",
+      "workflow_id": 301669744,
+      "url": "https://api.github.com/repos/jaunder-org/jaunder/actions/runs/30120914770",
+      "html_url": "https://github.com/jaunder-org/jaunder/actions/runs/30120914770",
+      "created_at": "2026-07-24T19:31:52Z",
+      "updated_at": "2026-07-24T19:48:17Z",
+      "run_attempt": 1,
+      "run_started_at": "2026-07-24T19:31:52Z"
+    },
+    {
+      "id": 30116668286,
+      "name": "CI",
+      "head_branch": "gh-readonly-queue/main/pr-646-97f75bd94847be6385cf5c4d635144d0f1c442fb",
+      "head_sha": "17a6b5fc3ab7b6c48278e8d71b6110d62b96673a",
+      "event": "merge_group",
+      "status": "completed",
+      "conclusion": "failure",
+      "workflow_id": 301669744,
+      "url": "https://api.github.com/repos/jaunder-org/jaunder/actions/runs/30116668286",
+      "html_url": "https://github.com/jaunder-org/jaunder/actions/runs/30116668286",
+      "created_at": "2026-07-24T18:22:35Z",
+      "updated_at": "2026-07-24T18:31:48Z",
+      "run_attempt": 1,
+      "run_started_at": "2026-07-24T18:22:35Z"
+    },
+    {
+      "id": 30115267074,
+      "name": "CI",
+      "head_branch": "gh-readonly-queue/main/pr-646-97f75bd94847be6385cf5c4d635144d0f1c442fb",
+      "head_sha": "d931c3da8098f9ef3d395207a87ad147e415fc12",
+      "event": "merge_group",
+      "status": "completed",
+      "conclusion": "failure",
+      "workflow_id": 301669744,
+      "url": "https://api.github.com/repos/jaunder-org/jaunder/actions/runs/30115267074",
+      "html_url": "https://github.com/jaunder-org/jaunder/actions/runs/30115267074",
+      "created_at": "2026-07-24T18:00:58Z",
+      "updated_at": "2026-07-24T18:17:13Z",
+      "run_attempt": 1,
+      "run_started_at": "2026-07-24T18:00:58Z"
+    }
+  ]
+}

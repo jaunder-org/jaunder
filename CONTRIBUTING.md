@@ -363,6 +363,36 @@ Jaunder uses OpenTelemetry for deep performance analysis (see
   - Use `--browser chromium|firefox` to restrict the run to one browser
     (default: both).
 
+- **PR watching**: Use `cargo xtask pr watch [N]` to follow a pull request
+  through the whole checks → merge queue → merged sequence, and
+  `cargo xtask pr land [N]` to arm the merge and drive it home. Both need `gh`
+  (in the devShell) and run on the host only. Omit `N` to use the open PR for
+  the current branch.
+
+  ```bash
+  cargo xtask pr watch                 # this branch's PR, until it resolves
+  cargo xtask --json pr watch 731 --once   # one snapshot, machine-readable
+  cargo xtask pr land 731              # arm the merge and watch it land
+  ```
+
+  It reports exactly one outcome — `merged`, `checks-failed`, `ejected`,
+  `conflicted`, `closed-unmerged`, `stale`, `timed-out`, or `watcher-error`,
+  plus `pending` when `--once` catches a PR mid-flight — and they never collapse
+  into one another: `timed-out` means GitHub never finished, `watcher-error`
+  means the tooling could not tell you. **Exit is 0 only for `merged`**; branch
+  on `pr.outcome` in `--json` (or in `.xtask/last-result.json`), not on the exit
+  code. Progress streams to stderr as it happens and is also serialized into
+  `pr.events`.
+
+  `watch` only observes — it never merges, re-runs a job, rebases, or
+  re-enqueues after an ejection, because each of those is a judgement call.
+  **Running `land` is the merge approval**; invoked from the PR's own branch it
+  refuses whenever your local HEAD differs from the PR head at all — ahead,
+  behind, or diverged — since what would merge is then not what you are looking
+  at. See [the ADR](docs/adr/0087-xtask-github-pr-observation.md) for why `gh`
+  is the transport and why the required-check set is read from the ruleset per
+  run.
+
 ### Targeted Rust tests
 
 The server integration tests compile as a **single** `integration` binary, so

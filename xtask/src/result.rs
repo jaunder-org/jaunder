@@ -70,6 +70,10 @@ pub struct CommandResult {
     /// and never Some on a `--json` run).
     #[serde(skip)]
     pub traces: Option<String>,
+    /// The `pr watch` / `pr land` verdict (#729). Carries the outcome an agent
+    /// branches on, since the exit code deliberately says only merged-or-not.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr: Option<crate::pr::PrReport>,
 }
 
 impl CommandResult {
@@ -84,6 +88,7 @@ impl CommandResult {
             audit: None,
             flaky: Vec::new(),
             traces: None,
+            pr: None,
         }
     }
 
@@ -143,6 +148,33 @@ impl CommandResult {
         // tables are the point, not the pass/fail line.
         if let Some(traces) = &self.traces {
             print!("{traces}");
+        }
+        // And for `pr watch`/`pr land`: the outcome and where to look next are the
+        // point. The event log already streamed to stderr as it happened, so this is
+        // the summary, not a replay of it.
+        if let Some(pr) = &self.pr {
+            // The head SHA is empty when the very first read failed, so it is only
+            // shown when it says something.
+            match pr.head_sha.as_str() {
+                "" => println!("PR #{} — {}", pr.pr, pr.outcome),
+                sha => println!("PR #{} @ {sha} — {}", pr.pr, pr.outcome),
+            }
+            if let Some(phase) = &pr.phase {
+                println!("  phase: {phase}");
+            }
+            if let Some(detail) = &pr.detail {
+                println!("  {detail}");
+            }
+            if let Some(pointer) = &pr.pointer {
+                // `merged` carries a commit OID, everything else a URL — labelling
+                // both "see:" made the OID read like a broken link.
+                let label = if pr.outcome.is_merged() {
+                    "merge commit"
+                } else {
+                    "see"
+                };
+                println!("  {label}: {pointer}");
+            }
         }
         let verdict = if self.ok { "PASSED" } else { "FAILED" };
         println!(

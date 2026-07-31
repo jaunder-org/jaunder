@@ -187,10 +187,19 @@ array** at the top of this doc (strict `true`, no `merge_queue`) and PUT it the
 same way.
 
 **Rollback trigger (#629).** `Validate (no e2e)` intermittently OOMs (~1-in-5 CI
-failures, tracked in #629). Under the queue an OOM-ejected PR is auto-requeued,
-so occasional ejection is tolerable — but **if OOM ejections thrash the queue**
-(PRs repeatedly ejected, batches failing to converge), run the rollback above
-and revisit #629 before re-enabling.
+failures, tracked in #629). **An ejected PR is _not_ requeued automatically** —
+the live `merge_queue` rule has no requeue parameter, so a failed front-of-queue
+`merge_group` drops the PR out of the queue and it stays `OPEN` until someone
+re-enqueues it. So each OOM ejection costs a manual re-enqueue, and **if OOM
+ejections thrash the queue** (PRs repeatedly ejected, batches failing to
+converge), run the rollback above and revisit #629 before re-enabling.
+
+**Observing queue state.** Ejection is silent — the queue entry vanishes while
+the PR stays `OPEN`, which looks identical to "still queued". Don't eyeball it:
+`cargo xtask pr watch <N>` reports `ejected` distinctly from `merged` and from
+still-queued, and points at the `gh-readonly-queue/main/pr-<N>-…` run that
+caused it. `cargo xtask pr watch <N> --once` answers the same question without
+blocking.
 
 ## Post-flip validation checklist (spec Acceptance #4)
 

@@ -114,6 +114,7 @@ convention). See the Status column below for each ADR's current status.
 | [0084](adr/0084-media-filename-encoded-canonical.md)               | Media filename — the encoded form is canonical, with a proffered inbound twin                                | proposed   |
 | [0085](adr/0085-static-type-safety-gates-enumerate.md)             | Static type-safety gates enumerate, they do not search                                                       | proposed   |
 | [0086](adr/0086-enforced-thin-component-budget.md)                 | Component thinness is enforced, not assumed                                                                  | proposed   |
+| [0087](adr/0087-xtask-github-pr-observation.md)                    | xtask observes the CI/merge system, with `gh` as its transport                                               | accepted   |
 
 <!-- adr-table:end -->
 
