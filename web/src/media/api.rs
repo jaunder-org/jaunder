@@ -21,13 +21,15 @@ use common::media::UploadResponse;
 use {
     crate::auth::require_auth,
     crate::error::InternalError,
-    // Server-only: the reference scan's flat cap. The CSR build never binds a query.
-    common::pagination::RowLimit,
+    // Server-only: the delete guard's key. The CSR build never runs a query.
+    common::media::MediaRef,
     leptos::prelude::*,
     leptos_axum::extract,
     std::path::PathBuf,
     std::sync::Arc,
-    storage::{MediaError, MediaManager, MediaStorage, PostStorage, SiteConfigStorage},
+    storage::{
+        MediaError, MediaManager, MediaStorage, PostStorage, SiteConfigStorage, TryDeleteOutcome,
+    },
 };
 
 use common::ids::PostId;
@@ -133,50 +135,35 @@ pub async fn delete(
     let media = expect_context::<Arc<dyn MediaStorage>>();
     let posts = expect_context::<Arc<dyn PostStorage>>();
 
-    let url = common::media::media_url(&source, &sha256, &filename);
-    // `str::contains` wants a `Pattern`, which the newtype is not — take its `str`
-    // view once here rather than at each of the two call sites below.
-    let needle: &str = &url;
+    let media_ref = MediaRef {
+        source,
+        sha256,
+        filename,
+    };
 
-    // A flat cap, not a page: this scans the author's posts for references to the
-    // media item, so it wants "as many as we are willing to look at" with no
-    // pagination behind it.
-    let scan_cap = RowLimit::at_most(1000);
-    let published = posts
-        .list_published_by_user(
-            &auth.username,
-            None,
-            scan_cap,
-            &crate::viewer::viewer_identity().await,
-            chrono::Utc::now(),
-        )
-        .await?;
-
-    let drafts = posts
-        .list_drafts_by_user(auth.user_id, None, scan_cap, chrono::Utc::now())
-        .await?;
-
-    let referenced_in_posts: Vec<PostId> = published
-        .iter()
-        .chain(drafts.iter())
-        .filter(|post| post.body.contains(needle) || post.rendered_html.contains(needle))
-        .map(|post| post.post_id)
-        .collect();
-
-    if !referenced_in_posts.is_empty() && !force.unwrap_or(false) {
-        return Ok(DeleteResult {
-            deleted: false,
-            referenced_in_posts,
-        });
-    }
-
-    media
-        .delete_media(auth.user_id, &sha256, &filename, &source)
+    // The decision is made first and made in SQL: `try_delete_media`'s guard and delete
+    // are one statement, so this handler holds no check-then-delete window of its own
+    // (spec D8).
+    let outcome = media
+        .try_delete_media(auth.user_id, &media_ref, force.unwrap_or(false))
         .await
         .map_err(InternalError::storage)?;
 
+    // Pure reporting, and only for a refusal — the one outcome that has to be explained.
+    // A successful delete therefore reports an empty list even when it was forced: the
+    // references it overrode did not block it, and the UI reads this field only on the
+    // `deleted == false` branch. Asking unconditionally would spend a second query on
+    // every happy-path delete to fill a field nothing reads.
+    let referenced_in_posts: Vec<PostId> = if outcome == TryDeleteOutcome::RefusedReferenced {
+        posts
+            .list_posts_referencing_media(auth.user_id, &media_ref)
+            .await?
+    } else {
+        Vec::new()
+    };
+
     Ok(DeleteResult {
-        deleted: true,
+        deleted: outcome == TryDeleteOutcome::Deleted,
         referenced_in_posts,
     })
 }

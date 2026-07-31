@@ -51,7 +51,7 @@ use {
     storage::{
         apply_post_tag_diff, fetch_post_record, find_draft_by_permalink_for_user,
         parse_post_cursor, perform_post_creation, perform_post_update, FeedEventStorage,
-        PostCreation, PostStorage, PostUpdate, PublishUpdate, SiteConfigStorage, UpdatePostInput,
+        PostCreation, PostStorage, PostUpdate, PublishUpdate, SiteConfigStorage,
     },
 };
 
@@ -462,36 +462,12 @@ pub async fn publish(post_id: PostId) -> WebResult<PublishResult> {
     let auth = require_auth().await?;
     let posts = expect_context::<Arc<dyn PostStorage>>();
 
-    let existing = posts
-        .get_post_by_id(post_id, &viewer_identity().await)
-        .await?
-        .ok_or_else(|| InternalError::not_found("Post"))?;
-
-    if existing.deleted_at.is_some() || existing.user_id != auth.user_id {
-        return Err(InternalError::not_found("Post"));
-    }
-
-    // Preserve the post's existing audience targeting across publication
-    // (chosen in the editor); publishing must not silently re-target it.
-    let audiences = posts.get_post_audiences(post_id).await?;
-
-    let updated = posts
-        .update_post(
-            post_id,
-            auth.user_id,
-            &UpdatePostInput {
-                title: existing.title,
-                slug: existing.slug,
-                body: existing.body,
-                format: existing.format,
-                rendered_html: existing.rendered_html,
-                summary: existing.summary,
-                unpublish: false,
-                explicit_published_at: None,
-                audiences,
-            },
-        )
-        .await?;
+    // Publication is one timestamp, not an edit: `publish_post` applies the
+    // ownership and soft-delete guard itself and rewrites nothing else, so the
+    // post's body, rendered HTML, audience targeting and media rows all survive
+    // (#711). Routing this through `update_post` used to replay the whole stored
+    // record back through the edit path.
+    let updated = posts.publish_post(post_id, auth.user_id).await?;
 
     let published_at = updated
         .published_at
@@ -806,15 +782,14 @@ mod server_tests {
     use crate::error::WebError;
     use crate::test_support::auth_parts;
     use chrono::Utc;
-    use common::ids::{ChannelId, PostId, UserId};
+    use common::ids::{PostId, UserId};
     use common::slug::Slug;
     use common::test_support::parse_username;
     use leptos::prelude::provide_context;
     use leptos::reactive::owner::Owner;
     use std::sync::Arc;
     use storage::{
-        MockPostStorage, MockSubscriptionStorage, PostFormat, PostRecord, PostStorage,
-        RenderedHtml, SubscriptionStorage, UpdatePostError,
+        MockPostStorage, PostFormat, PostRecord, PostStorage, RenderedHtml, UpdatePostError,
     };
 
     fn owned_post(user_id: UserId) -> PostRecord {
@@ -837,38 +812,25 @@ mod server_tests {
         }
     }
 
-    /// Wires an authenticated owner (user 1) whose post store returns an owned,
-    /// non-deleted post but fails `update_post` with `error`. Returns the owner,
-    /// which the caller must keep alive across the `.await`.
-    fn setup(error: fn() -> UpdatePostError) -> Owner {
+    /// Wires an authenticated owner (user 1) whose post store answers
+    /// `publish_post` with `outcome`. Returns the owner, which the caller must keep
+    /// alive across the `.await`.
+    fn setup(outcome: fn() -> Result<PostRecord, UpdatePostError>) -> Owner {
         let owner = Owner::new();
         owner.set();
         provide_context(auth_parts(UserId::from(1), "alice"));
         let mut posts = MockPostStorage::new();
         posts
-            .expect_get_post_by_id()
-            .returning(|_id, _viewer| Ok(Some(owned_post(UserId::from(1)))));
-        posts
-            .expect_get_post_audiences()
-            .returning(|_id| Ok(Vec::new()));
-        posts
-            .expect_update_post()
-            .returning(move |_id, _editor, _input| Err(error()));
+            .expect_publish_post()
+            .returning(move |_id, _user| outcome());
         provide_context(Arc::new(posts) as Arc<dyn PostStorage>);
-        // `viewer_identity()` (used to fetch the post) may consult the local
-        // channel id; allow it zero-or-more times.
-        let mut subs = MockSubscriptionStorage::new();
-        subs.expect_local_channel_id()
-            .times(0..)
-            .returning(|| Ok(ChannelId::from(1)));
-        provide_context(Arc::new(subs) as Arc<dyn SubscriptionStorage>);
         owner
     }
 
     // guard:no-backend — mock store
     #[tokio::test]
-    async fn publish_maps_not_found_update_error_to_not_found() {
-        let owner = setup(|| UpdatePostError::NotFound);
+    async fn publish_maps_not_found_publish_error_to_not_found() {
+        let owner = setup(|| Err(UpdatePostError::NotFound));
         let result = publish(PostId::from(1)).await;
         drop(owner);
         assert!(matches!(result.unwrap_err(), WebError::NotFound { .. }));
@@ -876,10 +838,21 @@ mod server_tests {
 
     // guard:no-backend — mock store
     #[tokio::test]
-    async fn publish_maps_internal_update_error_to_storage() {
-        let owner = setup(|| UpdatePostError::Internal(sqlx::Error::PoolClosed));
+    async fn publish_maps_internal_publish_error_to_storage() {
+        let owner = setup(|| Err(UpdatePostError::Internal(sqlx::Error::PoolClosed)));
         let result = publish(PostId::from(1)).await;
         drop(owner);
         assert!(matches!(result.unwrap_err(), WebError::Storage { .. }));
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn publish_maps_a_still_unpublished_record_to_not_found() {
+        // `publish_post` always stamps `published_at`; if a record comes back without
+        // one the handler has nothing to report, so it must not claim success.
+        let owner = setup(|| Ok(owned_post(UserId::from(1))));
+        let result = publish(PostId::from(1)).await;
+        drop(owner);
+        assert!(matches!(result.unwrap_err(), WebError::NotFound { .. }));
     }
 }

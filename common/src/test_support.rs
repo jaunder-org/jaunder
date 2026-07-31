@@ -272,6 +272,17 @@ pub fn parse_post_summary(s: &str) -> PostSummary {
     s.parse().expect("valid test post summary")
 }
 
+/// The content hash every media fixture is stored under: a realistic lowercase
+/// SHA-256 hex digest (the digest of the empty input), so the value is a real digest
+/// rather than an invented hex string.
+///
+/// The workspace's one spelling of it. Kept as a `&str` rather than a [`ContentHash`]
+/// because most uses interpolate it into a path, URL, or SQL literal; the ones that
+/// want the type pass it through [`parse_content_hash`]. `storage::test_support`
+/// re-exports it as `MEDIA_TEST_SHA256`, which is what its media fixtures are built on.
+pub const MEDIA_TEST_SHA256: &str =
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
 /// Parse `s` into a valid [`ContentHash`] for tests — the single place a test
 /// media-content-hash literal is parsed, so a malformed fixture fails loudly and
 /// the parse isn't re-spelled at every media store-seeding call site.

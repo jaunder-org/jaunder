@@ -3,11 +3,12 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use common::absolute_url::AbsoluteUrl;
-use common::media::{ByteSize, ContentHash, ContentType, Filename, MediaSource};
+use common::media::{ByteSize, ContentHash, ContentType, Filename, MediaRef, MediaSource};
 use sqlx::{Database, FromRow, Pool};
 use thiserror::Error;
 
 use crate::backend::Backend;
+use crate::posts::POSTS_REFERENCING_MEDIA_FROM_WHERE;
 use common::ids::UserId;
 use common::pagination::{PageOffset, RowLimit};
 
@@ -62,6 +63,19 @@ pub enum DeleteMediaError {
     Internal(#[from] sqlx::Error),
 }
 
+/// What [`MediaStorage::try_delete_media`] did.
+///
+/// A bare `bool` cannot carry the third case — the record was never there — which
+/// [`DeleteMediaError::NotFound`] keeps distinct (spec D8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TryDeleteOutcome {
+    /// The record was removed.
+    Deleted,
+    /// The record was left in place because one of the owner's live posts
+    /// references it and the caller did not force the delete.
+    RefusedReferenced,
+}
+
 /// Async operations on the `media` table.
 ///
 /// This trait manages the metadata for media files, supporting both user
@@ -97,18 +111,23 @@ pub trait MediaStorage: Send + Sync {
         offset: PageOffset,
     ) -> sqlx::Result<Vec<MediaRecord>>;
 
-    /// Deletes a media record from the database.
+    /// Deletes a media record, refusing when one of `user_id`'s live posts references
+    /// it unless `force`.
+    ///
+    /// The guard and the delete are **one statement**, so no post can start
+    /// referencing the media between them (spec D8) — the reason the
+    /// refuse-unless-forced policy lives in storage rather than in the caller.
     ///
     /// # Errors
     ///
-    /// Returns [`DeleteMediaError::NotFound`] if the record does not exist.
-    async fn delete_media(
+    /// Returns [`DeleteMediaError::NotFound`] if no such record exists — the case a
+    /// refusal is distinguished from by a follow-up existence check on the cold path.
+    async fn try_delete_media(
         &self,
         user_id: UserId,
-        sha256: &ContentHash,
-        filename: &Filename,
-        source: &MediaSource,
-    ) -> Result<(), DeleteMediaError>;
+        media: &MediaRef,
+        force: bool,
+    ) -> Result<TryDeleteOutcome, DeleteMediaError>;
 
     /// Calculates the total storage used by a user's uploads (in bytes).
     async fn get_user_upload_usage(&self, user_id: UserId) -> sqlx::Result<ByteSize>;
@@ -128,25 +147,15 @@ pub trait MediaStorage: Send + Sync {
 /// [`get_user_upload_usage`][MediaDialect::get_user_upload_usage] diverges
 /// because Postgres requires an explicit `::bigint` cast on the
 /// `COALESCE(SUM(…), 0)` expression while `SQLite` does not support that syntax.
-///
-/// [`delete_media`][MediaDialect::delete_media] is also here because calling
-/// `.rows_affected()` on the generic `DB::QueryResult` associated type
-/// requires no trait in sqlx 0.8 — the method exists only on the concrete
-/// per-backend result types, so the implementation must be monomorphised.
-/// The SQL itself is identical across backends.
+/// It is the only divergence: the delete used to live here too, because reading
+/// `.rows_affected()` off the generic `DB::QueryResult` associated type needs
+/// monomorphising (the method exists only on the concrete per-backend result
+/// types), but `RETURNING` + `fetch_optional` asks the same question generically,
+/// so [`MediaStorage::try_delete_media`] is shared on [`MediaStore`] (#711).
 #[async_trait]
 pub trait MediaDialect: Backend {
     /// Returns the total upload bytes for `user_id` using backend-appropriate SQL.
     async fn get_user_upload_usage(pool: &Pool<Self>, user_id: UserId) -> sqlx::Result<ByteSize>;
-
-    /// Deletes a media record; returns `NotFound` when no row was matched.
-    async fn delete_media_row(
-        pool: &Pool<Self>,
-        user_id: UserId,
-        sha256: &ContentHash,
-        filename: &Filename,
-        source: &MediaSource,
-    ) -> Result<(), DeleteMediaError>;
 }
 
 /// Generic [`MediaStorage`] backed by any [`MediaDialect`] database.
@@ -187,6 +196,8 @@ where
     for<'q> RowLimit: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> PageOffset: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    // `try_delete_media` binds `force` into the guard's `($5 OR NOT EXISTS …)`.
+    for<'q> bool: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
@@ -318,18 +329,67 @@ where
     }
 
     #[tracing::instrument(
-        name = "storage.media.delete",
-        skip(self),
+        name = "storage.media.try_delete",
+        skip(self, media),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn delete_media(
+    async fn try_delete_media(
         &self,
         user_id: UserId,
-        sha256: &ContentHash,
-        filename: &Filename,
-        source: &MediaSource,
-    ) -> Result<(), DeleteMediaError> {
-        DB::delete_media_row(&self.pool, user_id, sha256, filename, source).await
+        media: &MediaRef,
+        force: bool,
+    ) -> Result<TryDeleteOutcome, DeleteMediaError> {
+        // The guard and the delete are the same statement, so a `post_media` insert
+        // cannot slip between them the way it could between a check and a delete
+        // (spec D8). A single statement is atomic in both engines, so this needs no
+        // transaction, no locking, and no isolation-level tuning. `RETURNING` is what
+        // makes the outcome readable generically — `.rows_affected()` is not callable
+        // on `DB::QueryResult`, which is why the delete used to be a dialect method.
+        //
+        // The subquery is `POSTS_REFERENCING_MEDIA_FROM_WHERE`, the one definition of
+        // "referenced", shared with `list_posts_referencing_media` — which explains the
+        // refusal this statement decides. Its binds are `$1..=$4` in the same order the
+        // `DELETE`'s own `WHERE` uses them, so the two halves splice without renumbering.
+        let sql = format!(
+            "DELETE FROM media \
+             WHERE user_id = $1 AND source = $2 AND sha256 = $3 AND filename = $4 \
+               AND ($5 OR NOT EXISTS (SELECT 1 {POSTS_REFERENCING_MEDIA_FROM_WHERE})) \
+             RETURNING sha256"
+        );
+        let removed = sqlx::query(&sql)
+            .bind(user_id)
+            .bind(media.source)
+            .bind(&media.sha256)
+            .bind(&media.filename)
+            .bind(force)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        if removed.is_some() {
+            return Ok(TryDeleteOutcome::Deleted);
+        }
+
+        // No row came back for one of two reasons: the record is still there and was
+        // guarded, or it was never there. One existence check tells them apart, which
+        // is what keeps today's `NotFound` behaviour intact. Advisory and on the cold
+        // path only — the decision was already made atomically above, so asking
+        // afterwards cannot reopen the race.
+        let present = sqlx::query(
+            "SELECT 1 FROM media \
+             WHERE user_id = $1 AND source = $2 AND sha256 = $3 AND filename = $4",
+        )
+        .bind(user_id)
+        .bind(media.source)
+        .bind(&media.sha256)
+        .bind(&media.filename)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if present.is_some() {
+            Ok(TryDeleteOutcome::RefusedReferenced)
+        } else {
+            Err(DeleteMediaError::NotFound)
+        }
     }
 
     #[tracing::instrument(
@@ -381,16 +441,22 @@ pub const MEDIA_CACHE_POLICY_DEFAULT_KEY: &str = "media.cache_policy_default";
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, Backend, SeedUser, TestEnv};
+    use crate::test_support::{
+        backends, create_post_via_service, media_ref_for, media_row_exists, media_url_for,
+        seed_media, seed_users, Backend, SeedUser, TestEnv, MEDIA_TEST_SHA256,
+    };
     use common::test_support::{
         parse_byte_size, parse_content_hash, parse_content_type, parse_filename, parse_page_offset,
         parse_row_limit,
     };
     use rstest::*;
     use rstest_reuse::*;
+    use std::sync::Arc;
 
-    /// A canonical 64-char lowercase-hex content hash for fixtures.
-    const HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+    /// How many posts the concurrency exercise writes while the guard is hammered, and
+    /// how many unforced deletes it attempts against them. Large enough that the two
+    /// interleave for the whole run on both backends; small enough to stay a unit test.
+    const ROUNDS: usize = 100;
 
     #[apply(backends)]
     #[tokio::test]
@@ -399,7 +465,7 @@ mod tests {
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let record = MediaRecord {
             user_id,
-            sha256: parse_content_hash(HASH),
+            sha256: parse_content_hash(MEDIA_TEST_SHA256),
             filename: parse_filename("photo.jpg"),
             source: MediaSource::Upload,
             content_type: parse_content_type("image/jpeg"),
@@ -413,7 +479,7 @@ mod tests {
             .media
             .get_media(
                 user_id,
-                &parse_content_hash(HASH),
+                &parse_content_hash(MEDIA_TEST_SHA256),
                 &parse_filename("photo.jpg"),
                 &MediaSource::Upload,
             )
@@ -421,7 +487,7 @@ mod tests {
             .unwrap()
             .expect("present");
         // `sha256`/`filename` decode straight into their newtypes via the sqlx bridge (#438).
-        assert_eq!(got.sha256, parse_content_hash(HASH));
+        assert_eq!(got.sha256, parse_content_hash(MEDIA_TEST_SHA256));
         assert_eq!(got.filename, parse_filename("photo.jpg"));
     }
 
@@ -440,7 +506,7 @@ mod tests {
             .pool()
             .execute(&format!(
                 "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
-                 VALUES ({}, '{HASH}', '../evil', 'upload', 'image/jpeg', 1)",
+                 VALUES ({}, '{MEDIA_TEST_SHA256}', '../evil', 'upload', 'image/jpeg', 1)",
                 i64::from(user_id)
             ))
             .await
@@ -448,7 +514,7 @@ mod tests {
         let err = env
             .state
             .media
-            .find_by_hash(&parse_content_hash(HASH), &MediaSource::Upload)
+            .find_by_hash(&parse_content_hash(MEDIA_TEST_SHA256), &MediaSource::Upload)
             .await
             .unwrap_err();
         assert!(
@@ -479,7 +545,7 @@ mod tests {
             .pool()
             .execute(&format!(
                 "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
-                 VALUES ({}, '{HASH}', 'photo.jpg', 'upload', 'image/jpeg', -1)",
+                 VALUES ({}, '{MEDIA_TEST_SHA256}', 'photo.jpg', 'upload', 'image/jpeg', -1)",
                 i64::from(user_id)
             ))
             .await
@@ -487,7 +553,7 @@ mod tests {
         let err = env
             .state
             .media
-            .find_by_hash(&parse_content_hash(HASH), &MediaSource::Upload)
+            .find_by_hash(&parse_content_hash(MEDIA_TEST_SHA256), &MediaSource::Upload)
             .await
             .unwrap_err();
         assert!(
@@ -510,7 +576,7 @@ mod tests {
             .pool()
             .execute(&format!(
                 "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
-                 VALUES ({}, '{HASH}', 'photo.jpg', 'upload', 'image/jpeg', -5)",
+                 VALUES ({}, '{MEDIA_TEST_SHA256}', 'photo.jpg', 'upload', 'image/jpeg', -5)",
                 i64::from(user_id)
             ))
             .await
@@ -535,7 +601,7 @@ mod tests {
         // A valid record is stored normally.
         let good = MediaRecord {
             user_id,
-            sha256: parse_content_hash(HASH),
+            sha256: parse_content_hash(MEDIA_TEST_SHA256),
             filename: parse_filename("good.jpg"),
             source: MediaSource::Upload,
             content_type: parse_content_type("image/jpeg"),
@@ -570,7 +636,7 @@ mod tests {
             1,
             "the malformed-sha256 row must be skipped and the valid row kept"
         );
-        assert_eq!(listed[0].sha256, parse_content_hash(HASH));
+        assert_eq!(listed[0].sha256, parse_content_hash(MEDIA_TEST_SHA256));
     }
 
     #[apply(backends)]
@@ -580,7 +646,7 @@ mod tests {
         base.close_pool().await;
         let record = MediaRecord {
             user_id: UserId::from(1),
-            sha256: parse_content_hash(HASH),
+            sha256: parse_content_hash(MEDIA_TEST_SHA256),
             filename: parse_filename("test.jpg"),
             source: MediaSource::Upload,
             content_type: parse_content_type("image/jpeg"),
@@ -601,7 +667,7 @@ mod tests {
             .media
             .get_media(
                 UserId::from(1),
-                &parse_content_hash(HASH),
+                &parse_content_hash(MEDIA_TEST_SHA256),
                 &parse_filename("test.jpg"),
                 &MediaSource::Upload,
             )
@@ -628,19 +694,140 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn delete_media_with_closed_pool_returns_error(#[case] backend: Backend) {
+    async fn try_delete_media_with_closed_pool_returns_error(#[case] backend: Backend) {
         let TestEnv { state, base } = backend.setup().await;
         base.close_pool().await;
         let result = state
             .media
-            .delete_media(
-                UserId::from(1),
-                &parse_content_hash(HASH),
-                &parse_filename("test.jpg"),
-                &MediaSource::Upload,
-            )
+            .try_delete_media(UserId::from(1), &media_ref_for("test.jpg"), false)
             .await;
         assert!(matches!(result, Err(DeleteMediaError::Internal(_))));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn try_delete_media_refuses_a_referenced_item_unless_forced(#[case] backend: Backend) {
+        // A17b.
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(&env.state).await;
+        let media = seed_media(&env.state, user, "photo.jpg").await;
+        let embed = format!("<img src=\"{}\">", media_url_for("photo.jpg"));
+        create_post_via_service(&env.state, user, &embed).await;
+
+        assert_eq!(
+            env.state
+                .media
+                .try_delete_media(user, &media, false)
+                .await
+                .expect("the guarded delete succeeds as a query"),
+            TryDeleteOutcome::RefusedReferenced
+        );
+        assert!(
+            media_row_exists(&env.state, user, &media).await,
+            "refusal leaves the row"
+        );
+
+        assert_eq!(
+            env.state
+                .media
+                .try_delete_media(user, &media, true)
+                .await
+                .expect("the forced delete succeeds"),
+            TryDeleteOutcome::Deleted
+        );
+        assert!(!media_row_exists(&env.state, user, &media).await);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn try_delete_media_deletes_an_unreferenced_item(#[case] backend: Backend) {
+        // A17b, the other half: nothing references it, so an unforced delete goes through.
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(&env.state).await;
+        let media = seed_media(&env.state, user, "photo.jpg").await;
+
+        assert_eq!(
+            env.state
+                .media
+                .try_delete_media(user, &media, false)
+                .await
+                .expect("the delete succeeds"),
+            TryDeleteOutcome::Deleted
+        );
+        assert!(!media_row_exists(&env.state, user, &media).await);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn try_delete_media_reports_not_found_distinctly_from_refusal(#[case] backend: Backend) {
+        // A17c — the conditional statement returns no row in both cases, so this pins
+        // that the follow-up existence check still separates them, preserving today's
+        // `DeleteMediaError::NotFound`.
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(&env.state).await;
+
+        let result = env
+            .state
+            .media
+            .try_delete_media(user, &media_ref_for("never-uploaded.jpg"), false)
+            .await;
+
+        assert!(
+            matches!(result, Err(DeleteMediaError::NotFound)),
+            "expected NotFound, got {result:?}"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn try_delete_media_holds_under_concurrent_reference_writes(#[case] backend: Backend) {
+        // A17d/A17e. Be honest about what this establishes: a stress test cannot *prove*
+        // atomicity — that would need controlled interleaving inside the statement, which
+        // SQL gives no hook for. Atomicity here is structural: it is one statement. What
+        // this does establish is (a) the statement survives sustained concurrency without
+        // SQLITE_BUSY (A17e), and (b) the guard does not ignore references under load.
+        //
+        // Written monotone — the writer only ever ADDS references — so it cannot false-fail
+        // the way an add/remove churn would, where a reference legitimately appearing between
+        // the delete and a separate verification read looks identical to a violation.
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(&env.state).await;
+        let media = seed_media(&env.state, user, "photo.jpg").await;
+        // Each body carries a distinct leading line so the service path derives a distinct
+        // title, and hence a distinct slug: identical bodies would collide on the slug and
+        // exhaust the creator's attempt budget long before the round count here. The embed
+        // — the only part the guard reads — is the same in every one.
+        let embed = format!("<img src=\"{}\">", media_url_for("photo.jpg"));
+
+        // One reference exists before any delete is attempted, and none is ever removed, so
+        // every unforced delete from here on must refuse.
+        create_post_via_service(&env.state, user, &format!("reference 0\n\n{embed}")).await;
+
+        let writer = tokio::spawn({
+            let state = Arc::clone(&env.state);
+            async move {
+                for round in 1..=ROUNDS {
+                    create_post_via_service(&state, user, &format!("reference {round}\n\n{embed}"))
+                        .await;
+                }
+            }
+        });
+
+        for _ in 0..ROUNDS {
+            let outcome = env
+                .state
+                .media
+                .try_delete_media(user, &media, false)
+                .await
+                .expect("no SQLITE_BUSY under concurrency");
+            assert_eq!(
+                outcome,
+                TryDeleteOutcome::RefusedReferenced,
+                "a live reference exists throughout, so no unforced delete may succeed"
+            );
+        }
+        writer.await.expect("the concurrent writer does not panic");
+        assert!(media_row_exists(&env.state, user, &media).await);
     }
 
     #[apply(backends)]
@@ -659,7 +846,7 @@ mod tests {
         base.close_pool().await;
         let result = state
             .media
-            .find_by_hash(&parse_content_hash(HASH), &MediaSource::Upload)
+            .find_by_hash(&parse_content_hash(MEDIA_TEST_SHA256), &MediaSource::Upload)
             .await;
         assert!(result.is_err());
     }

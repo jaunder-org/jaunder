@@ -7,6 +7,7 @@ use thiserror::Error;
 
 use common::feed::FeedPath;
 use common::ids::{AudienceId, ChannelId, PostId, RevisionId, TagId, UserId};
+use common::media::MediaRef;
 use common::pagination::RowLimit;
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
@@ -21,7 +22,7 @@ use host::error::{InternalError, InternalResult};
 use crate::backend::Backend;
 use crate::helpers::{post_record_from_row, PostRow};
 
-pub use common::render::{InvalidPostFormat, PostFormat, RenderedHtml};
+pub use common::render::{InvalidPostFormat, PostFormat, RenderOutput, RenderedHtml};
 
 /// The validated calendar date of a public permalink lookup key. Re-exported from
 /// `common::time` so storage callers and the trait method name the domain type
@@ -210,7 +211,10 @@ pub struct CreatePostInput {
     pub slug: Slug,
     pub body: PostBody,
     pub format: PostFormat,
-    pub rendered_html: RenderedHtml,
+    /// The rendered body together with the media it references — see [`RenderOutput`],
+    /// whose only constructor is rendering, so this input cannot carry a reference set
+    /// that disagrees with its HTML (#711).
+    pub rendered: RenderOutput,
     /// If Some, the post is created in a published state.
     pub published_at: Option<DateTime<Utc>>,
     /// Optional summary/excerpt of the post.
@@ -232,7 +236,10 @@ pub struct UpdatePostInput {
     pub slug: Slug,
     pub body: PostBody,
     pub format: PostFormat,
-    pub rendered_html: RenderedHtml,
+    /// The rendered body together with the media it references — see [`RenderOutput`].
+    /// An edit can remove a reference, so the set must always be the one this HTML
+    /// implies; deriving it is the only way to build one (#711).
+    pub rendered: RenderOutput,
     /// If `true`, clear `published_at` back to NULL (draft / unschedule). Takes
     /// precedence over `explicit_published_at`.
     pub unpublish: bool,
@@ -582,6 +589,23 @@ pub trait PostStorage: Send + Sync {
         input: &UpdatePostInput,
     ) -> Result<PostRecord, UpdatePostError>;
 
+    /// Publishes a draft: sets `published_at` to now if it is NULL, leaving an
+    /// already-published post's timestamp untouched. Changes nothing else — not
+    /// the body, rendered HTML, format, slug, summary, audiences or media rows.
+    /// Publication is not an edit, so it does not go through `update_post` and
+    /// records no revision (#711).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UpdatePostError::NotFound`] if the post does not exist or is
+    /// soft-deleted, or [`UpdatePostError::Unauthorized`] if `user_id` does not
+    /// own it.
+    async fn publish_post(
+        &self,
+        post_id: PostId,
+        user_id: UserId,
+    ) -> Result<PostRecord, UpdatePostError>;
+
     /// Marks a post as deleted without removing it from the database.
     async fn soft_delete_post(&self, post_id: PostId) -> sqlx::Result<()>;
 
@@ -742,6 +766,27 @@ pub trait PostStorage: Send + Sync {
     /// [`AudienceTarget::Named`]); a post with no rows yields an empty vec
     /// (equivalent to [`AudienceTarget::Private`]). See ADR-0020.
     async fn get_post_audiences(&self, post_id: PostId) -> sqlx::Result<Vec<AudienceTarget>>;
+
+    /// The ids of `user_id`'s non-soft-deleted posts whose rendered HTML points at
+    /// `media`, ascending. An unreferenced item yields an empty vec.
+    ///
+    /// The read half of `post_media`'s lifecycle, kept in the same trait and module
+    /// as [`replace_post_media`], which writes those rows (#711).
+    ///
+    /// **Deliberately unlimited.** This replaces a body scan that paged the user's
+    /// posts and stopped at 1000, so a reference in an older post left the media
+    /// silently deletable; the join answers the question exactly, and capping it
+    /// would reintroduce the bug.
+    ///
+    /// **Deliberately scoped to `user_id`'s own posts.** `media` is keyed per-user,
+    /// so another user may hold a row for the same on-disk entry; their posts do not
+    /// block this user's delete, and — since the caller shows this list to the
+    /// deleting user — must not be disclosed to them (spec D9).
+    async fn list_posts_referencing_media(
+        &self,
+        user_id: UserId,
+        media: &MediaRef,
+    ) -> sqlx::Result<Vec<PostId>>;
 }
 
 /// Backend-specific divergence for [`PostStore`].
@@ -775,6 +820,12 @@ pub trait PostDialect: Backend {
     /// `kind_id` via a subquery. Bind order: `post_id, audience_id, kind_name`.
     const INSERT_POST_AUDIENCE: &'static str;
 
+    /// Deletes every `post_media` row for a post. Bind order: `post_id`.
+    const DELETE_POST_MEDIA: &'static str;
+    /// Inserts one `post_media` row. Bind order:
+    /// `post_id, source, sha256, filename`.
+    const INSERT_POST_MEDIA: &'static str;
+
     /// Update a post and record a revision, returning the updated record.
     async fn update_post(
         pool: &Pool<Self>,
@@ -799,6 +850,29 @@ pub trait PostDialect: Backend {
         tag_slug: &Tag,
     ) -> Result<(), TaggingError>;
 }
+
+/// The single definition of "which of `user_id`'s live posts reference this media" —
+/// the `FROM`/`JOIN`/`WHERE` half of that question, leaving the projection (and any
+/// `ORDER BY`) to whoever splices it in.
+///
+/// Bind order: `$1` `user_id`, `$2` `source`, `$3` `sha256`, `$4` `filename`.
+///
+/// Both places that ask the question use this fragment:
+/// [`PostStorage::list_posts_referencing_media`], which *reports* the references so a
+/// refusal can be explained, and the `NOT EXISTS` guard inside
+/// [`try_delete_media`][crate::media::MediaStorage::try_delete_media], which *makes*
+/// that refusal atomically (#711, spec D8). They have to agree: spelled separately,
+/// widening or narrowing "referenced" in one would leave the guard blocking deletes
+/// the message says are unblocked, or vice versa — a disagreement nothing would catch
+/// at compile time. So it is spelled once, here, in the module that owns `post_media`.
+pub(crate) const POSTS_REFERENCING_MEDIA_FROM_WHERE: &str = "\
+     FROM post_media pm \
+     JOIN posts p ON p.post_id = pm.post_id \
+     WHERE p.user_id = $1 \
+       AND p.deleted_at IS NULL \
+       AND pm.source = $2 \
+       AND pm.sha256 = $3 \
+       AND pm.filename = $4";
 
 /// Generic [`PostStorage`] backed by any [`PostDialect`] database.
 ///
@@ -969,6 +1043,34 @@ where
     }
 
     #[tracing::instrument(
+        name = "storage.posts.list_referencing_media",
+        skip(self, media),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn list_posts_referencing_media(
+        &self,
+        user_id: UserId,
+        media: &MediaRef,
+    ) -> sqlx::Result<Vec<PostId>> {
+        // Identical on both backends, so it stays here rather than becoming a
+        // `PostDialect` const (ADR-0019). No `LIMIT`: see the trait doc. The predicate
+        // itself is `POSTS_REFERENCING_MEDIA_FROM_WHERE`, shared with the delete guard.
+        //
+        // Decodes straight into `PostId` rather than `i64`-then-convert: an id column
+        // decodes as its newtype (ADR-0085, #715), which is also what keeps the `i64`
+        // decode bound off this impl.
+        let sql =
+            format!("SELECT pm.post_id {POSTS_REFERENCING_MEDIA_FROM_WHERE} ORDER BY pm.post_id");
+        sqlx::query_scalar::<_, PostId>(&sql)
+            .bind(user_id)
+            .bind(media.source)
+            .bind(&media.sha256)
+            .bind(&media.filename)
+            .fetch_all(&self.pool)
+            .await
+    }
+
+    #[tracing::instrument(
         name = "storage.posts.get_by_permalink",
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
@@ -1023,6 +1125,73 @@ where
         input: &UpdatePostInput,
     ) -> Result<PostRecord, UpdatePostError> {
         DB::update_post(&self.pool, post_id, editor_user_id, input).await
+    }
+
+    #[tracing::instrument(
+        name = "storage.posts.publish",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn publish_post(
+        &self,
+        post_id: PostId,
+        user_id: UserId,
+    ) -> Result<PostRecord, UpdatePostError> {
+        // No dialect split (ADR-0019): ownership and liveness are the UPDATE's own
+        // predicate rather than a preceding SELECT, so there is no check-then-write
+        // window for `update_post`'s `FOR UPDATE` / `BEGIN IMMEDIATE` locking to
+        // close, and one statement writes the single column publication touches.
+        let published = sqlx::query_scalar::<_, PostId>(
+            "UPDATE posts
+                SET published_at = COALESCE(published_at, $1),
+                    updated_at = $1
+              WHERE post_id = $2 AND user_id = $3 AND deleted_at IS NULL
+          RETURNING post_id",
+        )
+        .bind(Utc::now())
+        .bind(post_id)
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if published.is_none() {
+            // Nothing matched, so the post is either gone or someone else's. One read
+            // tells the two apart for the caller's error; nothing was written, so
+            // there is no state to unwind. A live row here is necessarily owned by
+            // another user — the UPDATE would have matched otherwise.
+            // Selects `post_id`, not `user_id`: the question is pure existence, and the
+            // owner's identity is never read — a live row is necessarily someone else's,
+            // as argued above. Decoding an id column into its newtype rather than `i64`
+            // is the ADR-0085 convention (#715).
+            let live = sqlx::query_scalar::<_, PostId>(
+                "SELECT post_id FROM posts WHERE post_id = $1 AND deleted_at IS NULL",
+            )
+            .bind(post_id)
+            .fetch_optional(&self.pool)
+            .await?;
+            return Err(if live.is_some() {
+                UpdatePostError::Unauthorized
+            } else {
+                UpdatePostError::NotFound
+            });
+        }
+
+        // Re-read through the record projection so `tags` and `author_username` come
+        // back populated. Owner-only, so no viewer resolution.
+        let sql = format!(
+            "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                    p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
+                    {tags} AS tags
+             FROM posts p
+             JOIN users u ON p.user_id = u.user_id
+             WHERE p.post_id = $1",
+            tags = DB::TAGS_SUBQUERY,
+        );
+        let row = sqlx::query_as::<_, PostRow>(&sql)
+            .bind(post_id)
+            .fetch_one(&self.pool)
+            .await?;
+        post_record_from_row(row).map_err(UpdatePostError::Internal)
     }
 
     #[tracing::instrument(
@@ -1929,7 +2098,7 @@ where
     .bind(&input.slug)
     .bind(&input.body)
     .bind(input.format)
-    .bind(&input.rendered_html)
+    .bind(input.rendered.html())
     .bind(now)
     .bind(now)
     .bind(input.published_at)
@@ -1945,6 +2114,7 @@ where
     })?;
 
     replace_post_audiences::<DB>(conn, post_id, &input.audiences).await?;
+    replace_post_media::<DB>(conn, post_id, input.rendered.media()).await?;
 
     // Register the idempotency key in the same transaction as the post. This
     // INSERT has its own unique-violation mapping — a `(user_id, key)` clash is
@@ -1996,6 +2166,50 @@ where
                 .execute(&mut *conn)
                 .await?;
         }
+    }
+    Ok(())
+}
+
+/// Replaces a post's `post_media` rows to exactly match `media`.
+///
+/// Deletes every existing row for `post_id`, then inserts one per reference, so an
+/// edit that *removes* an embed removes its row. Runs on the caller's executor so it
+/// shares the create/update transaction — the sibling of [`replace_post_audiences`],
+/// and kept beside it at every call site because they are one concern: a post's child
+/// rows (#711).
+///
+/// `media` is [`RenderOutput::media`](common::render::RenderOutput::media), which is
+/// already deduplicated and sorted, so the composite primary key can never be violated
+/// and no dialect-divergent conflict handling is needed.
+pub(crate) async fn replace_post_media<DB>(
+    conn: &mut DB::Connection,
+    post_id: PostId,
+    media: &[MediaRef],
+) -> sqlx::Result<()>
+where
+    DB: PostDialect,
+    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    // `MediaSource`/`ContentHash`/`Filename` all bind as themselves through their
+    // `String`-delegating sqlx bridges (ADR-0071 / the `db_enum` text-column bridge),
+    // which is what this pair makes available on the generic backend. The
+    // `sqlx-newtype-bind` gate forbids stripping any of them to `&str` here.
+    String: sqlx::Type<DB>,
+    for<'q> String: sqlx::Encode<'q, DB>,
+    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
+    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+{
+    sqlx::query(DB::DELETE_POST_MEDIA)
+        .bind(post_id)
+        .execute(&mut *conn)
+        .await?;
+    for reference in media {
+        sqlx::query(DB::INSERT_POST_MEDIA)
+            .bind(post_id)
+            .bind(reference.source)
+            .bind(&reference.sha256)
+            .bind(&reference.filename)
+            .execute(&mut *conn)
+            .await?;
     }
     Ok(())
 }
@@ -2270,7 +2484,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, Backend, CloseablePool, SeedRawPost, SeedUser};
+    use crate::test_support::{
+        backends, create_draft_via_service, create_post_via_service, fetch_post_media,
+        media_ref_for, media_row_exists, media_url_for, seed_media, seed_users,
+        update_post_body_via_service, Backend, CloseablePool, SeedRawPost, SeedUser, UpdateRawPost,
+        MEDIA_TEST_SHA256,
+    };
     use common::test_support::{
         parse_post_summary, parse_row_limit, parse_slug, parse_tag, parse_tag_label,
         parse_username, permalink_date,
@@ -2486,16 +2705,12 @@ mod tests {
             .await
             .post_id;
 
-        let update = |summary| UpdatePostInput {
-            title: Some("Test Title".into()),
-            slug: parse_slug("summary-edit"),
-            body: "Test body".into(),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Test body</p>"),
-            unpublish: false,
-            explicit_published_at: None,
-            summary,
-            audiences: vec![AudienceTarget::Public],
+        let update = |summary: Option<PostSummary>| {
+            UpdateRawPost::new("summary-edit")
+                .title("Test Title")
+                .body("Test body")
+                .summary(summary)
+                .build()
         };
 
         // An edit replaces the summary.
@@ -2515,6 +2730,364 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(cleared.summary, None);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn publish_post_changes_only_the_publication_timestamp(#[case] backend: Backend) {
+        // Publishing is not an edit (#711): it stamps `published_at` and touches
+        // nothing else — body, rendered HTML, format, slug, title, summary, tags and
+        // audience targeting all survive. Routing publication through `update_post`
+        // is what used to rewrite the whole row (and would clobber its child rows).
+        let env = backend.setup().await;
+        let user = SeedUser::new().seed(&env.state).await;
+        let posts = &*env.state.posts;
+        let seeded = SeedRawPost::new(user.user_id)
+            .draft()
+            .summary(parse_post_summary("the summary"))
+            .tags(["Rust"])
+            .seed(&env.state)
+            .await;
+        let before = posts
+            .get_post_by_id(seeded.post_id, &ViewerIdentity::Anonymous)
+            .await
+            .unwrap()
+            .unwrap();
+        let audiences_before = posts.get_post_audiences(seeded.post_id).await.unwrap();
+
+        let after = posts
+            .publish_post(seeded.post_id, user.user_id)
+            .await
+            .expect("publish succeeds");
+
+        assert!(after.published_at.is_some(), "the draft is now published");
+        assert_eq!(after.author_username, user.username);
+        assert_eq!(after.title, before.title);
+        assert_eq!(after.slug, before.slug);
+        assert_eq!(after.body, before.body);
+        assert_eq!(after.format, before.format);
+        assert_eq!(after.rendered_html, before.rendered_html);
+        assert_eq!(after.summary, before.summary);
+        assert_eq!(after.created_at, before.created_at);
+        assert_eq!(after.tags.len(), 1);
+        assert_eq!(after.tags[0].tag_slug, "rust");
+        assert_eq!(
+            posts.get_post_audiences(seeded.post_id).await.unwrap(),
+            audiences_before
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn publish_post_keeps_an_already_published_timestamp(#[case] backend: Backend) {
+        // COALESCE, not overwrite: the permalink is derived from `published_at`, so
+        // re-publishing must not restamp it.
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let posts = &*env.state.posts;
+        let post_id = SeedRawPost::new(user_id)
+            .draft()
+            .seed(&env.state)
+            .await
+            .post_id;
+
+        let first = posts.publish_post(post_id, user_id).await.unwrap();
+        let second = posts.publish_post(post_id, user_id).await.unwrap();
+
+        assert!(first.published_at.is_some());
+        assert_eq!(
+            first.published_at, second.published_at,
+            "republishing must not restamp"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn publish_post_rejects_a_missing_foreign_or_deleted_post(#[case] backend: Backend) {
+        // The ownership/liveness guard `update_post` applies, applied to publication:
+        // a post that is gone reads as NotFound, someone else's live post as
+        // Unauthorized (both mask as a 404 at the web boundary).
+        let env = backend.setup().await;
+        let [owner, stranger] = seed_users::<2>(&env.state).await;
+        let posts = &*env.state.posts;
+        let post_id = SeedRawPost::new(owner)
+            .draft()
+            .seed(&env.state)
+            .await
+            .post_id;
+
+        assert!(matches!(
+            posts.publish_post(PostId::from(999_999), owner).await,
+            Err(UpdatePostError::NotFound)
+        ));
+        assert!(matches!(
+            posts.publish_post(post_id, stranger).await,
+            Err(UpdatePostError::Unauthorized)
+        ));
+        // The rejected publish wrote nothing: the post is still a draft.
+        assert!(posts
+            .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
+            .await
+            .unwrap()
+            .unwrap()
+            .published_at
+            .is_none());
+
+        posts.soft_delete_post(post_id).await.unwrap();
+        assert!(matches!(
+            posts.publish_post(post_id, owner).await,
+            Err(UpdatePostError::NotFound)
+        ));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn publish_post_with_closed_pool_returns_error(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        env.base.close_pool().await;
+        let result = env
+            .state
+            .posts
+            .publish_post(PostId::from(1), UserId::from(1))
+            .await;
+        assert!(matches!(result, Err(UpdatePostError::Internal(_))));
+    }
+
+    // -----------------------------------------------------------------------
+    // post_media: what a post's rendered HTML points a reader at (#711)
+    // -----------------------------------------------------------------------
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn create_post_writes_its_media_rows(#[case] backend: Backend) {
+        // A11, and the web half of A14: `create_post_via_service` is the entry point
+        // `web::posts::create` uses, so this drives render -> extract -> write through
+        // the product's own path rather than a synthetic input.
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(&env.state).await;
+        let uploaded = seed_media(&env.state, user, "photo.jpg").await;
+        let body = format!("<img src=\"{}\">", media_url_for("photo.jpg"));
+
+        let post_id = create_post_via_service(&env.state, user, &body).await;
+
+        assert_eq!(
+            fetch_post_media(&env.base, post_id).await,
+            vec![media_ref_for("photo.jpg")]
+        );
+        // The recorded triple names the entry the `media` table holds — the join a
+        // reference guard reads in the other direction.
+        assert!(media_row_exists(&env.state, user, &uploaded).await);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn create_post_records_a_raw_filename_and_a_member_url(#[case] backend: Backend) {
+        // A2, A3 at the persistence level — the issue's two headline spellings become
+        // rows: a URL bearing the name a person types resolves to the stored encoded
+        // spelling, and the AtomPub member layout (which carries no source segment)
+        // is recognised too.
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(&env.state).await;
+        let raw = media_url_for("my photo.jpg").replace("%20", " ");
+        let member = format!("/atompub/alice/media/{MEDIA_TEST_SHA256}/photo.jpg");
+        let body = format!("<img src=\"{raw}\"><a href=\"{member}\">doc</a>");
+
+        let post_id = create_post_via_service(&env.state, user, &body).await;
+
+        let names: Vec<String> = fetch_post_media(&env.base, post_id)
+            .await
+            .into_iter()
+            .map(|media| media.filename.to_string())
+            .collect();
+        assert!(
+            names.contains(&"my%20photo.jpg".to_owned()),
+            "raw spelling must be canonicalised: {names:?}"
+        );
+        assert!(
+            names.contains(&"photo.jpg".to_owned()),
+            "member URL must be recorded: {names:?}"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn a_post_referencing_nothing_writes_no_media_rows(#[case] backend: Backend) {
+        // A13 — no false positives: prose that names no file writes no rows.
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(&env.state).await;
+
+        let post_id = create_post_via_service(&env.state, user, "just some prose").await;
+
+        assert!(fetch_post_media(&env.base, post_id).await.is_empty());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn updating_a_post_replaces_its_media_rows(#[case] backend: Backend) {
+        // A12, both directions — an edit that swaps one embed for another removes the
+        // old row and adds the new one, and an edit that removes every embed empties
+        // the set. This is why `replace_post_media` deletes before inserting.
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(&env.state).await;
+        let a = media_url_for("a.jpg");
+        let b = media_url_for("b.jpg");
+        let post_id =
+            create_post_via_service(&env.state, user, &format!("<img src=\"{a}\">")).await;
+
+        update_post_body_via_service(&env.state, post_id, user, &format!("<img src=\"{b}\">"))
+            .await;
+
+        let rows = fetch_post_media(&env.base, post_id).await;
+        assert_eq!(rows.len(), 1, "the removed reference is gone: {rows:?}");
+        assert_eq!(
+            rows[0],
+            media_ref_for("b.jpg"),
+            "the added reference is present"
+        );
+
+        update_post_body_via_service(&env.state, post_id, user, "no media at all").await;
+
+        assert!(fetch_post_media(&env.base, post_id).await.is_empty());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn publishing_a_draft_preserves_its_media_rows(#[case] backend: Backend) {
+        // A15 and the row half of A15b — publication is not an edit, so it must leave
+        // the child rows alone. This fails against any design that routes publication
+        // through `update_post`, which would rewrite them from whatever input the
+        // publish call happened to carry. It lives here rather than beside the other
+        // `publish_post` tests because it needs `post_media` to exist.
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(&env.state).await;
+        let body = format!("<img src=\"{}\">", media_url_for("photo.jpg"));
+        let post_id = create_draft_via_service(&env.state, user, &body).await;
+        let before = fetch_post_media(&env.base, post_id).await;
+        assert_eq!(
+            before.len(),
+            1,
+            "precondition: the draft records its reference"
+        );
+
+        env.state
+            .posts
+            .publish_post(post_id, user)
+            .await
+            .expect("publish succeeds");
+
+        assert_eq!(
+            fetch_post_media(&env.base, post_id).await,
+            before,
+            "rows survive publication"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn list_posts_referencing_media_scopes_and_orders(#[case] backend: Backend) {
+        // A16.
+        let env = backend.setup().await;
+        let [owner, stranger] = seed_users::<2>(&env.state).await;
+        let embed = format!("<img src=\"{}\">", media_url_for("photo.jpg"));
+
+        let first = create_post_via_service(&env.state, owner, &embed).await;
+        let second = create_post_via_service(&env.state, owner, &embed).await;
+        let deleted = create_post_via_service(&env.state, owner, &embed).await;
+        let foreign = create_post_via_service(&env.state, stranger, &embed).await;
+        let unrelated = create_post_via_service(&env.state, owner, "no media").await;
+        env.state
+            .posts
+            .soft_delete_post(deleted)
+            .await
+            .expect("soft delete succeeds");
+
+        let found = env
+            .state
+            .posts
+            .list_posts_referencing_media(owner, &media_ref_for("photo.jpg"))
+            .await
+            .expect("listing succeeds");
+
+        assert_eq!(found, vec![first, second], "own, non-deleted, ascending");
+        assert!(
+            !found.contains(&deleted),
+            "a soft-deleted post does not block a delete"
+        );
+        assert!(
+            !found.contains(&foreign),
+            "another user's post is not reported (spec D9)"
+        );
+        assert!(!found.contains(&unrelated));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn list_posts_referencing_media_reports_every_reference_past_the_old_scan_window(
+        #[case] backend: Backend,
+    ) {
+        // A17 — the truncation half. The old code paged the user's posts at
+        // `RowLimit::at_most(1000)` and scanned their bodies, so a reference in post
+        // 1001 went unseen and its media stayed silently deletable.
+        //
+        // Every seeded post embeds the *same* media, which is stronger than seeding
+        // 1200 unrelated fillers plus one needle: with only one matching row a `LIMIT
+        // 1000` on the new join would pass unnoticed, since the filter runs first.
+        // Here the cap has 1201 rows to truncate, so the absence of a limit is what
+        // the assertions actually rest on.
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(&env.state).await;
+        let body = format!("<img src=\"{}\">", media_url_for("needle.jpg"));
+
+        // One batched transaction, not 1201 round trips. `create_posts` shares
+        // `write_post_in_tx` with `create_post`, so each row's `post_media` is written
+        // too, and the ids come back in input order.
+        let inputs: Vec<CreatePostInput> = (0..1201)
+            .map(|_| SeedRawPost::new(user).body(body.as_str()).build())
+            .collect();
+        let ids = env
+            .state
+            .posts
+            .create_posts(&inputs)
+            .await
+            .expect("batch seed succeeds");
+
+        let found = env
+            .state
+            .posts
+            .list_posts_referencing_media(user, &media_ref_for("needle.jpg"))
+            .await
+            .expect("listing succeeds");
+
+        assert!(
+            found == ids,
+            "every reference, ascending and untruncated: got {} of {}",
+            found.len(),
+            ids.len()
+        );
+        assert_eq!(
+            found.last(),
+            ids.last(),
+            "the reference past the old 1000-row window is returned"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn list_posts_referencing_media_returns_empty_for_unreferenced_media(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(&env.state).await;
+        create_post_via_service(&env.state, user, "no media").await;
+
+        let found = env
+            .state
+            .posts
+            .list_posts_referencing_media(user, &media_ref_for("absent.jpg"))
+            .await
+            .expect("listing succeeds");
+
+        assert!(found.is_empty());
     }
 
     #[apply(backends)]
@@ -2932,14 +3505,15 @@ mod tests {
 
         // A post with no title exercises the `None` decode path for
         // `Option<PostTitle>`.
+        let untitled_body: PostBody = "body".into();
         let untitled_id = posts
             .create_post(&CreatePostInput {
                 user_id,
                 title: None,
                 slug: parse_slug("no-title"),
-                body: "body".into(),
+                body: untitled_body.clone(),
                 format: PostFormat::Markdown,
-                rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
+                rendered: RenderOutput::render(&untitled_body, &PostFormat::Markdown),
                 published_at: None,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],

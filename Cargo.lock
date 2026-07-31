@@ -555,6 +555,7 @@ dependencies = [
  "croner",
  "email_address",
  "getrandom 0.2.17",
+ "html5ever",
  "macros",
  "orgize",
  "percent-encoding",

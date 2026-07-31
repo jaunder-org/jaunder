@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 
 use common::absolute_url::{compose, AbsoluteUrl};
 use common::atompub::{render_media_link_entry, MediaLinkEntry};
-use common::media::{media_url, ContentHash, Filename, MediaSource, ProfferedFilename};
+use common::media::{media_url, ContentHash, Filename, MediaRef, MediaSource, ProfferedFilename};
 use common::root_relative_url::RootRelativeUrl;
 use common::time::UtcInstant;
 use common::username::Username;
@@ -184,8 +184,19 @@ pub async fn member_delete(
     // pre-handler 400); a well-formed but absent record still yields `NotFound` below.
     // As in `member_get`, the segment arrives decoded and is rewrapped here (#720).
     let filename = Filename::from(filename);
+    // `force = true`: AtomPub has no confirmation UI to carry a refusal back to the
+    // client, and this endpoint's behaviour today is an unconditional delete, which
+    // the guard must not change (#711).
     media
-        .delete_media(auth_user.user_id, &sha, &filename, &MediaSource::Upload)
+        .try_delete_media(
+            auth_user.user_id,
+            &MediaRef {
+                source: MediaSource::Upload,
+                sha256: sha,
+                filename,
+            },
+            true,
+        )
         .await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }

@@ -23,6 +23,13 @@ impl PostDialect for Sqlite {
          (post_id, audience_id, target_kind_id) \
          VALUES (?, ?, (SELECT kind_id FROM target_kinds WHERE name = ?))";
 
+    const DELETE_POST_MEDIA: &'static str = "DELETE FROM post_media WHERE post_id = ?";
+
+    // Bind order: post_id, source, sha256, filename (matches `replace_post_media`).
+    const INSERT_POST_MEDIA: &'static str = "INSERT INTO post_media \
+         (post_id, source, sha256, filename) \
+         VALUES (?, ?, ?, ?)";
+
     async fn update_post(
         pool: &Pool<Sqlite>,
         post_id: PostId,
@@ -91,7 +98,7 @@ impl PostDialect for Sqlite {
             .bind(&input.slug)
             .bind(&input.body)
             .bind(input.format)
-            .bind(&input.rendered_html)
+            .bind(input.rendered.html())
             // $6 unpublish, $7/$8 explicit_published_at (bound twice: NULL-test
             // then value), $9 now (COALESCE fallback), $10 now (updated_at),
             // $11 summary.
@@ -110,6 +117,8 @@ impl PostDialect for Sqlite {
             .await?;
 
             crate::posts::replace_post_audiences::<Sqlite>(&mut *conn, post_id, &input.audiences)
+                .await?;
+            crate::posts::replace_post_media::<Sqlite>(&mut *conn, post_id, input.rendered.media())
                 .await?;
 
             Ok(row)

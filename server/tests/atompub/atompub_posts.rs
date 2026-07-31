@@ -14,7 +14,9 @@ use crate::helpers::{
     atompub, atompub_at, atompub_get, atompub_post_xml, atompub_put_xml, body_string,
     create_user_and_session, make_app, setup_with_base_url, SeededSession,
 };
-use storage::test_support::{backends, backends_matrix, Backend, TestEnv};
+use storage::test_support::{
+    backends, backends_matrix, fetch_post_media, media_ref_for, media_url_for, Backend, TestEnv,
+};
 
 // #560: the AtomPub surface composes absolute URLs, so it *requires* `site.base_url`.
 // With base UNSET the handler returns `500` (`HandlerError::BaseUrlRequired`) rather than
@@ -1501,4 +1503,33 @@ async fn create_without_idempotency_key_is_201(#[case] backend: Backend) {
 
     let response = create_post_keyed(app, &session, &xml, None).await;
     assert_eq!(response.status(), StatusCode::CREATED);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn create_writes_the_entrys_media_rows(#[case] backend: Backend) {
+    // The AtomPub half of A14 (#711). The storage tests cover the web path; this one
+    // drives the router, because the AtomPub handler reaches storage by its own route
+    // and nothing in `storage` would notice if that path stopped recording references.
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+    let app = make_app(&state, &base);
+
+    // An `html` entry, so the escaped `<img>` is unescaped into the stored body and the
+    // renderer sees a real element rather than literal text.
+    let content = format!("&lt;img src=\"{}\"&gt;", media_url_for("photo.jpg"));
+    let xml = entry_xml("Photo entry", "html", &content);
+
+    let response = app
+        .oneshot(atompub_post_xml(&session, "posts", &xml))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let post_id = PostId::from(location_post_id(&response));
+
+    assert_eq!(
+        fetch_post_media(&base, post_id).await,
+        vec![media_ref_for("photo.jpg")]
+    );
 }
