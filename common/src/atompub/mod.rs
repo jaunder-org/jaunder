@@ -60,12 +60,6 @@ impl From<atom_syndication::Error> for AtomPubError {
     }
 }
 
-impl From<quick_xml::Error> for AtomPubError {
-    fn from(e: quick_xml::Error) -> Self {
-        AtomPubError::Malformed(e.to_string())
-    }
-}
-
 impl From<std::io::Error> for AtomPubError {
     fn from(e: std::io::Error) -> Self {
         AtomPubError::Malformed(e.to_string())

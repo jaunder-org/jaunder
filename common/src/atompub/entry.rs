@@ -15,9 +15,9 @@
 use std::collections::BTreeMap;
 
 use atom_syndication::extension::Extension;
-use atom_syndication::{Category, Content, Entry, Link, Text};
-use quick_xml::events::{BytesDecl, BytesEnd, BytesRef, BytesStart, BytesText, Event};
-use quick_xml::{Reader, Writer};
+use atom_syndication::Entry;
+use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
+use quick_xml::Writer;
 
 use super::xml::{write_empty_element, write_link, write_text_element};
 use super::{AtomPubError, APP_NS, ATOM_NS, J_NS};
@@ -126,111 +126,6 @@ pub fn set_j_slug(entry: &mut Entry, slug: &str) {
 // Parsing
 // ---------------------------------------------------------------------------
 
-/// Accumulator for the simple text-bearing elements of an entry.
-#[derive(Default)]
-struct Acc {
-    title: Option<String>,
-    summary: Option<String>,
-    id: Option<String>,
-    updated: Option<String>,
-    published: Option<String>,
-    content_value: Option<String>,
-    content_type: Option<String>,
-    categories: Vec<String>,
-    links: Vec<(String, String)>,
-    draft: bool,
-}
-
-/// The simple text-bearing element whose character data is currently being
-/// collected into [`Acc`].
-#[derive(Clone, Copy)]
-enum Field {
-    Title,
-    Summary,
-    Id,
-    Updated,
-    Published,
-    Content,
-    Draft,
-}
-
-/// Streaming state for [`entry_from_xml`]. Each SAX event is dispatched to a
-/// small method so the top-level read loop stays a flat match.
-#[derive(Default)]
-struct Parser {
-    acc: Acc,
-    saw_entry: bool,
-    /// The element whose text is currently being routed, if any.
-    current: Option<Field>,
-    /// True while inside an `app:control` element (scopes the `draft` child).
-    in_control: bool,
-}
-
-impl Parser {
-    /// Handles a start tag. `<content type="xhtml">` is consumed eagerly via
-    /// [`read_xhtml_content`]; every other element just arms `current`.
-    fn start(&mut self, e: &BytesStart, reader: &mut Reader<&[u8]>) -> Result<(), AtomPubError> {
-        match local_name(e).as_str() {
-            "entry" => self.saw_entry = true,
-            "title" => self.current = Some(Field::Title),
-            "summary" => self.current = Some(Field::Summary),
-            "id" => self.current = Some(Field::Id),
-            "updated" => self.current = Some(Field::Updated),
-            "published" => self.current = Some(Field::Published),
-            "content" => {
-                let ctype = attr_value(e, b"type").unwrap_or_else(|| "text".to_string());
-                if ctype == "xhtml" {
-                    self.acc.content_value = Some(read_xhtml_content(reader)?);
-                } else {
-                    self.current = Some(Field::Content);
-                }
-                self.acc.content_type = Some(ctype);
-            }
-            "link" => capture_link(e, &mut self.acc),
-            "control" => self.in_control = true,
-            "draft" if self.in_control => self.current = Some(Field::Draft),
-            _ => {}
-        }
-        Ok(())
-    }
-
-    /// Handles an empty (self-closing) tag: `<category>` and `<link>`.
-    fn empty(&mut self, e: &BytesStart) {
-        match local_name(e).as_str() {
-            "category" => {
-                if let Some(term) = attr_value(e, b"term") {
-                    self.acc.categories.push(term);
-                }
-            }
-            "link" => capture_link(e, &mut self.acc),
-            _ => {}
-        }
-    }
-
-    /// Routes a decoded text/entity piece into the element named by `current`.
-    /// Shared by the `Text` and `GeneralRef` event arms.
-    fn text(&mut self, piece: &str) {
-        match self.current {
-            Some(Field::Title) => append(&mut self.acc.title, piece),
-            Some(Field::Summary) => append(&mut self.acc.summary, piece),
-            Some(Field::Id) => append(&mut self.acc.id, piece),
-            Some(Field::Updated) => append(&mut self.acc.updated, piece),
-            Some(Field::Published) => append(&mut self.acc.published, piece),
-            Some(Field::Content) => append(&mut self.acc.content_value, piece),
-            Some(Field::Draft) => self.acc.draft = piece.trim().eq_ignore_ascii_case("yes"),
-            None => {}
-        }
-    }
-
-    /// Handles an end tag, closing the current text element and `app:control`.
-    fn end(&mut self, e: &BytesEnd) {
-        if local_name_end(e) == "control" {
-            self.in_control = false;
-        }
-        self.current = None;
-    }
-}
-
 /// Parses a standalone `AtomPub` `<entry>` document into an [`Entry`].
 ///
 /// Server-owned fields a client omits (id, dates, links) are simply left at
@@ -239,206 +134,11 @@ impl Parser {
 /// # Errors
 ///
 /// Returns [`AtomPubError::Malformed`] when the bytes are not a well-formed
-/// `<entry>` document or contain an unsupported entity reference.
+/// `<entry>` document, when the root element is not `<entry>`, or when a field
+/// upstream validates — a timestamp, or an atomTextConstruct's `type` — is
+/// out of spec.
 pub fn entry_from_xml(xml: &str) -> Result<Entry, AtomPubError> {
-    // Text is NOT trimmed globally — that would strip significant whitespace
-    // inside content. Inter-element indentation is harmless because text is
-    // only routed when a target element (`current`) is active.
-    let mut reader = Reader::from_str(xml);
-    let mut parser = Parser::default();
-
-    loop {
-        match reader.read_event()? {
-            Event::Eof => break,
-            Event::Start(e) => parser.start(&e, &mut reader)?,
-            Event::Empty(e) => parser.empty(&e),
-            Event::Text(e) => parser.text(&decode_text(&e)?),
-            // quick-xml 0.39 emits entity references (`&lt;`, `&#60;`) as
-            // separate events rather than inlining them into Text.
-            Event::GeneralRef(e) => parser.text(&resolve_ref(&e)?),
-            Event::End(e) => parser.end(&e),
-            _ => {}
-        }
-    }
-
-    if !parser.saw_entry {
-        return Err(AtomPubError::Malformed(
-            "document has no <entry> element".to_string(),
-        ));
-    }
-
-    Ok(build_entry(parser.acc))
-}
-
-/// Re-serializes the raw inner markup of an `<content type="xhtml">` element
-/// into a string, consuming events up to and including the matching
-/// `</content>` end tag.
-///
-/// Called after the opening `<content>` tag has been read, so `depth` tracks
-/// nesting *within* the content; the close at depth 0 terminates capture.
-fn read_xhtml_content(reader: &mut Reader<&[u8]>) -> Result<String, AtomPubError> {
-    let mut buf = Writer::new(Vec::new());
-    let mut depth = 0u32;
-    loop {
-        match reader.read_event()? {
-            Event::Start(e) => {
-                depth += 1;
-                buf.write_event(Event::Start(e.into_owned()))?;
-            }
-            Event::End(e) => {
-                if local_name_end(&e) == "content" && depth == 0 {
-                    let html = String::from_utf8(buf.into_inner())
-                        .map_err(|err| AtomPubError::Malformed(err.to_string()))?;
-                    return Ok(html.trim().to_string());
-                }
-                depth = depth.saturating_sub(1);
-                buf.write_event(Event::End(e.into_owned()))?;
-            }
-            Event::Empty(e) => buf.write_event(Event::Empty(e.into_owned()))?,
-            Event::Text(e) => buf.write_event(Event::Text(e.into_owned()))?,
-            Event::GeneralRef(e) => {
-                buf.write_event(Event::Text(BytesText::new(&resolve_ref(&e)?)))?;
-            }
-            Event::CData(e) => buf.write_event(Event::CData(e.into_owned()))?,
-            Event::Eof => {
-                return Err(AtomPubError::Malformed(
-                    "unclosed <content type=\"xhtml\"> element".to_string(),
-                ))
-            }
-            _ => {}
-        }
-    }
-}
-
-fn build_entry(acc: Acc) -> Entry {
-    let mut entry = Entry::default();
-    if let Some(title) = trimmed(acc.title) {
-        entry.title = Text::plain(title);
-    }
-    entry.summary = trimmed(acc.summary).map(Text::plain);
-    if let Some(value) = acc.content_value {
-        entry.content = Some(Content {
-            content_type: Some(acc.content_type.unwrap_or_else(|| "text".to_string())),
-            value: Some(value),
-            ..Default::default()
-        });
-    }
-    entry.categories = acc
-        .categories
-        .into_iter()
-        .map(|term| Category {
-            term,
-            ..Default::default()
-        })
-        .collect();
-    entry.links = acc
-        .links
-        .into_iter()
-        .map(|(rel, href)| Link {
-            rel,
-            href,
-            ..Default::default()
-        })
-        .collect();
-    if let Some(id) = acc.id {
-        entry.id = id;
-    }
-    if let Some(updated) = acc.updated.as_deref().and_then(parse_dt) {
-        entry.updated = updated;
-    }
-    entry.published = acc.published.as_deref().and_then(parse_dt);
-    if acc.draft {
-        set_draft(&mut entry, true);
-    }
-    entry
-}
-
-fn parse_dt(s: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
-    chrono::DateTime::parse_from_rfc3339(s.trim()).ok()
-}
-
-fn trimmed(value: Option<String>) -> Option<String> {
-    value
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-}
-
-fn capture_link(e: &BytesStart, acc: &mut Acc) {
-    if let (Some(rel), Some(href)) = (
-        attr_value(e, b"rel").or_else(|| Some("alternate".to_string())),
-        attr_value(e, b"href"),
-    ) {
-        acc.links.push((rel, href));
-    }
-}
-
-/// Resolves a general or character entity reference to its string value.
-fn resolve_ref(e: &BytesRef) -> Result<String, AtomPubError> {
-    if e.is_char_ref() {
-        return match e.resolve_char_ref()? {
-            Some(c) => Ok(c.to_string()),
-            // `resolve_char_ref` yields `Ok(None)` only for a *non*-char ref (one
-            // without a `#` prefix); the enclosing `is_char_ref()` guard excludes
-            // that here. A numeric ref resolves to `Ok(Some(_))`, or — for an
-            // out-of-range/surrogate/NUL code point — `Err` (returned via `?`).
-            None => {
-                unreachable!("resolve_char_ref returns None only for non-char refs, excluded by is_char_ref()")
-            }
-        };
-    }
-    let name =
-        std::str::from_utf8(e.as_ref()).map_err(|err| AtomPubError::Malformed(err.to_string()))?;
-    let resolved = match name {
-        "lt" => "<",
-        "gt" => ">",
-        "amp" => "&",
-        "quot" => "\"",
-        "apos" => "'",
-        other => {
-            return Err(AtomPubError::Malformed(format!(
-                "unsupported entity reference &{other};"
-            )))
-        }
-    };
-    Ok(resolved.to_string())
-}
-
-fn append(target: &mut Option<String>, text: &str) {
-    match target {
-        Some(existing) => existing.push_str(text),
-        None => *target = Some(text.to_string()),
-    }
-}
-
-fn local_name(e: &BytesStart) -> String {
-    String::from_utf8_lossy(e.local_name().as_ref()).into_owned()
-}
-
-fn local_name_end(e: &BytesEnd) -> String {
-    String::from_utf8_lossy(e.local_name().as_ref()).into_owned()
-}
-
-fn attr_value(e: &BytesStart, key: &[u8]) -> Option<String> {
-    e.attributes().flatten().find_map(|a| {
-        if a.key.local_name().as_ref() == key {
-            let raw = std::str::from_utf8(a.value.as_ref()).ok()?;
-            quick_xml::escape::unescape(raw)
-                .ok()
-                .map(std::borrow::Cow::into_owned)
-        } else {
-            None
-        }
-    })
-}
-
-/// Decodes a text event's bytes (UTF-8) and resolves XML entities.
-fn decode_text(e: &BytesText) -> Result<String, AtomPubError> {
-    let decoded = e
-        .decode()
-        .map_err(|err| AtomPubError::Malformed(err.to_string()))?;
-    Ok(quick_xml::escape::unescape(&decoded)
-        .map_err(|err| AtomPubError::Malformed(err.to_string()))?
-        .into_owned())
+    Ok(xml.parse::<Entry>()?)
 }
 
 // ---------------------------------------------------------------------------
@@ -648,6 +348,8 @@ pub fn render_media_link_entry(entry: &MediaLinkEntry) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use atom_syndication::{Category, Content, Link, Text};
+
     use crate::test_support::{
         parse_absolute_url, parse_content_type, parse_filename, parse_utc_instant,
     };
@@ -723,11 +425,9 @@ mod tests {
     #[test]
     fn non_scalar_char_ref_is_an_error() {
         // `&#xD800;` is a syntactically valid numeric char-ref, but U+D800 is a
-        // UTF-16 surrogate — not a Unicode scalar value — so quick-xml's
-        // `resolve_char_ref` returns `Err` (surfaced through `?` as Malformed),
-        // never `Ok(None)`. This documents why `resolve_ref`'s `None` arm is
-        // unreachable: guarded by `is_char_ref()`, resolution yields only
-        // `Some(_)` or `Err`.
+        // UTF-16 surrogate — not a Unicode scalar value — so resolving it fails
+        // and the whole entry is rejected. Unlike an *unresolvable* reference
+        // (below), a malformed code point is not something to pass through.
         let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
   <title>a&#xD800;b</title>
 </entry>"#;
@@ -735,11 +435,93 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_entity_is_an_error() {
+    fn an_unsupported_entity_is_passed_through_literally() {
+        // The one *loosening* delta of the atom_syndication migration: upstream
+        // resolves predefined entities, then char refs, then re-emits anything it
+        // cannot resolve verbatim — where the previous hand-rolled reader rejected
+        // the document. Lenient ingest, consistent with how `mapping.rs` drops a
+        // single bad category term rather than failing the entry (R5).
         let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
   <title>x&bogus;y</title>
 </entry>"#;
-        assert!(entry_from_xml(xml).is_err());
+        let entry = entry_from_xml(xml).expect("parse");
+        assert_eq!(entry.title().as_str(), "x&bogus;y");
+    }
+
+    #[test]
+    fn rejects_an_unparseable_updated() {
+        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>T</title>
+  <updated>not-a-date</updated>
+</entry>"#;
+        assert!(matches!(
+            entry_from_xml(xml),
+            Err(AtomPubError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_a_title_type_outside_the_text_constructs() {
+        // RFC 4287 restricts an atomTextConstruct's `type` to text|html|xhtml.
+        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
+  <title type="text/markdown">T</title>
+</entry>"#;
+        assert!(matches!(
+            entry_from_xml(xml),
+            Err(AtomPubError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn a_media_type_on_content_is_still_accepted() {
+        // The ADR-0023 format carrier. `atomContent` — unlike an atomTextConstruct —
+        // explicitly permits a media type, so the stricter parsing above must not
+        // reach it. This is the test that would catch org/markdown support breaking.
+        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>T</title>
+  <content type="text/org">* heading</content>
+</entry>"#;
+        let entry = entry_from_xml(xml).expect("parse");
+        assert_eq!(content_parts(&entry), (Some("text/org"), Some("* heading")));
+    }
+
+    #[test]
+    fn a_prefixed_atom_title_does_not_populate_the_title() {
+        // Accepted narrowing: upstream matches qualified names, so a prefixed child
+        // lands in the extension map instead of the title. Documented in the ADR as
+        // an interop cost of deleting the bespoke local-name-matching reader.
+        let xml = r#"<entry xmlns:atom="http://www.w3.org/2005/Atom">
+  <atom:title>T</atom:title>
+</entry>"#;
+        let entry = entry_from_xml(xml).expect("parse");
+        assert_ne!(entry.title().as_str(), "T");
+    }
+
+    #[test]
+    fn xhtml_content_escapes_literal_apostrophes() {
+        // Accepted delta: upstream escapes text events inside xhtml content, so a
+        // bare `'` becomes `&apos;`. Semantically identical once parsed.
+        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>X</title>
+  <content type="xhtml"><div>it's</div></content>
+</entry>"#;
+        let entry = entry_from_xml(xml).expect("parse");
+        let (_, value) = content_parts(&entry);
+        let value = value.expect("xhtml value");
+        assert!(value.contains("&apos;"), "value: {value}");
+    }
+
+    #[test]
+    fn xhtml_entity_references_survive_the_round_trip() {
+        // NOT a delta: the previous reader resolved `&amp;` to `&` and then re-escaped
+        // it on the way into the stored string, so both readers store `&amp;`.
+        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>X</title>
+  <content type="xhtml"><div>b &amp; c</div></content>
+</entry>"#;
+        let entry = entry_from_xml(xml).expect("parse");
+        let (_, value) = content_parts(&entry);
+        assert!(value.expect("xhtml value").contains("&amp;"));
     }
 
     #[test]
@@ -927,13 +709,39 @@ mod tests {
                 ..Default::default()
             },
         ];
+        entry.links = vec![Link {
+            rel: "edit".to_string(),
+            href: "https://h/atompub/alice/posts/1".to_string(),
+            ..Default::default()
+        }];
+        entry.published =
+            Some(chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z").unwrap());
         set_draft(&mut entry, true);
+        set_j_slug(&mut entry, "my-post");
 
         let out = entry_to_xml(&entry);
         let parsed = entry_from_xml(&out).expect("re-parse");
         assert!(is_draft(&parsed), "draft flag lost; xml: {out}");
         assert_eq!(parsed.title().as_str(), "RT");
         assert_eq!(parsed.summary().map(Text::as_str), Some("s"));
+        assert_eq!(parsed.links().len(), 1);
+        assert_eq!(parsed.links()[0].rel(), "edit");
+        assert_eq!(parsed.links()[0].href(), "https://h/atompub/alice/posts/1");
+        assert_eq!(
+            parsed
+                .published()
+                .map(chrono::DateTime::to_rfc3339)
+                .as_deref(),
+            Some("2026-01-01T00:00:00+00:00")
+        );
+        assert_eq!(
+            parsed.updated().to_rfc3339(),
+            entry.updated().to_rfc3339(),
+            "updated lost; xml: {out}"
+        );
+        // The slug had no reader arm at all before this migration, so nothing
+        // pinned it round-tripping.
+        assert_eq!(j_slug(&parsed), Some("my-post".to_string()));
         assert_eq!(
             content_parts(&parsed),
             (Some("html"), Some("<p>body & more</p>"))
