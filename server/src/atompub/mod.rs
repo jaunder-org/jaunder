@@ -206,9 +206,17 @@ impl From<StatusCode> for HandlerError {
 }
 
 impl From<common::atompub::AtomPubError> for HandlerError {
-    /// A malformed `AtomPub` document supplied by the client is a `400`.
-    fn from(_: common::atompub::AtomPubError) -> Self {
-        HandlerError::BadRequest
+    /// A malformed `AtomPub` document supplied by the client is a `400`; a failure
+    /// to *write* one is ours, so it logs and becomes a `500` rather than blaming
+    /// the request.
+    fn from(err: common::atompub::AtomPubError) -> Self {
+        match err {
+            common::atompub::AtomPubError::Malformed(_) => HandlerError::BadRequest,
+            common::atompub::AtomPubError::Serialize(_) => {
+                log_internal(&err);
+                HandlerError::Internal
+            }
+        }
     }
 }
 
@@ -283,6 +291,20 @@ mod tests {
     /// The status an error maps to through the single `IntoResponse` boundary.
     fn status(err: HandlerError) -> StatusCode {
         err.into_response().status()
+    }
+
+    #[test]
+    fn a_malformed_document_is_a_bad_request() {
+        let err = common::atompub::AtomPubError::Malformed("x".to_string());
+        assert_eq!(status(err.into()), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn a_serialization_failure_is_internal_not_a_bad_request() {
+        // Writing a document is the server's job, so a failure there must not be
+        // reported as the client having sent something wrong.
+        let err = common::atompub::AtomPubError::Serialize("x".to_string());
+        assert_eq!(status(err.into()), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[test]

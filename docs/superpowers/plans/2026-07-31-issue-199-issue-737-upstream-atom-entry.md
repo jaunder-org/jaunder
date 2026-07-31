@@ -280,7 +280,7 @@ pub struct MediaLinkEntry {
 Task 6 consumes both. `UtcInstant` comes from `crate::time::UtcInstant`; convert
 to atom's `FixedDateTime` with `instant.value().fixed_offset()`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `common/src/atompub/entry.rs`'s test module:
 
@@ -327,7 +327,7 @@ Also update the two existing tests that construct `FeedMeta`
 `render_feed_without_paging_omits_optional_links`) and the two that construct
 `MediaLinkEntry` to the new field names.
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 ```bash
 devtool run -- cargo nextest run -p common atompub::entry
@@ -336,7 +336,7 @@ devtool run -- cargo nextest run -p common atompub::entry
 Expected: FAIL — no field `updated` on `FeedMeta`; no field `published` on
 `MediaLinkEntry`.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 Change the struct fields as in **Interfaces**. In `write_entry`'s feed and
 media-link paths, replace the verbatim `&meta.updated_rfc3339` /
@@ -360,7 +360,11 @@ and in `server/src/atompub/media.rs`, replace
 
 Both files need `use common::time::UtcInstant;` added.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+Note when executing: a bare `cargo nextest run -p jaunder` fails the six
+`case_2_postgres` media tests with `ConnectionRefused` — that is the harness, not
+the code. Re-run under `devtool pg run -- cargo nextest run -p jaunder`.
+
+- [x] **Step 4: Run the tests, verify they pass**
 
 ```bash
 devtool run -- cargo nextest run -p common atompub::entry
@@ -369,7 +373,7 @@ devtool run -- cargo nextest run -p jaunder
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 devtool run -- cargo xtask check

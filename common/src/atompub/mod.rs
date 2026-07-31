@@ -42,8 +42,22 @@ pub const J_NS: &str = "https://jaunder.org/ns/atompub";
 #[derive(Debug, Error)]
 pub enum AtomPubError {
     /// The supplied XML could not be parsed as the expected document type.
+    /// Attributable to the client, so handlers surface it as a `400`.
     #[error("malformed AtomPub document: {0}")]
     Malformed(String),
+    /// The document could not be written. Never the client's fault — handlers
+    /// surface it as a `500` rather than blaming the request.
+    #[error("failed to serialize AtomPub document: {0}")]
+    Serialize(String),
+}
+
+impl From<atom_syndication::Error> for AtomPubError {
+    /// Reading is the only direction that consults this impl; the writers map
+    /// their (unreachable) failures to [`AtomPubError::Serialize`] explicitly,
+    /// because landing them here would route a server fault onto the `400` path.
+    fn from(e: atom_syndication::Error) -> Self {
+        AtomPubError::Malformed(e.to_string())
+    }
 }
 
 impl From<quick_xml::Error> for AtomPubError {
@@ -66,5 +80,17 @@ mod tests {
     fn io_error_converts_to_malformed() {
         let err: AtomPubError = std::io::Error::other("boom").into();
         assert!(matches!(err, AtomPubError::Malformed(msg) if msg.contains("boom")));
+    }
+
+    #[test]
+    fn atom_error_converts_to_malformed() {
+        let err: AtomPubError = atom_syndication::Error::InvalidStartTag.into();
+        assert!(matches!(err, AtomPubError::Malformed(_)));
+    }
+
+    #[test]
+    fn serialize_error_displays_its_cause() {
+        let err = AtomPubError::Serialize("boom".to_string());
+        assert!(err.to_string().contains("boom"));
     }
 }
