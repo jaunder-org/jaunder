@@ -471,11 +471,11 @@ mod tests {
         // The rule applied to the real files, not just to fixtures: whatever is in
         // `docs/coverage/` right now must satisfy the check the static lane runs.
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-        let snapshot = crate::server_fn_coverage::io::read_snapshot(
+        let snapshot = crate::server_fn_coverage::io::read_artifact::<Snapshot>(
             &root.join(crate::server_fn_coverage::io::SNAPSHOT_PATH),
         )
         .expect("the committed snapshot parses");
-        let evidence = crate::server_fn_coverage::io::read_evidence(
+        let evidence = crate::server_fn_coverage::io::read_artifact::<Evidence>(
             &root.join(crate::server_fn_coverage::io::EVIDENCE_PATH),
         )
         .expect("the committed evidence parses");

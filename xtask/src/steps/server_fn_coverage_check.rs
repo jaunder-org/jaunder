@@ -23,10 +23,12 @@ use anyhow::Result;
 
 use crate::result::{CommandResult, StepResult};
 use crate::server_fn_coverage::io::{
-    coverage_from_capture, inventory, read_allowlist, read_evidence, read_snapshot, write_evidence,
-    write_snapshot, ALLOWLIST_PATH, CAPTURE_PATH, EVIDENCE_PATH, SNAPSHOT_PATH, WEB_SRC,
+    coverage_from_capture, inventory, read_allowlist, read_artifact, write_artifact,
+    ALLOWLIST_PATH, CAPTURE_PATH, EVIDENCE_PATH, SNAPSHOT_PATH, WEB_SRC,
 };
-use crate::server_fn_coverage::{evidence_verdict, render, verdict, REGENERATE_CMD};
+use crate::server_fn_coverage::{
+    evidence_verdict, render, verdict, Evidence, Snapshot, REGENERATE_CMD,
+};
 
 /// The static lane's step name.
 const STATIC_STEP: &str = "server-fn-coverage";
@@ -58,9 +60,9 @@ fn check(
 ) -> StepResult {
     let (inventory, snapshot, allowlist, evidence) = match (
         inventory(web_src),
-        read_snapshot(snapshot_path),
+        read_artifact::<Snapshot>(snapshot_path),
         read_allowlist(allowlist_path),
-        read_evidence(evidence_path),
+        read_artifact::<Evidence>(evidence_path),
     ) {
         (Ok(i), Ok(s), Ok(a), Ok(e)) => (i, s, a, e),
         (i, s, a, e) => {
@@ -126,8 +128,8 @@ fn regenerate_or_verify(
         let orphans = snapshot.orphans.len();
         // Both, always: `evidence_verdict` fails on a key-set disagreement, so
         // writing one without the other would redden the very next static check.
-        write_snapshot(snapshot_path, &snapshot)?;
-        write_evidence(evidence_path, &evidence)?;
+        write_artifact(snapshot_path, &snapshot)?;
+        write_artifact(evidence_path, &evidence)?;
         return Ok(StepResult::ok(name).detail(format!(
             "{covered} covered, {orphans} fn(s) with unattributed hits → {} + {}",
             snapshot_path.display(),
@@ -572,7 +574,8 @@ mod tests {
         // The fixture must still be the evidence behind the committed snapshot:
         // every fn the snapshot calls covered is covered in the reduced capture too.
         let coverage = seed_coverage();
-        let snapshot = read_snapshot(&repo_root().join(SNAPSHOT_PATH)).expect("snapshot parses");
+        let snapshot =
+            read_artifact::<Snapshot>(&repo_root().join(SNAPSHOT_PATH)).expect("snapshot parses");
         let missing: Vec<&String> = snapshot
             .covered
             .iter()
