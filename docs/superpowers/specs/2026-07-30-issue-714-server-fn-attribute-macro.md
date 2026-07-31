@@ -193,6 +193,21 @@ interception via `failServerFn` (`helpers.ts:106-113`) for `auth/get_session`
 **None of the five moving idents, nor their PascalCase types, appears anywhere
 in `end2end/` or `elisp/`.**
 
+> **This claim expired before it shipped, and how it expired is the lesson.** It
+> was true when swept. #671 then merged, adding
+> `stallServerFn(page, "posts/list_local_timeline")` at `posts.spec.ts:1050` — a
+> _new_ reference to an endpoint this work renames. After rebasing, that string
+> silently stopped matching, so the stall did nothing, the page loaded
+> instantly, and `.j-loading` never appeared: one e2e failure whose message
+> (`waiting for locator('.j-loading')`) named nothing about the cause.
+>
+> #671's own commit anticipated it exactly — _"Rebasing did not conflict on this
+> — the route simply stops matching, the stall silently does nothing, and the
+> test fails."_ Which is the point: **a Playwright sweep is only valid against
+> the base it ran on.** This is precisely the drift ADR-0082 flags as the one
+> caller that can still break (#712), and no compiler, gate, or merge conflict
+> catches it. Re-swept after the rebase; the single reference is updated.
+
 The other 50 fns are already in `<vertical>/api.rs` and change nothing.
 
 ### Argument routing
