@@ -89,8 +89,10 @@ Therefore:
   `web/src/forms/component.rs` owning the wrapper `<label class=field_class>`,
   the `<span class="j-form-label">`, the optional help span, and the
   touched-gated error node. It takes two erased signals —
-  `error: Signal<Option<String>>` and `touched: Signal<bool>` — plus `children`
-  for the control, and performs the gating itself.
+  `error: Signal<Option<String>>` and `touched: Signal<bool>` — the optional
+  `help` text and its `help_id`, plus `children` for the control, and performs
+  the gating itself. It takes no `name`: the only thing `name` fed was the help
+  span's id, which now arrives ready-made.
 - **`ValidatedInput<T>`** and **`ValidatedTextarea<T>`** — the two public
   shells, each carrying only props meaningful for its control. Each passes
   `error=field.error` and one `Signal::derive(move || field.is_touched())`.
@@ -148,12 +150,17 @@ No `id` prop: ids are not emitted (D1). No `transform`: nothing multi-line needs
 live input massaging. `help` is exposed for symmetry with `ValidatedInput`,
 since `Labelled` renders it anyway; no current site passes it.
 
-**`aria-describedby`:** the help span's id lives in `Labelled` but the attribute
-belongs on the _control_ in the shell. Both derive `format!("{name}-help")` from
-`name` independently, with a comment saying why. Passing the derived id down
-from `Labelled` is **not** available: Leptos `children` is an opaque `Children`,
-and parameterising it would force a render-prop/`ChildrenFn`-with-args shape for
-a two-line saving.
+**`aria-describedby`:** the attribute belongs on the _control_ in the shell,
+while the help span it points at is rendered by `Labelled`. The shell derives
+`format!("{name}-help")` **once** and passes it down as `Labelled`'s `help_id`
+prop, so the pair is single-source and cannot drift; `Labelled` therefore needs
+no `name` prop of its own.
+
+_(Corrected at ship review. An earlier draft had both sides re-derive the id
+independently, justified by "Leptos `children` is opaque so the id cannot be
+handed down" — that reasoning was wrong: it describes passing a value from
+`Labelled` **into** its children, whereas the id travels the other way, from the
+shell **into** `Labelled` as an ordinary prop.)_
 
 **`rows` default:** profile's bio has no `rows` today, so it renders at the
 browser default (2). Under this spec it becomes 3. Intended; listed under known
@@ -302,12 +309,12 @@ Each is observable — a reviewer can tell delivered from not.
 prop surface, gated `#[cfg(target_arch = "wasm32")]` alongside `ValidatedInput`,
 and re-exported from `web/src/forms/mod.rs`.
 
-**AC2.** A private `Labelled<T>` component in `web/src/forms/component.rs`
-renders the wrapper label, label span, optional help span, and touched-gated
-error node; **both** `ValidatedInput` and `ValidatedTextarea` render their
-chrome through it. Neither shell contains its own copy of the
-`<span class="j-form-label">`, the help span, or the `<p class="error">` node,
-and neither writes its own `is_touched()` gate.
+**AC2.** A private `Labelled` component in `web/src/forms/component.rs` renders
+the wrapper label, label span, optional help span, and touched-gated error node;
+**both** `ValidatedInput` and `ValidatedTextarea` render their chrome through
+it. Neither shell contains its own copy of the `<span class="j-form-label">`,
+the help span, or the `<p class="error">` node, and neither writes its own
+`is_touched()` gate.
 
 **AC3.**
 `rg 'error_for\(&v\)' web/src/posts/component.rs web/src/profile/component.rs`

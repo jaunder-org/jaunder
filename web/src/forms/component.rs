@@ -20,7 +20,6 @@ use super::field::Field;
 #[component]
 fn Labelled(
     label: &'static str,
-    name: &'static str,
     /// The wrapping `<label>`'s class — always supplied by the shell, which owns the
     /// `j-form-field` default, so a call site can slot the field into a bespoke layout.
     field_class: &'static str,
@@ -29,10 +28,18 @@ fn Labelled(
     error: Signal<Option<String>>,
     /// Whether the field has been blurred — gates only whether `error` is *displayed*.
     touched: Signal<bool>,
-    /// Optional hint line rendered under the control and wired to it via
-    /// `aria-describedby` (id `{name}-help`), for a field whose format needs explaining.
+    /// Optional hint line rendered under the control, for a field whose format needs
+    /// explaining. `optional_no_strip` (not the usual `optional`): the shells hold their
+    /// own `help` as an `Option` and forward it as-is, and a plain `#[prop(optional)]` on
+    /// an `Option<_>` generates a `strip_option` setter that takes the *inner* type, which
+    /// would not accept it.
     #[prop(optional_no_strip)]
     help: Option<&'static str>,
+    /// The help span's DOM id — the SAME value the shell puts in its control's
+    /// `aria-describedby`, passed down rather than re-derived so the pair is
+    /// single-source and cannot drift. Ignored unless `help` is set.
+    #[prop(optional_no_strip)]
+    help_id: Option<String>,
     children: Children,
 ) -> impl IntoView {
     view! {
@@ -40,9 +47,10 @@ fn Labelled(
             <span class="j-form-label">{label}</span>
             {children()}
             {help
-                .map(|text| {
+                .zip(help_id)
+                .map(|(text, id)| {
                     view! {
-                        <span id=format!("{name}-help") class="j-form-help">
+                        <span id=id class="j-form-help">
                             {text}
                         </span>
                     }
@@ -100,19 +108,19 @@ where
         field.value.set(v.clone());
         field.error.set(field.error_for(&v));
     };
-    // Only wire `aria-describedby` when a help line is actually rendered (its id must resolve).
-    // Derived from `name` here and again in `Labelled`: the attribute belongs on the control
-    // while the help span lives in the chrome, and leptos `children` is opaque, so the id
-    // cannot be handed down without turning children into a render prop.
+    // Only wire `aria-describedby` when a help line is actually rendered (its id must
+    // resolve). Derived once here and handed to `Labelled` as `help_id`: the attribute
+    // belongs on the control, the span lives in the chrome, and passing the one value
+    // both ways keeps them from drifting.
     let describedby = help.map(|_| format!("{name}-help"));
     view! {
         <Labelled
             label=label
-            name=name
             field_class=field_class
             error=field.error
             touched=Signal::derive(move || field.is_touched())
             help=help
+            help_id=describedby.clone()
         >
             <input
                 class=class
@@ -168,17 +176,17 @@ where
         field.value.set(v.clone());
         field.error.set(field.error_for(&v));
     };
-    // Only wire `aria-describedby` when a help line is actually rendered (its id must resolve).
-    // Derived from `name` here and again in `Labelled`, for the reason given on `ValidatedInput`.
+    // Only wire `aria-describedby` when a help line is actually rendered (its id must
+    // resolve). Derived once and handed down as `help_id`, per `ValidatedInput`.
     let describedby = help.map(|_| format!("{name}-help"));
     view! {
         <Labelled
             label=label
-            name=name
             field_class=field_class
             error=field.error
             touched=Signal::derive(move || field.is_touched())
             help=help
+            help_id=describedby.clone()
         >
             <textarea
                 class=class
