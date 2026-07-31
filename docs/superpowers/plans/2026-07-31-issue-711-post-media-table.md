@@ -1032,6 +1032,15 @@ git commit -m "feat(storage): record post→media references at write time (#711
 
 ### Task 7: The read side — `list_posts_referencing_media`
 
+**Correction, recorded during execution.** The truncation test written below is
+defective: it seeds 1200 posts with _no_ media plus one needle, but the new
+query filters on the media triple **before** any limit, so the result set is one
+row and a `LIMIT 1000` truncates nothing. It would pass green against the very
+regression it is named for — pinning the _old_ code's shape rather than the new
+query's. As implemented, every one of the 1201 posts embeds the same media, so a
+cap has something to bite on; a `LIMIT 1000` mutation then fails with
+`got 1000 of 1201`.
+
 **Files:**
 
 - Modify: `storage/src/posts.rs` (`PostStorage` trait + generic impl)
@@ -1051,7 +1060,7 @@ async fn list_posts_referencing_media(
 ) -> sqlx::Result<Vec<PostId>>;
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```rust
 #[apply(backends)]
@@ -1131,12 +1140,12 @@ async fn list_posts_referencing_media_returns_empty_for_unreferenced_media(
 Match `SeedRawPost`'s real builder methods (`test_support.rs:901-1003`) rather
 than the illustrative `for_user`/`slug`/`body` chain above.
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run: `devtool run -- cargo nextest run -p storage list_posts_referencing_media`
 Expected: FAIL — method not defined.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 One shared query in the generic impl (the SQL is identical across backends, so
 no dialect method):
@@ -1151,12 +1160,12 @@ SELECT pm.post_id FROM post_media pm
 
 No `LIMIT` — its absence is the point.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Run: `devtool run -- cargo nextest run -p storage list_posts_referencing_media`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 devtool run -- cargo xtask check

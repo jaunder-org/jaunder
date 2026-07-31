@@ -766,6 +766,27 @@ pub trait PostStorage: Send + Sync {
     /// [`AudienceTarget::Named`]); a post with no rows yields an empty vec
     /// (equivalent to [`AudienceTarget::Private`]). See ADR-0020.
     async fn get_post_audiences(&self, post_id: PostId) -> sqlx::Result<Vec<AudienceTarget>>;
+
+    /// The ids of `user_id`'s non-soft-deleted posts whose rendered HTML points at
+    /// `media`, ascending. An unreferenced item yields an empty vec.
+    ///
+    /// The read half of `post_media`'s lifecycle, kept in the same trait and module
+    /// as [`replace_post_media`], which writes those rows (#711).
+    ///
+    /// **Deliberately unlimited.** This replaces a body scan that paged the user's
+    /// posts and stopped at 1000, so a reference in an older post left the media
+    /// silently deletable; the join answers the question exactly, and capping it
+    /// would reintroduce the bug.
+    ///
+    /// **Deliberately scoped to `user_id`'s own posts.** `media` is keyed per-user,
+    /// so another user may hold a row for the same on-disk entry; their posts do not
+    /// block this user's delete, and — since the caller shows this list to the
+    /// deleting user — must not be disclosed to them (spec D9).
+    async fn list_posts_referencing_media(
+        &self,
+        user_id: UserId,
+        media: &MediaRef,
+    ) -> sqlx::Result<Vec<PostId>>;
 }
 
 /// Backend-specific divergence for [`PostStore`].
@@ -996,6 +1017,38 @@ where
             .into_iter()
             .filter_map(|(kind, audience_id)| audience_target_from_row(&kind, audience_id))
             .collect())
+    }
+
+    #[tracing::instrument(
+        name = "storage.posts.list_referencing_media",
+        skip(self, media),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn list_posts_referencing_media(
+        &self,
+        user_id: UserId,
+        media: &MediaRef,
+    ) -> sqlx::Result<Vec<PostId>> {
+        // Identical on both backends, so it stays here rather than becoming a
+        // `PostDialect` const (ADR-0019). No `LIMIT`: see the trait doc.
+        let ids: Vec<i64> = sqlx::query_scalar(
+            "SELECT pm.post_id \
+             FROM post_media pm \
+             JOIN posts p ON p.post_id = pm.post_id \
+             WHERE p.user_id = $1 \
+               AND p.deleted_at IS NULL \
+               AND pm.source = $2 \
+               AND pm.sha256 = $3 \
+               AND pm.filename = $4 \
+             ORDER BY pm.post_id",
+        )
+        .bind(user_id)
+        .bind(media.source)
+        .bind(&media.sha256)
+        .bind(&media.filename)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(ids.into_iter().map(PostId::from).collect())
     }
 
     #[tracing::instrument(
@@ -2914,6 +2967,114 @@ mod tests {
             before,
             "rows survive publication"
         );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn list_posts_referencing_media_scopes_and_orders(#[case] backend: Backend) {
+        // A16.
+        let env = backend.setup().await;
+        let [owner, stranger] = seed_users::<2>(&env.state).await;
+        let embed = format!("<img src=\"{}\">", media_url_for("photo.jpg"));
+
+        let first = create_post_via_service(&env.state, owner, &embed).await;
+        let second = create_post_via_service(&env.state, owner, &embed).await;
+        let deleted = create_post_via_service(&env.state, owner, &embed).await;
+        let foreign = create_post_via_service(&env.state, stranger, &embed).await;
+        let unrelated = create_post_via_service(&env.state, owner, "no media").await;
+        env.state
+            .posts
+            .soft_delete_post(deleted)
+            .await
+            .expect("soft delete succeeds");
+
+        let found = env
+            .state
+            .posts
+            .list_posts_referencing_media(owner, &media_ref_for("photo.jpg"))
+            .await
+            .expect("listing succeeds");
+
+        assert_eq!(found, vec![first, second], "own, non-deleted, ascending");
+        assert!(
+            !found.contains(&deleted),
+            "a soft-deleted post does not block a delete"
+        );
+        assert!(
+            !found.contains(&foreign),
+            "another user's post is not reported (spec D9)"
+        );
+        assert!(!found.contains(&unrelated));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn list_posts_referencing_media_reports_every_reference_past_the_old_scan_window(
+        #[case] backend: Backend,
+    ) {
+        // A17 — the truncation half. The old code paged the user's posts at
+        // `RowLimit::at_most(1000)` and scanned their bodies, so a reference in post
+        // 1001 went unseen and its media stayed silently deletable.
+        //
+        // Every seeded post embeds the *same* media, which is stronger than seeding
+        // 1200 unrelated fillers plus one needle: with only one matching row a `LIMIT
+        // 1000` on the new join would pass unnoticed, since the filter runs first.
+        // Here the cap has 1201 rows to truncate, so the absence of a limit is what
+        // the assertions actually rest on.
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(&env.state).await;
+        let body = format!("<img src=\"{}\">", media_url_for("needle.jpg"));
+
+        // One batched transaction, not 1201 round trips. `create_posts` shares
+        // `write_post_in_tx` with `create_post`, so each row's `post_media` is written
+        // too, and the ids come back in input order.
+        let inputs: Vec<CreatePostInput> = (0..1201)
+            .map(|_| SeedRawPost::new(user).body(body.as_str()).build())
+            .collect();
+        let ids = env
+            .state
+            .posts
+            .create_posts(&inputs)
+            .await
+            .expect("batch seed succeeds");
+
+        let found = env
+            .state
+            .posts
+            .list_posts_referencing_media(user, &media_ref_for("needle.jpg"))
+            .await
+            .expect("listing succeeds");
+
+        assert!(
+            found == ids,
+            "every reference, ascending and untruncated: got {} of {}",
+            found.len(),
+            ids.len()
+        );
+        assert_eq!(
+            found.last(),
+            ids.last(),
+            "the reference past the old 1000-row window is returned"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn list_posts_referencing_media_returns_empty_for_unreferenced_media(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(&env.state).await;
+        create_post_via_service(&env.state, user, "no media").await;
+
+        let found = env
+            .state
+            .posts
+            .list_posts_referencing_media(user, &media_ref_for("absent.jpg"))
+            .await
+            .expect("listing succeeds");
+
+        assert!(found.is_empty());
     }
 
     #[apply(backends)]
