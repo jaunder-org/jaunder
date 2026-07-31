@@ -57,14 +57,25 @@ immediately fails `adr-format`.
 So this change first extracts a single helper in `adr_readme.rs`:
 
 ```rust
-/// The status line's 0-based index and the trimmed remainder after its `- Status:`
-/// / `Status:` prefix, under the one parse every consumer shares.
-///
-/// The remainder is returned whole, not pre-split: `file_format_problems` must keep
-/// rejecting `- Status: accepted (superseded)` for having more than one token, and a
-/// helper that returned only the first token would silently drop that check.
-pub(crate) fn status_line(content: &str) -> Option<(usize, &str)>;
+pub(crate) struct StatusLine<'a> {
+    /// Byte span of the line, excluding its terminator — so a rewriter can splice
+    /// in a replacement without recomputing where the line starts.
+    pub span: std::ops::Range<usize>,
+    /// Trimmed remainder after the prefix, returned whole rather than pre-split:
+    /// `file_format_problems` must keep rejecting `- Status: accepted (superseded)`
+    /// for having more than one token, and a helper that returned only the first
+    /// token would silently drop that check.
+    pub rest: &'a str,
+    /// Whether the line is `- Status:` at column 0.
+    pub canonical: bool,
+}
+
+pub(crate) fn status_line(content: &str) -> Option<StatusLine<'_>>;
 ```
+
+A **span**, not a line index: an index forces the rewriter to re-derive the byte
+offset and re-assert that both parses count lines identically — a coupling the
+type can simply remove.
 
 `status_token` takes the remainder's first whitespace-delimited token;
 `file_format_problems` counts the remainder's tokens (so `- Status:` with an
@@ -72,8 +83,18 @@ empty remainder still reports "must be a single token", as today). `pub(crate)`
 because `adr.rs`'s rewrite consumes it.
 
 `status_token`, `file_format_problems`, and the new promote rewrite are all
-rewritten to consume it. This is a refactor with no behavior change of its own,
-and it is a prerequisite for the rest — not an optional tidy-up.
+rewritten to consume it. It is a prerequisite for the rest — not an optional
+tidy-up.
+
+**Locate leniently, judge strictly.** Sharing one parse must not widen what the
+gate _accepts_: `file_format_problems` previously matched a column-0 `- Status:`
+and nothing else, so routing it through a parse that tolerates indentation and a
+bare `Status:` would silently let `  - Status: accepted` pass where it used to
+be reported. Agreement on _which_ line is a parsing concern; canonical spelling
+is a policy one. `StatusLine` therefore carries a `canonical` flag, and the gate
+reports a non-canonical line — preserving its old strictness exactly, while the
+rewrite still finds a misindented line so the two can never disagree about the
+target.
 
 ### 1. `promote` rewrites the status (`xtask/src/adr.rs`, Pass B)
 
@@ -81,9 +102,11 @@ Pass B already reads each draft body and applies two independent whole-body
 transforms — `ADR-DRAFT` → `ADR-NNNN` and `strip_one_level` — before writing
 under the assigned number. The status rewrite joins them:
 
-- If `status_line` reports the token `proposed`, that **token** is replaced with
-  `accepted` **in place**, preserving the line's prefix, indentation, and any
-  trailing content.
+- If `status_line`'s remainder is exactly `proposed`, that **token** is replaced
+  with `accepted` **in place**, preserving the line's prefix and indentation.
+  The guard is whole-remainder equality, so a multi-token status
+  (`proposed (pending #742)`) is left alone: it is malformed, and `adr-format`
+  should say so on a stable tree rather than have promotion half-fix it.
 - **Every other token is passed through byte-identically.** `superseded`,
   `rejected`, `deprecated` on a draft are deliberate authorial statements and
   must survive promotion.

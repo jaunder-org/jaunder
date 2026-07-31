@@ -110,36 +110,71 @@ fn heading_title(content: &str) -> String {
     after.to_string()
 }
 
-/// The status line's 0-based index and the trimmed remainder after its
-/// `- Status:` (or bare `Status:`) prefix.
+/// The status token a draft carries until promotion numbers it, and the token
+/// promotion writes in its place. Spelled once here because the gate, the table
+/// projection and `adr promote`'s rewrite all test against them.
+pub(crate) const PROPOSED: &str = "proposed";
+pub(crate) const ACCEPTED: &str = "accepted";
+
+/// An ADR's status line, located once for every consumer.
+pub(crate) struct StatusLine<'a> {
+    /// Byte span of the line within the document, excluding its terminator — so a
+    /// rewriter can splice a replacement in without recomputing where the line
+    /// starts, and the gate can quote the line verbatim.
+    pub span: std::ops::Range<usize>,
+    /// The trimmed remainder after the `- Status:` / `Status:` prefix, returned
+    /// **whole** rather than pre-split: the gate must keep rejecting
+    /// `- Status: accepted (superseded)` for carrying more than one token, and a
+    /// helper that yielded only the first token would silently drop that rule. An
+    /// empty remainder (`- Status:` with nothing after it) is `Some` with `rest`
+    /// empty, so the gate reports "not a single token" rather than "missing".
+    pub rest: &'a str,
+    /// Whether the line is in canonical form — `- Status:` at column 0. Locating a
+    /// non-canonical line is deliberate (so the rewrite and the gate always agree
+    /// on *which* line is the status line, even a misindented one), but accepting
+    /// it is not: `adr-format` requires the canonical spelling, exactly as it did
+    /// before the parses were unified.
+    pub canonical: bool,
+}
+
+/// Locate `content`'s status line: the first line whose `trim_start` begins
+/// `- Status:` or a bare `Status:`.
 ///
 /// The single home of "which line is the status line, and what does it say" — the
 /// `adr-format` gate, the table projection, and `adr promote`'s status rewrite all
-/// read it here, so they cannot disagree about an indented line. They previously
-/// disagreed: this parse tolerated indentation and the bare form, while the gate
-/// matched only a column-0 `- Status:`. A rewrite that picked a different line than
-/// the gate would emit a promoted ADR that instantly fails `adr-format`.
+/// read it here, so they cannot disagree. They previously disagreed: this parse
+/// tolerated indentation and the bare form, while the gate matched only a column-0
+/// `- Status:`. A rewrite that picked a different line than the gate would emit a
+/// promoted ADR that instantly fails `adr-format`.
 ///
-/// The remainder is returned **whole**, not pre-split, because the gate must keep
-/// rejecting `- Status: accepted (superseded)` for carrying more than one token —
-/// a helper that returned only the first token would silently drop that rule. An
-/// empty remainder (`- Status:` with nothing after it) is `Some((i, ""))`, not
-/// `None`, so the gate still reports it as "not a single token" rather than as a
-/// missing line.
-pub(crate) fn status_line(content: &str) -> Option<(usize, &str)> {
-    content.lines().enumerate().find_map(|(i, line)| {
-        let trimmed = line.trim_start();
-        let rest = trimmed
+/// Locating leniently and *judging* strictly is the point: agreement on the line is
+/// a parsing concern, canonical spelling is a policy one, and [`StatusLine`] hands
+/// each consumer the part it owns.
+pub(crate) fn status_line(content: &str) -> Option<StatusLine<'_>> {
+    let mut offset = 0;
+    for line in content.split_inclusive('\n') {
+        let bare = line.strip_suffix('\n').unwrap_or(line);
+        let bare = bare.strip_suffix('\r').unwrap_or(bare);
+        let trimmed = bare.trim_start();
+        if let Some(rest) = trimmed
             .strip_prefix("- Status:")
-            .or_else(|| trimmed.strip_prefix("Status:"))?;
-        Some((i, rest.trim()))
-    })
+            .or_else(|| trimmed.strip_prefix("Status:"))
+        {
+            return Some(StatusLine {
+                span: offset..offset + bare.len(),
+                rest: rest.trim(),
+                canonical: bare.starts_with("- Status:"),
+            });
+        }
+        offset += line.len();
+    }
+    None
 }
 
 /// The single status token from the status line, or `""` when there is none.
 fn status_token(content: &str) -> String {
     status_line(content)
-        .and_then(|(_, rest)| rest.split_whitespace().next())
+        .and_then(|s| s.rest.split_whitespace().next())
         .unwrap_or("")
         .to_string()
 }
@@ -335,13 +370,22 @@ fn file_format_problems(filename: &str, num: u32, content: &str) -> Vec<String> 
 
     match status_line(content) {
         None => problems.push(format!("{filename}: missing a `- Status: <token>` line")),
-        Some((_, rest)) => {
+        // A non-canonical line is located but not tolerated. Unifying the parse was
+        // about the gate and the rewrite agreeing on *which* line; it must not
+        // quietly widen what the gate accepts, which before the unification was a
+        // column-0 `- Status:` and nothing else.
+        Some(status) if !status.canonical => problems.push(format!(
+            "{filename}: status line must be `- Status: <token>` at column 0 (found `{}`)",
+            &content[status.span]
+        )),
+        Some(status) => {
+            let rest = status.rest;
             let tokens: Vec<&str> = rest.split_whitespace().collect();
             if tokens.len() != 1 {
                 problems.push(format!(
                     "{filename}: `- Status:` must be a single token with nothing trailing (found `{rest}`)"
                 ));
-            } else if tokens[0] == "proposed" {
+            } else if tokens[0] == PROPOSED {
                 // Special-cased ahead of the membership check so the diagnosis names
                 // the fix rather than a list the reader has to reason about.
                 problems.push(format!(
@@ -462,29 +506,68 @@ mod tests {
     }
 
     #[test]
-    fn status_line_parses_index_and_remainder_across_forms() {
+    fn status_line_spans_the_line_and_judges_canonicity() {
+        // `(span-as-text, rest, canonical)` — asserting on the sliced span rather
+        // than raw offsets keeps expectations readable and still pins the span.
+        fn parsed(content: &str) -> Option<(&str, &str, bool)> {
+            status_line(content).map(|s| (&content[s.span], s.rest, s.canonical))
+        }
+
         // Indentation and the bare `Status:` form are THE discriminating cases:
         // they are the only two spellings where the old gate parse (column-0
         // `- Status:` only) and the old `status_token` parse disagreed. Trailing
         // whitespace is *not* discriminating — the gate already trimmed — so an
         // implementation that only handled it would pass a weaker test than this.
         assert_eq!(
-            status_line("# T\n\n- Status: accepted\n"),
-            Some((2, "accepted"))
+            parsed("# T\n\n- Status: accepted\n"),
+            Some(("- Status: accepted", "accepted", true))
+        );
+        // Located, but NOT canonical: the rewrite still finds these, the gate still
+        // rejects them. Separating the two judgements is the whole point.
+        assert_eq!(
+            parsed("# T\n\n  - Status: accepted\n"),
+            Some(("  - Status: accepted", "accepted", false))
         );
         assert_eq!(
-            status_line("# T\n\n  - Status: accepted\n"),
-            Some((2, "accepted"))
-        );
-        assert_eq!(
-            status_line("# T\n\nStatus: superseded\n"),
-            Some((2, "superseded"))
+            parsed("# T\n\nStatus: superseded\n"),
+            Some(("Status: superseded", "superseded", false))
         );
         // Remainder returned whole, so the gate can still count tokens.
-        assert_eq!(status_line("# T\n\n- Status: a (b)\n"), Some((2, "a (b)")));
+        assert_eq!(
+            parsed("# T\n\n- Status: a (b)\n"),
+            Some(("- Status: a (b)", "a (b)", true))
+        );
         // Empty remainder is Some(""), not None — "not a single token", not "missing".
-        assert_eq!(status_line("# T\n\n- Status:\n"), Some((2, "")));
-        assert_eq!(status_line("# T\n\nno status\n"), None);
+        assert_eq!(parsed("# T\n\n- Status:\n"), Some(("- Status:", "", true)));
+        // The span excludes the terminator, including a CRLF's `\r`.
+        assert_eq!(
+            parsed("# T\r\n\r\n- Status: accepted\r\n"),
+            Some(("- Status: accepted", "accepted", true))
+        );
+        // Unterminated final line.
+        assert_eq!(
+            parsed("# T\n\n- Status: accepted"),
+            Some(("- Status: accepted", "accepted", true))
+        );
+        assert_eq!(parsed("# T\n\nno status\n"), None);
+    }
+
+    #[test]
+    fn file_format_problems_rejects_a_non_canonical_status_line() {
+        // Unifying the parse must not widen what the gate accepts. Before the
+        // unification an indented or bare-`Status:` line was reported (as a missing
+        // status line); it must still be reported, or the refactor smuggled in a
+        // loosening. Teeth: delete the `canonical` arm and both of these go green.
+        for body in [
+            "# ADR-0007: Auth\n\n  - Status: accepted\n",
+            "# ADR-0007: Auth\n\nStatus: accepted\n",
+        ] {
+            let problems = file_format_problems("0007-a.md", 7, body);
+            assert!(
+                problems.iter().any(|p| p.contains("at column 0")),
+                "{body:?} -> {problems:?}"
+            );
+        }
     }
 
     #[test]
