@@ -21,14 +21,20 @@ pub const ADR_DIR: &str = "docs/adr";
 pub const BEGIN: &str = "<!-- adr-table:begin -->";
 pub const END: &str = "<!-- adr-table:end -->";
 
-/// The recognized ADR status tokens (the canonical status cell is exactly one).
-pub const STATUS_VOCAB: [&str; 5] = [
-    "proposed",
-    "accepted",
-    "superseded",
-    "deprecated",
-    "rejected",
-];
+/// The status tokens legal on a **numbered** ADR (the canonical status cell is
+/// exactly one of these).
+///
+/// `proposed` is absent by design: numbering is the acceptance event, so a numbered
+/// ADR has been accepted. A *draft* may still say `proposed` — drafts are invisible
+/// to this gate (numberless, and in a subdirectory `adr_files` never descends into),
+/// and `adr promote` rewrites the token as it assigns the number.
+///
+/// There is deliberately no five-token constant alongside this one. Nothing ever
+/// validated a draft in code, so the draft vocabulary lives where it is actually
+/// consulted — `docs/adr/template.md` and the `jaunder-adr` skill. Keeping a wider
+/// set here would also make the out-of-vocabulary message below advertise
+/// `proposed` as legal while the rule above rejects it.
+const NUMBERED_STATUS_VOCAB: [&str; 4] = ["accepted", "superseded", "deprecated", "rejected"];
 
 /// An ADR file projected to its table-relevant fields. `title` is the heading
 /// text with the `ADR-NNNN:` / `NNNN.` prefix stripped (used only to seed a new
@@ -310,8 +316,9 @@ pub fn sync_readme() -> StepResult {
 
 /// The `adr-format` problems for one ADR file: the line-1 heading must be
 /// `# ADR-NNNN: <nonempty>` with `NNNN` matching the filename number, and a
-/// `- Status: <token>` line must exist with a single token from [`STATUS_VOCAB`]
-/// and nothing trailing. `filename`/`num` come from the directory entry.
+/// `- Status: <token>` line must exist with a single token from
+/// [`NUMBERED_STATUS_VOCAB`] and nothing trailing. `filename`/`num` come from the
+/// directory entry.
 fn file_format_problems(filename: &str, num: u32, content: &str) -> Vec<String> {
     let mut problems = Vec::new();
 
@@ -334,9 +341,16 @@ fn file_format_problems(filename: &str, num: u32, content: &str) -> Vec<String> 
                 problems.push(format!(
                     "{filename}: `- Status:` must be a single token with nothing trailing (found `{rest}`)"
                 ));
-            } else if !STATUS_VOCAB.contains(&tokens[0]) {
+            } else if tokens[0] == "proposed" {
+                // Special-cased ahead of the membership check so the diagnosis names
+                // the fix rather than a list the reader has to reason about.
                 problems.push(format!(
-                    "{filename}: status `{}` is not one of {STATUS_VOCAB:?}",
+                    "{filename}: status is `proposed`, but numbering is the acceptance \
+                     event — a decision still under consideration belongs in docs/adr/drafts/"
+                ));
+            } else if !NUMBERED_STATUS_VOCAB.contains(&tokens[0]) {
+                problems.push(format!(
+                    "{filename}: status `{}` is not one of {NUMBERED_STATUS_VOCAB:?}",
                     tokens[0]
                 ));
             }
@@ -561,6 +575,46 @@ mod tests {
         }];
         // The preserved title is the curated one, so desired == current: a no-op.
         assert_eq!(resolved_rows(&entries, &existing), existing);
+    }
+
+    #[test]
+    fn file_format_problems_rejects_proposed_on_a_numbered_adr() {
+        // The message must name the remedy (the drafts pen), not just the rule —
+        // "proposed is illegal" without "put it in drafts/" tells the reader what
+        // they may not do and nothing about what they should.
+        let problems =
+            file_format_problems("0007-a.md", 7, "# ADR-0007: Auth\n\n- Status: proposed\n");
+        assert!(
+            problems.iter().any(|p| p.contains("docs/adr/drafts/")),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
+    fn file_format_problems_accepts_every_numbered_token() {
+        for token in NUMBERED_STATUS_VOCAB {
+            let body = format!("# ADR-0007: Auth\n\n- Status: {token}\n");
+            let problems = file_format_problems("0007-a.md", 7, &body);
+            assert!(problems.is_empty(), "{token}: {problems:?}");
+        }
+    }
+
+    #[test]
+    fn out_of_vocab_message_no_longer_advertises_proposed() {
+        // Teeth: with the old five-token constant this message rendered `"proposed"`
+        // verbatim (it formats the vocab with `{:?}`), so a numbered ADR would be
+        // told `proposed` is legal by this rule while the rule above rejected it.
+        // Restore STATUS_VOCAB here and this fails.
+        let problems =
+            file_format_problems("0007-a.md", 7, "# ADR-0007: Auth\n\n- Status: accpeted\n");
+        assert!(
+            problems.iter().any(|p| p.contains("not one of")),
+            "{problems:?}"
+        );
+        assert!(
+            !problems.iter().any(|p| p.contains("\"proposed\"")),
+            "{problems:?}"
+        );
     }
 
     #[test]
