@@ -852,8 +852,9 @@ pub fn classify(snap: &PrSnapshot, req: &RequiredChecks,
                 ejection: Option<&RunRef>, progress: &Progress) -> Step;
 ```
 
-- [x] **Step 1: Write `test_support.rs`** — `subject()` deferred to Task 5, where it
-      is first used: an unused helper would trip `-D warnings` at this commit boundary.
+- [x] **Step 1: Write `test_support.rs`** — `subject()` deferred to Task 5,
+      where it is first used: an unused helper would trip `-D warnings` at this
+      commit boundary.
 
 Write every builder above. This file has no tests of its own; it is exercised by
 Tasks 4–6. Declare it `#[cfg(test)] pub(crate) mod test_support;` in `pr/mod.rs`
@@ -1074,8 +1075,9 @@ Run: `cargo test --manifest-path xtask/Cargo.toml pr::decide` Expected: FAIL —
 `classify` / `Step` / `Phase` not defined. **Observed** exactly that.
 
 - [x] **Step 4: Implement against the tests** — `resolve_context` additionally
-      resolves an **in-flight** duplicate over a completed one (a re-run in progress
-      means the context is unsettled), which the plan left to the implementer.
+      resolves an **in-flight** duplicate over a completed one (a re-run in
+      progress means the context is unsettled), which the plan left to the
+      implementer.
 
 Write `resolve_context`, `needs_ejection_probe`, and `classify` to the
 signatures above. Every branch is pinned by a test, so the tests determine the
@@ -1172,14 +1174,14 @@ impl PrSource for FakeSource {
 }
 ```
 
-- [ ] **Step 1: Extend `test_support.rs`**
+- [x] **Step 1: Extend `test_support.rs`**
 
 Write `FakeClock`, `FakeSource`, `clock()`, and `cfg()` as specified. The
 pop-or-repeat-last semantics are load-bearing:
 `budget_expiry_is_timed_out_not_watcher_error` depends on the script never
 running dry.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 ```rust
 #[cfg(test)]
@@ -1332,12 +1334,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Run the tests, verify they fail**
+- [x] **Step 3: Run the tests, verify they fail** — **deviation, recorded honestly:**
+      tests and implementation were written into `watch.rs` in one pass, so there was
+      no separate red run for this task. The first execution failed 1 of 13 (see
+      Step 5), which is the only red signal this task produced.
 
-Run: `cargo test --manifest-path xtask/Cargo.toml pr::watch` Expected: FAIL —
-`watch` / `Clock` not defined.
-
-- [ ] **Step 4: Implement against the tests**
+- [x] **Step 4: Implement against the tests**
 
 Write `watch` to the signature above. Every branch is pinned by a test, so the
 tests determine the body. Four rules the tests encode:
@@ -1362,12 +1364,20 @@ tests determine the body. Four rules the tests encode:
 subject to the same strike/rate-limit logic, not a separate path. `SystemClock`
 implements `Clock` over `std::time` and `std::thread::sleep`.
 
-- [ ] **Step 5: Run the tests, verify they pass**
+- [x] **Step 5: Run the tests, verify they pass** — **13** tests (the plan's 12 plus
+      `unix_seconds_format_as_rfc3339_utc`: the event log needs real timestamps and
+      xtask has no date crate, so `SystemClock` formats them itself and the algorithm
+      is pinned against four known epochs).
 
-Run: `cargo test --manifest-path xtask/Cargo.toml pr::watch` Expected: PASS (12
-tests)
+      First run: 12 passed, `a_queue_position_change_emits_per_change` failed with 3
+      Queue events. Real defect — the terminal poll also emitted the PR *leaving* the
+      queue, restating what the `Terminal` event already says. Fixed by suppressing
+      component events on the terminal poll; second run 13/13.
 
-- [ ] **Step 6: Commit**
+      Also fixed a `clippy::type_complexity` failure by introducing the `Rendered`
+      struct instead of an `#[allow]`.
+
+- [x] **Step 6: Commit** — `b7769604`, full `cargo xtask check` green.
 
 ```bash
 git add xtask/src/pr/watch.rs xtask/src/pr/test_support.rs xtask/src/pr/mod.rs
