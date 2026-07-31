@@ -60,20 +60,34 @@ this.
 
 ## Tasks
 
-1. `BridgeSpec` — parameterise `bridge()`, four callers semantically unchanged
-2. `StrNewtype` validating kinds decode `&'r str`
-3. `SqlxBridge` derive + `RenderedHtml` adopts it
-4. `text_enum` — shape guard and option parsing (the validation surface)
-5. `text_enum` — derive injection and the named error
-6. `text_enum` — serde
-7. `text_enum` — the sqlx bridge
-8. Migrate `PostFormat` + `MediaSource`; delete `db_enum.rs`
-9. Migrate `AudienceBase` + `RegistrationPolicy`
-10. Migrate `BackupMode` (D11)
-11. Migrate `Channel`/`SubscriptionStatus`/`TargetKind`; delete `strum_enum.rs`
-    (D12)
-12. Four remaining prose sites
-13. ADR draft + ADR-0075 amendments + issue body
+- [x] 1. `BridgeSpec` — parameterise `bridge()`, four callers semantically
+     unchanged — `d7c6f0d9`
+- [x] 2. `StrNewtype` validating kinds decode `&'r str` — `c6c1a226`
+- [x] 3. `SqlxBridge` derive + `RenderedHtml` adopts it — `968685ac`
+- [x] 4-7. `text_enum` — shape guard, options, injection, named error, serde,
+      and the sqlx bridge — `0c1598c2`. **Landed as one commit, not four.**
+      Splitting leaves `Opts`' fields dead until the last piece exists, and
+      `-D warnings` rejects that; the alternatives were an `#[allow(dead_code)]`
+      (needs user approval) or filler written to satisfy a linter.
+- [x] 8. Migrate `PostFormat` + `MediaSource`; delete `db_enum.rs` — `1e224f11`
+- [x] 9. Migrate `AudienceBase` + `RegistrationPolicy` — `bb6d4ab9`. Also
+     retired `impl_string_serde_proxy!`, which the plan had dying later: it had
+     exactly four users and this took the last two, so clippy refused it as
+     dead.
+- [x] 10. Migrate `BackupMode` (D11) — `216944bf`
+- [x] 11. Migrate `Channel`/`SubscriptionStatus`/`TargetKind`; delete
+      `strum_enum.rs` (D12) — `97e9ab00`
+- [x] 12-13. Prose sites, ADR-0075 amendments, ADR draft, issue body —
+      `72c51f2d`. Only three prose sites needed work;
+      `macros/src/sqlx_bridge.rs`'s module doc was already rewritten in Task 1.
+      The ADR draft is **uncommitted by design** — `docs/adr/drafts/` is
+      gitignored and `cargo xtask adr promote` numbers and stages it at ship.
+
+**Plan defect found during execution:** Task 11's verification named
+`cargo nextest run -p common -p storage`, which cannot pass outside the Nix
+harness — `storage`'s postgres cases need a provisioned server, so all six
+failures were `ConnectionRefused`. `cargo xtask check` is the command that runs
+them.
 
 **Key risks:** Task 5's injection is the novel mechanism — a uniform derive left
 above the attribute collides with `E0119`/`E0592` (D1a). Task 2 changes the
