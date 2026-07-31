@@ -294,6 +294,64 @@ mod tests {
         }
     }
 
+    // ── The determinism evidence (#745 AC9) ─────────────────────────────────
+    //
+    // Real `regenerate` output from three distinct executions of the same e2e
+    // derivation on one tree. See testdata/determinism/README.md for provenance.
+    // These pin the claim the split rests on: runs disagree about titles and
+    // agree about everything the gate asserts.
+
+    const RUN_A: &str = include_str!("testdata/determinism/run-a.json");
+    const RUN_B: &str = include_str!("testdata/determinism/run-b.json");
+    const RUN_C: &str = include_str!("testdata/determinism/run-c.json");
+
+    /// The combined shape `regenerate` wrote before #745 — the fixtures' format,
+    /// which today's [`Snapshot`] deliberately cannot parse.
+    #[derive(Deserialize)]
+    struct CombinedRun {
+        covered: BTreeMap<String, BTreeSet<String>>,
+        orphans: BTreeMap<String, BTreeSet<String>>,
+    }
+
+    fn run_coverage(raw: &str) -> Coverage {
+        let run: CombinedRun = serde_json::from_str(raw).expect("fixture parses");
+        Coverage {
+            covered: run.covered,
+            orphans: run.orphans,
+        }
+    }
+
+    #[test]
+    fn the_three_runs_really_do_disagree() {
+        // Without this the test below is vacuous: three identical inputs would
+        // project identically and prove nothing about determinism.
+        assert_ne!(RUN_A, RUN_B);
+        assert_ne!(RUN_B, RUN_C);
+        assert_ne!(RUN_A, RUN_C);
+    }
+
+    #[test]
+    fn runs_that_disagree_on_titles_still_render_one_compared_snapshot() {
+        // AC9, and the whole basis of #745's fix.
+        let rendered: Vec<String> = [RUN_A, RUN_B, RUN_C]
+            .iter()
+            .map(|raw| render(&run_coverage(raw).split().0).expect("renders"))
+            .collect();
+        assert_eq!(rendered[0], rendered[1]);
+        assert_eq!(rendered[1], rendered[2]);
+    }
+
+    #[test]
+    fn the_runs_disagree_only_in_the_evidence() {
+        // The complement: prove the difference asserted above is real and lands
+        // entirely in the uncompared artifact.
+        let evidence: Vec<String> = [RUN_A, RUN_B, RUN_C]
+            .iter()
+            .map(|raw| render(&run_coverage(raw).split().1).expect("renders"))
+            .collect();
+        assert_ne!(evidence[0], evidence[1]);
+    }
+
     #[test]
     fn split_puts_names_in_the_snapshot_and_titles_in_the_evidence() {
         let (s, e) = coverage_of(&[("posts::create", &["a test"])]).split();

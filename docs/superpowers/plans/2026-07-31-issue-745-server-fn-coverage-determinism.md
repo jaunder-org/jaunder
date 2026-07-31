@@ -466,7 +466,7 @@ re-executions of `.#checks.x86_64-linux.e2e-sqlite-chromium` on this tree. Runs
 combined format**, which the post-Task-2 code no longer parses — deliberate, as
 historical evidence, so the test brings its own deserialize struct.
 
-- [ ] **Step 1: Write the README**
+- [x] **Step 1: Write the README**
 
 `README.md` records provenance so the files are not mistaken for hand-authored:
 the commit they came from, the method (one `nix build` plus three
@@ -476,7 +476,7 @@ byte-identical, that the format is the pre-#745 combined one, and that the
 captures themselves (~2.2 MB compressed, ~26 MB of JSONL extracted) are not
 committed.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 ```rust
 /// Real `regenerate` output from three distinct forced re-executions of the
@@ -531,9 +531,13 @@ fn the_runs_disagree_only_in_the_evidence() {
 }
 ```
 
-- [ ] **Step 3: Run the tests, verify they pass**
+- [x] **Step 3: Run the tests, verify they pass**
 
 Run: `cargo nextest run -p xtask server_fn_coverage` Expected: PASS.
+
+> Executed as `cargo test --manifest-path xtask/Cargo.toml server_fn_coverage` —
+> `xtask` lives outside the workspace, so `-p xtask` resolves to no package. 63
+> passed. The same correction applies to every other task's run step.
 
 There is deliberately **no red phase** here. The fixtures are pre-staged
 (Task 0) and `include_str!` is compile-time, so a missing fixture is a build
@@ -541,7 +545,7 @@ failure rather than a failing assertion. The meaningful guard is
 `the_three_runs_really_do_disagree`, which fails if the fixtures are ever
 replaced by copies of one run.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add xtask/src/server_fn_coverage/testdata/determinism xtask/src/server_fn_coverage/snapshot.rs
