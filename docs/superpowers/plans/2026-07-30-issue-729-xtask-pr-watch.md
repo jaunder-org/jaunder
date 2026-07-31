@@ -1542,8 +1542,9 @@ mod tests {
 }
 ```
 
-- [x] **Step 2: Run the tests, verify they fail** — **same deviation as Task 5:**
-      tests and implementation were written in one pass, so no separate red run.
+- [x] **Step 2: Run the tests, verify they fail** — **same deviation as Task
+      5:** tests and implementation were written in one pass, so no separate red
+      run.
 
 - [x] **Step 3: Implement against the tests**
 
@@ -1631,7 +1632,7 @@ pub enum PrCommand {
 }
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `xtask/src/git.rs`, using the existing `crate::test_support` throwaway-repo
 helpers (the idiom the file's own tests already use, and the reason `at()`
@@ -1742,12 +1743,16 @@ fn pr_requires_a_subcommand() {
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail** — one genuine red: the A15
+      guard `no_hardcoded_repo_literal_in_the_module` failed because its own
+      `concat!` wrote the quoted slug into the file it greps. Needle now built
+      with `format!`.
 
-Run: `cargo test --manifest-path xtask/Cargo.toml` Expected: FAIL —
-`Command::Pr` / `PrCommand` / `parse_remote` / `current_branch` not defined.
-
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests** — the readers use
+      `branch --show-current` (empty when detached) and
+      `config --get remote.<n>.url` rather than the planned
+      `rev-parse --abbrev-ref` / `remote get-url`: both reuse the existing
+      exit-code-tolerating plumbing instead of adding new tolerated codes.
 
 Write the three `git.rs` readers via `git::at(dir)` (so `GIT_*` stays scrubbed —
 `CONTRIBUTING.md:174-185`): `rev-parse --abbrev-ref HEAD`, `rev-parse HEAD`, and
@@ -1782,18 +1787,17 @@ Add the `run()` arms. Each one, in order:
 `gh pr list --head <branch> --state open --json number` for the current branch,
 mapping an empty list to `ApiError::NotFound`.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Run: `cargo test --manifest-path xtask/Cargo.toml` Expected: PASS (whole xtask
-suite)
+suite) — **observed 558 passed, 0 failed.**
 
-- [ ] **Step 5: Verify the help text (A14)**
+- [x] **Step 5: Verify the help text (A14)** — all four documented; the flag
+      value-names render as `<INTERVAL>`/`<TIMEOUT>` with the units in the help
+      text rather than in the placeholder.
 
-Run: `cargo run --manifest-path xtask/Cargo.toml -- pr watch --help` Expected:
-documents `--interval <SECONDS>`, `--timeout <MINUTES>`, `--once`, and the
-optional PR number.
-
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit** — `5c51808f`, plus `34a7027f` for two defects the first
+      real `gh` smoke run exposed (see Task 10 Step 1).
 
 ```bash
 git add xtask/src/git.rs xtask/src/lib.rs xtask/src/pr/snapshot.rs
@@ -1811,7 +1815,8 @@ git commit -m "feat(xtask): wire pr watch/land into the CLI with remote-derived 
 
 **Interfaces:** none (documentation).
 
-- [ ] **Step 1: Write the ADR draft**
+- [x] **Step 1: Write the ADR draft** —
+      `docs/adr/drafts/xtask-github-pr-observation.md`.
 
 Follow `docs/adr/template.md`. **The H1 must be exactly `# ADR-DRAFT: <Title>`
 and the status must be lowercase `accepted`** — `adr_readme.rs:25-31` defines
@@ -1839,18 +1844,21 @@ otherwise be excavated:
 
 Cite ADR-0028 and ADR-0077 by path.
 
-- [ ] **Step 2: Verify the ADR gate accepts it**
+- [x] **Step 2: Verify the ADR gate accepts it**
 
 Run: `devtool run -- cargo xtask check --no-test` Expected: PASS — `adr-check`
-and `doc-links` green.
+and `doc-links` green. **Observed green.**
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit** — **there is nothing to commit, and that is correct.**
+      `docs/adr/drafts/` is gitignored by design (ADR-0048 / the drafts README):
+      a draft carries no number until `cargo xtask adr promote` assigns one at
+      ship, so it cannot be committed prematurely. The plan wrongly listed a
+      `git add`/`commit` here; the ADR's first appearance in history is the
+      promote commit in ship step 6.
 
-```bash
-prettier -w docs/adr/drafts/xtask-github-pr-observation.md
-git add docs/adr/drafts/xtask-github-pr-observation.md
-git commit -m "docs(adr): draft xtask GitHub PR observation boundary (#729)"
-```
+      Also corrected while writing it: sibling ADR links in a draft are written **as
+      if the draft already lived in `docs/adr/`** (`0028-…md`, not `../0028-…md`) —
+      `promote` strips one `../` level, so the bare form is what survives.
 
 ---
 

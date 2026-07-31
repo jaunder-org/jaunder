@@ -1314,6 +1314,10 @@
               pkgs.cargo-generate
               pkgs.cargo-mutants
               pkgs.sqlx-cli
+              # `cargo xtask pr watch`/`pr land` shell out to `gh` (#729). Host-only
+              # manual commands — no Nix check or CI job runs them — so this stays
+              # out of `ciInputs`, like the other interactive tooling here.
+              pkgs.gh
               # `devtool run -- <cmd>` etc. on the interactive PATH. Already built
               # for the coverage sandbox; here it serves humans/agents directly.
               devtoolBin
