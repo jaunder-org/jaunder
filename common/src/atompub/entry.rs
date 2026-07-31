@@ -161,18 +161,16 @@ pub fn entry_from_xml(xml: &str) -> Result<Entry, AtomPubError> {
 // Serialization
 // ---------------------------------------------------------------------------
 
-/// Runs an `atom_syndication` writer over an in-memory buffer and decodes the
-/// result.
+/// Decodes what an `atom_syndication` writer produced into a `String`.
 ///
 /// Both failure modes are unreachable in practice — a `Vec<u8>` has no I/O to
 /// fail, and upstream emits UTF-8 — but neither is expressible as infallible, so
 /// they surface as [`AtomPubError::Serialize`]. That variant, not `Malformed`,
 /// is what keeps a server-side write failure off the client-facing `400` path.
-fn to_xml_string<W>(write: W) -> Result<String, AtomPubError>
-where
-    W: FnOnce(Vec<u8>) -> Result<Vec<u8>, atom_syndication::Error>,
-{
-    let bytes = write(Vec::new()).map_err(|e| AtomPubError::Serialize(e.to_string()))?;
+fn to_xml_string(
+    written: Result<Vec<u8>, atom_syndication::Error>,
+) -> Result<String, AtomPubError> {
+    let bytes = written.map_err(|e| AtomPubError::Serialize(e.to_string()))?;
     String::from_utf8(bytes).map_err(|e| AtomPubError::Serialize(e.to_string()))
 }
 
@@ -186,7 +184,7 @@ where
 ///
 /// Returns [`AtomPubError::Serialize`] if the document cannot be written.
 pub fn entry_to_xml(entry: &Entry) -> Result<String, AtomPubError> {
-    to_xml_string(|w| entry.write_to(w))
+    to_xml_string(entry.write_to(Vec::new()))
 }
 
 /// Feed-level metadata for an `AtomPub` collection document.
@@ -255,7 +253,7 @@ pub fn render_feed(meta: &FeedMeta, entries: &[Entry]) -> Result<String, AtomPub
         ..Default::default()
     };
 
-    to_xml_string(|w| feed.write_to(w))
+    to_xml_string(feed.write_to(Vec::new()))
 }
 
 /// A media-link entry (RFC 5023 §9.6): the Atom `<entry>` a server returns for
@@ -311,9 +309,22 @@ pub fn render_media_link_entry(entry: &MediaLinkEntry) -> Result<String, AtomPub
         ..Default::default()
     };
 
-    to_xml_string(|w| atom_entry.write_to(w))
+    to_xml_string(atom_entry.write_to(Vec::new()))
 }
 
+/// What these tests are for, now that `atom_syndication` owns the XML.
+///
+/// They do **not** re-verify upstream's parser or writer — that is upstream's
+/// job, and duplicating it here would just pin someone else's implementation.
+/// What they cover is our side of the boundary:
+///
+/// - the `app:control/app:draft` and `j:slug` markers, and the `xmlns:*`
+///   bookkeeping that goes with them;
+/// - the documents assembled from *our* wire structs (`FeedMeta`,
+///   `MediaLinkEntry`);
+/// - each behaviour delta the migration deliberately accepted, so a future
+///   upstream bump that changes one fails here instead of on a client;
+/// - the error class a malformed document maps to.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -323,11 +334,11 @@ mod tests {
         parse_absolute_url, parse_content_type, parse_filename, parse_utc_instant,
     };
 
+    /// The `(type, value)` of an entry's `<content>`. Every caller supplies one, so
+    /// an absent element is a broken test rather than a case to report.
     fn content_parts(entry: &Entry) -> (Option<&str>, Option<&str>) {
-        match entry.content() {
-            Some(c) => (c.content_type(), c.value()),
-            None => (None, None),
-        }
+        let content = entry.content().expect("entry carries <content>");
+        (content.content_type(), content.value())
     }
 
     #[test]
@@ -347,60 +358,6 @@ mod tests {
         assert_eq!(entry.categories().len(), 1);
         assert_eq!(entry.categories()[0].term(), "rust");
         assert!(is_draft(&entry));
-    }
-
-    #[test]
-    fn parses_text_entry_not_draft() {
-        let xml = r#"<?xml version="1.0"?>
-<entry xmlns="http://www.w3.org/2005/Atom">
-  <title>Note</title>
-  <content type="text"># markdown</content>
-</entry>"#;
-        let entry = entry_from_xml(xml).expect("parse");
-        assert_eq!(entry.title().as_str(), "Note");
-        assert_eq!(content_parts(&entry), (Some("text"), Some("# markdown")));
-        assert!(entry.summary().is_none());
-        assert!(!is_draft(&entry));
-        assert!(entry.categories().is_empty());
-    }
-
-    #[test]
-    fn parses_id_and_timestamps() {
-        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
-  <title>T</title>
-  <id>tag:example.com,2026:post/7</id>
-  <published>2026-01-01T00:00:00Z</published>
-  <updated>2026-01-02T03:04:05Z</updated>
-</entry>"#;
-        let entry = entry_from_xml(xml).expect("parse");
-        assert_eq!(entry.id(), "tag:example.com,2026:post/7");
-        assert_eq!(
-            entry.published().map(chrono::DateTime::to_rfc3339),
-            Some("2026-01-01T00:00:00+00:00".to_string())
-        );
-        assert_eq!(entry.updated().to_rfc3339(), "2026-01-02T03:04:05+00:00");
-    }
-
-    #[test]
-    fn parses_numeric_and_named_char_refs_across_pieces() {
-        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
-  <title>A&#66;C &quot;q&quot; &apos;a&apos;</title>
-  <content type="text">x</content>
-</entry>"#;
-        let entry = entry_from_xml(xml).expect("parse");
-        assert_eq!(entry.title().as_str(), "ABC \"q\" 'a'");
-    }
-
-    #[test]
-    fn non_scalar_char_ref_is_an_error() {
-        // `&#xD800;` is a syntactically valid numeric char-ref, but U+D800 is a
-        // UTF-16 surrogate — not a Unicode scalar value — so resolving it fails
-        // and the whole entry is rejected. Unlike an *unresolvable* reference
-        // (below), a malformed code point is not something to pass through.
-        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
-  <title>a&#xD800;b</title>
-</entry>"#;
-        assert!(entry_from_xml(xml).is_err());
     }
 
     #[test]
@@ -499,65 +456,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_xhtml_with_empty_element_entity_and_cdata() {
-        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
-  <title>X</title>
-  <content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">a<br/>b &amp; c<![CDATA[ d ]]></div></content>
-</entry>"#;
-        let entry = entry_from_xml(xml).expect("parse");
-        let (ctype, value) = content_parts(&entry);
-        assert_eq!(ctype, Some("xhtml"));
-        let value = value.expect("xhtml value");
-        assert!(value.contains("<br"), "value: {value}");
-        assert!(value.contains('b'), "value: {value}");
-    }
-
-    #[test]
-    fn parses_nested_xhtml_preserving_inner_markup() {
-        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
-  <title>X</title>
-  <content type="xhtml"><div><p>one</p><!-- note --><ul><li>two</li></ul></div></content>
-</entry>"#;
-        let entry = entry_from_xml(xml).expect("parse");
-        let (ctype, value) = content_parts(&entry);
-        assert_eq!(ctype, Some("xhtml"));
-        let value = value.expect("xhtml value");
-        assert!(value.contains("<ul>"), "value: {value}");
-        assert!(value.contains("<li>two</li>"), "value: {value}");
-        assert!(value.contains("</div>"), "value: {value}");
-    }
-
-    #[test]
-    fn unclosed_xhtml_content_is_an_error() {
-        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
-  <title>X</title>
-  <content type="xhtml"><div>oops"#;
-        assert!(entry_from_xml(xml).is_err());
-    }
-
-    #[test]
-    fn parses_links_with_rel_and_href() {
-        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
-  <title>L</title>
-  <link rel="edit" href="https://h/atompub/alice/posts/1"/>
-  <link href="https://h/~alice/p"/>
-</entry>"#;
-        let entry = entry_from_xml(xml).expect("parse");
-        assert_eq!(entry.links().len(), 2);
-        assert_eq!(entry.links()[0].rel(), "edit");
-        assert_eq!(entry.links()[0].href(), "https://h/atompub/alice/posts/1");
-        // A link without rel defaults to "alternate".
-        assert_eq!(entry.links()[1].rel(), "alternate");
-        // The entry has no <content>, so content_parts yields the empty pair.
-        assert_eq!(content_parts(&entry), (None, None));
-    }
-
-    #[test]
-    fn malformed_xml_is_an_error() {
-        assert!(entry_from_xml("<entry><unclosed></entry>").is_err());
-    }
-
-    #[test]
     fn document_without_entry_is_an_error() {
         assert!(matches!(
             entry_from_xml("<?xml version=\"1.0\"?><other/>"),
@@ -579,6 +477,25 @@ mod tests {
         let mut entry = sample_entry();
         set_j_slug(&mut entry, "my-post");
         assert_eq!(j_slug(&entry), Some("my-post".to_string()));
+    }
+
+    #[test]
+    fn re_setting_a_marker_replaces_rather_than_accumulates() {
+        // Both the extension map and `namespaces` are keyed maps, so a repeated set
+        // overwrites its key rather than appending a second marker or a duplicate
+        // xmlns declaration.
+        let mut entry = sample_entry();
+        set_j_slug(&mut entry, "first");
+        set_j_slug(&mut entry, "second");
+        set_draft(&mut entry, true);
+        set_draft(&mut entry, true);
+
+        assert_eq!(j_slug(&entry), Some("second".to_string()));
+        let out = entry_to_xml(&entry).expect("serialize");
+        assert_eq!(out.matches("<j:slug>").count(), 1, "out: {out}");
+        assert_eq!(out.matches("app:control").count(), 2, "out: {out}"); // open + close
+        assert_eq!(out.matches("xmlns:j=").count(), 1, "out: {out}");
+        assert_eq!(out.matches("xmlns:app=").count(), 1, "out: {out}");
     }
 
     #[test]
@@ -655,18 +572,6 @@ mod tests {
         assert!(out.contains("yes"), "out: {out}");
         assert!(out.contains("type=\"html\""), "out: {out}");
         assert!(out.contains("&lt;p&gt;x&lt;/p&gt;"), "out: {out}");
-    }
-
-    #[test]
-    fn serializes_xhtml_content_type() {
-        let mut entry = sample_entry();
-        entry.content = Some(Content {
-            content_type: Some("xhtml".to_string()),
-            value: Some("<div><p>hi</p></div>".to_string()),
-            ..Default::default()
-        });
-        let out = entry_to_xml(&entry).expect("serialize");
-        assert!(out.contains("type=\"xhtml\""), "out: {out}");
     }
 
     #[test]
