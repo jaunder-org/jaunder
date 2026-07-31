@@ -1,6 +1,6 @@
 # ADR-0081: Server-fn flow coverage is derived from e2e traces, not asserted
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-29
 - Issue: [#681](https://github.com/jaunder-org/jaunder/issues/681)
 

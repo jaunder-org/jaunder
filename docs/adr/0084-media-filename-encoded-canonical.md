@@ -1,6 +1,6 @@
 # ADR-0084: Media filename — the encoded form is canonical, with a proffered inbound twin
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-30
 - Issue: [#720](https://github.com/jaunder-org/jaunder/issues/720)
 

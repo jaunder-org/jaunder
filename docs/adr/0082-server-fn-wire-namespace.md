@@ -1,6 +1,6 @@
 # ADR-0082: Server-fn wire URLs are `/api/<vertical>/<op>`, derived and macro-written
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-29
 - Issue: [#684](https://github.com/jaunder-org/jaunder/issues/684)
 

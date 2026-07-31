@@ -1,6 +1,6 @@
 # ADR-0073: The `url` crate is the sanctioned absolute-URL normalizer, and it enters the `common`/wasm graph
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-20
 - Issue: [#448](https://github.com/jaunder-org/jaunder/issues/448)
 

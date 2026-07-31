@@ -1,6 +1,6 @@
 # ADR-0086: Component thinness is enforced, not assumed
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-30
 - Issue: [#306](https://github.com/jaunder-org/jaunder/issues/306)
 

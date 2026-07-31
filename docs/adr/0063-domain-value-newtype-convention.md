@@ -1,6 +1,6 @@
 # ADR-0063: Domain-value newtypes — when to introduce one, and the standard trailer
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-11
 - Issue: [#17](https://github.com/jaunder-org/jaunder/issues/17)
 

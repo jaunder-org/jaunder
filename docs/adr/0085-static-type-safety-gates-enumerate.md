@@ -1,6 +1,6 @@
 # ADR-0085: Static type-safety gates enumerate, they do not search
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-30
 - Issue: [#715](https://github.com/jaunder-org/jaunder/issues/715)
 
