@@ -662,6 +662,125 @@ pub fn media_url(
     url
 }
 
+/// The triple a media URL names: one stored entry, and one directory entry on disk.
+///
+/// A bare [`ContentHash`] would be too coarse — identical bytes stored under two names are
+/// two distinct (hard-linked) entries — so the filename is part of the identity, and
+/// [`MediaSource`] is too because it selects the storage root.
+///
+/// Carries no `user_id`: a URL does not name an owner, and the same entry can be referenced
+/// from any post. Consumers that need ownership join through the referencing post (#711).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct MediaRef {
+    /// Which storage root the entry lives under.
+    pub source: MediaSource,
+    /// Content hash of the stored bytes.
+    pub sha256: ContentHash,
+    /// The canonical, percent-encoded filename segment (ADR-0080, #720).
+    pub filename: Filename,
+}
+
+impl MediaRef {
+    /// The lexicographic ordering key: the same triple, as string views.
+    fn order_key(&self) -> (&str, &str, &str) {
+        (
+            self.source.as_ref(),
+            self.sha256.as_ref(),
+            self.filename.as_ref(),
+        )
+    }
+}
+
+// Ordered so a set of references has one deterministic serialization — extraction collects
+// into a `BTreeSet`, which gives dedup and a stable row order in one move, and callers
+// writing those rows get a byte-identical result for a byte-identical body.
+//
+// Implemented here rather than derived because none of the three members is `Ord`, and
+// giving `MediaSource`/`ContentHash`/`Filename` an ordering apiece would push a trait onto
+// three widely-shared domain types to serve one local need. The key is their string views,
+// so the order is the obvious lexicographic one.
+impl Ord for MediaRef {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.order_key().cmp(&other.order_key())
+    }
+}
+
+impl PartialOrd for MediaRef {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Parses a media URL into the [`MediaRef`] it names, or `None` if it names none.
+///
+/// The exact inverse of [`media_url`], and deliberately adjacent to it: [`media_path`] is
+/// the single definition of the layout, so the parse is derived from that shape rather than
+/// re-spelling it. The round-trip is pinned by
+/// `parse_media_url_round_trips_every_source_and_encoded_names`.
+///
+/// Recognises both layouts a post can address a file by:
+///
+/// - the serve URL, `/media/<source>/<p1>/<p2>/<sha>/<filename>`;
+/// - the `AtomPub` media member URL, `/atompub/<user>/media/<sha>/<filename>`, which
+///   carries no source segment because its handlers hardcode [`MediaSource::Upload`].
+///
+/// **Scheme, host and port are ignored** — only the path is inspected. Rendering is a pure
+/// function with no access to site configuration, and the rendered HTML is *stored*, so a
+/// host-dependent parse would be silently invalidated by a later hostname change. The
+/// failure this admits is benign in both directions: a foreign-host URL that happens to
+/// carry a valid digest and matching filename makes a media item look referenced, which
+/// refuses a deletion that could have proceeded (`force` covers it) or leaves a file
+/// unreclaimed — never the reverse. #744 revisits this.
+///
+/// The filename segment is percent-decoded and re-encoded through [`ProfferedFilename`] —
+/// the same door the serve route uses — so a post addressing the file by its raw name and
+/// one using the canonical encoded spelling converge on the same value. Normalising here,
+/// on the write path, is the point: a transform at the *comparison* point is the bug class
+/// #675, #708 and #711 are all instances of.
+#[must_use]
+pub fn parse_media_url(url: &str) -> Option<MediaRef> {
+    // Query and fragment are not part of the path, so `…/photo.jpg?v=2` still names the
+    // file. Cut at whichever comes first.
+    let path = url.split_once(['?', '#']).map_or(url, |(before, _)| before);
+    // Drop `scheme://authority`, keeping the path. A URL with no `://` is already
+    // root-relative and is used as-is.
+    let path = path
+        .split_once("://")
+        .and_then(|(_, rest)| rest.find('/').map(|i| &rest[i..]))
+        .unwrap_or(path);
+
+    let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+    let (source, hash, filename) = match segments.as_slice() {
+        ["media", source, p1, p2, hash, filename] => {
+            let hash: ContentHash = hash.parse().ok()?;
+            // Mirror the serve route's prefix check exactly (`server::media`): a URL whose
+            // shard segments disagree with the digest 404s, so it names nothing. Using
+            // `starts_with` rather than equality keeps the two in step — the read path
+            // accepts a short prefix, so treating it as a reference is not a false positive.
+            if !hash.starts_with(p1) || !hash[2..].starts_with(p2) {
+                return None;
+            }
+            (source.parse().ok()?, hash, filename)
+        }
+        ["atompub", _user, "media", hash, filename] => {
+            (MediaSource::Upload, hash.parse().ok()?, filename)
+        }
+        _ => return None,
+    };
+
+    // Decode, then re-encode through the proffered door. That door is also the arbiter of
+    // whether the name *could* be stored at all — an unsafe leaf or an over-budget name
+    // names nothing, so it is not a reference.
+    let decoded = percent_decode_str(filename).decode_utf8().ok()?;
+    let filename: Filename = decoded.parse::<ProfferedFilename>().ok()?.into();
+
+    Some(MediaRef {
+        source,
+        sha256: hash,
+        filename,
+    })
+}
+
 /// A media `Content-Type` header value — a `type/subtype` media type with optional
 /// `;`-separated parameters (e.g. `image/png`, `text/html; charset=utf-8`). Introducing
 /// the type means an arbitrary string can no longer stand in for a media content type
@@ -1788,6 +1907,189 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<MediaSource>("\"upload\"").unwrap(),
             MediaSource::Upload
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_media_url — the inverse of `media_url` (#711)
+    // -----------------------------------------------------------------------
+
+    /// The canonical `Filename` for a raw (undecoded) name, via the proffered door.
+    fn canonical(raw: &str) -> Filename {
+        raw.parse::<ProfferedFilename>()
+            .expect("a legal filename")
+            .into()
+    }
+
+    #[test]
+    fn parse_media_url_round_trips_every_source_and_encoded_names() {
+        // The parser is the exact inverse of the formatter, which is what keeps the two
+        // definitions of the layout from drifting.
+        for source in [MediaSource::Upload, MediaSource::Cached] {
+            for raw in ["photo.jpg", "my photo.jpg", "ünïcode nàme.png", "100%.jpg"] {
+                let filename = canonical(raw);
+                let hash: ContentHash = CANONICAL.parse().unwrap();
+                let url = media_url(&source, &hash, &filename);
+                assert_eq!(
+                    parse_media_url(&url),
+                    Some(MediaRef {
+                        source,
+                        sha256: hash.clone(),
+                        filename: filename.clone(),
+                    }),
+                    "round trip failed for {source:?} / {raw}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn parse_media_url_accepts_the_atompub_member_layout_as_upload() {
+        // The member URL carries no source segment; the handlers hardcode Upload, so the
+        // layout pins it.
+        let url = format!("/atompub/alice/media/{CANONICAL}/photo.jpg");
+        assert_eq!(
+            parse_media_url(&url),
+            Some(MediaRef {
+                source: MediaSource::Upload,
+                sha256: CANONICAL.parse().unwrap(),
+                filename: canonical("photo.jpg"),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_media_url_canonicalises_a_raw_filename_to_the_stored_spelling() {
+        // The #675 spelling variance: a post may address the file by its raw name. Both
+        // spellings must land on the one stored `Filename`, normalised here on the write
+        // path rather than transformed at a comparison point.
+        let raw = format!("/media/upload/e3/b0/{CANONICAL}/my photo.jpg");
+        let encoded = format!("/media/upload/e3/b0/{CANONICAL}/my%20photo.jpg");
+        assert_eq!(parse_media_url(&raw), parse_media_url(&encoded));
+        assert_eq!(
+            parse_media_url(&raw)
+                .expect("raw spelling parses")
+                .filename
+                .as_ref(),
+            "my%20photo.jpg"
+        );
+    }
+
+    #[test]
+    fn parse_media_url_rejects_a_prefix_that_does_not_match_the_hash() {
+        // The serve route 404s a mismatched shard prefix, so such a URL names nothing.
+        assert_eq!(
+            parse_media_url(&format!("/media/upload/ff/b0/{CANONICAL}/photo.jpg")),
+            None
+        );
+        assert_eq!(
+            parse_media_url(&format!("/media/upload/e3/ff/{CANONICAL}/photo.jpg")),
+            None
+        );
+    }
+
+    #[test]
+    fn parse_media_url_strips_query_and_fragment() {
+        let base = format!("/media/upload/e3/b0/{CANONICAL}/photo.jpg");
+        let expected = parse_media_url(&base);
+        assert!(expected.is_some());
+        assert_eq!(parse_media_url(&format!("{base}?v=2")), expected);
+        assert_eq!(parse_media_url(&format!("{base}#frag")), expected);
+        assert_eq!(parse_media_url(&format!("{base}?v=2#frag")), expected);
+    }
+
+    #[test]
+    fn parse_media_url_is_host_blind() {
+        // Deliberate (#744 revisits it): rendering is pure and has no site config, and the
+        // rendered HTML is stored — so a host-dependent parse would be invalidated by a
+        // later hostname change. Pinned so nobody "fixes" it silently.
+        let path = format!("/media/upload/e3/b0/{CANONICAL}/photo.jpg");
+        let expected = parse_media_url(&path);
+        assert!(expected.is_some());
+        assert_eq!(
+            parse_media_url(&format!("https://elsewhere.example{path}")),
+            expected
+        );
+        assert_eq!(
+            parse_media_url(&format!("http://localhost:3000{path}")),
+            expected
+        );
+    }
+
+    #[test]
+    fn parse_media_url_rejects_non_media_paths() {
+        assert_eq!(parse_media_url("/posts/hello"), None);
+        assert_eq!(parse_media_url("/media/upload/e3/b0/short/photo.jpg"), None);
+        assert_eq!(
+            parse_media_url(&format!("/media/bogus-source/e3/b0/{CANONICAL}/photo.jpg")),
+            None,
+            "an unknown source token is not a media URL"
+        );
+        assert_eq!(parse_media_url(""), None);
+        assert_eq!(parse_media_url("/media/upload/e3/b0"), None);
+        assert_eq!(
+            parse_media_url(&format!("/media/upload/e3/b0/{CANONICAL}/a/b.jpg")),
+            None,
+            "the filename is one segment, so a deeper path is not this layout"
+        );
+    }
+
+    #[test]
+    fn media_refs_order_by_source_then_hash_then_filename() {
+        // The ordering exists so a set of references serializes one way for one body:
+        // extraction collects into a `BTreeSet`, so this is what makes the written rows
+        // deterministic rather than hash-order.
+        let hash: ContentHash = CANONICAL.parse().unwrap();
+        let make = |source, name| MediaRef {
+            source,
+            sha256: hash.clone(),
+            filename: canonical(name),
+        };
+
+        // Same hash: the filename breaks the tie.
+        assert!(
+            make(MediaSource::Upload, "a.jpg") < make(MediaSource::Upload, "b.jpg"),
+            "filename orders last"
+        );
+        // `cached` sorts before `upload`, so the source dominates the filename.
+        assert!(
+            make(MediaSource::Cached, "z.jpg") < make(MediaSource::Upload, "a.jpg"),
+            "source orders first"
+        );
+
+        let mut sorted = [
+            make(MediaSource::Upload, "b.jpg"),
+            make(MediaSource::Cached, "z.jpg"),
+            make(MediaSource::Upload, "a.jpg"),
+        ];
+        sorted.sort();
+        let names: Vec<&str> = sorted.iter().map(|r| r.filename.as_ref()).collect();
+        assert_eq!(names, ["z.jpg", "a.jpg", "b.jpg"]);
+    }
+
+    #[test]
+    fn media_refs_deduplicate_in_a_btree_set() {
+        // A post embedding the same image twice must yield one row, without needing
+        // dialect-divergent conflict handling at the insert.
+        let hash: ContentHash = CANONICAL.parse().unwrap();
+        let one = MediaRef {
+            source: MediaSource::Upload,
+            sha256: hash,
+            filename: canonical("photo.jpg"),
+        };
+        let set: std::collections::BTreeSet<MediaRef> =
+            [one.clone(), one.clone(), one].into_iter().collect();
+        assert_eq!(set.len(), 1);
+    }
+
+    #[test]
+    fn parse_media_url_rejects_a_filename_the_stored_door_would_reject() {
+        // An over-budget or unsafe segment cannot name a stored entry, so it is not a
+        // reference — the proffered door is the single arbiter of that.
+        let long = "a".repeat(MAX_FILENAME_ENCODED_BYTES + 1);
+        assert_eq!(
+            parse_media_url(&format!("/media/upload/e3/b0/{CANONICAL}/{long}")),
+            None
         );
     }
 }

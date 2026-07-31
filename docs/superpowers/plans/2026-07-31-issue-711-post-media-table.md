@@ -117,7 +117,8 @@ be picked up concurrently rather than blocked behind this cycle.
 - Consumes: nothing.
 - Produces: two issue numbers, cited in the spec's "Follow-up issues" section.
 
-- [ ] **Step 1: File the sanitiser-widening issue**
+- [x] **Step 1: File the sanitiser-widening issue** —
+      [#743](https://github.com/jaunder-org/jaunder/issues/743)
 
 Use `jaunder-issues`. Title:
 `media: allow <video>/<audio> embeds in post bodies`. Type Feature, label `web`.
@@ -130,7 +131,8 @@ that #711's coupling test forces every newly permitted pair to be classified
 before it can land, and that `<source>` (format alternatives) and `<track>`
 (WebVTT captions) belong with it.
 
-- [ ] **Step 2: File the host-aware-matching issue**
+- [x] **Step 2: File the host-aware-matching issue** —
+      [#744](https://github.com/jaunder-org/jaunder/issues/744)
 
 Title: `media: match absolute media URLs against the configured site host`. Type
 Feature, label `web`. Body: #711 matches on path alone and ignores
@@ -138,11 +140,11 @@ scheme/host/port to keep `render` pure and config-free (spec D4); this issue
 revisits that, and must address that `rendered_html` is stored, so a hostname
 change would invalidate previously extracted references.
 
-- [ ] **Step 3: Record the numbers in the spec**
+- [x] **Step 3: Record the numbers in the spec**
 
 Replace the two "Follow-up issues" entries' prose with `#<N> — <title>` links.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit** — `8870292a`
 
 ```bash
 git add docs/superpowers/specs/2026-07-30-issue-711-post-media-table.md
