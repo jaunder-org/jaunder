@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sqlx::{Database, Pool};
+use sqlx::{Database, Pool, Row};
 use thiserror::Error;
 
 use common::feed::FeedPath;
@@ -902,7 +902,12 @@ where
     (TagId, Tag): for<'r> sqlx::FromRow<'r, DB::Row>,
     (String, Option<AudienceId>): for<'r> sqlx::FromRow<'r, DB::Row>,
     (DateTime<Utc>,): for<'r> sqlx::FromRow<'r, DB::Row>,
-    (String, DateTime<Utc>): for<'r> sqlx::FromRow<'r, DB::Row>,
+    // `feed_urls_needing_catchup` reads `feed_cache` a row at a time (a bad `feed_url`
+    // must not fail the scan), so it needs the column-decode bounds directly rather than
+    // a `FromRow` tuple. `FeedPath` decodes as itself via the ADR-0071 bridge.
+    for<'r> FeedPath: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> DateTime<Utc>: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> &'r str: sqlx::ColumnIndex<DB::Row>,
     // Not residue: the ADR-0071 bridge *delegates* to `i64`, so `i64: Encode`/`Type` is
     // what makes every id newtype bind on a generic backend. Removing it breaks the
     // typed binds, not just the untyped ones.
@@ -1849,25 +1854,40 @@ where
         // Cached feeds live in the same database, so they are enumerated here
         // and, for each, the newest live post on that surface is compared
         // against the feed's own `generated_at`. Feed count is small, so a
-        // per-feed check is simpler than a set-based join and keeps the
-        // `feed_url` → surface parsing in Rust (`common::feed::parse`).
-        let cached: Vec<(String, DateTime<Utc>)> =
-            sqlx::query_as("SELECT feed_url, generated_at FROM feed_cache")
-                .fetch_all(&self.pool)
-                .await?;
+        // per-feed check is simpler than a set-based join.
+        //
+        // Rows are read one at a time rather than via `query_as` so a single bad
+        // `feed_url` cannot fail the whole scan — see the skip below.
+        let rows = sqlx::query("SELECT feed_url, generated_at FROM feed_cache")
+            .fetch_all(&self.pool)
+            .await?;
         let mut needing = Vec::new();
-        for (feed_url, generated_at) in cached {
-            let Some((surface, format)) = common::feed::parse(&feed_url) else {
+        for row in rows {
+            let generated_at: DateTime<Utc> = row.try_get("generated_at")?;
+            // Skip this row rather than failing the scan. A `feed_url` that no longer
+            // parses — a row written under an older grammar, say — is one unusable cache
+            // entry, but this scan runs only while the feed worker's `last_tick` is unset
+            // and the worker never advances it past an error, so returning `Err` here
+            // would retry forever and go-live enqueueing would never resume. One bad row
+            // must not cost every feed.
+            //
+            // `parts` is folded into the same skip: it can only fail if `canonicalize`
+            // and `parse` disagree, which the decode above has already ruled out, so this
+            // costs no second branch.
+            let Some((feed_path, surface)) = row
+                .try_get::<FeedPath, _>("feed_url")
+                .ok()
+                .and_then(|path| path.parts().map(|(surface, _)| (path, surface)))
+            else {
+                tracing::warn!("skipping feed_cache row whose feed_url no longer parses");
                 continue;
             };
             if let Some(max) = max_published_at_for_surface::<DB>(&self.pool, &surface, now).await?
             {
                 // Strictly newer => a go-live happened after this feed was last
-                // generated, so it must be regenerated. Rebuild the key as a
-                // `FeedPath` from the already-parsed surface (infallible; also
-                // re-canonicalizes, harmless since the column is canonical).
+                // generated, so it must be regenerated.
                 if max > generated_at {
-                    needing.push(FeedPath::canonical(&surface, format));
+                    needing.push(feed_path);
                 }
             }
         }
@@ -2489,15 +2509,16 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::feed_cache::FeedCacheRow;
     use crate::test_support::{
-        backends, create_draft_via_service, create_post_via_service, fetch_post_media,
+        backends, create_draft_via_service, create_post_via_service, fetch_post_media, fp,
         media_ref_for, media_row_exists, media_url_for, seed_media, seed_users,
         update_post_body_via_service, Backend, CloseablePool, SeedRawPost, SeedUser, UpdateRawPost,
         MEDIA_TEST_SHA256,
     };
     use common::test_support::{
-        parse_post_summary, parse_row_limit, parse_slug, parse_tag, parse_tag_label,
-        parse_username, permalink_date,
+        parse_content_type, parse_etag, parse_post_summary, parse_row_limit, parse_slug, parse_tag,
+        parse_tag_label, parse_username, permalink_date,
     };
     use rstest::*;
     use rstest_reuse::*;
@@ -2530,6 +2551,58 @@ mod tests {
         assert_eq!(
             audience_target_from_row("bogus", Some(AudienceId::from(1))),
             None
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn feed_urls_needing_catchup_skips_a_row_whose_feed_url_no_longer_parses(
+        #[case] backend: Backend,
+    ) {
+        // A `feed_url` that will not decode into a `FeedPath` must cost only its own row.
+        // The scan runs only while the feed worker's `last_tick` is unset and the worker
+        // never advances it past an error, so returning `Err` here would retry forever and
+        // go-live enqueueing would never resume — one bad row would stop every feed.
+        let env = backend.setup().await;
+        let state = &env.state;
+        let author = SeedUser::new().seed(state).await.user_id;
+        let now = Utc::now();
+        SeedRawPost::new(author).published_at(now).seed(state).await;
+
+        // Two stale cached feeds, both older than the post above, so both would need
+        // catch-up if they were readable.
+        let stale = now - chrono::Duration::hours(1);
+        for url in ["/feed.rss", "/feed.atom"] {
+            state
+                .feed_cache
+                .upsert(FeedCacheRow {
+                    feed_path: fp(url),
+                    body: "<rss/>".into(),
+                    etag: parse_etag("\"sha256-deadbeef\""),
+                    content_type: parse_content_type("application/rss+xml"),
+                    updated_at: stale,
+                    generated_at: stale,
+                })
+                .await
+                .unwrap();
+        }
+        // Only reachable by DB tampering or a grammar that has since been tightened:
+        // `FeedPath`'s validating bridge rejects this on read.
+        env.base
+            .pool()
+            .execute(
+                "UPDATE feed_cache SET feed_url = 'not-a-feed-path' WHERE feed_url = '/feed.atom'",
+            )
+            .await
+            .unwrap();
+
+        let needing = state.posts.feed_urls_needing_catchup(now).await.unwrap();
+
+        assert_eq!(
+            needing,
+            vec![fp("/feed.rss")],
+            "the readable stale feed is still reported, and the corrupt row is skipped \
+             rather than failing the whole scan"
         );
     }
 
