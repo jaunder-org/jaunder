@@ -1,10 +1,12 @@
 //! Shared `quick-xml` writer helpers for the `AtomPub` serializers.
 //!
-//! `write_text_element` was previously defined identically in `entry.rs` and
-//! `service.rs`, and several serializers hand-rolled their own empty-element
-//! writes. Centralizing them here removes that duplication and keeps element
-//! and escaping behavior consistent across the entry, feed, service,
-//! categories, and media-link serializers.
+//! These exist to keep element and escaping behavior consistent across the
+//! service and categories serializers, which had each hand-rolled their own
+//! element writes.
+//!
+//! They once served the Atom documents too — entry, feed, and media-link — which
+//! is why the set is wider than those two callers strictly need. Those documents
+//! are now written by `atom_syndication` and no longer pass through here.
 //!
 //! Every serializer writes into an in-memory `Writer<Vec<u8>>`, whose only
 //! failure mode is real I/O — which a `Vec<u8>` never produces. These helpers
@@ -38,9 +40,4 @@ pub(super) fn write_empty_element<V: AsRef<str>>(
         start.push_attribute((*key, value.as_ref()));
     }
     let _ = writer.write_event(Event::Empty(start));
-}
-
-/// Writes a self-closing `<link rel="..." href="..."/>` element.
-pub(super) fn write_link(writer: &mut Writer<Vec<u8>>, rel: &str, href: &str) {
-    write_empty_element(writer, "link", &[("rel", rel), ("href", href)]);
 }

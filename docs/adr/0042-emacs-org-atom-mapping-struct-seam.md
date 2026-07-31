@@ -96,5 +96,6 @@ Rejected alternatives:
 - `jaunder.el` byte-compiles clean with `byte-compile-error-on-warn` (exercising
   D2's accessor/constructor checks).
 - Serializer output verified well-formed via `libxml-parse-xml-region` and
-  structurally against the elements `common::atompub::entry_from_xml` parses; a
-  live round-trip against the server is C4's territory.
+  structurally against the elements the server accepts — since ADR-0089 that is
+  whatever `atom_syndication` parses, rather than a jaunder-side reader; a live
+  round-trip against the server is C4's territory.

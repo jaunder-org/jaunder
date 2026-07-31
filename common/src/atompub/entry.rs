@@ -1,28 +1,35 @@
-//! Standalone Atom entry (`<entry>`) read/write for `AtomPub`.
+//! Writing the Atom documents `AtomPub` exchanges: the standalone `<entry>`
+//! (POST to create, PUT to edit, GET a member), the collection `<feed>`, and the
+//! RFC 5023 §9.6 media-link entry.
 //!
-//! The data model is `atom_syndication::Entry` — a complete, public Atom entry
-//! struct. We do **not** reuse `atom_syndication`'s XML I/O, because its
-//! entry-level read/write traits are crate-private; it can only handle whole
-//! `<feed>` documents, while `AtomPub` exchanges *standalone* `<entry>` documents
-//! (POST to create, PUT to edit, GET a member). So the XML reading and writing
-//! is done here with `quick-xml`, populating and reading the canonical
-//! `atom_syndication::Entry`.
+//! The data model *and* the XML are `atom_syndication`'s — `Entry::write_to` and
+//! `Feed::write_to` do the serializing. Bare-entry I/O was crate-private until
+//! `atom_syndication` 0.12.10, which is why this module once carried its own
+//! `quick-xml` reader and writers.
 //!
-//! The one piece `atom_syndication` does not model first-class is the Atom
-//! Publishing Protocol control element `app:control/app:draft`; it is stored in
-//! the entry's extension map and accessed via [`is_draft`] / [`set_draft`].
+//! **There is no reader here.** Parsing is `Entry::from_str` at the call site;
+//! a wrapper would be a rename of `parse` and nothing else.
+//!
+//! What remains is what upstream does not model: the Atom Publishing Protocol
+//! control element `app:control/app:draft` (RFC 5023 §B) and jaunder's own
+//! `j:slug` (ADR-0023), both stored in the entry's extension map and reached
+//! through [`is_draft`] / [`set_draft`] / [`j_slug`] / [`set_j_slug`] — plus the
+//! two wire structs, [`FeedMeta`] and [`MediaLinkEntry`], describing documents
+//! assembled from more than one Atom element.
+//!
+//! Each marker helper also owns its namespace prefix in `Entry::namespaces`,
+//! because that map is what the writer turns into `xmlns:*` declarations: a
+//! prefix is declared exactly while the marker it labels is present.
 
 use std::collections::BTreeMap;
 
 use atom_syndication::extension::Extension;
-use atom_syndication::{Category, Content, Entry, Link, Text};
-use quick_xml::events::{BytesDecl, BytesEnd, BytesRef, BytesStart, BytesText, Event};
-use quick_xml::{Reader, Writer};
+use atom_syndication::{Content, Entry, Feed, Link, Text};
 
-use super::xml::{write_empty_element, write_link, write_text_element};
-use super::{AtomPubError, APP_NS, ATOM_NS, J_NS};
+use super::{AtomPubError, APP_NS, J_NS};
 use crate::absolute_url::AbsoluteUrl;
 use crate::media::{ContentType, Filename};
+use crate::time::UtcInstant;
 
 // ---------------------------------------------------------------------------
 // Draft flag (app:control/app:draft) helpers
@@ -59,6 +66,13 @@ pub fn set_draft(entry: &mut Entry, draft: bool) {
         elements.remove("control");
     }
     entry.extensions.retain(|_, elements| !elements.is_empty());
+    // The writer emits `xmlns:*` from `Entry::namespaces`, so the declaration has to
+    // track the extensions that need it. Only drop `xmlns:app` once *no* `app:`
+    // extension is left — a parsed entry may carry others besides the control we
+    // just removed, and undeclaring their prefix would emit unbound-prefix XML.
+    if !entry.extensions.contains_key("app") {
+        entry.namespaces.remove("app");
+    }
 
     if draft {
         let draft_ext = Extension {
@@ -80,6 +94,9 @@ pub fn set_draft(entry: &mut Entry, draft: bool) {
             .entry("app".to_string())
             .or_default()
             .insert("control".to_string(), vec![control]);
+        entry
+            .namespaces
+            .insert("app".to_string(), APP_NS.to_string());
     }
 }
 
@@ -119,404 +136,37 @@ pub fn set_j_slug(entry: &mut Entry, slug: &str) {
         .entry("j".to_string())
         .or_default()
         .insert("slug".to_string(), vec![ext]);
-}
-
-// ---------------------------------------------------------------------------
-// Parsing
-// ---------------------------------------------------------------------------
-
-/// Accumulator for the simple text-bearing elements of an entry.
-#[derive(Default)]
-struct Acc {
-    title: Option<String>,
-    summary: Option<String>,
-    id: Option<String>,
-    updated: Option<String>,
-    published: Option<String>,
-    content_value: Option<String>,
-    content_type: Option<String>,
-    categories: Vec<String>,
-    links: Vec<(String, String)>,
-    draft: bool,
-}
-
-/// The simple text-bearing element whose character data is currently being
-/// collected into [`Acc`].
-#[derive(Clone, Copy)]
-enum Field {
-    Title,
-    Summary,
-    Id,
-    Updated,
-    Published,
-    Content,
-    Draft,
-}
-
-/// Streaming state for [`entry_from_xml`]. Each SAX event is dispatched to a
-/// small method so the top-level read loop stays a flat match.
-#[derive(Default)]
-struct Parser {
-    acc: Acc,
-    saw_entry: bool,
-    /// The element whose text is currently being routed, if any.
-    current: Option<Field>,
-    /// True while inside an `app:control` element (scopes the `draft` child).
-    in_control: bool,
-}
-
-impl Parser {
-    /// Handles a start tag. `<content type="xhtml">` is consumed eagerly via
-    /// [`read_xhtml_content`]; every other element just arms `current`.
-    fn start(&mut self, e: &BytesStart, reader: &mut Reader<&[u8]>) -> Result<(), AtomPubError> {
-        match local_name(e).as_str() {
-            "entry" => self.saw_entry = true,
-            "title" => self.current = Some(Field::Title),
-            "summary" => self.current = Some(Field::Summary),
-            "id" => self.current = Some(Field::Id),
-            "updated" => self.current = Some(Field::Updated),
-            "published" => self.current = Some(Field::Published),
-            "content" => {
-                let ctype = attr_value(e, b"type").unwrap_or_else(|| "text".to_string());
-                if ctype == "xhtml" {
-                    self.acc.content_value = Some(read_xhtml_content(reader)?);
-                } else {
-                    self.current = Some(Field::Content);
-                }
-                self.acc.content_type = Some(ctype);
-            }
-            "link" => capture_link(e, &mut self.acc),
-            "control" => self.in_control = true,
-            "draft" if self.in_control => self.current = Some(Field::Draft),
-            _ => {}
-        }
-        Ok(())
-    }
-
-    /// Handles an empty (self-closing) tag: `<category>` and `<link>`.
-    fn empty(&mut self, e: &BytesStart) {
-        match local_name(e).as_str() {
-            "category" => {
-                if let Some(term) = attr_value(e, b"term") {
-                    self.acc.categories.push(term);
-                }
-            }
-            "link" => capture_link(e, &mut self.acc),
-            _ => {}
-        }
-    }
-
-    /// Routes a decoded text/entity piece into the element named by `current`.
-    /// Shared by the `Text` and `GeneralRef` event arms.
-    fn text(&mut self, piece: &str) {
-        match self.current {
-            Some(Field::Title) => append(&mut self.acc.title, piece),
-            Some(Field::Summary) => append(&mut self.acc.summary, piece),
-            Some(Field::Id) => append(&mut self.acc.id, piece),
-            Some(Field::Updated) => append(&mut self.acc.updated, piece),
-            Some(Field::Published) => append(&mut self.acc.published, piece),
-            Some(Field::Content) => append(&mut self.acc.content_value, piece),
-            Some(Field::Draft) => self.acc.draft = piece.trim().eq_ignore_ascii_case("yes"),
-            None => {}
-        }
-    }
-
-    /// Handles an end tag, closing the current text element and `app:control`.
-    fn end(&mut self, e: &BytesEnd) {
-        if local_name_end(e) == "control" {
-            self.in_control = false;
-        }
-        self.current = None;
-    }
-}
-
-/// Parses a standalone `AtomPub` `<entry>` document into an [`Entry`].
-///
-/// Server-owned fields a client omits (id, dates, links) are simply left at
-/// their defaults; this reader captures whatever the document provides.
-///
-/// # Errors
-///
-/// Returns [`AtomPubError::Malformed`] when the bytes are not a well-formed
-/// `<entry>` document or contain an unsupported entity reference.
-pub fn entry_from_xml(xml: &str) -> Result<Entry, AtomPubError> {
-    // Text is NOT trimmed globally — that would strip significant whitespace
-    // inside content. Inter-element indentation is harmless because text is
-    // only routed when a target element (`current`) is active.
-    let mut reader = Reader::from_str(xml);
-    let mut parser = Parser::default();
-
-    loop {
-        match reader.read_event()? {
-            Event::Eof => break,
-            Event::Start(e) => parser.start(&e, &mut reader)?,
-            Event::Empty(e) => parser.empty(&e),
-            Event::Text(e) => parser.text(&decode_text(&e)?),
-            // quick-xml 0.39 emits entity references (`&lt;`, `&#60;`) as
-            // separate events rather than inlining them into Text.
-            Event::GeneralRef(e) => parser.text(&resolve_ref(&e)?),
-            Event::End(e) => parser.end(&e),
-            _ => {}
-        }
-    }
-
-    if !parser.saw_entry {
-        return Err(AtomPubError::Malformed(
-            "document has no <entry> element".to_string(),
-        ));
-    }
-
-    Ok(build_entry(parser.acc))
-}
-
-/// Re-serializes the raw inner markup of an `<content type="xhtml">` element
-/// into a string, consuming events up to and including the matching
-/// `</content>` end tag.
-///
-/// Called after the opening `<content>` tag has been read, so `depth` tracks
-/// nesting *within* the content; the close at depth 0 terminates capture.
-fn read_xhtml_content(reader: &mut Reader<&[u8]>) -> Result<String, AtomPubError> {
-    let mut buf = Writer::new(Vec::new());
-    let mut depth = 0u32;
-    loop {
-        match reader.read_event()? {
-            Event::Start(e) => {
-                depth += 1;
-                buf.write_event(Event::Start(e.into_owned()))?;
-            }
-            Event::End(e) => {
-                if local_name_end(&e) == "content" && depth == 0 {
-                    let html = String::from_utf8(buf.into_inner())
-                        .map_err(|err| AtomPubError::Malformed(err.to_string()))?;
-                    return Ok(html.trim().to_string());
-                }
-                depth = depth.saturating_sub(1);
-                buf.write_event(Event::End(e.into_owned()))?;
-            }
-            Event::Empty(e) => buf.write_event(Event::Empty(e.into_owned()))?,
-            Event::Text(e) => buf.write_event(Event::Text(e.into_owned()))?,
-            Event::GeneralRef(e) => {
-                buf.write_event(Event::Text(BytesText::new(&resolve_ref(&e)?)))?;
-            }
-            Event::CData(e) => buf.write_event(Event::CData(e.into_owned()))?,
-            Event::Eof => {
-                return Err(AtomPubError::Malformed(
-                    "unclosed <content type=\"xhtml\"> element".to_string(),
-                ))
-            }
-            _ => {}
-        }
-    }
-}
-
-fn build_entry(acc: Acc) -> Entry {
-    let mut entry = Entry::default();
-    if let Some(title) = trimmed(acc.title) {
-        entry.title = Text::plain(title);
-    }
-    entry.summary = trimmed(acc.summary).map(Text::plain);
-    if let Some(value) = acc.content_value {
-        entry.content = Some(Content {
-            content_type: Some(acc.content_type.unwrap_or_else(|| "text".to_string())),
-            value: Some(value),
-            ..Default::default()
-        });
-    }
-    entry.categories = acc
-        .categories
-        .into_iter()
-        .map(|term| Category {
-            term,
-            ..Default::default()
-        })
-        .collect();
-    entry.links = acc
-        .links
-        .into_iter()
-        .map(|(rel, href)| Link {
-            rel,
-            href,
-            ..Default::default()
-        })
-        .collect();
-    if let Some(id) = acc.id {
-        entry.id = id;
-    }
-    if let Some(updated) = acc.updated.as_deref().and_then(parse_dt) {
-        entry.updated = updated;
-    }
-    entry.published = acc.published.as_deref().and_then(parse_dt);
-    if acc.draft {
-        set_draft(&mut entry, true);
-    }
-    entry
-}
-
-fn parse_dt(s: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
-    chrono::DateTime::parse_from_rfc3339(s.trim()).ok()
-}
-
-fn trimmed(value: Option<String>) -> Option<String> {
-    value
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-}
-
-fn capture_link(e: &BytesStart, acc: &mut Acc) {
-    if let (Some(rel), Some(href)) = (
-        attr_value(e, b"rel").or_else(|| Some("alternate".to_string())),
-        attr_value(e, b"href"),
-    ) {
-        acc.links.push((rel, href));
-    }
-}
-
-/// Resolves a general or character entity reference to its string value.
-fn resolve_ref(e: &BytesRef) -> Result<String, AtomPubError> {
-    if e.is_char_ref() {
-        return match e.resolve_char_ref()? {
-            Some(c) => Ok(c.to_string()),
-            // `resolve_char_ref` yields `Ok(None)` only for a *non*-char ref (one
-            // without a `#` prefix); the enclosing `is_char_ref()` guard excludes
-            // that here. A numeric ref resolves to `Ok(Some(_))`, or — for an
-            // out-of-range/surrogate/NUL code point — `Err` (returned via `?`).
-            None => {
-                unreachable!("resolve_char_ref returns None only for non-char refs, excluded by is_char_ref()")
-            }
-        };
-    }
-    let name =
-        std::str::from_utf8(e.as_ref()).map_err(|err| AtomPubError::Malformed(err.to_string()))?;
-    let resolved = match name {
-        "lt" => "<",
-        "gt" => ">",
-        "amp" => "&",
-        "quot" => "\"",
-        "apos" => "'",
-        other => {
-            return Err(AtomPubError::Malformed(format!(
-                "unsupported entity reference &{other};"
-            )))
-        }
-    };
-    Ok(resolved.to_string())
-}
-
-fn append(target: &mut Option<String>, text: &str) {
-    match target {
-        Some(existing) => existing.push_str(text),
-        None => *target = Some(text.to_string()),
-    }
-}
-
-fn local_name(e: &BytesStart) -> String {
-    String::from_utf8_lossy(e.local_name().as_ref()).into_owned()
-}
-
-fn local_name_end(e: &BytesEnd) -> String {
-    String::from_utf8_lossy(e.local_name().as_ref()).into_owned()
-}
-
-fn attr_value(e: &BytesStart, key: &[u8]) -> Option<String> {
-    e.attributes().flatten().find_map(|a| {
-        if a.key.local_name().as_ref() == key {
-            let raw = std::str::from_utf8(a.value.as_ref()).ok()?;
-            quick_xml::escape::unescape(raw)
-                .ok()
-                .map(std::borrow::Cow::into_owned)
-        } else {
-            None
-        }
-    })
-}
-
-/// Decodes a text event's bytes (UTF-8) and resolves XML entities.
-fn decode_text(e: &BytesText) -> Result<String, AtomPubError> {
-    let decoded = e
-        .decode()
-        .map_err(|err| AtomPubError::Malformed(err.to_string()))?;
-    Ok(quick_xml::escape::unescape(&decoded)
-        .map_err(|err| AtomPubError::Malformed(err.to_string()))?
-        .into_owned())
+    // As with `set_draft`, this helper owns its prefix's `xmlns:j` declaration.
+    // There is no clearing counterpart: a slug is set on every outgoing entry.
+    entry.namespaces.insert("j".to_string(), J_NS.to_string());
 }
 
 // ---------------------------------------------------------------------------
 // Serialization
 // ---------------------------------------------------------------------------
 
+/// Decodes what an `atom_syndication` writer produced into a `String`.
+///
+/// Both failure modes are unreachable in practice — a `Vec<u8>` has no I/O to
+/// fail, and upstream emits UTF-8 — but neither is expressible as infallible.
+fn to_xml_string(
+    written: Result<Vec<u8>, atom_syndication::Error>,
+) -> Result<String, AtomPubError> {
+    let bytes = written.map_err(|e| AtomPubError::new(e.to_string()))?;
+    String::from_utf8(bytes).map_err(|e| AtomPubError::new(e.to_string()))
+}
+
 /// Serializes an [`Entry`] to a standalone `AtomPub` `<entry>` document.
 ///
 /// Emits whatever the entry carries: id, title, dates, summary, content (with
-/// its `type`), all links, all categories, and the draft marker when set.
+/// its `type`), all links, all categories, and any extension markers — the
+/// draft flag and `j:slug` among them.
 ///
-/// Serialization writes into an in-memory buffer, which cannot fail, so this is
-/// infallible and returns a `String` directly.
-#[must_use]
-pub fn entry_to_xml(entry: &Entry) -> String {
-    let mut writer = Writer::new(Vec::new());
-    let _ = writer.write_event(Event::Decl(BytesDecl::new("1.0", Some("utf-8"), None)));
-    write_entry(&mut writer, entry, true);
-    String::from_utf8_lossy(&writer.into_inner()).into_owned()
-}
-
-/// Writes an `<entry>…</entry>` element to the provided writer.
+/// # Errors
 ///
-/// # Parameters
-///
-/// - `writer`: The XML writer to emit events to.
-/// - `entry`: The entry to serialize.
-/// - `declare_namespaces`: If `true`, emits `xmlns` and `xmlns:app` attributes on
-///   the entry element. If `false`, assumes the namespaces are already declared
-///   by an enclosing element (e.g., a `<feed>`).
-///
-/// Writes into an in-memory buffer, so it is infallible.
-fn write_entry(writer: &mut Writer<Vec<u8>>, entry: &Entry, declare_namespaces: bool) {
-    let draft = is_draft(entry);
-    let mut root = BytesStart::new("entry");
-    if declare_namespaces {
-        root.push_attribute(("xmlns", ATOM_NS));
-        if draft {
-            root.push_attribute(("xmlns:app", APP_NS));
-        }
-        if j_slug(entry).is_some() {
-            root.push_attribute(("xmlns:j", J_NS));
-        }
-    }
-    let _ = writer.write_event(Event::Start(root));
-
-    write_text_element(writer, "id", entry.id());
-    write_text_element(writer, "title", entry.title().as_str());
-    write_text_element(writer, "updated", &entry.updated().to_rfc3339());
-    if let Some(published) = entry.published() {
-        write_text_element(writer, "published", &published.to_rfc3339());
-    }
-    if let Some(summary) = entry.summary() {
-        write_text_element(writer, "summary", summary.as_str());
-    }
-    if let Some(content) = entry.content() {
-        let mut start = BytesStart::new("content");
-        start.push_attribute(("type", content.content_type().unwrap_or("text")));
-        let _ = writer.write_event(Event::Start(start));
-        let _ = writer.write_event(Event::Text(BytesText::new(content.value().unwrap_or(""))));
-        let _ = writer.write_event(Event::End(BytesEnd::new("content")));
-    }
-    for link in entry.links() {
-        write_link(writer, link.rel(), link.href());
-    }
-    for category in entry.categories() {
-        write_empty_element(writer, "category", &[("term", category.term())]);
-    }
-    if draft {
-        let _ = writer.write_event(Event::Start(BytesStart::new("app:control")));
-        write_text_element(writer, "app:draft", "yes");
-        let _ = writer.write_event(Event::End(BytesEnd::new("app:control")));
-    }
-    // Read-only server slug (ADR-0023): emitted on every outgoing entry.
-    if let Some(slug) = j_slug(entry) {
-        write_text_element(writer, "j:slug", &slug);
-    }
-
-    let _ = writer.write_event(Event::End(BytesEnd::new("entry")));
+/// Returns [`AtomPubError`] if the document cannot be written.
+pub fn entry_to_xml(entry: &Entry) -> Result<String, AtomPubError> {
+    to_xml_string(entry.write_to(Vec::new()))
 }
 
 /// Feed-level metadata for an `AtomPub` collection document.
@@ -528,8 +178,8 @@ pub struct FeedMeta {
     pub id: AbsoluteUrl,
     /// Human-readable collection title.
     pub title: String,
-    /// Feed `updated` timestamp, RFC 3339.
-    pub updated_rfc3339: String,
+    /// Feed `updated` timestamp.
+    pub updated: UtcInstant,
     /// `rel="self"` href (the absolute collection URL for this page).
     pub self_url: AbsoluteUrl,
     /// `rel="first"` href, when paging.
@@ -540,46 +190,52 @@ pub struct FeedMeta {
     pub previous: Option<AbsoluteUrl>,
 }
 
+/// Builds a `rel`-labelled [`Link`] — feed paging links and entry `edit` links alike.
+fn rel_link(rel: &str, href: &AbsoluteUrl) -> Link {
+    Link {
+        rel: rel.to_string(),
+        href: href.to_string(),
+        ..Default::default()
+    }
+}
+
 /// Serializes a collection `<feed>` wrapping the given entries, with RFC 5005
 /// paging links.
 ///
-/// The entries are embedded without redeclaring the Atom namespace; the `<feed>`
-/// root declares both `xmlns` and `xmlns:app`.
+/// The `<feed>` root declares `xmlns` plus the `app` and `j` prefixes; the
+/// embedded entries inherit the default namespace from it rather than
+/// redeclaring it.
 ///
-/// Writes into an in-memory buffer, so it is infallible.
-#[must_use]
-pub fn render_feed(meta: &FeedMeta, entries: &[Entry]) -> String {
-    let mut writer = Writer::new(Vec::new());
-    let _ = writer.write_event(Event::Decl(BytesDecl::new("1.0", Some("utf-8"), None)));
-
-    let mut root = BytesStart::new("feed");
-    root.push_attribute(("xmlns", ATOM_NS));
-    root.push_attribute(("xmlns:app", APP_NS));
-    // Every embedded entry carries a read-only j:slug (ADR-0023) and is written
-    // with declare_namespaces=false, so the feed root declares xmlns:j for them.
-    root.push_attribute(("xmlns:j", J_NS));
-    let _ = writer.write_event(Event::Start(root));
-
-    write_text_element(&mut writer, "id", &meta.id);
-    write_text_element(&mut writer, "title", &meta.title);
-    write_text_element(&mut writer, "updated", &meta.updated_rfc3339);
-    write_link(&mut writer, "self", &meta.self_url);
-    if let Some(href) = &meta.first {
-        write_link(&mut writer, "first", href);
-    }
-    if let Some(href) = &meta.previous {
-        write_link(&mut writer, "previous", href);
-    }
-    if let Some(href) = &meta.next {
-        write_link(&mut writer, "next", href);
+/// # Errors
+///
+/// Returns [`AtomPubError`] if the document cannot be written.
+pub fn render_feed(meta: &FeedMeta, entries: &[Entry]) -> Result<String, AtomPubError> {
+    let mut links = vec![rel_link("self", &meta.self_url)];
+    // Order matches the previous hand-rolled writer: first, previous, next.
+    for (rel, href) in [
+        ("first", &meta.first),
+        ("previous", &meta.previous),
+        ("next", &meta.next),
+    ] {
+        if let Some(href) = href.as_ref() {
+            links.push(rel_link(rel, href));
+        }
     }
 
-    for entry in entries {
-        write_entry(&mut writer, entry, false);
-    }
+    let feed = Feed {
+        id: meta.id.to_string(),
+        title: Text::plain(meta.title.clone()),
+        updated: meta.updated.value().fixed_offset(),
+        links,
+        entries: entries.to_vec(),
+        namespaces: BTreeMap::from([
+            ("app".to_string(), APP_NS.to_string()),
+            ("j".to_string(), J_NS.to_string()),
+        ]),
+        ..Default::default()
+    };
 
-    let _ = writer.write_event(Event::End(BytesEnd::new("feed")));
-    String::from_utf8_lossy(&writer.into_inner()).into_owned()
+    to_xml_string(feed.write_to(Vec::new()))
 }
 
 /// A media-link entry (RFC 5023 §9.6): the Atom `<entry>` a server returns for
@@ -602,54 +258,69 @@ pub struct MediaLinkEntry {
     pub content_src: AbsoluteUrl,
     /// MIME type of the binary.
     pub content_type: ContentType,
-    /// Publication timestamp, RFC 3339.
-    pub published_rfc3339: String,
-    /// Last-update timestamp, RFC 3339.
-    pub updated_rfc3339: String,
+    /// Publication timestamp.
+    pub published: UtcInstant,
+    /// Last-update timestamp.
+    pub updated: UtcInstant,
 }
 
 /// Serializes a [`MediaLinkEntry`] to a standalone `<entry>` document.
 ///
-/// Writes into an in-memory buffer, so it is infallible.
-#[must_use]
-pub fn render_media_link_entry(entry: &MediaLinkEntry) -> String {
-    let mut writer = Writer::new(Vec::new());
-    let _ = writer.write_event(Event::Decl(BytesDecl::new("1.0", Some("utf-8"), None)));
+/// # Errors
+///
+/// Returns [`AtomPubError`] if the document cannot be written.
+pub fn render_media_link_entry(entry: &MediaLinkEntry) -> Result<String, AtomPubError> {
+    let atom_entry = Entry {
+        id: entry.id.to_string(),
+        // The one display surface in this document: the title shows the name the user
+        // typed, while every URL below keeps the canonical stored spelling (#720).
+        title: Text::plain(entry.title.decoded()),
+        updated: entry.updated.value().fixed_offset(),
+        published: Some(entry.published.value().fixed_offset()),
+        // A media-link entry references the binary rather than embedding it, so the
+        // content carries `src` and no value (RFC 5023 §9.6).
+        content: Some(Content {
+            content_type: Some(entry.content_type.to_string()),
+            src: Some(entry.content_src.to_string()),
+            ..Default::default()
+        }),
+        links: vec![
+            rel_link("edit", &entry.edit_uri),
+            rel_link("edit-media", &entry.edit_media_uri),
+        ],
+        ..Default::default()
+    };
 
-    let mut root = BytesStart::new("entry");
-    root.push_attribute(("xmlns", ATOM_NS));
-    let _ = writer.write_event(Event::Start(root));
-
-    write_text_element(&mut writer, "id", &entry.id);
-    // The one display surface in this document: the title shows the name the user typed,
-    // while every URL below keeps the canonical stored spelling (#720).
-    write_text_element(&mut writer, "title", &entry.title.decoded());
-    write_text_element(&mut writer, "updated", &entry.updated_rfc3339);
-    write_text_element(&mut writer, "published", &entry.published_rfc3339);
-
-    let content_attrs = [
-        ("type", entry.content_type.as_ref()),
-        ("src", entry.content_src.as_ref()),
-    ];
-    write_empty_element(&mut writer, "content", &content_attrs);
-
-    write_link(&mut writer, "edit", &entry.edit_uri);
-    write_link(&mut writer, "edit-media", &entry.edit_media_uri);
-
-    let _ = writer.write_event(Event::End(BytesEnd::new("entry")));
-    String::from_utf8_lossy(&writer.into_inner()).into_owned()
+    to_xml_string(atom_entry.write_to(Vec::new()))
 }
 
+/// What these tests are for, now that `atom_syndication` owns the XML.
+///
+/// They do **not** re-verify upstream's parser or writer — that is upstream's
+/// job, and duplicating it here would just pin someone else's implementation.
+/// What they cover is our side of the boundary:
+///
+/// - the `app:control/app:draft` and `j:slug` markers, and the `xmlns:*`
+///   bookkeeping that goes with them;
+/// - the documents assembled from *our* wire structs (`FeedMeta`,
+///   `MediaLinkEntry`);
+/// - each behaviour delta the migration deliberately accepted, so a future
+///   upstream bump that changes one fails here instead of on a client;
+/// - the error class a malformed document maps to.
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{parse_absolute_url, parse_content_type, parse_filename};
+    use atom_syndication::Category;
 
+    use crate::test_support::{
+        parse_absolute_url, parse_content_type, parse_filename, parse_utc_instant,
+    };
+
+    /// The `(type, value)` of an entry's `<content>`. Every caller supplies one, so
+    /// an absent element is a broken test rather than a case to report.
     fn content_parts(entry: &Entry) -> (Option<&str>, Option<&str>) {
-        match entry.content() {
-            Some(c) => (c.content_type(), c.value()),
-            None => (None, None),
-        }
+        let content = entry.content().expect("entry carries <content>");
+        (content.content_type(), content.value())
     }
 
     #[test]
@@ -662,7 +333,7 @@ mod tests {
   <category term="rust"/>
   <app:control><app:draft>yes</app:draft></app:control>
 </entry>"#;
-        let entry = entry_from_xml(xml).expect("parse");
+        let entry = xml.parse::<Entry>().expect("parse");
         assert_eq!(entry.title().as_str(), "Hello");
         assert_eq!(entry.summary().map(Text::as_str), Some("sum"));
         assert_eq!(content_parts(&entry), (Some("html"), Some("<p>hi</p>")));
@@ -672,131 +343,97 @@ mod tests {
     }
 
     #[test]
-    fn parses_text_entry_not_draft() {
-        let xml = r#"<?xml version="1.0"?>
-<entry xmlns="http://www.w3.org/2005/Atom">
-  <title>Note</title>
-  <content type="text"># markdown</content>
-</entry>"#;
-        let entry = entry_from_xml(xml).expect("parse");
-        assert_eq!(entry.title().as_str(), "Note");
-        assert_eq!(content_parts(&entry), (Some("text"), Some("# markdown")));
-        assert!(entry.summary().is_none());
-        assert!(!is_draft(&entry));
-        assert!(entry.categories().is_empty());
-    }
-
-    #[test]
-    fn parses_id_and_timestamps() {
-        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
-  <title>T</title>
-  <id>tag:example.com,2026:post/7</id>
-  <published>2026-01-01T00:00:00Z</published>
-  <updated>2026-01-02T03:04:05Z</updated>
-</entry>"#;
-        let entry = entry_from_xml(xml).expect("parse");
-        assert_eq!(entry.id(), "tag:example.com,2026:post/7");
-        assert_eq!(
-            entry.published().map(chrono::DateTime::to_rfc3339),
-            Some("2026-01-01T00:00:00+00:00".to_string())
-        );
-        assert_eq!(entry.updated().to_rfc3339(), "2026-01-02T03:04:05+00:00");
-    }
-
-    #[test]
-    fn parses_numeric_and_named_char_refs_across_pieces() {
-        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
-  <title>A&#66;C &quot;q&quot; &apos;a&apos;</title>
-  <content type="text">x</content>
-</entry>"#;
-        let entry = entry_from_xml(xml).expect("parse");
-        assert_eq!(entry.title().as_str(), "ABC \"q\" 'a'");
-    }
-
-    #[test]
-    fn non_scalar_char_ref_is_an_error() {
-        // `&#xD800;` is a syntactically valid numeric char-ref, but U+D800 is a
-        // UTF-16 surrogate — not a Unicode scalar value — so quick-xml's
-        // `resolve_char_ref` returns `Err` (surfaced through `?` as Malformed),
-        // never `Ok(None)`. This documents why `resolve_ref`'s `None` arm is
-        // unreachable: guarded by `is_char_ref()`, resolution yields only
-        // `Some(_)` or `Err`.
-        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
-  <title>a&#xD800;b</title>
-</entry>"#;
-        assert!(entry_from_xml(xml).is_err());
-    }
-
-    #[test]
-    fn unsupported_entity_is_an_error() {
+    fn an_unsupported_entity_is_passed_through_literally() {
+        // The one *loosening* delta of the atom_syndication migration: upstream
+        // resolves predefined entities, then char refs, then re-emits anything it
+        // cannot resolve verbatim — where the previous hand-rolled reader rejected
+        // the document. Lenient ingest, consistent with how `mapping.rs` drops a
+        // single bad category term rather than failing the entry (R5).
         let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
   <title>x&bogus;y</title>
 </entry>"#;
-        assert!(entry_from_xml(xml).is_err());
+        let entry = xml.parse::<Entry>().expect("parse");
+        assert_eq!(entry.title().as_str(), "x&bogus;y");
     }
 
     #[test]
-    fn parses_xhtml_with_empty_element_entity_and_cdata() {
+    fn rejects_an_unparseable_updated() {
+        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>T</title>
+  <updated>not-a-date</updated>
+</entry>"#;
+        assert!(xml.parse::<Entry>().is_err());
+    }
+
+    #[test]
+    fn rejects_a_title_type_outside_the_text_constructs() {
+        // RFC 4287 restricts an atomTextConstruct's `type` to text|html|xhtml.
+        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
+  <title type="text/markdown">T</title>
+</entry>"#;
+        assert!(xml.parse::<Entry>().is_err());
+    }
+
+    #[test]
+    fn a_media_type_on_content_is_still_accepted() {
+        // The ADR-0023 format carrier. `atomContent` — unlike an atomTextConstruct —
+        // explicitly permits a media type, so the stricter parsing above must not
+        // reach it. This is the test that would catch org/markdown support breaking.
+        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>T</title>
+  <content type="text/org">* heading</content>
+</entry>"#;
+        let entry = xml.parse::<Entry>().expect("parse");
+        assert_eq!(content_parts(&entry), (Some("text/org"), Some("* heading")));
+    }
+
+    #[test]
+    fn a_prefixed_atom_title_does_not_populate_the_title() {
+        // Accepted narrowing: upstream matches qualified names, so a prefixed child
+        // lands in the extension map instead of the title. Documented in the ADR as
+        // an interop cost of deleting the bespoke local-name-matching reader.
+        let xml = r#"<entry xmlns:atom="http://www.w3.org/2005/Atom">
+  <atom:title>T</atom:title>
+</entry>"#;
+        let entry = xml.parse::<Entry>().expect("parse");
+        assert_ne!(entry.title().as_str(), "T");
+    }
+
+    #[test]
+    fn xhtml_content_escapes_literal_apostrophes() {
+        // Accepted delta: upstream escapes text events inside xhtml content, so a
+        // bare `'` becomes `&apos;`. Semantically identical once parsed.
         let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
   <title>X</title>
-  <content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">a<br/>b &amp; c<![CDATA[ d ]]></div></content>
+  <content type="xhtml"><div>it's</div></content>
 </entry>"#;
-        let entry = entry_from_xml(xml).expect("parse");
-        let (ctype, value) = content_parts(&entry);
-        assert_eq!(ctype, Some("xhtml"));
+        let entry = xml.parse::<Entry>().expect("parse");
+        let (_, value) = content_parts(&entry);
         let value = value.expect("xhtml value");
-        assert!(value.contains("<br"), "value: {value}");
-        assert!(value.contains('b'), "value: {value}");
+        assert!(value.contains("&apos;"), "value: {value}");
+
+        // …and survives the serialize leg, so the escaped form is what a client
+        // actually receives — not just what we happen to hold in memory.
+        let out = entry_to_xml(&entry).expect("serialize");
+        assert!(out.contains("&apos;"), "out: {out}");
     }
 
     #[test]
-    fn parses_nested_xhtml_preserving_inner_markup() {
+    fn xhtml_entity_references_survive_the_round_trip() {
+        // NOT a delta: the previous reader resolved `&amp;` to `&` and then re-escaped
+        // it on the way into the stored string, so both readers store `&amp;`.
         let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
   <title>X</title>
-  <content type="xhtml"><div><p>one</p><!-- note --><ul><li>two</li></ul></div></content>
+  <content type="xhtml"><div>b &amp; c</div></content>
 </entry>"#;
-        let entry = entry_from_xml(xml).expect("parse");
-        let (ctype, value) = content_parts(&entry);
-        assert_eq!(ctype, Some("xhtml"));
-        let value = value.expect("xhtml value");
-        assert!(value.contains("<ul>"), "value: {value}");
-        assert!(value.contains("<li>two</li>"), "value: {value}");
-        assert!(value.contains("</div>"), "value: {value}");
-    }
-
-    #[test]
-    fn unclosed_xhtml_content_is_an_error() {
-        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
-  <title>X</title>
-  <content type="xhtml"><div>oops"#;
-        assert!(entry_from_xml(xml).is_err());
-    }
-
-    #[test]
-    fn parses_links_with_rel_and_href() {
-        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
-  <title>L</title>
-  <link rel="edit" href="https://h/atompub/alice/posts/1"/>
-  <link href="https://h/~alice/p"/>
-</entry>"#;
-        let entry = entry_from_xml(xml).expect("parse");
-        assert_eq!(entry.links().len(), 2);
-        assert_eq!(entry.links()[0].rel(), "edit");
-        assert_eq!(entry.links()[0].href(), "https://h/atompub/alice/posts/1");
-        // A link without rel defaults to "alternate".
-        assert_eq!(entry.links()[1].rel(), "alternate");
-        // The entry has no <content>, so content_parts yields the empty pair.
-        assert_eq!(content_parts(&entry), (None, None));
-    }
-
-    #[test]
-    fn malformed_xml_is_an_error() {
-        assert!(entry_from_xml("<entry><unclosed></entry>").is_err());
+        let entry = xml.parse::<Entry>().expect("parse");
+        let (_, value) = content_parts(&entry);
+        assert!(value.expect("xhtml value").contains("&amp;"));
     }
 
     #[test]
     fn document_without_entry_is_an_error() {
-        assert!(entry_from_xml("<?xml version=\"1.0\"?><other/>").is_err());
+        assert!("<?xml version=\"1.0\"?><other/>".parse::<Entry>().is_err());
     }
 
     fn sample_entry() -> Entry {
@@ -816,10 +453,29 @@ mod tests {
     }
 
     #[test]
+    fn re_setting_a_marker_replaces_rather_than_accumulates() {
+        // Both the extension map and `namespaces` are keyed maps, so a repeated set
+        // overwrites its key rather than appending a second marker or a duplicate
+        // xmlns declaration.
+        let mut entry = sample_entry();
+        set_j_slug(&mut entry, "first");
+        set_j_slug(&mut entry, "second");
+        set_draft(&mut entry, true);
+        set_draft(&mut entry, true);
+
+        assert_eq!(j_slug(&entry), Some("second".to_string()));
+        let out = entry_to_xml(&entry).expect("serialize");
+        assert_eq!(out.matches("<j:slug>").count(), 1, "out: {out}");
+        assert_eq!(out.matches("app:control").count(), 2, "out: {out}"); // open + close
+        assert_eq!(out.matches("xmlns:j=").count(), 1, "out: {out}");
+        assert_eq!(out.matches("xmlns:app=").count(), 1, "out: {out}");
+    }
+
+    #[test]
     fn j_slug_is_serialized_with_namespace() {
         let mut entry = sample_entry();
         set_j_slug(&mut entry, "my-post");
-        let out = entry_to_xml(&entry);
+        let out = entry_to_xml(&entry).expect("serialize");
         assert!(
             out.contains(r#"xmlns:j="https://jaunder.org/ns/atompub""#),
             "out: {out}"
@@ -828,10 +484,13 @@ mod tests {
     }
 
     #[test]
-    fn no_j_slug_means_no_namespace_declared() {
+    fn an_entry_with_no_markers_declares_neither_prefix() {
+        // A prefix is declared exactly while the marker it labels is present, so a
+        // plain entry carries neither declaration.
         let entry = sample_entry();
-        let out = entry_to_xml(&entry);
+        let out = entry_to_xml(&entry).expect("serialize");
         assert!(!out.contains("xmlns:j"), "out: {out}");
+        assert!(!out.contains("xmlns:app"), "out: {out}");
     }
 
     #[test]
@@ -862,7 +521,7 @@ mod tests {
         entry.published =
             Some(chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z").unwrap());
 
-        let out = entry_to_xml(&entry);
+        let out = entry_to_xml(&entry).expect("serialize");
         assert!(out.contains("type=\"text\""), "out: {out}");
         assert!(out.contains("rel=\"edit\""), "out: {out}");
         assert!(out.contains("rel=\"alternate\""), "out: {out}");
@@ -881,23 +540,11 @@ mod tests {
             value: Some("<p>x</p>".to_string()),
             ..Default::default()
         });
-        let out = entry_to_xml(&entry);
+        let out = entry_to_xml(&entry).expect("serialize");
         assert!(out.contains("app:draft"), "out: {out}");
         assert!(out.contains("yes"), "out: {out}");
         assert!(out.contains("type=\"html\""), "out: {out}");
         assert!(out.contains("&lt;p&gt;x&lt;/p&gt;"), "out: {out}");
-    }
-
-    #[test]
-    fn serializes_xhtml_content_type() {
-        let mut entry = sample_entry();
-        entry.content = Some(Content {
-            content_type: Some("xhtml".to_string()),
-            value: Some("<div><p>hi</p></div>".to_string()),
-            ..Default::default()
-        });
-        let out = entry_to_xml(&entry);
-        assert!(out.contains("type=\"xhtml\""), "out: {out}");
     }
 
     #[test]
@@ -920,13 +567,39 @@ mod tests {
                 ..Default::default()
             },
         ];
+        entry.links = vec![Link {
+            rel: "edit".to_string(),
+            href: "https://h/atompub/alice/posts/1".to_string(),
+            ..Default::default()
+        }];
+        entry.published =
+            Some(chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z").unwrap());
         set_draft(&mut entry, true);
+        set_j_slug(&mut entry, "my-post");
 
-        let out = entry_to_xml(&entry);
-        let parsed = entry_from_xml(&out).expect("re-parse");
+        let out = entry_to_xml(&entry).expect("serialize");
+        let parsed = out.parse::<Entry>().expect("re-parse");
         assert!(is_draft(&parsed), "draft flag lost; xml: {out}");
         assert_eq!(parsed.title().as_str(), "RT");
         assert_eq!(parsed.summary().map(Text::as_str), Some("s"));
+        assert_eq!(parsed.links().len(), 1);
+        assert_eq!(parsed.links()[0].rel(), "edit");
+        assert_eq!(parsed.links()[0].href(), "https://h/atompub/alice/posts/1");
+        assert_eq!(
+            parsed
+                .published()
+                .map(chrono::DateTime::to_rfc3339)
+                .as_deref(),
+            Some("2026-01-01T00:00:00+00:00")
+        );
+        assert_eq!(
+            parsed.updated().to_rfc3339(),
+            entry.updated().to_rfc3339(),
+            "updated lost; xml: {out}"
+        );
+        // The slug had no reader arm at all before this migration, so nothing
+        // pinned it round-tripping.
+        assert_eq!(j_slug(&parsed), Some("my-post".to_string()));
         assert_eq!(
             content_parts(&parsed),
             (Some("html"), Some("<p>body & more</p>"))
@@ -942,7 +615,9 @@ mod tests {
         assert!(is_draft(&entry));
         set_draft(&mut entry, false);
         assert!(!is_draft(&entry));
-        assert!(!entry_to_xml(&entry).contains("app:draft"));
+        assert!(!entry_to_xml(&entry)
+            .expect("serialize")
+            .contains("app:draft"));
     }
 
     #[test]
@@ -958,7 +633,7 @@ mod tests {
         let meta = FeedMeta {
             id: parse_absolute_url("https://example.com/atompub/alice/posts"),
             title: "Alice's Posts".to_string(),
-            updated_rfc3339: "2026-05-31T12:00:00Z".to_string(),
+            updated: parse_utc_instant("2026-05-31T12:00:00Z"),
             self_url: parse_absolute_url("https://example.com/atompub/alice/posts"),
             first: Some(parse_absolute_url(
                 "https://example.com/atompub/alice/posts?page=1",
@@ -971,7 +646,7 @@ mod tests {
             )),
         };
 
-        let out = render_feed(&meta, &[entry1, entry2]);
+        let out = render_feed(&meta, &[entry1, entry2]).expect("serialize");
 
         // Feed structure and metadata
         assert!(out.contains("<feed"), "out: {out}");
@@ -990,9 +665,11 @@ mod tests {
         assert!(out.contains("page=2"), "out: {out}");
         assert!(out.contains("page=0"), "out: {out}");
 
-        // Entry titles present
+        // Entry titles present — and exactly one <entry> per input, since the titles
+        // alone would still pass if an entry were dropped or duplicated.
         assert!(out.contains(">First<"), "out: {out}");
         assert!(out.contains(">Second<"), "out: {out}");
+        assert_eq!(out.matches("<entry").count(), 2, "out: {out}");
 
         // Embedded entries should NOT redeclare the Atom namespace on their own
         // They should not have xmlns="..." as an attribute on the entry element
@@ -1001,6 +678,14 @@ mod tests {
             !entry_with_xmlns,
             "Entries should not redeclare xmlns; out: {out}"
         );
+
+        // A marker-bearing entry *does* carry its own prefix declaration, because the
+        // writer emits `Entry::namespaces` whether or not the entry is embedded. The
+        // redundancy with the feed root is valid XML and is the accepted delta.
+        let mut marked = sample_entry();
+        set_j_slug(&mut marked, "my-post");
+        let out = render_feed(&meta, &[marked]).expect("serialize");
+        assert!(out.contains("<entry xmlns:j="), "out: {out}");
 
         // Feed closing tag present
         assert!(out.contains("</feed>"), "out: {out}");
@@ -1014,14 +699,14 @@ mod tests {
         let meta = FeedMeta {
             id: parse_absolute_url("https://example.com/atompub/bob/posts"),
             title: "Bob's Posts".to_string(),
-            updated_rfc3339: "2026-05-31T13:00:00Z".to_string(),
+            updated: parse_utc_instant("2026-05-31T13:00:00Z"),
             self_url: parse_absolute_url("https://example.com/atompub/bob/posts"),
             first: None,
             next: None,
             previous: None,
         };
 
-        let out = render_feed(&meta, &[entry]);
+        let out = render_feed(&meta, &[entry]).expect("serialize");
 
         // Required elements present
         assert!(out.contains("<feed"), "out: {out}");
@@ -1038,24 +723,59 @@ mod tests {
     }
 
     #[test]
-    fn render_media_link_entry_references_binary_by_src() {
-        let out = render_media_link_entry(&MediaLinkEntry {
+    fn feed_meta_updated_is_serialized_as_rfc3339_utc() {
+        let meta = FeedMeta {
+            id: parse_absolute_url("https://example.com/atompub/alice/posts"),
+            title: "Alice's Posts".to_string(),
+            updated: parse_utc_instant("2026-05-31T12:00:00Z"),
+            self_url: parse_absolute_url("https://example.com/atompub/alice/posts"),
+            first: None,
+            next: None,
+            previous: None,
+        };
+        let out = render_feed(&meta, &[]).expect("serialize");
+        assert!(out.contains("2026-05-31T12:00:00"), "out: {out}");
+    }
+
+    /// The media-link sibling of [`sample_entry`]: a PNG member, whose fields the
+    /// individual tests override where the case calls for it.
+    fn sample_media_link_entry() -> MediaLinkEntry {
+        MediaLinkEntry {
             id: parse_absolute_url("https://h/atompub/alice/media/abc/pic.png"),
             title: parse_filename("pic.png"),
             edit_uri: parse_absolute_url("https://h/atompub/alice/media/abc/pic.png"),
             edit_media_uri: parse_absolute_url("https://h/media/upload/ab/c0/abc/pic.png"),
             content_src: parse_absolute_url("https://h/media/upload/ab/c0/abc/pic.png"),
             content_type: parse_content_type("image/png"),
-            published_rfc3339: "2026-06-01T00:00:00Z".to_string(),
-            updated_rfc3339: "2026-06-01T00:00:00Z".to_string(),
-        });
+            published: parse_utc_instant("2026-06-01T00:00:00Z"),
+            updated: parse_utc_instant("2026-06-01T00:00:00Z"),
+        }
+    }
+
+    #[test]
+    fn media_link_entry_timestamps_are_serialized_as_rfc3339_utc() {
+        let out = render_media_link_entry(&MediaLinkEntry {
+            updated: parse_utc_instant("2026-06-02T00:00:00Z"),
+            ..sample_media_link_entry()
+        })
+        .expect("serialize");
+        assert!(out.contains("<published>2026-06-01T00:00:00"), "out: {out}");
+        assert!(out.contains("<updated>2026-06-02T00:00:00"), "out: {out}");
+    }
+
+    #[test]
+    fn render_media_link_entry_references_binary_by_src() {
+        let out = render_media_link_entry(&sample_media_link_entry()).expect("serialize");
 
         assert!(out.contains("<entry"), "out: {out}");
-        assert!(out.contains("type=\"image/png\""), "out: {out}");
+        // Upstream writes a paired `<content>`, not the self-closing form the previous
+        // hand-rolled writer emitted — a deliberate, consumer-checked delta.
+        assert!(out.contains(r#"<content type="image/png""#), "out: {out}");
         assert!(
             out.contains("src=\"https://h/media/upload/ab/c0/abc/pic.png\""),
             "out: {out}"
         );
+        assert!(out.contains("</content>"), "out: {out}");
         assert!(out.contains("rel=\"edit-media\""), "out: {out}");
         assert!(out.contains("rel=\"edit\""), "out: {out}");
         assert!(out.contains(">pic.png<"), "out: {out}");
@@ -1073,12 +793,28 @@ mod tests {
             edit_media_uri: parse_absolute_url("https://h/media/upload/ab/c0/abc/my%20photo.jpg"),
             content_src: parse_absolute_url("https://h/media/upload/ab/c0/abc/my%20photo.jpg"),
             content_type: parse_content_type("image/jpeg"),
-            published_rfc3339: "2026-06-01T00:00:00Z".to_string(),
-            updated_rfc3339: "2026-06-01T00:00:00Z".to_string(),
-        });
+            ..sample_media_link_entry()
+        })
+        .expect("serialize");
 
         assert!(out.contains("<title>my photo.jpg</title>"), "out: {out}");
         // The URLs keep the canonical spelling — one value, two views.
         assert!(out.contains("/my%20photo.jpg\""), "out: {out}");
+    }
+
+    #[test]
+    fn draft_entry_declares_the_app_namespace_and_clearing_removes_it() {
+        let mut entry = sample_entry();
+        set_draft(&mut entry, true);
+        let out = entry_to_xml(&entry).expect("serialize");
+        assert!(
+            out.contains(r#"xmlns:app="http://www.w3.org/2007/app""#),
+            "out: {out}"
+        );
+
+        set_draft(&mut entry, false);
+        let out = entry_to_xml(&entry).expect("serialize");
+        assert!(!out.contains("xmlns:app"), "out: {out}");
+        assert!(!out.contains("app:draft"), "out: {out}");
     }
 }

@@ -11,11 +11,12 @@ use axum::Extension;
 use serde::{Deserialize, Serialize};
 
 use common::absolute_url::{compose, AbsoluteUrl};
-use common::atompub::{entry_from_xml, entry_to_xml, render_feed, FeedMeta};
+use common::atompub::{entry_to_xml, render_feed, Entry, FeedMeta};
 use common::etag::ETag;
 use common::ids::PostId;
 use common::pagination::PageSize;
 use common::tag::TagLabel;
+use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::ViewerIdentity;
 use storage::{
@@ -186,22 +187,22 @@ pub async fn collection_get(
 
     let entries: Vec<_> = records.iter().map(|p| post_to_entry(p, &base)).collect();
 
-    let updated_rfc3339 = records.first().map_or_else(
-        || chrono::Utc::now().to_rfc3339(),
-        |p| p.updated_at.to_rfc3339(),
+    let updated = records.first().map_or_else(
+        || UtcInstant::from(chrono::Utc::now()),
+        |p| p.updated_at.into(),
     );
 
     let meta = FeedMeta {
         id: collection_url.clone(),
         title: format!("{username}'s posts"),
-        updated_rfc3339,
+        updated,
         self_url: collection_url.clone(),
         first: Some(collection_url),
         next,
         previous: None,
     };
 
-    let xml = render_feed(&meta, &entries);
+    let xml = render_feed(&meta, &entries)?;
     Ok(([(header::CONTENT_TYPE, FEED_CONTENT_TYPE)], xml).into_response())
 }
 
@@ -268,7 +269,7 @@ pub async fn member_get(
     .await?;
     let base = required_base_url(site_config.as_ref()).await?;
     let entry = post_to_entry(&post, &base);
-    let xml = entry_to_xml(&entry);
+    let xml = entry_to_xml(&entry)?;
     Ok((
         [
             (header::CONTENT_TYPE, ENTRY_CONTENT_TYPE.to_string()),
@@ -357,7 +358,7 @@ pub async fn collection_post(
         site_config,
     } = services;
     super::require_user_match(&auth_user, &username)?;
-    let entry = entry_from_xml(&body)?;
+    let entry: Entry = body.parse()?;
     let default_format =
         storage::get_default_post_format(user_config.as_ref(), auth_user.user_id).await?;
     let fields = entry_to_post_fields(&entry, default_format);
@@ -415,7 +416,7 @@ pub async fn collection_post(
             .get_post_by_id(post_id, &viewer)
             .await?
             .ok_or(HandlerError::NotFound)?;
-        return Ok(post_entry_response(StatusCode::OK, &post, &base, &username));
+        return post_entry_response(StatusCode::OK, &post, &base, &username);
     }
 
     // Fresh create: a non-conflict error propagates via `?`.
@@ -425,12 +426,7 @@ pub async fn collection_post(
         .get_post_by_id(created.post_id, &viewer)
         .await?
         .ok_or(HandlerError::Internal)?;
-    Ok(post_entry_response(
-        StatusCode::CREATED,
-        &post,
-        &base,
-        &username,
-    ))
+    post_entry_response(StatusCode::CREATED, &post, &base, &username)
 }
 
 /// Builds a member-entry response (used by create `201` and the idempotent-replay
@@ -440,11 +436,11 @@ fn post_entry_response(
     post: &PostRecord,
     base: &AbsoluteUrl,
     username: &Username,
-) -> Response {
+) -> Result<Response, HandlerError> {
     let location_path = format!("/atompub/{username}/posts/{}", post.post_id);
     let location = compose(base, &location_path);
-    let xml = entry_to_xml(&post_to_entry(post, base));
-    (
+    let xml = entry_to_xml(&post_to_entry(post, base))?;
+    Ok((
         status,
         [
             (header::CONTENT_TYPE, ENTRY_CONTENT_TYPE.to_string()),
@@ -453,7 +449,7 @@ fn post_entry_response(
         ],
         xml,
     )
-        .into_response()
+        .into_response())
 }
 
 /// `PUT /atompub/{username}/posts/{post_id}` — replace a post from an `AtomPub` entry.
@@ -494,7 +490,7 @@ pub async fn member_put(
         return Err(HandlerError::PreconditionFailed);
     }
 
-    let entry = entry_from_xml(&body)?;
+    let entry: Entry = body.parse()?;
     let default_format =
         storage::get_default_post_format(user_config.as_ref(), auth_user.user_id).await?;
     let fields = entry_to_post_fields(&entry, default_format);
@@ -538,7 +534,7 @@ pub async fn member_put(
 
     let base = required_base_url(site_config.as_ref()).await?;
     let entry_out = post_to_entry(&post, &base);
-    let xml = entry_to_xml(&entry_out);
+    let xml = entry_to_xml(&entry_out)?;
 
     Ok((
         StatusCode::OK,

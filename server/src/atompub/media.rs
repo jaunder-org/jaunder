@@ -14,6 +14,7 @@ use common::absolute_url::{compose, AbsoluteUrl};
 use common::atompub::{render_media_link_entry, MediaLinkEntry};
 use common::media::{media_url, ContentHash, Filename, MediaSource, ProfferedFilename};
 use common::root_relative_url::RootRelativeUrl;
+use common::time::UtcInstant;
 use common::username::Username;
 use storage::{MediaRecord, MediaStorage, SiteConfigStorage};
 use web::auth::AuthUser;
@@ -52,7 +53,7 @@ fn media_link_entry(
         url
     };
     let edit = compose(base, &edit_path);
-    let timestamp = record.created_at.to_rfc3339();
+    let timestamp = UtcInstant::from(record.created_at);
     MediaLinkEntry {
         id: edit.clone(),
         title: record.filename.clone(),
@@ -60,8 +61,8 @@ fn media_link_entry(
         edit_media_uri: binary.clone(),
         content_src: binary,
         content_type: record.content_type.clone(),
-        published_rfc3339: timestamp.clone(),
-        updated_rfc3339: timestamp,
+        published: timestamp,
+        updated: timestamp,
     }
 }
 
@@ -120,7 +121,7 @@ pub async fn collection_post(
 
     let base = required_base_url(site_config.as_ref()).await?;
     let entry = media_link_entry(&record, &base, &username);
-    let xml = render_media_link_entry(&entry);
+    let xml = render_media_link_entry(&entry)?;
     let status = if existed {
         StatusCode::OK
     } else {
@@ -164,7 +165,7 @@ pub async fn member_get(
 
     let base = required_base_url(site_config.as_ref()).await?;
     let entry = media_link_entry(&record, &base, &username);
-    let xml = render_media_link_entry(&entry);
+    let xml = render_media_link_entry(&entry)?;
     Ok(([(header::CONTENT_TYPE, ENTRY_CONTENT_TYPE)], xml).into_response())
 }
 

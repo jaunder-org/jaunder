@@ -70,7 +70,7 @@ convention). See the Status column below for each ADR's current status.
 | [0040](adr/0040-web-rendering-leptos-csr.md)                       | Web rendering: leptos-CSR (drop concurrent reactive SSR)                                                     | accepted   |
 | [0041](adr/0041-public-projector-and-csr-client.md)                | Public projector and CSR client (SSR the data, not the components)                                           | accepted   |
 | [0042](adr/0042-emacs-org-atom-mapping-struct-seam.md)             | Emacs org→atom mapping: struct seam, `dom-print` serialization, Emacs 29.1 floor                             | accepted   |
-| [0043](adr/0043-quick-xml-fork-patch.md)                           | quick-xml advisory: fork + git-patch bridge (RUSTSEC-2026-0194/0195)                                         | accepted   |
+| [0043](adr/0043-quick-xml-fork-patch.md)                           | quick-xml advisory: fork + git-patch bridge (RUSTSEC-2026-0194/0195)                                         | superseded |
 | [0044](adr/0044-authenticated-owner-flash-free-enhancement.md)     | Authenticated-owner flash-free enhancement (pre-paint marker + additive decoration)                          | accepted   |
 | [0045](adr/0045-emacs-media-content-src.md)                        | Emacs client harvests media URLs from the response `<content src>`                                           | accepted   |
 | [0046](adr/0046-test-support-seed-binary.md)                       | A `test-support` binary that links `storage` for out-of-process e2e seeding                                  | accepted   |
@@ -115,7 +115,8 @@ convention). See the Status column below for each ADR's current status.
 | [0085](adr/0085-static-type-safety-gates-enumerate.md)             | Static type-safety gates enumerate, they do not search                                                       | accepted   |
 | [0086](adr/0086-enforced-thin-component-budget.md)                 | Component thinness is enforced, not assumed                                                                  | accepted   |
 | [0087](adr/0087-xtask-github-pr-observation.md)                    | xtask observes the CI/merge system, with `gh` as its transport                                               | accepted   |
-| [0088](adr/0088-promotion-is-the-acceptance-event.md)              | Promotion is the acceptance event                                                                            | accepted   |
+| [0088](adr/0088-promotion-is-the-acceptance-event.md)              | Delegate AtomPub Atom document I/O to `atom_syndication`; retire the fork bridge                             | accepted   |
+| [0089](adr/0089-upstream-atom-document-io.md)                      | Delegate AtomPub Atom document I/O to `atom_syndication`; retire the fork bridge                             | accepted   |
 
 <!-- adr-table:end -->
 
