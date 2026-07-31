@@ -642,7 +642,7 @@ six field tests: `:13`, `:34`, `:53` (display name) and `:82`, `:104`, `:151`
 `:34` specifically prove the touched-gated `.error` and the disable-until-valid
 gate still work through `Labelled`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit** — `f651a09a`
 
 ```bash
 git add web/src/profile/component.rs
@@ -664,7 +664,7 @@ consequence.
 
 **Interfaces:** none produced or consumed.
 
-- [ ] **Step 1: Wrap the control in a card**
+- [x] **Step 1: Wrap the control in a card**
 
 Replace the inner `view!` (the `j-field-label` + `<select>` + Save button) with:
 
@@ -726,7 +726,8 @@ the dispatch are unchanged. The `<select>` moving from `j-field-val` to
 `j-form-input` is a visible change, recorded in the spec's Known visible
 changes.
 
-- [ ] **Step 2: Run the profile e2e**
+- [x] **Step 2: Run the profile e2e** — 7 passed; no `j-field-*` remains in
+      `profile/component.rs` (AC8)
 
 Run: `devtool run -- cargo xtask e2e-local profile.spec.ts` Expected: PASS — in
 particular `:127` "default post format round-trips through the typed dispatch".

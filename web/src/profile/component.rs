@@ -127,43 +127,59 @@ fn DefaultPostFormatControl() -> impl IntoView {
             {move || Suspend::new(async move {
                 format.set(initial.await.unwrap_or(PostFormat::Markdown));
                 view! {
-                    <label class="j-field-label" for="default-post-format">
-                        "Default post format"
-                    </label>
-                    <select
-                        id="default-post-format"
-                        class="j-field-val"
-                        on:change=move |ev| {
-                            if let Ok(f) = event_target_value(&ev).parse::<PostFormat>() {
-                                format.set(f);
-                            }
-                        }
-                    >
-                        {PostFormat::VARIANTS
-                            .iter()
-                            .copied()
-                            .filter_map(|f| f.get_message().map(|label| (f, label)))
-                            .map(|(f, label)| {
-                                view! {
-                                    <option value=f.to_string() selected=move || format.get() == f>
-                                        {label}
-                                    </option>
+                    <div class="j-card">
+                        <div class="j-card-head">
+                            <div>
+                                <h2>"Default Post Format"</h2>
+                                <div class="j-sub">"The editor format new posts start in."</div>
+                            </div>
+                        </div>
+                        <div class="j-form-body">
+                            <label class="j-form-field">
+                                <span class="j-form-label">"Default post format"</span>
+                                <select
+                                    id="default-post-format"
+                                    class="j-form-input"
+                                    on:change=move |ev| {
+                                        if let Ok(f) = event_target_value(&ev).parse::<PostFormat>()
+                                        {
+                                            format.set(f);
+                                        }
+                                    }
+                                >
+                                    {PostFormat::VARIANTS
+                                        .iter()
+                                        .copied()
+                                        .filter_map(|f| f.get_message().map(|label| (f, label)))
+                                        .map(|(f, label)| {
+                                            view! {
+                                                <option
+                                                    value=f.to_string()
+                                                    selected=move || format.get() == f
+                                                >
+                                                    {label}
+                                                </option>
+                                            }
+                                        })
+                                        .collect_view()}
+                                </select>
+                            </label>
+                        </div>
+                        <div class="j-form-actions">
+                            <button
+                                type="button"
+                                class="j-btn"
+                                on:click=move |_| {
+                                    action
+                                        .dispatch(SetDefaultPostFormat {
+                                            format: format.get(),
+                                        });
                                 }
-                            })
-                            .collect_view()}
-                    </select>
-                    <button
-                        type="button"
-                        class="j-btn"
-                        on:click=move |_| {
-                            action
-                                .dispatch(SetDefaultPostFormat {
-                                    format: format.get(),
-                                });
-                        }
-                    >
-                        "Save"
-                    </button>
+                            >
+                                "Save"
+                            </button>
+                        </div>
+                    </div>
                 }
             })}
         </Suspense>
