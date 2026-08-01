@@ -567,6 +567,26 @@
           assert not reports, "e2e zero-panic gate (${backend}): jaunder.service logged Rust panic(s):\n" + "\n".join(reports.values())
         '';
 
+        # The two e2e time budgets, which must stay ordered:
+        # `e2ePlaywrightTimeout` < `e2eGlobalTimeout`.
+        #
+        # Playwright runs under `machine.execute`, whose driver default is
+        # `timeout=900`. Passing no `timeout=` therefore capped the Playwright step
+        # at 15 min *silently*, below the 20 min `globalTimeout` chosen in #130 — so
+        # the "~1.9x headroom" that comment claims was never actually available, and
+        # a loaded host reached the undeclared 900 s instead. Both budgets are named
+        # here so the cap is explicit and the ordering is checkable.
+        #
+        # The ordering is load-bearing, not cosmetic: when Playwright is the thing
+        # that expires, `machine.execute` returns 124 and the artifact copies below
+        # still run (that is why this uses `execute`, not `succeed`). If the driver's
+        # `globalTimeout` expired first it would kill the VM outright and take every
+        # diagnostic with it — the exact failure #123/#49 built this path to avoid.
+        # The difference is the boot + seed + copy allowance; measured overhead is
+        # ~40 s, so 180 s is ~4x headroom.
+        e2ePlaywrightTimeout = 1020;
+        e2eGlobalTimeout = 1200;
+
         # #123/#49: run Playwright capturing its exit (NOT machine.succeed, which
         # would abort before we copy diagnostics), stream its line-reporter output
         # to the build log, copy ALL artifacts out of the VM unconditionally, then
@@ -598,7 +618,8 @@
               + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
               + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
               + " --config playwright.config.ts"
-              + " --project ${browser} --project ${browser}-admin"
+              + " --project ${browser} --project ${browser}-admin",
+              timeout=${toString e2ePlaywrightTimeout},
             )
             # Stream the Playwright line-reporter output into the build log (-L), so
             # the failing test + assertion are recoverable from build.log alone,
@@ -653,11 +674,14 @@
           pkgs.testers.nixosTest {
             name = checkName;
 
-            # Cap the test-driver budget at 20 min (default is 3600 s). Healthy
-            # runs peak at ~10.6 min (slowest single-browser combo), so this is
-            # ~1.9x headroom; a boot/infra hang now fails near 20 min instead of
-            # burning the full hour. See issue #130.
-            globalTimeout = 1200;
+            # Cap the test-driver budget (default is 3600 s) so a boot/infra hang
+            # fails near 20 min instead of burning the full hour. See issue #130.
+            # This is the OUTER budget: `e2ePlaywrightTimeout` above expires first
+            # and is the one sized against the test run itself (~10.6 min for the
+            # slowest single-browser combo, so ~1.6x headroom).
+            globalTimeout =
+              assert e2ePlaywrightTimeout < e2eGlobalTimeout;
+              e2eGlobalTimeout;
 
             nodes.machine =
               { pkgs, lib, ... }:
@@ -750,11 +774,14 @@
           pkgs.testers.nixosTest {
             name = checkName;
 
-            # Cap the test-driver budget at 20 min (default is 3600 s). Healthy
-            # runs peak at ~10.6 min (slowest single-browser combo), so this is
-            # ~1.9x headroom; a boot/infra hang now fails near 20 min instead of
-            # burning the full hour. See issue #130.
-            globalTimeout = 1200;
+            # Cap the test-driver budget (default is 3600 s) so a boot/infra hang
+            # fails near 20 min instead of burning the full hour. See issue #130.
+            # This is the OUTER budget: `e2ePlaywrightTimeout` above expires first
+            # and is the one sized against the test run itself (~10.6 min for the
+            # slowest single-browser combo, so ~1.6x headroom).
+            globalTimeout =
+              assert e2ePlaywrightTimeout < e2eGlobalTimeout;
+              e2eGlobalTimeout;
 
             nodes.machine =
               { pkgs, lib, ... }:
