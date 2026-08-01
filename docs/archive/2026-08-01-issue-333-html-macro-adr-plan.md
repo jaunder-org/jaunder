@@ -19,7 +19,7 @@ render layer's currency and its only trusted-HTML carrier. Render fns return
 
 **Spec:** `docs/superpowers/specs/2026-08-01-issue-333-html-macro-adr.md` —
 referenced by decision (D1–D8) and criterion (A1–A17); not restated here. **ADR
-draft:** `docs/adr/drafts/web-render-html-macro.md`.
+draft:** `docs/adr/0093-web-render-html-macro.md`.
 
 ## Global Constraints
 

@@ -23,7 +23,7 @@ builder; delete `escape_html`; convert **all nine** render modules in this
 cycle. Keep the trusted-HTML invariant carried by **one type**, and add two
 **enumerating** static gates (ADR-0085) that can see inside macro bodies.
 
-Full rationale: `docs/adr/drafts/web-render-html-macro.md` (numbered at ship by
+Full rationale: `docs/adr/0093-web-render-html-macro.md` (numbered at ship by
 `cargo xtask adr promote`, per ADR-0048).
 
 ## Resolved decisions
