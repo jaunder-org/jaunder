@@ -2545,11 +2545,15 @@ mod tests {
     use rstest::*;
     use rstest_reuse::*;
 
-    /// Both dialects pin tag ordering, and pin it to the *same* order. The JSON
-    /// aggregate has no inherent order, and `PostRecord.tags` promises slug order
-    /// (#772). Postgres additionally needs `COLLATE "C"`: its default is the
-    /// cluster's locale, which disagrees with `SQLite`'s BINARY on the hyphens
-    /// and digits that are in the slug alphabet.
+    /// Guards the two dialect constants against drifting apart — the failure mode
+    /// where one is edited and the other forgotten (#772; the rationale for the
+    /// Postgres `COLLATE "C"` lives on [`PostDialect::TAGS_SUBQUERY`]).
+    ///
+    /// Deliberately a *sync* check, not a semantic one: it proves both constants
+    /// carry the clause, not that either is positioned correctly inside the
+    /// aggregate. Placement is proven behaviourally, on both backends, by
+    /// `post_record_carries_tags` and
+    /// `regenerated_json_feed_carries_slug_ordered_tags`.
     #[test]
     fn tags_subquery_pins_slug_ordering_on_both_dialects() {
         let sqlite = <sqlx::Sqlite as PostDialect>::TAGS_SUBQUERY;

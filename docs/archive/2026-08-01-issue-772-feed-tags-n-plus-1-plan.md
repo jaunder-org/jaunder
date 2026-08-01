@@ -475,7 +475,7 @@ git add server/src/feed/regenerate.rs server/tests/feed/feed_regenerate.rs
 git commit -m "perf(feed): read tags off the listing query instead of N+1 per post (#772)"
 ```
 
-- [ ] **Step 6: Run the branch gate (AC7)**
+- [x] **Step 6: Run the branch gate (AC7)**
 
 `cargo xtask check` is the per-commit gate; AC7 additionally requires
 `validate`. Run the iterating form now, over both tasks' work:
