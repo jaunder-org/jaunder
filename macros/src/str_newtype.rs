@@ -1,6 +1,7 @@
 //! Codegen for `#[derive(StrNewtype)]` — the ADR-0063 string-newtype trailer for a
 //! `struct X(String)`. The derive owns the whole trailer except `FromStr` (the one
-//! per-type validating/normalizing chokepoint) and the std `#[derive]`s.
+//! per-type validating/normalizing chokepoint) and the std `#[derive]`s — except
+//! ordering, which it emits (#761) unless `#[str_newtype(no_ord)]` suppresses it.
 
 use quote::quote;
 use syn::DeriveInput;

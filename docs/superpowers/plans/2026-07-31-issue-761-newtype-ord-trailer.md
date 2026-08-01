@@ -705,7 +705,7 @@ Run: `devtool run -- cargo test -p macros --doc` Expected: PASS
 Run: `devtool run -- cargo nextest run -p common` Expected: PASS — the eight id
 newtypes in `common/src/ids.rs` all derive `PartialEq, Eq` already
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit** — `d16e8d27`, gate green (coverage 22919 lines, clean).
 
 ```bash
 devtool run -- cargo xtask check
@@ -741,7 +741,8 @@ verified by the Step 2 sweep.
 
 **Interfaces:** none produced or consumed.
 
-- [ ] **Step 1: Rewrite each comment**
+- [x] **Step 1: Rewrite each comment** — 10 code sites, 5 macro-crate docs, and
+      `docs/adr/0068`.
 
 Apply the spec §4 principle — the trailer grants **capability**, and an omitted
 derive never encoded intent. Concretely: strike every "no `Ord`" / "never
@@ -755,7 +756,9 @@ five macro-crate statements to say ordering is emitted, not user-derived.
 `SmtpUsername`, `SiteTitle`, `BackupSchedule`, and `DestinationPath` omit `Hash`
 silently with no rationale — leave them alone.
 
-- [ ] **Step 2: Sweep for anything missed**
+- [x] **Step 2: Sweep for anything missed** — clean: the only live hits left are
+      this plan/spec and one true statement (a secret really is never sorted).
+      `docs/archive/` excluded by the note below.
 
 Use `-U` (multiline) and search every crate plus `docs/`. A single-line pattern
 is not good enough here: rustfmt wraps these comments, and the naive
@@ -771,6 +774,14 @@ rg -n -i -U 'map/set\s+key|never\s+sorted|are\s+not\s+sorted|no\s+.?Ord|Keeps\s+
 Expected: no hit that claims a newtype cannot be ordered, or is "never a key",
 on the strength of an omitted derive. Hits that merely describe `Hash` without
 invoking key-ness are fine and stay.
+
+**`docs/archive/` is deliberately excluded.** The sweep surfaces ~12 archived
+specs and plans (#350, #399, #409, #459, #472, #475, #478, #545) carrying the
+old claims. They are a historical record of decisions _as they were made_;
+rewriting them would falsify that record and make the archive useless for
+answering "what did we believe when we chose this?". AC10's catch-all is read as
+governing **live** documentation — code doc comments and active ADRs — which is
+what a future author would consult and be misled by.
 
 - [ ] **Step 3: Commit**
 

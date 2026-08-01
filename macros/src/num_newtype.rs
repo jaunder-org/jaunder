@@ -5,7 +5,8 @@
 //! `#[num_newtype(...)]` attributes: a validating `FromStr`, a `value()` accessor, `Display`,
 //! an optional compile-checked `Default`, a validating transparent-integer serde bridge, an
 //! optional `clamp` affordance (`MIN`/`MAX` + a coercing `clamped` constructor), and a
-//! self-contained error type. The std `#[derive]`s stay in the user's list.
+//! self-contained error type. Ordering is emitted here too (#761); the remaining std
+//! `#[derive]`s stay in the user's list, with `PartialEq`/`Eq` now required (`Ord: Eq`).
 
 use proc_macro2::TokenStream;
 use quote::quote;

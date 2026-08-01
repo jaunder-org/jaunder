@@ -16,8 +16,10 @@ mod text_enum;
 /// Derives the ADR-0063 **string-newtype trailer** for a `struct X(String)`: `Display`,
 /// a serde bridge (deserialize routed through `FromStr`, so invalid input is rejected on
 /// the wire), `AsRef`/`Borrow`/`Deref<str>`, `TryFrom<String>`, `From<Self> for String`,
-/// and `PartialEq<str>`/`<&str>`. `FromStr` stays hand-written — it is the single
-/// validating/normalizing chokepoint — as do the std `#[derive]`s.
+/// `PartialEq<str>`/`<&str>`, and `PartialOrd`/`Ord` on the inner value. `FromStr` stays
+/// hand-written — it is the single validating/normalizing chokepoint — as do the
+/// remaining std `#[derive]`s. Because `Ord: Eq`, `PartialEq`/`Eq` are required unless
+/// the type takes `#[str_newtype(no_ord)]` (#761).
 ///
 /// `#[str_newtype(secret)]` selects the tight secret surface (redacting `Debug`,
 /// `AsRef` + `TryFrom` only; no `Display`/serde/`Deref`/`Borrow`/owned-`String`/`PartialEq`).
@@ -206,7 +208,9 @@ pub fn str_newtype_derive(item: TokenStream) -> TokenStream {
 
 /// Derives the ADR-0063 **numeric-ID trailer** for a `struct X(i64)`: `From<i64>`,
 /// `From<Self> for i64`, `Display`, and a transparent-i64 serde bridge (wire form is a
-/// bare integer). `Copy` and the other std traits stay in the user's `#[derive]` list.
+/// bare integer), and `PartialOrd`/`Ord` on the inner `i64` (#761). `Copy` and the
+/// remaining std traits stay in the user's `#[derive]` list; `PartialEq`/`Eq` are
+/// required, since `Ord: Eq`.
 ///
 /// Applying the derive to anything but a single-field tuple struct is a compile error:
 ///
@@ -235,9 +239,10 @@ pub fn id_newtype_derive(item: TokenStream) -> TokenStream {
 /// `IdNewtype` (which enforces no value invariant), a numeric bound is declarative, so this
 /// derive *generates* the whole trailer from `#[num_newtype(...)]`: a self-contained error
 /// type, `value()`, a validating `FromStr`, `Display`, an optional compile-checked `Default`,
-/// and a validating transparent-integer serde bridge (out-of-range rejected on the wire).
-/// The std `#[derive]`s (`Clone`/`Copy`/`Debug`/`PartialEq`/`Eq`/`Hash`/`Ord`) stay in the
-/// user's list.
+/// a validating transparent-integer serde bridge (out-of-range rejected on the wire), and
+/// `PartialOrd`/`Ord` on the inner integer (#761). The remaining std `#[derive]`s
+/// (`Clone`/`Copy`/`Debug`/`PartialEq`/`Eq`/`Hash`) stay in the user's list, with
+/// `PartialEq`/`Eq` required since `Ord: Eq`.
 ///
 /// Options: `inner = <ty>` (**required**, the wrapped integer type; the tuple field must be
 /// exactly this type), `min` / `max` (inclusive bounds, each optional — the check is emitted

@@ -56,7 +56,8 @@ The two are paired explicitly where the N-side needs both:
 `PostTag { tag_slug: Tag, tag_display: TagLabel }`,
 `TagSummary { slug: Tag, display: TagLabel }`. Equality/dedup on labels is **by
 slug** (`TagLabel::slug`), never by raw casing — collapsing `Rust`/`rust` is a
-canonical-slug operation on `Tag`, which keeps `Hash`/`Ord`.
+canonical-slug operation on `Tag`, which keeps `Hash` (and orders via the
+ADR-0063 trailer, #761).
 
 **One validity source.** Both `TagLabel::from_str` (client pre-validation, wire
 `Deserialize`) and the derived slug funnel through `Tag`'s rule — no

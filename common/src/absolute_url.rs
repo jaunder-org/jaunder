@@ -18,7 +18,7 @@ use thiserror::Error;
 
 /// A validated, normalized absolute `http(s)` URL. Construct via [`FromStr`]
 /// (untrusted strings) or [`AbsoluteUrl::join`] (base + path). `Hash` is derived (it
-/// may be a map key); no `Ord` — URLs are not sorted.
+/// may be a `HashMap` key); ordering is emitted by the trailer (ADR-0063 §2).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, StrNewtype)]
 pub struct AbsoluteUrl(String);
 
