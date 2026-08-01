@@ -9,7 +9,9 @@ mod id_newtype;
 mod num_newtype;
 mod server_fn;
 mod sqlx_bridge;
+mod sqlx_bridge_derive;
 mod str_newtype;
+mod text_enum;
 
 /// Derives the ADR-0063 **string-newtype trailer** for a `struct X(String)`: `Display`,
 /// a serde bridge (deserialize routed through `FromStr`, so invalid input is rejected on
@@ -273,6 +275,76 @@ pub fn server(args: TokenStream, item: TokenStream) -> TokenStream {
 }
 // cov:ignore-stop
 
+/// Emits **only** the `sqlx` storage bridge (`Type`/`Encode`/`Decode`) for a
+/// `struct X(Inner)` — no trailer, no serde, no constructor. For a type that is stored as
+/// its inner but whose construction is deliberately not the derive's business.
+///
+/// # The generated `Decode` is an inbound door that re-establishes no invariant
+///
+/// It wraps whatever the column holds, straight into `Self(..)`, with no validation and no
+/// normalization. That is correct only for a type whose invariant is *inherited* from the
+/// fact that we wrote the row ourselves. A type whose invariant must hold for arbitrary
+/// bytes — anything reachable from outside — must either establish it on the way in through
+/// its own door, or not use this derive.
+///
+/// `RenderedHtml` (`common/src/render.rs`) is the motivating case, and its module documents
+/// exactly why a sanitizing decode was rejected there and when to revisit that.
+#[proc_macro_derive(SqlxBridge)]
+pub fn sqlx_bridge_derive(item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as DeriveInput);
+    sqlx_bridge_derive::expand(&input).into()
+}
+
+/// The standard shape for a **closed string enum** (ADR-0075 as amended by #746): one
+/// attribute that owns the whole convention.
+///
+/// ```ignore
+/// #[text_enum(
+///     sqlx,
+///     error = InvalidPostFormat,
+///     message = "post format must be \"markdown\", \"org\", or \"html\"",
+/// )]
+/// #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, strum::VariantArray)]
+/// #[strum(serialize_all = "snake_case")]
+/// pub enum PostFormat { … }
+/// ```
+///
+/// It **injects** `strum`'s `AsRefStr`/`Display`/`EnumString`/`IntoStaticStr` and the
+/// `#[strum(parse_err_ty, parse_err_fn)]` pair, and **generates** the named parse error,
+/// its parse fn, `Serialize`/`Deserialize`, and — with `sqlx` — the storage bridge. The
+/// author keeps the non-uniform derives (`VariantArray`, `EnumMessage`, `Default`, …) and
+/// `serialize_all`. `strum` does all the actual token/`Display`/`FromStr` work.
+///
+/// # It must be the item's first *active* attribute
+///
+/// An attribute macro only receives the attributes written **below** it; anything above
+/// has already been expanded and stripped. So a uniform derive written above this
+/// attribute is invisible here, gets injected a second time, and fails to compile with
+/// `E0119` (conflicting implementations) or `E0592` (duplicate definitions). Put
+/// `#[text_enum(…)]` first and that cannot happen.
+///
+/// A `///` doc comment above it is fine, and is how the adopting enums are written: doc
+/// attributes are inert, so they neither expand nor collide — they simply stack onto the
+/// enum along with the injected derives.
+///
+/// # The adopting crate must depend on `strum` and `serde`
+///
+/// The injected derives are emitted as `::strum::…` and the serde bridge as `::serde::…`,
+/// so both must be dependencies of the crate under exactly those names. The serde bridge
+/// is unconditional — there is no opt-out — because every closed string enum in this repo
+/// either crosses the wire already or is one field away from doing so. Without the
+/// dependencies the error is "cannot find derive macro in this scope" or an unresolved
+/// `::serde` path, neither of which points back here.
+///
+/// The generated error type is always `pub`, regardless of the enum's own visibility: it
+/// is registered by name across crate boundaries (`host`'s `validation_from!`), so a
+/// private one would be useless.
+#[proc_macro_attribute]
+pub fn text_enum(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let item = proc_macro2::TokenStream::from(item);
+    text_enum::expand(attr.into(), &item).into()
+}
+
 /// Validates that `input` is a **non-generic** single-field tuple struct (`struct X(T)`) —
 /// the shape both newtype derives require — returning a spanned error (rendered as
 /// `compile_error!`) otherwise. `macro_name`/`example` shape the diagnostic. Generics are
@@ -296,6 +368,33 @@ pub(crate) fn require_newtype_shape(
             input,
             format!(
                 "{macro_name} requires a non-generic single-field tuple struct like `{example}`"
+            ),
+        ))
+    }
+}
+
+/// Validates that `input` is a **non-generic** enum whose variants are all unit variants —
+/// the shape `#[text_enum]` requires, since every variant must map to exactly one token.
+/// Mirrors [`require_newtype_shape`], including its rejection of generics: the emitted
+/// impls carry no `impl_generics`/`where_clause`, so a generic enum would otherwise fail
+/// confusingly at the user's site instead of clearly here.
+pub(crate) fn require_enum_shape(
+    input: &DeriveInput,
+    macro_name: &str,
+    example: &str,
+) -> syn::Result<()> {
+    let unit_enum = matches!(
+        &input.data,
+        Data::Enum(e) if e.variants.iter().all(|v| matches!(v.fields, Fields::Unit)),
+    );
+    let non_generic = input.generics.params.is_empty() && input.generics.where_clause.is_none();
+    if unit_enum && non_generic {
+        Ok(())
+    } else {
+        Err(syn::Error::new_spanned(
+            input,
+            format!(
+                "{macro_name} requires a non-generic enum with only unit variants like `{example}`"
             ),
         ))
     }
@@ -327,6 +426,39 @@ mod tests {
     fn require_newtype_shape_accepts_tuple_struct() {
         let input: DeriveInput = parse_quote! { struct X(String); };
         assert!(require_newtype_shape(&input, "StrNewtype", "struct X(String)").is_ok());
+    }
+
+    /// Asserts the rejection *and* that its message names the macro — deliberately
+    /// stronger than `require_newtype_shape`'s tests above, which assert only `is_err()`
+    /// and so would pass on an anonymous diagnostic.
+    fn assert_rejected_naming_macro(input: &DeriveInput) {
+        let err = require_enum_shape(input, "text_enum", "enum X { A }")
+            .expect_err("this shape must be rejected");
+        assert!(
+            err.to_string().contains("text_enum"),
+            "the diagnostic must name the macro, got: {err}"
+        );
+    }
+
+    #[test]
+    fn require_enum_shape_rejects_a_struct() {
+        assert_rejected_naming_macro(&parse_quote! { struct S(String); });
+    }
+
+    #[test]
+    fn require_enum_shape_rejects_a_non_unit_variant() {
+        assert_rejected_naming_macro(&parse_quote! { enum X { A(u8) } });
+    }
+
+    #[test]
+    fn require_enum_shape_rejects_a_generic_enum() {
+        assert_rejected_naming_macro(&parse_quote! { enum X<T> { A(T) } });
+    }
+
+    #[test]
+    fn require_enum_shape_accepts_a_unit_enum() {
+        let input: DeriveInput = parse_quote! { enum X { A, B } };
+        assert!(require_enum_shape(&input, "text_enum", "enum X { A }").is_ok());
     }
 
     #[test]

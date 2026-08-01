@@ -80,8 +80,10 @@ const ALLOWED_FNS: &[&str] = &[
     // the one production door left. `common/src/render.rs`, used by the seed DTOs
     // in `common/src/seed.rs`.
     //
-    // `build_post_record` was here until #445: the `rendered_html` column now has
-    // its own `sqlx::Decode`, so the DB read no longer rebuilds through this door.
+    // `build_post_record` was here until #445: the `rendered_html` column decodes
+    // straight into `RenderedHtml`, so the DB read no longer rebuilds through this
+    // door. That decode is `#[derive(SqlxBridge)]` since #746 — still expanded in the
+    // type's own module, so it still reaches the private constructor without a door.
     "deserialize_rendered_html",
 ];
 

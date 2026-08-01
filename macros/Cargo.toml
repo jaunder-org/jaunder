@@ -26,6 +26,10 @@ sqlx = []
 [dev-dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+# Workspace-inherited so `features = ["derive"]` comes with it: the integration test
+# expands `#[text_enum]`, whose injected `::strum::…` derives resolve only if the test
+# crate depends on strum under that name.
+strum = { workspace = true }
 
 [lints]
 workspace = true

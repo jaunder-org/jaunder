@@ -2322,6 +2322,7 @@ dependencies = [
  "quote",
  "serde",
  "serde_json",
+ "strum",
  "syn",
 ]
 

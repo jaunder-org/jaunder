@@ -12,7 +12,6 @@ pub mod audience;
 pub mod auth;
 pub mod backup;
 pub mod bio;
-mod db_enum;
 pub mod display_name;
 pub mod email;
 pub mod etag;
@@ -37,7 +36,6 @@ pub mod site;
 pub mod slug;
 pub mod smtp_password;
 pub mod smtp_username;
-mod strum_enum;
 pub mod tag;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

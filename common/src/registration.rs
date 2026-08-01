@@ -1,33 +1,24 @@
 //! The site's user-registration access policy — a wire+DB string enum shared by
 //! `storage` (persists it as `site.registration_policy`, read typed via
 //! `SiteConfigStorage::get_registration_policy`) and `web` (returns it typed from
-//! `get_registration_policy`). A `strum` string enum (ADR-0075).
-
-use crate::strum_enum::{impl_string_serde_proxy, parse_error};
+//! `get_registration_policy`). A closed string enum (`#[text_enum]`, ADR-0075 as
+//! amended by #746).
 
 /// The site's user-registration access policy.
 ///
-/// A `strum` string enum: `serialize_all = "snake_case"` gives the wire/DB
-/// tokens `"open"` / `"invite_only"` / `"closed"`, with a named
-/// `InvalidRegistrationPolicy` parse error via `parse_err_ty`/`parse_err_fn`.
-/// serde routes through an owned-`String` proxy (`into`/`try_from`) so a bad
-/// wire value surfaces the domain error rather than serde's generic message.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    Hash,
-    serde::Serialize,
-    serde::Deserialize,
-    strum::AsRefStr,
-    strum::Display,
-    strum::EnumString,
+/// `serialize_all = "snake_case"` gives the wire/DB tokens `"open"` /
+/// `"invite_only"` / `"closed"`. The attribute injects strum's
+/// token/`Display`/`FromStr` derives and generates the named
+/// `InvalidRegistrationPolicy` plus the serde bridge, whose deserialize routes
+/// `String` → `FromStr` so a bad wire value surfaces the domain error rather than
+/// serde's generic message. Not `sqlx`: storage persists it through
+/// `site.registration_policy` as a plain config string, not a typed column.
+#[macros::text_enum(
+    error = InvalidRegistrationPolicy,
+    message = "registration policy must be \"open\", \"invite_only\", or \"closed\""
 )]
-#[serde(into = "String", try_from = "String")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[strum(serialize_all = "snake_case")]
-#[strum(parse_err_ty = InvalidRegistrationPolicy, parse_err_fn = registration_policy_parse_err)]
 pub enum RegistrationPolicy {
     /// Anyone may register without a code.
     Open,
@@ -36,14 +27,6 @@ pub enum RegistrationPolicy {
     /// Registration is disabled; no new accounts can be created.
     Closed,
 }
-
-parse_error!(
-    InvalidRegistrationPolicy,
-    registration_policy_parse_err,
-    "registration policy must be \"open\", \"invite_only\", or \"closed\""
-);
-
-impl_string_serde_proxy!(RegistrationPolicy);
 
 #[cfg(test)]
 mod tests {
