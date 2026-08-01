@@ -903,7 +903,10 @@ not match. (The earlier draft of this step predicted them and would have handed
 the worker a contradiction.) The `impl(<...>)?` prefix is there so a generic
 `impl<T> Ord for …` cannot slip past.
 
-- [ ] **Step 3: Run the full local gate (AC12)**
+- [x] **Step 3: Run the full local gate (AC12)** — `validate --no-e2e` PASSED:
+      coverage clean at 23803 executable lines, 0 failures, 0 guard violations,
+      0 CRAP over threshold. Doctests re-run post-rebase: macros 18, common 18,
+      both green.
 
 Run: `devtool run -- cargo xtask validate --no-e2e` Expected: PASS — static,
 clippy, and coverage, with no new `cov:ignore`
