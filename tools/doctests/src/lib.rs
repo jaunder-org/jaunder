@@ -3,4 +3,5 @@
 
 pub mod check;
 pub mod fence;
+pub mod libtest;
 pub mod roots;

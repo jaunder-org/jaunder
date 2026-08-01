@@ -315,11 +315,11 @@ Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate -- cargo test --manifest-path tools/Cargo.toml -p doctests`
 Expected: FAIL — `Fence`, `Scan`, `fences` not defined.
 
-**Done differently, recorded:** tests and implementation were written together, so
-there was no red run. Falsification was done instead by mutation — disabling
+**Done differently, recorded:** tests and implementation were written together,
+so there was no red run. Falsification was done instead by mutation — disabling
 `hidden_code` to always return `None` failed exactly
-`hidden_lines_are_separated_and_stripped` (9 passed, 1 failed), then reverted. That
-establishes the same thing the red step does: the tests are not vacuous.
+`hidden_lines_are_separated_and_stripped` (9 passed, 1 failed), then reverted.
+That establishes the same thing the red step does: the tests are not vacuous.
 
 - [x] **Step 4: Implement against the tests**
 
@@ -404,7 +404,7 @@ git commit -m "feat(doctests): syn-based rustdoc fence scanner and shared scan r
 - Consumes: `fence::{Fence, Scan}`.
 - Produces: `check::{Violation, Kind, fence_violations}` (Task 4).
 
-- [ ] **Step 1: Write the failing tests** in `tools/doctests/src/check.rs`
+- [x] **Step 1: Write the failing tests** in `tools/doctests/src/check.rs`
 
 ````rust
 #[cfg(test)]
@@ -512,13 +512,17 @@ mod tests {
 }
 ````
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate -- cargo test --manifest-path tools/Cargo.toml -p doctests`
 Expected: FAIL — `Violation`, `Kind`, `fence_violations` not defined.
 
-- [ ] **Step 3: Implement against the tests**
+**Done by mutation, as in Task 1:** removing the `doc_block` scope from the
+companion lookup failed exactly `a_companion_in_a_different_doc_comment_does_not_count`
+(23 passed, 1 failed), then reverted.
+
+- [x] **Step 3: Implement against the tests**
 
 ```rust
 /// One thing wrong with the fence population.
@@ -568,13 +572,19 @@ The tests pin every branch. One detail they cannot express: every `detail` ends
 with a recovery instruction naming the fix, following the `"  recovery: …"`
 footer convention at `sqlx_newtype_decode_check.rs:539-551`.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate -- cargo test --manifest-path tools/Cargo.toml -p doctests`
-Expected: PASS — 12 new tests.
+Expected: PASS — 12 new tests. **Actual: 14** — two beyond the plan,
+`whitespace_cannot_smuggle_a_variant_past_the_vocabulary` and
+`a_text_fence_needs_no_companion`. Total 24.
 
-- [ ] **Step 5: Commit**
+**Gate note:** `tools-clippy` runs with `-D warnings`, and the first pass tripped
+`manual_contains`. Fixed, not silenced. Recorded because the plan review left it
+open whether clippy applies to `tools/` — it does.
+
+- [x] **Step 5: Commit**
 
 ```bash
 git add tools/doctests/src/check.rs tools/doctests/src/lib.rs
