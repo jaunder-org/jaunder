@@ -532,7 +532,7 @@ ordering impls meet the uncovered-line gate. If it reports per-type uncovered
 regions for the new impls, **stop and report** rather than papering over it with
 `cov:ignore`; the spec's abort condition has fired.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit** — `1745d124`, gate green.
 
 ```bash
 git add macros/src/lib.rs macros/src/str_newtype.rs macros/tests/str_newtype.rs common/src/token.rs common/src/tag.rs
@@ -556,7 +556,7 @@ git commit -m "feat(macros): emit Ord/PartialOrd from StrNewtype, with a no_ord 
   (Task 2).
 - Produces: nothing later tasks depend on.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `macros/tests/num_newtype.rs`. `PageSize::MIN` is typed as the **inner**
 integer, not the newtype, so it must not appear in an ordering assertion.
@@ -609,23 +609,25 @@ fn sorts_and_keys_a_btreeset() {
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail** — FAIL as designed: `<`/`>`
+      not applicable to `Count`, `Count: Ord` unsatisfied.
 
 Run: `devtool run -- cargo nextest run -p macros --test num_newtype` Expected:
 FAIL — `a < b` does not compile; `Count` is not `Ord`
 
-- [ ] **Step 3: Emit ordering from `NumNewtype`**
+- [x] **Step 3: Emit ordering from `NumNewtype`**
 
 Append `crate::ord_impls(name)` to the token stream `num_newtype::expand`
 returns, unconditionally — there is no `no_ord` on this macro (spec §2). Every
 branch is pinned by the Step 1 tests plus the collision that Step 4 resolves.
 
-- [ ] **Step 4: Drop `ByteSize`'s now-colliding derives**
+- [x] **Step 4: Drop `ByteSize`'s now-colliding derives**
 
 `common/src/media.rs:828` →
 `#[derive(Clone, Copy, Debug, Eq, PartialEq, NumNewtype)]`.
 
-- [ ] **Step 5: Run the tests, verify they pass**
+- [x] **Step 5: Run the tests, verify they pass** — 535 passed (78 macros + 3
+      new `num_newtype` + 454 common).
 
 Run: `devtool run -- cargo nextest run -p macros` Expected: PASS
 

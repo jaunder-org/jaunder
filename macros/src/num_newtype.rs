@@ -74,6 +74,10 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
     let serde = serde_impl(name, &err_name, &opts);
     let clamped = clamped_impl(name, &opts);
     let sqlx = sqlx_impls(name, &opts.inner);
+    // Ordering is unconditional here (#761): there is no `no_ord` on this macro, because
+    // every numeric value orders meaningfully and every `NumNewtype` in the tree already
+    // derives `PartialEq`/`Eq` — which `Ord: Eq` now makes a requirement rather than a habit.
+    let ord = crate::ord_impls(name);
 
     quote! {
         #error_ty
@@ -84,6 +88,7 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
         #default_impl
         #serde
         #clamped
+        #ord
         #sqlx
     }
 }

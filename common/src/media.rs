@@ -908,7 +908,7 @@ pub struct UserQuota(i64);
 /// measured, never a config fallback). Unlike the limits — which are only ever built from
 /// config strings — a `ByteSize` is built from a runtime `i64` (a DB column, a `SUM`), so it
 /// relies on the `NumNewtype` validating `TryFrom<i64>` door.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, NumNewtype)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, NumNewtype)]
 #[num_newtype(
     inner = i64,
     min = 0,
