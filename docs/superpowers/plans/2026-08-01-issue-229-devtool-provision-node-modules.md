@@ -650,7 +650,7 @@ git commit -m "test(devtool): cover the provision-node-modules CLI surface (#229
 - Produces: `pub fn needs_provisioning(name: &str) -> bool` — the pure predicate
   that makes "provisioning is `tsc`-only" testable without executing `tsc`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `check.rs`'s existing `mod tests`:
 
@@ -667,7 +667,7 @@ Add to `check.rs`'s existing `mod tests`:
     }
 ```
 
-- [ ] **Step 2: Run it, verify it fails**
+- [x] **Step 2: Run it, verify it fails**
 
 Run:
 
@@ -677,7 +677,7 @@ devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-229-devtool-
 
 Expected: FAIL — `cannot find function `needs_provisioning` in this scope`.
 
-- [ ] **Step 3: Implement against the test**
+- [x] **Step 3: Implement against the test**
 
 In `check.rs`, add above `run`:
 
@@ -708,7 +708,7 @@ in-process (A17). Drop the now-unused `Command`/`bash` import only if nothing
 else in the file uses it — `run` still spawns each check's own program, so
 `std::process::Command` stays.
 
-- [ ] **Step 4: Run the test, verify it passes**
+- [x] **Step 4: Run the test, verify it passes**
 
 Run:
 
@@ -718,7 +718,7 @@ devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-229-devtool-
 
 Expected: PASS — the whole `tools/` suite.
 
-- [ ] **Step 5: Prove the in-process path really provisions**
+- [x] **Step 5: Prove the in-process path really provisions**
 
 ```bash
 rm -rf /home/mdorman/src/jaunder/.claude/worktrees/issue-229-devtool-provision/end2end/node_modules
@@ -729,7 +729,7 @@ Expected: exit 0, and `end2end/node_modules/@playwright/test` exists as a
 symlink into the Nix store. (This is A13/A19's mechanism, exercised before the
 flake changes land.)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 Run `cargo xtask check` first, then:
 
@@ -757,7 +757,7 @@ git commit -m "refactor(devtool): provision node_modules in-process for check ts
   script can go.
 - Produces: nothing later tasks depend on. This is the last task.
 
-- [ ] **Step 1: Move `devtoolBin` into `ciInputs`**
+- [x] **Step 1: Move `devtoolBin` into `ciInputs`**
 
 The `shellHook` lives in `shellEnv`, which is spread into **both**
 `devShells.ci` and `devShells.default`; `devtoolBin` is currently only in
@@ -782,7 +782,7 @@ before `emacsForCi`):
               devtoolBin
 ```
 
-- [ ] **Step 2: Point the `shellHook` at the subcommand and reword the
+- [x] **Step 2: Point the `shellHook` at the subcommand and reword the
       comments**
 
 Replace `flake.nix:1289-1293` with:
@@ -803,7 +803,7 @@ the hook. Reword `:1097-1098` — "tsc needs BOTH node-dep envs (the provision
 script guards on each with `${VAR:?}`)" — to name
 `devtool provision-node-modules` and its resolver instead of a script (A17).
 
-- [ ] **Step 3: Delete the script and amend ADR-0028**
+- [x] **Step 3: Delete the script and amend ADR-0028**
 
 ```bash
 git rm end2end/provision-node-modules.sh
@@ -815,7 +815,7 @@ coverage sandbox's `nativeBuildInputs`." to name **both** devShells, with a
 short "(#229 put it in `ciInputs` too, because the shared `shellHook` invokes
 `devtool provision-node-modules`)" clause (A18).
 
-- [ ] **Step 4: Verify nothing still references the script**
+- [x] **Step 4: Verify nothing still references the script**
 
 ```bash
 rg -n 'provision-node-modules\.sh|provision script|shared script' --glob '!docs/adr/0051*' --glob '!docs/archive' --glob '!docs/superpowers' .
@@ -833,7 +833,7 @@ ship review rather than trying to satisfy it here.
 Second command is a manual read of the `shellHook` block: confirm it contains no
 `cargo` invocation (A16's second half, otherwise true only by construction).
 
-- [ ] **Step 5: Run the fresh-provision gate**
+- [x] **Step 5: Run the fresh-provision gate**
 
 ```bash
 rm -rf /home/mdorman/src/jaunder/.claude/worktrees/issue-229-devtool-provision/end2end/node_modules
@@ -850,7 +850,7 @@ ls -l /home/mdorman/src/jaunder/.claude/worktrees/issue-229-devtool-provision/en
 
 Expected: both listed as symlinks into `/nix/store/…`.
 
-- [ ] **Step 6: Run the Nix gate**
+- [x] **Step 6: Run the Nix gate**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-229-devtool-provision -- nix build .#checks.x86_64-linux.static-checks
@@ -860,12 +860,26 @@ Expected: PASS — this is the prebuilt-`devtoolBin` path CI uses, which
 `cargo xtask check` does not exercise (A20). Expect a rebuild: deleting the
 script changes both `staticCheckSrc` and `e2ePackage`'s store path.
 
-- [ ] **Step 7: Manual devShell check (both shells)**
+- [x] **Step 7: Manual devShell check (both shells)**
+
+Two things block the obvious `nix develop --command true`: `devtool run` refuses
+shell re-entry by design (ADR-0028), and a session hook rejects `nix develop -c`
+as a wrapper anti-pattern. Verify the same two facts declaratively instead —
+which is strictly more precise, since it reads the evaluated shell rather than
+inferring from the absence of an error message:
 
 ```bash
-devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-229-devtool-provision -- nix develop --command true
-devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-229-devtool-provision -- nix develop .#ci --command true
+devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-229-devtool-provision -- nix eval --raw .#devShells.x86_64-linux.ci.shellHook
+devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-229-devtool-provision -- nix eval --json .#devShells.x86_64-linux.ci.buildInputs --apply 'ps: builtins.filter (n: builtins.match ".*devtool.*" n != null) (map (p: p.name) ps)'
+devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-229-devtool-provision -- nix eval --json .#devShells.x86_64-linux.default.buildInputs --apply 'ps: builtins.filter (n: builtins.match ".*devtool.*" n != null) (map (p: p.name) ps)'
 ```
+
+Expected: the hook body is `devtool provision-node-modules` with no `cargo`
+anywhere (A15, A16 second half), and both `buildInputs` queries return
+`["devtool-0.1.0"]`, so `devtool` is on PATH in each shell (A16 first half).
+
+A live entry is still worth one human confirmation — the reviewer can run
+`! nix develop --command true` in a session without that hook.
 
 Expected: both exit 0 with **no** `devtool: command not found` on stderr —
 A15/A16. Check the parked `.err` log for that message with Grep.
@@ -876,7 +890,7 @@ that still says `bash end2end/provision-node-modules.sh` would pass this step
 vacuously — it cannot fail for the reason it exists. Nix evaluates the
 worktree's own `flake.nix` from `--cwd`, exactly as Step 6 relies on.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 Run `cargo xtask check` first, then:
 

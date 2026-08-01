@@ -1094,14 +1094,16 @@
                     pkgs.typescript
                     emacsForCi
                   ];
-                  # ert needs a zone DB (#160); tsc needs BOTH node-dep envs (the
-                  # provision script guards on each with `${VAR:?}`).
+                  # ert needs a zone DB (#160); tsc needs BOTH node-dep envs
+                  # (`devtool provision-node-modules`'s resolver errors on each when
+                  # unset).
                   TZDIR = "${pkgs.tzdata}/share/zoneinfo";
                   E2E_TYPES_NODE_MODULES = "${e2ePackage}/node_modules";
                   E2E_PLAYWRIGHT_TEST = "${pkgs.playwright-test}/lib/node_modules/@playwright/test";
                 }
                 ''
-                  # Writable copy: `devtool check tsc` provisions end2end/node_modules.
+                  # Writable copy: `devtool check tsc` provisions end2end/node_modules
+                  # in-process (#229).
                   cp --no-preserve=mode -r ${staticCheckSrc} src
                   cd src
                   devtool check --all
@@ -1233,6 +1235,11 @@
               pkgs.cargo-llvm-cov
               pkgs.cargo-nextest
               pkgs.curl
+              # `devtool run -- <cmd>` for humans/agents, and the `shellHook`'s
+              # `devtool provision-node-modules` (#229) — so it must be on PATH in the
+              # CI shell too, not just the interactive one. Already built for the
+              # coverage and static-checks derivations, so this adds no new build.
+              devtoolBin
               emacsForCi
               pkgs.jq
               pkgs.leptosfmt
@@ -1262,9 +1269,6 @@
               # manual commands — no Nix check or CI job runs them — so this stays
               # out of `ciInputs`, like the other interactive tooling here.
               pkgs.gh
-              # `devtool run -- <cmd>` etc. on the interactive PATH. Already built
-              # for the coverage sandbox; here it serves humans/agents directly.
-              devtoolBin
             ];
             shellEnv = {
               RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";
@@ -1277,10 +1281,10 @@
               # on the host system's own TZDIR (which masked this locally). Mirrors
               # the ert-check derivation's TZDIR (#160).
               TZDIR = "${pkgs.tzdata}/share/zoneinfo";
-              # Store paths for end2end/provision-node-modules.sh. Exported as env
+              # Store paths for `devtool provision-node-modules`. Exported as env
               # vars (rather than baked into the shellHook) so they survive `cd`
-              # into a worktree — that is what lets xtask's tsc-deps step re-run the
-              # provisioning script there, where the shellHook never fired.
+              # into a worktree — that is what lets `devtool check tsc` re-run the
+              # provisioning there, where the shellHook never fired.
               E2E_TYPES_NODE_MODULES = "${e2ePackage}/node_modules";
               E2E_PLAYWRIGHT_TEST = "${pkgs.playwright-test}/lib/node_modules/@playwright/test";
               shellHook = ''
@@ -1288,9 +1292,10 @@
 
                 # Provision end2end/node_modules (the tsc type-dep closure) so the
                 # devShell `tsc` and IDEs can type-check end2end/ offline in this
-                # checkout. The same script also runs as xtask's tsc-deps gate step,
-                # so worktrees self-heal there; see its header for the full rationale.
-                bash end2end/provision-node-modules.sh
+                # checkout. The same subcommand runs in-process from `devtool check
+                # tsc`, so worktrees self-heal there; see
+                # tools/devtool/src/provision.rs for the full rationale.
+                devtool provision-node-modules
               '';
             };
           in

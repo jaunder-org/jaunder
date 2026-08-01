@@ -43,7 +43,7 @@ enum Command {
     SeedE2e(SeedE2eArgs),
     /// Symlink the tsc type-dep closure + the nix-matched Playwright into
     /// `<root>/end2end/node_modules` (gitignored, so absent in fresh checkouts and
-    /// worktrees). Replaces `end2end/provision-node-modules.sh` (#229).
+    /// worktrees). Run by the devShell shellHook and by `check tsc` (#229).
     ProvisionNodeModules(ProvisionArgs),
 }
 
