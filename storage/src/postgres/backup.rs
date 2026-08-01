@@ -276,9 +276,11 @@ async fn columns(
     .await?;
     rows.into_iter()
         .map(|row| {
+            // `ColumnInfo` is a plain struct, so its field types police nothing — the
+            // turbofish is what makes these two decodes visible to `sqlx-newtype-decode`.
             Ok(ColumnInfo {
-                name: row.try_get("column_name")?,
-                type_name: row.try_get("udt_name")?,
+                name: row.try_get::<String, _>("column_name")?,
+                type_name: row.try_get::<String, _>("udt_name")?,
             })
         })
         .collect()

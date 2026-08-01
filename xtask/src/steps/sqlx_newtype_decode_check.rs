@@ -54,6 +54,15 @@
 //! - **A decode whose type is pinned only by later use** — an unascribed `let` whose
 //!   value is later pushed into a `Vec<i64>`.
 //!
+//! One class that *used* to be listed here is not any more. A `.get`/`try_get` in
+//! **struct-literal field position** was called safe on the grounds that "the destination
+//! field's declared type pins the decode, and that declaration is itself policed as a
+//! declared target". That holds for a `#[derive(FromRow)]` struct and is false for a plain
+//! one, whose fields are policed by nothing — `storage`'s own `FeedEventRecord` and
+//! `ColumnInfo` were both invisible that way (#728). `syn` cannot follow a field to its
+//! struct's definition, so the gate does not guess: it **fails**, and the author writes the
+//! type at the call.
+//!
 //! Neither occurs as an id decode today. They are recorded here so the boundary is
 //! inherited by the next audit rather than rediscovered.
 //!
@@ -510,15 +519,23 @@ fn nth_type_arg(args: &syn::PathArguments, n: usize) -> Option<syn::Type> {
 /// type.
 struct Scanner {
     out: Vec<DecodeSite>,
+    /// `(line, column-argument)` of each turbofish-less `.get`/`try_get` in struct-literal
+    /// field position — a hard failure, not a decode record.
+    unreadable_fields: Vec<(usize, String)>,
+    /// Spans of those calls, so [`Scanner::record`] can decline them rather than pinning
+    /// them to whatever `let` or `fn` return happens to enclose the struct literal.
+    field_positions: std::collections::HashSet<(usize, usize)>,
     function: String,
     fn_ret: Option<syn::Type>,
     let_ty: Option<syn::Type>,
 }
 
 impl Scanner {
-    fn new() -> Self {
+    fn new(field_positions: std::collections::HashSet<(usize, usize)>) -> Self {
         Self {
             out: Vec::new(),
+            unreadable_fields: Vec::new(),
+            field_positions,
             function: String::new(),
             fn_ret: None,
             let_ty: None,
@@ -566,6 +583,52 @@ fn return_type(sig: &syn::Signature) -> Option<syn::Type> {
     }
 }
 
+/// Strips the wrappers that can sit between a struct-literal field and the call that
+/// produces its value, so `name: row.try_get("c")?` is recognised as field position.
+///
+/// **The peel set is deliberately short and closed**: `?`, `.await`, and parens/groups.
+/// Anything else — `.unwrap()`, a cast, a nested call — is *not* field position and this
+/// rule does not reach it. A longer peel would be guesswork about which expressions
+/// "really" mean the field, and the whole design rests on the gate never guessing.
+fn peel_to_call(expr: &syn::Expr) -> &syn::Expr {
+    match expr {
+        syn::Expr::Try(e) => peel_to_call(&e.expr),
+        syn::Expr::Await(e) => peel_to_call(&e.base),
+        syn::Expr::Paren(e) => peel_to_call(&e.expr),
+        syn::Expr::Group(e) => peel_to_call(&e.expr),
+        other => other,
+    }
+}
+
+/// `(line, column)` of every turbofish-less `.get`/`try_get` sitting in struct-literal
+/// field position.
+///
+/// This is the class #715's module doc wrongly called safe: it claimed the destination
+/// field's declared type pins such a decode "and that declaration is itself policed as a
+/// declared target". True for a `#[derive(FromRow)]` struct; false for a plain one, whose
+/// fields are policed by nothing. `syn` cannot follow the struct name to its definition —
+/// it may be in another file or another crate — so the gate does not try. It refuses to be
+/// blind instead: write the type at the call, and rule 1 reads it.
+fn unreadable_field_positions(file: &syn::File) -> std::collections::HashSet<(usize, usize)> {
+    struct Finder(std::collections::HashSet<(usize, usize)>);
+    impl<'ast> syn::visit::Visit<'ast> for Finder {
+        fn visit_expr_struct(&mut self, i: &'ast syn::ExprStruct) {
+            for f in &i.fields {
+                if let syn::Expr::MethodCall(m) = peel_to_call(&f.expr) {
+                    if target_index(&m.method.to_string()).is_some() && m.turbofish.is_none() {
+                        let s = m.method.span().start();
+                        self.0.insert((s.line, s.column));
+                    }
+                }
+            }
+            syn::visit::visit_expr_struct(self, i);
+        }
+    }
+    let mut finder = Finder(std::collections::HashSet::new());
+    syn::visit::Visit::visit_file(&mut finder, file);
+    finder.0
+}
+
 impl<'ast> syn::visit::Visit<'ast> for Scanner {
     fn visit_item_fn(&mut self, i: &'ast syn::ItemFn) {
         let ret = return_type(&i.sig);
@@ -606,12 +669,21 @@ impl<'ast> syn::visit::Visit<'ast> for Scanner {
     fn visit_expr_method_call(&mut self, i: &'ast syn::ExprMethodCall) {
         let name = i.method.to_string();
         if let Some(idx) = target_index(&name) {
-            let turbofish = i
-                .turbofish
-                .as_ref()
-                .and_then(|t| nth_type_of(t.args.iter(), idx));
+            let span = i.method.span().start();
             let what = i.args.first().map(render).unwrap_or_default();
-            self.record(turbofish, what, i.method.span());
+            if self.field_positions.contains(&(span.line, span.column)) {
+                // Field position with no turbofish: a hard failure, and NOT a decode
+                // record. Falling through to `record` would pin it to the enclosing `fn`
+                // return — the struct literal's own type, or worse an unrelated one — and
+                // report a target the author never wrote.
+                self.unreadable_fields.push((span.line, what));
+            } else {
+                let turbofish = i
+                    .turbofish
+                    .as_ref()
+                    .and_then(|t| nth_type_of(t.args.iter(), idx));
+                self.record(turbofish, what, i.method.span());
+            }
         }
         syn::visit::visit_expr_method_call(self, i);
     }
@@ -667,11 +739,22 @@ impl<'ast> syn::visit::Visit<'ast> for Scanner {
 /// A file that will not parse is **not** silently skipped: an unparsed file is a file
 /// the gate cannot see, and a gate that quietly shrinks its own population is the
 /// failure this whole design exists to prevent. Pure, so it is unit-tested directly.
-fn decodes(source: &str) -> Result<Vec<DecodeSite>, String> {
+fn decodes(source: &str) -> Result<FileScan, String> {
     let file = syn::parse_file(source).map_err(|e| format!("cannot parse as Rust: {e}"))?;
-    let mut scanner = Scanner::new();
+    let mut scanner = Scanner::new(unreadable_field_positions(&file));
     syn::visit::Visit::visit_file(&mut scanner, &file);
-    Ok(scanner.out)
+    Ok(FileScan {
+        sites: scanner.out,
+        unreadable_fields: scanner.unreadable_fields,
+    })
+}
+
+/// One file's scan: the decode records, and the field-position calls whose target is not
+/// written anywhere the gate can read.
+struct FileScan {
+    sites: Vec<DecodeSite>,
+    /// `(line, column-argument)` per failure.
+    unreadable_fields: Vec<(usize, String)>,
 }
 
 /// Whether `path` is exactly `POLICED_ROOT/relative`.
@@ -703,7 +786,18 @@ pub fn problems(scanned: &[(String, String)]) -> Option<String> {
     let mut lines = Vec::new();
     for (path, source) in scanned {
         match decodes(source) {
-            Ok(ds) => found.extend(ds.into_iter().map(|d| (path.clone(), d))),
+            Ok(scan) => {
+                found.extend(scan.sites.into_iter().map(|d| (path.clone(), d)));
+                for (line, what) in scan.unreadable_fields {
+                    lines.push(format!(
+                        "{path}:{line}: `{what}` decodes into a struct-literal field with no type \
+                         written at the call. Add a turbofish — `row.try_get::<T, _>({what})` — so \
+                         this gate can read the target. It will not follow the field to the \
+                         struct's definition: that declaration is only policed when the struct \
+                         derives `FromRow`, and for a plain struct nothing checks it at all."
+                    ));
+                }
+            }
             Err(e) => lines.push(format!(
                 "{path}: {e} — an unparsed file is invisible to this gate, which is exactly the \
                  blind spot it exists to close. Fix the file or the parser; do not skip it."
@@ -888,8 +982,19 @@ mod tests {
     fn targets(src: &str) -> Vec<String> {
         decodes(src)
             .expect("parses")
+            .sites
             .into_iter()
             .map(|d| d.target)
+            .collect()
+    }
+
+    /// Line numbers of the turbofish-less struct-literal field decodes in `src`.
+    fn field_failures(src: &str) -> Vec<usize> {
+        decodes(src)
+            .expect("parses")
+            .unreadable_fields
+            .into_iter()
+            .map(|(line, _)| line)
             .collect()
     }
 
@@ -1036,13 +1141,51 @@ mod tests {
         assert!(targets(src).is_empty());
     }
 
+    // ---- struct-literal field position: the gate refuses to be blind ----
+
     #[test]
-    fn struct_literal_row_get_is_not_collected() {
-        // The destination field's declared type pins the decode, and that declaration
-        // is itself policed as a declared target — so the invariant lives on the
-        // struct, where the newtype belongs.
+    fn an_unturbofished_struct_literal_field_is_a_failure() {
+        // This test replaces `struct_literal_row_get_is_not_collected`, which asserted the
+        // opposite on the strength of a claim that only holds for `#[derive(FromRow)]`
+        // structs: that the destination field's declaration polices the decode. `Rec` here
+        // is a plain struct, so nothing polices it — the exact shape that hid
+        // `FeedEventRecord.attempts` and `ColumnInfo.name` (#728).
         let src = r#"fn f() { Rec { id: r.get("id"), attempts: r.get("attempts") }; }"#;
+        assert_eq!(field_failures(src).len(), 2);
+        // …and it is NOT also recorded as a decode against some enclosing type.
         assert!(targets(src).is_empty());
+    }
+
+    #[test]
+    fn a_turbofished_struct_literal_field_is_read_normally() {
+        let src = r#"fn f() { Rec { id: r.get::<i64, _>("id") }; }"#;
+        assert!(field_failures(src).is_empty());
+        assert_eq!(targets(src), vec!["i64"]);
+    }
+
+    #[test]
+    fn the_peel_set_is_exactly_try_await_and_parens() {
+        // The live sites are `name: row.try_get("c")?`, so `?` must peel. `.await` and
+        // parens travel with it. Everything else is deliberately out of reach — a longer
+        // peel would be guesswork about which expressions "really" mean the field.
+        for src in [
+            r#"fn f() { Rec { a: r.try_get("c")? }; }"#,
+            r#"fn f() { Rec { a: r.get("c").await }; }"#,
+            r#"fn f() { Rec { a: (r.get("c")) }; }"#,
+        ] {
+            assert_eq!(field_failures(src).len(), 1, "must bite: {src}");
+        }
+        // `.unwrap()` puts the call outside field position: the field's value is the
+        // `unwrap` call, not the `get`.
+        let src = r#"fn f() { Rec { a: r.get("c").unwrap() }; }"#;
+        assert!(field_failures(src).is_empty(), "must not bite: {src}");
+    }
+
+    #[test]
+    fn field_position_does_not_reach_a_nested_argument() {
+        // A `get` buried in an argument is not the field's value.
+        let src = r#"fn f() { Rec { a: helper(r.get("c")) }; }"#;
+        assert!(field_failures(src).is_empty());
     }
 
     #[test]
