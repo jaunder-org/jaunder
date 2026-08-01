@@ -8,7 +8,13 @@ use crate::ids::{AudienceId, ChannelId, UserId};
 // `IntoStaticStr` with the wire token as the snake_case variant name, and generates the
 // named parse error plus the serde bridge. `AudienceBase` is wire-facing; the three
 // below are FK-normalized — storage binds their token as a typed `&'static str` into a
-// lookup column and parses it back.
+// lookup column.
+//
+// `TargetKind` additionally takes `sqlx` (#728). FK-normalization is a fact about the
+// *write* side — the column stores a `kind_id` — but the read side joins `target_kinds`
+// and gets the **name back as text**, so the decode direction wants the bridge even
+// though the bind direction does not. `Channel` and `SubscriptionStatus` are not read
+// back that way and so stay bridge-less; when one of them is, it takes the flag too.
 //
 // Those three gain `Serialize`/`Deserialize` they do not currently need, which is the
 // price of one convention rather than two (#746 D12). Note the cost: their tokens are a
@@ -35,6 +41,7 @@ pub enum SubscriptionStatus {
 }
 
 #[macros::text_enum(
+    sqlx,
     error = InvalidTargetKind,
     message = "audience target kind must be \"public\", \"subscribers\", or \"named\""
 )]

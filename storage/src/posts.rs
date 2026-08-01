@@ -900,7 +900,7 @@ where
     (bool,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (PostId, TagId, Tag, TagLabel): for<'r> sqlx::FromRow<'r, DB::Row>,
     (TagId, Tag): for<'r> sqlx::FromRow<'r, DB::Row>,
-    (String, Option<AudienceId>): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (TargetKind, Option<AudienceId>): for<'r> sqlx::FromRow<'r, DB::Row>,
     (DateTime<Utc>,): for<'r> sqlx::FromRow<'r, DB::Row>,
     // `feed_urls_needing_catchup` reads `feed_cache` a row at a time (a bad `feed_url`
     // must not fail the scan), so it needs the column-decode bounds directly rather than
@@ -1031,7 +1031,7 @@ where
     async fn get_post_audiences(&self, post_id: PostId) -> sqlx::Result<Vec<AudienceTarget>> {
         // Owner-only: no viewer resolution. `ORDER BY` makes the result
         // deterministic so callers can compare vecs directly.
-        let rows: Vec<(String, Option<AudienceId>)> = sqlx::query_as(
+        let rows: Vec<(TargetKind, Option<AudienceId>)> = sqlx::query_as(
             "SELECT tk.name, pa.audience_id \
              FROM post_audiences pa \
              JOIN target_kinds tk ON tk.kind_id = pa.target_kind_id \
@@ -1043,7 +1043,7 @@ where
         .await?;
         Ok(rows
             .into_iter()
-            .filter_map(|(kind, audience_id)| audience_target_from_row(&kind, audience_id))
+            .filter_map(|(kind, audience_id)| audience_target_from_row(kind, audience_id))
             .collect())
     }
 
@@ -2043,14 +2043,22 @@ fn audience_target_row(target: &AudienceTarget) -> Option<(&'static str, Option<
 ///
 /// `public` → [`AudienceTarget::Public`], `subscribers` →
 /// [`AudienceTarget::Subscribers`], `named` (with an id) →
-/// [`AudienceTarget::Named`]. A `named` row missing its id, or any kind name
-/// the lookup table never holds, yields `None` (the row is dropped).
-fn audience_target_from_row(kind: &str, audience_id: Option<AudienceId>) -> Option<AudienceTarget> {
-    match TargetKind::try_from(kind) {
-        Ok(TargetKind::Public) => Some(AudienceTarget::Public),
-        Ok(TargetKind::Subscribers) => Some(AudienceTarget::Subscribers),
-        Ok(TargetKind::Named) => audience_id.map(AudienceTarget::Named),
-        Err(_) => None,
+/// [`AudienceTarget::Named`].
+///
+/// **Still returns `Option`, for one reason only.** A `named` row whose `audience_id` is
+/// NULL has no target to build, so it is dropped — unchanged behaviour, asserted below.
+/// The *other* former drop reason is gone: an unrecognised kind name used to land here as
+/// an `Err` from `TargetKind::try_from` and be silently discarded, shortening the caller's
+/// result with no signal. The column now decodes as `TargetKind` (#728), so that value
+/// never reaches this function — it is a `ColumnDecode` error at the query boundary.
+fn audience_target_from_row(
+    kind: TargetKind,
+    audience_id: Option<AudienceId>,
+) -> Option<AudienceTarget> {
+    match kind {
+        TargetKind::Public => Some(AudienceTarget::Public),
+        TargetKind::Subscribers => Some(AudienceTarget::Subscribers),
+        TargetKind::Named => audience_id.map(AudienceTarget::Named),
     }
 }
 
@@ -2535,22 +2543,60 @@ mod tests {
     fn audience_target_from_row_maps_every_kind() {
         // Each lookup-table kind maps to its target; `named` carries the id.
         assert_eq!(
-            audience_target_from_row("public", None),
+            audience_target_from_row(TargetKind::Public, None),
             Some(AudienceTarget::Public)
         );
         assert_eq!(
-            audience_target_from_row("subscribers", None),
+            audience_target_from_row(TargetKind::Subscribers, None),
             Some(AudienceTarget::Subscribers)
         );
         assert_eq!(
-            audience_target_from_row("named", Some(AudienceId::from(7))),
+            audience_target_from_row(TargetKind::Named, Some(AudienceId::from(7))),
             Some(AudienceTarget::Named(AudienceId::from(7)))
         );
-        // A `named` row missing its id, or an unknown kind name, is dropped.
-        assert_eq!(audience_target_from_row("named", None), None);
+        // A `named` row missing its id is still dropped — unchanged by #728, and the only
+        // remaining reason this returns `Option`.
+        assert_eq!(audience_target_from_row(TargetKind::Named, None), None);
+        // The former second drop reason — an unrecognised kind name — is no longer
+        // expressible here: the parameter is a `TargetKind`, so a bad name cannot get this
+        // far. `get_post_audiences_rejects_an_unknown_target_kind` covers it at the
+        // boundary where it now surfaces.
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn get_post_audiences_rejects_an_unknown_target_kind(#[case] backend: Backend) {
+        // Before #728 the `tk.name` column decoded as `String` and an unrecognised value
+        // was dropped by a `filter_map` — the post silently lost an audience row, with no
+        // error and no log. Decoding as `TargetKind` moves that to the query boundary.
+        let env = backend.setup().await;
+        let state = &env.state;
+        let author = SeedUser::new().seed(state).await.user_id;
+        let post = SeedRawPost::new(author)
+            .audiences(vec![AudienceTarget::Public])
+            .seed(state)
+            .await;
         assert_eq!(
-            audience_target_from_row("bogus", Some(AudienceId::from(1))),
-            None
+            state.posts.get_post_audiences(post.post_id).await.unwrap(),
+            vec![AudienceTarget::Public],
+            "precondition: the audience reads back before tampering"
+        );
+
+        // Only reachable by DB tampering or a migration that renames a lookup row.
+        env.base
+            .pool()
+            .execute("UPDATE target_kinds SET name = 'bogus' WHERE name = 'public'")
+            .await
+            .unwrap();
+
+        let err = state
+            .posts
+            .get_post_audiences(post.post_id)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, sqlx::Error::ColumnDecode { .. }),
+            "an unrecognised kind must surface as a decode error, not a shorter list: {err:?}"
         );
     }
 
