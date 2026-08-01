@@ -341,6 +341,13 @@ struct Allowed {
 enum Category {
     /// `COUNT(*)`, `SELECT EXISTS(…)`, and other cardinality probes.
     CountOrExists,
+    /// A flag or counter whose primitive **is** the whole domain — a `bool` with two
+    /// meaningful states, an integer retry count. A newtype would wrap nothing.
+    ///
+    /// Distinct from [`Category::CountOrExists`], which is about a *query shape*: reading
+    /// `email_verified` is not a cardinality probe, and filing it under one would dilute
+    /// exactly the by-rationale reading these categories exist for.
+    FlagOrCounter,
     /// Names and versions read out of the database's own catalog.
     SchemaIntrospection,
     /// A blob the storage layer deliberately does not interpret — raw JSON, a cached
@@ -369,6 +376,7 @@ impl Category {
     /// `HashMap` iteration order or a hand-kept second list.
     const ALL: &'static [Self] = &[
         Self::CountOrExists,
+        Self::FlagOrCounter,
         Self::SchemaIntrospection,
         Self::OpaquePayload,
         Self::DeliberateLossy,
@@ -381,6 +389,7 @@ impl Category {
     fn label(self) -> &'static str {
         match self {
             Self::CountOrExists => "count-or-exists",
+            Self::FlagOrCounter => "flag-or-counter",
             Self::SchemaIntrospection => "schema-introspection",
             Self::OpaquePayload => "opaque-payload",
             Self::DeliberateLossy => "deliberate-lossy",
@@ -405,8 +414,8 @@ fn names_an_issue(reason: &str) -> bool {
 
 /// Every decode that is genuinely primitive, each with its reason.
 ///
-/// **No entry here may name a decode that yields an id.** That is the whole point:
-/// this list is the complete population of legitimate `i64` decodes under the root,
+/// **No entry here may name a decode that yields a domain value.** That is the whole
+/// point: this list is the complete population of legitimate untyped decodes under the root,
 /// and anything not on it is a failure.
 const ALLOWLIST: &[Allowed] = &[
     // ---- schema introspection: names and definitions out of the DB's own catalog ----
@@ -426,7 +435,8 @@ const ALLOWLIST: &[Allowed] = &[
         what: "\"table_name\"",
         count: 1,
         category: Category::SchemaIntrospection,
-        reason: "a table name from information_schema",
+        reason: "a table name read from information_schema and spliced back into DDL — a \
+                 catalog identifier the domain model has no type for",
     },
     Allowed {
         file: "postgres/backup.rs",
@@ -677,8 +687,9 @@ const ALLOWLIST: &[Allowed] = &[
         target: "i32",
         what: "attempts",
         count: 1,
-        category: Category::CountOrExists,
-        reason: "retry counter for the claim-lease backoff, not an identifier",
+        category: Category::FlagOrCounter,
+        reason: "retry counter for the claim-lease backoff — an integer compared against a \
+                 max, with no identity of its own",
     },
     // ---- flags on row tuples ----
     Allowed {
@@ -687,8 +698,9 @@ const ALLOWLIST: &[Allowed] = &[
         target: "bool",
         what: "UserRow.7",
         count: 1,
-        category: Category::CountOrExists,
-        reason: "email_verified flag",
+        category: Category::FlagOrCounter,
+        reason: "email_verified — a two-state flag whose meaning is exhausted by the bool; \
+                 there is no wider domain for a newtype to carry",
     },
     Allowed {
         file: "helpers.rs",
@@ -696,8 +708,9 @@ const ALLOWLIST: &[Allowed] = &[
         target: "bool",
         what: "UserRow.8",
         count: 1,
-        category: Category::CountOrExists,
-        reason: "is_operator flag",
+        category: Category::FlagOrCounter,
+        reason: "is_operator — the same two-state shape; the authorization *decision* is a \
+                 domain concept, but the stored bit is not",
     },
     Allowed {
         file: "helpers.rs",
@@ -1239,7 +1252,8 @@ impl Scanner<'_> {
     }
 
     /// Records one decode with the nearest declared target, if that target is in the
-    /// `i64` family. `turbofish` wins, then the enclosing `let`, then the `fn` return.
+    /// has an unapproved leaf. `turbofish` wins, then the enclosing `let`, then the `fn`
+    /// return.
     fn record(&mut self, turbofish: Option<syn::Type>, what: String, span: proc_macro2::Span) {
         let target = turbofish
             .or_else(|| self.let_ty.clone())
@@ -1389,11 +1403,10 @@ impl<'ast> syn::visit::Visit<'ast> for Scanner<'_> {
     /// A `#[derive(FromRow)]` struct is a declared decode target: each field is a
     /// column decode, and the field's type is where the newtype belongs.
     fn visit_item_struct(&mut self, i: &'ast syn::ItemStruct) {
-        let is_from_row = i
-            .attrs
-            .iter()
-            .any(|a| a.path().is_ident("derive") && render(&a.meta).contains("FromRow"));
-        if is_from_row {
+        // Same predicate `collect_declarations` uses to decide delegation — they must not
+        // drift, or a struct could be approved as a composite while its fields go
+        // unpoliced.
+        if is_from_row(&i.attrs) {
             for f in &i.fields {
                 let unapproved = unapproved_leaves(&f.ty, self.approve);
                 if !unapproved.is_empty() {
@@ -1483,7 +1496,7 @@ fn entry_matches(entry: &Allowed, path: &str, decode: &DecodeSite) -> bool {
 /// The failure detail for every unjustified decode and every allowlist entry whose
 /// declared count no longer matches the tree, or `None` when the population is exactly
 /// accounted for. Pure given the `(path, source)` pairs, so it is unit-tested directly.
-pub fn problems(scanned: &[(String, String)], approve: &ApproveSet) -> Option<String> {
+pub(crate) fn problems(scanned: &[(String, String)], approve: &ApproveSet) -> Option<String> {
     let mut found: Vec<(String, DecodeSite)> = Vec::new();
     let mut lines = Vec::new();
     for (path, source) in scanned {
@@ -1556,9 +1569,11 @@ pub fn problems(scanned: &[(String, String)], approve: &ApproveSet) -> Option<St
     }
     lines.push(
         "  recovery: this gate enumerates rather than searching — it has no idea which columns \
-         are ids, and deliberately so, because every audit that searched for the id-ish spelling \
-         missed the sites spelled another way (#686, #715). Every i64-family decode is therefore \
-         either typed or listed. Currently exempt, by rationale:"
+         hold domain values, and deliberately so, because every audit that searched for the \
+         id-ish spelling missed the sites spelled another way (#686, #715). So a decode passes \
+         only when every leaf of its target is an APPROVED type — one declared with a \
+         bridge-emitting macro, or a composite whose fields this gate polices — and every other \
+         decode is either typed or listed below. Currently exempt, by rationale:"
             .to_string(),
     );
     for category in Category::ALL {

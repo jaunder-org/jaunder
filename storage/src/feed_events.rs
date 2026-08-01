@@ -46,7 +46,13 @@ pub enum FeedEventError {
 /// such a row names no identifiable feed, so it is an unactionable work item. Failing the
 /// whole batch on it would wedge the worker on that row forever, which is what
 /// [`purge_corrupt`](crate::postgres::feed_events) exists to prevent.
-pub(crate) struct ClaimedRow(pub(crate) Result<FeedEventRecord, FeedEventId>);
+/// A two-variant enum rather than a `Result`: [`ClaimedRow::Corrupt`] is not an error, it
+/// is a decided outcome — the row was read, understood to be unusable, and routed to the
+/// purge list. Spelling it `Err` invites the next reader to `?` it and lose the id.
+pub(crate) enum ClaimedRow {
+    Record(Box<FeedEventRecord>),
+    Corrupt(FeedEventId),
+}
 
 /// **The diversion is column-scoped, and that is the whole point of this impl.**
 ///
@@ -69,9 +75,9 @@ where
 {
     fn from_row(row: &'r R) -> sqlx::Result<Self> {
         match FeedEventRecord::from_row(row) {
-            Ok(record) => Ok(Self(Ok(record))),
+            Ok(record) => Ok(Self::Record(Box::new(record))),
             Err(_) if row.try_get::<FeedPath, _>("feed_url").is_err() => {
-                Ok(Self(Err(row.try_get::<FeedEventId, _>("id")?)))
+                Ok(Self::Corrupt(row.try_get::<FeedEventId, _>("id")?))
             }
             Err(e) => Err(e),
         }
@@ -85,10 +91,10 @@ where
 pub(crate) fn partition_claimed(rows: Vec<ClaimedRow>) -> (Vec<FeedEventRecord>, Vec<FeedEventId>) {
     let mut records = Vec::with_capacity(rows.len());
     let mut corrupt = Vec::new();
-    for ClaimedRow(row) in rows {
+    for row in rows {
         match row {
-            Ok(record) => records.push(record),
-            Err(id) => corrupt.push(id),
+            ClaimedRow::Record(record) => records.push(*record),
+            ClaimedRow::Corrupt(id) => corrupt.push(id),
         }
     }
     (records, corrupt)
