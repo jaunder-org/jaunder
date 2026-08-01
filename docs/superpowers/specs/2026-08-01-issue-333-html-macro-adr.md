@@ -238,14 +238,24 @@ producing a string, with no reactive runtime.
 - A1. All nine render modules build markup with `html!`: `app/render.rs`,
   `posts/render.rs`, `timeline/render.rs`, `home/render.rs`, `icon/markup.rs`,
   `sidebar/markup.rs`, `topbar/markup.rs`, `avatar/markup.rs`,
-  `taglist/markup.rs`. Mechanically: no `format!`, `write!`, or `push_str`
-  remains in those nine files outside `#[cfg(test)]`, and the now-unused
-  `use std::fmt::Write` imports (`sidebar/markup.rs:2`, `taglist/markup.rs:1`)
-  are gone. (`write!` and `push_str` are both named because `sidebar` and
-  `taglist` build with a mix of the two — `write!` at
+  `taglist/markup.rs`. Mechanically: **no `format!`, `write!`, or `push_str` in
+  those nine files whose string literal contains `<`**, outside `#[cfg(test)]`;
+  and the now-unused `use std::fmt::Write` imports (`sidebar/markup.rs:2`,
+  `taglist/markup.rs:1`) are gone. (`write!` and `push_str` are both named
+  because `sidebar` and `taglist` build with a mix of the two — `write!` at
   `sidebar/markup.rs:50,62,70` and `taglist/markup.rs:20,26`, `push_str` at
   `sidebar/markup.rs:55,68,76` and `taglist/markup.rs:32,34` — not with
   `format!`.)
+
+  > **Why "whose literal contains `<`" rather than "no `format!` at all"**
+  > (tightened during execution): these modules also format plain **text** that
+  > maud then escapes — `format!("Posts by {username}")` for a topbar title
+  > (`posts/render.rs:55`), `format!("#{tag}")` (`:62`). Banning those outright
+  > would be a criterion the work cannot satisfy without pointless contortion,
+  > and it is the same carve-out A3 already makes for `format_post_time` and
+  > `feed_label`: formatting _text_ is not building _markup_. The `<` test keeps
+  > the rule mechanical rather than a judgment call.
+
 - A2. `crate::html::escape_html` no longer exists; `rg 'escape_html' web/src`
   returns no hits.
 - A3. Every fn in those nine modules **whose return value is HTML** returns

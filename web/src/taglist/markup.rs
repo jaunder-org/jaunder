@@ -1,38 +1,36 @@
-use std::fmt::Write;
+use maud::html;
 
 use common::seed::TagSummary;
 
-use crate::html::escape_html;
+use crate::html::Markup;
 use crate::taglist::TagCtx;
 
 /// The footer tag chips: a `<span class="j-tag-list">` of `<span class="j-tag-cell">`
 /// chips, each a `#display` link to `/tags/:slug`, plus the "· here" link under
-/// [`TagCtx::ForUser`]. Byte-identical to the reactive [`TagList`]; keep their
-/// markup coincident.
+/// [`TagCtx::ForUser`]. Mirrors the reactive [`TagList`]; keep their markup
+/// coincident.
 #[must_use]
-pub(crate) fn render(tags: &[TagSummary], ctx: &TagCtx) -> String {
+pub(crate) fn render(tags: &[TagSummary], ctx: &TagCtx) -> Markup {
     if tags.is_empty() {
-        return String::new();
+        return Markup::empty();
     }
-    let mut out = String::from("<span class=\"j-tag-list\">");
-    for tag in tags {
-        let slug = escape_html(&tag.slug);
-        let _ = write!(
-            out,
-            "<span class=\"j-tag-cell\"><a class=\"j-tag\" href=\"/tags/{slug}\">#{display}</a>",
-            display = escape_html(&tag.display),
-        );
-        if let TagCtx::ForUser(username) = ctx {
-            let _ = write!(
-                out,
-                "<a class=\"j-tag-here\" href=\"/~{user}/tags/{slug}\" title=\"On this blog\">\u{00b7} here</a>",
-                user = escape_html(username),
-            );
+    Markup::new(html! {
+        span class="j-tag-list" {
+            @for tag in tags {
+                span class="j-tag-cell" {
+                    a class="j-tag" href={ "/tags/" (tag.slug) } { "#" (tag.display) }
+                    @if let TagCtx::ForUser(username) = ctx {
+                        a class="j-tag-here"
+                            href={ "/~" (username) "/tags/" (tag.slug) }
+                            title="On this blog"
+                        {
+                            "\u{00b7} here"
+                        }
+                    }
+                }
+            }
         }
-        out.push_str("</span>");
-    }
-    out.push_str("</span>");
-    out
+    })
 }
 
 #[cfg(test)]
@@ -51,7 +49,7 @@ mod tests {
         }];
         let html = render(&tags, &TagCtx::SiteWide);
         assert_eq!(
-            html,
+            html.as_str(),
             "<span class=\"j-tag-list\"><span class=\"j-tag-cell\">\
              <a class=\"j-tag\" href=\"/tags/rust\">#Rust</a></span></span>"
         );
@@ -63,7 +61,8 @@ mod tests {
             slug: "rust".parse().unwrap(),
             display: "Rust".parse().unwrap(),
         }];
-        let html = render(&tags, &TagCtx::ForUser(parse_username("alice")));
+        let markup = render(&tags, &TagCtx::ForUser(parse_username("alice")));
+        let html = markup.as_str();
         assert!(
             html.contains(
                 "<a class=\"j-tag-here\" href=\"/~alice/tags/rust\" title=\"On this blog\">"
@@ -74,6 +73,6 @@ mod tests {
 
     #[test]
     fn empty_tag_list_renders_nothing() {
-        assert_eq!(render(&[], &TagCtx::SiteWide), "");
+        assert_eq!(render(&[], &TagCtx::SiteWide).as_str(), "");
     }
 }

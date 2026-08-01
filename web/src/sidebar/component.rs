@@ -61,7 +61,7 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
     // and the reactive re-render coincide (flash-free). `display:contents` keeps the
     // host wrapper out of the aside's layout.
     let session = crate::auth::use_session().current;
-    let anon_html = render_sidebar(&active_key);
+    let anon_html = render_sidebar(&active_key).into_string();
     view! {
         <aside class="j-sidebar">
             {move || match session.get() {

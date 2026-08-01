@@ -717,6 +717,21 @@ git commit -m "fix(xtask): scan macro bodies for the from_trusted door"
 
 ### Task 7: Convert `icon` + `timeline` + `home`
 
+> **[x] DONE — merged with Task 8** (`topbar` + `taglist`), for a reason the
+> plan got wrong: `home::render_masthead` composes `topbar::render`'s output, so
+> converting `home` first would interpolate an HTML `String` into `html!` and
+> maud would **silently escape it**. That is worse than the ordering bug this
+> plan already guards against — it compiles, and only the golden test catches
+> it. `home` must convert with or after `topbar`, so the two tasks are one
+> commit.
+>
+> `Markup::empty()` is restored here (deferred from Task 2): `topbar`'s `right`
+> slot is its first production caller.
+>
+> Second D2 data point: **no golden needed re-pinning** — icon, topbar, taglist
+> and home all still assert their original bytes. maud is reproducing the
+> hand-written `format!` output exactly across every element converted so far.
+
 **Files:**
 
 - Modify: `web/src/icon/markup.rs`, `web/src/timeline/render.rs`,
@@ -778,6 +793,9 @@ git commit -m "refactor(web): build icon, load-more, and masthead markup with ma
 
 ### Task 8: Convert `topbar` + `taglist`
 
+> **[x] DONE — landed with Task 7** (see the note there for why `topbar` cannot
+> follow `home`).
+
 **Files:**
 
 - Modify: `web/src/topbar/markup.rs`, `web/src/taglist/markup.rs`
@@ -831,6 +849,11 @@ git commit -m "refactor(web): build topbar and tag list with maud; type the trus
 
 ### Task 9: Convert `sidebar`
 
+> **[x] DONE.** `write!`/`push_str` loops became `@for`;
+> `use std::fmt::Write as _` removed. Goldens unchanged again — including
+> `html.ends_with("<div class=\"j-sb-foot\"></div>")`, so maud emits the same
+> empty-element form the hand-written string did.
+
 **Files:**
 
 - Modify: `web/src/sidebar/markup.rs` — builds with a mix of **`write!`**
@@ -876,6 +899,12 @@ git commit -m "refactor(web): build the sidebar with maud"
 ---
 
 ### Task 10: Convert `posts/render.rs` and its `inner_html` callers
+
+> **[x] DONE.** The raw door gets its first production caller here —
+> `(Markup::from_rendered_html(view.rendered_html))` inside the `html!`,
+> replacing a bare `{body}` interpolation that relied on `RenderedHtml`'s
+> `Display`. `Markup` deliberately has **no** `Display`, which is what makes
+> that substitution the only spelling available.
 
 The largest module (601 lines incl. tests) and the one holding the trusted-HTML
 interpolation the whole design is built around.
@@ -940,6 +969,22 @@ git commit -m "refactor(web): build post markup with maud"
 ---
 
 ### Task 11: Convert `app/render.rs` and the projector boundary
+
+> **[x] DONE.** D8 handled as specified: the discovery `<link>`s spell
+> `data-jaunder-discovery` literally, pinned to `DISCOVERY_MARKER_ATTR` by
+> `discovery_marker_attr_matches_the_literal_written_in_the_markup` (A15). `og:`
+> properties needed no special handling — the whole reason maud was chosen.
+>
+> One byte change, deliberate and the only one in the cycle: maud emits void
+> elements as `<meta …>` where the hand-written strings had `<meta … />`. That
+> is `<head>` content, invisible to layout and to the CLS probe, and the head
+> tests assert on `contains`, so nothing needed re-pinning.
+>
+> **Deviation from A6's letter:** `topbar::render`'s `right` and
+> `render_timeline_page`'s `chrome` are `&Markup`, not `Markup` — clippy's
+> `needless_pass_by_value` fires on by-value, because maud renders through
+> `Render::render_to(&self)` and never consumes them. A6's intent (the trusted
+> slot is typed, not a `&str` with a comment) is met.
 
 **Files:**
 
@@ -1008,6 +1053,12 @@ git commit -m "refactor(web): build the page shell with maud; hand the projector
 ---
 
 ### Task 12: Delete `escape_html`; rewrite the `html.rs` module doc
+
+> **[x] DONE.** `rg 'escape_html' web/src` returns nothing (A2). The module doc
+> and `web/src/lib.rs`'s description now describe `Markup`, and both carry
+> forward the invariant `html.rs` was the sole record of: non-reactive markup
+> only, so `reactive_graph` never sits on the public request path (#173,
+> ADR-0040) — maud preserves it, being a compile-time macro with no runtime.
 
 **Files:**
 

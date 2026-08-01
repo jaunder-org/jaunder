@@ -14,7 +14,7 @@
 //! tests that protect the byte-identical output.
 
 use crate::home::render::render_masthead;
-use crate::html::escape_html;
+use crate::html::Markup;
 use crate::taglist::TagCtx;
 use crate::timeline::render::render_load_more;
 use crate::{avatar, taglist, topbar};
@@ -22,6 +22,7 @@ use common::render::RenderedHtml;
 use common::seed::{PageSeed, PostResponse, TagSummary, TimelinePostSummary};
 use common::time::UtcInstant;
 use common::username::Username;
+use maud::html;
 
 /// Formats a [`UtcInstant`] as `"YYYY-MM-DD HH:MM"` (UTC wall-clock). Shared with
 /// the reactive components so the projected post time and the reactive re-render
@@ -35,13 +36,14 @@ pub(crate) fn format_post_time(ts: UtcInstant) -> String {
 /// page's markup (Topbar + wrappers + posts + load-more) so the seeded first paint
 /// coincides. Split from [`crate::app::render_shell`] so the permalink Suspense
 /// fallback can reuse just [`permalink_article`].
-pub(crate) fn render_body(seed: &PageSeed) -> String {
+pub(crate) fn render_body(seed: &PageSeed) -> Markup {
     match seed {
         // Permalink: no Topbar; a single article inside `j-scroll`/`j-page`.
-        PageSeed::Permalink(post) => format!(
-            "<div class=\"j-scroll\"><div class=\"j-page\">{}</div></div>",
-            permalink_article(post),
-        ),
+        PageSeed::Permalink(post) => Markup::new(html! {
+            div class="j-scroll" {
+                div class="j-page" { (permalink_article(post)) }
+            }
+        }),
         // Home (anonymous "Local" mode): the shared masthead as the leading chrome,
         // then the same flush timeline body as the profile/tag pages.
         PageSeed::SiteTimeline(page) => render_timeline_page(
@@ -52,14 +54,22 @@ pub(crate) fn render_body(seed: &PageSeed) -> String {
             "No posts yet.",
         ),
         PageSeed::Profile { username, page } => render_timeline_page(
-            &topbar::render(&format!("Posts by {username}"), Some("User timeline"), ""),
+            &topbar::render(
+                &format!("Posts by {username}"),
+                Some("User timeline"),
+                &Markup::empty(),
+            ),
             &page.posts,
             page.has_more,
             &TagCtx::ForUser(username.clone()),
             "No posts yet.",
         ),
         PageSeed::SiteTag { tag, page } => render_timeline_page(
-            &topbar::render(&format!("#{tag}"), Some("Posts on this instance"), ""),
+            &topbar::render(
+                &format!("#{tag}"),
+                Some("Posts on this instance"),
+                &Markup::empty(),
+            ),
             &page.posts,
             page.has_more,
             &TagCtx::SiteWide,
@@ -73,7 +83,7 @@ pub(crate) fn render_body(seed: &PageSeed) -> String {
             &topbar::render(
                 &format!("#{tag}"),
                 Some(&format!("Posts by ~{username}")),
-                "",
+                &Markup::empty(),
             ),
             &page.posts,
             page.has_more,
@@ -86,7 +96,7 @@ pub(crate) fn render_body(seed: &PageSeed) -> String {
 /// One permalink post as an `<article>`. Shared by the projector's permalink page
 /// and the reactive `PostPage`'s Suspense fallback so they coincide.
 #[must_use]
-pub(crate) fn permalink_article(post: &PostResponse) -> String {
+pub(crate) fn permalink_article(post: &PostResponse) -> Markup {
     let ctx = TagCtx::ForUser(post.username.clone());
     render_post_article(&PostView {
         username: &post.username,
@@ -104,22 +114,23 @@ pub(crate) fn permalink_article(post: &PostResponse) -> String {
 /// Concatenated `<article>`s for a list of timeline posts (anonymous, so no action
 /// column), each coincident with the reactive `PostCard`/`PostDisplay` output.
 #[must_use]
-fn render_posts(posts: &[TimelinePostSummary], tag_ctx: &TagCtx) -> String {
-    let mut out = String::new();
-    for post in posts {
-        out.push_str(&render_post_article(&PostView {
-            username: &post.username,
-            title: post.title.as_deref(),
-            banner: None,
-            summary: post.summary.as_deref(),
-            rendered_html: &post.rendered_html,
-            time: &format_post_time(post.published_at),
-            permalink: post.permalink.as_deref().unwrap_or_default(),
-            tags: &post.tags,
-            tag_ctx,
-        }));
-    }
-    out
+fn render_posts(posts: &[TimelinePostSummary], tag_ctx: &TagCtx) -> Markup {
+    Markup::new(html! {
+        @for post in posts {
+            @let time = format_post_time(post.published_at);
+            (render_post_article(&PostView {
+                username: &post.username,
+                title: post.title.as_deref(),
+                banner: None,
+                summary: post.summary.as_deref(),
+                rendered_html: &post.rendered_html,
+                time: &time,
+                permalink: post.permalink.as_deref().unwrap_or_default(),
+                tags: &post.tags,
+                tag_ctx,
+            }))
+        }
+    })
 }
 
 /// The fields needed to render one post, borrowed from a `PostResponse` or a
@@ -141,28 +152,23 @@ pub(crate) struct PostView<'a> {
 /// [`render_post_inner`] / [`render_post_content`]) so a seeded first paint and
 /// the reactive re-render are byte-identical.
 #[must_use]
-pub(crate) fn render_post_article(view: &PostView) -> String {
-    format!(
-        "<article class=\"j-post\">{}</article>",
-        render_post_inner(view)
-    )
+pub(crate) fn render_post_article(view: &PostView) -> Markup {
+    Markup::new(html! {
+        article class="j-post" { (render_post_inner(view)) }
+    })
 }
 
 /// The inner HTML of `<article class="j-post">` for the **anonymous** layout:
 /// avatar + the content column, with no author-action slot. Mirrors
 /// `PostDisplay`'s children when no `children` are passed.
 #[must_use]
-pub(crate) fn render_post_inner(view: &PostView) -> String {
-    format!(
-        concat!(
-            "{avatar}",
-            "<div style=\"min-width:0;display:flex;gap:8px;align-items:flex-start\">",
-            "<div style=\"flex:1;min-width:0\">{content}</div>",
-            "</div>",
-        ),
-        avatar = avatar::render(view.username, 38).into_string(),
-        content = render_post_content(view),
-    )
+pub(crate) fn render_post_inner(view: &PostView) -> Markup {
+    Markup::new(html! {
+        (avatar::render(view.username, 38))
+        div style="min-width:0;display:flex;gap:8px;align-items:flex-start" {
+            div style="flex:1;min-width:0" { (render_post_content(view)) }
+        }
+    })
 }
 
 /// The inner HTML of the post's content column (`<div style="flex:1;min-width:0">`):
@@ -174,48 +180,38 @@ pub(crate) fn render_post_inner(view: &PostView) -> String {
 /// projector's anonymous paint, so the timestamp always stays in the header and
 /// the action column is purely additive — never a content change.
 #[must_use]
-pub(crate) fn render_post_content(view: &PostView) -> String {
-    let user = escape_html(view.username);
-    let header_time = format!(
-        "<span class=\"j-spacer\"></span><span class=\"j-post-time\">{}</span>",
-        escape_html(view.time)
-    );
-    let title_html = view.title.map_or_else(String::new, |t| {
-        let t = escape_html(t);
-        if view.permalink.is_empty() {
-            format!("<div class=\"j-post-title\">{t}</div>")
-        } else {
-            format!(
-                "<div class=\"j-post-title\"><a href=\"{}\">{t}</a></div>",
-                escape_html(view.permalink)
-            )
+pub(crate) fn render_post_content(view: &PostView) -> Markup {
+    Markup::new(html! {
+        header class="j-post-head" {
+            span class="j-post-name" { (view.username) }
+            span class="j-post-handle" { "@" (view.username) }
+            span class="j-spacer" {}
+            span class="j-post-time" { (view.time) }
         }
-    });
-    let banner_html = view.banner.map_or_else(String::new, |b| {
-        format!("<p class=\"draft-banner\">{}</p>", escape_html(b))
-    });
-    let summary_html = view.summary.map_or_else(String::new, |s| {
-        format!("<p class=\"j-post-summary\">{}</p>", escape_html(s))
-    });
-    format!(
-        concat!(
-            "<header class=\"j-post-head\">",
-            "<span class=\"j-post-name\">{user}</span>",
-            "<span class=\"j-post-handle\">@{user}</span>",
-            "{header_time}",
-            "</header>",
-            "{title_html}{banner_html}{summary_html}",
-            "<div class=\"j-post-body\">{body}</div>",
-            "<footer class=\"j-post-foot\">{tags}<span class=\"j-spacer\"></span></footer>",
-        ),
-        user = user,
-        header_time = header_time,
-        title_html = title_html,
-        banner_html = banner_html,
-        summary_html = summary_html,
-        body = view.rendered_html,
-        tags = taglist::render(view.tags, view.tag_ctx),
-    )
+        @if let Some(title) = view.title {
+            div class="j-post-title" {
+                @if view.permalink.is_empty() {
+                    (title)
+                } @else {
+                    a href=(view.permalink) { (title) }
+                }
+            }
+        }
+        @if let Some(banner) = view.banner {
+            p class="draft-banner" { (banner) }
+        }
+        @if let Some(summary) = view.summary {
+            p class="j-post-summary" { (summary) }
+        }
+        // The one place trusted HTML enters the markup layer. `rendered_html` is a
+        // `RenderedHtml`, so the door is the only way to spell this and the
+        // `raw-html-door` gate accounts for it.
+        div class="j-post-body" { (Markup::from_rendered_html(view.rendered_html)) }
+        footer class="j-post-foot" {
+            (taglist::render(view.tags, view.tag_ctx))
+            span class="j-spacer" {}
+        }
+    })
 }
 
 /// A timeline page's `<main>` content: the given leading `chrome` (a `Topbar`, or
@@ -226,22 +222,23 @@ pub(crate) fn render_post_content(view: &PostView) -> String {
 /// coincide (the anonymous `SubscribeButton` renders nothing).
 #[must_use]
 fn render_timeline_page(
-    chrome: &str,
+    chrome: &Markup,
     posts: &[TimelinePostSummary],
     has_more: bool,
     tag_ctx: &TagCtx,
     empty_text: &str,
-) -> String {
-    let inner = if posts.is_empty() {
-        format!("<p>{}</p>", escape_html(empty_text))
-    } else {
-        format!(
-            "{}{}",
-            render_posts(posts, tag_ctx),
-            render_load_more(has_more)
-        )
-    };
-    format!("{chrome}<div class=\"j-scroll\">{inner}</div>")
+) -> Markup {
+    Markup::new(html! {
+        (chrome)
+        div class="j-scroll" {
+            @if posts.is_empty() {
+                p { (empty_text) }
+            } @else {
+                (render_posts(posts, tag_ctx))
+                (render_load_more(has_more))
+            }
+        }
+    })
 }
 
 /// Shared coincidence-test fixtures. Both this module's tests and the projector's
@@ -354,7 +351,7 @@ mod tests {
             tags: &[],
             tag_ctx: &ctx,
         };
-        let content = render_post_content(&view);
+        let content = render_post_content(&view).into_string();
         // The timestamp stays in the header — the specific divergence #181 fixed. The
         // projector painted it anonymously, so the authed content column must too.
         assert!(
@@ -364,14 +361,14 @@ mod tests {
         // The anonymous inner the projector paints embeds that exact content column
         // verbatim — the authed Some arm injects the identical string.
         assert!(
-            render_post_inner(&view).contains(&content),
+            render_post_inner(&view).as_str().contains(&content),
             "anonymous inner must embed the identical content column: {content}"
         );
     }
 
     #[test]
     fn permalink_body_escapes_title_but_injects_rendered_html_raw() {
-        let html = render_body(&PageSeed::Permalink(sample_post()));
+        let html = render_body(&PageSeed::Permalink(sample_post())).into_string();
         assert!(
             html.contains("Hello &amp; &lt;World&gt;"),
             "title must be escaped: {html}"
@@ -402,7 +399,8 @@ mod tests {
         let html = render_body(&PageSeed::Profile {
             username: parse_username("bob"),
             page,
-        });
+        })
+        .into_string();
         assert!(html.contains("Posts by bob"), "expected heading: {html}");
         assert!(html.contains("First"), "expected post title: {html}");
         assert!(html.contains("<p>body</p>"), "expected body: {html}");
@@ -416,7 +414,7 @@ mod tests {
             next_cursor_post_id: None,
             has_more: false,
         };
-        let html = render_body(&PageSeed::SiteTimeline(page));
+        let html = render_body(&PageSeed::SiteTimeline(page)).into_string();
         assert!(html.contains("No posts yet."), "{html}");
     }
 
@@ -425,7 +423,8 @@ mod tests {
         let site = render_body(&PageSeed::SiteTag {
             tag: "rust".parse().unwrap(),
             page: one_post_page(),
-        });
+        })
+        .into_string();
         // Tag pages render the Topbar (h1 + sub), then a bare j-scroll > posts (flush,
         // no j-page — matches TimelineRows and the home test below).
         assert!(site.contains("<h1>#rust</h1>"), "{site}");
@@ -440,14 +439,15 @@ mod tests {
             username: parse_username("bob"),
             tag: "rust".parse().unwrap(),
             page: one_post_page(),
-        });
+        })
+        .into_string();
         assert!(user.contains("<h1>#rust</h1>"), "{user}");
         assert!(user.contains("Posts by ~bob"), "{user}");
     }
 
     #[test]
     fn home_local_body_has_topbar_hero_signin_and_posts() {
-        let html = render_body(&PageSeed::SiteTimeline(one_post_page()));
+        let html = render_body(&PageSeed::SiteTimeline(one_post_page())).into_string();
         assert!(html.contains("<h1>jaunder.local</h1>"), "{html}");
         assert!(
             html.contains("<a href=\"/login\" class=\"j-btn j-anon-only\">Sign in</a>"),
@@ -471,10 +471,10 @@ mod tests {
     fn load_more_button_rendered_only_when_has_more() {
         let mut page = one_post_page();
         page.has_more = true;
-        let with = render_body(&PageSeed::SiteTimeline(page));
+        let with = render_body(&PageSeed::SiteTimeline(page)).into_string();
         assert!(with.contains("<button>Load more</button>"), "{with}");
 
-        let without = render_body(&PageSeed::SiteTimeline(one_post_page()));
+        let without = render_body(&PageSeed::SiteTimeline(one_post_page())).into_string();
         assert!(!without.contains("Load more"), "{without}");
     }
 
@@ -489,18 +489,20 @@ mod tests {
         let profile = render_body(&PageSeed::Profile {
             username: parse_username("bob"),
             page: empty.clone(),
-        });
+        })
+        .into_string();
         assert!(profile.contains("<p>No posts yet.</p>"), "{profile}");
         let tag = render_body(&PageSeed::SiteTag {
             tag: "rust".parse().unwrap(),
             page: empty,
-        });
+        })
+        .into_string();
         assert!(tag.contains("<p>No posts with this tag yet.</p>"), "{tag}");
     }
 
     #[test]
     fn permalink_body_has_no_topbar_and_wraps_article_in_page() {
-        let html = render_body(&PageSeed::Permalink(sample_post()));
+        let html = render_body(&PageSeed::Permalink(sample_post())).into_string();
         assert!(
             !html.contains("j-topbar"),
             "permalink has no topbar: {html}"
@@ -518,7 +520,7 @@ mod tests {
         let mut post = sample_post();
         post.published_at = None;
         post.permalink = None;
-        let html = render_body(&PageSeed::Permalink(post));
+        let html = render_body(&PageSeed::Permalink(post)).into_string();
         // The time is formatted (mirroring the reactive `format_post_time`), not raw.
         assert!(html.contains("2026-01-02 03:04"), "{html}");
     }
@@ -543,6 +545,7 @@ mod tests {
             tag_ctx: &ctx,
         };
         assert!(render_post_content(&view)
+            .as_str()
             .contains("<span class=\"j-post-time\">2026-01-01 00:00</span>"));
     }
 
@@ -562,7 +565,7 @@ mod tests {
             tags: &[],
             tag_ctx: &ctx,
         };
-        let html = render_post_content(&view);
+        let html = render_post_content(&view).into_string();
         assert!(
             html.contains("<p class=\"draft-banner\">Draft - visible only to you</p>"),
             "{html}"
@@ -589,7 +592,7 @@ mod tests {
             tags: &[],
             tag_ctx: &ctx,
         };
-        let html = render_post_article(&view);
+        let html = render_post_article(&view).into_string();
         assert!(html.starts_with("<article class=\"j-post\">"), "{html}");
         assert!(html.ends_with("</article>"), "{html}");
         // Title links to the permalink, mirroring `PostDisplay`.

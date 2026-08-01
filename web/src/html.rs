@@ -1,12 +1,21 @@
-//! HTML text escaping — the crate's one low-level markup primitive.
+//! [`Markup`] — the render layer's currency and its one trusted-HTML door.
 //!
 //! Deliberately cross-cutting rather than owned by a widget or vertical: every pure
 //! markup builder (`app::render`, `avatar::markup`, `posts::render`,
-//! `taglist::markup`, `topbar::markup`) interpolates untrusted text and must escape
-//! it identically. Plain-string building only — no leptos reactivity — so
-//! `reactive_graph` never sits on the public request path (the #173 escape).
+//! `sidebar::markup`, `taglist::markup`, `topbar::markup`, …) returns `Markup`, and
+//! `Markup` is the only thing that composes into a `maud::html!` unescaped. Escaping
+//! is therefore no longer a rule anyone has to remember: text interpolated into
+//! `html!` is escaped by the macro, and the one way to emit raw HTML is
+//! [`Markup::from_rendered_html`], which the `raw-html-door` gate pins to this file.
+//! (This replaced a hand-rolled `escape_html` that every builder had to call at
+//! every interpolation — #333.)
+//!
+//! **Non-reactive markup only — no leptos reactivity**, so `reactive_graph` never
+//! sits on the public request path (the #173 escape, ADR-0040). maud preserves that
+//! property: `html!` is a compile-time macro that builds a string, with no runtime.
 
-use maud::Render;
+use common::render::RenderedHtml;
+use maud::{PreEscaped, Render};
 
 /// A rendered HTML fragment — the render layer's currency and its **only**
 /// trusted-HTML carrier.
@@ -14,9 +23,8 @@ use maud::Render;
 /// Render fns return `Markup` rather than `String`, and `Markup` is the only thing
 /// that composes into a `maud::html!` unescaped. So a hand-built string cannot reach
 /// the output without passing the crate's single raw door,
-/// `Markup::from_rendered_html` — the compiler enforcing what would otherwise need a
-/// scanner. (That door arrives with its first caller, in the posts conversion; adding
-/// it costs an entry in the `raw-html-door` gate's allowlist.)
+/// [`Markup::from_rendered_html`] — the compiler enforcing what would otherwise need
+/// a scanner.
 ///
 /// Deliberately shadows `maud::Markup` (its `PreEscaped<String>` alias) inside this
 /// crate: `Markup` is the word a `web` reader should reach for, and `maud::Markup` is
@@ -34,6 +42,24 @@ impl Markup {
     #[must_use]
     pub(crate) fn new(markup: maud::Markup) -> Self {
         Self(markup.into_string())
+    }
+
+    /// The empty fragment, for an absent optional slot.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self(String::new())
+    }
+
+    /// Carry an already-sanitized [`RenderedHtml`] into the markup layer unescaped.
+    ///
+    /// **This is the crate's one raw door.** The `raw-html-door` static check fails
+    /// the build on any other `PreEscaped` under `web/src`, including inside macro
+    /// bodies, so a second door has to argue for itself in review.
+    #[must_use]
+    pub fn from_rendered_html(html: &RenderedHtml) -> Self {
+        // XSS SAFETY: `RenderedHtml`'s invariant is established by sanitization
+        // (ADR-0079) — this only inherits it, so no escaping is owed here.
+        Self(PreEscaped(html.as_ref()).into_string())
     }
 
     /// The rendered markup as a string slice.
@@ -57,33 +83,6 @@ impl Render for Markup {
     /// A `Markup` is by definition already rendered, so it goes in verbatim.
     fn render_to(&self, buffer: &mut String) {
         buffer.push_str(self.as_str());
-    }
-}
-
-/// Escape text for safe interpolation into HTML element or attribute content.
-pub(crate) fn escape_html<S: AsRef<str>>(input: S) -> String {
-    let input = input.as_ref();
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            _ => out.push(ch),
-        }
-    }
-    out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::escape_html;
-
-    #[test]
-    fn escape_replaces_markup_metacharacters() {
-        assert_eq!(escape_html("a<b>&\"'"), "a&lt;b&gt;&amp;&quot;&#39;");
     }
 }
 
