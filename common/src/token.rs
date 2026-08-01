@@ -75,8 +75,12 @@ pub fn validate_shape(s: &str) -> Result<(), InvalidTokenShape> {
 // `no_sqlx`: a `RawToken` must be hashed to a `TokenHash` before it touches the DB,
 // so it deliberately gets no `sqlx::Encode` — `.bind(raw_token)` is a compile error
 // (#438). Its sibling `TokenHash` carries the default bridge.
+//
+// `no_ord`: the bearer-token profile derives no `PartialEq`/`Eq` at all — its security
+// value is the type distinction, not value comparison — and `Ord: Eq`, so the trailer's
+// ordering half (#761) cannot be emitted here. This is the one production opt-out.
 #[derive(Clone, StrNewtype)]
-#[str_newtype(no_sqlx)]
+#[str_newtype(no_sqlx, no_ord)]
 pub struct RawToken(String);
 
 impl fmt::Debug for RawToken {

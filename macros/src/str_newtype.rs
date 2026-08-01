@@ -1,6 +1,7 @@
 //! Codegen for `#[derive(StrNewtype)]` — the ADR-0063 string-newtype trailer for a
 //! `struct X(String)`. The derive owns the whole trailer except `FromStr` (the one
-//! per-type validating/normalizing chokepoint) and the std `#[derive]`s.
+//! per-type validating/normalizing chokepoint) and the std `#[derive]`s — except
+//! ordering, which it emits (#761) unless `#[str_newtype(no_ord)]` suppresses it.
 
 use quote::quote;
 use syn::DeriveInput;
@@ -17,17 +18,32 @@ enum Kind {
     Infallible,
 }
 
+/// How the sqlx storage bridge is selected — the `sqlx`/`no_sqlx` flags collapsed into one
+/// field, so "both at once" is unrepresentable in [`Opts`] rather than merely rejected, and
+/// the struct's bool count stays inside clippy's `struct_excessive_bools` bound. Same reason
+/// [`Kind`] is an enum.
+enum SqlxMode {
+    /// No explicit flag — the default-on-except-secret policy applies.
+    Default,
+    /// `#[str_newtype(sqlx)]`: re-add the bridge to a secret that genuinely is stored
+    /// (`InviteCode`).
+    Forced,
+    /// `#[str_newtype(no_sqlx)]`: opt a non-secret must-not-store type out (`RawToken`).
+    Off,
+}
+
 /// The `#[str_newtype(...)]` options: the trailer `kind`, whether a secret re-opens the
-/// serde bridge (`secret, serde`) for an inbound wire value, and the sqlx bridge controls.
+/// serde bridge (`secret, serde`) for an inbound wire value, and the sqlx bridge control.
 /// The sqlx bridge (feature-gated `Type`/`Encode`/`Decode`) is **on by default** for every
-/// non-secret type, dropped for a `secret` one; `sqlx` re-adds it to a secret that genuinely
-/// is stored (`InviteCode`) and `no_sqlx` opts a non-secret must-not-store type out
-/// (`RawToken`).
+/// non-secret type and dropped for a `secret` one; [`SqlxMode`] carries the two overrides.
 struct Opts {
     kind: Kind,
     serde: bool,
-    sqlx: bool,
-    no_sqlx: bool,
+    sqlx: SqlxMode,
+    /// Whether the author opted *out* of the ordering half of the trailer (#761) —
+    /// false iff `no_ord` was written. Whether a given [`Kind`] orders at all is decided
+    /// in `expand`, not here.
+    ord: bool,
 }
 
 /// Expands `#[derive(StrNewtype)]` on a single-field tuple struct. On the wrong shape
@@ -48,6 +64,12 @@ pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
     // computed once here; each trailer is a sibling helper, so the three arms stay
     // short and parallel.
     let sqlx = sqlx_bridge(&opts, name);
+    // The ordering half (#761), suppressed by `no_ord` and never emitted for a secret.
+    let ord = if opts.ord {
+        crate::ord_impls(name)
+    } else {
+        quote! {}
+    };
     match opts.kind {
         // The tight secret surface; `secret, serde` re-opens the serde bridge for an
         // inbound wire value (its inbound-only role is enforced by an xtask gate).
@@ -70,6 +92,7 @@ pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
             let trailer = infallible_trailer(name);
             quote! {
                 #trailer
+                #ord
                 #sqlx
             }
         }
@@ -80,6 +103,7 @@ pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
             quote! {
                 #trailer
                 #serde
+                #ord
                 #sqlx
             }
         }
@@ -94,9 +118,9 @@ pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
 /// arms consistent.
 fn sqlx_bridge(opts: &Opts, name: &syn::Ident) -> proc_macro2::TokenStream {
     match opts.kind {
-        Kind::Secret if opts.sqlx => sqlx_impls(name),
+        Kind::Secret if matches!(opts.sqlx, SqlxMode::Forced) => sqlx_impls(name),
         Kind::Secret => quote! {},
-        _ if opts.no_sqlx => quote! {},
+        _ if matches!(opts.sqlx, SqlxMode::Off) => quote! {},
         Kind::Infallible => sqlx_impls_infallible(name),
         Kind::Default => sqlx_impls(name),
     }
@@ -375,16 +399,19 @@ fn secret_trailer(name: &syn::Ident) -> proc_macro2::TokenStream {
     }
 }
 
-/// Reads `#[str_newtype(secret)]` / `#[str_newtype(secret, serde)]`. Errors on any other
-/// option so a typo fails loudly rather than silently un-redacting, and on a bare
-/// `serde` (the default trailer already has the serde bridge — `serde` is only meaningful
-/// as a re-opener for a `secret`).
+/// Reads the six `#[str_newtype(...)]` options — `secret`, `serde`, `infallible`, `sqlx`,
+/// `no_sqlx`, `no_ord`. Errors on any other so a typo fails loudly rather than silently
+/// un-redacting, and on the combinations that are contradictory or redundant: a bare
+/// `serde` (the default trailer already has the bridge — `serde` is only a re-opener for a
+/// `secret`), `infallible` with `secret`/`serde`, `no_sqlx` with `secret` or with `sqlx`,
+/// a bare `sqlx` off a secret, and `no_ord` on a secret (already unordered).
 fn parse_opts(input: &DeriveInput) -> syn::Result<Opts> {
     let mut secret = false;
     let mut serde = false;
     let mut infallible = false;
     let mut sqlx = false;
     let mut no_sqlx = false;
+    let mut no_ord = false;
     for attr in &input.attrs {
         if attr.path().is_ident("str_newtype") {
             attr.parse_nested_meta(|meta| {
@@ -403,9 +430,12 @@ fn parse_opts(input: &DeriveInput) -> syn::Result<Opts> {
                 } else if meta.path.is_ident("no_sqlx") {
                     no_sqlx = true;
                     Ok(())
+                } else if meta.path.is_ident("no_ord") {
+                    no_ord = true;
+                    Ok(())
                 } else {
                     Err(meta.error(
-                        "unknown `str_newtype` option (expected `secret`, `serde`, `infallible`, `sqlx`, or `no_sqlx`)",
+                        "unknown `str_newtype` option (expected `secret`, `serde`, `infallible`, `sqlx`, `no_sqlx`, or `no_ord`)",
                     ))
                 }
             })?;
@@ -437,6 +467,12 @@ fn parse_opts(input: &DeriveInput) -> syn::Result<Opts> {
             "`no_sqlx` is exclusive with `sqlx`",
         ));
     }
+    if no_ord && secret {
+        return Err(syn::Error::new_spanned(
+            input,
+            "a `secret` newtype is already unordered; `no_ord` is redundant/invalid",
+        ));
+    }
     if sqlx && !secret {
         return Err(syn::Error::new_spanned(
             input,
@@ -450,11 +486,26 @@ fn parse_opts(input: &DeriveInput) -> syn::Result<Opts> {
     } else {
         Kind::Default
     };
+    // Parsing stays on plain locals so every guard above keeps its exact spelling and
+    // message; only the fold into `Opts` is typed. The `no_sqlx && sqlx` guard has already
+    // fired by here, so at most one of the two is set and this chain cannot lose a flag.
+    let sqlx = if sqlx {
+        SqlxMode::Forced
+    } else if no_sqlx {
+        SqlxMode::Off
+    } else {
+        SqlxMode::Default
+    };
+    // Just the author's opt-out. Whether a *kind* orders is `expand`'s call — the secret
+    // arm simply never interpolates `#ord` — so this does not also test for `Kind::Secret`:
+    // one rule, one place. Anding it in here would silently override a future arm that
+    // deliberately emitted ordering.
+    let ord = !no_ord;
     Ok(Opts {
         kind,
         serde,
         sqlx,
-        no_sqlx,
+        ord,
     })
 }
 

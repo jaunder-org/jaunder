@@ -17,7 +17,8 @@ pub const MAX_POST_SUMMARY_CHARS: usize = 500;
 /// door that guarantees only the length half (see its docs). Absence of a summary is
 /// modeled by `Option<PostSummary>` at the boundary, so `FromStr` rejecting the empty
 /// string means an empty wire value is rejected and clearing goes through omission
-/// (`None`). No `Hash` — a `PostSummary` is never a map/set key.
+/// (`None`). No `Hash` — nothing hashes a `PostSummary`; ordering is emitted by the
+/// trailer (ADR-0063 §2).
 #[derive(Clone, Debug, PartialEq, Eq, StrNewtype)]
 pub struct PostSummary(String);
 

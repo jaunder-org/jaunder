@@ -1,7 +1,9 @@
 //! Codegen for `#[derive(IdNewtype)]` — the ADR-0063 numeric-ID trailer for a
 //! `struct X(i64)`: `From<i64>`, `From<Self> for i64`, `Display`, `FromStr` (delegating to
 //! `i64`'s parse), a transparent-i64 serde bridge, and the feature-gated sqlx storage bridge
-//! (ADR-0071). `Copy` and the other std traits stay in the user's `#[derive]` list.
+//! (ADR-0071). Ordering is emitted here (#761); `Copy`/`Debug`/`PartialEq`/`Eq`/`Hash`
+//! stay in the user's `#[derive]` list — and `PartialEq`/`Eq` are now required, since
+//! `Ord: Eq`.
 //!
 //! Unlike `StrNewtype`, the sqlx bridge here is **unconditional** — there is no
 //! `no_sqlx`/`sqlx` control, because every id is stored. Add one only if a non-stored id
@@ -18,8 +20,15 @@ pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
     }
     let name = &input.ident;
     let sqlx = sqlx_impls(name);
+    // Ordering is unconditional (#761): an id orders meaningfully (deterministic sorts,
+    // `BTreeMap` keys), and there is no `no_ord` here — this macro has no attribute parser
+    // at all, and no id newtype needs the escape. `Ord: Eq` makes `PartialEq`/`Eq`
+    // required on every `IdNewtype` rather than merely conventional.
+    let ord = crate::ord_impls(name);
 
     quote! {
+        #ord
+
         #[automatically_derived]
         impl ::core::convert::From<i64> for #name {
             fn from(v: i64) -> Self {

@@ -5,7 +5,8 @@
 //! `#[num_newtype(...)]` attributes: a validating `FromStr`, a `value()` accessor, `Display`,
 //! an optional compile-checked `Default`, a validating transparent-integer serde bridge, an
 //! optional `clamp` affordance (`MIN`/`MAX` + a coercing `clamped` constructor), and a
-//! self-contained error type. The std `#[derive]`s stay in the user's list.
+//! self-contained error type. Ordering is emitted here too (#761); the remaining std
+//! `#[derive]`s stay in the user's list, with `PartialEq`/`Eq` now required (`Ord: Eq`).
 
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -74,6 +75,10 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
     let serde = serde_impl(name, &err_name, &opts);
     let clamped = clamped_impl(name, &opts);
     let sqlx = sqlx_impls(name, &opts.inner);
+    // Ordering is unconditional here (#761): there is no `no_ord` on this macro, because
+    // every numeric value orders meaningfully and every `NumNewtype` in the tree already
+    // derives `PartialEq`/`Eq` — which `Ord: Eq` now makes a requirement rather than a habit.
+    let ord = crate::ord_impls(name);
 
     quote! {
         #error_ty
@@ -84,6 +89,7 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
         #default_impl
         #serde
         #clamped
+        #ord
         #sqlx
     }
 }

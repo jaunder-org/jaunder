@@ -18,7 +18,8 @@ use macros::StrNewtype;
 use thiserror::Error;
 
 /// A validated, host-less root-relative URL reference (`/…`, optional query). Construct
-/// via [`FromStr`]. `Hash` is derived (it may be a map key); no `Ord`.
+/// via [`FromStr`]. `Hash` is derived (it may be a `HashMap` key); ordering is emitted
+/// by the trailer (ADR-0063 §2).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, StrNewtype)]
 pub struct RootRelativeUrl(String);
 
