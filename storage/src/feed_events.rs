@@ -15,9 +15,12 @@ use crate::backend::Backend;
 // `FeedEventRecord`; the type itself lives in `common` (#728, see its doc for why).
 pub use common::feed::FeedEventStatus;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
 pub struct FeedEventRecord {
     pub id: FeedEventId,
+    // The column is `feed_url`; the field is the domain name. The derive binds by field
+    // name, so without this every claim fails at runtime rather than at compile time.
+    #[sqlx(rename = "feed_url")]
     pub feed_path: FeedPath,
     pub status: FeedEventStatus,
     pub attempts: i32,
@@ -33,6 +36,62 @@ pub struct FeedEventRecord {
 pub enum FeedEventError {
     #[error("database error: {0}")]
     Db(#[from] sqlx::Error),
+}
+
+/// One row of a claim batch: either a decoded record, or the id of a row whose `feed_url`
+/// will not parse and which must therefore be purged.
+///
+/// The claim query cannot simply decode into [`FeedEventRecord`]. A `feed_url` that will
+/// not parse can only come from DB tampering or a grammar that has since been tightened;
+/// such a row names no identifiable feed, so it is an unactionable work item. Failing the
+/// whole batch on it would wedge the worker on that row forever, which is what
+/// [`purge_corrupt`](crate::postgres::feed_events) exists to prevent.
+pub(crate) struct ClaimedRow(pub(crate) Result<FeedEventRecord, FeedEventId>);
+
+/// **The diversion is column-scoped, and that is the whole point of this impl.**
+///
+/// A wrapper that treated *any* decode failure as "corrupt" would widen a **destructive**
+/// path from one column to ten: `purge_corrupt` DELETEs, so a schema change or a driver
+/// regression on `created_at` would silently drain the queue. Before #728 only `feed_url`
+/// could divert a row — every other column used an infallible read, so its failure
+/// propagated. That property is preserved here by re-checking `feed_url` specifically and
+/// propagating anything else.
+///
+/// If `id` itself will not decode there is no third state: the error propagates and the
+/// batch fails. Stated so it is a decision rather than an accident.
+impl<'r, R> sqlx::FromRow<'r, R> for ClaimedRow
+where
+    R: sqlx::Row,
+    &'r str: sqlx::ColumnIndex<R>,
+    FeedEventRecord: sqlx::FromRow<'r, R>,
+    FeedPath: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
+    FeedEventId: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
+{
+    fn from_row(row: &'r R) -> sqlx::Result<Self> {
+        match FeedEventRecord::from_row(row) {
+            Ok(record) => Ok(Self(Ok(record))),
+            Err(_) if row.try_get::<FeedPath, _>("feed_url").is_err() => {
+                Ok(Self(Err(row.try_get::<FeedEventId, _>("id")?)))
+            }
+            Err(e) => Err(e),
+        }
+    }
+}
+
+/// Splits a claim batch into the records the worker can act on and the ids to purge.
+///
+/// Shared because both dialects' claim statements differ only in SQL; the row handling was
+/// duplicated line-for-line before #728.
+pub(crate) fn partition_claimed(rows: Vec<ClaimedRow>) -> (Vec<FeedEventRecord>, Vec<FeedEventId>) {
+    let mut records = Vec::with_capacity(rows.len());
+    let mut corrupt = Vec::new();
+    for ClaimedRow(row) in rows {
+        match row {
+            Ok(record) => records.push(record),
+            Err(id) => corrupt.push(id),
+        }
+    }
+    (records, corrupt)
 }
 
 #[cfg_attr(feature = "test-utils", mockall::automock)]
@@ -300,6 +359,62 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(corrupt_remaining, 0, "corrupt row should be purged");
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn a_decode_failure_outside_feed_url_propagates_and_deletes_nothing(
+        #[case] backend: Backend,
+    ) {
+        // The property that keeps the purge path narrow. `purge_corrupt` DELETEs, and
+        // exactly one column may trigger it. A `ClaimedRow` that treated *any* decode
+        // failure as "corrupt" would turn a schema change or a driver regression on some
+        // unrelated column into silent data loss — the queue would drain itself.
+        let env = backend.setup().await;
+        env.state
+            .feed_events
+            .enqueue(&fp("/feed.rss"))
+            .await
+            .unwrap();
+        // Widen `attempts` past `i32` and store an out-of-range value — the shape of a
+        // migration that grows a column without the Rust side following. `status` would
+        // be the obvious lever now that it is a closed enum, but the claim's own
+        // eligibility predicate filters on `status`, so a bad one is never selected (D5).
+        if matches!(backend, Backend::Postgres) {
+            env.base
+                .pool()
+                .execute("ALTER TABLE feed_events ALTER COLUMN attempts TYPE bigint")
+                .await
+                .unwrap();
+        }
+        env.base
+            .pool()
+            .execute("UPDATE feed_events SET attempts = 3000000000")
+            .await
+            .unwrap();
+
+        let err = env
+            .state
+            .feed_events
+            .claim_pending_batch(50, chrono::Duration::minutes(5))
+            .await
+            .expect_err("a non-feed_url decode failure must propagate");
+        assert!(
+            matches!(err, FeedEventError::Db(sqlx::Error::ColumnDecode { .. })),
+            "expected a column-decode error, got {err:?}"
+        );
+
+        // …and above all, the row is still there.
+        let remaining = env
+            .base
+            .pool()
+            .scalar_i64("SELECT COUNT(*) FROM feed_events")
+            .await
+            .unwrap();
+        assert_eq!(
+            remaining, 1,
+            "a decode failure outside feed_url must never delete the row"
+        );
     }
 
     #[apply(backends)]

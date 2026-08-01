@@ -419,15 +419,6 @@ const ALLOWLIST: &[Allowed] = &[
         category: Category::CountOrExists,
         reason: "Existence flag, not an id — subscriptions.rs's own bound comment says so",
     },
-    Allowed {
-        file: "sqlite/feed_events.rs",
-        function: "claim_pending_batch",
-        target: "i64",
-        what: "\"attempts\"",
-        count: 1,
-        category: Category::CountOrExists,
-        reason: "attempts retry counter, narrowed to i32 for the record field",
-    },
 ];
 
 /// One decode site: where it is, and what it decodes into.

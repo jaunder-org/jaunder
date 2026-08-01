@@ -1,11 +1,11 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use common::feed::FeedPath;
 use common::ids::FeedEventId;
-use sqlx::{Pool, Row, Sqlite};
+use sqlx::{Pool, Sqlite};
 
 use crate::feed_events::{
-    FeedEventDialect, FeedEventError, FeedEventRecord, FeedEventStatus, FeedEventStore,
+    partition_claimed, ClaimedRow, FeedEventDialect, FeedEventError, FeedEventRecord,
+    FeedEventStore,
 };
 
 /// SQLite-backed feed-event storage.
@@ -52,7 +52,7 @@ impl FeedEventDialect for Sqlite {
         // Single autocommit statement: SQLite takes the write lock immediately,
         // so there is no deferred read-then-write lock upgrade (ADR-0021) and the
         // 5s busy_timeout applies cleanly. Mirrors the Postgres CTE claim.
-        let rows = sqlx::query(
+        let rows = sqlx::query_as::<_, ClaimedRow>(
             "UPDATE feed_events SET status = 'claimed', claimed_at = $1 \
              WHERE id IN ( \
                  SELECT id FROM feed_events \
@@ -71,32 +71,7 @@ impl FeedEventDialect for Sqlite {
         .fetch_all(pool)
         .await?;
 
-        let mut records = Vec::with_capacity(rows.len());
-        let mut corrupt = Vec::new();
-        for r in rows {
-            let id: FeedEventId = r.get("id");
-            // A feed_url that won't parse can only come from DB tampering/corruption
-            // (enqueue takes a validated FeedPath). Such a row is an unactionable
-            // work item, so collect it for purge rather than failing the whole batch
-            // (which would wedge the worker on the corrupt row forever).
-            let Ok(feed_path) = r.try_get::<FeedPath, _>("feed_url") else {
-                corrupt.push(id);
-                continue;
-            };
-            let attempts: i64 = r.get("attempts");
-            records.push(FeedEventRecord {
-                id,
-                feed_path,
-                status: r.get::<FeedEventStatus, _>("status"),
-                attempts: i32::try_from(attempts).unwrap_or(i32::MAX),
-                last_error: r.get("last_error"),
-                next_attempt_at: r.get("next_attempt_at"),
-                claimed_at: r.get("claimed_at"),
-                created_at: r.get("created_at"),
-                regenerated_at: r.get("regenerated_at"),
-                pinged_at: r.get("pinged_at"),
-            });
-        }
+        let (records, corrupt) = partition_claimed(rows);
         purge_corrupt(pool, &corrupt).await;
         Ok(records)
     }
