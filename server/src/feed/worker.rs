@@ -68,26 +68,30 @@ impl FeedWorker {
     /// `generated_at` is re-enqueued, healing a restart that straddled a
     /// go-live. Every later call runs the steady-state `(last_tick, now]` window
     /// pass, fanning each newly-live post out to its affected feed surfaces.
-    /// Both branches seed `last_tick = now`.
+    /// Both branches seed `last_tick = now`, and both enqueue their whole
+    /// fan-out as ONE batched write (`enqueue_many`) — per-row autocommit
+    /// enqueue loops are the `SQLite` write-lock churn that starved live
+    /// requests in #766.
     ///
     /// # Errors
     ///
     /// Returns an error if a storage read or feed-event enqueue fails.
     pub async fn go_live_pass(&self, now: DateTime<Utc>) -> anyhow::Result<()> {
         let mut last_tick = self.last_tick.lock().await;
-        match *last_tick {
-            None => {
-                for url in self.posts.feed_urls_needing_catchup(now).await? {
-                    self.feed_events.enqueue(&url).await?;
-                }
-            }
+        let urls = match *last_tick {
+            None => self.posts.feed_urls_needing_catchup(now).await?,
             Some(last) => {
+                let mut urls = Vec::new();
                 for post in self.posts.list_posts_gone_live_between(last, now).await? {
-                    for url in affected_feed_urls(&post.username, &post.tag_slugs) {
-                        self.feed_events.enqueue(&url).await?;
-                    }
+                    urls.extend(affected_feed_urls(&post.username, &post.tag_slugs));
                 }
+                urls
             }
+        };
+        // Skip the storage call outright on an idle pass — the common case for
+        // every 10s tick with nothing newly live.
+        if !urls.is_empty() {
+            self.feed_events.enqueue_many(&urls).await?;
         }
         *last_tick = Some(now);
         Ok(())
@@ -420,6 +424,82 @@ mod tests {
             events,
         );
         w.tick().await;
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn go_live_catchup_enqueues_all_surfaces_in_one_batch() {
+        let mut posts = storage::MockPostStorage::new();
+        posts
+            .expect_feed_urls_needing_catchup()
+            .times(1)
+            .returning(|_| {
+                Ok(vec![
+                    "/feed.rss".parse().expect("valid feed path in test"),
+                    "/~alice/feed.rss".parse().expect("valid feed path in test"),
+                    "/tags/t/feed.rss".parse().expect("valid feed path in test"),
+                ])
+            });
+        let mut events = storage::MockFeedEventStorage::new();
+        // The regression gate for #766: the whole catch-up fans out as ONE
+        // batched write, and the per-row API is never used.
+        events
+            .expect_enqueue_many()
+            .times(1)
+            .withf(|paths| paths.len() == 3)
+            .returning(|_| Ok(()));
+        events.expect_enqueue().times(0);
+        let w = worker(
+            storage::MockSiteConfigStorage::new(),
+            posts,
+            storage::MockFeedCacheStorage::new(),
+            events,
+        );
+        w.go_live_pass(Utc::now()).await.expect("catch-up pass");
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn go_live_window_enqueues_all_surfaces_in_one_batch() {
+        let mut posts = storage::MockPostStorage::new();
+        // First pass primes last_tick (catch-up, nothing to do); no enqueue
+        // call may result from it.
+        posts
+            .expect_feed_urls_needing_catchup()
+            .times(1)
+            .returning(|_| Ok(vec![]));
+        // Second pass: two just-live untagged posts -> 2 surfaces x 3 formats
+        // each = 12 URLs, all in ONE batched write.
+        posts
+            .expect_list_posts_gone_live_between()
+            .times(1)
+            .returning(|_, _| {
+                Ok(vec![
+                    storage::GoLivePost {
+                        username: common::test_support::parse_username("alice"),
+                        tag_slugs: vec![],
+                    },
+                    storage::GoLivePost {
+                        username: common::test_support::parse_username("bob"),
+                        tag_slugs: vec![],
+                    },
+                ])
+            });
+        let mut events = storage::MockFeedEventStorage::new();
+        events
+            .expect_enqueue_many()
+            .times(1)
+            .withf(|paths| paths.len() == 12)
+            .returning(|_| Ok(()));
+        events.expect_enqueue().times(0);
+        let w = worker(
+            storage::MockSiteConfigStorage::new(),
+            posts,
+            storage::MockFeedCacheStorage::new(),
+            events,
+        );
+        w.go_live_pass(Utc::now()).await.expect("priming pass");
+        w.go_live_pass(Utc::now()).await.expect("windowed pass");
     }
 
     // guard:no-backend — mock store
