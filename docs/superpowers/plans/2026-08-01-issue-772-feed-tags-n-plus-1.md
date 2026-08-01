@@ -107,7 +107,7 @@ Every task's requirements implicitly include these.
   `PostDialect::TAGS_SUBQUERY` remains a `&'static str` const; only its text
   changes.
 
-- [ ] **Step 1: Strengthen the two accidental-pass ordering tests**
+- [x] **Step 1: Strengthen the two accidental-pass ordering tests**
 
 Both currently tag `"Rust"` then `"web"` — insertion order _coincides_ with slug
 order, so the assertion cannot distinguish them (spec, test plan items 1–2).
@@ -154,7 +154,7 @@ In `server/tests/web/web_posts.rs`, within
         .unwrap();
 ```
 
-- [ ] **Step 2: Write the failing dialect-constant test**
+- [x] **Step 2: Write the failing dialect-constant test**
 
 Add to the `#[cfg(test)] mod tests` in `storage/src/posts.rs`. A pure const test
 — no DB, no async — so a plain `#[test]`, exempt from the `test-backend-pattern`
@@ -182,7 +182,7 @@ guard, and homed with the trait declaration rather than in a dialect dir
     }
 ```
 
-- [ ] **Step 3: Run the tests, verify they fail**
+- [x] **Step 3: Run the tests, verify they fail**
 
 ```
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-772-feed-tags-n-plus-1 -- cargo nextest run -p storage tags_subquery_pins_slug_ordering_on_both_dialects
@@ -204,7 +204,7 @@ Expected: **FAIL** on all three.
 the aggregate is already ordering by something other than insertion, and the
 premise that these assertions were vacuous needs rechecking before proceeding.
 
-- [ ] **Step 4: Add `ORDER BY` to both constants**
+- [x] **Step 4: Add `ORDER BY` to both constants**
 
 Both constants also get the doc comment AC4 requires at this site (neither
 carries one today). `ORDER BY` goes inside the aggregate, after
@@ -239,7 +239,7 @@ both dialect files (`storage/src/{sqlite,postgres}/posts.rs:5-6`). The repo sets
 no `deny(rustdoc::broken_intra_doc_links)`, so a bad link would warn rather than
 fail the gate, but these are correct.
 
-- [ ] **Step 5: Document the ordering contract (AC4)**
+- [x] **Step 5: Document the ordering contract (AC4)**
 
 `storage/src/posts.rs:68` — `PostRecord.tags` is currently the only field on the
 struct with no doc comment. Replace the bare field with:
@@ -279,7 +279,7 @@ struct with no doc comment. Replace the bare field with:
     // never staleness.
 ```
 
-- [ ] **Step 6: Run the tests, verify they pass**
+- [x] **Step 6: Run the tests, verify they pass**
 
 Re-run the three commands from Step 3. Expected: **PASS** on all three.
 
@@ -294,7 +294,7 @@ devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-772-feed-tag
 Expected: **PASS**. Any tag-order failure here is a sweep miss — add it to the
 spec's enumeration and fix it in this task.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 Run the gate first (**jaunder-commit**):
 
@@ -325,7 +325,7 @@ git commit -m "refactor(storage): pin PostRecord.tags to slug order in both dial
   `fn build_feed_items(base: &AbsoluteUrl, records: &[PostRecord]) -> Vec<FeedItem>`
   — no `PostStorage` parameter, not `async`, no `Result`.
 
-- [ ] **Step 1: Write the feed-body test**
+- [x] **Step 1: Write the feed-body test**
 
 Add to `server/tests/feed/feed_regenerate.rs`. **This test passes before the
 change as well as after — deliberately.** It pins the observable contract that
@@ -380,7 +380,7 @@ async fn regenerated_json_feed_carries_slug_ordered_tags(#[case] backend: Backen
 }
 ```
 
-- [ ] **Step 2: Run the test, verify it passes**
+- [x] **Step 2: Run the test, verify it passes**
 
 ```
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-772-feed-tags-n-plus-1 -- cargo nextest run -p jaunder --test integration regenerated_json_feed_carries_slug_ordered_tags
@@ -390,7 +390,7 @@ Expected: **PASS** (via the current `get_tags_for_post` path, which sorts by
 slug itself). If it fails, the fixture is wrong — fix it here, before touching
 `build_feed_items`, so the test is known-meaningful when it guards the refactor.
 
-- [ ] **Step 3: Rewrite `build_feed_items` and its call site**
+- [x] **Step 3: Rewrite `build_feed_items` and its call site**
 
 `server/src/feed/regenerate.rs:75` — drop the `posts` argument and the `await?`:
 
@@ -444,7 +444,7 @@ fn build_feed_items(base: &AbsoluteUrl, records: &[PostRecord]) -> Vec<FeedItem>
 Leave `regenerate_feed`'s own `posts: &dyn PostStorage` parameter alone — it
 still drives `list_published_in_window`.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 ```
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-772-feed-tags-n-plus-1 -- cargo nextest run -p jaunder --test integration regenerate
@@ -462,7 +462,7 @@ on no-match, which is the success case here):
 rg -n 'get_tags_for_post' server/src/feed/ || true
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run the gate first (**jaunder-commit**):
 

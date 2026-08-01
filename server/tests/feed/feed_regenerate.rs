@@ -232,3 +232,49 @@ async fn feed_contains_only_public_posts(#[case] backend: Backend) {
         row.body
     );
 }
+
+/// #772: the feed reads tags off the records `list_published_in_window` already
+/// returned instead of issuing one `get_tags_for_post` per post. This pins the
+/// observable contract that must survive that switch — tags still reach the body,
+/// slug-ordered even when written in the opposite order.
+///
+/// JSON is deliberate. RSS renders no tags at all (`common/src/feed/rss.rs` never
+/// reads `item.tags`), and Atom's `<category term=…>` would force a substring-index
+/// comparison; JSON Feed's `tags` is an array that takes an exact vector assertion.
+#[apply(backends)]
+#[tokio::test]
+async fn regenerated_json_feed_carries_slug_ordered_tags(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+
+    let user = SeedUser::new().seed(&state).await;
+    // Applied in reverse-slug order: an unordered read would surface "web" first.
+    SeedRawPost::new(user.user_id)
+        .tags(["web", "Rust"])
+        .seed(&state)
+        .await;
+
+    let row = regenerate_feed(
+        state.site_config.as_ref(),
+        state.posts.as_ref(),
+        state.feed_cache.as_ref(),
+        &fp(&format!("/~{}/feed.json", user.username)),
+    )
+    .await
+    .expect("regenerate json feed");
+
+    let v: serde_json::Value = serde_json::from_str(&row.body).expect("feed body is JSON");
+    assert_eq!(
+        v["items"].as_array().map(Vec::len),
+        Some(1),
+        "one published post in the feed: {}",
+        row.body
+    );
+    // Ordered by slug (rust < web); the *display* casing the author supplied is
+    // what the feed emits.
+    assert_eq!(
+        v["items"][0]["tags"],
+        serde_json::json!(["Rust", "web"]),
+        "tags slug-ordered in the JSON feed body: {}",
+        row.body
+    );
+}
