@@ -131,7 +131,7 @@ about _real_ SSR hydration stays exactly as written.
   - Re-exported from `helpers.ts` as `waitForMount` (replacing the
     `waitForHydration` re-export).
 
-- [ ] **Step 1: Move the module and write it in full**
+- [x] **Step 1: Move the module and write it in full**
 
 ```bash
 git mv end2end/tests/hydration.ts end2end/tests/mount.ts
@@ -181,7 +181,7 @@ export async function waitForMount(
 }
 ```
 
-- [ ] **Step 2: Run the type checker, verify it fails**
+- [x] **Step 2: Run the type checker, verify it fails**
 
 Run: `devtool run -- cargo xtask check --no-test`
 
@@ -189,7 +189,7 @@ Expected: **FAIL** — `tsc` reports `Cannot find module './hydration'` from
 `helpers.ts:40`, `helpers.ts:44`, and `layout-shift.ts:14`. This is the contract
 for the rest of this task: every remaining step exists to drive it green.
 
-- [ ] **Step 3: Update the Rust side**
+- [x] **Step 3: Update the Rust side**
 
 In `csr/src/lib.rs`, replace lines 10–19 (the comment and the `inline_js` block)
 with:
@@ -210,7 +210,7 @@ with:
 
 Leave `extern "C" { fn mark_ready(); }` and everything below it unchanged.
 
-- [ ] **Step 4: Update `fixtures.ts` — the Node-scope sites**
+- [x] **Step 4: Update `fixtures.ts` — the Node-scope sites**
 
 Add to the import block (alongside the existing `./helpers`, `./mail`,
 `./selectors` imports at `:34-36`):
@@ -241,7 +241,7 @@ And replace the `:452-453` comment:
 // navigation (`data-mounted` is set once per document).
 ```
 
-- [ ] **Step 5: Update `fixtures.ts` — the browser-scope init script**
+- [x] **Step 5: Update `fixtures.ts` — the browser-scope init script**
 
 **Read this step before editing.** The function at `:463` is passed to
 `page.addInitScript()`, which **serializes it and runs it in the browser**. It
@@ -309,7 +309,7 @@ callback inside the init script, not the `addInitScript` call. Editing it
 produces a syntax error; editing neither leaves `mountedAttr` `undefined` in the
 browser, which fails silently in a diagnostics-only path.
 
-- [ ] **Step 6: Update the importers and their comments**
+- [x] **Step 6: Update the importers and their comments**
 
 `end2end/tests/helpers.ts`:
 
@@ -379,14 +379,14 @@ browser, which fails silently in a diagnostics-only path.
   →
   ``* `document.fonts.ready` + `body[data-mounted]`, never a timer, so it is safe under``
 
-- [ ] **Step 7: Run the type checker, verify it passes**
+- [x] **Step 7: Run the type checker, verify it passes**
 
 Run: `devtool run -- cargo xtask check --no-test`
 
 Expected: **PASS** — `tsc`, `prettier`, `fmt`, and `clippy` all clean. If `tsc`
 still reports an unresolved `./hydration`, a Step 6 importer was missed.
 
-- [ ] **Step 8: Verify the acceptance criteria this task owns**
+- [x] **Step 8: Verify the acceptance criteria this task owns**
 
 ```bash
 # AC2 — the marker moved
@@ -413,7 +413,7 @@ Step 6 deliberately writes the attribute name into prose comments in
 `auth.spec.ts`, so "matches only `mount.ts`" is unsatisfiable. Both greps above
 are immune: those comments write the name in backticks, never in double quotes.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 Run `devtool run -- cargo xtask check` first and confirm it is green
 (**jaunder-commit**).
@@ -444,7 +444,7 @@ git commit -m "refactor(e2e): rename the data-hydrated mount marker to data-moun
   `"issue #22: .j-root keeps a real data-theme after CSR mount"`, which **Task 4
   depends on** — the capture must observe the new title.
 
-- [ ] **Step 1: Apply the five prose edits**
+- [x] **Step 1: Apply the five prose edits**
 
 `end2end/tests/atompub.spec.ts:87`:
 
@@ -484,14 +484,14 @@ await goto(page, "/"); // public projector home; goto() waits for the CSR mount
 //! dev loop; the CSR mount is slower); `--release` matches CI's optimized wasm.
 ```
 
-- [ ] **Step 2: Run the gate**
+- [x] **Step 2: Run the gate**
 
 Run: `devtool run -- cargo xtask check --no-test`
 
 Expected: **PASS**. (`prettier` may reflow a comment; it auto-fixes in `check`
 mode — re-run once if it reports a fix.)
 
-- [ ] **Step 3: Verify AC1 — zero residue**
+- [x] **Step 3: Verify AC1 — zero residue**
 
 ```bash
 git ls-files csr end2end xtask/src/steps/build_csr.rs | xargs rg -i hydrat
@@ -503,7 +503,7 @@ here). Any hit means a site was missed — fix it before committing. Note the
 gitignored and would otherwise produce a spurious hit until Task 5's checklist
 item.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 Run `devtool run -- cargo xtask check` first and confirm it is green
 (**jaunder-commit**).
@@ -527,7 +527,7 @@ git commit -m "docs(e2e): drop the remaining CSR-mount \"hydration\" prose (#251
 - Consumes: the span name `wait.mount` established in Task 1 (`mount.ts`).
 - Produces: nothing consumed by later tasks.
 
-- [ ] **Step 1: Rename in place inside the dated findings section**
+- [x] **Step 1: Rename in place inside the dated findings section**
 
 Per D3 this follows #224's convention at `:306`/`:308` — new name inline, old
 name deleted, a trailing note recording the rename. Replace the `:291-294`
@@ -545,7 +545,7 @@ bullet with:
 sentences are about _real_ SSR hydration and its removal, and are correct as
 written.
 
-- [ ] **Step 2: Update the live warmup paragraph**
+- [x] **Step 2: Update the live warmup paragraph**
 
 Replace `:455-457` with:
 
@@ -555,7 +555,7 @@ This warmup runs on the same test page/context and waits for
 warm-cache behavior.
 ```
 
-- [ ] **Step 3: Verify AC5**
+- [x] **Step 3: Verify AC5**
 
 ```bash
 rg -cF 'wait.hydration' docs/observability.md
@@ -576,7 +576,7 @@ points.
 If the first reports more than 1, the `:291-294` bullet still carries the old
 name outside the note.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 Run `devtool run -- cargo xtask check` first and confirm it is green
 (**jaunder-commit**).
@@ -604,7 +604,7 @@ git commit -m "docs(observability): rename the wait.hydration action to wait.mou
   before it, because the capture would record the old title.
 - Produces: nothing consumed by later tasks.
 
-- [ ] **Step 1: Produce a fresh capture**
+- [x] **Step 1: Produce a fresh capture**
 
 Run (long — use the Bash tool's background mode):
 
@@ -616,14 +616,14 @@ Expected: **PASS**. This also serves as an early read on AC7 for one of the four
 combos — if the Rust/TS attribute pair drifted in Task 1, every test in this run
 times out.
 
-- [ ] **Step 2: Regenerate both artifacts**
+- [x] **Step 2: Regenerate both artifacts**
 
 Run: `devtool run -- cargo xtask server-fn-coverage regenerate`
 
 Expected: **PASS**, rewriting `docs/coverage/server-fns.json` and
 `docs/coverage/server-fns-evidence.json`.
 
-- [ ] **Step 3: Verify AC6**
+- [x] **Step 3: Verify AC6**
 
 ```bash
 rg -cF 'after CSR mount' docs/coverage/server-fns-evidence.json
@@ -638,7 +638,7 @@ theme test happened to drive in the recorded run — and #745 documents this
 generator as run-to-run variable. "At least one, and none of the old" is what
 AC6 actually requires.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 Run `devtool run -- cargo xtask check` first and confirm it is green
 (**jaunder-commit**).
@@ -667,7 +667,7 @@ generator (#745) and expected in this diff."
 - Consumes: all four preceding tasks.
 - Produces: the AC7 green that authorizes shipping.
 
-- [ ] **Step 1: Run the full local gate**
+- [x] **Step 1: Run the full local gate**
 
 Run (long — use the Bash tool's background mode):
 
@@ -679,7 +679,7 @@ Expected: **PASS**, including all four `{sqlite,postgres}×{chromium,firefox}`
 e2e combos. This is AC7 and the real proof of the rename: a Rust/TS attribute
 mismatch times out every test rather than degrading quietly.
 
-- [ ] **Step 2: Re-verify AC1 on the final tree**
+- [x] **Step 2: Re-verify AC1 on the final tree**
 
 ```bash
 git ls-files csr end2end xtask/src/steps/build_csr.rs | xargs rg -i hydrat
@@ -687,7 +687,7 @@ git ls-files csr end2end xtask/src/steps/build_csr.rs | xargs rg -i hydrat
 
 Expected: **no matches**.
 
-- [ ] **Step 3: Ship checklist — update the untracked agent doc**
+- [x] **Step 3: Ship checklist — update the untracked agent doc**
 
 Per D7 this file is **untracked and stays untracked**: edit it in the **main
 checkout** (`/home/mdorman/src/jaunder/end2end/CLAUDE.md`), never `git add` it,
@@ -720,7 +720,7 @@ Verify by re-running the grep above: expect **no matches**.
 Nothing tracks or verifies this step (spec, "Ship checklist"). If it is skipped,
 say so explicitly at the ship gate rather than letting it pass silently.
 
-- [ ] **Step 4: Hand off to `jaunder-ship`**
+- [x] **Step 4: Hand off to `jaunder-ship`**
 
 No commit in this task. Proceed to **jaunder-ship** for the final review,
 plan/spec archiving, push, and PR.
