@@ -184,6 +184,7 @@ dependencies = [
  "brotli",
  "clap",
  "coverage",
+ "doctests",
  "flate2",
  "serde",
  "serde_json",

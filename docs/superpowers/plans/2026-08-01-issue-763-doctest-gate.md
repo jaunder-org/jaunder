@@ -673,13 +673,13 @@ Run:
 Expected: FAIL — `RunEntry`, `run_entries` not defined.
 
 **The mutation check earned its keep here.** The first parser used `rfind` to
-defend against a dash in the path, with a test that appeared to prove it. Flipping
-to `find` changed nothing — `test-support` holds a bare hyphen, which never
-collides with the spaced ` - ` separator, so the test asserted something true for a
-reason unrelated to the code. Corrected to `find`, tests renamed to what they
-actually pin, one added for the `- compile fail` suffix that follows the marker in
-real output, and the real boundary (a path containing a literal ` - `) recorded in
-the module doc per ADR-0085's honesty obligation.
+defend against a dash in the path, with a test that appeared to prove it.
+Flipping to `find` changed nothing — `test-support` holds a bare hyphen, which
+never collides with the spaced `-` separator, so the test asserted something
+true for a reason unrelated to the code. Corrected to `find`, tests renamed to
+what they actually pin, one added for the `- compile fail` suffix that follows
+the marker in real output, and the real boundary (a path containing a literal
+`-`) recorded in the module doc per ADR-0085's honesty obligation.
 
 - [x] **Step 3: Implement against the tests**
 
@@ -735,7 +735,7 @@ git commit -m "feat(doctests): parse libtest doctest result lines (#763)"
 - Produces: `check::{ScannedFile, problems}` and
   `status::{DoctestStatus, StatusCategory}` (Tasks 5, 6, 14).
 
-- [ ] **Step 1: Write the failing tests** for `problems` in `check.rs`'s test
+- [x] **Step 1: Write the failing tests** for `problems` in `check.rs`'s test
       module
 
 ````rust
@@ -825,7 +825,7 @@ git commit -m "feat(doctests): parse libtest doctest result lines (#763)"
     }
 ````
 
-- [ ] **Step 2: Write the failing tests** in `tools/doctests/src/status.rs`
+- [x] **Step 2: Write the failing tests** in `tools/doctests/src/status.rs`
 
 ```rust
 #[cfg(test)]
@@ -874,14 +874,18 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Run the tests, verify they fail**
+- [x] **Step 3: Run the tests, verify they fail**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate -- cargo test --manifest-path tools/Cargo.toml -p doctests`
 Expected: FAIL — `ScannedFile`, `problems`, `DoctestStatus`, `StatusCategory`
 not defined.
 
-- [ ] **Step 4: Implement against the tests**
+**Done by mutation:** short-circuiting the run→tree loop so nothing is ever an
+orphan failed exactly `a_run_entry_matching_no_scanned_fence_fails` (45 passed,
+1 failed), then reverted.
+
+- [x] **Step 4: Implement against the tests**
 
 In `check.rs`:
 
@@ -935,13 +939,19 @@ pub struct DoctestStatus {
 }
 ```
 
-- [ ] **Step 5: Run the tests, verify they pass**
+- [x] **Step 5: Run the tests, verify they pass**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate -- cargo test --manifest-path tools/Cargo.toml -p doctests`
-Expected: PASS — 12 new tests.
+Expected: PASS — 12 new tests. **Actual: 15.** Total 46.
 
-- [ ] **Step 6: Commit**
+Two guards added beyond the plan, both against a gate that lies about its own
+reach: `DoctestStatus::from_violations` derives the category from the list, so a
+status can never claim `ok` beside a non-empty list; and
+`entries_from_files_this_half_did_not_scan_are_left_alone`, so the workspace
+producer cannot call the host half's entries orphans.
+
+- [x] **Step 6: Commit**
 
 ```bash
 git add tools/doctests/src
@@ -966,7 +976,7 @@ git commit -m "feat(doctests): bidirectional fence/run reconciler and status sen
 - Produces: `devtool doctests emit --out <dir>` and `$out/status.json` (Tasks 6,
   13, 14).
 
-- [ ] **Step 1: Write the failing tests** in
+- [x] **Step 1: Write the failing tests** in
       `tools/devtool/src/doctests/emit.rs`
 
 ```rust
@@ -1000,13 +1010,22 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate -- cargo test --manifest-path tools/Cargo.toml -p devtool`
 Expected: FAIL — `doctest_command`, `SCAN_ROOTS` not defined.
 
-- [ ] **Step 3: Implement against the tests**
+**Falsified by the real-tree run instead** (Step 5): a scanner that saw nothing,
+or a package-scoped invocation, would not have reproduced the spec's 26-fence
+inventory line for line. That is a far stronger check than a red run.
+
+A third test was added beyond the plan —
+`a_missing_scan_root_is_an_error_not_an_empty_list` — because a root that moved
+must fail loudly; silently scanning nothing is the one way this gate must never
+report green (ADR-0085 principle 6).
+
+- [x] **Step 3: Implement against the tests**
 
 Add `doctests = { path = "../doctests" }` to `tools/devtool/Cargo.toml`.
 
@@ -1041,13 +1060,13 @@ with category `Ok` when empty and `Violations` otherwise. A file that cannot be
 **read** becomes a `Kind::Unreadable` violation, never a silent drop — same
 reasoning as `sqlx_newtype_decode_check.rs:569-583`.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate -- cargo test --manifest-path tools/Cargo.toml`
 Expected: PASS.
 
-- [ ] **Step 5: Run it against the real tree and record the baseline**
+- [x] **Step 5: Run it against the real tree and record the baseline**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate -- cargo run --manifest-path tools/Cargo.toml -p devtool -- doctests emit --out /tmp/claude-1000/-home-mdorman-src-jaunder/e947b2d0-6d3a-4e7c-9e0a-b41042681c7e/scratchpad/dt-baseline`
@@ -1067,7 +1086,21 @@ violation appears, stop and reconcile it against the spec's inventory: an
 unexpected violation means the scanner and the spec disagree about the
 population.
 
-- [ ] **Step 6: Commit**
+**Actual: exactly as predicted.** 26 distinct fences missing companions —
+`common/` token 56/59/64/69, etag 35/38, media 83/86/183/186/369/373/761/764,
+post_body 15/19, render 72/75/511/518 (20), plus `macros` 43/145/158/173/220/274
+(6) — and 3 `banned-attribute` + 3 `not-run` on `macros:298`, `macros:353`,
+`web/src/reactive/scope.rs:16`. No `unreadable`, no `orphan`, no `failed`. 38
+violation records over 26 fences, because the rule reports one per unmatched
+prelude line.
+
+**`render.rs:511` and `:518` are flagged `missing-companion`, not `not-run`** —
+i.e. the `#[cfg(feature = "sanitize")]` pair DID appear in the run. That is the
+spec's central claim confirmed by the running gate: `--workspace` reaches them
+via `storage`'s feature unification, where the issue's `-p common -p macros`
+would have dropped them silently.
+
+- [x] **Step 6: Commit**
 
 ```bash
 git add tools/devtool tools/Cargo.lock
