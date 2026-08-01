@@ -17,17 +17,28 @@ enum Kind {
     Infallible,
 }
 
+/// How the sqlx storage bridge is selected — the `sqlx`/`no_sqlx` flags collapsed into one
+/// field, so "both at once" is unrepresentable in [`Opts`] rather than merely rejected, and
+/// the struct's bool count stays inside clippy's `struct_excessive_bools` bound. Same reason
+/// [`Kind`] is an enum.
+enum SqlxMode {
+    /// No explicit flag — the default-on-except-secret policy applies.
+    Default,
+    /// `#[str_newtype(sqlx)]`: re-add the bridge to a secret that genuinely is stored
+    /// (`InviteCode`).
+    Forced,
+    /// `#[str_newtype(no_sqlx)]`: opt a non-secret must-not-store type out (`RawToken`).
+    Off,
+}
+
 /// The `#[str_newtype(...)]` options: the trailer `kind`, whether a secret re-opens the
-/// serde bridge (`secret, serde`) for an inbound wire value, and the sqlx bridge controls.
+/// serde bridge (`secret, serde`) for an inbound wire value, and the sqlx bridge control.
 /// The sqlx bridge (feature-gated `Type`/`Encode`/`Decode`) is **on by default** for every
-/// non-secret type, dropped for a `secret` one; `sqlx` re-adds it to a secret that genuinely
-/// is stored (`InviteCode`) and `no_sqlx` opts a non-secret must-not-store type out
-/// (`RawToken`).
+/// non-secret type and dropped for a `secret` one; [`SqlxMode`] carries the two overrides.
 struct Opts {
     kind: Kind,
     serde: bool,
-    sqlx: bool,
-    no_sqlx: bool,
+    sqlx: SqlxMode,
 }
 
 /// Expands `#[derive(StrNewtype)]` on a single-field tuple struct. On the wrong shape
@@ -94,9 +105,9 @@ pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
 /// arms consistent.
 fn sqlx_bridge(opts: &Opts, name: &syn::Ident) -> proc_macro2::TokenStream {
     match opts.kind {
-        Kind::Secret if opts.sqlx => sqlx_impls(name),
+        Kind::Secret if matches!(opts.sqlx, SqlxMode::Forced) => sqlx_impls(name),
         Kind::Secret => quote! {},
-        _ if opts.no_sqlx => quote! {},
+        _ if matches!(opts.sqlx, SqlxMode::Off) => quote! {},
         Kind::Infallible => sqlx_impls_infallible(name),
         Kind::Default => sqlx_impls(name),
     }
@@ -450,12 +461,17 @@ fn parse_opts(input: &DeriveInput) -> syn::Result<Opts> {
     } else {
         Kind::Default
     };
-    Ok(Opts {
-        kind,
-        serde,
-        sqlx,
-        no_sqlx,
-    })
+    // Parsing stays on plain locals so every guard above keeps its exact spelling and
+    // message; only the fold into `Opts` is typed. The `no_sqlx && sqlx` guard has already
+    // fired by here, so at most one of the two is set and this chain cannot lose a flag.
+    let sqlx = if sqlx {
+        SqlxMode::Forced
+    } else if no_sqlx {
+        SqlxMode::Off
+    } else {
+        SqlxMode::Default
+    };
+    Ok(Opts { kind, serde, sqlx })
 }
 
 #[cfg(test)]
