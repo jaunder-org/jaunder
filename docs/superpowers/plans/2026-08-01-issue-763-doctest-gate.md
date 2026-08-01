@@ -142,7 +142,7 @@ called out where they occur: the stale "separate `nextest` check" comment at
 - Produces: `doctests::fence::{Fence, Scan, fences}` (Tasks 2, 4, 6) and
   `doctests::roots::{WORKSPACE, HOST, ALL}` (Tasks 5, 15).
 
-- [ ] **Step 1: Create the crate, the scan-root module, and register it**
+- [x] **Step 1: Create the crate, the scan-root module, and register it**
 
 `tools/doctests/Cargo.toml`:
 
@@ -229,7 +229,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Write the failing tests** in `tools/doctests/src/fence.rs`
+- [x] **Step 2: Write the failing tests** in `tools/doctests/src/fence.rs`
 
 ````rust
 #[cfg(test)]
@@ -309,13 +309,19 @@ mod tests {
 }
 ````
 
-- [ ] **Step 3: Run the tests, verify they fail**
+- [x] **Step 3: Run the tests, verify they fail**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate -- cargo test --manifest-path tools/Cargo.toml -p doctests`
 Expected: FAIL — `Fence`, `Scan`, `fences` not defined.
 
-- [ ] **Step 4: Implement against the tests**
+**Done differently, recorded:** tests and implementation were written together, so
+there was no red run. Falsification was done instead by mutation — disabling
+`hidden_code` to always return `None` failed exactly
+`hidden_lines_are_separated_and_stripped` (9 passed, 1 failed), then reverted. That
+establishes the same thing the red step does: the tests are not vacuous.
+
+- [x] **Step 4: Implement against the tests**
 
 ````rust
 /// One rustdoc code fence, keyed the way the doctest runner reports it.
@@ -371,13 +377,13 @@ Implementation notes the tests cannot pin:
 - Fence state: a line whose trimmed text starts with ` ``` ` toggles. The
   opener's remainder (after the backticks, trimmed) is `info`.
 
-- [ ] **Step 5: Run the tests, verify they pass**
+- [x] **Step 5: Run the tests, verify they pass**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate -- cargo test --manifest-path tools/Cargo.toml -p doctests`
-Expected: PASS — 10 tests (8 fence + 2 roots).
+Expected: PASS — 10 tests (8 fence + 2 roots). **Actual: 10 passed.**
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add tools/Cargo.toml tools/Cargo.lock tools/doctests
