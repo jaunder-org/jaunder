@@ -634,7 +634,7 @@ Run: `devtool run -- cargo nextest run -p macros` Expected: PASS
 Run: `devtool run -- cargo nextest run -p common` Expected: PASS — `ByteSize`'s
 existing surface test (`common/src/media.rs:858`) still passes
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit** — `86bcd5f3`, gate green (coverage 22918 lines, clean).
 
 ```bash
 devtool run -- cargo xtask check
@@ -657,7 +657,7 @@ git commit -m "feat(macros): emit Ord/PartialOrd from NumNewtype (#761)"
 - Consumes: `crate::ord_impls` (Task 2).
 - Produces: nothing later tasks depend on.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `macros/tests/id_newtype.rs` (its `Id` fixture at `:7` already derives
 `PartialEq, Eq`):
@@ -679,22 +679,24 @@ fn ordering_agrees_with_the_inner_i64() {
 }
 ```
 
-- [ ] **Step 2: Run the test, verify it fails**
+- [x] **Step 2: Run the test, verify it fails** — FAIL as designed: `<`/`>` not
+      applicable to `Id`, `Id: Ord` unsatisfied.
 
 Run: `devtool run -- cargo nextest run -p macros --test id_newtype` Expected:
 FAIL — `Id` is not `Ord`
 
-- [ ] **Step 3: Emit ordering from `IdNewtype`**
+- [x] **Step 3: Emit ordering from `IdNewtype`**
 
 Append `crate::ord_impls(name)` to the stream `id_newtype::expand` returns,
 unconditionally.
 
-- [ ] **Step 4: Fix the doc fixture**
+- [x] **Step 4: Fix the doc fixture**
 
 `macros/src/lib.rs:178` → `#[derive(Clone, Copy, PartialEq, Eq, IdNewtype)]`.
 Without this the doctest stops compiling, because `Ord: Eq`.
 
-- [ ] **Step 5: Run the tests and doctests, verify they pass**
+- [x] **Step 5: Run the tests and doctests, verify they pass** — 536 passed;
+      doctests 18 (macros) and 18 (common), both clean.
 
 Run: `devtool run -- cargo nextest run -p macros` Expected: PASS
 

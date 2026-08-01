@@ -220,7 +220,8 @@ pub fn str_newtype_derive(item: TokenStream) -> TokenStream {
 ///
 /// ```
 /// use macros::IdNewtype;
-/// #[derive(Clone, Copy, IdNewtype)]
+/// // `PartialEq, Eq` are required: the trailer emits `Ord`, and `Ord: Eq` (#761).
+/// #[derive(Clone, Copy, PartialEq, Eq, IdNewtype)]
 /// struct Id(i64);
 /// ```
 #[proc_macro_derive(IdNewtype)]
