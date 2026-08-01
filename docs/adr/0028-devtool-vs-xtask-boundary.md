@@ -106,9 +106,12 @@ allowlist entry for it is narrower than one for `bash`.
 
 This fits the litmus on both sides: it is the in-sandbox process runner, and it
 is also useful on the host as the gate-execution surface for humans and agents.
-`devtoolBin` is therefore exposed in the **default devShell** (direnv) in
-addition to the coverage sandbox's `nativeBuildInputs`. No git-revision build
-stamp is added: `devtoolBin` is a build input to the coverage check, so stamping
-it with the repo revision would bust the coverage cache on every commit;
+`devtoolBin` is therefore exposed in **both devShells** — it sits in `ciInputs`,
+so `nix develop` (direnv) and `nix develop .#ci` alike have it — in addition to
+the coverage sandbox's `nativeBuildInputs`. (#229 is why it is in `ciInputs`
+rather than the interactive-only list: the `shellHook` is shared by both shells
+and invokes `devtool provision-node-modules`.) No git-revision build stamp is
+added: `devtoolBin` is a build input to the coverage check, so stamping it with
+the repo revision would bust the coverage cache on every commit;
 `devtool --version` reports the crate version, and staleness while developing
 the runner is handled by running it live via `cargo run -p devtool`.

@@ -567,6 +567,26 @@
           assert not reports, "e2e zero-panic gate (${backend}): jaunder.service logged Rust panic(s):\n" + "\n".join(reports.values())
         '';
 
+        # The two e2e time budgets, which must stay ordered:
+        # `e2ePlaywrightTimeout` < `e2eGlobalTimeout`.
+        #
+        # Playwright runs under `machine.execute`, whose driver default is
+        # `timeout=900`. Passing no `timeout=` therefore capped the Playwright step
+        # at 15 min *silently*, below the 20 min `globalTimeout` chosen in #130 — so
+        # the "~1.9x headroom" that comment claims was never actually available, and
+        # a loaded host reached the undeclared 900 s instead. Both budgets are named
+        # here so the cap is explicit and the ordering is checkable.
+        #
+        # The ordering is load-bearing, not cosmetic: when Playwright is the thing
+        # that expires, `machine.execute` returns 124 and the artifact copies below
+        # still run (that is why this uses `execute`, not `succeed`). If the driver's
+        # `globalTimeout` expired first it would kill the VM outright and take every
+        # diagnostic with it — the exact failure #123/#49 built this path to avoid.
+        # The difference is the boot + seed + copy allowance; measured overhead is
+        # ~40 s, so 180 s is ~4x headroom.
+        e2ePlaywrightTimeout = 1020;
+        e2eGlobalTimeout = 1200;
+
         # #123/#49: run Playwright capturing its exit (NOT machine.succeed, which
         # would abort before we copy diagnostics), stream its line-reporter output
         # to the build log, copy ALL artifacts out of the VM unconditionally, then
@@ -598,7 +618,8 @@
               + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
               + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
               + " --config playwright.config.ts"
-              + " --project ${browser} --project ${browser}-admin"
+              + " --project ${browser} --project ${browser}-admin",
+              timeout=${toString e2ePlaywrightTimeout},
             )
             # Stream the Playwright line-reporter output into the build log (-L), so
             # the failing test + assertion are recoverable from build.log alone,
@@ -653,11 +674,14 @@
           pkgs.testers.nixosTest {
             name = checkName;
 
-            # Cap the test-driver budget at 20 min (default is 3600 s). Healthy
-            # runs peak at ~10.6 min (slowest single-browser combo), so this is
-            # ~1.9x headroom; a boot/infra hang now fails near 20 min instead of
-            # burning the full hour. See issue #130.
-            globalTimeout = 1200;
+            # Cap the test-driver budget (default is 3600 s) so a boot/infra hang
+            # fails near 20 min instead of burning the full hour. See issue #130.
+            # This is the OUTER budget: `e2ePlaywrightTimeout` above expires first
+            # and is the one sized against the test run itself (~10.6 min for the
+            # slowest single-browser combo, so ~1.6x headroom).
+            globalTimeout =
+              assert e2ePlaywrightTimeout < e2eGlobalTimeout;
+              e2eGlobalTimeout;
 
             nodes.machine =
               { pkgs, lib, ... }:
@@ -750,11 +774,14 @@
           pkgs.testers.nixosTest {
             name = checkName;
 
-            # Cap the test-driver budget at 20 min (default is 3600 s). Healthy
-            # runs peak at ~10.6 min (slowest single-browser combo), so this is
-            # ~1.9x headroom; a boot/infra hang now fails near 20 min instead of
-            # burning the full hour. See issue #130.
-            globalTimeout = 1200;
+            # Cap the test-driver budget (default is 3600 s) so a boot/infra hang
+            # fails near 20 min instead of burning the full hour. See issue #130.
+            # This is the OUTER budget: `e2ePlaywrightTimeout` above expires first
+            # and is the one sized against the test run itself (~10.6 min for the
+            # slowest single-browser combo, so ~1.6x headroom).
+            globalTimeout =
+              assert e2ePlaywrightTimeout < e2eGlobalTimeout;
+              e2eGlobalTimeout;
 
             nodes.machine =
               { pkgs, lib, ... }:
@@ -1094,14 +1121,16 @@
                     pkgs.typescript
                     emacsForCi
                   ];
-                  # ert needs a zone DB (#160); tsc needs BOTH node-dep envs (the
-                  # provision script guards on each with `${VAR:?}`).
+                  # ert needs a zone DB (#160); tsc needs BOTH node-dep envs
+                  # (`devtool provision-node-modules`'s resolver errors on each when
+                  # unset).
                   TZDIR = "${pkgs.tzdata}/share/zoneinfo";
                   E2E_TYPES_NODE_MODULES = "${e2ePackage}/node_modules";
                   E2E_PLAYWRIGHT_TEST = "${pkgs.playwright-test}/lib/node_modules/@playwright/test";
                 }
                 ''
-                  # Writable copy: `devtool check tsc` provisions end2end/node_modules.
+                  # Writable copy: `devtool check tsc` provisions end2end/node_modules
+                  # in-process (#229).
                   cp --no-preserve=mode -r ${staticCheckSrc} src
                   cd src
                   devtool check --all
@@ -1233,6 +1262,11 @@
               pkgs.cargo-llvm-cov
               pkgs.cargo-nextest
               pkgs.curl
+              # `devtool run -- <cmd>` for humans/agents, and the `shellHook`'s
+              # `devtool provision-node-modules` (#229) — so it must be on PATH in the
+              # CI shell too, not just the interactive one. Already built for the
+              # coverage and static-checks derivations, so this adds no new build.
+              devtoolBin
               emacsForCi
               pkgs.jq
               pkgs.leptosfmt
@@ -1262,9 +1296,6 @@
               # manual commands — no Nix check or CI job runs them — so this stays
               # out of `ciInputs`, like the other interactive tooling here.
               pkgs.gh
-              # `devtool run -- <cmd>` etc. on the interactive PATH. Already built
-              # for the coverage sandbox; here it serves humans/agents directly.
-              devtoolBin
             ];
             shellEnv = {
               RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";
@@ -1277,10 +1308,10 @@
               # on the host system's own TZDIR (which masked this locally). Mirrors
               # the ert-check derivation's TZDIR (#160).
               TZDIR = "${pkgs.tzdata}/share/zoneinfo";
-              # Store paths for end2end/provision-node-modules.sh. Exported as env
+              # Store paths for `devtool provision-node-modules`. Exported as env
               # vars (rather than baked into the shellHook) so they survive `cd`
-              # into a worktree — that is what lets xtask's tsc-deps step re-run the
-              # provisioning script there, where the shellHook never fired.
+              # into a worktree — that is what lets `devtool check tsc` re-run the
+              # provisioning there, where the shellHook never fired.
               E2E_TYPES_NODE_MODULES = "${e2ePackage}/node_modules";
               E2E_PLAYWRIGHT_TEST = "${pkgs.playwright-test}/lib/node_modules/@playwright/test";
               shellHook = ''
@@ -1288,9 +1319,10 @@
 
                 # Provision end2end/node_modules (the tsc type-dep closure) so the
                 # devShell `tsc` and IDEs can type-check end2end/ offline in this
-                # checkout. The same script also runs as xtask's tsc-deps gate step,
-                # so worktrees self-heal there; see its header for the full rationale.
-                bash end2end/provision-node-modules.sh
+                # checkout. The same subcommand runs in-process from `devtool check
+                # tsc`, so worktrees self-heal there; see
+                # tools/devtool/src/provision.rs for the full rationale.
+                devtool provision-node-modules
               '';
             };
           in

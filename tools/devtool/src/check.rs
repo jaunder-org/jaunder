@@ -107,8 +107,16 @@ fn spec(name: &str, fix: bool) -> Result<(&'static str, Vec<String>)> {
     })
 }
 
+/// Whether a check needs `end2end/node_modules` provisioned before it runs. Only `tsc`
+/// type-checks against that closure. Kept as a pure predicate so the rule is testable
+/// without executing tsc (#229).
+pub fn needs_provisioning(name: &str) -> bool {
+    name == "tsc"
+}
+
 /// Run one check by name, or all of them (`--all`). `tsc` provisions
-/// `end2end/node_modules` (the type-dep closure) first, via the shared script.
+/// `end2end/node_modules` (the type-dep closure) first, by calling
+/// [`crate::provision::run`] in-process.
 pub fn run(name: Option<&str>, all: bool, fix: bool) -> Result<()> {
     let names: Vec<&str> = match (name, all) {
         (Some(n), false) => vec![n],
@@ -116,14 +124,10 @@ pub fn run(name: Option<&str>, all: bool, fix: bool) -> Result<()> {
         _ => bail!("pass exactly one of <name> or --all"),
     };
     for n in &names {
-        if *n == "tsc" {
-            let st = Command::new("bash")
-                .arg("end2end/provision-node-modules.sh")
-                .status()
+        if needs_provisioning(n) {
+            let paths = crate::provision::StorePaths::resolve(None, None)?;
+            crate::provision::run(std::path::Path::new("."), &paths)
                 .context("provisioning end2end/node_modules for tsc")?;
-            if !st.success() {
-                bail!("tsc-deps (provision-node-modules.sh) failed ({st})");
-            }
         }
         let (program, args) = spec(n, fix)?;
         let st = Command::new(program)
@@ -140,6 +144,17 @@ pub fn run(name: Option<&str>, all: bool, fix: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_tsc_needs_provisioning() {
+        assert!(needs_provisioning("tsc"));
+        for name in ALL.iter().filter(|n| **n != "tsc") {
+            assert!(
+                !needs_provisioning(name),
+                "{name} must not provision end2end/node_modules"
+            );
+        }
+    }
 
     #[test]
     fn fmt_check_vs_fix() {
