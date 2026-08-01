@@ -368,9 +368,15 @@ degenerate case anyway.)
 
 ## Task 6 — final gate
 
-- [ ] `devtool run --cwd <worktree> -- cargo xtask validate` (Bash background
-      mode; all four e2e combos). Expect green; sqlite/firefox is the combo this
-      issue reddened.
+- [x] `devtool run --cwd <worktree> -- cargo xtask validate` (Bash background
+      mode; all four e2e combos). Outcome: static + coverage green; 3/4 combos
+      green concurrently — **including sqlite/firefox, the combo this issue
+      reddened** — while postgres/firefox hit the 15-min Playwright timeout
+      (exit 124) with the VM starved to ~36s CPU over 15min wall (four
+      concurrent QEMU VMs oversubscribed the host; ADR-0034 distributes CI for
+      this exact reason). Re-run in isolation
+      (`cargo xtask e2e postgres     firefox`) → green. All four combos have
+      passed on this tree.
 
 ## Self-review notes
 
