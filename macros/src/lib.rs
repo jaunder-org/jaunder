@@ -456,9 +456,10 @@ pub(crate) fn require_enum_shape(
 /// Two details are load-bearing and easy to "simplify" wrongly:
 ///
 /// - `partial_cmp` is written as `Some(self.cmp(other))` — clippy's canonical form for
-///   `non_canonical_partial_ord_impl`. It resolves to `<#name as Ord>::cmp`, not `str`'s:
-///   the receiver is `&#name`, which matches at the first autoderef step, so a `str`-backed
-///   newtype does not fall through to `str`'s impl and recurse.
+///   `non_canonical_partial_ord_impl`. It resolves to `<#name as Ord>::cmp`, not `str`'s.
+///   The probe walks the deref chain `&#name` → `#name` → `str`, and at the `#name` step
+///   autoref finds a method taking `&#name`, which is our own `Ord::cmp`. It stops there,
+///   so a `str`-backed newtype never reaches `str`'s impl — and never recurses.
 /// - `cmp` delegates to `self.0`, the wrapped value, **not** to a `str` view. That is what
 ///   keeps the order consistent with the derived `PartialEq` and with `Borrow<str>`, whose
 ///   contract requires `Ord`/`Eq`/`Hash` to agree with the borrowed form.
@@ -925,14 +926,15 @@ mod tests {
     #[test]
     fn str_newtype_no_ord_with_secret_emits_compile_error() {
         // A secret is already unordered — `no_ord` is redundant/invalid, mirroring the
-        // `no_sqlx` + `secret` guard above.
+        // `no_sqlx` + `secret` guard above. The message is asserted, not just the presence
+        // of a `compile_error!`: six guards can fire here, and only one of them is right.
         let input: DeriveInput = parse_quote! {
             #[str_newtype(secret, no_ord)]
             struct X(String);
         };
-        assert!(str_newtype::expand(&input)
-            .to_string()
-            .contains("compile_error"));
+        let out = str_newtype::expand(&input).to_string();
+        assert!(out.contains("compile_error"));
+        assert!(out.contains("already unordered"));
     }
 
     #[test]

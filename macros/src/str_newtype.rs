@@ -40,8 +40,9 @@ struct Opts {
     kind: Kind,
     serde: bool,
     sqlx: SqlxMode,
-    /// Whether the ordering half of the trailer is emitted (#761). True unless `no_ord`
-    /// was written; always false for a `secret`, which never orders.
+    /// Whether the author opted *out* of the ordering half of the trailer (#761) —
+    /// false iff `no_ord` was written. Whether a given [`Kind`] orders at all is decided
+    /// in `expand`, not here.
     ord: bool,
 }
 
@@ -398,10 +399,12 @@ fn secret_trailer(name: &syn::Ident) -> proc_macro2::TokenStream {
     }
 }
 
-/// Reads `#[str_newtype(secret)]` / `#[str_newtype(secret, serde)]`. Errors on any other
-/// option so a typo fails loudly rather than silently un-redacting, and on a bare
-/// `serde` (the default trailer already has the serde bridge — `serde` is only meaningful
-/// as a re-opener for a `secret`).
+/// Reads the six `#[str_newtype(...)]` options — `secret`, `serde`, `infallible`, `sqlx`,
+/// `no_sqlx`, `no_ord`. Errors on any other so a typo fails loudly rather than silently
+/// un-redacting, and on the combinations that are contradictory or redundant: a bare
+/// `serde` (the default trailer already has the bridge — `serde` is only a re-opener for a
+/// `secret`), `infallible` with `secret`/`serde`, `no_sqlx` with `secret` or with `sqlx`,
+/// a bare `sqlx` off a secret, and `no_ord` on a secret (already unordered).
 fn parse_opts(input: &DeriveInput) -> syn::Result<Opts> {
     let mut secret = false;
     let mut serde = false;
@@ -493,9 +496,11 @@ fn parse_opts(input: &DeriveInput) -> syn::Result<Opts> {
     } else {
         SqlxMode::Default
     };
-    // A secret never orders, so its `ord` is false regardless — the guard above has
-    // already rejected an explicit `no_ord` on one, so this only covers the implicit case.
-    let ord = !no_ord && !matches!(kind, Kind::Secret);
+    // Just the author's opt-out. Whether a *kind* orders is `expand`'s call — the secret
+    // arm simply never interpolates `#ord` — so this does not also test for `Kind::Secret`:
+    // one rule, one place. Anding it in here would silently override a future arm that
+    // deliberately emitted ordering.
+    let ord = !no_ord;
     Ok(Opts {
         kind,
         serde,

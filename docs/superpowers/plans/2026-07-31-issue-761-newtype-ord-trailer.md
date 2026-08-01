@@ -856,14 +856,18 @@ git fetch origin
 git rebase origin/main
 rg -n -U --multiline-dotall \
   '#\[derive\([^)]*\b(?:Partial)?Ord\b[^)]*\)\]' \
-  -g '*.rs' --glob '!target/**' \
-  | rg -i 'newtype'
+  -g '*.rs' --glob '!target/**'
 ```
 
 Order-independent and wrap-tolerant, both of which matter: the previous
 single-line, `Ord`-before-the-derive pattern matched today's two hits only by
 luck, and would silently miss `#[derive(StrNewtype, Ord)]` or a rustfmt-wrapped
 derive list — which is exactly the shape an unseen branch like #711 may land.
+
+Read every hit; do **not** pipe this through `rg -i 'newtype'` to narrow it. The
+worktree path itself contains "newtype" (`…/issue-761-newtype-ord-derives/…`),
+so that filter matches every line and only looks like it is narrowing. The
+unfiltered list is short — two known non-newtype hits in `xtask/` — so read it.
 
 Expected: no hits on non-secret newtypes. Any hit from a branch that landed
 after this plan was written (e.g. #711's `ContentHash`/`Filename`/`MediaSource`)

@@ -114,8 +114,17 @@ fn sorts_and_keys_a_btreeset() {
     assert_eq!(v[0], Code::from_str("a").unwrap());
     assert_eq!(v[2], Code::from_str("c").unwrap());
 
+    // Probe the set with a bare `&str`. This is the point of delegating `cmp` to the
+    // wrapped `String` rather than to some other view: `Borrow<str>`'s contract requires
+    // `Ord` to agree with the borrowed form, and a `BTreeSet` lookup is what breaks if it
+    // does not. `len()` alone would pass under any ordering, so it is not the assertion.
     let set: BTreeSet<Code> = v.into_iter().collect();
-    assert_eq!(set.len(), 3);
+    assert!(set.contains("b"));
+    assert!(!set.contains("z"));
+    assert_eq!(
+        set.iter().map(Code::as_ref).collect::<Vec<&str>>(),
+        vec!["a", "b", "c"] // iteration order is the inner `str` order
+    );
 }
 
 // --- secret variant -------------------------------------------------------------------
@@ -256,5 +265,27 @@ fn no_ord_keeps_the_rest_of_the_trailer() {
     let read: &str = &u; // Deref
     assert_eq!(read, "x");
     assert!(u == "x"); // PartialEq<str>
+    assert_eq!(serde_json::to_string(&u).unwrap(), "\"x\"");
+}
+
+// `infallible, no_ord` is a legal pair (unlike `infallible, secret`). This fixture's
+// existence is the proof: a unit test on the token stream shows only that no
+// `compile_error!` was emitted, not that the combination yields usable code.
+#[derive(Clone, Debug, StrNewtype)]
+#[str_newtype(infallible, no_ord)]
+struct UnorderedLabel(String);
+
+impl From<String> for UnorderedLabel {
+    fn from(s: String) -> Self {
+        UnorderedLabel(s)
+    }
+}
+
+#[test]
+fn infallible_no_ord_keeps_the_rest_of_the_trailer() {
+    let u = UnorderedLabel::from("x");
+    assert_eq!(u.to_string(), "x");
+    let read: &str = &u;
+    assert_eq!(read, "x");
     assert_eq!(serde_json::to_string(&u).unwrap(), "\"x\"");
 }
