@@ -432,7 +432,7 @@ Why a separate file: Task 3 makes `check tsc` call `provision::run`
 are never exercised by the library tests or by the gate. This is the only
 automated cover for A1–A4.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```rust
 //! CLI-surface tests for `devtool provision-node-modules` — the flag parsing, env
@@ -601,7 +601,7 @@ fn unset_playwright_alone_names_its_own_variable() {
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run:
 
@@ -616,7 +616,7 @@ the dispatch arm) rather than weakening the test. In particular
 `help_lists_the_flags_and_their_env_fallback` fails unless the doc comments on
 `ProvisionArgs` name the two variables.
 
-- [ ] **Step 3: Run the whole tools suite, verify nothing regressed**
+- [x] **Step 3: Run the whole tools suite, verify nothing regressed**
 
 Run:
 
@@ -626,7 +626,7 @@ devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-229-devtool-
 
 Expected: PASS — this is exactly what the `tools-test` gate step runs.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 Run `cargo xtask check` first, then:
 
