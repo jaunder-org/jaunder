@@ -299,6 +299,10 @@ enum Category {
     NotADecodeTarget,
     /// Test scaffolding whose type comes from a generic helper's signature.
     TestScaffolding,
+    /// A row target whose `FromRow` is **hand-written**, so delegation cannot back it:
+    /// the gate polices a derived struct's fields and a tuple alias's elements, and a
+    /// hand-written impl has neither. Its parts are accounted for in the reason instead.
+    HandWrittenFromRow,
     /// **Residue, not a verdict.** This should be a domain type; the fix is a vertical
     /// tracked elsewhere. The reason must name the issue.
     DeferredNewtype,
@@ -314,6 +318,7 @@ impl Category {
         Self::DeliberateLossy,
         Self::NotADecodeTarget,
         Self::TestScaffolding,
+        Self::HandWrittenFromRow,
         Self::DeferredNewtype,
     ];
 
@@ -325,6 +330,7 @@ impl Category {
             Self::DeliberateLossy => "deliberate-lossy",
             Self::NotADecodeTarget => "not-a-decode-target",
             Self::TestScaffolding => "test-scaffolding",
+            Self::HandWrittenFromRow => "hand-written-fromrow",
             Self::DeferredNewtype => "deferred-newtype",
         }
     }
@@ -347,6 +353,488 @@ fn names_an_issue(reason: &str) -> bool {
 /// this list is the complete population of legitimate `i64` decodes under the root,
 /// and anything not on it is a failure.
 const ALLOWLIST: &[Allowed] = &[
+    // ---- schema introspection: names and definitions out of the DB's own catalog ----
+    Allowed {
+        file: "postgres/backup.rs",
+        function: "existing_export_tables",
+        target: "String",
+        what: "\"table_name\"",
+        count: 1,
+        category: Category::SchemaIntrospection,
+        reason: "a table name from information_schema — a catalog identifier, not a domain value",
+    },
+    Allowed {
+        file: "postgres/backup.rs",
+        function: "repair_sequences",
+        target: "String",
+        what: "\"table_name\"",
+        count: 1,
+        category: Category::SchemaIntrospection,
+        reason: "a table name from information_schema",
+    },
+    Allowed {
+        file: "postgres/backup.rs",
+        function: "repair_sequences",
+        target: "String",
+        what: "\"column_name\"",
+        count: 1,
+        category: Category::SchemaIntrospection,
+        reason: "a column name from information_schema",
+    },
+    Allowed {
+        file: "postgres/backup.rs",
+        function: "columns",
+        target: "String",
+        what: "\"column_name\"",
+        count: 1,
+        category: Category::SchemaIntrospection,
+        reason: "a column name from information_schema, into the plain ColumnInfo struct",
+    },
+    Allowed {
+        file: "postgres/backup.rs",
+        function: "columns",
+        target: "String",
+        what: "\"udt_name\"",
+        count: 1,
+        category: Category::SchemaIntrospection,
+        reason: "a Postgres type name from information_schema",
+    },
+    Allowed {
+        file: "postgres/backup.rs",
+        function: "export_table",
+        target: "String",
+        what: "0",
+        count: 1,
+        category: Category::OpaquePayload,
+        reason: "the row rendered as JSON by the query itself — an opaque payload this layer \
+                 never interprets",
+    },
+    Allowed {
+        file: "postgres/backup.rs",
+        function: "schema_checksum",
+        target: "String",
+        what: "\"table_name\"",
+        count: 1,
+        category: Category::SchemaIntrospection,
+        reason: "a table name from information_schema, hashed into the schema fingerprint",
+    },
+    Allowed {
+        file: "postgres/backup.rs",
+        function: "schema_checksum",
+        target: "String",
+        what: "\"column_name\"",
+        count: 1,
+        category: Category::SchemaIntrospection,
+        reason: "a column name from information_schema, hashed into the schema fingerprint",
+    },
+    Allowed {
+        file: "postgres/backup.rs",
+        function: "schema_checksum",
+        target: "String",
+        what: "\"udt_name\"",
+        count: 1,
+        category: Category::SchemaIntrospection,
+        reason: "a Postgres type name from information_schema, hashed into the fingerprint",
+    },
+    Allowed {
+        file: "postgres/backup.rs",
+        function: "schema_checksum",
+        target: "String",
+        what: "\"is_nullable\"",
+        count: 1,
+        category: Category::SchemaIntrospection,
+        reason: "information_schema's YES/NO nullability flag — a catalog string, not a bool \
+                 column",
+    },
+    Allowed {
+        file: "sqlite/backup.rs",
+        function: "existing_export_tables",
+        target: "String",
+        what: "\"name\"",
+        count: 1,
+        category: Category::SchemaIntrospection,
+        reason: "a table name from sqlite_master, the dialect twin of the Postgres read",
+    },
+    Allowed {
+        file: "sqlite/backup.rs",
+        function: "columns",
+        target: "String",
+        what: "\"name\"",
+        count: 1,
+        category: Category::SchemaIntrospection,
+        reason: "a column name from PRAGMA table_info, into the plain ColumnInfo struct",
+    },
+    Allowed {
+        file: "sqlite/backup.rs",
+        function: "columns",
+        target: "String",
+        what: "\"type\"",
+        count: 1,
+        category: Category::SchemaIntrospection,
+        reason: "a SQLite declared column type from PRAGMA table_info",
+    },
+    Allowed {
+        file: "sqlite/backup.rs",
+        function: "export_table",
+        target: "String",
+        what: "0",
+        count: 1,
+        category: Category::OpaquePayload,
+        reason: "the row rendered as JSON by the query itself, the twin of the Postgres export",
+    },
+    Allowed {
+        file: "sqlite/backup.rs",
+        function: "schema_checksum",
+        target: "String",
+        what: "\"name\"",
+        count: 1,
+        category: Category::SchemaIntrospection,
+        reason: "an object name from sqlite_master, hashed into the schema fingerprint",
+    },
+    Allowed {
+        file: "sqlite/backup.rs",
+        function: "schema_checksum",
+        target: "String",
+        what: "\"sql\"",
+        count: 1,
+        category: Category::SchemaIntrospection,
+        reason: "the stored DDL text from sqlite_master, hashed into the schema fingerprint",
+    },
+    Allowed {
+        file: "postgres/mod.rs",
+        function: "database_is_empty",
+        target: "String",
+        what: "\"SELECTtable_nameFROMinformation_schema.tables\\WHEREtable_schema='public'ANDtable_type='BASETABLE'\\ANDtable_name<>'_sqlx_migrations'\"",
+        count: 1,
+        category: Category::SchemaIntrospection,
+        reason: "table names enumerated to decide emptiness",
+    },
+    Allowed {
+        file: "sqlite/mod.rs",
+        function: "database_is_empty",
+        target: "String",
+        what: "\"SELECTnameFROMsqlite_master\\WHEREtype='table'ANDnameNOTLIKE'sqlite_%'ANDname<>'_sqlx_migrations'\"",
+        count: 1,
+        category: Category::SchemaIntrospection,
+        reason: "table names enumerated to decide emptiness, the SQLite twin",
+    },
+    // ---- cardinality probes ----
+    Allowed {
+        file: "postgres/mod.rs",
+        function: "database_is_empty",
+        target: "bool",
+        what: "&format!(\"SELECTEXISTS(SELECT1FROM{}LIMIT1)\",crate::sql::quote_identifier(&table))",
+        count: 1,
+        category: Category::CountOrExists,
+        reason: "SELECT EXISTS(…) emptiness probe; the SQLite twin decodes i64 (no bool there)",
+    },
+    Allowed {
+        file: "postgres/posts.rs",
+        function: "tag_post",
+        target: "bool",
+        what: "\"SELECTCOUNT(*)>0FROMpostsWHEREpost_id=$1\"",
+        count: 1,
+        category: Category::CountOrExists,
+        reason: "post-exists check before tagging",
+    },
+    Allowed {
+        file: "sqlite/posts.rs",
+        function: "tag_post",
+        target: "bool",
+        what: "\"SELECTCOUNT(*)>0FROMpostsWHEREpost_id=$1\"",
+        count: 1,
+        category: Category::CountOrExists,
+        reason: "post-exists check before tagging, the dialect twin",
+    },
+    Allowed {
+        file: "posts.rs",
+        function: "list_posts_by_tag",
+        target: "bool",
+        what: "\"SELECTCOUNT(*)>0FROMtagsWHEREtag_slug=$1\"",
+        count: 1,
+        category: Category::CountOrExists,
+        reason: "tag-existence check, so an unknown tag is a 404 rather than an empty list",
+    },
+    Allowed {
+        file: "posts.rs",
+        function: "list_user_posts_by_tag",
+        target: "bool",
+        what: "\"SELECTCOUNT(*)>0FROMtagsWHEREtag_slug=$1\"",
+        count: 1,
+        category: Category::CountOrExists,
+        reason: "the same tag-existence check on the per-user listing",
+    },
+    Allowed {
+        file: "postgres/teardown.rs",
+        function: "database_exists",
+        target: "bool",
+        what: "\"SELECTEXISTS(SELECT1FROMpg_databaseWHEREdatname=$1)\"",
+        count: 1,
+        category: Category::CountOrExists,
+        reason: "database-exists probe before a teardown DROP",
+    },
+    // ---- deliberately lossy / opaque ----
+    Allowed {
+        file: "helpers.rs",
+        function: "",
+        target: "String",
+        what: "SessionRow.3",
+        count: 1,
+        category: Category::DeliberateLossy,
+        reason: "the session label is stored lossily (SessionLabel::from_lossy truncates), so \
+                 the column holds less than the domain type claims — decoding into it would \
+                 assert an invariant the data does not carry (#728 names this site explicitly)",
+    },
+    Allowed {
+        file: "feed_cache.rs",
+        function: "",
+        target: "String",
+        what: "CacheTuple.1",
+        count: 1,
+        category: Category::OpaquePayload,
+        reason: "the cached feed body — rendered RSS/Atom/JSON this layer stores and serves \
+                 verbatim, never inspects. Note the same tuple's feed_url and content_type \
+                 DO decode into FeedPath/ContentType",
+    },
+    Allowed {
+        file: "helpers.rs",
+        function: "",
+        target: "String",
+        what: "tags",
+        count: 1,
+        category: Category::OpaquePayload,
+        reason: "PostRow's tags column is the JSON aggregate built by TAGS_SUBQUERY, parsed \
+                 by build_post_record — the one column of that row that is not a domain type",
+    },
+    Allowed {
+        file: "feed_events.rs",
+        function: "",
+        target: "Option<String>",
+        what: "last_error",
+        count: 1,
+        category: Category::OpaquePayload,
+        reason: "free-text error detail from a failed regeneration attempt; no shape to type",
+    },
+    Allowed {
+        file: "feed_events.rs",
+        function: "",
+        target: "i32",
+        what: "attempts",
+        count: 1,
+        category: Category::CountOrExists,
+        reason: "retry counter for the claim-lease backoff, not an identifier",
+    },
+    // ---- flags on row tuples ----
+    Allowed {
+        file: "helpers.rs",
+        function: "",
+        target: "bool",
+        what: "UserRow.7",
+        count: 1,
+        category: Category::CountOrExists,
+        reason: "email_verified flag",
+    },
+    Allowed {
+        file: "helpers.rs",
+        function: "",
+        target: "bool",
+        what: "UserRow.8",
+        count: 1,
+        category: Category::CountOrExists,
+        reason: "is_operator flag",
+    },
+    Allowed {
+        file: "helpers.rs",
+        function: "",
+        target: "bool",
+        what: "UserRecordParts.7",
+        count: 1,
+        category: Category::NotADecodeTarget,
+        reason: "UserRecordParts is a function-parameter tuple, never a query_as target — the \
+                 gate polices every tuple alias under the root and cannot tell which are \
+                 decode targets without guessing, so this is over-bite, not residue",
+    },
+    Allowed {
+        file: "helpers.rs",
+        function: "",
+        target: "bool",
+        what: "UserRecordParts.8",
+        count: 1,
+        category: Category::NotADecodeTarget,
+        reason: "the is_operator half of the same function-parameter tuple",
+    },
+    Allowed {
+        file: "users.rs",
+        function: "authenticate",
+        target: "(UserId,Username,Option<DisplayName>,Option<Bio>,DateTime<Utc>,Option<DateTime<Utc>>,String,Option<Email>,bool,bool,)",
+        count: 1,
+        what: "\"SELECTuser_id,username,display_name,bio,created_at,last_authenticated_at,password_hash,email,email_verified,is_operatorFROMusersWHEREusername=$1\"",
+        category: Category::DeferredNewtype,
+        reason: "the password_hash column decodes as String; every other element is typed. \
+                 Hashes are a secret-bearing value that wants its own newtype — deferred to \
+                 #693, which owns the secret-newtype vertical",
+    },
+    // ---- config values: #687 owns the key half, nothing owns the value half ----
+    Allowed {
+        file: "site_config.rs",
+        function: "get",
+        target: "(String,)",
+        what: "\"SELECTvalueFROMsite_configWHEREkey=$1\"",
+        count: 1,
+        category: Category::OpaquePayload,
+        reason: "a site-config value is deliberately polymorphic text (a URL, a port, a token) \
+                 parsed by each key's own getter. #687 types the KEY half; this entry \
+                 survives it, because the value half stays String by design",
+    },
+    Allowed {
+        file: "site_config.rs",
+        function: "list",
+        target: "(String,String)",
+        what: "\"SELECTkey,valueFROMsite_configORDERBYkey\"",
+        count: 1,
+        category: Category::DeferredNewtype,
+        reason: "two adjacent Strings — a real transposition hazard, and the only one in this \
+                 file. #687's SiteConfigKey types the first element and removes it; the \
+                 second stays String per the entry above",
+    },
+    Allowed {
+        file: "site_config.rs",
+        function: "delete",
+        target: "(String,)",
+        what: "\"DELETEFROMsite_configWHEREkey=$1RETURNINGkey\"",
+        count: 1,
+        category: Category::DeferredNewtype,
+        reason: "the RETURNING key echoes back the config key — #687's SiteConfigKey territory",
+    },
+    Allowed {
+        file: "user_config.rs",
+        function: "get",
+        target: "(String,)",
+        what: "\"SELECTvalueFROMuser_configWHEREuser_id=$1ANDkey=$2\"",
+        count: 1,
+        category: Category::OpaquePayload,
+        reason: "a per-user config value, polymorphic text like its site-config sibling",
+    },
+    Allowed {
+        file: "smtp.rs",
+        function: "load_smtp_config",
+        target: "Result<Option<SmtpConfig>,SmtpConfigError>",
+        what: "\"smtp.host\"",
+        count: 1,
+        category: Category::NotADecodeTarget,
+        reason: "SiteConfigStorage::get, not a row read — the gate takes the target from the \
+                 enclosing fn return because the call writes no type, and cannot tell this \
+                 receiver from an sqlx row",
+    },
+    Allowed {
+        file: "smtp.rs",
+        function: "load_smtp_config",
+        target: "Result<Option<SmtpConfig>,SmtpConfigError>",
+        what: "\"smtp.port\"",
+        count: 1,
+        category: Category::NotADecodeTarget,
+        reason: "SiteConfigStorage::get, not a row read",
+    },
+    Allowed {
+        file: "smtp.rs",
+        function: "load_smtp_config",
+        target: "Result<Option<SmtpConfig>,SmtpConfigError>",
+        what: "\"smtp.tls_mode\"",
+        count: 1,
+        category: Category::NotADecodeTarget,
+        reason: "SiteConfigStorage::get, not a row read",
+    },
+    Allowed {
+        file: "smtp.rs",
+        function: "load_smtp_config",
+        target: "Result<Option<SmtpConfig>,SmtpConfigError>",
+        what: "\"smtp.sender\"",
+        count: 1,
+        category: Category::NotADecodeTarget,
+        reason: "SiteConfigStorage::get, not a row read",
+    },
+    // ---- subscriptions ----
+    Allowed {
+        file: "subscriptions.rs",
+        function: "list_subscribers",
+        target: "(SubscriptionId,ChannelId,String,DateTime<Utc>)",
+        what: "DB::LIST_ACTIVE_SUBSCRIBERS",
+        count: 1,
+        category: Category::DeferredNewtype,
+        reason: "subscriber_ref is a channel-scoped opaque reference — a domain value with no \
+                 type. Deferred to #750: the fix spans the admission seam, the ChannelId \
+                 pairing and the wire DTOs, not this decode",
+    },
+    // ---- the claim wrapper ----
+    Allowed {
+        file: "postgres/feed_events.rs",
+        function: "claim_pending_batch",
+        target: "ClaimedRow",
+        what: "\"WITHeligibleAS(\\SELECTidFROMfeed_events\\WHERE(status='pending'ANDnext_attempt_at<=$1)\\OR(status='claimed'ANDclaimed_at<$2)\\ORDERBYnext_attempt_atASC\\LIMIT$3\\FORUPDATESKIPLOCKED\\)\\UPDATEfeed_eventsSETstatus='claimed',claimed_at=$1\\WHEREidIN(SELECTidFROMeligible)\\RETURNINGid,feed_url,status,attempts,last_error,next_attempt_at,claimed_at,\\created_at,regenerated_at,pinged_at\"",
+        count: 1,
+        category: Category::HandWrittenFromRow,
+        reason: "ClaimedRow's FromRow is hand-written (it must divert a corrupt feed_url to \
+                 the purge list), so delegation cannot back it. Its parts are accounted for: \
+                 FeedEventRecord is a policed FromRow struct and FeedEventId is a bridge type",
+    },
+    Allowed {
+        file: "sqlite/feed_events.rs",
+        function: "claim_pending_batch",
+        target: "ClaimedRow",
+        what: "\"UPDATEfeed_eventsSETstatus='claimed',claimed_at=$1\\WHEREidIN(\\SELECTidFROMfeed_events\\WHERE(status='pending'ANDnext_attempt_at<=$2)\\OR(status='claimed'ANDclaimed_at<$3)\\ORDERBYnext_attempt_atASC\\LIMIT$4\\)\\RETURNINGid,feed_url,status,attempts,last_error,next_attempt_at,claimed_at,\\created_at,regenerated_at,pinged_at\"",
+        count: 1,
+        category: Category::HandWrittenFromRow,
+        reason: "the dialect twin of the Postgres claim; same wrapper, same accounting",
+    },
+    // ---- test scaffolding ----
+    Allowed {
+        file: "test_support.rs",
+        function: "string_triples",
+        target: "Result<Vec<(String,String,String)>,sqlx::Error>",
+        what: "sql",
+        count: 2,
+        category: Category::TestScaffolding,
+        reason: "a generic test row helper; the SQL is a runtime &str and the shape comes from \
+                 the fn return. The two dialect arms are byte-identical",
+    },
+    Allowed {
+        file: "test_support.rs",
+        function: "ensure_template_db",
+        target: "bool",
+        what: "\"SELECTEXISTS(SELECT1FROMpg_databaseWHEREdatname=$1)\"",
+        count: 1,
+        category: Category::CountOrExists,
+        reason: "database-exists probe in the Postgres test harness",
+    },
+    Allowed {
+        file: "test_support.rs",
+        function: "get",
+        target: "sqlx::Result<Option<String>>",
+        what: "key",
+        count: 1,
+        category: Category::NotADecodeTarget,
+        reason: "a HashMap::get in the in-memory SiteConfigStorage fake — not a row read; the \
+                 gate takes the target from the fn return and cannot tell the receiver apart",
+    },
+    Allowed {
+        file: "test_support.rs",
+        function: "get_smtp_credentials",
+        target: "sqlx::Result<crate::smtp::SmtpCredentials>",
+        what: "\"smtp.username\"",
+        count: 1,
+        category: Category::NotADecodeTarget,
+        reason: "SiteConfigStorage::get in the test harness, not a row read",
+    },
+    Allowed {
+        file: "test_support.rs",
+        function: "get_smtp_credentials",
+        target: "sqlx::Result<crate::smtp::SmtpCredentials>",
+        what: "\"smtp.password\"",
+        count: 1,
+        category: Category::NotADecodeTarget,
+        reason: "SiteConfigStorage::get in the test harness, not a row read",
+    },
+    // ---- surviving i64-family entries from #715 ----
     Allowed {
         file: "backup.rs",
         function: "backup_covers_every_table_or_deliberately_excludes_it",
@@ -439,6 +927,9 @@ struct DecodeSite {
     target: String,
     /// Rendered first argument / field name. A key and a message, never a decision.
     what: String,
+    /// The leaf types that are not approved — the reason this site is in the report.
+    /// Message only; matching keys on the four fields above.
+    unapproved: Vec<String>,
     line: usize,
 }
 
@@ -452,33 +943,165 @@ fn render<T: ToTokens>(t: &T) -> String {
         .collect()
 }
 
-/// Whether `ty` resolves to the `i64` family, recursing through `Vec`, `Option`,
-/// `Result`, references, and tuples — so `Vec<(String, Option<i64>)>` is in
-/// population and `Vec<(String, DateTime<Utc>)>` is not.
+/// Roots scanned for *declarations*, to build the approve-set. Wider than
+/// [`POLICED_ROOT`]: the domain types a `storage` decode targets are declared in `common`.
 ///
-/// Pure, so it is unit-tested directly.
-fn is_i64_family(ty: &syn::Type) -> bool {
+/// A missing or unparseable file here fails the gate, exactly as under the policed root —
+/// the approve-set is what makes a decode legal, so a shrunken one is a gate that has
+/// quietly changed its own rule.
+/// `host/src` is here because the *validated* halves of a few split newtypes live there,
+/// server-only and serde-free — `host::invite::InviteCode` is the one storage decodes
+/// today, and it is exactly the type `common`'s wasm-facing `ProfferedInviteCode` is not.
+/// Missing it would have cost a spurious allowlist entry for a properly typed decode.
+const DECLARATION_ROOTS: &[&str] = &["common/src", "host/src", "storage/src"];
+
+/// Generic containers walked *through* to reach leaves. Anything else is a leaf that must
+/// itself be approved, so an unrecognised wrapper fails closed.
+const CONTAINERS: &[&str] = &["Vec", "Option", "Box", "Cow", "Arc", "Rc"];
+
+/// Foreign types that are legitimate column targets but are declared outside this repo, so
+/// no declaration scan can find them.
+///
+/// The only hand-maintained part of the approve-set, and small precisely because the ~35
+/// domain types derive automatically. Each entry is a deliberate statement that decoding a
+/// column straight into this type is right.
+const APPROVED_FOREIGN: &[(&str, &str)] = &[(
+    "DateTime",
+    "chrono timestamps — the correct target for every temporal column; note this is also \
+     the residual ADR-0085 records, since two adjacent DateTime columns transpose \
+     invisibly (#751)",
+)];
+
+/// The types a decode may land in: domain types with a bridge, plus the composites whose
+/// parts this gate polices separately.
+#[derive(Default)]
+pub(crate) struct ApproveSet {
+    /// Types declared with a bridge-emitting macro, plus [`APPROVED_FOREIGN`].
+    approved: std::collections::HashSet<String>,
+    /// `#[derive(FromRow)]` structs and tuple aliases declared under a scanned root.
+    ///
+    /// Approved **by delegation**: every field and element is itself policed, at the
+    /// declaration, by [`Scanner::visit_item_struct`] / [`Scanner::visit_item_type`]. This
+    /// is a second policed population, not a promise — which is why the delegation is
+    /// scoped to composites declared under a root this gate actually reads. One declared
+    /// elsewhere has had no field checked, so it stays unrecognised and fails.
+    composites: std::collections::HashSet<String>,
+}
+
+/// Whether `attrs` carry a bridge-emitting macro.
+///
+/// Two shapes, and the rule differs between them (#746). A **derive** from
+/// [`BRIDGE_DERIVES`] approves on its presence alone: whether it actually emits the bridge
+/// depends on the type's own options (`no_sqlx`, `secret`), which is not a static property
+/// — so this over-approves, harmlessly, since the compiler rejects a decode into a type
+/// with no `Decode` impl. A **`#[text_enum]` attribute** carries an explicit `sqlx` flag,
+/// so the gate reads it and is exact: `TargetKind` has it, `Channel` does not.
+fn has_bridge(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|a| {
+        let last = a.path().segments.last().map(|s| s.ident.to_string());
+        match last.as_deref() {
+            Some("derive") => a.meta.require_list().is_ok_and(|l| {
+                l.tokens.clone().into_iter().any(|t| match t {
+                    proc_macro2::TokenTree::Ident(i) => {
+                        BRIDGE_DERIVES.contains(&i.to_string().as_str())
+                    }
+                    _ => false,
+                })
+            }),
+            Some(name) if BRIDGE_ATTRIBUTES.contains(&name) => {
+                a.meta.require_list().is_ok_and(|l| {
+                    l.tokens
+                        .clone()
+                        .into_iter()
+                        .any(|t| matches!(&t, proc_macro2::TokenTree::Ident(i) if i == "sqlx"))
+                })
+            }
+            _ => false,
+        }
+    })
+}
+
+/// Whether `attrs` derive `sqlx::FromRow`.
+fn is_from_row(attrs: &[syn::Attribute]) -> bool {
+    attrs
+        .iter()
+        .any(|a| a.path().is_ident("derive") && render(&a.meta).contains("FromRow"))
+}
+
+/// Folds one file's declarations into `set`.
+fn collect_declarations(source: &str, set: &mut ApproveSet) -> Result<(), String> {
+    let file = syn::parse_file(source).map_err(|e| format!("cannot parse as Rust: {e}"))?;
+    for item in &file.items {
+        match item {
+            syn::Item::Struct(s) if has_bridge(&s.attrs) => {
+                set.approved.insert(s.ident.to_string());
+            }
+            syn::Item::Enum(e) if has_bridge(&e.attrs) => {
+                set.approved.insert(e.ident.to_string());
+            }
+            syn::Item::Struct(s) if is_from_row(&s.attrs) => {
+                set.composites.insert(s.ident.to_string());
+            }
+            syn::Item::Type(t) if matches!(&*t.ty, syn::Type::Tuple(_)) => {
+                set.composites.insert(t.ident.to_string());
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Every leaf of `ty` that is not an approved column type — empty when the decode is fine.
+///
+/// `Result<T, E>` recurses into `T` **only**: the error arm is never decoded from a column,
+/// so asking `BackupError` to be an approved column type would be nonsense.
+fn unapproved_leaves(ty: &syn::Type, set: &ApproveSet) -> Vec<String> {
     match ty {
         syn::Type::Path(p) => {
             let Some(last) = p.path.segments.last() else {
-                return false;
+                return Vec::new();
             };
-            if last.ident == "i64" {
-                return true;
+            let name = last.ident.to_string();
+            let args: Vec<&syn::Type> = match &last.arguments {
+                syn::PathArguments::AngleBracketed(ab) => ab
+                    .args
+                    .iter()
+                    .filter_map(|a| match a {
+                        syn::GenericArgument::Type(t) => Some(t),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            if name == "Result" {
+                return args
+                    .first()
+                    .map(|t| unapproved_leaves(t, set))
+                    .unwrap_or_default();
             }
-            match &last.arguments {
-                syn::PathArguments::AngleBracketed(args) => args.args.iter().any(|a| match a {
-                    syn::GenericArgument::Type(t) => is_i64_family(t),
-                    _ => false,
-                }),
-                _ => false,
+            if CONTAINERS.contains(&name.as_str()) {
+                return args
+                    .iter()
+                    .flat_map(|t| unapproved_leaves(t, set))
+                    .collect();
+            }
+            if set.approved.contains(&name) || set.composites.contains(&name) {
+                Vec::new()
+            } else {
+                vec![name]
             }
         }
-        syn::Type::Tuple(t) => t.elems.iter().any(is_i64_family),
-        syn::Type::Reference(r) => is_i64_family(&r.elem),
-        syn::Type::Paren(p) => is_i64_family(&p.elem),
-        syn::Type::Group(g) => is_i64_family(&g.elem),
-        _ => false,
+        syn::Type::Tuple(t) => t
+            .elems
+            .iter()
+            .flat_map(|e| unapproved_leaves(e, set))
+            .collect(),
+        syn::Type::Reference(r) => unapproved_leaves(&r.elem, set),
+        syn::Type::Paren(p) => unapproved_leaves(&p.elem, set),
+        syn::Type::Group(g) => unapproved_leaves(&g.elem, set),
+        syn::Type::Slice(s) => unapproved_leaves(&s.elem, set),
+        syn::Type::Array(a) => unapproved_leaves(&a.elem, set),
+        _ => Vec::new(),
     }
 }
 
@@ -517,7 +1140,9 @@ fn nth_type_arg(args: &syn::PathArguments, n: usize) -> Option<syn::Type> {
 /// Walks a file collecting [`DecodeSite`]s, carrying the enclosing `fn` name/return type
 /// and the enclosing `let` ascription so each call can take its **nearest** declared
 /// type.
-struct Scanner {
+struct Scanner<'a> {
+    /// The types a decode may legally land in.
+    approve: &'a ApproveSet,
     out: Vec<DecodeSite>,
     /// `(line, column-argument)` of each turbofish-less `.get`/`try_get` in struct-literal
     /// field position — a hard failure, not a decode record.
@@ -530,12 +1155,16 @@ struct Scanner {
     let_ty: Option<syn::Type>,
 }
 
-impl Scanner {
-    fn new(field_positions: std::collections::HashSet<(usize, usize)>) -> Self {
-        Self {
+impl Scanner<'_> {
+    fn new(
+        field_positions: std::collections::HashSet<(usize, usize)>,
+        approve: &ApproveSet,
+    ) -> Scanner<'_> {
+        Scanner {
             out: Vec::new(),
             unreadable_fields: Vec::new(),
             field_positions,
+            approve,
             function: String::new(),
             fn_ret: None,
             let_ty: None,
@@ -553,13 +1182,15 @@ impl Scanner {
             // by construction — see the module doc.
             return;
         };
-        if !is_i64_family(&target) {
+        let unapproved = unapproved_leaves(&target, self.approve);
+        if unapproved.is_empty() {
             return;
         }
         self.out.push(DecodeSite {
             function: self.function.clone(),
             target: render(&target),
             what,
+            unapproved,
             line: span.start().line,
         });
     }
@@ -629,7 +1260,7 @@ fn unreadable_field_positions(file: &syn::File) -> std::collections::HashSet<(us
     finder.0
 }
 
-impl<'ast> syn::visit::Visit<'ast> for Scanner {
+impl<'ast> syn::visit::Visit<'ast> for Scanner<'_> {
     fn visit_item_fn(&mut self, i: &'ast syn::ItemFn) {
         let ret = return_type(&i.sig);
         self.visit_block_with(&i.sig.ident.to_string(), ret, &i.block);
@@ -697,7 +1328,8 @@ impl<'ast> syn::visit::Visit<'ast> for Scanner {
             .any(|a| a.path().is_ident("derive") && render(&a.meta).contains("FromRow"));
         if is_from_row {
             for f in &i.fields {
-                if is_i64_family(&f.ty) {
+                let unapproved = unapproved_leaves(&f.ty, self.approve);
+                if !unapproved.is_empty() {
                     self.out.push(DecodeSite {
                         function: String::new(),
                         target: render(&f.ty),
@@ -706,6 +1338,7 @@ impl<'ast> syn::visit::Visit<'ast> for Scanner {
                             .as_ref()
                             .map(std::string::ToString::to_string)
                             .unwrap_or_default(),
+                        unapproved,
                         line: f.ty.span().start().line,
                     });
                 }
@@ -720,11 +1353,13 @@ impl<'ast> syn::visit::Visit<'ast> for Scanner {
     fn visit_item_type(&mut self, i: &'ast syn::ItemType) {
         if let syn::Type::Tuple(t) = &*i.ty {
             for (n, elem) in t.elems.iter().enumerate() {
-                if is_i64_family(elem) {
+                let unapproved = unapproved_leaves(elem, self.approve);
+                if !unapproved.is_empty() {
                     self.out.push(DecodeSite {
                         function: String::new(),
                         target: render(elem),
                         what: format!("{}.{n}", i.ident),
+                        unapproved,
                         line: elem.span().start().line,
                     });
                 }
@@ -739,9 +1374,9 @@ impl<'ast> syn::visit::Visit<'ast> for Scanner {
 /// A file that will not parse is **not** silently skipped: an unparsed file is a file
 /// the gate cannot see, and a gate that quietly shrinks its own population is the
 /// failure this whole design exists to prevent. Pure, so it is unit-tested directly.
-fn decodes(source: &str) -> Result<FileScan, String> {
+fn decodes(source: &str, approve: &ApproveSet) -> Result<FileScan, String> {
     let file = syn::parse_file(source).map_err(|e| format!("cannot parse as Rust: {e}"))?;
-    let mut scanner = Scanner::new(unreadable_field_positions(&file));
+    let mut scanner = Scanner::new(unreadable_field_positions(&file), approve);
     syn::visit::Visit::visit_file(&mut scanner, &file);
     Ok(FileScan {
         sites: scanner.out,
@@ -781,11 +1416,11 @@ fn entry_matches(entry: &Allowed, path: &str, decode: &DecodeSite) -> bool {
 /// The failure detail for every unjustified decode and every allowlist entry whose
 /// declared count no longer matches the tree, or `None` when the population is exactly
 /// accounted for. Pure given the `(path, source)` pairs, so it is unit-tested directly.
-pub fn problems(scanned: &[(String, String)]) -> Option<String> {
+pub fn problems(scanned: &[(String, String)], approve: &ApproveSet) -> Option<String> {
     let mut found: Vec<(String, DecodeSite)> = Vec::new();
     let mut lines = Vec::new();
     for (path, source) in scanned {
-        match decodes(source) {
+        match decodes(source, approve) {
             Ok(scan) => {
                 found.extend(scan.sites.into_iter().map(|d| (path.clone(), d)));
                 for (line, what) in scan.unreadable_fields {
@@ -809,13 +1444,16 @@ pub fn problems(scanned: &[(String, String)]) -> Option<String> {
     for (path, d) in &found {
         if !ALLOWLIST.iter().any(|e| entry_matches(e, path, d)) {
             lines.push(format!(
-                "{path}:{}: `{}` decodes into `{}` — an sqlx decode in the `i64` family with no \
-                 allowlist entry. If this column is an id, decode it into its id newtype directly \
-                 (the ADR-0071 bridge makes `query_scalar::<_, PostId>` work) and delete the \
-                 hand re-wrap. If it is genuinely a primitive, add an ALLOWLIST entry with a \
-                 written reason. This gate reads no SQL, so it cannot tell which — that judgement \
-                 is yours to record.",
-                d.line, d.what, d.target
+                "{path}:{}: `{}` decodes into `{}`, whose leaf type(s) {} are not approved column \
+                 types. If the column holds a domain value, decode it straight into its type — the \
+                 ADR-0071 bridge makes `query_scalar::<_, PostId>` work — and delete any hand \
+                 re-wrap. If it is genuinely untyped, add an ALLOWLIST entry with a written \
+                 reason. This gate reads no SQL, so it cannot tell which; that judgement is yours \
+                 to record.",
+                d.line,
+                d.what,
+                d.target,
+                d.unapproved.join(", ")
             ));
         }
     }
@@ -960,7 +1598,41 @@ pub fn run(result: &mut CommandResult) {
         )),
     }
 
-    let detail = match (problems(&scanned), unreadable.is_empty()) {
+    // The approve-set is built from a WIDER set of roots than the policed one: a
+    // `storage` decode targets types declared in `common`. Same read-and-parse discipline
+    // — a file missed here would silently shrink what the gate accepts, which changes the
+    // rule rather than the population, and is worse.
+    let mut approve = ApproveSet::default();
+    for root in DECLARATION_ROOTS {
+        match files::with_extension(Path::new(root), "rs") {
+            Ok(decls) => {
+                for p in &decls {
+                    let path = p.display().to_string();
+                    match std::fs::read_to_string(p) {
+                        Ok(s) => {
+                            if let Err(e) = collect_declarations(&s, &mut approve) {
+                                unreadable.push(format!(
+                                    "{path}: {e} — this gate's approved-type set is built from \
+                                     the declarations here, so an unparsed file shrinks what it \
+                                     accepts."
+                                ));
+                            }
+                        }
+                        Err(e) => unreadable.push(format!(
+                            "{path}: cannot read: {e} — a declaration file this gate cannot read \
+                             is an approve-set it cannot trust."
+                        )),
+                    }
+                }
+            }
+            Err(e) => unreadable.push(format!("cannot scan declaration root {root}: {e}")),
+        }
+    }
+    approve
+        .approved
+        .extend(APPROVED_FOREIGN.iter().map(|(n, _)| (*n).to_string()));
+
+    let detail = match (problems(&scanned, &approve), unreadable.is_empty()) {
         (None, true) => {
             result.push(StepResult::ok("sqlx-newtype-decode"));
             return;
@@ -978,9 +1650,32 @@ pub fn run(result: &mut CommandResult) {
 mod tests {
     use super::*;
 
+    /// A synthetic approve-set, so the pure tests never touch the filesystem.
+    ///
+    /// The names here stand in for what the real declaration scan finds: `Slug`/`PostId`
+    /// for bridge-carrying domain types, `DateTime` for [`APPROVED_FOREIGN`], and
+    /// `PostRow`/`CacheTuple` for composites approved by delegation.
+    fn approve() -> ApproveSet {
+        let names = |ns: &[&str]| ns.iter().map(|s| (*s).to_string()).collect();
+        ApproveSet {
+            approved: names(&[
+                "Slug",
+                "PostId",
+                "UserId",
+                "AudienceId",
+                "Email",
+                "FeedPath",
+                "TagId",
+                "Tag",
+                "DateTime",
+            ]),
+            composites: names(&["PostRow", "CacheTuple"]),
+        }
+    }
+
     /// Targets of every decode the scanner found, for terse assertions.
     fn targets(src: &str) -> Vec<String> {
-        decodes(src)
+        decodes(src, &approve())
             .expect("parses")
             .sites
             .into_iter()
@@ -990,12 +1685,17 @@ mod tests {
 
     /// Line numbers of the turbofish-less struct-literal field decodes in `src`.
     fn field_failures(src: &str) -> Vec<usize> {
-        decodes(src)
+        decodes(src, &approve())
             .expect("parses")
             .unreadable_fields
             .into_iter()
             .map(|(line, _)| line)
             .collect()
+    }
+
+    /// [`problems`] against the synthetic approve-set.
+    fn problems_of(scanned: &[(String, String)]) -> Option<String> {
+        problems(scanned, &approve())
     }
 
     // ---- the population: each of the three call-site type positions bites ----
@@ -1121,13 +1821,72 @@ mod tests {
     }
 
     #[test]
-    fn bool_and_string_targets_are_not_collected() {
-        // The out-of-population classes: `COUNT(*) > 0` flags and table-name reads are
-        // never in the population at all, so they need no allowlist entry.
+    fn every_unapproved_target_is_collected_with_no_special_casing() {
+        // This replaces `bool_and_string_targets_are_not_collected`, which asserted the
+        // opposite. Under #715's rule those were out of population — invisible, and
+        // recorded nowhere. That invisibility is the defect #728 exists to close, so they
+        // are now in population and need a written reason like anything else.
+        //
+        // Note there is no primitive list anywhere in the rule: `bool`, `String`, `i64`,
+        // `u32`, `char` and `Uuid` fail for one reason — nothing approved them.
+        for target in [
+            "bool",
+            "String",
+            "i64",
+            "u32",
+            "char",
+            "f64",
+            "Uuid",
+            "NaiveDate",
+        ] {
+            let src = format!(
+                r#"fn f() {{ sqlx::query_scalar::<_, {target}>("SELECT c").fetch_one(p); }}"#
+            );
+            assert_eq!(targets(&src), vec![target.to_string()], "for {target}");
+        }
+    }
+
+    #[test]
+    fn slice_and_array_leaves_are_reached() {
+        // `Type::Slice`/`Type::Array` were absent from #715's recursion, so a `&[u8]`
+        // target slipped through even though `u8` is no more approved than `i64`.
+        for target in ["&[u8]", "[u8; 32]"] {
+            let src = format!(r#"fn f() {{ let v: {target} = r.get("c"); }}"#);
+            assert_eq!(targets(&src).len(), 1, "for {target}");
+        }
+    }
+
+    #[test]
+    fn a_composite_is_approved_by_delegation_but_its_parts_are_not() {
+        // The property that keeps delegation honest. `PostRow` passes as a target — its
+        // fields are policed at the declaration, which is where the newtype belongs — but
+        // that approval does NOT extend to a primitive field of it.
+        let approved_target =
+            r#"fn f() { sqlx::query_as::<_, PostRow>("SELECT *").fetch_one(p); }"#;
+        assert!(targets(approved_target).is_empty());
+
+        let leaky_field = r#"
+            #[derive(sqlx::FromRow)]
+            struct PostRow { slug: Slug, tags: String }
+        "#;
+        assert_eq!(targets(leaky_field), vec!["String"]);
+    }
+
+    #[test]
+    fn a_composite_declared_outside_the_scanned_roots_is_not_approved() {
+        // Delegation is a second policed population, not a promise. A composite the gate
+        // never read has had no field checked, so approving it would be an unbacked claim.
+        let src = r#"fn f() { sqlx::query_as::<_, SomeForeignRow>("SELECT *").fetch_one(p); }"#;
+        assert_eq!(targets(src), vec!["SomeForeignRow"]);
+    }
+
+    #[test]
+    fn a_result_error_arm_is_never_a_decode_target() {
+        // `Result<T, E>`: the error arm is not decoded from a column, so an unapproved
+        // `E` must not fail the decode. Every fn-return site in the tree hits this.
         let src = r#"
-            fn f() {
-                let ok: bool = sqlx::query_scalar("SELECT COUNT(*) > 0 FROM t").fetch_one(p);
-                let names = sqlx::query_scalar::<_, String>("SELECT name FROM t").fetch_all(p);
+            fn f() -> Result<Slug, BackupError> {
+                sqlx::query_scalar("SELECT slug").fetch_one(p)
             }
         "#;
         assert!(targets(src).is_empty());
@@ -1233,7 +1992,7 @@ mod tests {
             "storage/src/test_support.rs".to_string(),
             identical_sites(2),
         )];
-        let two_detail = problems(&two).unwrap_or_default();
+        let two_detail = problems_of(&two).unwrap_or_default();
         // Match the failure phrasing, not the bare key — the recovery footer lists
         // every entry by key, including this one.
         assert!(
@@ -1245,7 +2004,7 @@ mod tests {
             "storage/src/test_support.rs".to_string(),
             identical_sites(3),
         )];
-        let detail = problems(&three).expect("a third identical decode must fail");
+        let detail = problems_of(&three).expect("a third identical decode must fail");
         assert!(
             detail.contains("declares 2 site(s), the tree has 3"),
             "{detail}"
@@ -1262,7 +2021,7 @@ mod tests {
                    Q(pool) => sqlx::query_scalar(sql).fetch_one(pool).await, \
                    R(pool) => sqlx::query_scalar(\"SELECT owner_id FROM t\").fetch_one(pool).await, \
                    } }";
-        let detail = problems(&[("storage/src/test_support.rs".to_string(), src.to_string())])
+        let detail = problems_of(&[("storage/src/test_support.rs".to_string(), src.to_string())])
             .expect("the unlisted sibling decode must fail");
         assert!(detail.contains("SELECTowner_idFROMt"), "{detail}");
     }
@@ -1279,7 +2038,7 @@ mod tests {
                 }
             }
         "#;
-        let detail = problems(&[("storage/src/users.rs".to_string(), src.to_string())])
+        let detail = problems_of(&[("storage/src/users.rs".to_string(), src.to_string())])
             .expect("a bare i64 id decode must fail");
         assert!(detail.contains("storage/src/users.rs"), "{detail}");
         assert!(detail.contains("decodes into `i64`"), "{detail}");
@@ -1289,7 +2048,7 @@ mod tests {
     fn a_stale_entry_with_no_matching_site_is_reported() {
         // An allowlist that stops tracking the tree has quietly become a region
         // exemption, so a vanished site is a failure too, not a free pass.
-        let detail = problems(&[("storage/src/users.rs".to_string(), String::new())])
+        let detail = problems_of(&[("storage/src/users.rs".to_string(), String::new())])
             .expect("every entry is now stale");
         assert!(
             detail.contains("The decode is gone — delete the entry."),
@@ -1313,7 +2072,7 @@ mod tests {
 
     #[test]
     fn an_unparseable_file_is_a_failure_not_a_skip() {
-        let detail = problems(&[("storage/src/broken.rs".to_string(), "fn f( {{{".to_string())])
+        let detail = problems_of(&[("storage/src/broken.rs".to_string(), "fn f( {{{".to_string())])
             .expect("an unparsed file must fail");
         assert!(detail.contains("invisible to this gate"), "{detail}");
     }
@@ -1460,6 +2219,7 @@ mod tests {
             function: "f".to_string(),
             target: "i64".to_string(),
             what: "\"SELECTCOUNT(*)\"".to_string(),
+            unapproved: vec!["i64".to_string()],
             line: 1,
         };
         let path = "storage/src/users.rs";
@@ -1531,12 +2291,15 @@ mod tests {
     }
 
     #[test]
-    fn is_i64_family_recurses_without_over_matching() {
-        let ty: syn::Type = syn::parse_quote!(Vec<(String, Option<i64>)>);
-        assert!(is_i64_family(&ty));
-        let ty: syn::Type = syn::parse_quote!(Vec<(String, DateTime<Utc>)>);
-        assert!(!is_i64_family(&ty));
+    fn leaf_recursion_reaches_through_wrappers_without_over_matching() {
+        // Replaces `is_i64_family_recurses_without_over_matching`. Same shapes, new rule:
+        // the question is no longer "is any leaf i64" but "is any leaf unapproved".
+        let set = approve();
+        let ty: syn::Type = syn::parse_quote!(Vec<(String, Option<PostId>)>);
+        assert_eq!(unapproved_leaves(&ty, &set), vec!["String".to_string()]);
+        let ty: syn::Type = syn::parse_quote!(Vec<(Slug, DateTime<Utc>)>);
+        assert!(unapproved_leaves(&ty, &set).is_empty());
         let ty: syn::Type = syn::parse_quote!(Option<AudienceId>);
-        assert!(!is_i64_family(&ty));
+        assert!(unapproved_leaves(&ty, &set).is_empty());
     }
 }
