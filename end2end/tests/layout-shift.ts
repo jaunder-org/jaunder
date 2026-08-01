@@ -1,7 +1,7 @@
 /**
  * Reusable empirical layout-shift (CLS) probe for the projector-paint → wasm-mount
  * transition (#202). Deterministic by construction: it gates only on the wasm-route
- * release, `body[data-hydrated]`, and `document.fonts.ready` — never a timer — so it
+ * release, `body[data-mounted]`, and `document.fonts.ready` — never a timer — so it
  * is safe under `fullyParallel` `workers>1` (#182).
  *
  * Page-agnostic: a per-page CLS check supplies a {@link MountShiftProbe} (its `url`,
@@ -11,7 +11,7 @@
  */
 import { expect, type Page, type Locator } from "@playwright/test";
 import { BASE_URL } from "./helpers";
-import { waitForHydration } from "./hydration";
+import { waitForMount } from "./mount";
 
 export interface MountShiftProbe {
   /**
@@ -29,7 +29,7 @@ export interface MountShiftProbe {
   /**
    * Optional: assert the mount actually decorated the measured content (so a green
    * result can't be a no-op) — e.g. the owner action column appeared. Runs after
-   * hydration, before the after-sample.
+   * the mount, before the after-sample.
    */
   afterMount?: (page: Page) => Promise<void>;
   /**
@@ -79,7 +79,7 @@ export async function expectNoShiftAcrossMount(
     );
 
     releaseWasm();
-    await waitForHydration(page);
+    await waitForMount(page);
     if (probe.afterMount) await probe.afterMount(page);
 
     const after = await Promise.all(

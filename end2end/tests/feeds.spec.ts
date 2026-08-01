@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { goto, register, click, waitForHydration, BASE_URL } from "./helpers";
+import { goto, register, click, waitForMount, BASE_URL } from "./helpers";
 // `test` comes from the shared fixtures, not @playwright/test, so this spec emits
 // an `e2e.test` span and its traffic — including the direct `page.request.post`
 // to /api/posts/update below — is attributable to a named test (#681).
@@ -125,7 +125,7 @@ test("head discovery links update across a client-side nav, staying a single set
   });
 
   await goto(page, "/");
-  await waitForHydration(page);
+  await waitForMount(page);
   const siteHrefs = await page.$$eval('head link[rel="alternate"]', (els) =>
     els.map((e) => (e as HTMLLinkElement).href),
   );
@@ -197,7 +197,7 @@ test("per-user feeds contain only that user's posts, newest first, in all format
   // and Bob's post would be authored by Alice.
   await click(page, SEL.logoutLink);
   await page.waitForURL(`${BASE_URL}/`, { timeout: 10_000 });
-  await waitForHydration(page);
+  await waitForMount(page);
 
   const bob = await register(
     page,

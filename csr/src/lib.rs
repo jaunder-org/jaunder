@@ -7,13 +7,14 @@ use common::seed::PageSeed;
 use leptos::prelude::*;
 use web::app::App;
 
-// The e2e suite waits on `body[data-hydrated]` (end2end/tests/hydration.ts) as the
-// "app is mounted and interactive" signal. CSR has no hydration, but the same marker
-// cleanly means "mount_to_body done" here, so the specs need no changes.
+// The e2e suite waits on `body[data-mounted]` as the "app is mounted and
+// interactive" signal — the counterpart of `MOUNTED_ATTR` in
+// `end2end/tests/mount.ts`. The two literals must agree; if they drift, every
+// e2e test times out.
 #[wasm_bindgen::prelude::wasm_bindgen(inline_js = "
     export function mark_ready() {
         if (document && document.body) {
-            document.body.setAttribute('data-hydrated', 'true');
+            document.body.setAttribute('data-mounted', 'true');
         }
     }
 ")]

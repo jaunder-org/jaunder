@@ -73,7 +73,7 @@ test("login with valid credentials succeeds", async ({
   await waitForSelector(page, SEL.logoutLink);
   perf.mark("logout_link_visible");
 
-  // No waitForHydration: login is a client-side pushState now, so `data-hydrated`
+  // No waitForMount: login is a client-side pushState now, so `data-mounted`
   // (per-document) is already set — assert on content readiness instead (#591).
   await expect(page.locator(".j-sb-foot")).toContainText(user.username);
   await expect(page.locator(".j-sidebar")).toBeVisible();

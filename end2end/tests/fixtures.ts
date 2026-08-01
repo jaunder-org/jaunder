@@ -1,6 +1,6 @@
 /**
  * Auto-applied Playwright fixture (`_autoPerfSpan`, `auto: true`) that wraps every
- * test in OTel capture: it instruments page requests, navigations, and hydration,
+ * test in OTel capture: it instruments page requests, navigations, and the CSR mount,
  * folds in the action records from actions.ts, and emits a single `e2e.test` span
  * on teardown.
  *
@@ -33,6 +33,7 @@ import {
 } from "./otel";
 import { BASE_URL, click, expectFlash, goto, login, register } from "./helpers";
 import { extractToken, readEmailLines, type CapturedEmail } from "./mail";
+import { MOUNTED_ATTR, MOUNTED_SELECTOR } from "./mount";
 import { SEL } from "./selectors";
 
 type RequestRecord = {
@@ -67,7 +68,7 @@ type NavigationRecord = {
   committedMs: number | null;
   domContentLoadedMs: number | null;
   loadMs: number | null;
-  hydratedMs: number | null;
+  mountedMs: number | null;
   requestFinishedMs: number | null;
   requestFailed: boolean;
   requestFailureText?: string;
@@ -166,7 +167,7 @@ async function warmupPageContext(
       waitUntil: "domcontentloaded",
       timeout: timeoutMs,
     });
-    await page.waitForSelector("body[data-hydrated]", {
+    await page.waitForSelector(MOUNTED_SELECTOR, {
       timeout: timeoutMs,
     });
   } catch (error) {
@@ -443,62 +444,63 @@ const test = base.extend<{
       let activeNavigationId: number | null = null;
       let nextNavigationId = 1;
 
-      await page.exposeBinding("__jaunderRecordHydration", (_source, value) => {
+      await page.exposeBinding("__jaunderRecordMount", (_source, value) => {
         if (!value || typeof value !== "object") return;
         const payload = value as { href?: unknown };
         const href = typeof payload.href === "string" ? payload.href : null;
         const nowMs = Date.now();
 
         // The mount-ready marker should be attributed to the most recent matching
-        // navigation (CSR has no hydration; `data-hydrated` marks mount-ready).
+        // navigation (`data-mounted` is set once per document).
         for (let index = navigations.length - 1; index >= 0; index -= 1) {
           const navigation = navigations[index];
-          if (navigation.hydratedMs !== null) continue;
+          if (navigation.mountedMs !== null) continue;
           if (href !== null && navigation.url !== href) continue;
-          navigation.hydratedMs = nowMs;
+          navigation.mountedMs = nowMs;
           return;
         }
       });
 
-      await page.addInitScript(() => {
+      // `addInitScript` serializes this callback into the page, so it cannot close
+      // over `MOUNTED_ATTR` from module scope — the attribute name is passed as the
+      // call's argument instead (#251).
+      await page.addInitScript((mountedAttr: string) => {
         const globalScope = globalThis as typeof globalThis & {
           __jaunderLongTasks?: Array<{
             startTime: number;
             duration: number;
             name: string;
           }>;
-          __jaunderHydrationNotified?: boolean;
-          __jaunderRecordHydration?: (payload: { href: string }) => void;
+          __jaunderMountNotified?: boolean;
+          __jaunderRecordMount?: (payload: { href: string }) => void;
         };
         globalScope.__jaunderLongTasks = [];
-        globalScope.__jaunderHydrationNotified = false;
+        globalScope.__jaunderMountNotified = false;
 
-        const notifyHydration = () => {
-          if (globalScope.__jaunderHydrationNotified) return;
+        const notifyMount = () => {
+          if (globalScope.__jaunderMountNotified) return;
           const body = document.body;
-          if (!body || !body.hasAttribute("data-hydrated")) return;
-          globalScope.__jaunderHydrationNotified = true;
+          if (!body || !body.hasAttribute(mountedAttr)) return;
+          globalScope.__jaunderMountNotified = true;
           try {
-            globalScope.__jaunderRecordHydration?.({ href: location.href });
+            globalScope.__jaunderRecordMount?.({ href: location.href });
           } catch {
             // Ignore cross-context bridge errors while collecting diagnostics.
           }
         };
 
-        notifyHydration();
+        notifyMount();
         if (document.readyState === "loading") {
-          document.addEventListener("DOMContentLoaded", notifyHydration, {
+          document.addEventListener("DOMContentLoaded", notifyMount, {
             once: true,
           });
         }
         try {
-          const hydrationObserver = new MutationObserver(() =>
-            notifyHydration(),
-          );
-          hydrationObserver.observe(document.documentElement, {
+          const mountObserver = new MutationObserver(() => notifyMount());
+          mountObserver.observe(document.documentElement, {
             subtree: true,
             attributes: true,
-            attributeFilter: ["data-hydrated"],
+            attributeFilter: [mountedAttr],
           });
         } catch {
           // MutationObserver should always exist in browsers, but keep this defensive.
@@ -520,7 +522,7 @@ const test = base.extend<{
         } catch {
           // LongTask API is not available in every engine build.
         }
-      });
+      }, MOUNTED_ATTR);
 
       page.on("request", (request) => {
         requestStarts.set(request, Date.now());
@@ -540,7 +542,7 @@ const test = base.extend<{
             committedMs: null,
             domContentLoadedMs: null,
             loadMs: null,
-            hydratedMs: null,
+            mountedMs: null,
             requestFinishedMs: null,
             requestFailed: false,
           });
@@ -719,7 +721,7 @@ const test = base.extend<{
       const navigationSummary: NavigationSummary[] = navigations
         .map((navigation): NavigationSummary => {
           const endMs =
-            navigation.hydratedMs ??
+            navigation.mountedMs ??
             navigation.loadMs ??
             navigation.domContentLoadedMs ??
             navigation.requestFinishedMs ??
@@ -735,8 +737,8 @@ const test = base.extend<{
               ? navigation.domContentLoadedMs - navigation.committedMs
               : null;
           const commitToMountMs =
-            navigation.committedMs !== null && navigation.hydratedMs !== null
-              ? navigation.hydratedMs - navigation.committedMs
+            navigation.committedMs !== null && navigation.mountedMs !== null
+              ? navigation.mountedMs - navigation.committedMs
               : null;
           const domContentLoadedToLoadMs =
             navigation.domContentLoadedMs !== null && navigation.loadMs !== null
