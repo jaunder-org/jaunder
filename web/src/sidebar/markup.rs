@@ -1,5 +1,7 @@
+use maud::html;
+
+use crate::html::Markup;
 use crate::icon::{self, Icons};
-use std::fmt::Write as _;
 
 /// Sidebar nav items: `(key, label, icon_path, href, auth_required)`. Shared by
 /// [`render_sidebar`] (anonymous → the `href.is_some() && !auth_required` subset)
@@ -42,39 +44,51 @@ pub(crate) const SIDEBAR_SOURCES: &[(&str, &str, &str)] = &[
 /// first paint and the reactive re-render coincide; authed users get the reactive
 /// build (extra nav, footer avatar) layered on top (#181).
 #[must_use]
-pub(crate) fn render_sidebar(active_key: &str) -> String {
-    let mut out = String::from(
-        "<a class=\"j-brand\" href=\"/\" style=\"text-decoration:none;color:inherit\">\
-         <div class=\"j-brand-mark\">j</div><div class=\"j-brand-text\">Jaunder</div></a>",
-    );
-    let _ = write!(
-        out,
-        "<div class=\"j-search\">{}<span>Search</span><span class=\"j-kbd\">\u{2318}K</span></div>",
-        icon::render(Icons::SEARCH, 14),
-    );
-    out.push_str("<nav class=\"j-nav\">");
-    for &(key, label, icon_path, href, auth_required) in NAV_ITEMS {
-        let Some(href) = href else { continue };
-        if auth_required {
-            continue;
+pub(crate) fn render_sidebar(active_key: &str) -> Markup {
+    Markup::new(html! {
+        a class="j-brand" href="/" style="text-decoration:none;color:inherit" {
+            div class="j-brand-mark" { "j" }
+            div class="j-brand-text" { "Jaunder" }
         }
-        let active = if key == active_key { " is-active" } else { "" };
-        let _ = write!(
-            out,
-            "<a class=\"j-nav-item{active}\" href=\"{href}\">{icon}<span>{label}</span></a>",
-            icon = icon::render(icon_path, 16),
-        );
-    }
-    out.push_str("</nav><div><div class=\"j-sb-head\"><span>Sources</span><span class=\"j-sb-add\">+</span></div>");
-    for &(proto, name, sub) in SIDEBAR_SOURCES {
-        let _ = write!(
-            out,
-            "<div class=\"j-source\"><span class=\"j-dot\" style=\"width:8px;height:8px;border-radius:4px;background:var(--c-{proto})\"></span>\
-             <div style=\"flex:1;min-width:0\"><div class=\"j-source-name\">{name}</div><div class=\"j-source-sub\">{sub}</div></div></div>",
-        );
-    }
-    out.push_str("</div><div class=\"j-sb-foot\"></div>");
-    out
+        div class="j-search" {
+            (icon::render(Icons::SEARCH, 14))
+            span { "Search" }
+            span class="j-kbd" { "\u{2318}K" }
+        }
+        nav class="j-nav" {
+            @for &(key, label, icon_path, href, auth_required) in NAV_ITEMS {
+                @if let Some(href) = href {
+                    @if !auth_required {
+                        a class={ "j-nav-item" @if key == active_key { " is-active" } }
+                            href=(href)
+                        {
+                            (icon::render(icon_path, 16))
+                            span { (label) }
+                        }
+                    }
+                }
+            }
+        }
+        div {
+            div class="j-sb-head" {
+                span { "Sources" }
+                span class="j-sb-add" { "+" }
+            }
+            @for &(proto, name, sub) in SIDEBAR_SOURCES {
+                div class="j-source" {
+                    span class="j-dot"
+                        style={
+                            "width:8px;height:8px;border-radius:4px;background:var(--c-" (proto) ")"
+                        } {}
+                    div style="flex:1;min-width:0" {
+                        div class="j-source-name" { (name) }
+                        div class="j-source-sub" { (sub) }
+                    }
+                }
+            }
+        }
+        div class="j-sb-foot" {}
+    })
 }
 
 #[cfg(test)]
@@ -83,7 +97,8 @@ mod tests {
 
     #[test]
     fn sidebar_renders_brand_public_nav_sources_and_empty_foot() {
-        let html = render_sidebar("home");
+        let markup = render_sidebar("home");
+        let html = markup.as_str();
         assert!(
             html.contains("<div class=\"j-brand-text\">Jaunder</div>"),
             "{html}"
@@ -107,7 +122,8 @@ mod tests {
 
     #[test]
     fn sidebar_active_class_absent_for_non_home_route() {
-        let html = render_sidebar("tags");
+        let markup = render_sidebar("tags");
+        let html = markup.as_str();
         assert!(
             html.contains("<a class=\"j-nav-item\" href=\"/\">"),
             "{html}"

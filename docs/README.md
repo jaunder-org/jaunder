@@ -120,6 +120,7 @@ convention). See the Status column below for each ADR's current status.
 | [0090](adr/0090-media-references-extracted-at-render.md)           | A post's media references are derived from its sanitized HTML, never supplied                                | accepted   |
 | [0091](adr/0091-text-enum-closed-string-enum-convention.md)        | `#[text_enum]` owns the closed-string-enum convention                                                        | accepted   |
 | [0092](adr/0092-sqlite-bounded-write-lock-occupancy.md)            | Bounded write-lock occupancy on the SQLite path                                                              | accepted   |
+| [0093](adr/0093-web-render-html-macro.md)                          | The web render layer builds markup with maud, not `format!`                                                  | accepted   |
 
 <!-- adr-table:end -->
 

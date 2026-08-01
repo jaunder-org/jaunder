@@ -56,7 +56,7 @@ pub fn HomePage() -> impl IntoView {
     // and shown for the anonymous visitor. Single-mode Local (#181, D10): `/` is
     // always the enhanced public timeline; the owner's own posts gain the
     // client-side action column reactively via `TimelineRows`/`PostCard`.
-    let masthead = super::render::render_masthead();
+    let masthead = super::render::render_masthead().into_string();
 
     view! {
         <FeedDiscovery surface=FeedSurface::Site />

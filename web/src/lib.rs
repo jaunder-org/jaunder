@@ -19,8 +19,8 @@ pub mod feed_discovery;
 pub mod feed_events;
 pub mod forms;
 pub mod home;
-/// HTML text escaping — the shared low-level markup primitive every pure builder
-/// interpolates untrusted text through. Crate-internal.
+/// `Markup` — the render layer's currency and its one trusted-HTML door. Every
+/// pure builder returns it; escaping is maud's job, not the caller's.
 mod html;
 pub mod icon;
 pub mod invites;

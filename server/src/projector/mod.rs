@@ -75,8 +75,10 @@ where
 /// JSON data blob, and the CSR boot.
 #[must_use]
 pub fn document(seed: &PageSeed) -> String {
-    let head = render_head(seed);
-    let body = render_shell(seed);
+    // Both arrive as `Markup` (trust is type-carried across the crate boundary);
+    // this is where they exit to the untyped response body.
+    let head = render_head(seed).into_string();
+    let body = render_shell(seed).into_string();
     let blob = serde_json::to_string(seed).unwrap_or_else(|_| "null".to_string());
     format!(
         concat!(

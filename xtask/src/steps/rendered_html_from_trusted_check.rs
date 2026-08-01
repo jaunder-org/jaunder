@@ -18,6 +18,14 @@
 //! allowlisted function, so choosing the wrong door breaks the build instead of
 //! silently shipping. (`sanitize` needs no gate: it is safe wherever it is called.)
 //!
+//! The scan — test-code exemption, enclosing-fn tracking, the macro token walk — is
+//! [`crate::steps::ident_gate`]; this module is the population, the allowlist and
+//! the prose. Unlike its two siblings there, this gate's [`ALLOWED_FNS`] entries
+//! carry **no multiplicity**, so a second door added inside an already-allowed fn is
+//! absorbed silently — a region exemption in disguise, and a violation of ADR-0085
+//! principle 4 that #778 tracks. Adopting [`crate::steps::ident_gate::Allowed`] is
+//! what closes it.
+//!
 //! Test/fixture code (anything under a `#[cfg(test)]` module/fn, or a `#[test]`/
 //! `#[rstest]` fn) is exempt — fixtures legitimately mint `RenderedHtml` to stand
 //! in for rendered output.
@@ -28,24 +36,29 @@
 //! pins the allowlist to a **top-level** fn (a nested fn shadowing an allowed name
 //! is still flagged).
 //!
-//! Accepted limitations (a guardrail, not a determined adversary): (1) `syn` does
-//! not descend into **macro bodies**, so a `from_trusted` inside a `view! { … }`
-//! (or any macro) invocation is invisible to this scan — the most plausible
-//! residual gap, since the unescaped sink lives in `web`; none exists today. (2) A
-//! `use … as` rename evades, and a same-named `from_trusted` on an unrelated type
-//! false-positives — except the [`EXEMPT_QUALIFIERS`] types (e.g.
-//! `ContentType::from_trusted`, #584), recognised by qualifier as distinct non-HTML
-//! doors. All are as visible in review as editing the allowlist. A
+//! **Macro bodies are scanned** (#333). `syn` itself does not descend into a macro
+//! invocation, so the shared scan walks [`syn::Macro`]'s `.tokens` directly,
+//! recursing through nested `Group`s, and this gate applies the same qualifier rule
+//! to the `Ident :: Ident` token shape. That was an accepted limitation until #333
+//! rebuilt `web`'s render layer out of `html!`/`view!` bodies, which is exactly
+//! where the unescaped sink lives — the residual gap the old doc called "the most
+//! plausible" became the ordinary case, so it is no longer acceptable.
+//!
+//! **Unreadable classes** (ADR-0085's honesty obligation) specific to this gate:
+//! (1) a same-named `from_trusted` on an unrelated type false-positives — except the
+//! [`EXEMPT_QUALIFIERS`] types (e.g. `ContentType::from_trusted`, #584), recognised
+//! by qualifier as distinct non-HTML doors. (2) Inside macro tokens the qualifier is
+//! read positionally (the ident three tokens left of the leaf), so a qualifier
+//! spelled across a `Group` — e.g. `<Foo as Bar>::from_trusted` — is treated as
+//! unqualified and stays guarded (a safe bias). The classes inherent to the shared
+//! scan (a `use … as` rename, the unwalked attribute-macro tokens, the fn-name-keyed
+//! allowlist, the absent call graph) are stated in [`crate::steps::ident_gate`]. A
 //! `syn` parse failure is a **hard error** (a file we cannot walk could hide a
 //! spurious door — a false pass), matching
 //! [`crate::steps::server_fn_registrar_check`].
 
-use std::path::Path;
-
-use syn::spanned::Spanned;
-
-use crate::files;
-use crate::result::{CommandResult, StepResult};
+use crate::result::CommandResult;
+use crate::steps::ident_gate::{self, Population};
 
 /// Source roots scanned recursively for `.rs` files — production `src` trees, not
 /// the `tests/` integration crates (whose fixtures mint freely).
@@ -87,118 +100,74 @@ const ALLOWED_FNS: &[&str] = &[
     "deserialize_rendered_html",
 ];
 
+/// The population: a `from_trusted` path leaf whose qualifier is not a recognised
+/// other-type door. Not a bare ident, because membership turns on the **qualifier**
+/// — which is what keeps `ContentType::from_trusted` (#584) outside the population
+/// instead of costing an allowlist entry.
+struct TrustedDoor;
+
+impl Population for TrustedDoor {
+    /// Nothing: a bare ident carries no qualifier, so the AST side reads paths
+    /// ([`Population::expr_path`]) instead.
+    fn ident(&self, _id: &proc_macro2::Ident) -> bool {
+        false
+    }
+
+    /// Whether a path is the guarded `RenderedHtml::from_trusted` door: leaf segment
+    /// `from_trusted` with a qualifier that is not in [`EXEMPT_QUALIFIERS`]. A bare
+    /// or aliased `from_trusted` (no exempt qualifier) stays guarded.
+    fn expr_path(&self, path: &syn::Path) -> bool {
+        let mut rev = path.segments.iter().rev();
+        if rev.next().is_none_or(|leaf| leaf.ident != DOOR) {
+            return false;
+        }
+        // The qualifier is the segment immediately left of the leaf, if any.
+        !rev.next()
+            .is_some_and(|qualifier| EXEMPT_QUALIFIERS.iter().any(|q| qualifier.ident == q))
+    }
+
+    fn macro_ident(
+        &self,
+        id: &proc_macro2::Ident,
+        trees: &[proc_macro2::TokenTree],
+        idx: usize,
+    ) -> bool {
+        *id == DOOR && !macro_qualifier_is_exempt(trees, idx)
+    }
+}
+
+/// Whether the `from_trusted` leaf at `idx` in a flat macro token stream is
+/// qualified by an [`EXEMPT_QUALIFIERS`] type. Tokens carry no path structure, so a
+/// qualified path reads as `Ident : : Ident` and the qualifier is the ident three
+/// positions left, behind the two `:` puncts. Anything else — a bare leaf, or a
+/// qualifier assembled inside a nested `Group` — reads as unqualified and stays
+/// guarded, which is the safe bias.
+fn macro_qualifier_is_exempt(trees: &[proc_macro2::TokenTree], idx: usize) -> bool {
+    let Some(qualifier) = idx.checked_sub(3) else {
+        return false;
+    };
+    let is_colon = |t: &proc_macro2::TokenTree| matches!(t, proc_macro2::TokenTree::Punct(p) if p.as_char() == ':');
+    if !is_colon(&trees[qualifier + 1]) || !is_colon(&trees[qualifier + 2]) {
+        return false;
+    }
+    matches!(
+        &trees[qualifier],
+        proc_macro2::TokenTree::Ident(id) if EXEMPT_QUALIFIERS.iter().any(|q| *id == *q)
+    )
+}
+
 /// 1-based `(line, enclosing-fn)` of every **non-test** `from_trusted` mention
 /// whose enclosing function is not allowlisted. `Err` on a `syn` parse failure
 /// (fail-loud). Pure given the source, so it is unit-tested directly.
+///
+/// The door must be the WHOLE enclosing path, so a *nested* fn shadowing
+/// `deserialize_rendered_html` cannot borrow its exemption.
 fn violations(source: &str) -> Result<Vec<(usize, String)>, String> {
-    let file = syn::parse_file(source).map_err(|e| format!("cannot parse as Rust: {e}"))?;
-    let mut scanner = Scanner {
-        test_depth: 0,
-        fn_stack: Vec::new(),
-        hits: Vec::new(),
-    };
-    syn::visit::visit_file(&mut scanner, &file);
-    Ok(scanner.hits)
-}
-
-struct Scanner {
-    /// >0 while inside a `#[cfg(test)]`/`#[test]` item — mints there are exempt.
-    test_depth: usize,
-    /// Names of the enclosing functions; the last is the nearest.
-    fn_stack: Vec<String>,
-    hits: Vec<(usize, String)>,
-}
-
-/// Whether an attribute list carries a test-enabling `#[cfg(test)]` (incl.
-/// `cfg(all(test, …))` / `cfg(any(test, …))`). Pragmatic token scan: the attr is
-/// `cfg`, its tokens mention `test`, and are not negated (`not(...)`). The
-/// `not`-guard biases the rare `cfg(all(not(x), test))` toward being **scanned**
-/// (a safe false-positive) rather than letting a production-only `cfg(not(test))`
-/// slip through unscanned.
-fn is_test_cfg(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|a| match &a.meta {
-        syn::Meta::List(ml) if ml.path.is_ident("cfg") => {
-            let toks = ml.tokens.to_string();
-            toks.contains("test") && !toks.contains("not")
-        }
-        _ => false,
-    })
-}
-
-/// Whether an attribute list carries a test-harness attribute (`#[test]`,
-/// `#[tokio::test]`, `#[rstest]`). Belt-and-suspenders for a test fn that is not
-/// wrapped in a `#[cfg(test)]` module.
-fn has_test_attr(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|a| {
-        a.path()
-            .segments
-            .last()
-            .is_some_and(|s| s.ident == "test" || s.ident == "rstest")
-    })
-}
-
-/// Whether a path is the guarded `RenderedHtml::from_trusted` door: leaf segment
-/// `from_trusted` with a qualifier that is not in [`EXEMPT_QUALIFIERS`]. A bare or
-/// aliased `from_trusted` (no exempt qualifier) stays guarded; a recognised
-/// other-type door (e.g. `ContentType::from_trusted`) is skipped.
-fn is_door(path: &syn::Path) -> bool {
-    let mut rev = path.segments.iter().rev();
-    if rev.next().is_none_or(|leaf| leaf.ident != DOOR) {
-        return false;
-    }
-    // The qualifier is the segment immediately left of the leaf, if any.
-    !rev.next()
-        .is_some_and(|qualifier| EXEMPT_QUALIFIERS.iter().any(|q| qualifier.ident == q))
-}
-
-impl<'ast> syn::visit::Visit<'ast> for Scanner {
-    fn visit_item_mod(&mut self, i: &'ast syn::ItemMod) {
-        let test = is_test_cfg(&i.attrs);
-        self.test_depth += usize::from(test);
-        syn::visit::visit_item_mod(self, i);
-        self.test_depth -= usize::from(test);
-    }
-
-    fn visit_item_impl(&mut self, i: &'ast syn::ItemImpl) {
-        let test = is_test_cfg(&i.attrs);
-        self.test_depth += usize::from(test);
-        syn::visit::visit_item_impl(self, i);
-        self.test_depth -= usize::from(test);
-    }
-
-    fn visit_item_fn(&mut self, i: &'ast syn::ItemFn) {
-        let test = is_test_cfg(&i.attrs) || has_test_attr(&i.attrs);
-        self.test_depth += usize::from(test);
-        self.fn_stack.push(i.sig.ident.to_string());
-        syn::visit::visit_item_fn(self, i);
-        self.fn_stack.pop();
-        self.test_depth -= usize::from(test);
-    }
-
-    fn visit_impl_item_fn(&mut self, i: &'ast syn::ImplItemFn) {
-        let test = is_test_cfg(&i.attrs) || has_test_attr(&i.attrs);
-        self.test_depth += usize::from(test);
-        self.fn_stack.push(i.sig.ident.to_string());
-        syn::visit::visit_impl_item_fn(self, i);
-        self.fn_stack.pop();
-        self.test_depth -= usize::from(test);
-    }
-
-    fn visit_expr_path(&mut self, i: &'ast syn::ExprPath) {
-        if self.test_depth == 0 && is_door(&i.path) {
-            // Allowlisted only when the door is the WHOLE enclosing path — a
-            // top-level fn with the allowed name — so a *nested* fn shadowing
-            // `deserialize_rendered_html` cannot borrow its exemption
-            // (`fn_stack.len() == 1`).
-            let allowed =
-                self.fn_stack.len() == 1 && ALLOWED_FNS.contains(&self.fn_stack[0].as_str());
-            if !allowed {
-                let enclosing = self.fn_stack.last().cloned().unwrap_or_default();
-                self.hits.push((i.path.span().start().line, enclosing));
-            }
-        }
-        syn::visit::visit_expr_path(self, i);
-    }
+    Ok(ident_gate::mentions(source, &TrustedDoor)?
+        .into_iter()
+        .filter(|m| !(m.top_level && ALLOWED_FNS.contains(&m.function.as_str())))
+        .map(|m| (m.line, m.function))
+        .collect())
 }
 
 /// The failure detail for every offending mention across the scanned files, or
@@ -247,35 +216,12 @@ pub fn problems(scanned: &[(String, String)]) -> Option<String> {
 /// missing root is a hard failure, so a moved/renamed tree can never quietly
 /// disable the guard.
 pub fn run(result: &mut CommandResult) {
-    let mut files = Vec::new();
-    for root in POLICED_ROOTS {
-        match files::with_extension(Path::new(root), "rs") {
-            Ok(found) => files.extend(found),
-            Err(e) => {
-                result.push(
-                    StepResult::fail("rendered-html-from-trusted")
-                        .detail(format!("cannot scan {root}: {e}")),
-                );
-                return;
-            }
-        }
-    }
-    let mut scanned = Vec::new();
-    let mut read_errors = Vec::new();
-    for p in &files {
-        match std::fs::read_to_string(p) {
-            Ok(s) => scanned.push((p.display().to_string(), s)),
-            Err(e) => read_errors.push(format!("{}: cannot read: {e}", p.display())),
-        }
-    }
-    let step = match (read_errors.is_empty(), problems(&scanned)) {
-        (true, None) => StepResult::ok("rendered-html-from-trusted"),
-        (_, prob) => {
-            read_errors.extend(prob);
-            StepResult::fail("rendered-html-from-trusted").detail(read_errors.join("\n"))
-        }
-    };
-    result.push(step);
+    ident_gate::run_scan(
+        result,
+        "rendered-html-from-trusted",
+        POLICED_ROOTS,
+        problems,
+    );
 }
 
 #[cfg(test)]
@@ -452,6 +398,68 @@ impl RenderedHtml {
     }
 }
 ";
+        assert!(violations(src).unwrap().is_empty());
+    }
+
+    /// #333: the render layer is macro bodies now, so the limitation this gate
+    /// documented ("syn does not descend into macro bodies") is no longer
+    /// acceptable. A `from_trusted` inside a `view!` must be seen.
+    #[test]
+    fn from_trusted_inside_a_macro_body_is_detected() {
+        let src = r#"
+            fn sneaky(s: &str) -> AnyView {
+                view! { <div inner_html=RenderedHtml::from_trusted(s).to_string()></div> }.into_any()
+            }
+        "#;
+        let hits = violations(src).unwrap();
+        assert_eq!(hits.len(), 1, "macro body must be scanned: {hits:?}");
+        assert_eq!(hits[0].1, "sneaky");
+    }
+
+    #[test]
+    fn from_trusted_nested_deeper_in_macro_groups_is_detected() {
+        // The token walk recurses through nested `Group`s, so depth is not a hiding
+        // place — a `view!` body is groups all the way down.
+        let src = r#"
+            fn sneaky(s: &str) -> AnyView {
+                view! { <div>{ move || RenderedHtml::from_trusted(s).to_string() }</div> }.into_any()
+            }
+        "#;
+        assert_eq!(violations(src).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_exempt_qualifier_inside_a_macro_body_is_still_exempt() {
+        // The macro walk applies the same qualifier rule as the AST walk: a
+        // recognised non-HTML door (#584) is not the thing this gate guards.
+        let src = r#"
+            fn detect(name: &str) -> AnyView {
+                view! { <div data-kind=ContentType::from_trusted(name)></div> }.into_any()
+            }
+        "#;
+        assert!(violations(src).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_bare_from_trusted_inside_a_macro_body_is_flagged() {
+        // No qualifier at all (a `use`-imported or aliased door) — the positional
+        // qualifier read finds nothing to exempt, so the leaf stays guarded.
+        let src = r#"
+            fn sneaky(s: &str) -> AnyView {
+                view! { <div inner_html=from_trusted(s)></div> }.into_any()
+            }
+        "#;
+        assert_eq!(violations(src).unwrap(), vec![(3, "sneaky".to_string())]);
+    }
+
+    #[test]
+    fn a_macro_body_in_a_test_fn_is_exempt() {
+        let src = r#"
+            #[test]
+            fn t() {
+                let _ = view! { <div inner_html=RenderedHtml::from_trusted("x")></div> };
+            }
+        "#;
         assert!(violations(src).unwrap().is_empty());
     }
 

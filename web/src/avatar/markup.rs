@@ -1,4 +1,6 @@
-use crate::html::escape_html;
+use maud::html;
+
+use crate::html::Markup;
 
 /// Derives `(initials, hue)` from a display name. `initials`: first character of
 /// each of the first two whitespace-separated words, uppercased. `hue`: sum of all
@@ -16,18 +18,25 @@ pub(crate) fn avatar_parts(name: &str) -> (String, u32) {
     (initials, hue)
 }
 
-/// One avatar chip as `<div class="j-av" …>`, byte-identical to the reactive
-/// [`Avatar`] component's output for the same `(name, size)`.
+/// One avatar chip as `<div class="j-av" …>`, mirroring the reactive [`Avatar`]
+/// component for the same `(name, size)`.
 #[must_use]
-pub(crate) fn render(name: &str, size: u32) -> String {
+pub(crate) fn render(name: &str, size: u32) -> Markup {
     let (initials, hue) = avatar_parts(name);
     // Integer equivalent of `(size as f32 * 0.36).round()`, avoiding float casts;
     // `+ 50` gives round-half-up. `size` is a small avatar dimension.
     let font_size = (size * 36 + 50) / 100;
-    format!(
-        "<div class=\"j-av\" style=\"width:{size}px;height:{size}px;background:oklch(0.58 0.07 {hue});font-size:{font_size}px\">{initials}</div>",
-        initials = escape_html(&initials),
-    )
+    Markup::new(html! {
+        div class="j-av"
+            style={
+                "width:" (size) "px;height:" (size) "px;"
+                "background:oklch(0.58 0.07 " (hue) ");"
+                "font-size:" (font_size) "px"
+            }
+        {
+            (initials)
+        }
+    })
 }
 
 #[cfg(test)]
@@ -35,13 +44,15 @@ mod tests {
     use super::{avatar_parts, render};
 
     #[test]
-    fn avatar_matches_reactive_component_markup() {
-        // Must stay byte-identical to the reactive `Avatar` for size 38.
+    fn avatar_markup_is_stable() {
+        // A renderer regression pin, NOT a claim about the reactive `Avatar`: under
+        // CSR the component builds DOM nodes and emits no bytes to compare against,
+        // so no host test can verify correspondence. Coincidence is proven by
+        // `expectNoShiftAcrossMount` (end2end/tests/layout-shift.ts).
         let (initials, hue) = avatar_parts("Mara Ek");
         assert_eq!(initials, "ME");
-        let html = render("Mara Ek", 38);
         assert_eq!(
-            html,
+            render("Mara Ek", 38),
             format!(
                 "<div class=\"j-av\" style=\"width:38px;height:38px;background:oklch(0.58 0.07 {hue});font-size:14px\">ME</div>"
             )

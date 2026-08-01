@@ -13,13 +13,13 @@
 //!
 //! Ungated and host-compiled, so these twins stay host-tested and
 //! coverage-measured; the `#[cfg(test)] mod tests` below are the coincidence
-//! tests. Leaf primitives it composes (`escape_html`, `render_body`,
-//! `render_sidebar`) live in their own modules and are called cross-module.
+//! tests. Leaf primitives it composes (`render_body`, `render_sidebar`) live in
+//! their own modules and are called cross-module.
 
 use common::seed::PageSeed;
-use std::fmt::Write as _;
+use maud::html;
 
-use crate::html::escape_html;
+use crate::html::Markup;
 
 /// The default theme applied to `<div class="j-root" data-theme=…>`. Lives here
 /// (the shell-rendering layer) so the projector's server-painted shell and the
@@ -54,7 +54,7 @@ pub const SPA_SHELL: &str = include_str!("../../../csr/index.html");
 /// This is the SEO/discoverability payload — the whole reason the public
 /// surface stays server-rendered.
 #[must_use]
-pub fn render_head(seed: &PageSeed) -> String {
+pub fn render_head(seed: &PageSeed) -> Markup {
     let (title, description) = match seed {
         PageSeed::Permalink(post) => (
             post.title
@@ -67,24 +67,17 @@ pub fn render_head(seed: &PageSeed) -> String {
         PageSeed::SiteTag { tag, .. } => (format!("#{tag}"), String::new()),
         PageSeed::UserTag { username, tag, .. } => (format!("#{tag} by {username}"), String::new()),
     };
-    let title = escape_html(&title);
-    let description = escape_html(&description);
-    let mut head = format!(
-        concat!(
-            "<meta charset=\"utf-8\" />",
-            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />",
-            "<link rel=\"stylesheet\" href=\"/style/jaunder.css\" />",
-            "<link rel=\"stylesheet\" href=\"/style/jaunder-themes.css\" />",
-            "<title>{title}</title>",
-            "<meta name=\"description\" content=\"{description}\" />",
-            "<meta property=\"og:title\" content=\"{title}\" />",
-            "<meta property=\"og:description\" content=\"{description}\" />",
-        ),
-        title = title,
-        description = description,
-    );
-    head.push_str(&render_discovery(seed));
-    head
+    Markup::new(html! {
+        meta charset="utf-8";
+        meta name="viewport" content="width=device-width, initial-scale=1";
+        link rel="stylesheet" href="/style/jaunder.css";
+        link rel="stylesheet" href="/style/jaunder-themes.css";
+        title { (title) }
+        meta name="description" content=(description);
+        meta property="og:title" content=(title);
+        meta property="og:description" content=(description);
+        (render_discovery(seed))
+    })
 }
 
 /// Marker attribute on each projector-painted autodiscovery `<link>`. The CSR boot
@@ -101,10 +94,8 @@ pub const DISCOVERY_MARKER_ATTR: &str = "data-jaunder-discovery";
 /// its surface, and — only on the user-profile page — the RSD `EditURI` link. The
 /// permalink page renders none. Post-boot the reactive components re-add
 /// identical links; the duplicates are invisible.
-fn render_discovery(seed: &PageSeed) -> String {
+fn render_discovery(seed: &PageSeed) -> Markup {
     use common::feed::{canonicalize, FeedFormat, FeedSurface};
-
-    let mut out = String::new();
 
     let surface = match seed {
         PageSeed::SiteTimeline(_) => Some(FeedSurface::Site),
@@ -120,35 +111,33 @@ fn render_discovery(seed: &PageSeed) -> String {
         PageSeed::Permalink(_) => None,
     };
 
-    if let Some(surface) = surface {
-        let label = feed_label(&surface);
-        for (format, suffix, mime) in [
-            (FeedFormat::Rss, "RSS", "application/rss+xml"),
-            (FeedFormat::Atom, "Atom", "application/atom+xml"),
-            (FeedFormat::Json, "JSON Feed", "application/feed+json"),
-        ] {
-            let _ = write!(
-                out,
-                "<link {marker} rel=\"alternate\" type=\"{mime}\" title=\"{title}\" href=\"{href}\" />",
-                marker = DISCOVERY_MARKER_ATTR,
-                title = escape_html(format!("{label} ({suffix})")),
-                href = escape_html(canonicalize(&surface, format)),
-            );
+    // NOTE: the marker attribute is spelled as a literal here, not interpolated from
+    // `DISCOVERY_MARKER_ATTR`. maud (like any compile-time markup macro) needs a
+    // literal attribute *name*, and the const is `pub` and consumed by
+    // `csr::mount` to build the removal selector — so
+    // `discovery_marker_attr_matches_the_literal_written_in_the_markup` below pins
+    // the two together and fails loudly if the const ever changes.
+    Markup::new(html! {
+        @if let Some(surface) = surface {
+            @let label = feed_label(&surface);
+            @for (format, suffix, mime) in [
+                (FeedFormat::Rss, "RSS", "application/rss+xml"),
+                (FeedFormat::Atom, "Atom", "application/atom+xml"),
+                (FeedFormat::Json, "JSON Feed", "application/feed+json"),
+            ] {
+                link data-jaunder-discovery rel="alternate" type=(mime)
+                    title={ (label) " (" (suffix) ")" }
+                    href=(canonicalize(&surface, format));
+            }
         }
-    }
 
-    // Only the reactive user-profile page hoists the RSD link (the user-tag page
-    // does not), so mirror that exactly.
-    if let PageSeed::Profile { username, .. } = seed {
-        let _ = write!(
-            out,
-            "<link {marker} rel=\"EditURI\" type=\"application/rsd+xml\" title=\"AtomPub (RSD)\" href=\"{href}\" />",
-            marker = DISCOVERY_MARKER_ATTR,
-            href = escape_html(format!("/~{username}/rsd.xml")),
-        );
-    }
-
-    out
+        // Only the reactive user-profile page hoists the RSD link (the user-tag page
+        // does not), so mirror that exactly.
+        @if let PageSeed::Profile { username, .. } = seed {
+            link data-jaunder-discovery rel="EditURI" type="application/rsd+xml"
+                title="AtomPub (RSD)" href={ "/~" (username) "/rsd.xml" };
+        }
+    })
 }
 
 /// Human-readable feed title per surface — the pure mirror of the reactive
@@ -171,17 +160,17 @@ fn feed_label(surface: &common::feed::FeedSurface) -> String {
 /// `current_user` resolves (that is #181, and needs no coincidence).
 /// `BackupBanner` renders nothing for an anonymous viewer, so it is omitted here.
 #[must_use]
-pub fn render_shell(seed: &PageSeed) -> String {
-    format!(
-        concat!(
-            "<div class=\"j-root\" data-theme=\"{theme}\"><div class=\"j-shell\">",
-            "<aside class=\"j-sidebar\">{sidebar}</aside>",
-            "<div class=\"j-main-region\"><main class=\"j-main\">{body}</main></div></div></div>",
-        ),
-        theme = DEFAULT_THEME,
-        sidebar = crate::sidebar::render_sidebar(""),
-        body = crate::posts::render::render_body(seed),
-    )
+pub fn render_shell(seed: &PageSeed) -> Markup {
+    Markup::new(html! {
+        div class="j-root" data-theme=(DEFAULT_THEME) {
+            div class="j-shell" {
+                aside class="j-sidebar" { (crate::sidebar::render_sidebar("")) }
+                div class="j-main-region" {
+                    main class="j-main" { (crate::posts::render::render_body(seed)) }
+                }
+            }
+        }
+    })
 }
 
 #[cfg(test)]
@@ -196,7 +185,7 @@ mod tests {
     fn discovery_links_carry_the_marker_per_surface() {
         // Site: three feed links, all marked, no RSD (#198 — the boot-time remover keys
         // on the marker, so every projector discovery <link> must carry it).
-        let site = render_discovery(&PageSeed::SiteTimeline(one_post_page()));
+        let site = render_discovery(&PageSeed::SiteTimeline(one_post_page())).into_string();
         assert_eq!(site.matches(DISCOVERY_MARKER_ATTR).count(), 3, "{site}");
         assert_eq!(site.matches("rel=\"alternate\"").count(), 3, "{site}");
         assert!(!site.contains("EditURI"), "{site}");
@@ -204,7 +193,8 @@ mod tests {
         let profile = render_discovery(&PageSeed::Profile {
             username: parse_username("bob"),
             page: one_post_page(),
-        });
+        })
+        .into_string();
         assert_eq!(
             profile.matches(DISCOVERY_MARKER_ATTR).count(),
             4,
@@ -212,12 +202,26 @@ mod tests {
         );
         assert!(profile.contains("rel=\"EditURI\""), "{profile}");
         // Permalink: none.
-        assert_eq!(render_discovery(&PageSeed::Permalink(sample_post())), "");
+        assert_eq!(
+            render_discovery(&PageSeed::Permalink(sample_post())).as_str(),
+            ""
+        );
     }
 
     #[test]
     fn default_theme_is_nonempty() {
         assert!(!DEFAULT_THEME.is_empty());
+    }
+
+    /// maud (like any compile-time markup macro) needs a literal attribute *name*,
+    /// so `render_discovery` spells `data-jaunder-discovery` out rather than
+    /// splicing the const. The const is still the one `csr::mount` uses to build its
+    /// removal selector (#198), so pin the two together — otherwise changing the
+    /// const would silently stop matching the markup and the boot-time remover would
+    /// quietly no-op.
+    #[test]
+    fn discovery_marker_attr_matches_the_literal_written_in_the_markup() {
+        assert_eq!(DISCOVERY_MARKER_ATTR, "data-jaunder-discovery");
     }
 
     #[test]
@@ -262,7 +266,7 @@ mod tests {
 
     #[test]
     fn permalink_head_sets_escaped_title_and_og() {
-        let head = render_head(&PageSeed::Permalink(sample_post()));
+        let head = render_head(&PageSeed::Permalink(sample_post())).into_string();
         assert!(
             head.contains("<title>Hello &amp; &lt;World&gt;</title>"),
             "{head}"
@@ -301,14 +305,14 @@ mod tests {
             ),
         ];
         for (seed, expected_title) in cases {
-            let head = render_head(&seed);
+            let head = render_head(&seed).into_string();
             assert!(head.contains(expected_title), "{head}");
         }
     }
 
     #[test]
     fn shell_wraps_body_in_j_root_with_sidebar_and_main() {
-        let html = render_shell(&PageSeed::SiteTimeline(one_post_page()));
+        let html = render_shell(&PageSeed::SiteTimeline(one_post_page())).into_string();
         assert!(
             html.starts_with(
                 "<div class=\"j-root\" data-theme=\"studio\"><div class=\"j-shell\">\

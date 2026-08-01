@@ -27,10 +27,13 @@ mod steps {
     pub mod e2e_local;
     pub mod flaky;
     pub mod host_tests;
+    pub mod html_sink_check;
+    pub mod ident_gate;
     pub mod nix;
     pub mod no_full_reload_check;
     pub mod proffered_filename_check;
     pub mod proffered_secret_check;
+    pub mod raw_html_door_check;
     pub mod rendered_html_from_trusted_check;
     pub mod sequence_check;
     pub mod server_fn_coverage_check;
@@ -410,6 +413,8 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::sqlx_newtype_bind_check::run(&mut result);
             steps::sqlx_newtype_decode_check::run(&mut result);
             steps::rendered_html_from_trusted_check::run(&mut result);
+            steps::raw_html_door_check::run(&mut result);
+            steps::html_sink_check::run(&mut result);
             steps::host_tests::run(&sh, &mut result);
             if !no_test {
                 steps::nix::coverage(&mut result);
@@ -450,6 +455,8 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::sqlx_newtype_bind_check::run(&mut result);
             steps::sqlx_newtype_decode_check::run(&mut result);
             steps::rendered_html_from_trusted_check::run(&mut result);
+            steps::raw_html_door_check::run(&mut result);
+            steps::html_sink_check::run(&mut result);
             steps::host_tests::run(&sh, &mut result);
             steps::nix::coverage(&mut result);
             if !no_e2e {

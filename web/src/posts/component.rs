@@ -185,7 +185,7 @@ pub fn PostDisplay(
         // not the component" (ADR-0041 §4). The projector only ever renders this
         // anonymous view, so this is the only path that must coincide.
         None => {
-            let inner = crate::posts::render::render_post_inner(&view);
+            let inner = crate::posts::render::render_post_inner(&view).into_string();
             view! { <article class="j-post" inner_html=inner></article> }.into_any()
         }
         // Authored layout (own posts, with the action column). The content column is
@@ -196,7 +196,7 @@ pub fn PostDisplay(
         // hand-rebuilt reactive header/title/body markup, which had diverged from
         // the projector — the divergence that kept the authored path from coinciding.
         Some(children) => {
-            let inner_content = crate::posts::render::render_post_content(&view);
+            let inner_content = crate::posts::render::render_post_content(&view).into_string();
             view! {
                 <article class="j-post">
                     <Avatar name=post.username.clone() size=38 />
@@ -887,7 +887,7 @@ fn permalink_first_paint(seed_post: Option<PostResponse>) -> AnyView {
             // Just the article — this fallback sits inside the reactive PostPage's
             // own `j-scroll`/`j-page`. `display:contents` keeps the host wrapper out
             // of the layout so it coincides with the projector's permalink page.
-            let html = crate::posts::render::permalink_article(&post);
+            let html = crate::posts::render::permalink_article(&post).into_string();
             view! { <div style="display:contents" inner_html=html></div> }.into_any()
         }
         None => view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any(),
