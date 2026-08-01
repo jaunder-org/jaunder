@@ -355,7 +355,7 @@ degenerate case anyway.)
 ## Task 5 — ADR draft
 
 - [x] Via **`jaunder-adr`** (draft-out-of-git flow): author numberless draft
-      `docs/adr/drafts/sqlite-bounded-write-lock-occupancy.md`. Decision: on the
+      `docs/adr/0092-sqlite-bounded-write-lock-occupancy.md`. Decision: on the
       SQLite path, write-lock occupancy must be bounded in **both** dimensions —
       duration (no slow compute/IO inside a write tx; ADR-0021's holds) and
       **acquisition count** (no per-row autocommit write loops in fan-outs;
