@@ -783,7 +783,8 @@ answering "what did we believe when we chose this?". AC10's catch-all is read as
 governing **live** documentation — code doc comments and active ADRs — which is
 what a future author would consult and be misled by.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit** — `2d96f19a`. (A follow-up review-fixes commit
+      `6fa7a45b` landed after it.)
 
 ```bash
 devtool run -- cargo xtask check
@@ -804,7 +805,10 @@ git commit -m "docs(newtypes): correct rationale falsified by the ordering trail
 
 **Interfaces:** none.
 
-- [ ] **Step 1: Edit the three sites**
+- [x] **Step 1: Edit the three sites** — four sites in the end: §2 trailer
+      bullet, the secret exception (plus an honest-limit note), the
+      inbound-secret variant, and §3. Also the two numeric-trailer paragraphs
+      and a Consequences entry.
 
 - §2's
   `Derive Clone, Debug, PartialEq, Eq, Hash (add Ord when the type is used as a sort/map key)`
@@ -822,7 +826,8 @@ git commit -m "docs(newtypes): correct rationale falsified by the ordering trail
 
 Cite #761. Do not create a draft, do not hand-edit `docs/README.md`.
 
-- [ ] **Step 2: Verify the ADR gates**
+- [x] **Step 2: Verify the ADR gates** — `adr-format` and `adr-readme-parity`
+      both green; no `sync-readme` needed (body edit, not a status change).
 
 Run: `devtool run -- cargo xtask check` Expected: PASS — `adr-format` and
 `adr-readme-parity` both green (this is a body edit, not a status change, so
