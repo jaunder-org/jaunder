@@ -6,7 +6,7 @@
 > tracking.
 
 **Spec:**
-[`docs/superpowers/specs/2026-08-01-issue-229-devtool-provision-node-modules.md`](../specs/2026-08-01-issue-229-devtool-provision-node-modules.md)
+[`2026-08-01-issue-229-devtool-provision-node-modules-spec.md`](2026-08-01-issue-229-devtool-provision-node-modules-spec.md)
 — criteria are referenced below as A1–A20. Issue: #229.
 
 **Goal:** Replace `end2end/provision-node-modules.sh` with a typed
