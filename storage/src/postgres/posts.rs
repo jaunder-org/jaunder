@@ -12,7 +12,11 @@ pub type PostgresPostStorage = PostStore<Postgres>;
 
 #[async_trait]
 impl PostDialect for Postgres {
-    const TAGS_SUBQUERY: &'static str = "COALESCE((SELECT json_agg(json_build_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]'::json)::text";
+    /// `ORDER BY t.tag_slug COLLATE "C"` is what makes [`PostRecord::tags`]
+    /// slug-ordered (#772). The `COLLATE` is load-bearing — see
+    /// [`PostDialect::TAGS_SUBQUERY`] for why — and must stay in sync with the
+    /// `SQLite` twin.
+    const TAGS_SUBQUERY: &'static str = "COALESCE((SELECT json_agg(json_build_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display) ORDER BY t.tag_slug COLLATE \"C\") FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]'::json)::text";
 
     const PERMALINK_DATE_CLAUSE: &'static str =
         "date(p.published_at AT TIME ZONE 'UTC') = $3::date";

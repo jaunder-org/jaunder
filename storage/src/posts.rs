@@ -65,6 +65,12 @@ pub struct PostRecord {
     pub deleted_at: Option<DateTime<Utc>>,
     /// Optional summary/excerpt of the post.
     pub summary: Option<PostSummary>,
+    /// The post's tags, ordered by `tag_slug` ascending (byte order).
+    ///
+    /// Populated by the same query that loaded the rest of the row — every post
+    /// SELECT projects [`PostDialect::TAGS_SUBQUERY`] — so reading tags off a
+    /// `PostRecord` costs no extra round-trip. The ordering is pinned in that
+    /// subquery on both backends (#772); do not rely on insertion order.
     pub tags: Vec<PostTag>,
 }
 
@@ -808,6 +814,14 @@ pub trait PostStorage: Send + Sync {
 pub trait PostDialect: Backend {
     /// Correlated JSON tag-aggregation subquery (on `p.post_id`) spelled in
     /// this backend's JSON dialect, yielding a `text` column.
+    ///
+    /// Both dialects order the aggregate by `t.tag_slug`, which is what makes
+    /// [`PostRecord::tags`] slug-ordered (#772). Postgres spells it
+    /// `ORDER BY t.tag_slug COLLATE "C"`: its default collation comes from the
+    /// cluster locale and disagrees with `SQLite`'s BINARY on the hyphens and
+    /// digits in the slug alphabet, so the `COLLATE` is what makes the two
+    /// backends agree. Keep the two constants in sync — asserted by
+    /// `tags_subquery_pins_slug_ordering_on_both_dialects`.
     const TAGS_SUBQUERY: &'static str;
 
     /// Predicate matching a post's `published_at` date against the bound
@@ -2530,6 +2544,29 @@ mod tests {
     };
     use rstest::*;
     use rstest_reuse::*;
+
+    /// Guards the two dialect constants against drifting apart — the failure mode
+    /// where one is edited and the other forgotten (#772; the rationale for the
+    /// Postgres `COLLATE "C"` lives on [`PostDialect::TAGS_SUBQUERY`]).
+    ///
+    /// Deliberately a *sync* check, not a semantic one: it proves both constants
+    /// carry the clause, not that either is positioned correctly inside the
+    /// aggregate. Placement is proven behaviourally, on both backends, by
+    /// `post_record_carries_tags` and
+    /// `regenerated_json_feed_carries_slug_ordered_tags`.
+    #[test]
+    fn tags_subquery_pins_slug_ordering_on_both_dialects() {
+        let sqlite = <sqlx::Sqlite as PostDialect>::TAGS_SUBQUERY;
+        let postgres = <sqlx::Postgres as PostDialect>::TAGS_SUBQUERY;
+        assert!(
+            sqlite.contains("ORDER BY t.tag_slug"),
+            "sqlite TAGS_SUBQUERY must order by slug: {sqlite}"
+        );
+        assert!(
+            postgres.contains("ORDER BY t.tag_slug COLLATE \"C\""),
+            "postgres TAGS_SUBQUERY must order by slug under C collation: {postgres}"
+        );
+    }
 
     #[test]
     fn map_idempotency_insert_error_passes_non_unique_errors_through() {

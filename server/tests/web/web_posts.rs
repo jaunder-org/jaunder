@@ -1888,14 +1888,16 @@ async fn list_user_posts_carries_tags_per_post(#[case] backend: Backend) {
     // Apply two tags via the storage layer (the create_post tags param lands
     // in tags.5; here we just verify the timeline surface threads them
     // through).
+    // Applied in reverse-slug order so the slug assertion below tests ordering
+    // (#772) rather than coinciding with insertion order.
     state
         .posts
-        .tag_post(created.post_id, &"Rust".parse::<TagLabel>().unwrap())
+        .tag_post(created.post_id, &"web".parse::<TagLabel>().unwrap())
         .await
         .unwrap();
     state
         .posts
-        .tag_post(created.post_id, &"web".parse::<TagLabel>().unwrap())
+        .tag_post(created.post_id, &"Rust".parse::<TagLabel>().unwrap())
         .await
         .unwrap();
 

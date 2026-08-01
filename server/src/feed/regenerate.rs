@@ -72,7 +72,7 @@ pub async fn regenerate_feed(
         .as_ref()
         .ok_or(RegenerateError::BaseUrlRequired)?;
 
-    let items = build_feed_items(base, posts, &published).await?;
+    let items = build_feed_items(base, &published);
 
     let self_url = compose(base, feed_path);
     let canonical_path = match &surface {
@@ -123,40 +123,40 @@ fn storage_err<E: std::error::Error + Send + Sync + 'static>(e: E) -> Regenerate
     RegenerateError::Storage(Box::new(e))
 }
 
-async fn build_feed_items(
-    base: &AbsoluteUrl,
-    posts: &dyn PostStorage,
-    records: &[PostRecord],
-) -> Result<Vec<FeedItem>, RegenerateError> {
-    let mut items = Vec::with_capacity(records.len());
-    for p in records {
-        let tags = posts
-            .get_tags_for_post(p.post_id)
-            .await
-            .map_err(storage_err)?;
-        // list_published_in_window guarantees published_at IS NOT NULL,
-        // but we fall back to created_at rather than panic if the
-        // invariant is ever violated (matches PostRecord::permalink).
-        let published_at = p.published_at.unwrap_or(p.created_at);
-        items.push(FeedItem {
-            id: p.post_id,
-            // FeedItem carries the post's PostTitle unflattened (#470); renderers
-            // read it out via Deref/Display at the external-crate boundary.
-            title: p.title.clone(),
-            // Compose the root-relative permalink to an absolute per-item feed URL
-            // (atom Entry.id/link, RSS link/guid, JSON item url) — no relative atom:id
-            // (#560, D1). `base` is the required site origin.
-            permalink: compose(base, &p.permalink()),
-            summary: p.summary.clone(),
-            // FeedItem carries the post's RenderedHtml unflattened (#470); the value
-            // is already rendered — no from_trusted rebuild, just propagate it.
-            content_html: p.rendered_html.clone(),
-            published_at,
-            updated_at: p.updated_at,
-            tags: tags.iter().map(|t| t.tag_display.clone()).collect(),
-        });
-    }
-    Ok(items)
+/// Builds the feed's items from the records the listing query already returned.
+///
+/// Tags come from [`PostRecord::tags`], which `list_published_in_window` populates
+/// from the same query that loaded the rest of the row, slug-ordered (#772) — so
+/// this performs **no** storage access at all. That is why it takes no
+/// `PostStorage`, is not `async`, and cannot fail: a per-post tag read cannot be
+/// reintroduced here without changing the signature.
+fn build_feed_items(base: &AbsoluteUrl, records: &[PostRecord]) -> Vec<FeedItem> {
+    records
+        .iter()
+        .map(|p| {
+            // list_published_in_window guarantees published_at IS NOT NULL,
+            // but we fall back to created_at rather than panic if the
+            // invariant is ever violated (matches PostRecord::permalink).
+            let published_at = p.published_at.unwrap_or(p.created_at);
+            FeedItem {
+                id: p.post_id,
+                // FeedItem carries the post's PostTitle unflattened (#470); renderers
+                // read it out via Deref/Display at the external-crate boundary.
+                title: p.title.clone(),
+                // Compose the root-relative permalink to an absolute per-item feed URL
+                // (atom Entry.id/link, RSS link/guid, JSON item url) — no relative atom:id
+                // (#560, D1). `base` is the required site origin.
+                permalink: compose(base, &p.permalink()),
+                summary: p.summary.clone(),
+                // FeedItem carries the post's RenderedHtml unflattened (#470); the value
+                // is already rendered — no from_trusted rebuild, just propagate it.
+                content_html: p.rendered_html.clone(),
+                published_at,
+                updated_at: p.updated_at,
+                tags: p.tags.iter().map(|t| t.tag_display.clone()).collect(),
+            }
+        })
+        .collect()
 }
 
 fn compute_title(site_title: &str, surface: &FeedSurface) -> String {

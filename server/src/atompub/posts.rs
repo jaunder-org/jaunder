@@ -93,6 +93,10 @@ pub(crate) fn etag_for(post: &PostRecord) -> ETag {
         body: &post.body,
         format: post.format.to_string(),
         summary: post.summary.as_deref(),
+        // Tags are folded in iteration order, which `TAGS_SUBQUERY`'s `ORDER BY` now
+        // makes deterministic across query plans and backends (#772). Entry ETags for
+        // posts tagged before that change shift once; an ETag change costs a re-fetch,
+        // never staleness.
         tags: post.tags.iter().map(|t| &t.tag_display).collect(),
         draft: post.published_at.is_none(),
     };
