@@ -116,7 +116,7 @@ Every task's requirements implicitly include these.
     `devtool provision-node-modules [--types-node-modules <PATH>] [--playwright-test <PATH>] [--root <DIR>]`.
     Task 4's `shellHook` invokes the zero-argument form.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tools/devtool/src/provision.rs`. The helper builds a fake store tree;
 every branch of `run` and `resolve` is pinned here.
@@ -289,7 +289,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run:
 
@@ -303,7 +303,7 @@ only the test block written, expect: FAIL —
 `E0425: cannot find function `run` in this scope` and the same for `resolve`,
 plus unresolved `Path` / `PathBuf`.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 Write `tools/devtool/src/provision.rs` opening with
 
@@ -386,7 +386,7 @@ and the dispatch arm:
         }
 ```
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Run:
 
@@ -396,7 +396,7 @@ devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-229-devtool-
 
 Expected: PASS — 9 tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run `cargo xtask check` first (**jaunder-commit**), then:
 
