@@ -324,9 +324,16 @@ on hitting a type without `Ord` was to hand-write one. All three macros now emit
 `PartialOrd`/`Ord` from a single shared helper, since the code is identical for
 a `String` and an integer inner. Because a derive macro cannot append to the
 user's `#[derive(...)]` list — rustc does not even show it that attribute — the
-impls are emitted blocks, which makes the convention **self-enforcing**: after
-this, both a leftover `Ord` in a derive list and a hand-written `impl Ord` on a
-newtype are compile errors. No gate is needed, and none was added.
+impls are emitted blocks, which makes the convention **self-enforcing wherever
+the macro actually emits**: for a non-secret, non-`no_ord` newtype, both a
+leftover `Ord` in a derive list and a hand-written `impl Ord` are compile
+errors. No gate is needed, and none was added.
+
+The qualifier is load-bearing, not throat-clearing. Where the macro emits
+_nothing_ — a `secret`, or a type that took `no_ord` — there is nothing to
+collide with, so a hand-added `Ord` compiles there and the rule is convention
+only (§2's honest limit). That is also why the "no `Ord` in a newtype's derive
+list" sweep is scoped to non-secrets rather than stated absolutely.
 
 The serde bridge is emitted as **direct `Serialize`/`Deserialize` impls**, not a
 `#[serde(try_from/into)]` attribute (serialize borrows instead of cloning into a

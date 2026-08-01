@@ -138,7 +138,10 @@ mod text_enum;
 /// let _: &str = &s;
 /// ```
 ///
-/// No ordering — a secret is never sorted or used as a `BTreeMap` key (#761):
+/// No ordering — a secret is never sorted or used as a `BTreeMap` key (#761). Like the
+/// `no_ord` block below, these two document intent rather than discriminate: the fixture
+/// derives no `PartialEq`, so `a < b` would fail to compile even if the macro *did* emit
+/// ordering for a secret. `str_newtype_secret_omits_ordering` is the actual guard.
 /// ```compile_fail
 /// # use macros::StrNewtype;
 /// # use std::str::FromStr;
@@ -908,8 +911,11 @@ mod tests {
         let out = str_newtype::expand(&input).to_string();
         assert!(!out.contains("fn partial_cmp"));
         assert!(!out.contains("fn cmp"));
-        // Only the ordering half is suppressed; the rest of the trailer stands.
+        // Only the ordering half is suppressed; the rest of the trailer stands — including
+        // the sqlx bridge, which no integration fixture can assert (the `macros` crate
+        // declares the `sqlx` feature with no deps, so nothing enables it there).
         assert!(out.contains("Display"));
+        assert!(has_sqlx_bridge(&out));
     }
 
     #[test]

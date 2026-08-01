@@ -652,8 +652,10 @@ pub fn media_url(
 /// into a `BTreeSet`, which gives dedup and a stable row order in one move, so callers
 /// writing those rows get a byte-identical result for a byte-identical body. The order is
 /// the derived one: field by field, in declaration order, each member ordering as its inner
-/// value. Those members no longer opt in individually — ordering is part of the standard
-/// newtype trailer (ADR-0063 §2, #761), which is what this type's need prompted.
+/// value. The two newtype members no longer opt in individually — ordering is part of the
+/// standard newtype trailer (ADR-0063 §2, #761), which is what this type's need prompted.
+/// [`MediaSource`] still derives its own: it is a `text_enum`, not a newtype, so it has no
+/// inner value to delegate to and orders by variant declaration order instead.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MediaRef {
     /// Which storage root the entry lives under.

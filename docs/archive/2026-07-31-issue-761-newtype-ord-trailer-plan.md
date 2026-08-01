@@ -17,6 +17,10 @@ derives call it. The body is identical for `String` and integer inners, so there
 is exactly one copy. `#[str_newtype(no_ord)]` suppresses it for `StrNewtype`
 only.
 
+> **Note:** this branch was rebased onto a much-newer `main` during Task 7, so
+> every commit SHA changed. Progress notes below therefore name commits by their
+> purpose rather than by hash.
+
 **Tech Stack:** Rust 2021, `syn`/`quote`/`proc-macro2`, `cargo nextest`,
 `cargo xtask`.
 
@@ -200,7 +204,7 @@ only matters in the struct.
 Run: `devtool run -- cargo nextest run -p macros` Expected: PASS — identical
 results to Step 1
 
-- [x] **Step 6: Commit** — `e3f102e0`, gate green (coverage clean, 22858
+- [x] **Step 6: Commit** — the SqlxMode refactor commit, gate green (coverage clean, 22858
       executable lines, 0 failures).
 
 ```bash
@@ -532,7 +536,7 @@ ordering impls meet the uncovered-line gate. If it reports per-type uncovered
 regions for the new impls, **stop and report** rather than papering over it with
 `cov:ignore`; the spec's abort condition has fired.
 
-- [x] **Step 9: Commit** — `1745d124`, gate green.
+- [x] **Step 9: Commit** — the StrNewtype ordering commit, gate green.
 
 ```bash
 git add macros/src/lib.rs macros/src/str_newtype.rs macros/tests/str_newtype.rs common/src/token.rs common/src/tag.rs
@@ -634,7 +638,7 @@ Run: `devtool run -- cargo nextest run -p macros` Expected: PASS
 Run: `devtool run -- cargo nextest run -p common` Expected: PASS — `ByteSize`'s
 existing surface test (`common/src/media.rs:858`) still passes
 
-- [x] **Step 6: Commit** — `86bcd5f3`, gate green (coverage 22918 lines, clean).
+- [x] **Step 6: Commit** — the NumNewtype ordering commit, gate green (coverage 22918 lines, clean).
 
 ```bash
 devtool run -- cargo xtask check
@@ -705,7 +709,7 @@ Run: `devtool run -- cargo test -p macros --doc` Expected: PASS
 Run: `devtool run -- cargo nextest run -p common` Expected: PASS — the eight id
 newtypes in `common/src/ids.rs` all derive `PartialEq, Eq` already
 
-- [x] **Step 6: Commit** — `d16e8d27`, gate green (coverage 22919 lines, clean).
+- [x] **Step 6: Commit** — the IdNewtype ordering commit, gate green (coverage 22919 lines, clean).
 
 ```bash
 devtool run -- cargo xtask check
@@ -783,8 +787,8 @@ answering "what did we believe when we chose this?". AC10's catch-all is read as
 governing **live** documentation — code doc comments and active ADRs — which is
 what a future author would consult and be misled by.
 
-- [x] **Step 3: Commit** — `2d96f19a`. (A follow-up review-fixes commit
-      `6fa7a45b` landed after it.)
+- [x] **Step 3: Commit** — the doc-correction commit. (A follow-up review-fixes commit
+      the review-fixes commit landed after it.)
 
 ```bash
 devtool run -- cargo xtask check
@@ -834,7 +838,7 @@ Run: `devtool run -- cargo xtask check` Expected: PASS — `adr-format` and
 `sync-readme` should not be needed; if parity complains, run
 `devtool run -- cargo xtask adr sync-readme`)
 
-- [x] **Step 3: Commit** — `9e57add9`.
+- [x] **Step 3: Commit** — the ADR-0063 amendment commit.
 
 ```bash
 git add docs/adr/0063-domain-value-newtype-convention.md
