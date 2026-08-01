@@ -2,7 +2,7 @@
 //! Compiles the `csr` crate to wasm, then runs the shared `devtool csr-bundle`
 //! post-processing — the SAME implementation the Nix `csrWasmBundle` derivation
 //! uses (#236), so the host and CI bundles cannot drift. Debug by default (fast
-//! dev loop; hydration is slower); `--release` matches CI's optimized wasm.
+//! dev loop; the CSR mount is slower); `--release` matches CI's optimized wasm.
 //!
 //! Output lands in `target/site/pkg/` (`jaunder.{js,wasm}` + wasm-bindgen's
 //! `.d.ts`/`snippets`), where `jaunder serve` serves it from `site_root`.
