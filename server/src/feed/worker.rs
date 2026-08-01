@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -19,6 +19,10 @@ use super::regenerate::{regenerate_feed, RegenerateError};
 const BATCH_LIMIT: usize = 200;
 const LEASE_TIMEOUT: Duration = Duration::from_mins(5);
 const BACKOFFS_SECS: &[u64] = &[60, 300, 1800, 7200, 7200, 7200];
+/// Max URLs per `enqueue_many` transaction: bounds the write-lock hold of a
+/// go-live fan-out (a post-outage catch-up can be arbitrarily large) so
+/// batching #766's churn away can't reintroduce the long-hold failure mode.
+const ENQUEUE_CHUNK: usize = 256;
 
 /// The background feed worker: the deps it needs to regenerate feeds and ping
 /// the `WebSub` hub, declared explicitly as constructor parameters rather than
@@ -68,10 +72,11 @@ impl FeedWorker {
     /// `generated_at` is re-enqueued, healing a restart that straddled a
     /// go-live. Every later call runs the steady-state `(last_tick, now]` window
     /// pass, fanning each newly-live post out to its affected feed surfaces.
-    /// Both branches seed `last_tick = now`, and both enqueue their whole
-    /// fan-out as ONE batched write (`enqueue_many`) — per-row autocommit
-    /// enqueue loops are the `SQLite` write-lock churn that starved live
-    /// requests in #766.
+    /// Both branches seed `last_tick = now`, and both enqueue their fan-out as
+    /// deduped, `ENQUEUE_CHUNK`-bounded `enqueue_many` batches — per-row
+    /// autocommit enqueue loops are the `SQLite` write-lock churn that starved
+    /// live requests in #766, and one unbounded transaction would be the
+    /// equally-banned long hold.
     ///
     /// # Errors
     ///
@@ -88,10 +93,20 @@ impl FeedWorker {
                 urls
             }
         };
-        // Skip the storage call outright on an idle pass — the common case for
-        // every 10s tick with nothing newly live.
-        if !urls.is_empty() {
-            self.feed_events.enqueue_many(&urls).await?;
+        // Dedupe across posts: every post's fan-out contains the site-wide
+        // surfaces, so two untagged posts share 3 of their 12 URLs — fewer
+        // rows is the point of batching. (The drain also groups by feed_path,
+        // so this only trims volume, never changes which feeds regenerate.)
+        let mut seen = HashSet::new();
+        let urls: Vec<FeedPath> = urls
+            .into_iter()
+            .filter(|url| seen.insert(url.clone()))
+            .collect();
+        // Bounded chunks per transaction: an idle pass yields zero chunks (no
+        // storage call at all), a normal tick one, and a post-outage catch-up
+        // as many bounded holds as it needs — never one unbounded hold.
+        for chunk in urls.chunks(ENQUEUE_CHUNK) {
+            self.feed_events.enqueue_many(chunk).await?;
         }
         *last_tick = Some(now);
         Ok(())
@@ -469,7 +484,8 @@ mod tests {
             .times(1)
             .returning(|_| Ok(vec![]));
         // Second pass: two just-live untagged posts -> 2 surfaces x 3 formats
-        // each = 12 URLs, all in ONE batched write.
+        // each = 12 URLs, minus the 3 site-wide surfaces both posts share
+        // (deduped) = 9, all in ONE batched write.
         posts
             .expect_list_posts_gone_live_between()
             .times(1)
@@ -489,7 +505,7 @@ mod tests {
         events
             .expect_enqueue_many()
             .times(1)
-            .withf(|paths| paths.len() == 12)
+            .withf(|paths| paths.len() == 9)
             .returning(|_| Ok(()));
         events.expect_enqueue().times(0);
         let w = worker(

@@ -55,6 +55,10 @@ pub enum FeedEventError {
 #[async_trait]
 pub trait FeedEventStorage: Send + Sync {
     /// Insert a new `pending` row for `feed_path`. Returns the new row id.
+    ///
+    /// Single-item API. Do NOT call this in a loop from production code —
+    /// per-row autocommit write loops are the `SQLite` lock-churn failure mode
+    /// diagnosed in #766; a fan-out uses [`enqueue_many`](Self::enqueue_many).
     async fn enqueue(&self, feed_path: &FeedPath) -> Result<FeedEventId, FeedEventError>;
 
     /// Insert `pending` rows for every path in `feed_paths`, in ONE write-first
@@ -155,6 +159,11 @@ pub struct FeedEventStore<DB: Database> {
     pool: Pool<DB>,
 }
 
+/// The one enqueue statement, shared by [`FeedEventStorage::enqueue`] (which
+/// appends `RETURNING id`) and [`FeedEventStorage::enqueue_many`] — a column
+/// change edits it once.
+const INSERT_FEED_EVENT: &str = "INSERT INTO feed_events (feed_url) VALUES ($1)";
+
 impl<DB: Database> FeedEventStore<DB> {
     #[must_use]
     pub fn new(pool: Pool<DB>) -> Self {
@@ -186,12 +195,11 @@ where
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn enqueue(&self, feed_path: &FeedPath) -> Result<FeedEventId, FeedEventError> {
-        let id = sqlx::query_scalar::<_, FeedEventId>(
-            "INSERT INTO feed_events (feed_url) VALUES ($1) RETURNING id",
-        )
-        .bind(feed_path)
-        .fetch_one(&self.pool)
-        .await?;
+        let sql = format!("{INSERT_FEED_EVENT} RETURNING id");
+        let id = sqlx::query_scalar::<_, FeedEventId>(&sql)
+            .bind(feed_path)
+            .fetch_one(&self.pool)
+            .await?;
         Ok(id)
     }
 
@@ -206,10 +214,12 @@ where
         }
         // One write-first transaction: a single write-lock acquisition (and one
         // WAL sync) for the whole batch, instead of one per row (#766). First
-        // statement is a write, so no deferred-upgrade hazard (ADR-0021).
+        // statement is a write, so no deferred-upgrade hazard (ADR-0021) — and
+        // write-first is also the only shape available here: the generic impl
+        // has no dialect hook for `BEGIN IMMEDIATE`.
         let mut tx = self.pool.begin().await?;
         for feed_path in feed_paths {
-            sqlx::query("INSERT INTO feed_events (feed_url) VALUES ($1)")
+            sqlx::query(INSERT_FEED_EVENT)
                 .bind(feed_path)
                 .execute(&mut *tx)
                 .await?;
