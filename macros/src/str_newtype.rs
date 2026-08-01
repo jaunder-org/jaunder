@@ -39,6 +39,9 @@ struct Opts {
     kind: Kind,
     serde: bool,
     sqlx: SqlxMode,
+    /// Whether the ordering half of the trailer is emitted (#761). True unless `no_ord`
+    /// was written; always false for a `secret`, which never orders.
+    ord: bool,
 }
 
 /// Expands `#[derive(StrNewtype)]` on a single-field tuple struct. On the wrong shape
@@ -59,6 +62,12 @@ pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
     // computed once here; each trailer is a sibling helper, so the three arms stay
     // short and parallel.
     let sqlx = sqlx_bridge(&opts, name);
+    // The ordering half (#761), suppressed by `no_ord` and never emitted for a secret.
+    let ord = if opts.ord {
+        crate::ord_impls(name)
+    } else {
+        quote! {}
+    };
     match opts.kind {
         // The tight secret surface; `secret, serde` re-opens the serde bridge for an
         // inbound wire value (its inbound-only role is enforced by an xtask gate).
@@ -81,6 +90,7 @@ pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
             let trailer = infallible_trailer(name);
             quote! {
                 #trailer
+                #ord
                 #sqlx
             }
         }
@@ -91,6 +101,7 @@ pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
             quote! {
                 #trailer
                 #serde
+                #ord
                 #sqlx
             }
         }
@@ -396,6 +407,7 @@ fn parse_opts(input: &DeriveInput) -> syn::Result<Opts> {
     let mut infallible = false;
     let mut sqlx = false;
     let mut no_sqlx = false;
+    let mut no_ord = false;
     for attr in &input.attrs {
         if attr.path().is_ident("str_newtype") {
             attr.parse_nested_meta(|meta| {
@@ -414,9 +426,12 @@ fn parse_opts(input: &DeriveInput) -> syn::Result<Opts> {
                 } else if meta.path.is_ident("no_sqlx") {
                     no_sqlx = true;
                     Ok(())
+                } else if meta.path.is_ident("no_ord") {
+                    no_ord = true;
+                    Ok(())
                 } else {
                     Err(meta.error(
-                        "unknown `str_newtype` option (expected `secret`, `serde`, `infallible`, `sqlx`, or `no_sqlx`)",
+                        "unknown `str_newtype` option (expected `secret`, `serde`, `infallible`, `sqlx`, `no_sqlx`, or `no_ord`)",
                     ))
                 }
             })?;
@@ -448,6 +463,12 @@ fn parse_opts(input: &DeriveInput) -> syn::Result<Opts> {
             "`no_sqlx` is exclusive with `sqlx`",
         ));
     }
+    if no_ord && secret {
+        return Err(syn::Error::new_spanned(
+            input,
+            "a `secret` newtype is already unordered; `no_ord` is redundant/invalid",
+        ));
+    }
     if sqlx && !secret {
         return Err(syn::Error::new_spanned(
             input,
@@ -471,7 +492,15 @@ fn parse_opts(input: &DeriveInput) -> syn::Result<Opts> {
     } else {
         SqlxMode::Default
     };
-    Ok(Opts { kind, serde, sqlx })
+    // A secret never orders, so its `ord` is false regardless — the guard above has
+    // already rejected an explicit `no_ord` on one, so this only covers the implicit case.
+    let ord = !no_ord && !matches!(kind, Kind::Secret);
+    Ok(Opts {
+        kind,
+        serde,
+        sqlx,
+        ord,
+    })
 }
 
 #[cfg(test)]

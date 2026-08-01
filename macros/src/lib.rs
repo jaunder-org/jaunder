@@ -49,7 +49,9 @@ mod text_enum;
 /// ```
 /// use macros::StrNewtype;
 /// use std::str::FromStr;
-/// #[derive(Clone, StrNewtype)]
+/// // `PartialEq, Eq` are required: the trailer emits `Ord`, and `Ord: Eq` (#761).
+/// // A type that genuinely cannot have them takes `#[str_newtype(no_ord)]`.
+/// #[derive(Clone, PartialEq, Eq, StrNewtype)]
 /// struct Ok1(String);
 /// impl FromStr for Ok1 {
 ///     type Err = std::convert::Infallible;
@@ -134,6 +136,47 @@ mod text_enum;
 /// let _: &str = &s;
 /// ```
 ///
+/// No ordering — a secret is never sorted or used as a `BTreeMap` key (#761):
+/// ```compile_fail
+/// # use macros::StrNewtype;
+/// # use std::str::FromStr;
+/// # #[derive(Clone, StrNewtype)]
+/// # #[str_newtype(secret)]
+/// # struct Sec(String);
+/// # impl FromStr for Sec { type Err = std::convert::Infallible; fn from_str(s: &str) -> Result<Self, Self::Err> { Ok(Sec(s.to_owned())) } }
+/// # let a = Sec("a".to_owned());
+/// # let b = Sec("b".to_owned());
+/// let _ = a < b;
+/// ```
+///
+/// …nor on the inbound `secret, serde` variant:
+/// ```compile_fail
+/// # use macros::StrNewtype;
+/// # use std::str::FromStr;
+/// # #[derive(Clone, StrNewtype)]
+/// # #[str_newtype(secret, serde)]
+/// # struct Sec(String);
+/// # impl FromStr for Sec { type Err = std::convert::Infallible; fn from_str(s: &str) -> Result<Self, Self::Err> { Ok(Sec(s.to_owned())) } }
+/// # let a = Sec("a".to_owned());
+/// # let b = Sec("b".to_owned());
+/// let _ = a < b;
+/// ```
+///
+/// `#[str_newtype(no_ord)]` suppresses just the ordering half, for a type that
+/// deliberately derives no `PartialEq`/`Eq` (`RawToken`). Everything else stands:
+///
+/// ```compile_fail
+/// # use macros::StrNewtype;
+/// # use std::str::FromStr;
+/// # #[derive(Clone, StrNewtype)]
+/// # #[str_newtype(no_ord)]
+/// # struct Unordered(String);
+/// # impl FromStr for Unordered { type Err = std::convert::Infallible; fn from_str(s: &str) -> Result<Self, Self::Err> { Ok(Unordered(s.to_owned())) } }
+/// # let a = Unordered("a".to_owned());
+/// # let b = Unordered("b".to_owned());
+/// let _ = a < b;
+/// ```
+///
 /// `#[str_newtype(infallible)]` selects the **infallible** trailer for a newtype whose
 /// invariant never rejects: construction is a hand-written `From<String>` (the single
 /// pure-wrap or normalizing chokepoint) rather than `FromStr`, so there is no
@@ -145,7 +188,7 @@ mod text_enum;
 ///
 /// ```
 /// use macros::StrNewtype;
-/// #[derive(Clone, StrNewtype)]
+/// #[derive(Clone, PartialEq, Eq, StrNewtype)]
 /// #[str_newtype(infallible)]
 /// struct Inf(String);
 /// impl From<String> for Inf {
@@ -397,6 +440,37 @@ pub(crate) fn require_enum_shape(
                 "{macro_name} requires a non-generic enum with only unit variants like `{example}`"
             ),
         ))
+    }
+}
+
+/// The **ordering half** of the ADR-0063 trailer (#761), shared by all three newtype
+/// derives: `PartialOrd` + `Ord` delegating to the wrapped value. The emitted code is
+/// identical for a `String` and an integer inner, so there is one copy rather than three.
+///
+/// Two details are load-bearing and easy to "simplify" wrongly:
+///
+/// - `partial_cmp` is written as `Some(self.cmp(other))` — clippy's canonical form for
+///   `non_canonical_partial_ord_impl`. It resolves to `<#name as Ord>::cmp`, not `str`'s:
+///   the receiver is `&#name`, which matches at the first autoderef step, so a `str`-backed
+///   newtype does not fall through to `str`'s impl and recurse.
+/// - `cmp` delegates to `self.0`, the wrapped value, **not** to a `str` view. That is what
+///   keeps the order consistent with the derived `PartialEq` and with `Borrow<str>`, whose
+///   contract requires `Ord`/`Eq`/`Hash` to agree with the borrowed form.
+pub(crate) fn ord_impls(name: &syn::Ident) -> proc_macro2::TokenStream {
+    quote::quote! {
+        #[automatically_derived]
+        impl ::core::cmp::PartialOrd for #name {
+            fn partial_cmp(&self, other: &Self) -> ::core::option::Option<::core::cmp::Ordering> {
+                ::core::option::Option::Some(self.cmp(other))
+            }
+        }
+
+        #[automatically_derived]
+        impl ::core::cmp::Ord for #name {
+            fn cmp(&self, other: &Self) -> ::core::cmp::Ordering {
+                ::core::cmp::Ord::cmp(&self.0, &other.0)
+            }
+        }
     }
 }
 
@@ -790,6 +864,82 @@ mod tests {
         assert!(str_newtype::expand(&input)
             .to_string()
             .contains("compile_error"));
+    }
+
+    // --- ordering (#761) ---------------------------------------------------------------
+    // Assertions key on the emitted *method* names, never the trait names: "Ord" is a
+    // substring of "PartialOrd", so `contains("Ord")` could never fail independently.
+
+    #[test]
+    fn str_newtype_emits_ordering_by_default() {
+        let input: DeriveInput = parse_quote! { struct X(String); };
+        let out = str_newtype::expand(&input).to_string();
+        assert!(out.contains("fn partial_cmp"));
+        assert!(out.contains("fn cmp"));
+    }
+
+    #[test]
+    fn str_newtype_infallible_emits_ordering() {
+        let input: DeriveInput = parse_quote! {
+            #[str_newtype(infallible)]
+            struct X(String);
+        };
+        assert!(str_newtype::expand(&input)
+            .to_string()
+            .contains("fn partial_cmp"));
+    }
+
+    #[test]
+    fn str_newtype_no_ord_omits_ordering() {
+        // The real discriminator for `no_ord`. The companion `compile_fail` doctest
+        // cannot tell the two states apart, because an *unknown* option also fails to
+        // compile — it would pass before this feature existed.
+        let input: DeriveInput = parse_quote! {
+            #[str_newtype(no_ord)]
+            struct X(String);
+        };
+        let out = str_newtype::expand(&input).to_string();
+        assert!(!out.contains("fn partial_cmp"));
+        assert!(!out.contains("fn cmp"));
+        // Only the ordering half is suppressed; the rest of the trailer stands.
+        assert!(out.contains("Display"));
+    }
+
+    #[test]
+    fn str_newtype_secret_omits_ordering() {
+        let input: DeriveInput = parse_quote! {
+            #[str_newtype(secret)]
+            struct X(String);
+        };
+        assert!(!str_newtype::expand(&input)
+            .to_string()
+            .contains("fn partial_cmp"));
+    }
+
+    #[test]
+    fn str_newtype_no_ord_with_secret_emits_compile_error() {
+        // A secret is already unordered — `no_ord` is redundant/invalid, mirroring the
+        // `no_sqlx` + `secret` guard above.
+        let input: DeriveInput = parse_quote! {
+            #[str_newtype(secret, no_ord)]
+            struct X(String);
+        };
+        assert!(str_newtype::expand(&input)
+            .to_string()
+            .contains("compile_error"));
+    }
+
+    #[test]
+    fn str_newtype_infallible_no_ord_is_accepted() {
+        // An infallible newtype can lack `Eq` for the same reasons a default one can,
+        // so the pair is legal (unlike `infallible, secret`).
+        let input: DeriveInput = parse_quote! {
+            #[str_newtype(infallible, no_ord)]
+            struct X(String);
+        };
+        let out = str_newtype::expand(&input).to_string();
+        assert!(!out.contains("compile_error"));
+        assert!(!out.contains("fn partial_cmp"));
     }
 
     #[test]

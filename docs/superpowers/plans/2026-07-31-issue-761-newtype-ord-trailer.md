@@ -200,13 +200,19 @@ only matters in the struct.
 Run: `devtool run -- cargo nextest run -p macros` Expected: PASS — identical
 results to Step 1
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit** — `e3f102e0`, gate green (coverage clean, 22858
+      executable lines, 0 failures).
 
 ```bash
 devtool run -- cargo xtask check
 git add macros/src/str_newtype.rs
 git commit -m "refactor(macros): fold str_newtype sqlx flags into a SqlxMode enum (#761)"
 ```
+
+> Note for later tasks: pass commit messages via `git commit -F <file>`, not
+> `-m "…"`. These messages contain backticks, which a double-quoted `-m` hands
+> to the shell as command substitution — the first attempt here silently ran
+> `sqlx` and mangled the message.
 
 ---
 
@@ -233,7 +239,8 @@ together because none of them compiles without the others.
   `macros/src/lib.rs` — Tasks 3 and 4 call this exact function. `Opts` gains
   `ord: bool` (true unless `no_ord` was written).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests** — 10 new tests: 6 expansion-level, 4
+      integration.
 
 In `macros/tests/str_newtype.rs`, against the existing `Code(String)` fixture
 (`:9`):
@@ -386,12 +393,15 @@ fn str_newtype_infallible_no_ord_is_accepted() {
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail** — FAIL as designed: unknown
+      `no_ord` option, `<` not applicable to `Code`/`Label`, `Code: Ord`
+      unsatisfied. Notably `a.cmp(&b)` did **not** error, empirically confirming
+      it resolves through `Deref<str>`.
 
 Run: `devtool run -- cargo nextest run -p macros` Expected: FAIL — `no_ord` is
 an unknown option; no ordering is emitted; `a < b` does not compile
 
-- [ ] **Step 3: Add the shared `ord_impls` helper**
+- [x] **Step 3: Add the shared `ord_impls` helper**
 
 In `macros/src/lib.rs`, beside `require_newtype_shape`. The body is written out
 here because two invariants no test can express: the UFCS-free `self.cmp(other)`
@@ -423,7 +433,7 @@ pub(crate) fn ord_impls(name: &syn::Ident) -> proc_macro2::TokenStream {
 }
 ```
 
-- [ ] **Step 4: Wire `no_ord` through `str_newtype`**
+- [x] **Step 4: Wire `no_ord` through `str_newtype`**
 
 Add `ord: bool` to `Opts` (bool count is now 2 — `serde`, `ord` — under the
 threshold thanks to Task 1). In `parse_opts`, accept a `no_ord` key, extend the
@@ -443,7 +453,7 @@ Set `ord: !no_ord`. In `expand`, append `crate::ord_impls(name)` to the
 `Kind::Default` and `Kind::Infallible` arms when `opts.ord`, and never to
 `Kind::Secret`. Every branch above is pinned by a Step 1 test.
 
-- [ ] **Step 5: Fix the two colliding call sites and the doc fixtures**
+- [x] **Step 5: Fix the two colliding call sites and the doc fixtures**
 
 - `common/src/token.rs:79` → `#[str_newtype(no_sqlx, no_ord)]`, with a comment
   recording that `RawToken` derives no `PartialEq`/`Eq` by design so ordering
@@ -456,7 +466,7 @@ Set `ord: !no_ord`. In `expand`, append `crate::ord_impls(name)` to the
 - `macros/src/lib.rs:146` → `#[derive(Clone, PartialEq, Eq, StrNewtype)]` for
   `Inf`.
 
-- [ ] **Step 6: Add the negative `compile_fail` doctests**
+- [x] **Step 6: Add the negative `compile_fail` doctests**
 
 In `macros/src/lib.rs`, following the existing hidden-fixture style
 (`#`-prefixed setup lines). One for `secret` and one for `secret, serde` (AC3),
@@ -486,7 +496,9 @@ it also passes before this task, because an unknown `no_ord` option is itself a
 compile error. `str_newtype_no_ord_omits_ordering` from Step 1 is what actually
 pins the behavior.
 
-- [ ] **Step 7: Run the tests and the doctests, verify they pass**
+- [x] **Step 7: Run the tests and the doctests, verify they pass** — macros 78
+      passed (was 68); macros doctests 18 (was 15); **common doctests 18,
+      unchanged — AC7 verified**; common 454 passed.
 
 Run: `devtool run -- cargo nextest run -p macros` Expected: PASS
 
@@ -501,7 +513,18 @@ only command that verifies AC7.** `RawToken`'s four `compile_fail` doctests live
 at `common/src/token.rs:56-74`, and no gate runs them; without this line the
 criterion is asserted but never checked.
 
-- [ ] **Step 8: Confirm the coverage inference before going further**
+- [x] **Step 8: Confirm the coverage inference before going further** —
+      **CONFIRMED.** Coverage clean at 22917 executable lines (up from 22858), 0
+      failures, 0 guard violations, 0 CRAP over threshold. The ~48 emitted
+      `StrNewtype` impls produced no uncovered regions, so the spec's inference
+      holds and the abort condition did not fire.
+
+      The first run of this step also caught three clippy errors in the new
+      fixtures — `nonminimal_bool` on `!(b < a)`, `infallible_try_from` on the
+      `Unordered` fixture's `Infallible` error type, and
+      `no_effect_underscore_binding` on `let _read`. All three were fixed in the
+      fixtures (asserting `b > a`, giving `Unordered` a rejecting `FromStr`, and
+      asserting on the deref result), not silenced.
 
 Run: `devtool run -- cargo xtask check` Expected: PASS, with **no new uncovered
 lines**. This is the spec's stated risk checkpoint — the first run where emitted
