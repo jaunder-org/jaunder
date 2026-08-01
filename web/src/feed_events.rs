@@ -29,16 +29,41 @@ pub async fn enqueue_feed_events(
     username: &Username,
     tag_slugs: &BTreeSet<Tag>,
 ) -> Result<(), FeedEventError> {
-    for url in affected_feed_urls(username, tag_slugs) {
-        events.enqueue(&url).await?;
-    }
-    Ok(())
+    // One batched write per mutation, not one autocommit write per surface:
+    // this runs synchronously inside every post-mutation server fn, and the
+    // per-row loop was half of the #766 write-lock churn.
+    events
+        .enqueue_many(&affected_feed_urls(username, tag_slugs))
+        .await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use common::ids::{PostId, TagId};
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn enqueue_feed_events_issues_one_batched_call() {
+        let mut events = storage::MockFeedEventStorage::new();
+        // The regression gate for #766 on the request path: one batched write
+        // per post mutation (no tags -> 2 surfaces x 3 formats = 6 URLs), and
+        // the per-row API is never used.
+        events
+            .expect_enqueue_many()
+            .times(1)
+            .withf(|paths| paths.len() == 6)
+            .returning(|_| Ok(()));
+        events.expect_enqueue().times(0);
+        let tags: BTreeSet<Tag> = BTreeSet::new();
+        enqueue_feed_events(
+            &events,
+            &common::test_support::parse_username("alice"),
+            &tags,
+        )
+        .await
+        .expect("batched enqueue succeeds");
+    }
 
     #[test]
     fn test_tag_slugs_deduplicates_and_sorts() {

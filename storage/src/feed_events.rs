@@ -55,7 +55,19 @@ pub enum FeedEventError {
 #[async_trait]
 pub trait FeedEventStorage: Send + Sync {
     /// Insert a new `pending` row for `feed_path`. Returns the new row id.
+    ///
+    /// Single-item API. Do NOT call this in a loop from production code —
+    /// per-row autocommit write loops are the `SQLite` lock-churn failure mode
+    /// diagnosed in #766; a fan-out uses [`enqueue_many`](Self::enqueue_many).
     async fn enqueue(&self, feed_path: &FeedPath) -> Result<FeedEventId, FeedEventError>;
+
+    /// Insert `pending` rows for every path in `feed_paths`, in ONE write-first
+    /// transaction — a single write-lock acquisition for the whole batch.
+    /// Production fan-outs MUST use this, not per-row `enqueue`: per-row
+    /// autocommit loops are the `SQLite` lock-churn failure mode diagnosed in
+    /// #766. Duplicates are inserted as-is; the drain dedupes by grouping on
+    /// `feed_path`.
+    async fn enqueue_many(&self, feed_paths: &[FeedPath]) -> Result<(), FeedEventError>;
 
     /// Atomically claim up to `limit` rows that are either:
     ///   * `status = 'pending' AND next_attempt_at <= now`, or
@@ -139,13 +151,18 @@ pub trait FeedEventDialect: Backend {
 
 /// Generic [`FeedEventStorage`] backed by any [`FeedEventDialect`] database.
 ///
-/// Only `enqueue` is shared directly here (its SQL is identical across
-/// backends). All other methods delegate to [`FeedEventDialect`] because they
-/// diverge in either transaction strategy or bulk-id binding approach.
-/// See ADR-0019.
+/// `enqueue` and `enqueue_many` are shared directly here (their SQL is
+/// identical across backends). All other methods delegate to
+/// [`FeedEventDialect`] because they diverge in either transaction strategy or
+/// bulk-id binding approach. See ADR-0019.
 pub struct FeedEventStore<DB: Database> {
     pool: Pool<DB>,
 }
+
+/// The one enqueue statement, shared by [`FeedEventStorage::enqueue`] (which
+/// appends `RETURNING id`) and [`FeedEventStorage::enqueue_many`] — a column
+/// change edits it once.
+const INSERT_FEED_EVENT: &str = "INSERT INTO feed_events (feed_url) VALUES ($1)";
 
 impl<DB: Database> FeedEventStore<DB> {
     #[must_use]
@@ -166,6 +183,9 @@ where
     String: sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
+    // `enqueue_many` executes on `&mut *tx` inside its batching transaction
+    // (#766); same precedent as the posts generic impl.
+    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
     (FeedEventId,): for<'r> sqlx::FromRow<'r, DB::Row>,
 {
@@ -175,13 +195,37 @@ where
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn enqueue(&self, feed_path: &FeedPath) -> Result<FeedEventId, FeedEventError> {
-        let id = sqlx::query_scalar::<_, FeedEventId>(
-            "INSERT INTO feed_events (feed_url) VALUES ($1) RETURNING id",
-        )
-        .bind(feed_path)
-        .fetch_one(&self.pool)
-        .await?;
+        let sql = format!("{INSERT_FEED_EVENT} RETURNING id");
+        let id = sqlx::query_scalar::<_, FeedEventId>(&sql)
+            .bind(feed_path)
+            .fetch_one(&self.pool)
+            .await?;
         Ok(id)
+    }
+
+    #[tracing::instrument(
+        name = "storage.feed_events.enqueue_many",
+        skip(self, feed_paths),
+        fields(db.system = DB::DB_SYSTEM, count = feed_paths.len())
+    )]
+    async fn enqueue_many(&self, feed_paths: &[FeedPath]) -> Result<(), FeedEventError> {
+        if feed_paths.is_empty() {
+            return Ok(());
+        }
+        // One write-first transaction: a single write-lock acquisition (and one
+        // WAL sync) for the whole batch, instead of one per row (#766). First
+        // statement is a write, so no deferred-upgrade hazard (ADR-0021) — and
+        // write-first is also the only shape available here: the generic impl
+        // has no dialect hook for `BEGIN IMMEDIATE`.
+        let mut tx = self.pool.begin().await?;
+        for feed_path in feed_paths {
+            sqlx::query(INSERT_FEED_EVENT)
+                .bind(feed_path)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
     }
 
     #[tracing::instrument(
@@ -282,6 +326,63 @@ mod tests {
             .await
             .unwrap();
         assert!(i64::from(id) > 0);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn enqueue_many_creates_pending_rows_in_one_batch(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let paths = [
+            fp("/feed.rss"),
+            fp("/~alice/feed.rss"),
+            fp("/tags/t/feed.rss"),
+        ];
+        env.state.feed_events.enqueue_many(&paths).await.unwrap();
+
+        let claimed = env
+            .state
+            .feed_events
+            .claim_pending_batch(10, chrono::Duration::minutes(5))
+            .await
+            .unwrap();
+        // FeedPath has no Ord (deliberate), so compare as sets.
+        let urls: std::collections::HashSet<_> =
+            claimed.iter().map(|r| r.feed_path.clone()).collect();
+        let expected: std::collections::HashSet<_> = paths.iter().cloned().collect();
+        assert_eq!(urls, expected);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn enqueue_many_inserts_duplicates_as_is(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        // No dedupe: the drain groups by feed_path, so duplicate rows are
+        // harmless — pin that enqueue_many does not silently collapse them.
+        let paths = [fp("/feed.rss"), fp("/feed.rss")];
+        env.state.feed_events.enqueue_many(&paths).await.unwrap();
+
+        let claimed = env
+            .state
+            .feed_events
+            .claim_pending_batch(10, chrono::Duration::minutes(5))
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 2);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn enqueue_many_empty_input_is_a_no_op(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        env.state.feed_events.enqueue_many(&[]).await.unwrap();
+
+        let claimed = env
+            .state
+            .feed_events
+            .claim_pending_batch(10, chrono::Duration::minutes(5))
+            .await
+            .unwrap();
+        assert!(claimed.is_empty());
     }
 
     #[apply(backends)]
