@@ -87,10 +87,46 @@ impl Markup {
 
 impl Render for Markup {
     /// A `Markup` is by definition already rendered, so it goes in verbatim.
+    ///
+    /// This impl is the whole reason the type exists: without a `Render` that emits
+    /// raw, `html! { (render_avatar(…)) }` would *escape* the nested markup. The
+    /// escaping guarantee itself lives here and in the single `PreEscaped` door —
+    /// **not** in how convertible `Markup` is to a string, which is why the
+    /// conversions below cost nothing in safety.
     fn render_to(&self, buffer: &mut String) {
         buffer.push_str(self.as_str());
     }
 }
+
+impl AsRef<str> for Markup {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<Markup> for String {
+    fn from(markup: Markup) -> Self {
+        markup.0
+    }
+}
+
+/// Compare rendered markup against a literal, so the pinned render goldens read
+/// `assert_eq!(render(…), "<div>…</div>")` without an `.as_str()` at every site.
+impl PartialEq<&str> for Markup {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<String> for Markup {
+    fn eq(&self, other: &String) -> bool {
+        self.0 == *other
+    }
+}
+
+// The reversed impls (`&str == Markup`, `String == Markup`) are deliberately absent:
+// every golden reads `assert_eq!(render(…), "literal")`, so nothing calls them and
+// they would be uncovered lines carrying no weight.
 
 #[cfg(test)]
 mod markup_tests {
@@ -153,6 +189,29 @@ mod markup_tests {
             Markup::new(html! { div { (inner) } }).into_string(),
             "<div><em>x &amp; y</em></div>"
         );
+    }
+
+    /// The string conversions are ergonomic only — they must not change what
+    /// `html!` does with a `Markup`. Escaping is decided by the `Render` impl, so a
+    /// nested `Markup` still goes in verbatim no matter how convertible it is.
+    #[test]
+    fn string_conversions_do_not_affect_how_html_renders_markup() {
+        let inner = Markup::new(html! { em { "a & b" } });
+        assert_eq!(inner.as_ref(), "<em>a &amp; b</em>");
+        assert_eq!(String::from(inner.clone()), "<em>a &amp; b</em>");
+        // Still raw when nested, not re-escaped.
+        assert_eq!(
+            Markup::new(html! { div { (inner) } }),
+            "<div><em>a &amp; b</em></div>"
+        );
+    }
+
+    #[test]
+    fn markup_compares_against_str_and_string_literals() {
+        let m = Markup::new(html! { b { "x" } });
+        assert_eq!(m, "<b>x</b>");
+        assert_eq!(m, "<b>x</b>".to_string());
+        assert_ne!(m, "<b>y</b>");
     }
 
     #[test]

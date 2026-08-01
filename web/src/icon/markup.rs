@@ -25,7 +25,7 @@ mod tests {
     #[test]
     fn icon_markup_is_stable() {
         assert_eq!(
-            render(Icons::HOME, 16).as_str(),
+            render(Icons::HOME, 16),
             format!(
                 "<svg class=\"j-icon\" width=\"16\" height=\"16\" viewBox=\"0 0 20 20\" \
                  fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" \

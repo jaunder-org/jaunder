@@ -36,7 +36,7 @@ mod tests {
     #[test]
     fn topbar_with_sub_markup_is_stable() {
         assert_eq!(
-            render("Title", Some("Subtitle"), &Markup::empty()).as_str(),
+            render("Title", Some("Subtitle"), &Markup::empty()),
             "<div class=\"j-topbar\"><div><h1>Title</h1>\
              <div class=\"j-sub\">Subtitle</div></div>\
              <div class=\"j-topbar-right\"></div></div>"
@@ -46,7 +46,7 @@ mod tests {
     #[test]
     fn topbar_without_sub_markup_is_stable() {
         assert_eq!(
-            render("Title", None, &Markup::empty()).as_str(),
+            render("Title", None, &Markup::empty()),
             "<div class=\"j-topbar\"><div><h1>Title</h1></div>\
              <div class=\"j-topbar-right\"></div></div>"
         );

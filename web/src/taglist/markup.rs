@@ -49,7 +49,7 @@ mod tests {
         }];
         let html = render(&tags, &TagCtx::SiteWide);
         assert_eq!(
-            html.as_str(),
+            html,
             "<span class=\"j-tag-list\"><span class=\"j-tag-cell\">\
              <a class=\"j-tag\" href=\"/tags/rust\">#Rust</a></span></span>"
         );
@@ -73,6 +73,6 @@ mod tests {
 
     #[test]
     fn empty_tag_list_renders_nothing() {
-        assert_eq!(render(&[], &TagCtx::SiteWide).as_str(), "");
+        assert_eq!(render(&[], &TagCtx::SiteWide), "");
     }
 }

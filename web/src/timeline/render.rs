@@ -24,14 +24,11 @@ mod tests {
 
     #[test]
     fn load_more_placeholder_renders_when_more_rows_exist() {
-        assert_eq!(
-            render_load_more(true).as_str(),
-            "<button>Load more</button>"
-        );
+        assert_eq!(render_load_more(true), "<button>Load more</button>");
     }
 
     #[test]
     fn load_more_placeholder_renders_empty_without_next_page() {
-        assert_eq!(render_load_more(false).as_str(), "");
+        assert_eq!(render_load_more(false), "");
     }
 }

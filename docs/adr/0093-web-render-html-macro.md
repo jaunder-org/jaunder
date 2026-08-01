@@ -112,10 +112,27 @@ gates that guard it able to see inside macro bodies.**
    in `common` instead would drag maud into `common` and move the raw door out
    of the crate the sink gate polices.
 
-4. **A hand-built `String` therefore cannot reach the output.** Render fns
-   return `Markup`, and only `Markup` composes raw into `html!`, so the sole
+4. **A hand-built `String` therefore cannot reach the output unescaped.** Render
+   fns return `Markup`, and only `Markup` composes raw into `html!`, so the sole
    path from an untyped string to unescaped output is `from_rendered_html`. That
    is the compiler enforcing what would otherwise be a scanner's job.
+
+   **Where that guarantee actually lives — and where it does not.** It lives in
+   maud's `Render` dispatch (every other type is escaped on interpolation) and
+   in the single `PreEscaped` door. It does **not** live in how convertible
+   `Markup` is to a string. `Markup` therefore implements `AsRef<str>`,
+   `From<Markup> for String` and `PartialEq<&str>`/`PartialEq<String>` freely:
+   verified that adding even `Display` leaves `html!` emitting a nested `Markup`
+   raw, because trait selection picks the `Render` impl regardless. Withholding
+   those conversions would buy no safety and cost every call site — an earlier
+   draft of this ADR implied otherwise and was wrong.
+
+   `Display` is nonetheless **not** implemented, for a narrower and non-security
+   reason worth stating plainly: its absence is the only mechanical brake on
+   `format!("<div>{markup}</div>")` — the hand-built-HTML idiom this ADR retires
+   — returning to the render layer. That is housekeeping, not a vulnerability
+   boundary, and it should be re-litigated on those terms if the friction ever
+   outweighs it.
 
 5. **Two enumerating gates, scanning token streams.** `syn`'s `visit_macro`
    yields the `Macro` node and `.tokens` is a walkable `TokenStream`, so a

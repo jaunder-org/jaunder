@@ -52,7 +52,7 @@ mod tests {
         let (initials, hue) = avatar_parts("Mara Ek");
         assert_eq!(initials, "ME");
         assert_eq!(
-            render("Mara Ek", 38).as_str(),
+            render("Mara Ek", 38),
             format!(
                 "<div class=\"j-av\" style=\"width:38px;height:38px;background:oklch(0.58 0.07 {hue});font-size:14px\">ME</div>"
             )
