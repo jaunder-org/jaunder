@@ -38,19 +38,20 @@ resilience or `go_live_pass`'s `last_tick` handling (spec D9).
       See "#746 landed differently" below.
 - [x] **T7** — `TargetKind` takes `text_enum`'s `sqlx` flag (**not** a derive);
       `get_post_audiences` decodes it (A7)
-- [ ] **T8** — `FeedEventStatus` moves to `common` +
+- [x] **T8** — `FeedEventStatus` moves to `common` +
       `#[macros::text_enum(sqlx)]`; delete `parse_status` (A5, D5)
-- [ ] **T9** — `FeedEventRecord` → `FromRow`; `ClaimedRow` narrow purge (D4, A6)
+- [x] **T9** — `FeedEventRecord` → `FromRow`; `ClaimedRow` narrow purge (D4, A6)
       — needs T6, T8
-- [ ] **T10** — Gate: struct-literal field-position rule + peel set (A2) — needs
+- [x] **T10** — Gate: struct-literal field-position rule + peel set (A2) — needs
       **T9**
 - [x] **T11** — Gate inventory: run under the new rule, record the raw site list
-      — **ran early, pre-#746; 129 sites, stop-and-report fired. See "T11
+      — **re-run after T9/T10 with the corrected rule: 51 sites, then 0 once the
+      allowlist landed. First run (pre-#746, uncorrected) was 129 — See "T11
       result" below. Re-run after T9/T10 for the final number.**
-- [ ] **T12** — Gate: approve-set + `APPROVED_FOREIGN` + `ALLOWLIST` (A1, A1b,
+- [x] **T12** — Gate: approve-set + `APPROVED_FOREIGN` + `ALLOWLIST` (A1, A1b,
       A3, A12) — needs T11
-- [ ] **T13** — Module doc + ADR-0085 amendment (A10, D8) — needs T12
-- [ ] **T14** — Record the four revert-proofs (A9) — needs T12 (before its
+- [x] **T13** — Module doc + ADR-0085 amendment (A10, D8) — needs T12
+- [x] **T14** — Record the four revert-proofs (A9) — needs T12 (before its
       commit is final)
 
 ### #746 landed differently from its issue — three consequences
