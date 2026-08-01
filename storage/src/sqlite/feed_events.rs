@@ -5,7 +5,7 @@ use common::ids::FeedEventId;
 use sqlx::{Pool, Row, Sqlite};
 
 use crate::feed_events::{
-    parse_status, FeedEventDialect, FeedEventError, FeedEventRecord, FeedEventStore,
+    FeedEventDialect, FeedEventError, FeedEventRecord, FeedEventStatus, FeedEventStore,
 };
 
 /// SQLite-backed feed-event storage.
@@ -87,7 +87,7 @@ impl FeedEventDialect for Sqlite {
             records.push(FeedEventRecord {
                 id,
                 feed_path,
-                status: parse_status(r.get::<&str, _>("status")),
+                status: r.get::<FeedEventStatus, _>("status"),
                 attempts: i32::try_from(attempts).unwrap_or(i32::MAX),
                 last_error: r.get("last_error"),
                 next_attempt_at: r.get("next_attempt_at"),

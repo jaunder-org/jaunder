@@ -3,6 +3,9 @@ pub use feed_path::{
     affected_feed_urls, canonicalize, parse, FeedFormat, FeedPath, FeedSurface, InvalidFeedPath,
 };
 
+pub mod event_status;
+pub use event_status::{FeedEventStatus, InvalidFeedEventStatus};
+
 pub mod settings;
 pub use settings::{FeedMinDays, FeedMinItems};
 

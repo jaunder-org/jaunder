@@ -33,11 +33,13 @@ resilience or `go_live_pass`'s `last_tick` handling (spec D9).
 - [x] **T4** — Gate: `category` + duplicate-key check (A8, D6) — plus the
       `deferred-newtype` category, whose reason must name an issue
 - [x] **T5** — Gate: derive self-check (A1a)
-- [ ] **T6** — _rebase onto #746_ — **blocking stop**
-- [ ] **T7** — `TargetKind` adopts `TextEnum`; `get_post_audiences` decodes it
-      (A7) — needs T6
-- [ ] **T8** — `FeedEventStatus` moves to `common` + `TextEnum`; delete
-      `parse_status` (A5, D5) — needs T6
+- [x] **T6** — _rebase onto #746_ — one import conflict in `posts.rs`; the
+      gate's self-check then caught `SqlxBridge` and the attribute-macro hole.
+      See "#746 landed differently" below.
+- [x] **T7** — `TargetKind` takes `text_enum`'s `sqlx` flag (**not** a derive);
+      `get_post_audiences` decodes it (A7)
+- [ ] **T8** — `FeedEventStatus` moves to `common` +
+      `#[macros::text_enum(sqlx)]`; delete `parse_status` (A5, D5)
 - [ ] **T9** — `FeedEventRecord` → `FromRow`; `ClaimedRow` narrow purge (D4, A6)
       — needs T6, T8
 - [ ] **T10** — Gate: struct-literal field-position rule + peel set (A2) — needs
@@ -50,6 +52,31 @@ resilience or `go_live_pass`'s `last_tick` handling (spec D9).
 - [ ] **T13** — Module doc + ADR-0085 amendment (A10, D8) — needs T12
 - [ ] **T14** — Record the four revert-proofs (A9) — needs T12 (before its
       commit is final)
+
+### #746 landed differently from its issue — three consequences
+
+The issue proposed `#[derive(TextEnum)]`. What shipped is
+**`#[macros::text_enum(…)]`, an attribute macro**, plus a fourth **derive**
+(`SqlxBridge`) the issue never mentioned, and
+`strum_enum`/`impl_string_serde_proxy!` deleted outright.
+
+1. **The gate's self-check earned its keep and then needed widening.** It caught
+   `SqlxBridge` as one clear message on the first post-rebase run — its whole
+   purpose. But it enumerated only `#[proc_macro_derive]`, so `text_enum` was
+   invisible to it: it would have gone green while the newest bridge family was
+   unmodelled. Now enumerates attribute macros too.
+2. **The bridge is opt-in per type** (`sqlx` flag), so carrying `text_enum` is
+   **not** grounds for approval — `Channel`, `SubscriptionStatus` and
+   `AudienceBase` deliberately lack it. T12's approve-set must read the flag.
+   Note the asymmetry: for the derives "does it bridge?" is not static
+   (`no_sqlx`/`secret`), so they are approved on the derive alone; for the
+   attribute the flag is readable and the gate can be exact.
+3. **T8's rationale lost one leg but stands.** D3 moved `FeedEventStatus` to
+   `common` for three reasons; #746 dissolved the first (`parse_error!` was
+   `pub(crate)` in a private module — both are gone, the attribute generates the
+   error now). The other two hold, re-verified: `storage` has no `macros`
+   dependency, and `sqlx_bridge` is `#[cfg(feature = "sqlx")]` evaluated in the
+   consuming crate, which `storage` does not have.
 
 **Commit ordering is deliberate.** T4, T5, T10 are additive and stay green under
 the _old_ `is_i64_family` rule, so each is a real standalone commit. Only

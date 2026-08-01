@@ -5,7 +5,7 @@ use common::ids::FeedEventId;
 use sqlx::{Pool, Postgres, Row};
 
 use crate::feed_events::{
-    parse_status, FeedEventDialect, FeedEventError, FeedEventRecord, FeedEventStore,
+    FeedEventDialect, FeedEventError, FeedEventRecord, FeedEventStatus, FeedEventStore,
 };
 
 /// Postgres-backed feed-event storage.
@@ -93,7 +93,7 @@ impl FeedEventDialect for Postgres {
             records.push(FeedEventRecord {
                 id,
                 feed_path,
-                status: parse_status(r.get::<&str, _>("status")),
+                status: r.get::<FeedEventStatus, _>("status"),
                 attempts: r.get("attempts"),
                 last_error: r.get("last_error"),
                 next_attempt_at: r.get("next_attempt_at"),

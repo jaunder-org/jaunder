@@ -11,25 +11,9 @@ use thiserror::Error;
 
 use crate::backend::Backend;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FeedEventStatus {
-    Pending,
-    Claimed,
-    Done,
-    Failed,
-}
-
-/// Parses a persisted status string into a [`FeedEventStatus`], falling back to
-/// `Failed` for any unrecognized value (defensive against schema drift). Shared
-/// by both dialects' row mappers.
-pub(crate) fn parse_status(s: &str) -> FeedEventStatus {
-    match s {
-        "pending" => FeedEventStatus::Pending,
-        "claimed" => FeedEventStatus::Claimed,
-        "done" => FeedEventStatus::Done,
-        _ => FeedEventStatus::Failed,
-    }
-}
+// Re-exported so `server`'s feed worker keeps importing it from `storage` alongside
+// `FeedEventRecord`; the type itself lives in `common` (#728, see its doc for why).
+pub use common::feed::FeedEventStatus;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeedEventRecord {
@@ -261,15 +245,10 @@ mod tests {
     use rstest::*;
     use rstest_reuse::*;
 
-    #[test]
-    fn parse_status_handles_all_statuses() {
-        assert_eq!(parse_status("pending"), FeedEventStatus::Pending);
-        assert_eq!(parse_status("claimed"), FeedEventStatus::Claimed);
-        assert_eq!(parse_status("done"), FeedEventStatus::Done);
-        assert_eq!(parse_status("failed"), FeedEventStatus::Failed);
-        // Defensive fallback for unknown status strings.
-        assert_eq!(parse_status("???"), FeedEventStatus::Failed);
-    }
+    // `parse_status_handles_all_statuses` lived here and is gone with the function: the
+    // token ↔ variant mapping is now the `text_enum` attribute's, tested at the type in
+    // `common/src/feed/event_status.rs`. Its fifth assertion — that an unrecognised token
+    // becomes `Failed` — was not a behaviour worth preserving; see D5.
 
     #[apply(backends)]
     #[tokio::test]
