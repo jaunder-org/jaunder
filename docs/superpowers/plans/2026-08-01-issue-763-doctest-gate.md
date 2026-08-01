@@ -519,8 +519,9 @@ Run:
 Expected: FAIL — `Violation`, `Kind`, `fence_violations` not defined.
 
 **Done by mutation, as in Task 1:** removing the `doc_block` scope from the
-companion lookup failed exactly `a_companion_in_a_different_doc_comment_does_not_count`
-(23 passed, 1 failed), then reverted.
+companion lookup failed exactly
+`a_companion_in_a_different_doc_comment_does_not_count` (23 passed, 1 failed),
+then reverted.
 
 - [x] **Step 3: Implement against the tests**
 
@@ -580,9 +581,9 @@ Expected: PASS — 12 new tests. **Actual: 14** — two beyond the plan,
 `whitespace_cannot_smuggle_a_variant_past_the_vocabulary` and
 `a_text_fence_needs_no_companion`. Total 24.
 
-**Gate note:** `tools-clippy` runs with `-D warnings`, and the first pass tripped
-`manual_contains`. Fixed, not silenced. Recorded because the plan review left it
-open whether clippy applies to `tools/` — it does.
+**Gate note:** `tools-clippy` runs with `-D warnings`, and the first pass
+tripped `manual_contains`. Fixed, not silenced. Recorded because the plan review
+left it open whether clippy applies to `tools/` — it does.
 
 - [x] **Step 5: Commit**
 
@@ -605,7 +606,7 @@ git commit -m "feat(doctests): closed fence vocabulary and hidden-prelude compan
 - Consumes: nothing.
 - Produces: `libtest::{RunEntry, run_entries}` (Task 4).
 
-- [ ] **Step 1: Write the failing tests** in `tools/doctests/src/libtest.rs`
+- [x] **Step 1: Write the failing tests** in `tools/doctests/src/libtest.rs`
 
 ```rust
 #[cfg(test)]
@@ -665,13 +666,22 @@ test b.rs - b::B (line 7) ... FAILED
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate -- cargo test --manifest-path tools/Cargo.toml -p doctests`
 Expected: FAIL — `RunEntry`, `run_entries` not defined.
 
-- [ ] **Step 3: Implement against the tests**
+**The mutation check earned its keep here.** The first parser used `rfind` to
+defend against a dash in the path, with a test that appeared to prove it. Flipping
+to `find` changed nothing — `test-support` holds a bare hyphen, which never
+collides with the spaced ` - ` separator, so the test asserted something true for a
+reason unrelated to the code. Corrected to `find`, tests renamed to what they
+actually pin, one added for the `- compile fail` suffix that follows the marker in
+real output, and the real boundary (a path containing a literal ` - `) recorded in
+the module doc per ADR-0085's honesty obligation.
+
+- [x] **Step 3: Implement against the tests**
 
 ```rust
 /// One doctest as the runner reported it.
@@ -696,13 +706,13 @@ outcome at the **last** `...`; find the **last** `(line N)` in the head; the
 file is the head up to the last `-` preceding that `(line N)`, which the
 dash-in-path test pins.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate -- cargo test --manifest-path tools/Cargo.toml -p doctests`
-Expected: PASS — 5 new tests.
+Expected: PASS — 5 new tests. **Actual: 7** (one renamed, two added). Total 31.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tools/doctests/src/libtest.rs tools/doctests/src/lib.rs
