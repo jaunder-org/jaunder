@@ -120,7 +120,7 @@ async fn enqueue_many(&self, feed_paths: &[FeedPath]) -> Result<(), FeedEventErr
 
 **Steps (TDD)**
 
-- [ ] RED: dual-backend tests in the existing `#[cfg(test)]` mod. `FeedPath` has
+- [x] RED: dual-backend tests in the existing `#[cfg(test)]` mod. `FeedPath` has
       no `Ord` (deliberate — `common/src/feed/feed_path.rs:16-19`), so compare
       as `HashSet<FeedPath>` (`Hash` derived); the record field is `feed_path`
       (`feed_events.rs:37`):
@@ -175,9 +175,9 @@ async fn enqueue_many_empty_input_is_a_no_op(#[case] backend: Backend) {
 }
 ```
 
-- [ ] `devtool run -- cargo nextest run -p storage enqueue_many` → FAIL (compile
+- [x] `devtool run -- cargo nextest run -p storage enqueue_many` → FAIL (compile
       error until the trait method exists; smallest honest RED).
-- [ ] GREEN: trait method (doc above) + generic impl:
+- [x] GREEN: trait method (doc above) + generic impl:
 
 ```rust
 #[tracing::instrument(
@@ -209,8 +209,9 @@ Add impl-block bound
 `FeedEventStore` doc comment (`feed_events.rs:142-144`) — `enqueue` is no longer
 the only shared method.
 
-- [ ] `devtool run -- cargo nextest run -p storage enqueue_many` → PASS.
-- [ ] `devtool run -- cargo xtask check` → green; commit
+- [x] `devtool run -- cargo nextest run -p storage enqueue_many` → PASS (sqlite
+      locally; postgres halves via the Nix gate — no local Postgres).
+- [x] `devtool run -- cargo xtask check` → green; committed as `7e79d8d3`
       (`feat(storage): add FeedEventStorage::enqueue_many batched enqueue (#766)`).
 
 ## Task 3 — worker `go_live_pass` batches (server crate)
@@ -221,7 +222,7 @@ the only shared method.
 
 **Steps (TDD)**
 
-- [ ] RED: two in-file tests, one per branch (the existing tests' posts-mock
+- [x] RED: two in-file tests, one per branch (the existing tests' posts-mock
       arrangement is the template):
 
 ```rust
@@ -247,9 +248,10 @@ async fn go_live_window_enqueues_all_surfaces_in_one_batch() {
 }
 ```
 
-- [ ] `devtool run -- cargo nextest run -p server go_live` → FAIL (per-row
-      `enqueue` unexpected-call panic).
-- [ ] GREEN — collect-then-batch, **skipping the call when empty** so idle ticks
+- [x] `devtool run -- cargo nextest run -p jaunder go_live` → FAIL (per-row;
+      note the server crate's package name is `jaunder`, not `server`) `enqueue`
+      unexpected-call panic).
+- [x] GREEN — collect-then-batch, **skipping the call when empty** so idle ticks
       issue zero enqueue calls (keeps the six existing mock tests —
       `tick_logs_and_returns_when_claim_fails`,
       `tick_returns_when_batch_is_empty`,
@@ -283,10 +285,10 @@ fan-out is batched into one write per pass (#766).
 `tick_logs_when_go_live_pass_fails_but_still_drains` (:403) injects its failure
 via `feed_urls_needing_catchup` → **unchanged**.
 
-- [ ] `devtool run -- cargo nextest run -p server feed` → PASS (new tests + all
+- [x] `devtool run -- cargo nextest run -p jaunder feed` → PASS (new tests + all
       existing; `server/tests/feed/feed_worker.rs` real-backend tests exercise
       `enqueue_many` end-to-end unchanged).
-- [ ] `devtool run -- cargo xtask check` → green; commit
+- [x] `devtool run -- cargo xtask check` → green; committed as `9cd768c3`
       (`fix(feed): batch the go-live fan-out into one enqueue_many per tick (#766)`).
 
 ## Task 4 — request-path `enqueue_feed_events` batches (web crate)
@@ -297,7 +299,7 @@ via `feed_urls_needing_catchup` → **unchanged**.
 
 **Steps (TDD)**
 
-- [ ] RED: in-file mock-counted test (`storage` `test-utils` is in web's
+- [x] RED: in-file mock-counted test (`storage` `test-utils` is in web's
       dev-deps — web/Cargo.toml:41; note the fn takes `&dyn FeedEventStorage`):
 
 ```rust
@@ -322,8 +324,10 @@ mod show the imports. The test mod may need
 `#[cfg(all(test, feature =   "server"))]`-style gating consistent with the
 file's `#![cfg(feature =   "server")]`.)
 
-- [ ] `devtool run -- cargo nextest run -p web enqueue_feed_events` → FAIL.
-- [ ] GREEN:
+- [x] `devtool run -- cargo nextest run enqueue_feed_events` → FAIL (workspace
+      run, not `-p web`: the bare crate builds without the `server` feature and
+      the file compiles away; workspace feature-unification enables it).
+- [x] GREEN:
 
 ```rust
 pub async fn enqueue_feed_events(
@@ -341,16 +345,16 @@ pub async fn enqueue_feed_events(
 empty-skip is needed here; the storage impl's empty early-return covers the
 degenerate case anyway.)
 
-- [ ] `devtool run -- cargo nextest run -p web` → PASS; the five call sites in
-      `web/src/posts/api.rs` (:228, :363, :478, :512, :540) are unchanged —
-      behavior identical, verified end-to-end by the existing server integration
-      tests.
-- [ ] `devtool run -- cargo xtask check` → green; commit
+- [x] `devtool run -- cargo nextest run enqueue_feed_events` → PASS; the five
+      call sites in `web/src/posts/api.rs` (:228, :363, :478, :512, :540) are
+      unchanged — behavior identical, verified end-to-end by the existing server
+      integration tests.
+- [x] `devtool run -- cargo xtask check` → green; committed as `733b9bf0`
       (`fix(web): batch enqueue_feed_events into one enqueue_many call (#766)`).
 
 ## Task 5 — ADR draft
 
-- [ ] Via **`jaunder-adr`** (draft-out-of-git flow): author numberless draft
+- [x] Via **`jaunder-adr`** (draft-out-of-git flow): author numberless draft
       `docs/adr/drafts/sqlite-bounded-write-lock-occupancy.md`. Decision: on the
       SQLite path, write-lock occupancy must be bounded in **both** dimensions —
       duration (no slow compute/IO inside a write tx; ADR-0021's holds) and
@@ -359,7 +363,8 @@ degenerate case anyway.)
       (unfair busy-wait under churn); consequences: `enqueue_many` is the
       template; the per-tag loops and N+1 reads are tracked in follow-ups
       (issues C, D); note the measured 5–6× total-time win. Builds on ADR-0021.
-- [ ] Commit (`docs(adr): draft bounded write-lock occupancy (#766)`).
+- [x] Commit — n/a: the drafts pen is gitignored (ADR-0048); the draft enters
+      git at ship via `cargo xtask adr promote`, which numbers and stages it.
 
 ## Task 6 — final gate
 
