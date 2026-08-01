@@ -315,12 +315,21 @@ parse error naming the file — it is never skipped.
   doctest** with concrete variants, `sqlx` dropped from the attribute and the
   sqlx bridge noted in prose instead.
 
-**AC13.** A control fixture pins that the ordering proofs of AC17 actually
-discriminate: the same fixture shape **without** the suppressing option orders
-(`a < b` compiles), so the negatives fail for the missing ordering rather than
-for a missing `PartialEq`. Without this control the three proofs would be
-indistinguishable from the vacuous ones they replace. It lives with the gate's
-other fixtures (AC14), not in a production crate.
+**AC13.** Controls pin that the ordering proofs of AC17 actually discriminate —
+that the same fixture shape **without** the suppressing option orders, so the
+negatives fail for the missing ordering rather than for a missing `PartialEq`.
+Without a control the three proofs would be indistinguishable from the vacuous
+ones they replace. Two halves, because the claim has two:
+
+- the **compiler** fact — `PartialEq + Eq` alone does not admit `<` — pinned by
+  a dependency-free fixture crate alongside the gate's other fixtures (AC14);
+- the **macro** fact — an un-suppressed `StrNewtype` orders, while `no_ord` and
+  `secret` suppress it — pinned by a control fence in `macros/src/lib.rs`'s own
+  doc comment, where it runs in the real gate and sits beside the negatives it
+  justifies.
+
+The macro half deliberately **is** in a production crate: a control that a
+reader of those proofs cannot see does not do the job the control exists for.
 
 **AC14.** The synthetic fixtures backing AC6, AC7, AC10, AC11 and AC13 live
 under a dedicated fixture tree owned by the gate's tests (not in a shipped

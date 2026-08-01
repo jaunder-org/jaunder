@@ -1128,7 +1128,7 @@ orders — which is a fact about what the compiler accepts, not about our scanne
 The same applies to AC6's "a crate with no lib target" and to AC4's failing-run
 case. These need a crate that is actually compiled and run.
 
-- [ ] **Step 1: Write the harness**
+- [x] **Step 1: Write the harness**
 
 `tools/doctests/src/harness.rs`, gated `#![cfg(test)]`:
 
@@ -1147,7 +1147,7 @@ pub fn run_fixture(name: &str, source: &str) -> (tempfile::TempDir, String);
 pub fn run_bin_fixture(name: &str, source: &str) -> (tempfile::TempDir, String);
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 ```rust
 #[cfg(test)]
@@ -1236,7 +1236,20 @@ Vector 4 ("a crate outside every scan root") is structural, not observable in a
 fixture crate — it is covered by Task 15's `ALL` coverage assertion instead. Say
 so in `testdata/README.md`.
 
-- [ ] **Step 3: Write the fixtures**
+**AC13 split, and the spec amended to match.** The amended AC13 said the
+ordering control must live "not in a production crate". That was wrong: a
+control a reader of the proofs cannot see does not do the job a control exists
+for. It is now two halves — the **compiler** fact (`PartialEq + Eq` alone does
+not admit `<`) here in `ordering_control.rs`, dependency-free; and the **macro**
+fact (an un-suppressed newtype orders, `no_ord`/`secret` suppress it) as a
+control fence in `macros/src/lib.rs` itself, added by Task 12. Keeping the macro
+half out of this directory also spares the crate a path-dependency on `macros`.
+
+`ordering_control.rs` doubles as the harness's own positive control: it yields
+two collected entries, so a zero-entry result from the other fixtures means
+"rustdoc dropped it", not "the harness collects nothing".
+
+- [x] **Step 3: Write the fixtures**
 
 Six files under `tools/doctests/testdata/`, each a single lib (or bin) source:
 
@@ -1258,15 +1271,20 @@ Six files under `tools/doctests/testdata/`, each a single lib (or bin) source:
 vector 4 is covered elsewhere — following the provenance convention of
 `xtask/src/server_fn_coverage/testdata/README.md`.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate -- cargo test --manifest-path tools/Cargo.toml -p doctests`
 Expected: PASS — 6 new tests. These compile real crates, so they are slower than
 the rest; that cost is the price of asserting rustdoc's behaviour rather than
-assuming it.
+assuming it. **Actual: 6 passed, total 52**, ~1.2s for the harness set.
 
-- [ ] **Step 5: Commit**
+No mutation check here: these assert on real compiler output, and
+`ordering_control` is the harness's own positive control — it yields two
+collected entries, so a zero-entry result elsewhere means "rustdoc dropped it"
+rather than "the harness collects nothing".
+
+- [x] **Step 5: Commit**
 
 ```bash
 git add tools/doctests
