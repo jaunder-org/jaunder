@@ -1,11 +1,11 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use common::feed::FeedPath;
 use common::ids::FeedEventId;
-use sqlx::{Pool, Postgres, Row};
+use sqlx::{Pool, Postgres};
 
 use crate::feed_events::{
-    parse_status, FeedEventDialect, FeedEventError, FeedEventRecord, FeedEventStore,
+    partition_claimed, ClaimedRow, FeedEventDialect, FeedEventError, FeedEventRecord,
+    FeedEventStore,
 };
 
 /// Postgres-backed feed-event storage.
@@ -58,7 +58,7 @@ impl FeedEventDialect for Postgres {
     ) -> Result<Vec<FeedEventRecord>, FeedEventError> {
         // Postgres can express the whole claim atomically with FOR UPDATE
         // SKIP LOCKED + UPDATE … RETURNING in a single statement.
-        let rows = sqlx::query(
+        let rows = sqlx::query_as::<_, ClaimedRow>(
             "WITH eligible AS ( \
                 SELECT id FROM feed_events \
                 WHERE (status = 'pending' AND next_attempt_at <= $1) \
@@ -78,31 +78,7 @@ impl FeedEventDialect for Postgres {
         .fetch_all(pool)
         .await?;
 
-        let mut records = Vec::with_capacity(rows.len());
-        let mut corrupt = Vec::new();
-        for r in rows {
-            let id: FeedEventId = r.get("id");
-            // A feed_url that won't parse can only come from DB tampering/corruption
-            // (enqueue takes a validated FeedPath). Such a row is an unactionable
-            // work item, so collect it for purge rather than failing the whole batch
-            // (which would wedge the worker on the corrupt row forever).
-            let Ok(feed_path) = r.try_get::<FeedPath, _>("feed_url") else {
-                corrupt.push(id);
-                continue;
-            };
-            records.push(FeedEventRecord {
-                id,
-                feed_path,
-                status: parse_status(r.get::<&str, _>("status")),
-                attempts: r.get("attempts"),
-                last_error: r.get("last_error"),
-                next_attempt_at: r.get("next_attempt_at"),
-                claimed_at: r.get("claimed_at"),
-                created_at: r.get("created_at"),
-                regenerated_at: r.get("regenerated_at"),
-                pinged_at: r.get("pinged_at"),
-            });
-        }
+        let (records, corrupt) = partition_claimed(rows);
         purge_corrupt(pool, &corrupt).await;
         Ok(records)
     }

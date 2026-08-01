@@ -230,8 +230,12 @@ async fn columns(
     let rows = sqlx::query(&sql).fetch_all(&mut *connection).await?;
     rows.into_iter()
         .map(|row| {
+            // `ColumnInfo` is a plain struct, so its field types police nothing — the
+            // turbofish is what makes this decode visible to `sqlx-newtype-decode`. (The
+            // `type` read below already carried one, and its `.to_ascii_lowercase()` puts
+            // it outside field position anyway.)
             Ok(ColumnInfo {
-                name: row.try_get("name")?,
+                name: row.try_get::<String, _>("name")?,
                 type_name: row.try_get::<String, _>("type")?.to_ascii_lowercase(),
             })
         })

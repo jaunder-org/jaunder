@@ -35,6 +35,25 @@ impl FeedPath {
     pub fn canonical(surface: &FeedSurface, format: FeedFormat) -> Self {
         Self(canonicalize(surface, format))
     }
+
+    /// The `(surface, format)` this path addresses — the inverse of
+    /// [`canonical`](FeedPath::canonical).
+    ///
+    /// Exists so a holder of a validated `FeedPath` never re-runs [`parse`] on a bare
+    /// string to recover what construction already knew (#728).
+    ///
+    /// **Returns `Option` even though `None` is unreachable today.** Both construction
+    /// doors guarantee a recoverable path — [`FromStr`] routes through [`parse`], and
+    /// [`canonical`] emits only what [`canonicalize`] produces, which `parse` accepts
+    /// (pinned by `round_trips_all_surfaces_and_formats`). But that invariant spans *two*
+    /// functions rather than being enforced by the type, so widening `canonicalize`
+    /// without widening `parse` would break it. Returning `Option` keeps that a value the
+    /// caller handles instead of a panic — which is also why this is not an `expect`:
+    /// production code never unwraps (`CONTRIBUTING.md`).
+    #[must_use]
+    pub fn parts(&self) -> Option<(FeedSurface, FeedFormat)> {
+        parse(&self.0)
+    }
 }
 
 impl FromStr for FeedPath {
@@ -207,6 +226,46 @@ mod tests {
                 format,
             );
         }
+    }
+
+    #[test]
+    fn parts_inverts_canonical_for_every_surface() {
+        // `parts` is the inverse of `canonical`, so every surface shape must survive the
+        // round trip — including the two-segment ones, where a naive parse could drop the
+        // tag or mistake the username for it.
+        for format in [FeedFormat::Rss, FeedFormat::Atom, FeedFormat::Json] {
+            for surface in [
+                FeedSurface::Site,
+                FeedSurface::SiteTag { tag: tag("rust") },
+                FeedSurface::User {
+                    username: user("alice"),
+                },
+                FeedSurface::UserTag {
+                    username: user("alice"),
+                    tag: tag("rust"),
+                },
+            ] {
+                let path = FeedPath::canonical(&surface, format);
+                assert_eq!(path.parts(), Some((surface, format)), "for {path}");
+            }
+        }
+    }
+
+    #[test]
+    fn parts_inverts_a_path_built_from_an_untrusted_string() {
+        // The other construction door: `FromStr` normalizes before storing, so `parts`
+        // must report the *normalized* surface, not whatever the caller typed.
+        let path: FeedPath = "/~alice/tags/rust/feed.atom".parse().expect("valid");
+        assert_eq!(
+            path.parts(),
+            Some((
+                FeedSurface::UserTag {
+                    username: user("alice"),
+                    tag: tag("rust"),
+                },
+                FeedFormat::Atom
+            ))
+        );
     }
 
     #[test]
