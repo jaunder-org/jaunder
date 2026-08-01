@@ -52,11 +52,15 @@
 //!
 //! ## Composites are approved by delegation
 //!
-//! A `#[derive(FromRow)]` struct or tuple alias declared under a scanned root passes as a
-//! target. That is not a hole: every field and element is **separately policed at the
+//! A `#[derive(FromRow)]` struct or tuple alias declared under **[`POLICED_ROOT`]** passes
+//! as a target. That is not a hole: every field and element is **separately policed at the
 //! declaration**, which is where the newtype belongs — a second population, not a promise.
-//! Hence the scoping. A composite declared outside the scanned roots has had no field
-//! checked, so approving it would be an unbacked claim; it stays unrecognised and fails.
+//!
+//! Hence the scoping, and note it is *narrower* than the approve-set's. A bridge-carrying
+//! type is approved wherever it is declared, because the bridge is the whole claim. A
+//! composite is approved because its fields were checked — and that check runs under the
+//! policed root only, so a composite declared in `common/src` or `host/src` has had no
+//! field examined and stays unrecognised.
 //! A composite with a *hand-written* `FromRow` (`ClaimedRow`) has no policed fields either,
 //! so it takes an allowlist entry accounting for its parts.
 //!
@@ -1081,7 +1085,18 @@ fn is_from_row(attrs: &[syn::Attribute]) -> bool {
 }
 
 /// Folds one file's declarations into `set`.
-fn collect_declarations(source: &str, set: &mut ApproveSet) -> Result<(), String> {
+///
+/// `policed` says whether this file sits under [`POLICED_ROOT`], and it gates **only** the
+/// composites. A bridge-carrying type is approved wherever it is declared — the bridge is
+/// the whole claim. A composite is approved because its fields are checked, and that check
+/// runs under the policed root alone; collecting composites from the wider declaration
+/// roots would approve a `FromRow` struct or tuple alias with **zero fields examined**,
+/// which is precisely the unbacked promise delegation must not make.
+///
+/// Only top-level `file.items` are read: a declaration inside an inline `mod` is not seen.
+/// That direction is safe — an unseen declaration is an unapproved type, so the gate bites
+/// rather than waving something through — but it is a boundary, not an oversight.
+fn collect_declarations(source: &str, policed: bool, set: &mut ApproveSet) -> Result<(), String> {
     let file = syn::parse_file(source).map_err(|e| format!("cannot parse as Rust: {e}"))?;
     for item in &file.items {
         match item {
@@ -1091,10 +1106,10 @@ fn collect_declarations(source: &str, set: &mut ApproveSet) -> Result<(), String
             syn::Item::Enum(e) if has_bridge(&e.attrs) => {
                 set.approved.insert(e.ident.to_string());
             }
-            syn::Item::Struct(s) if is_from_row(&s.attrs) => {
+            syn::Item::Struct(s) if policed && is_from_row(&s.attrs) => {
                 set.composites.insert(s.ident.to_string());
             }
-            syn::Item::Type(t) if matches!(&*t.ty, syn::Type::Tuple(_)) => {
+            syn::Item::Type(t) if policed && matches!(&*t.ty, syn::Type::Tuple(_)) => {
                 set.composites.insert(t.ident.to_string());
             }
             _ => {}
@@ -1662,7 +1677,9 @@ pub fn run(result: &mut CommandResult) {
                     let path = p.display().to_string();
                     match std::fs::read_to_string(p) {
                         Ok(s) => {
-                            if let Err(e) = collect_declarations(&s, &mut approve) {
+                            if let Err(e) =
+                                collect_declarations(&s, *root == POLICED_ROOT, &mut approve)
+                            {
                                 unreadable.push(format!(
                                     "{path}: {e} — this gate's approved-type set is built from \
                                      the declarations here, so an unparsed file shrinks what it \
@@ -1925,11 +1942,50 @@ mod tests {
     }
 
     #[test]
-    fn a_composite_declared_outside_the_scanned_roots_is_not_approved() {
+    fn a_composite_the_gate_never_read_is_not_approved() {
         // Delegation is a second policed population, not a promise. A composite the gate
         // never read has had no field checked, so approving it would be an unbacked claim.
         let src = r#"fn f() { sqlx::query_as::<_, SomeForeignRow>("SELECT *").fetch_one(p); }"#;
         assert_eq!(targets(src), vec!["SomeForeignRow"]);
+    }
+
+    #[test]
+    fn composites_are_collected_only_from_the_policed_root() {
+        // The scoping that keeps delegation backed. A `FromRow` struct or tuple alias
+        // declared in `common/src` is NOT approved: its fields are never examined, because
+        // field policing runs under `storage/src` alone. Approving it would be the unbacked
+        // promise delegation exists to avoid — and this is the direction that fails open,
+        // so nothing else would catch it.
+        let src = "
+            #[derive(sqlx::FromRow)]
+            struct ForeignRow { a: Slug }
+            type ForeignTuple = (Slug, PostId);
+        ";
+        let mut policed = ApproveSet::default();
+        collect_declarations(src, true, &mut policed).expect("parses");
+        assert!(policed.composites.contains("ForeignRow"));
+        assert!(policed.composites.contains("ForeignTuple"));
+
+        let mut declaration_only = ApproveSet::default();
+        collect_declarations(src, false, &mut declaration_only).expect("parses");
+        assert!(
+            declaration_only.composites.is_empty(),
+            "a composite outside the policed root has had no field checked"
+        );
+    }
+
+    #[test]
+    fn bridge_types_are_collected_from_every_declaration_root() {
+        // The other half of the asymmetry: a bridge-carrying type is approved wherever it
+        // is declared, because the bridge itself is the claim — no second check needed.
+        // `host::invite::InviteCode` is decoded by storage and lives outside `common`.
+        let src = "
+            #[derive(Clone, StrNewtype)]
+            pub struct InviteCode(String);
+        ";
+        let mut outside = ApproveSet::default();
+        collect_declarations(src, false, &mut outside).expect("parses");
+        assert!(outside.approved.contains("InviteCode"));
     }
 
     #[test]

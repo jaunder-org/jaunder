@@ -343,6 +343,21 @@ no test can purge a row for a bad status — the precondition is unconstructible
 entries). The failure footer groups by it. **Nothing branches on it** — matching
 and the count check are untouched, so it cannot become a region exemption.
 
+**As shipped, two things went beyond this text**, both recorded here rather than
+left for a reader to reconcile:
+
+- Two further categories the inventory demanded — `test-scaffolding`, and
+  `hand-written-fromrow` for a row target whose `FromRow` is written by hand
+  (`ClaimedRow`), where delegation cannot back the approval and the parts must
+  be accounted for in the reason instead. Plus `deferred-newtype` (agreed after
+  this section was written).
+- The gate **does** branch on one category: a `deferred-newtype` entry whose
+  reason names no tracking issue is a failure. That is the opposite of the risk
+  "nothing branches on it" was guarding — it can only _reject_ an entry, never
+  exempt a site — and it is what makes the category an obligation rather than a
+  label. The invariant that matters is unchanged and still stated: **no category
+  can widen what an entry covers.**
+
 Entries stay one-per-site: the backup-introspection reads are **not** collapsed
 into one multiplicity entry, because the key distinguishes them and a collapsed
 entry would silently absorb a twelfth read.
