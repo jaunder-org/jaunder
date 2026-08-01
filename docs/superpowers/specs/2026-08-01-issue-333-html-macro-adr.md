@@ -126,9 +126,9 @@ single type, not two.
 - **The one raw door:** `Markup::from_rendered_html(&RenderedHtml) -> Markup`,
   whose body is the crate's only `PreEscaped`, carrying an `// XSS SAFETY:`
   comment citing ADR-0079 (the value is sanitized by construction). Note
-  `RenderedHtml` exposes no `as_str()` — only `Display`
-  (`common/src/render.rs:101-103`) — so the door reads through `to_string()`.
-  `common` is not modified.
+  `RenderedHtml` exposes no inherent `as_str()`, but it does implement
+  `AsRef<str>` (`common/src/render.rs:107`), so the door reads through
+  `as_ref()`. `common` is not modified.
 - **Exits:** `as_str(&self) -> &str` and `into_string(self) -> String`. Both
   `pub`; `Markup` is re-exported from `web::app` (`pub use crate::html::Markup;`
   — it lives in the private `html` module) because `render_head`/`render_shell`

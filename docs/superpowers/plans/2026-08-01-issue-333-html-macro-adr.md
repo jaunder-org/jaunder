@@ -124,6 +124,25 @@ entries by site with a stated multiplicity, as #333's two new gates do. Label
 
 ### Task 2: Foundation — maud dependency, `Markup`, escaping contract
 
+> **[x] DONE — landed together with Task 3.** Two corrections found in
+> execution, both of the "every commit must pass the gate" class:
+>
+> 1. **Task 2 is not commit-viable alone.** With no production caller, `Markup`
+>    is dead code on the wasm target (the test module isn't compiled there), and
+>    `wasm-clippy` denies warnings. A standalone `cargo clippy` passes because
+>    it does _not_ deny — do not trust it as the dual-target proof. Tasks 2 and
+>    3 are therefore one commit.
+> 2. **`empty()` and `from_rendered_html()` are deferred to their first
+>    callers** (Tasks 8 and 10) for the same reason. Their tests move with them.
+>    This is better than it sounds: adding the raw door now costs its
+>    `raw-html-door` allowlist entry in the _same_ commit, which is exactly
+>    ADR-0085's friction.
+>
+> Also: `RenderedHtml` implements `AsRef<str>` (`common/src/render.rs:107`), so
+> the door reads via `as_ref()`, not `to_string()`. And `maud::PreEscaped`
+> implements neither `PartialEq` nor `Eq`, so `Markup` wraps the rendered
+> `String` rather than `maud::Markup`.
+
 **Files:**
 
 - Modify: `Cargo.toml` (workspace dependency table, `[workspace.dependencies]`
@@ -134,13 +153,12 @@ entries by site with a stated multiplicity, as #333's two new gates do. Label
 
 **Interfaces:**
 
-- Consumes: `common::render::RenderedHtml` (`common/src/render.rs:80`). It
-  exposes **no `as_str()`** — only `Display` (`:101-103`) — so the door reads it
-  with `to_string()`. `common` is not modified.
+- Consumes: `common::render::RenderedHtml` (`common/src/render.rs:80`) via its
+  `AsRef<str>` impl (`:107`). `common` is not modified.
 - Produces — every later task depends on these exact names:
 
 ```rust
-pub struct Markup(maud::Markup);   // maud::Markup == PreEscaped<String>
+pub struct Markup(String);   // the rendered markup; minted only by the ctors below
 
 impl Markup {
     /// Wrap a rendered `html!` fragment: `Markup::new(html! { … })`.
@@ -283,6 +301,17 @@ git commit -m "feat(web): add maud and the Markup trusted-markup newtype"
 ---
 
 ### Task 3: Convert `avatar` — the risk probe
+
+> **[x] DONE — RISK PROBE PASSED.** `cargo xtask check` green: `wasm-clippy` ok
+> and coverage **clean** — 23787 executable lines, 0 failures, 0 guard
+> violations, 0 CRAP over threshold. `html!` expansion does **not** attribute
+> uncovered branches to source lines, so the remaining eight conversions are
+> cleared to proceed.
+>
+> Second finding, in favour of D2: the avatar golden needed **no re-pin** — maud
+> reproduced the hand-written `format!` bytes exactly for this element. The
+> re-pinning D2 budgets for may turn out to be narrower than expected; later
+> tasks should still expect it where whitespace or attribute order is involved.
 
 **Do this before any other conversion.** It is the go/no-go for the plan's two
 unretired risks.

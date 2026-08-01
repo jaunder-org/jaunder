@@ -160,7 +160,7 @@ pub(crate) fn render_post_inner(view: &PostView) -> String {
             "<div style=\"flex:1;min-width:0\">{content}</div>",
             "</div>",
         ),
-        avatar = avatar::render(view.username, 38),
+        avatar = avatar::render(view.username, 38).into_string(),
         content = render_post_content(view),
     )
 }
