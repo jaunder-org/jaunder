@@ -12,7 +12,12 @@ pub type SqlitePostStorage = PostStore<Sqlite>;
 
 #[async_trait]
 impl PostDialect for Sqlite {
-    const TAGS_SUBQUERY: &'static str = "COALESCE((SELECT json_group_array(json_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]')";
+    /// `ORDER BY t.tag_slug` is what makes [`PostRecord::tags`] slug-ordered
+    /// (#772). `SQLite`'s default text collation is BINARY, so the bare clause
+    /// is already byte order — the Postgres twin needs an explicit
+    /// `COLLATE "C"` to match. Keep the two in sync; asserted by
+    /// `tags_subquery_pins_slug_ordering_on_both_dialects`.
+    const TAGS_SUBQUERY: &'static str = "COALESCE((SELECT json_group_array(json_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display) ORDER BY t.tag_slug) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]')";
 
     const PERMALINK_DATE_CLAUSE: &'static str = "date(p.published_at) = $3";
 

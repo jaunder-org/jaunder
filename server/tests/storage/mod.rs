@@ -5836,15 +5836,17 @@ async fn post_record_carries_tags(#[case] backend: Backend) {
     }
     let (p1, p2, p3) = (post_ids[0], post_ids[1], post_ids[2]);
 
-    // p1: two tags; p2: one tag; p3: none.
+    // p1: two tags, applied in reverse-slug order so the assertion below tests
+    // ordering rather than coinciding with insertion order (#772);
+    // p2: one tag; p3: none.
     state
         .posts
-        .tag_post(p1, &"Rust".parse::<TagLabel>().unwrap())
+        .tag_post(p1, &"web".parse::<TagLabel>().unwrap())
         .await
         .unwrap();
     state
         .posts
-        .tag_post(p1, &"web".parse::<TagLabel>().unwrap())
+        .tag_post(p1, &"Rust".parse::<TagLabel>().unwrap())
         .await
         .unwrap();
     state
