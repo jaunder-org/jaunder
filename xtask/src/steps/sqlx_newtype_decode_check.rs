@@ -1090,6 +1090,21 @@ fn has_bridge(attrs: &[syn::Attribute]) -> bool {
     })
 }
 
+/// Which kind of root a scanned declaration file sits under.
+///
+/// Named rather than a `bool` because the two call sites read very differently: at the
+/// scan it is derived from the root, but in a test `collect_declarations(src, true, …)`
+/// says nothing about *what* is true.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Root {
+    /// Under [`POLICED_ROOT`] — decode sites here are checked, so composites declared here
+    /// can be approved by delegation.
+    Policed,
+    /// Scanned for declarations only. Bridge-carrying types still count; composites do
+    /// not, because nothing here polices their fields.
+    DeclarationsOnly,
+}
+
 /// Whether `attrs` derive `sqlx::FromRow`.
 fn is_from_row(attrs: &[syn::Attribute]) -> bool {
     attrs
@@ -1109,7 +1124,8 @@ fn is_from_row(attrs: &[syn::Attribute]) -> bool {
 /// Only top-level `file.items` are read: a declaration inside an inline `mod` is not seen.
 /// That direction is safe — an unseen declaration is an unapproved type, so the gate bites
 /// rather than waving something through — but it is a boundary, not an oversight.
-fn collect_declarations(source: &str, policed: bool, set: &mut ApproveSet) -> Result<(), String> {
+fn collect_declarations(source: &str, root: Root, set: &mut ApproveSet) -> Result<(), String> {
+    let policed = root == Root::Policed;
     let file = syn::parse_file(source).map_err(|e| format!("cannot parse as Rust: {e}"))?;
     for item in &file.items {
         match item {
@@ -1685,16 +1701,32 @@ pub fn run(result: &mut CommandResult) {
     // — a file missed here would silently shrink what the gate accepts, which changes the
     // rule rather than the population, and is worse.
     let mut approve = ApproveSet::default();
+    // Delegation is only sound where field policing runs, and that link is a *string*
+    // match between the two consts. Check it rather than assume it: a `DECLARATION_ROOTS`
+    // that spells the policed root differently would silently stop collecting composites.
+    // That direction fails closed (every composite target becomes unrecognised and the
+    // gate goes loudly red), so this is about naming the cause, not preventing a silent
+    // hole.
+    if !DECLARATION_ROOTS.contains(&POLICED_ROOT) {
+        unreadable.push(format!(
+            "DECLARATION_ROOTS does not contain POLICED_ROOT ({POLICED_ROOT}) — composite \
+             delegation is scoped by matching the two, so nothing would be approved by \
+             delegation and every row-struct target would fail as unrecognised."
+        ));
+    }
     for root in DECLARATION_ROOTS {
+        let kind = if *root == POLICED_ROOT {
+            Root::Policed
+        } else {
+            Root::DeclarationsOnly
+        };
         match files::with_extension(Path::new(root), "rs") {
             Ok(decls) => {
                 for p in &decls {
                     let path = p.display().to_string();
                     match std::fs::read_to_string(p) {
                         Ok(s) => {
-                            if let Err(e) =
-                                collect_declarations(&s, *root == POLICED_ROOT, &mut approve)
-                            {
+                            if let Err(e) = collect_declarations(&s, kind, &mut approve) {
                                 unreadable.push(format!(
                                     "{path}: {e} — this gate's approved-type set is built from \
                                      the declarations here, so an unparsed file shrinks what it \
@@ -1977,12 +2009,12 @@ mod tests {
             type ForeignTuple = (Slug, PostId);
         ";
         let mut policed = ApproveSet::default();
-        collect_declarations(src, true, &mut policed).expect("parses");
+        collect_declarations(src, Root::Policed, &mut policed).expect("parses");
         assert!(policed.composites.contains("ForeignRow"));
         assert!(policed.composites.contains("ForeignTuple"));
 
         let mut declaration_only = ApproveSet::default();
-        collect_declarations(src, false, &mut declaration_only).expect("parses");
+        collect_declarations(src, Root::DeclarationsOnly, &mut declaration_only).expect("parses");
         assert!(
             declaration_only.composites.is_empty(),
             "a composite outside the policed root has had no field checked"
@@ -1999,7 +2031,7 @@ mod tests {
             pub struct InviteCode(String);
         ";
         let mut outside = ApproveSet::default();
-        collect_declarations(src, false, &mut outside).expect("parses");
+        collect_declarations(src, Root::DeclarationsOnly, &mut outside).expect("parses");
         assert!(outside.approved.contains("InviteCode"));
     }
 
