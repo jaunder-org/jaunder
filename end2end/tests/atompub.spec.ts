@@ -84,7 +84,7 @@ test("an app password can be minted from the sessions page", async ({
 
   await goto(page, "/sessions");
 
-  // goto waits for hydration, so the label input is safe to fill.
+  // goto waits for the CSR mount, so the label input is safe to fill.
   await page.fill("#app-password-label", "MarsEdit e2e");
   await click(page, '.j-app-passwords button:has-text("Create app password")');
 

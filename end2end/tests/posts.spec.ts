@@ -212,7 +212,7 @@ test("edit page pre-selects the post's current audience", async ({
   // Characterization test (#643): opening the editor must render the post's
   // stored targeting — `#audience-base` set to the saved base and the
   // named-audience checkbox pre-checked. Pins the seed behavior before it is
-  // refactored from a post-hydration Effect into the Suspense block; must pass
+  // refactored from a post-mount Effect into the Suspense block; must pass
   // on the current (unrefactored) code too. The picker renders only for
   // unpublished posts, so this targets a draft.
 

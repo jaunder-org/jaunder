@@ -2,13 +2,13 @@ import { test, expect } from "./fixtures";
 import { goto } from "./helpers";
 
 // Regression for #22: the reactive data-theme binding on the plain `.j-root`
-// element must survive CSR hydration. A leaked Leptos `attr:` directive prefix
+// element must survive the CSR mount. A leaked Leptos `attr:` directive prefix
 // produced a literal `attr:data-theme` attribute, so `.j-root[data-theme=...]`
 // stopped matching and no theme token overrides applied after the client booted.
-test("issue #22: .j-root keeps a real data-theme after CSR hydration", async ({
+test("issue #22: .j-root keeps a real data-theme after CSR mount", async ({
   page,
 }) => {
-  await goto(page, "/"); // public projector home; goto() waits for hydration
+  await goto(page, "/"); // public projector home; goto() waits for the CSR mount
 
   const probe = await page.evaluate(() => {
     const root = document.querySelector(".j-root");

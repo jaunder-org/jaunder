@@ -290,8 +290,9 @@ few hot tests. Attribution (sqlite chromium vs firefox traces):
   is not doing more server work.
 - The delta lives in **`navigation.commit_to_mount`** (the commit → CSR
   mount-ready phase): firefox 1123ms vs chromium 559ms = **2.01×**. The
-  `wait.hydration` action (the mount-ready wait) is the single largest action
-  bucket (655ms avg × 302 = 198s).
+  `wait.mount` action (the mount-ready wait) is the single largest action bucket
+  (655ms avg × 302 = 198s); the action was renamed from `wait.hydration` in
+  #251.
 - Server-side phases are browser-invariant and small: `navigation.request` ~88ms
   avg; API fetches (`/api/current_user` 27ms, etc.) are browser-independent.
 
@@ -453,8 +454,8 @@ Optional controls:
 - `JAUNDER_E2E_WARMUP_TIMEOUT_MS` (default `10000`)
 
 This warmup runs on the same test page/context and waits for
-`body[data-hydrated]`, so subsequent navigations within that test are measured
-as warm-cache behavior.
+`body[data-mounted]`, so subsequent navigations within that test are measured as
+warm-cache behavior.
 
 ### Heavy timeline fixture seeding (#210)
 

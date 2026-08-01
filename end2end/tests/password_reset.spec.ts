@@ -3,7 +3,7 @@ import {
   goto,
   click,
   waitForSelector,
-  waitForHydration,
+  waitForMount,
   fillLoginForm,
   followEmailLink,
 } from "./helpers";
@@ -38,12 +38,12 @@ test("password reset flow completes successfully", async ({
   await fillLoginForm(page, verifiedUser.username, verifiedUser.password);
   await expect(page.locator(SEL.error)).toBeVisible();
 
-  // Login with new password should succeed from the same hydrated login page.
+  // Login with new password should succeed from the same mounted login page.
   await page.fill(SEL.username, "");
   await page.fill(SEL.password, "");
   await fillLoginForm(page, verifiedUser.username, "resetpassword789");
   await waitForSelector(page, SEL.logoutLink, { timeout: 10_000 });
-  await waitForHydration(page);
+  await waitForMount(page);
   // Login redirects to `/`, now the enhanced public Local timeline (#181, D10).
   await expect(page.locator(SEL.topbarHeading)).toHaveText("jaunder.local");
 });

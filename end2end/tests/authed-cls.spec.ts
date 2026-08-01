@@ -13,7 +13,7 @@
  *
  * Deterministic by construction via the shared `expectNoShiftAcrossMount` helper
  * (holds the wasm to freeze first paint; gates on `document.fonts.ready` +
- * `body[data-hydrated]`, never a timer) — safe under `workers>1` (#182).
+ * `body[data-mounted]`, never a timer) — safe under `workers>1` (#182).
  */
 import { test, expect, slowBrowserTimeoutMs } from "./fixtures";
 import { register } from "./helpers";

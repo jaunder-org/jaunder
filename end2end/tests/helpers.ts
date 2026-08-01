@@ -13,8 +13,8 @@
  *   non-`goto` calls such as `page.request.post`, `page.request.get`, and
  *   `page.waitForURL`.
  *
- * - `goto` waits for Leptos WASM hydration automatically.  Call
- *   `waitForHydration(page)` only after action-triggered navigations (e.g.
+ * - `goto` waits for the CSR mount automatically.  Call
+ *   `waitForMount(page)` only after action-triggered navigations (e.g.
  *   redirects from form submits, server-side 302s) where `goto` was not used.
  *
  * - Never use `page.waitForLoadState("networkidle")` — it fires before ActionForm
@@ -37,11 +37,11 @@
 
 import { expect, type Page } from "@playwright/test";
 import { withTimedAction } from "./actions";
-import { waitForHydration } from "./hydration";
 import { extractLink, type CapturedEmail } from "./mail";
+import { waitForMount } from "./mount";
 import { SEL } from "./selectors";
 
-export { waitForHydration } from "./hydration";
+export { waitForMount } from "./mount";
 
 // The server's base URL. `JAUNDER_E2E_BASE_URL` lets the harness point the suite
 // at an ephemeral-port server (the host e2e loop feeds its discovered
@@ -68,7 +68,7 @@ export async function goto(
       ...options,
     }),
   );
-  await waitForHydration(page, options?.timeout);
+  await waitForMount(page, options?.timeout);
 }
 
 /** Click `selector`, recording timing in the OTEL trace. */

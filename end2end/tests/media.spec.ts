@@ -91,7 +91,7 @@ test.describe("Media upload and serving", () => {
     expect(response.status()).toBe(200);
 
     // Reached via the nav link and pinned on the page's own landmark, matching the
-    // sibling media-page tests below — a bare `goto` races the CSR shell's hydration.
+    // sibling media-page tests below — a bare `goto` races the CSR shell's mount.
     await click(page, "a[href='/media']");
     await waitForSelector(page, "button:has-text('Attach media')");
 

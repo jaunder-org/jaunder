@@ -6,7 +6,7 @@
  * fold, chrome as a memo-gated sibling region). The projector's own render fns are
  * untouched and `adopt_seed` runs before first render, so a seeded page should paint
  * rows immediately and never flash — but that is an *argument*, and the rest of the
- * suite cannot check it: those tests assert content AFTER hydration settles and would
+ * suite cannot check it: those tests assert content AFTER the mount settles and would
  * pass straight through a visible flash. #653 was exactly such a flash on the tag
  * pages and the suite missed it.
  *
@@ -16,7 +16,7 @@
  *
  * Deterministic by construction via the shared `expectNoShiftAcrossMount` helper
  * (#202) — it holds the wasm so first paint stays the projector's, and gates on
- * `document.fonts.ready` + `body[data-hydrated]`, never a timer, so it is safe under
+ * `document.fonts.ready` + `body[data-mounted]`, never a timer, so it is safe under
  * `workers>1` (#182).
  *
  * `/app` is deliberately absent: it is served `no-store` and is never
