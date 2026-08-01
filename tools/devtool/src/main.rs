@@ -9,6 +9,7 @@ mod check;
 mod coverage;
 mod csr_bundle;
 mod pg;
+mod provision;
 mod run;
 mod seed_e2e;
 
@@ -40,6 +41,10 @@ enum Command {
     /// shelling out to `test-support`. The single fixture list shared by the
     /// host loop and the flake VM `seed_db()` (#249).
     SeedE2e(SeedE2eArgs),
+    /// Symlink the tsc type-dep closure + the nix-matched Playwright into
+    /// `<root>/end2end/node_modules` (gitignored, so absent in fresh checkouts and
+    /// worktrees). Replaces `end2end/provision-node-modules.sh` (#229).
+    ProvisionNodeModules(ProvisionArgs),
 }
 
 #[derive(clap::Args)]
@@ -78,6 +83,21 @@ struct SeedE2eArgs {
     /// `target/debug/jaunder` on the host. Must be a non-cheap-kdf build.
     #[arg(long)]
     jaunder_bin: std::path::PathBuf,
+}
+
+#[derive(clap::Args)]
+struct ProvisionArgs {
+    /// The tsc type-dep closure to symlink. Defaults to $E2E_TYPES_NODE_MODULES,
+    /// exported by the Nix devShell.
+    #[arg(long)]
+    types_node_modules: Option<std::path::PathBuf>,
+    /// The nix-matched @playwright/test to pin. Defaults to $E2E_PLAYWRIGHT_TEST,
+    /// exported by the Nix devShell.
+    #[arg(long)]
+    playwright_test: Option<std::path::PathBuf>,
+    /// Repo or worktree root; provisions <root>/end2end/node_modules.
+    #[arg(long, default_value = ".")]
+    root: std::path::PathBuf,
 }
 
 #[derive(clap::Args)]
@@ -123,6 +143,11 @@ fn main() -> anyhow::Result<()> {
         Command::CsrBundle(args) => csr_bundle::run(&args.wasm, &args.out),
         Command::SeedE2e(args) => {
             seed_e2e::run(&args.db, &args.test_support_bin, &args.jaunder_bin)
+        }
+        Command::ProvisionNodeModules(args) => {
+            let types = provision::resolve(args.types_node_modules, "E2E_TYPES_NODE_MODULES")?;
+            let playwright = provision::resolve(args.playwright_test, "E2E_PLAYWRIGHT_TEST")?;
+            provision::run(&args.root, &types, &playwright)
         }
     }
 }
