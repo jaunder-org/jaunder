@@ -125,9 +125,8 @@ pub fn run(name: Option<&str>, all: bool, fix: bool) -> Result<()> {
     };
     for n in &names {
         if needs_provisioning(n) {
-            let types = crate::provision::resolve(None, "E2E_TYPES_NODE_MODULES")?;
-            let playwright = crate::provision::resolve(None, "E2E_PLAYWRIGHT_TEST")?;
-            crate::provision::run(std::path::Path::new("."), &types, &playwright)
+            let paths = crate::provision::StorePaths::resolve(None, None)?;
+            crate::provision::run(std::path::Path::new("."), &paths)
                 .context("provisioning end2end/node_modules for tsc")?;
         }
         let (program, args) = spec(n, fix)?;

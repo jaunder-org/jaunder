@@ -44,7 +44,7 @@ enum Command {
     /// Symlink the tsc type-dep closure + the nix-matched Playwright into
     /// `<root>/end2end/node_modules` (gitignored, so absent in fresh checkouts and
     /// worktrees). Run by the devShell shellHook and by `check tsc` (#229).
-    ProvisionNodeModules(ProvisionArgs),
+    ProvisionNodeModules(ProvisionNodeModulesArgs),
 }
 
 #[derive(clap::Args)]
@@ -86,7 +86,7 @@ struct SeedE2eArgs {
 }
 
 #[derive(clap::Args)]
-struct ProvisionArgs {
+struct ProvisionNodeModulesArgs {
     /// The tsc type-dep closure to symlink. Defaults to $E2E_TYPES_NODE_MODULES,
     /// exported by the Nix devShell.
     #[arg(long)]
@@ -145,9 +145,9 @@ fn main() -> anyhow::Result<()> {
             seed_e2e::run(&args.db, &args.test_support_bin, &args.jaunder_bin)
         }
         Command::ProvisionNodeModules(args) => {
-            let types = provision::resolve(args.types_node_modules, "E2E_TYPES_NODE_MODULES")?;
-            let playwright = provision::resolve(args.playwright_test, "E2E_PLAYWRIGHT_TEST")?;
-            provision::run(&args.root, &types, &playwright)
+            let paths =
+                provision::StorePaths::resolve(args.types_node_modules, args.playwright_test)?;
+            provision::run(&args.root, &paths)
         }
     }
 }

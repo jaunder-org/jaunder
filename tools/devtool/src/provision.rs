@@ -15,7 +15,35 @@
 
 use anyhow::{bail, Context, Result};
 use std::fs;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+
+/// The two Nix store paths provisioning needs. They are always resolved together and
+/// always consumed together, so they travel as one value rather than as a pair of
+/// arguments every caller has to order correctly.
+pub struct StorePaths {
+    /// The tsc type-dep closure (`${e2ePackage}/node_modules`).
+    types_node_modules: PathBuf,
+    /// The nix-matched `@playwright/test`.
+    playwright_test: PathBuf,
+}
+
+impl StorePaths {
+    /// Resolve both paths: an explicit flag wins, else the devShell's env var.
+    ///
+    /// The flag→variable pairing lives here alone, so the subcommand and
+    /// [`crate::check`] cannot drift apart and there is exactly one place that
+    /// produces the unset-variable message.
+    pub fn resolve(
+        types_node_modules: Option<PathBuf>,
+        playwright_test: Option<PathBuf>,
+    ) -> Result<Self> {
+        Ok(Self {
+            types_node_modules: resolve_store_path(types_node_modules, "E2E_TYPES_NODE_MODULES")?,
+            playwright_test: resolve_store_path(playwright_test, "E2E_PLAYWRIGHT_TEST")?,
+        })
+    }
+}
 
 /// Resolve one store path: the explicit flag wins, else the devShell's `var`.
 ///
@@ -23,7 +51,7 @@ use std::path::{Path, PathBuf};
 /// UTF-8, and treats an empty value as unset — matching the bash it replaces, whose
 /// `: "${VAR:?}"` guard rejected empty. Letting `""` through would defer the failure
 /// to an obscure `read_dir` error instead of naming the variable.
-pub fn resolve(flag: Option<PathBuf>, var: &str) -> Result<PathBuf> {
+fn resolve_store_path(flag: Option<PathBuf>, var: &str) -> Result<PathBuf> {
     if let Some(path) = flag {
         return Ok(path);
     }
@@ -58,7 +86,8 @@ fn remove_any(path: &Path) -> Result<()> {
 /// cleanly and the plain `@playwright` directory can replace an earlier symlink of the
 /// same name. Dot-entries are skipped because the bash glob `"$VAR"/*` never matched
 /// them — linking `.bin` would change what tsc sees, which is a separate decision.
-pub fn run(root: &Path, types_node_modules: &Path, playwright_test: &Path) -> Result<()> {
+pub fn run(root: &Path, paths: &StorePaths) -> Result<()> {
+    let types_node_modules = paths.types_node_modules.as_path();
     let dest = root.join("end2end/node_modules");
     fs::create_dir_all(&dest).with_context(|| format!("creating {}", dest.display()))?;
 
@@ -72,7 +101,8 @@ pub fn run(root: &Path, types_node_modules: &Path, playwright_test: &Path) -> Re
         let entry = entry
             .with_context(|| format!("reading an entry of {}", types_node_modules.display()))?;
         let name = entry.file_name();
-        if name.to_string_lossy().starts_with('.') {
+        // Compare bytes, not a lossy String: these are paths, which need not be UTF-8.
+        if name.as_bytes().starts_with(b".") {
             continue;
         }
         let target = dest.join(&name);
@@ -88,6 +118,7 @@ pub fn run(root: &Path, types_node_modules: &Path, playwright_test: &Path) -> Re
     fs::create_dir_all(&playwright_dir)
         .with_context(|| format!("creating {}", playwright_dir.display()))?;
     let link = playwright_dir.join("test");
+    let playwright_test = paths.playwright_test.as_path();
     std::os::unix::fs::symlink(playwright_test, &link).with_context(|| {
         format!(
             "linking {} -> {}",
@@ -137,12 +168,21 @@ mod tests {
             .unwrap()
     }
 
+    /// Explicit paths, bypassing the env fallback — these tests are about what `run`
+    /// writes, not about where the paths came from.
+    fn paths(types_node_modules: &Path, playwright_test: &Path) -> StorePaths {
+        StorePaths {
+            types_node_modules: types_node_modules.to_path_buf(),
+            playwright_test: playwright_test.to_path_buf(),
+        }
+    }
+
     #[test]
     fn provisions_visible_entries_as_symlinks() {
         let t = tmp();
         let types = fake_types_dir(t.path(), "store-a");
         let pw = fake_playwright(t.path());
-        run(t.path(), &types, &pw).unwrap();
+        run(t.path(), &paths(&types, &pw)).unwrap();
 
         let dest = t.path().join("end2end/node_modules");
         for name in [
@@ -166,7 +206,7 @@ mod tests {
         let t = tmp();
         let types = fake_types_dir(t.path(), "store-a");
         let pw = fake_playwright(t.path());
-        run(t.path(), &types, &pw).unwrap();
+        run(t.path(), &paths(&types, &pw)).unwrap();
 
         let dest = t.path().join("end2end/node_modules");
         for name in [".bin", ".package-lock.json"] {
@@ -182,7 +222,7 @@ mod tests {
         let t = tmp();
         let types = fake_types_dir(t.path(), "store-a");
         let pw = fake_playwright(t.path());
-        run(t.path(), &types, &pw).unwrap();
+        run(t.path(), &paths(&types, &pw)).unwrap();
 
         let at_pw = t.path().join("end2end/node_modules/@playwright");
         assert!(
@@ -202,8 +242,8 @@ mod tests {
         let t = tmp();
         let types = fake_types_dir(t.path(), "store-a");
         let pw = fake_playwright(t.path());
-        run(t.path(), &types, &pw).unwrap();
-        run(t.path(), &types, &pw).unwrap();
+        run(t.path(), &paths(&types, &pw)).unwrap();
+        run(t.path(), &paths(&types, &pw)).unwrap();
 
         let dest = t.path().join("end2end/node_modules");
         assert_eq!(
@@ -226,7 +266,7 @@ mod tests {
         // A previous run (or a hand-rolled tree) left @playwright as a symlink.
         std::os::unix::fs::symlink(types.join("@playwright"), dest.join("@playwright")).unwrap();
 
-        run(t.path(), &types, &pw).unwrap();
+        run(t.path(), &paths(&types, &pw)).unwrap();
 
         assert!(fs::symlink_metadata(dest.join("@playwright"))
             .unwrap()
@@ -240,8 +280,8 @@ mod tests {
         let old = fake_types_dir(t.path(), "store-a");
         let new = fake_types_dir(t.path(), "store-b");
         let pw = fake_playwright(t.path());
-        run(t.path(), &old, &pw).unwrap();
-        run(t.path(), &new, &pw).unwrap();
+        run(t.path(), &paths(&old, &pw)).unwrap();
+        run(t.path(), &paths(&new, &pw)).unwrap();
 
         let dest = t.path().join("end2end/node_modules");
         assert_eq!(
@@ -255,7 +295,7 @@ mod tests {
         let t = tmp();
         let missing = t.path().join("no-such-store");
         let pw = fake_playwright(t.path());
-        let err = run(t.path(), &missing, &pw).unwrap_err();
+        let err = run(t.path(), &paths(&missing, &pw)).unwrap_err();
         assert!(
             format!("{err:#}").contains(&missing.display().to_string()),
             "error should name the missing path, got: {err:#}"
@@ -266,12 +306,15 @@ mod tests {
     fn resolve_prefers_the_flag_over_the_environment() {
         let flag = PathBuf::from("/from/flag");
         // Deliberately a variable that is set in every environment.
-        assert_eq!(resolve(Some(flag.clone()), "PATH").unwrap(), flag);
+        assert_eq!(
+            resolve_store_path(Some(flag.clone()), "PATH").unwrap(),
+            flag
+        );
     }
 
     #[test]
     fn resolve_errors_name_the_variable_and_the_devshell() {
-        let err = resolve(None, "JAUNDER_DEFINITELY_UNSET_FOR_TESTS").unwrap_err();
+        let err = resolve_store_path(None, "JAUNDER_DEFINITELY_UNSET_FOR_TESTS").unwrap_err();
         let msg = format!("{err:#}");
         assert!(
             msg.contains("JAUNDER_DEFINITELY_UNSET_FOR_TESTS"),

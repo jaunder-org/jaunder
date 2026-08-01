@@ -61,8 +61,10 @@ ADR-0051 already recorded this conversion as a surfaced follow-up. It is a
    names the flag, never the variable or the devShell (failing A9/A10), and
    enabling the feature would churn `tools/Cargo.toml` + `tools/Cargo.lock` and
    thus `devtoolBin`'s vendored-deps derivation. The resolver is a named seam —
-   `provision::resolve_paths(...)` — shared verbatim by the subcommand and by
-   `check::run`, so there is exactly one message site.
+   `provision::StorePaths::resolve(...)`, which owns the flag→variable pairing
+   and returns both paths as one value — shared verbatim by the subcommand and
+   by `check::run`, so there is exactly one message site and no caller can pair
+   a flag with the wrong variable.
 5. **Target: `--root <DIR>`, defaulting to the current directory.** It writes
    `<root>/end2end/node_modules`. Both callers pass nothing (repo root is cwd),
    so the contract is unchanged; tests point it at a tempdir without a
