@@ -98,7 +98,12 @@ Each is checkable by a reviewer without reading the diff.
   1. `rg -cF 'wait.hydration'` reports **exactly 1** — D3's rename note is the
      only surviving mention, and the `#155 … (findings, 2026-07-02)` bullet
      itself reads `wait.mount`.
-  2. `rg -F 'renamed from \`wait.hydration\` in #251'` matches **once**.
+  2. ``rg -Uc 'renamed\s+from\s+`wait\.hydration`\s+in\s+#251'`` reports **1**.
+     `-U` (multiline) plus `\s+` at **every** word gap are required, not
+     stylistic: prettier reflows this note, and where it wraps changes as
+     surrounding text changes. A literal-space pattern silently reports zero on
+     correct text — observed twice while implementing this spec, at two
+     different wrap points.
   3. `rg -F 'data-hydrated'` returns **no matches**; the warmup paragraph
      (currently `:456`) says `body[data-mounted]`.
 

@@ -559,13 +559,19 @@ warm-cache behavior.
 
 ```bash
 rg -cF 'wait.hydration' docs/observability.md
-rg -F 'renamed from `wait.hydration` in #251' docs/observability.md
+rg -Uc 'renamed\s+from\s+`wait\.hydration`\s+in\s+#251' docs/observability.md
 rg -F 'data-hydrated' docs/observability.md
 ```
 
-Expected: the first reports **exactly 1**, the second matches **once** (they are
-the same line — D3's rename note necessarily quotes the old span name), and the
-third returns **no matches**.
+Expected: the first two both report **exactly 1** (the same occurrence — D3's
+rename note necessarily quotes the old span name), and the third returns **no
+matches**.
+
+The second command's `-U` (multiline) and the `\s+` at **every** word gap are
+load-bearing: prettier reflows this note, and the wrap point moves as
+surrounding text changes. A literal-space pattern reports zero even when the
+text is correct — this bit twice during implementation, at two different wrap
+points.
 
 If the first reports more than 1, the `:291-294` bullet still carries the old
 name outside the note.
