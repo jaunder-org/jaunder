@@ -834,7 +834,7 @@ Run: `devtool run -- cargo xtask check` Expected: PASS — `adr-format` and
 `sync-readme` should not be needed; if parity complains, run
 `devtool run -- cargo xtask adr sync-readme`)
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit** — `9e57add9`.
 
 ```bash
 git add docs/adr/0063-domain-value-newtype-convention.md
@@ -854,7 +854,14 @@ derive entries).
 
 **Interfaces:** none.
 
-- [ ] **Step 1: Rebase onto current `main` and re-sweep for colliding derives**
+- [x] **Step 1: Rebase onto current `main` and re-sweep for colliding derives**
+      — main had moved 60+ commits (#199/#737, #711, #745, #746, #251). Rebased;
+      one conflict in `macros/src/lib.rs`, resolved by keeping both new fns
+      (#746's `require_enum_shape` and this branch's `ord_impls`).
+      `str_newtype.rs` auto-merged, preserving both #746's `BridgeSpec` refactor
+      and this branch's `SqlxMode`/`no_ord`. **#711 had landed and added
+      `PartialOrd, Ord` to `ContentHash`/`Filename`** — removed, exactly the
+      case this step exists for.
 
 ```bash
 git fetch origin
@@ -879,7 +886,8 @@ after this plan was written (e.g. #711's `ContentHash`/`Filename`/`MediaSource`)
 is removed now, then `cargo xtask check` and commit as
 `refactor(media): drop derives subsumed by the ordering trailer (#761)`.
 
-- [ ] **Step 2: Confirm no hand-written ordering exists (AC9)**
+- [x] **Step 2: Confirm no hand-written ordering exists (AC9)** — clean: exactly
+      one hit, the `ord_impls` generator body.
 
 ```bash
 rg -n 'impl(<[^>]*>)?\s+(::core::cmp::)?(Partial)?Ord\b' -g '*.rs' --glob '!target/**'

@@ -87,7 +87,7 @@ use crate::root_relative_url::RootRelativeUrl;
 /// fn takes_hash(_: common::media::ContentHash) {}
 /// takes_hash("abc".to_string()); // a String is not a ContentHash
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, StrNewtype)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, StrNewtype)]
 pub struct ContentHash(String);
 
 /// Error returned when a string cannot be parsed as a [`ContentHash`].
@@ -187,7 +187,7 @@ impl ContentHash {
 /// fn takes_filename(_: common::media::Filename) {}
 /// takes_filename("a".to_string()); // a String is not a Filename
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, StrNewtype)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, StrNewtype)]
 pub struct Filename(String);
 
 /// Error returned when a string is not a usable media filename leaf.
@@ -652,8 +652,8 @@ pub fn media_url(
 /// into a `BTreeSet`, which gives dedup and a stable row order in one move, so callers
 /// writing those rows get a byte-identical result for a byte-identical body. The order is
 /// the derived one: field by field, in declaration order, each member ordering as its inner
-/// value. (#761 asks whether the newtype derives should carry `Ord` in their standard
-/// trailer, rather than each type opting in as `ByteSize` and these three now do.)
+/// value. Those members no longer opt in individually — ordering is part of the standard
+/// newtype trailer (ADR-0063 §2, #761), which is what this type's need prompted.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MediaRef {
     /// Which storage root the entry lives under.
