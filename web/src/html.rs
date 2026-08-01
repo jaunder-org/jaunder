@@ -7,8 +7,8 @@
 //! is therefore no longer a rule anyone has to remember: text interpolated into
 //! `html!` is escaped by the macro, and the one way to emit raw HTML is
 //! [`Markup::from_rendered_html`], which the `raw-html-door` gate pins to this file.
-//! (This replaced a hand-rolled `escape_html` that every builder had to call at
-//! every interpolation — #333.)
+//! (This replaced a hand-rolled escaper that every builder had to remember to call
+//! at every interpolation — #333.)
 //!
 //! **Non-reactive markup only — no leptos reactivity**, so `reactive_graph` never
 //! sits on the public request path (the #173 escape, ADR-0040). maud preserves that
@@ -46,7 +46,7 @@ impl Markup {
 
     /// The empty fragment, for an absent optional slot.
     #[must_use]
-    pub fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self(String::new())
     }
 
@@ -56,15 +56,21 @@ impl Markup {
     /// the build on any other `PreEscaped` under `web/src`, including inside macro
     /// bodies, so a second door has to argue for itself in review.
     #[must_use]
-    pub fn from_rendered_html(html: &RenderedHtml) -> Self {
+    pub(crate) fn from_rendered_html(html: &RenderedHtml) -> Self {
         // XSS SAFETY: `RenderedHtml`'s invariant is established by sanitization
         // (ADR-0079) — this only inherits it, so no escaping is owed here.
+        //
+        // Because `Markup` already stores the rendered string, wrapping in
+        // `PreEscaped` and unwrapping is a no-op on the bytes. It is kept because it
+        // is what "this string is markup, not text" is *spelled* as in maud, and it
+        // is the token the `raw-html-door` gate keys on — which is what catches the
+        // real hazard, a `PreEscaped(user_input)` appearing anywhere else in `web`.
         Self(PreEscaped(html.as_ref()).into_string())
     }
 
     /// The rendered markup as a string slice.
     #[must_use]
-    pub fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
 

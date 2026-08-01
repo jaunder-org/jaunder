@@ -111,13 +111,18 @@ single type, not two.
 > to `web` — E0117, orphan rule. `Markup` is local to `web`, so
 > `impl Render for Markup` is legal, and it keeps maud out of `common`.
 
-- **Definition:** `pub struct Markup(maud::Markup)` in `web/src/html.rs` —
-  maud's `Markup` is its `PreEscaped<String>` alias.
+- **Definition:** `pub struct Markup(String)` in `web/src/html.rs` — the
+  rendered markup, mintable only by the three constructors below.
 
-  > **Naming:** ours deliberately shadows maud's within `web`. `maud::Markup` is
-  > **never imported**; the crate's glob-import ban (below) keeps that
-  > enforceable, and `Markup` is the domain word every `web` reader should reach
-  > for.
+  > **Naming:** ours deliberately shadows `maud::Markup` (its
+  > `PreEscaped<String>` alias) within `web`. `maud::Markup` is **never
+  > imported**; the crate's glob-import ban (below) keeps that enforceable, and
+  > `Markup` is the domain word every `web` reader should reach for.
+  >
+  > **Corrected during execution:** this originally specified a newtype _over_
+  > `maud::Markup`. `PreEscaped` implements neither `PartialEq` nor `Eq`, which
+  > the pinned render goldens need, so it wraps the rendered `String` instead.
+  > The invariant is unchanged.
 
 - **Traits:** `maud::Render` (so it composes inside `html!`), plus `Clone`
   (required — `home/component.rs:69` and `sidebar/component.rs:69` clone before
@@ -129,12 +134,21 @@ single type, not two.
   `RenderedHtml` exposes no inherent `as_str()`, but it does implement
   `AsRef<str>` (`common/src/render.rs:107`), so the door reads through
   `as_ref()`. `common` is not modified.
-- **Exits:** `as_str(&self) -> &str` and `into_string(self) -> String`. Both
-  `pub`; `Markup` is re-exported from `web::app` (`pub use crate::html::Markup;`
-  — it lives in the private `html` module) because `render_head`/`render_shell`
-  (`web/src/app/render.rs:57,174`) are `pub` and consumed cross-crate at
-  `server/src/projector/mod.rs:78-79`. The projector's use needs no gate: it
-  receives a `Markup`, so trust is type-carried across that boundary.
+- **Exits:** `as_str(&self) -> &str` and `into_string(self) -> String`. Only
+  `into_string` is `pub` — it is the sole method with a cross-crate caller
+  (`server/src/projector/mod.rs:78-79`, consuming `render_head`/`render_shell`).
+  `new`, `empty`, `from_rendered_html` and `as_str` are `pub(crate)`; widening
+  the raw door beyond the crate the gate polices would be a hole, not a
+  convenience. The projector's use needs no gate: it receives a `Markup`, so
+  trust is type-carried across that boundary.
+
+  > **Corrected during execution.** This bullet originally required re-exporting
+  > `Markup` from `web::app` so cross-crate consumers could name it. Verified
+  > empirically that nothing needs it — the projector never names the type, only
+  > calls `.into_string()`, and
+  > `cargo clippy -p web --features server --all-targets -- -D warnings` is
+  > clean without the re-export. It was speculative generality and is gone.
+
 - **No glob imports of maud.** Import `maud::{html, Render, PreEscaped}`
   narrowly; a glob would pull `maud::Markup` into scope and collide with ours.
 - **`topbar`'s trusted slot takes `Markup`.** `topbar::render`'s `right`
@@ -257,7 +271,8 @@ producing a string, with no reactive runtime.
   > the rule mechanical rather than a judgment call.
 
 - A2. `crate::html::escape_html` no longer exists; `rg 'escape_html' web/src`
-  returns no hits.
+  returns no hits — including in prose, so the `html.rs` module doc describes
+  the retired escaper without naming it.
 - A3. Every fn in those nine modules **whose return value is HTML** returns
   `Markup`; none returns `String`. The HTML-returning set is exactly:
   `app::render_head`, `app::render_shell`, `app::render_discovery`,
@@ -304,12 +319,25 @@ producing a string, with no reactive runtime.
 - A12. The D6 escaping-contract test exists and passes, asserting the two
   properties as stated (no golden literal, no HTML-parser dependency added).
 - A13. Twin goldens re-pinned, and the "byte-identical to the reactive X"
-  comments removed or corrected at these enumerated sites:
-  `topbar/markup.rs:21,33`, `avatar/markup.rs:19,39`, `posts/render.rs:14,142`,
-  `posts/component.rs:184`, `taglist/markup.rs:10`, `sidebar/markup.rs:41-43`,
-  `icon/markup.rs:1`. **Excluded deliberately:** `app/render.rs:37`, which
-  asserts the per-visitor CDN property (ADR-0041 decision 4) — a different
-  claim, still true.
+  comments removed or corrected **at the duplicate-twin sites only**:
+  `topbar/markup.rs:21,33`, `avatar/markup.rs:19,39`, `taglist/markup.rs:10`,
+  `icon/markup.rs:1`.
+
+  > **Corrected during execution — this criterion originally over-enumerated.**
+  > It also listed `posts/render.rs:14,142`, `posts/component.rs:184` and
+  > `sidebar/markup.rs:41-43`. Those are **delegation** renderers, not duplicate
+  > twins: their comments say "both call the SAME function", "the SAME code the
+  > public projector server-renders", "injects this verbatim via `inner_html`".
+  > For those, byte-identity is **true by construction** (ADR-0041 decision 2)
+  > and is precisely what D1 says survives this change, since both sides keep
+  > calling the same converted fn. Correcting them would have replaced a
+  > guaranteed claim with a hedge. What needed retiring is the _duplicate-twin_
+  > claim, where a human transcribed a `view!` tree into a literal and nothing
+  > kept the two in step.
+
+  **Excluded deliberately:** `app/render.rs:37`, which asserts the per-visitor
+  CDN property (ADR-0041 decision 4) — a different claim, still true.
+
 - A14. `web/src/html.rs`'s module doc is rewritten and restates the "no leptos
   reactivity in the render layer / #173 escape" invariant;
   `web/src/lib.rs:22-23`'s description of the module matches.

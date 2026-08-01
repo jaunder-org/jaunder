@@ -1100,6 +1100,18 @@ git commit -m "refactor(web): retire escape_html in favour of maud auto-escaping
 
 ### Task 13: Full gate + e2e coincidence confirmation
 
+> **[x] DONE — `cargo xtask validate` exit 0.** Every step `ok`, including
+> `wasm-clippy`, all three new/retrofitted gates, `coverage` (clean — 23727
+> executable lines, 0 failures, 0 guard violations, 0 CRAP over threshold), and
+> `nix-e2e` across all four `{sqlite,postgres}×{chromium,firefox}` combos.
+>
+> **A11 verified, not assumed.** `timeline-cls.spec.ts` carries no
+> `.skip`/`.only`/`.fixme`, sits under `testDir: "./tests"`, and is not matched
+> by any `testIgnore` (only `admin-site|invite` are excluded), so it genuinely
+> ran — `expectNoShiftAcrossMount` held at `tolerancePx: 0` on the four
+> projector-painted routes. This is the oracle D1 rests on: the escaping and
+> void-element byte changes moved nothing.
+
 **Files:** none (verification only), unless a failure demands a fix.
 
 - [ ] **Step 1: Run the full local gate**

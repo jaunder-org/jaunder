@@ -1,4 +1,4 @@
-//! The `html-sink` static check (#333): pins every unescaped-HTML sink in `web` —
+//! The `html-sink` static check (#333): pins every unescaped-HTML sink —
 //! `inner_html` and `set_inner_html` — to an enumerated allowlist.
 //!
 //! These are the DOM's raw doors. Whatever string reaches them is parsed as markup,
@@ -9,12 +9,18 @@
 //! reason, and it is exactly why the set must stay small and written down.
 //!
 //! **Population** (read structurally, ADR-0085 principle 1): every `inner_html` or
-//! `set_inner_html` **ident** anywhere under [`POLICED_ROOT`], in ordinary code and
+//! `set_inner_html` **ident** anywhere under [`POLICED_ROOTS`], in ordinary code and
 //! inside macro token streams. Deliberately *not* "attributes inside a `view!`": a
 //! `web_sys` `set_inner_html`, a builder-API call, or a bare reference is then
 //! inside the population rather than silently outside it. Deciding the population by
 //! the syntax that reaches the sink would be a search for the spelling we
 //! anticipated, which is the failure mode ADR-0085 exists to stop.
+//!
+//! The roots are the whole production tree, not `web/src` alone, for the same reason
+//! [`crate::steps::raw_html_door_check`] scans them all: `csr` is the crate that
+//! mounts to the DOM, so a `set_inner_html` sprouting there must **fail** rather
+//! than sit outside the gate's reach. A population scoped to where we expect the
+//! construct to appear is a hypothesis, not an enumeration.
 //!
 //! Every member fails unless an [`ALLOWLIST`] entry names its enclosing top-level fn
 //! *and* the entry's declared multiplicity still covers it. The multiplicity is what
@@ -22,68 +28,62 @@
 //! `PostDisplay` genuinely holds two sinks, its entry says two, and a third is a
 //! failure rather than an absorption.
 //!
+//! The scan itself — test-code exemption, enclosing-fn tracking, the macro token
+//! walk, the multiplicity rule and the tree-wide reconciliation — is
+//! [`crate::steps::ident_gate`]; this module is the population, the allowlist and
+//! the prose.
+//!
 //! Test/fixture code (anything under a `#[cfg(test)]` module/impl/fn, or a
 //! `#[test]`/`#[rstest]` fn) is exempt.
 //!
-//! **Unreadable classes** (ADR-0085's honesty obligation): (1) a sink reached
-//! through a helper that takes the element and the string as parameters — `syn` has
-//! no call graph, so the helper is flagged and the *caller* that supplied the
-//! untrusted string is not; the gate can detect, not attribute. (2) A rename or
-//! re-export (`use web_sys::Element as E` changes nothing, but a wrapper method
-//! named something else does) evades ident matching. (3) Tokens inside an
-//! *attribute* macro's argument list are not walked, only `syn::Macro` invocations.
-//! (4) A `use` declaration is outside the population — it reaches no sink, and what
-//! it enables is its own ident occurrence. (5) The allowlist is keyed by enclosing fn name, not by file, so a same-named fn
-//! in another file matches the entry — the tree-wide multiplicity reconciliation in
-//! [`problems`] catches the resulting count drift, but the per-file report will not
-//! name it as a shadow. A `syn` parse failure is a **hard error** (a file we cannot
-//! walk could hide a sink — a false pass), matching
-//! [`crate::steps::rendered_html_from_trusted_check`].
+//! **Unreadable classes** (ADR-0085's honesty obligation) specific to this gate: a
+//! rename or re-export evades ident matching — `use web_sys::Element as E` changes
+//! nothing, but a wrapper method named something else does. A `use` declaration is
+//! outside the population: it reaches no sink, and what it enables is its own ident
+//! occurrence. The classes inherent to the shared scan (the unwalked attribute-macro
+//! tokens, the fn-name-keyed allowlist, and above all the absent call graph — a sink
+//! reached through a helper is flagged at the helper, never at the caller that
+//! supplied the untrusted string) are stated in [`crate::steps::ident_gate`]. A
+//! `syn` parse failure is a **hard error** (a file we cannot walk could hide a sink —
+//! a false pass).
 
-use std::collections::HashMap;
-use std::path::Path;
+use crate::result::CommandResult;
+use crate::steps::ident_gate::{self, Allowed, AnyOf, Gate, Report};
 
-use crate::files;
-use crate::result::{CommandResult, StepResult};
-
-/// Source root scanned recursively for `.rs` files. `web` is the only crate that
-/// touches the DOM's raw doors — `csr` mounts, `server` serializes — so the root is
-/// where the sinks are, and a sink appearing elsewhere would be a different gate's
-/// argument to make.
-const POLICED_ROOT: &str = "web/src";
+/// Source roots scanned recursively for `.rs` files — the production `src` trees,
+/// not the `tests/` integration crates (whose fixtures inject freely). The sinks all
+/// live in `web` today; the roots are the same seven
+/// [`crate::steps::raw_html_door_check`] polices because the population is defined
+/// by the tree, not by where we expect a sink to appear.
+const POLICED_ROOTS: &[&str] = &[
+    "common/src",
+    "host/src",
+    "storage/src",
+    "web/src",
+    "server/src",
+    "csr/src",
+    "macros/src",
+];
 
 /// The sink idents this guard pins: leptos' `inner_html=` attribute and `web_sys`'
 /// `Element::set_inner_html`.
 const SINKS: &[&str] = &["inner_html", "set_inner_html"];
 
-/// A sink permitted in production code, keyed by its enclosing **top-level**
-/// function plus how many identical sites that key covers.
-///
-/// **The count is load-bearing, not decoration.** A bare function-scoped exemption
-/// is a region exemption in disguise: a second `inner_html` added inside an allowed
-/// fn would pass silently, which is the precise defect ADR-0085 principle 4 forbids
-/// (and which #778 records against `rendered-html-from-trusted`'s `ALLOWED_FNS`).
-/// `PostDisplay` is why the count cannot simply be 1: its two sinks are the
-/// anonymous and authored layouts of the same article, indistinguishable to any key
-/// a human would keep correct. Declaring the multiplicity means gaining a third is a
-/// mismatch and a failure.
-struct Allowed {
-    /// Enclosing top-level function name.
-    function: &'static str,
-    /// How many sink sites this entry covers, tree-wide.
-    count: usize,
-    /// Why the value injected there is trusted.
-    reason: &'static str,
-}
-
 /// Every production sink, each with its reason. The reasons all have the same shape,
 /// and that is the point: the injected value is the output of the *pure render
 /// layer* — the identical fn the projector server-renders — so it is markup we
 /// built, escaped by maud, never a string that arrived from outside.
+///
+/// The count on each entry is load-bearing — see [`Allowed`]. `PostDisplay` is why
+/// it cannot simply be 1: its two sinks are the anonymous and authored layouts of
+/// the same article, indistinguishable to any key a human would keep correct.
+///
+/// Entries name **fns**, not lines: the fn name is the key the gate matches on, and
+/// a line number in a comment is checked by nothing and rots on the next edit.
 const ALLOWLIST: &[Allowed] = &[
-    // `web/src/posts/component.rs:155`; sinks at `:189` (anonymous layout, the whole
-    // article inner) and `:204` (authored layout, the content column the action
-    // overlay sits beside). Both inject `posts::render::render_post_inner` /
+    // `web/src/posts/component.rs`. Two sinks: the anonymous layout (the whole
+    // article inner) and the authored layout (the content column the action overlay
+    // sits beside). Both inject `posts::render::render_post_inner` /
     // `render_post_content` output — the same pure fn the public projector paints
     // (#179/#181, ADR-0041 §4), which is what makes the seeded first paint and the
     // reactive re-render coincide.
@@ -92,26 +92,25 @@ const ALLOWLIST: &[Allowed] = &[
         count: 2,
         reason: "posts::render output — the same pure render the projector paints (#179/#181)",
     },
-    // `web/src/posts/component.rs:884`; sink at `:891`. Injects
-    // `posts::render::permalink_article` output for the projector-seeded permalink,
-    // so the `Suspense` fallback is byte-for-byte the paint it replaces.
+    // `web/src/posts/component.rs`. Injects `posts::render::permalink_article`
+    // output for the projector-seeded permalink, so the `Suspense` fallback is
+    // byte-for-byte the paint it replaces.
     Allowed {
         function: "permalink_first_paint",
         count: 1,
         reason: "posts::render::permalink_article output — the projector's own permalink paint",
     },
-    // `web/src/home/component.rs:15`; sink at `:69`. Injects
-    // `home::render::render_masthead` output into the timeline gate's `children`
-    // slot — the shared pure fn the projector renders too (ADR-0041 §2), with no
-    // `view!` twin to drift.
+    // `web/src/home/component.rs`. Injects `home::render::render_masthead` output
+    // into the timeline gate's `children` slot — the shared pure fn the projector
+    // renders too (ADR-0041 §2), with no `view!` twin to drift.
     Allowed {
         function: "HomePage",
         count: 1,
         reason: "home::render::render_masthead output — the shared pure fn (ADR-0041 §2)",
     },
-    // `web/src/sidebar/component.rs:53`; sink at `:69`. Injects
-    // `sidebar::markup::render_sidebar` output for the anonymous viewer, so a
-    // marker-seeded first paint and the reactive re-render coincide (#181/#591).
+    // `web/src/sidebar/component.rs`. Injects `sidebar::markup::render_sidebar`
+    // output for the anonymous viewer, so a marker-seeded first paint and the
+    // reactive re-render coincide (#181/#591).
     Allowed {
         function: "Sidebar",
         count: 1,
@@ -119,297 +118,47 @@ const ALLOWLIST: &[Allowed] = &[
     },
 ];
 
-/// One sink mention: where it is, and what encloses it.
-#[derive(Debug, Clone)]
-struct Mention {
-    /// 1-based source line.
-    line: usize,
-    /// Nearest enclosing fn name; empty at module scope.
-    function: String,
-    /// Whether that fn is top-level (`fn_stack.len() == 1`). Only a top-level fn can
-    /// match an allowlist entry, so a nested fn shadowing an allowed name cannot
-    /// borrow its exemption.
-    top_level: bool,
-}
-
-/// Every **non-test** sink mention in the source, in line order. `Err` on a `syn`
-/// parse failure (fail-loud). Pure given the source, so it is unit-tested directly.
-fn mentions(source: &str) -> Result<Vec<Mention>, String> {
-    let file = syn::parse_file(source).map_err(|e| format!("cannot parse as Rust: {e}"))?;
-    let mut scanner = Scanner {
-        test_depth: 0,
-        fn_stack: Vec::new(),
-        hits: Vec::new(),
-    };
-    syn::visit::visit_file(&mut scanner, &file);
-    scanner.hits.sort_by_key(|m| m.line);
-    Ok(scanner.hits)
-}
+/// The gate: population, allowlist, roots and prose.
+const GATE: Gate<AnyOf> = Gate {
+    step: "html-sink",
+    roots: POLICED_ROOTS,
+    population: AnyOf(SINKS),
+    allowlist: ALLOWLIST,
+    report: Report {
+        subject: "an unescaped-HTML sink",
+        verdict: "is not allowlisted — whatever string reaches it is parsed as markup (XSS) (#333)",
+        noun: "sink(s)",
+        vanished: "The sink is gone — delete the entry.",
+        recovery:
+            "  recovery: an unescaped sink is only safe when the string was built by our own \
+                   render layer — a `Markup`, or a `RenderedHtml` that `RenderedHtml::sanitize` \
+                   scrubbed. If the value came from anywhere else, do not inject it: render it as \
+                   text, where maud escapes it. If this is a genuine coincidence sink (the \
+                   projector paints the same markup), add an ALLOWLIST entry with its \
+                   multiplicity and a written reason in xtask/src/steps/html_sink_check.rs. \
+                   Currently exempt:",
+    },
+};
 
 /// 1-based `(line, enclosing-fn)` of every sink the [`ALLOWLIST`] does not cover.
-/// Test-only: [`problems`] parses once and applies [`unjustified`] itself, so this is
+/// Test-only: [`problems`] parses once and applies the allowlist itself, so this is
 /// the single-source convenience the unit tests assert through.
 #[cfg(test)]
 fn violations(source: &str) -> Result<Vec<(usize, String)>, String> {
-    Ok(unjustified(&mentions(source)?, ALLOWLIST))
-}
-
-/// The mentions `allowlist` does not cover: everything outside an allowlisted
-/// top-level fn, plus everything **beyond** an entry's declared multiplicity (the
-/// later sites in line order, so the first `count` keep the exemption they were
-/// written for).
-fn unjustified(found: &[Mention], allowlist: &[Allowed]) -> Vec<(usize, String)> {
-    let mut used: HashMap<&str, usize> = HashMap::new();
-    let mut out = Vec::new();
-    for m in found {
-        let entry = m
-            .top_level
-            .then(|| allowlist.iter().find(|a| a.function == m.function))
-            .flatten();
-        match entry {
-            Some(a) => {
-                let seen = used.entry(a.function).or_insert(0);
-                *seen += 1;
-                if *seen > a.count {
-                    out.push((m.line, m.function.clone()));
-                }
-            }
-            None => out.push((m.line, m.function.clone())),
-        }
-    }
-    out
-}
-
-struct Scanner {
-    /// >0 while inside a `#[cfg(test)]`/`#[test]` item — sinks there are exempt.
-    test_depth: usize,
-    /// Names of the enclosing functions; the last is the nearest.
-    fn_stack: Vec<String>,
-    hits: Vec<Mention>,
-}
-
-/// Whether an attribute list carries a test-enabling `#[cfg(test)]` (incl.
-/// `cfg(all(test, …))` / `cfg(any(test, …))`). Pragmatic token scan: the attr is
-/// `cfg`, its tokens mention `test`, and are not negated (`not(...)`). The
-/// `not`-guard biases the rare `cfg(all(not(x), test))` toward being **scanned** (a
-/// safe false-positive) rather than letting a production-only `cfg(not(test))` slip
-/// through unscanned.
-fn is_test_cfg(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|a| match &a.meta {
-        syn::Meta::List(ml) if ml.path.is_ident("cfg") => {
-            let toks = ml.tokens.to_string();
-            toks.contains("test") && !toks.contains("not")
-        }
-        _ => false,
-    })
-}
-
-/// Whether an attribute list carries a test-harness attribute (`#[test]`,
-/// `#[tokio::test]`, `#[rstest]`). Belt-and-suspenders for a test fn that is not
-/// wrapped in a `#[cfg(test)]` module.
-fn has_test_attr(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|a| {
-        a.path()
-            .segments
-            .last()
-            .is_some_and(|s| s.ident == "test" || s.ident == "rstest")
-    })
-}
-
-impl Scanner {
-    /// Record a sink mention on `line`, unless it is test code.
-    ///
-    /// Allowlisting happens later, in [`unjustified`], because a multiplicity can
-    /// only be judged once every site is in hand.
-    fn record(&mut self, line: usize) {
-        if self.test_depth > 0 {
-            return;
-        }
-        self.hits.push(Mention {
-            line,
-            function: self.fn_stack.last().cloned().unwrap_or_default(),
-            top_level: self.fn_stack.len() == 1,
-        });
-    }
-
-    /// Walk a macro invocation's tokens, recursing through nested `Group`s, and
-    /// record every sink ident. `syn` never parses these tokens, so nothing found
-    /// here can duplicate a hit already found in the AST — and comments are not
-    /// tokens, so prose mentioning `inner_html` cannot false-positive.
-    fn walk_macro_tokens(&mut self, tokens: &proc_macro2::TokenStream) {
-        for tt in tokens.clone() {
-            match tt {
-                proc_macro2::TokenTree::Group(g) => self.walk_macro_tokens(&g.stream()),
-                proc_macro2::TokenTree::Ident(id) if SINKS.iter().any(|s| id == *s) => {
-                    self.record(id.span().start().line);
-                }
-                _ => {}
-            }
-        }
-    }
-}
-
-impl<'ast> syn::visit::Visit<'ast> for Scanner {
-    fn visit_item_mod(&mut self, i: &'ast syn::ItemMod) {
-        let test = is_test_cfg(&i.attrs);
-        self.test_depth += usize::from(test);
-        syn::visit::visit_item_mod(self, i);
-        self.test_depth -= usize::from(test);
-    }
-
-    fn visit_item_impl(&mut self, i: &'ast syn::ItemImpl) {
-        let test = is_test_cfg(&i.attrs);
-        self.test_depth += usize::from(test);
-        syn::visit::visit_item_impl(self, i);
-        self.test_depth -= usize::from(test);
-    }
-
-    fn visit_item_fn(&mut self, i: &'ast syn::ItemFn) {
-        let test = is_test_cfg(&i.attrs) || has_test_attr(&i.attrs);
-        self.test_depth += usize::from(test);
-        self.fn_stack.push(i.sig.ident.to_string());
-        syn::visit::visit_item_fn(self, i);
-        self.fn_stack.pop();
-        self.test_depth -= usize::from(test);
-    }
-
-    fn visit_impl_item_fn(&mut self, i: &'ast syn::ImplItemFn) {
-        let test = is_test_cfg(&i.attrs) || has_test_attr(&i.attrs);
-        self.test_depth += usize::from(test);
-        self.fn_stack.push(i.sig.ident.to_string());
-        syn::visit::visit_impl_item_fn(self, i);
-        self.fn_stack.pop();
-        self.test_depth -= usize::from(test);
-    }
-
-    /// A `use` declaration is outside the population, for the same reason as in
-    /// [`crate::steps::raw_html_door_check`]: it names something but reaches no sink,
-    /// and whatever it enables is its own ident occurrence.
-    fn visit_item_use(&mut self, _i: &'ast syn::ItemUse) {}
-
-    /// The population is otherwise the **ident**, wherever it appears — a method
-    /// call, a struct field, a bare reference. Matching the ident rather than a call
-    /// shape is what keeps this an enumeration instead of a search for the spelling
-    /// someone anticipated.
-    fn visit_ident(&mut self, i: &'ast proc_macro2::Ident) {
-        if SINKS.iter().any(|s| i == *s) {
-            self.record(i.span().start().line);
-        }
-    }
-
-    /// `syn` stops at a macro invocation's boundary, so the tokens are walked by
-    /// hand — leptos' `inner_html=` lives inside `view!`.
-    fn visit_macro(&mut self, i: &'ast syn::Macro) {
-        self.walk_macro_tokens(&i.tokens);
-        syn::visit::visit_macro(self, i);
-    }
+    GATE.violations(source)
 }
 
 /// The failure detail for every offending sink across the scanned files, or `None`
-/// when the tree matches the allowlist exactly. A per-file parse failure is surfaced
-/// (never swallowed). Pure given the `(path, source)` pairs, so it is unit-tested
-/// directly.
+/// when the tree matches the allowlist exactly.
 pub fn problems(scanned: &[(String, String)]) -> Option<String> {
-    let mut lines = Vec::new();
-    let mut found: Vec<(String, Mention)> = Vec::new();
-    for (path, source) in scanned {
-        match mentions(source) {
-            Err(msg) => lines.push(format!(
-                "{path}: {msg} — an unparsed file is invisible to this gate, which is exactly the \
-                 blind spot it exists to close. Fix the file or the parser; do not skip it."
-            )),
-            Ok(ms) => {
-                for (ln, enclosing) in unjustified(&ms, ALLOWLIST) {
-                    let where_ = if enclosing.is_empty() {
-                        "at module scope".to_string()
-                    } else {
-                        format!("in fn `{enclosing}`")
-                    };
-                    lines.push(format!(
-                        "{path}:{ln}: an unescaped-HTML sink {where_} is not allowlisted — \
-                         whatever string reaches it is parsed as markup (XSS) (#333)"
-                    ));
-                }
-                found.extend(ms.into_iter().map(|m| (path.clone(), m)));
-            }
-        }
-    }
-
-    // Stale or drifted entries: an allowlist that stops tracking the tree has
-    // silently become a region exemption. This is also what catches a *second* file
-    // growing a same-named fn — the per-file pass would hand it the entry's
-    // exemption, but the tree-wide total no longer matches.
-    for e in ALLOWLIST {
-        let seen = found
-            .iter()
-            .filter(|(_, m)| m.top_level && m.function == e.function)
-            .count();
-        if seen != e.count {
-            lines.push(format!(
-                "fn `{}`: allowlist entry declares {} sink(s), the tree has {}. {}",
-                e.function,
-                e.count,
-                seen,
-                if seen == 0 {
-                    "The sink is gone — delete the entry."
-                } else {
-                    "Re-justify each site, then update the count."
-                }
-            ));
-        }
-    }
-
-    if lines.is_empty() {
-        return None;
-    }
-    lines.sort();
-    lines.push(
-        "  recovery: an unescaped sink is only safe when the string was built by our own render \
-         layer — a `Markup`, or a `RenderedHtml` that `RenderedHtml::sanitize` scrubbed. If the \
-         value came from anywhere else, do not inject it: render it as text, where maud escapes \
-         it. If this is a genuine coincidence sink (the projector paints the same markup), add \
-         an ALLOWLIST entry with its multiplicity and a written reason in \
-         xtask/src/steps/html_sink_check.rs. Currently exempt:"
-            .to_string(),
-    );
-    for a in ALLOWLIST {
-        lines.push(format!(
-            "    - fn `{}` ×{}: {}",
-            a.function, a.count, a.reason
-        ));
-    }
-    Some(lines.join("\n"))
+    GATE.problems(scanned)
 }
 
-/// Scan every Rust file under [`POLICED_ROOT`] and push the result step. A missing
-/// root is a hard failure, so a moved/renamed tree can never quietly disable the
-/// guard.
+/// Scan every Rust file under each [`POLICED_ROOTS`] and push the result step. A
+/// missing root is a hard failure, so a moved/renamed tree can never quietly disable
+/// the guard.
 pub fn run(result: &mut CommandResult) {
-    let files = match files::with_extension(Path::new(POLICED_ROOT), "rs") {
-        Ok(found) => found,
-        Err(e) => {
-            result.push(
-                StepResult::fail("html-sink").detail(format!("cannot scan {POLICED_ROOT}: {e}")),
-            );
-            return;
-        }
-    };
-    let mut scanned = Vec::new();
-    let mut read_errors = Vec::new();
-    for p in &files {
-        match std::fs::read_to_string(p) {
-            Ok(s) => scanned.push((p.display().to_string(), s)),
-            Err(e) => read_errors.push(format!("{}: cannot read: {e}", p.display())),
-        }
-    }
-    let step = match (read_errors.is_empty(), problems(&scanned)) {
-        (true, None) => StepResult::ok("html-sink"),
-        (_, prob) => {
-            read_errors.extend(prob);
-            StepResult::fail("html-sink").detail(read_errors.join("\n"))
-        }
-    };
-    result.push(step);
+    ident_gate::run_scan(result, GATE.step, GATE.roots, problems);
 }
 
 #[cfg(test)]

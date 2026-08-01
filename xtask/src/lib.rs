@@ -28,6 +28,7 @@ mod steps {
     pub mod flaky;
     pub mod host_tests;
     pub mod html_sink_check;
+    pub mod ident_gate;
     pub mod nix;
     pub mod no_full_reload_check;
     pub mod proffered_filename_check;
