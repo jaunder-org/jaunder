@@ -78,6 +78,50 @@ passes that test. It is: **does an unanticipated member of the population
 fail?** A conforming gate rejects a novel construct _because it recognised
 nothing_, which is the only claim a static check can honestly make.
 
+### Approve by declaration, not deny by primitive (#728)
+
+Principle 1 says define the population structurally. It does not say how to
+decide membership, and the obvious answer — enumerate the primitive types a
+violation lands in — is itself a search wearing better clothes. It bounds the
+gate by the vocabulary its author happened to think of: #715 policed `i64`, so
+`String`, `bool` and `i32` decodes were not merely unpoliced but **invisible**,
+recorded nowhere and reported by no green run.
+
+**Where a repo can name the declarations that make a type legitimate, a gate
+should approve from those and deny everything else, rather than enumerate the
+primitives it expects violations to use.**
+
+The objection is that this is still a search — for approval spellings instead of
+violation spellings. The answer is the failure direction, and it is decisive:
+
+- An incomplete **violation** detector is **silent**. The site passes; a green
+  run implies it was examined. That is the defect this ADR exists to prevent.
+- An incomplete **approval** detector is **loud**. The type is unrecognised, so
+  every use of it fails and the author is told immediately.
+
+An approve-set **fails closed**. That is what makes reading declaration
+spellings legitimate where reading violation spellings is not. The cost is
+friction on the _good_ path, and it is worth naming: a gate that must be taught
+about each new declaration form taxes the behaviour we want. Deriving the set
+from the declarations themselves — scanning for the macros that emit the bridge,
+rather than hand-listing types — removes almost all of it: adding a newtype
+approves it with no gate edit, and only a novel _form_ costs a change.
+
+Failing closed is safe but noisy, so a conforming approve-set gate must also
+**police its own model**: every macro the source declares has to appear in one
+of its lists. A forgotten family then produces one message naming the macro
+instead of thirty unrelated failures. `sqlx-newtype-decode` earned this the hard
+way — #746 added a fourth family, and the check caught it on the first run; the
+same #746 shipped a bridge-emitting _attribute_ macro, which the check had to be
+widened to see.
+
+**Delegation.** A composite target (a `FromRow` struct, a tuple alias) is
+approved when the gate polices its fields separately. This is not an exception
+to deny-by-default: it is a second enumerated population, and the approval is
+only valid where that second check actually runs. A composite the gate has not
+read has had no field examined, so approving it would be an unbacked promise —
+it must fail.
+
 The cost is deliberate and load-bearing. An enumerating gate makes legitimate
 primitive use cost a written allowlist entry, and that friction lands on common,
 harmless operations. We accept it: the friction _is_ the mechanism. A gate that
@@ -85,21 +129,38 @@ is free to work around is a gate that reports green.
 
 ### Conformance
 
-- **`sqlx-newtype-decode`** (#715) conforms. Its population is every sqlx decode
-  under `storage/src` whose target resolves to the `i64` family — recursing
-  through `Vec`, `Option`, `Result`, references and tuples — read from the AST
-  at the nearest place the type is _written down_ (turbofish, then `let`
-  ascription, then the enclosing `fn` return), plus every declared decode target
-  (`FromRow` struct fields, tuple aliases). It inspects no SQL; each of the ten
-  allowlist entries names one decode and its multiplicity, with a written
-  reason; and an unparseable file under the root is a hard failure rather than a
-  silent skip.
+- **`sqlx-newtype-decode`** (#715, widened by #728) conforms, and is the worked
+  example of the approve-by-declaration rule above. Its population is every sqlx
+  decode under `storage/src`, read from the AST at the nearest place the type is
+  _written down_ (turbofish, then `let` ascription, then the enclosing `fn`
+  return), plus every declared decode target (`FromRow` struct fields, tuple
+  aliases). A decode passes only when **every leaf** of its target is approved:
+  declared with a bridge-emitting macro found by scanning the declaration roots,
+  listed in a small `APPROVED_FOREIGN`, or a composite whose parts the gate
+  polices separately. There is no primitive list — `String`, `bool`, `u32` and
+  `Uuid` fail for the one reason that nothing approved them.
 
-  Its honesty obligation (below) is discharged in its module doc: two constructs
+  It inspects no SQL; each allowlist entry names one decode and its
+  multiplicity, with a written reason and a rationale category; two entries
+  sharing a key is a failure, as is a `deferred-newtype` entry naming no
+  tracking issue; it cross-checks its own model against every macro the `macros`
+  crate declares; and an unreadable or unparseable file under **either** the
+  policed root or a declaration root is a hard failure rather than a silent
+  skip.
+
+  Its honesty obligation (below) is discharged in its module doc. Two constructs
   are **outside** the population because `syn` cannot resolve them — a
   `.get`/`try_get` with neither turbofish nor ascription (indistinguishable from
   `serde_json::Map::get`, and both live under the root), and a decode typed only
-  by later use.
+  by later use. A third was listed there until #728 and was **wrong**: a
+  `.get`/`try_get` in struct-literal field position was called safe because the
+  destination field's declaration polices it, which holds only for `FromRow`
+  structs; for a plain struct nothing checks it, and two such sites were live.
+  The gate now fails on it rather than guessing.
+
+  The doc also states what the gate does **not** claim: type identity is not
+  column correspondence, so two adjacent `DateTime<Utc>` columns transpose
+  invisibly (#751).
 
 - **`sqlx-newtype-bind`** (#438, #686, #696) **does not conform**, on two
   counts.

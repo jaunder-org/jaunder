@@ -1,5 +1,6 @@
-//! The `sqlx-newtype-decode` static check (#715): every sqlx decode under
-//! `storage/src` that lands in the `i64` family must be justified.
+//! The `sqlx-newtype-decode` static check (#715, widened by #728): every sqlx decode
+//! under `storage/src` must land in an **approved column type**, or carry a written
+//! reason.
 //!
 //! The sibling `sqlx-newtype-bind` polices *binds*. Nothing policed *decodes*, so
 //! `query_scalar::<_, i64>` on a `RETURNING post_id` was invisible to it and to the
@@ -13,10 +14,53 @@
 //! id, and it does not look for `COUNT(` to decide something is a count. Both are
 //! pattern searches, and either one hands the blind spot straight back —
 //! `SELECT post_id FROM t WHERE (SELECT COUNT(*) …) > 0` defeats the second while
-//! looking perfectly safe. Instead: **every** `i64`-family decode target is a failure
-//! unless an [`ALLOWLIST`] entry names that exact decode. A construct the gate has
-//! never seen fails *because it recognised nothing*, which is the only claim a static
-//! check can honestly make.
+//! looking perfectly safe.
+//!
+//! # The rule
+//!
+//! **Every leaf type of a decode target must be approved, or an [`ALLOWLIST`] entry must
+//! name that exact decode.** #715 denied one primitive family, which left every other
+//! primitive — and every non-primitive non-newtype — unexamined and recorded nowhere.
+//! There is no primitive list here at all: `String`, `bool`, `u32`, `char`, `Uuid` and
+//! `NaiveDate` fail for a single reason, that nothing approved them.
+//!
+//! A type is approved when its declaration carries a bridge-emitting macro
+//! ([`BRIDGE_DERIVES`], [`BRIDGE_ATTRIBUTES`]), found by scanning
+//! [`DECLARATION_ROOTS`] — so adding a newtype approves it with no gate edit — or when it
+//! is listed in [`APPROVED_FOREIGN`].
+//!
+//! ## Why reading *declaration* spellings is legitimate when reading *violation*
+//! spellings is not
+//!
+//! ADR-0085 forbids deciding violations or exemptions by searching for anticipated
+//! spellings. This search is neither, and the difference is the failure direction:
+//!
+//! - An incomplete **violation** detector is **silent**. The site passes, and a green run
+//!   falsely implies it was examined. That is the defect the ADR exists to prevent.
+//! - An incomplete **approval** detector is **loud**. An unrecognised declaration form
+//!   means the type is not approved, so every decode into it fails and the author is told.
+//!
+//! This one fails closed. [`macro_enumeration_problems`] then makes the noise legible:
+//! a forgotten family is one message naming the macro, not thirty unrelated failures.
+//!
+//! Approval means "declared with a bridge-capable macro", **not** "has a bridge". A
+//! `#[str_newtype(secret)]` or `no_sqlx` type carries `StrNewtype` and emits none, so it is
+//! approved here while being undecodable in fact — harmless, since the compiler rejects a
+//! decode into a type with no `Decode` impl, but do not read approval as proof of a bridge.
+//! (`#[text_enum]`'s bridge is opt-in via an `sqlx` flag the gate *can* read, so there the
+//! answer is exact.)
+//!
+//! ## Composites are approved by delegation
+//!
+//! A `#[derive(FromRow)]` struct or tuple alias declared under a scanned root passes as a
+//! target. That is not a hole: every field and element is **separately policed at the
+//! declaration**, which is where the newtype belongs — a second population, not a promise.
+//! Hence the scoping. A composite declared outside the scanned roots has had no field
+//! checked, so approving it would be an unbacked claim; it stays unrecognised and fails.
+//! A composite with a *hand-written* `FromRow` (`ClaimedRow`) has no policed fields either,
+//! so it takes an allowlist entry accounting for its parts.
+//!
+//! `Result<T, E>` recurses into `T` only — the error arm is never decoded from a column.
 //!
 //! # The population — decode targets whose type is written down
 //!
@@ -39,10 +83,10 @@
 //! Separately, **declared decode targets** are policed per field: a
 //! `#[derive(FromRow)]` struct's fields and a tuple `type` alias's elements. `syn`
 //! cannot tell a `query_as` target alias from any other tuple alias, so this polices
-//! every tuple alias under the root — today that is only `feed_cache.rs`'s
-//! `CacheTuple`, so the reach costs nothing. It is what stops a future
+//! every tuple alias under the root. It is what stops a future
 //! `struct PostRow { revision_id: i64 }` from decoding an id into a primitive
-//! invisibly.
+//! invisibly — and it is the check that *backs* composite delegation above: `PostRow` is
+//! an approved target because these twelve fields were each examined, not instead of.
 //!
 //! # What this gate cannot read, stated rather than papered over
 //!
@@ -63,29 +107,37 @@
 //! struct's definition, so the gate does not guess: it **fails**, and the author writes the
 //! type at the call.
 //!
-//! Neither occurs as an id decode today. They are recorded here so the boundary is
-//! inherited by the next audit rather than rediscovered.
+//! Both are recorded here so the boundary is inherited by the next audit rather than
+//! rediscovered.
 //!
-//! The boundary is visible in the tree, and the shape is worth recognising: the two
-//! feed-events dialects decode the same `attempts` column, and only one is policed.
-//! SQLite ascribes `let attempts: i64`, so it is in population and carries an
-//! allowlist entry; Postgres reads it unascribed straight into a struct field, so the
-//! field's declared type pins it and the call is invisible here. Same act, two
-//! spellings, one policed — which is the honest cost of a population defined by where
-//! the type is written down, not a gap to paper over with a heuristic.
+//! The **over-bite** is the mirror of that boundary, and it is no longer latent: an
+//! unascribed `.get(…)` on something that is *not* a row — a `HashMap`, a
+//! `SiteConfigStorage` — inside a function whose return type is unapproved is recorded,
+//! because rule 3 supplies the target. Widening the population under #728 made this live:
+//! `smtp.rs`'s four `load_smtp_config` reads and three in `test_support.rs` are config-store
+//! lookups, not row reads, and they carry `not-a-decode-target` entries. Telling them apart
+//! by receiver name would be exactly the pattern search this gate forbids. Likewise
+//! [`Scanner::visit_item_type`] polices *every* tuple alias under the root, including
+//! `UserRecordParts`, which is a function-parameter tuple and never a `query_as` target.
 //!
-//! The mirror of that boundary is a **latent over-bite**: an unascribed `.get(…)` on
-//! something that is not a row — a `HashMap`, a JSON map — inside a function whose
-//! return type is in the `i64` family would be recorded, because rule 3 supplies the
-//! target. No such site exists today. If one appears, the fix is a turbofish or an
-//! ascription at the call, not a receiver-name heuristic here.
+//! # What this gate does not claim
 //!
-//! # Root
+//! Type identity is not column correspondence. It can prove a target is **a** domain type;
+//! it can never prove it is the **right** one. Two adjacent `DateTime<Utc>` columns
+//! transpose invisibly and compile — `SessionRow`, `InviteRow` and `CacheTuple` each hold
+//! such a pair. That needs a different mechanism and is tracked in #751.
 //!
-//! `storage/src` only. The two `server/tests/storage/mod.rs` decodes #715 typed are
-//! **not** policed: a regression there surfaces as a failing test, not as a
-//! production transposition, and widening the root would drag every test `COUNT(*)`
-//! into the allowlist for no safety gain.
+//! # Roots
+//!
+//! **Policed:** `storage/src` only. The two `server/tests/storage/mod.rs` decodes #715
+//! typed are **not** policed: a regression there surfaces as a failing test, not as a
+//! production transposition, and widening the root would drag every test `COUNT(*)` into
+//! the allowlist for no safety gain.
+//!
+//! **Scanned for declarations:** [`DECLARATION_ROOTS`] — wider, because the types a
+//! `storage` decode targets are declared elsewhere. A file missed there would shrink what
+//! the gate *accepts*, which changes the rule rather than the population, so it fails the
+//! same way an unparseable policed file does.
 
 use std::path::Path;
 
