@@ -1,4 +1,5 @@
 use crate::coverage::{FileCoverage, LineCov};
+use crate::markers::{comment_marker_is, line_comment};
 use anyhow::{bail, Result};
 
 /// Parse `cargo llvm-cov report --text` output. A line is executable iff its
@@ -103,100 +104,6 @@ pub fn parse_text_report(report: &str, repo_root: &str) -> Result<Vec<FileCovera
 /// A count column is "zero" only if it is literally 0 (covered iff non-zero).
 fn is_zero_count(count: &str) -> bool {
     count == "0"
-}
-
-/// True iff `marker` is the first whitespace-delimited token of `comment` (the text
-/// after `//`, as returned by [`line_comment`]). Anchoring marker recognition to the
-/// first token keeps an incidental mention in prose (`// unlike the cov:ignore path`)
-/// inert, while still honoring `// cov:ignore` and `// cov:ignore <trailing note>`
-/// (#246).
-fn comment_marker_is(comment: &str, marker: &str) -> bool {
-    comment.split_whitespace().next() == Some(marker)
-}
-
-/// Return the text of the first real trailing line comment in `src` — the slice
-/// after the first `//` that begins OUTSIDE a `"`-string or `'`-char literal.
-/// Returns `None` when there is no such comment (so a `//` inside a string or a
-/// doc/string-embedded marker never counts). A **doc comment** — outer `///` or
-/// inner `//!` — is deliberately NOT treated as a marker-bearing comment: it
-/// can never open/close a `cov:ignore` block or suppress a line, so a marker
-/// mentioned in prose documentation is inert. Escapes (`\"`, `\'`) are honored;
-/// a `'` that does not open a well-formed char literal (a lifetime tick) is
-/// treated as ordinary text. Raw strings are not specially handled — rare in
-/// report lines, and a best-effort scan is sufficient here.
-fn line_comment(src: &str) -> Option<&str> {
-    let bytes = src.as_bytes();
-    let mut i = 0;
-    let mut in_str = false;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if in_str {
-            match b {
-                b'\\' => i += 1, // skip the escaped character
-                b'"' => in_str = false,
-                _ => {}
-            }
-            i += 1;
-            continue;
-        }
-        match b {
-            b'/' if bytes.get(i + 1) == Some(&b'/') => {
-                // `///` (outer doc) or `//!` (inner doc) is a doc comment, not a
-                // marker-bearing comment — the rest of the line is documentation
-                // prose and can never suppress coverage.
-                if matches!(bytes.get(i + 2), Some(&b'/') | Some(&b'!')) {
-                    return None;
-                }
-                return Some(&src[i + 2..]);
-            }
-            b'"' => in_str = true,
-            b'\'' => {
-                if let Some(len) = char_literal_len(&bytes[i..]) {
-                    i += len; // jump past the whole char literal
-                    continue;
-                }
-                // otherwise a lifetime tick — fall through, treat as ordinary text
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    None
-}
-
-/// If `bytes` (which starts at a `'`) opens a well-formed char literal, return
-/// its length in bytes including both quotes; otherwise `None` (e.g. a lifetime
-/// tick like `'a`). Best-effort — handles simple and escaped char literals.
-fn char_literal_len(bytes: &[u8]) -> Option<usize> {
-    debug_assert_eq!(bytes.first(), Some(&b'\''));
-    if bytes.len() < 3 {
-        return None;
-    }
-    if bytes[1] == b'\\' {
-        // Escaped: '\n', '\'', '\\', '\0', '\u{1F600}', '\x41' … the byte right
-        // after the backslash is literal, so start scanning for the closer past it.
-        let mut j = 3;
-        while j < bytes.len() {
-            if bytes[j] == b'\'' {
-                return Some(j + 1);
-            }
-            j += 1;
-        }
-        None
-    } else {
-        // Unescaped: one UTF-8 scalar (1..=4 bytes) then a closing quote. A
-        // closing quote within the next few bytes marks a real char literal; its
-        // absence (e.g. `'a` in `'a, 'b>`) means a lifetime.
-        let end = bytes.len().min(6);
-        let mut j = 2;
-        while j < end {
-            if bytes[j] == b'\'' {
-                return Some(j + 1);
-            }
-            j += 1;
-        }
-        None
-    }
 }
 
 #[cfg(test)]
@@ -314,26 +221,6 @@ mod tests {
     }
 
     #[test]
-    fn line_comment_ignores_markers_inside_strings_and_finds_real_comments() {
-        assert_eq!(
-            line_comment("    boom() // cov:ignore"),
-            Some(" cov:ignore")
-        );
-        assert_eq!(line_comment("    let s = \"// cov:ignore\";"), None);
-        assert_eq!(line_comment("    let c = '/';"), None);
-        // A lifetime tick must not swallow a following real comment.
-        assert_eq!(
-            line_comment("    fn f<'a>() {} // cov:ignore"),
-            Some(" cov:ignore")
-        );
-        // Doc comments (`///` outer, `//!` inner) are not marker-bearing
-        // comments — a real `//` still is.
-        assert_eq!(line_comment("/// cov:ignore-start"), None);
-        assert_eq!(line_comment("//! cov:ignore"), None);
-        assert_eq!(line_comment("    boom() /// cov:ignore"), None);
-    }
-
-    #[test]
     fn doc_comment_line_marker_does_not_suppress() {
         // A `cov:ignore` mentioned inside a doc comment must NOT drop the line:
         // doc comments document behavior, they don't suppress coverage.
@@ -416,23 +303,5 @@ mod tests {
         let files = parse_text_report(report, "/repo").unwrap();
         let lines: Vec<u32> = files[0].lines.iter().map(|l| l.line).collect();
         assert_eq!(lines, vec![5]); // block stayed open past the incidental mention
-    }
-
-    #[test]
-    fn comment_marker_is_matches_first_token_only() {
-        assert!(comment_marker_is(" cov:ignore", "cov:ignore"));
-        assert!(comment_marker_is(" cov:ignore trailing", "cov:ignore"));
-        assert!(comment_marker_is("cov:ignore", "cov:ignore")); // no leading space
-        assert!(!comment_marker_is(
-            " unlike the cov:ignore path",
-            "cov:ignore"
-        ));
-        assert!(comment_marker_is(" cov:ignore-start", "cov:ignore-start"));
-        assert!(!comment_marker_is(" cov:ignore-start", "cov:ignore")); // distinct token
-        assert!(comment_marker_is(" cov:ignore-stop", "cov:ignore-stop"));
-        assert!(!comment_marker_is(
-            " closes the cov:ignore-stop block",
-            "cov:ignore-stop"
-        ));
     }
 }
