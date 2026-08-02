@@ -25,6 +25,7 @@ mod steps {
     pub mod adr_check;
     pub mod build_csr;
     pub mod doc_links;
+    pub mod doctest_fences;
     pub mod e2e_local;
     pub mod flaky;
     pub mod host_tests;
@@ -94,10 +95,13 @@ impl E2eBrowser {
 pub enum Command {
     /// Inner loop (auto-fixes formatting): host static checks + clippy + the host
     /// xtask unit suite, then the Nix coverage check (instrumented test suite +
-    /// coverage). `--no-test` skips only the Nix coverage check; static, clippy,
-    /// and the xtask unit tests still run.
+    /// coverage) and the Nix doctest check. `--no-test` skips only those two Nix
+    /// checks; static, clippy, and the xtask unit tests still run — as does the
+    /// host-side `doctest-fences` step, which gates the `xtask`/`tools` fence
+    /// population that no Nix check can see (#763).
     Check {
-        /// Skip the Nix coverage check — static + clippy + host xtask unit tests only.
+        /// Skip the Nix coverage and doctest checks — static + clippy + host xtask
+        /// unit tests only.
         #[arg(long)]
         no_test: bool,
     },
@@ -413,12 +417,14 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::thin_components::run(&mut result);
             steps::sqlx_newtype_bind_check::run(&mut result);
             steps::sqlx_newtype_decode_check::run(&mut result);
+            steps::doctest_fences::run(&mut result);
             steps::rendered_html_from_trusted_check::run(&mut result);
             steps::raw_html_door_check::run(&mut result);
             steps::html_sink_check::run(&mut result);
             steps::host_tests::run(&sh, &mut result);
             if !no_test {
                 steps::nix::coverage(&mut result);
+                steps::nix::doctests(&mut result);
             }
             finalize(&mut result, start);
             Ok(result)
@@ -455,11 +461,13 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::thin_components::run(&mut result);
             steps::sqlx_newtype_bind_check::run(&mut result);
             steps::sqlx_newtype_decode_check::run(&mut result);
+            steps::doctest_fences::run(&mut result);
             steps::rendered_html_from_trusted_check::run(&mut result);
             steps::raw_html_door_check::run(&mut result);
             steps::html_sink_check::run(&mut result);
             steps::host_tests::run(&sh, &mut result);
             steps::nix::coverage(&mut result);
+            steps::nix::doctests(&mut result);
             if !no_e2e {
                 // `e2e` builds the `e2e-checks` aggregate, which now includes the
                 // `e2e-elisp-integration` check — so it runs in parallel with the

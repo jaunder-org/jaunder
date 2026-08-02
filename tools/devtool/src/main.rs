@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 mod check;
 mod coverage;
 mod csr_bundle;
+mod doctests;
 mod pg;
 mod provision;
 mod run;
@@ -25,6 +26,9 @@ enum Command {
     /// Coverage pipeline subcommands.
     #[command(subcommand)]
     Coverage(CoverageCmd),
+    /// Doctest gate subcommands.
+    #[command(subcommand)]
+    Doctests(DoctestsCmd),
     /// Ephemeral PostgreSQL subcommands.
     #[command(subcommand)]
     Pg(PgCmd),
@@ -124,6 +128,16 @@ enum CoverageCmd {
 }
 
 #[derive(Subcommand)]
+enum DoctestsCmd {
+    /// Run the workspace doctests and emit the reconciliation status.
+    Emit {
+        /// Directory to write emitted artifacts into (defaults to CWD).
+        #[arg(long, default_value = ".")]
+        out: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum PgCmd {
     /// Run a command with a throwaway PostgreSQL 16 cluster.
     Run {
@@ -137,6 +151,7 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Coverage(CoverageCmd::Emit { out }) => coverage::emit::run(&out),
+        Command::Doctests(DoctestsCmd::Emit { out }) => doctests::emit::run(&out),
         Command::Pg(PgCmd::Run { cmd }) => pg::run_command(&cmd),
         Command::Run(args) => run::run(&args.cmd, args.cwd, args.timeout),
         Command::Check(args) => check::run(args.name.as_deref(), args.all, args.fix),

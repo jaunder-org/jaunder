@@ -10,6 +10,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 coverage = { path = "../coverage" }
+doctests = { path = "../doctests" }
 tempfile = "3"
 signal-hook = "0.3"
 brotli = "8"

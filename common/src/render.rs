@@ -68,13 +68,27 @@ pub enum PostFormat {
 /// `Deserialize`, so a raw `String` can never become a `RenderedHtml` (deref coercion
 /// is one-way — it reads out, never in).
 ///
-/// Constructing one from an arbitrary string does not compile:
-/// ```compile_fail
-/// let _ = common::render::RenderedHtml("<p>x</p>".to_string()); // private field
+/// The positive companion shows the identical fixture compiles — the path resolves
+/// and a trusted door does produce one — so each `compile_fail` below fails for the
+/// missing inbound constructor, not for a moved path. (Fixture lines are hidden
+/// with `#`.)
+///
 /// ```
+/// use common::render::RenderedHtml;
+/// let html = RenderedHtml::from_trusted("<p>x</p>");
+/// let _read: &str = html.as_ref();
+/// ```
+///
+/// No public constructor:
 /// ```compile_fail
-/// // no inbound `From<String>` (only the outbound `From<RenderedHtml> for String`)
-/// let _: common::render::RenderedHtml = "<p>x</p>".to_string().into();
+/// # use common::render::RenderedHtml;
+/// let _ = RenderedHtml("<p>x</p>".to_string()); // private field
+/// ```
+///
+/// No inbound `From<String>` (only the outbound `From<RenderedHtml> for String`):
+/// ```compile_fail
+/// # use common::render::RenderedHtml;
+/// let _: RenderedHtml = "<p>x</p>".to_string().into();
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, macros::SqlxBridge)]
 pub struct RenderedHtml(String);
@@ -504,11 +518,14 @@ mod sanitized {
     /// create/update input on its way to storage cannot substitute a set of its own, correct
     /// or not, and a caller with no way to render has no way to invent one either.
     ///
-    /// The set is derived, never supplied:
+    /// The set is derived, never supplied. The companion imports the **same** names the
+    /// two negatives below hide — including the free `render`, which they both call — so
+    /// each fails for the private field rather than for an unresolved path:
     /// ```
-    /// # use common::render::{PostFormat, RenderOutput};
+    /// # use common::render::{render, PostFormat, RenderOutput};
     /// let out = RenderOutput::render(&"hello".to_owned().into(), &PostFormat::Markdown);
     /// assert!(out.media().is_empty());
+    /// let _direct = render(&"hello".to_owned().into(), &PostFormat::Markdown); // `render` resolves
     /// ```
     /// and a struct literal cannot smuggle one in:
     /// ```compile_fail

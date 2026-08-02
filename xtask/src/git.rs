@@ -52,6 +52,23 @@ pub fn working_tree_status(dir: &Path) -> Result<String> {
     output(dir, &["status", "--porcelain"])
 }
 
+/// Tracked files matching `glob`, sorted, relative to `dir`.
+///
+/// `git ls-files` rather than a filesystem walk: the walk would descend into
+/// `target/` and into nested worktrees under `.claude/worktrees/`, so a gate that
+/// enumerates "every source file" would police other checkouts' code.
+///
+/// `ls-files` lists only what is under `dir`, so a caller that means "every tracked
+/// file in the repo" must pass [`toplevel`] — a test run with `--manifest-path
+/// xtask/Cargo.toml` executes with `xtask/` as its cwd and would otherwise see a
+/// partial tree, with paths relative to it rather than to the repo.
+pub fn tracked_files(dir: &Path, glob: &str) -> Result<Vec<String>> {
+    let out = output(dir, &["ls-files", "--", glob])?;
+    let mut files: Vec<String> = out.lines().map(str::to_string).collect();
+    files.sort();
+    Ok(files)
+}
+
 /// The checked-out branch, or `None` when HEAD is detached (`--show-current`
 /// prints nothing there). Used by `pr land` to tell "I am standing on this PR's
 /// branch" from "I am elsewhere".
@@ -205,7 +222,7 @@ pub(crate) fn add(dir: &Path, path: &str) -> Result<()> {
 }
 
 /// `git rev-parse --show-toplevel` — the working tree's root.
-pub(crate) fn toplevel(dir: &Path) -> Result<String> {
+pub fn toplevel(dir: &Path) -> Result<String> {
     output(dir, &["rev-parse", "--show-toplevel"])
 }
 

@@ -312,9 +312,11 @@
             # is the build-order edge that makes the binary depend on the bundle.
             JAUNDER_CSR_BUNDLE_DIR = "${csrWasmBundle}";
             JAUNDER_PUBLIC_DIR = "${./public}";
-            # Tests are covered by the separate `nextest` check; disabling here
-            # avoids a redundant `cargo test` compile + run during the package
-            # build.
+            # Tests are covered by the separate `coverage` check (which runs the
+            # instrumented nextest suite) and, for doctests — which nextest
+            # structurally cannot run — the separate `doctests` check. Disabling
+            # here avoids a redundant `cargo test` compile + run during the
+            # package build.
             doCheck = false;
           }
         );
@@ -1246,6 +1248,61 @@
                     echo "coverage gate failed: category=$cat" >&2
                     jq -r '.infra_detail // (.failed_tests | join("\n"))' \
                       ${self.checks.${system}.coverage}/status.json >&2
+                    exit 1
+                  fi
+                  touch $out
+                '';
+
+            # Doctests: the one suite nextest structurally cannot run, so the
+            # `coverage` check above never sees them (#763). The producer runs
+            # `cargo test --workspace --doc` AND reconciles what ran against the
+            # fences the scanner finds in the source, in both directions — running
+            # alone would inherit every way a doctest population silently shrinks
+            # (a cfg gate, an unrecognized info string, a crate out of reach).
+            #
+            # `--workspace` is load-bearing, not incidental: package-scoping to
+            # `-p common -p macros` drops the three `#[cfg(feature = "sanitize")]`
+            # fences in `common/src/render.rs`, because nothing in that package set
+            # enables the feature. Under `--workspace`, unification enables it via
+            # `storage`. The invocation is pinned by a unit test in devtool.
+            #
+            # `--doc` runs OUTSIDE any llvm-cov instrumentation, so no profraw from
+            # these tests reaches the coverage profile: doctests deliberately do not
+            # feed the ADR-0050 coverage gate (`llvm-cov --doctests` is unstable).
+            doctests = craneLib.mkCargoDerivation (
+              commonArgs
+              // {
+                inherit cargoArtifacts;
+                pname = "jaunder-doctests";
+                nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ devtoolBin ];
+                buildPhaseCargoCommand = ''
+                  export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:''${LD_LIBRARY_PATH:-}"
+                  mkdir -p emit-out
+                  # devtool always exits 0 after writing emit-out/status.json;
+                  # gating is the doctests-gate consumer + host xtask.
+                  devtool doctests emit --out emit-out
+                '';
+                installPhaseCommand = ''
+                  mkdir -p $out
+                  cp emit-out/status.json $out/status.json
+                  cp -r emit-out/diagnostics $out/diagnostics
+                '';
+              }
+            );
+            # The consumer that actually fails, mirroring `coverage-gate`. Named
+            # `jaunder-doctests-gate` for symmetry with its producer.
+            doctests-gate =
+              pkgs.runCommand "jaunder-doctests-gate"
+                {
+                  nativeBuildInputs = [ pkgs.jq ];
+                }
+                ''
+                  cat ${self.checks.${system}.doctests}/status.json
+                  cat=$(jq -r .category ${self.checks.${system}.doctests}/status.json)
+                  if [ "$cat" != "ok" ]; then
+                    echo "doctest gate failed: category=$cat" >&2
+                    jq -r '.infra_detail // (.violations[] | "\(.file):\(.line) [\(.kind)] \(.detail)")' \
+                      ${self.checks.${system}.doctests}/status.json >&2
                     exit 1
                   fi
                   touch $out

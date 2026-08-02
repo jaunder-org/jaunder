@@ -184,10 +184,23 @@ dependencies = [
  "brotli",
  "clap",
  "coverage",
+ "doctests",
  "flate2",
  "serde",
  "serde_json",
  "signal-hook",
+ "tempfile",
+]
+
+[[package]]
+name = "doctests"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "proc-macro2",
+ "serde",
+ "serde_json",
+ "syn",
  "tempfile",
 ]
 

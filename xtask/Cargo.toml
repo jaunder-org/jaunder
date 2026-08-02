@@ -16,6 +16,7 @@ flate2 = "1"
 tar = "0.4"
 brotli = "7"
 coverage = { path = "../tools/coverage" }
+doctests = { path = "../tools/doctests" }
 tabled = "0.21.0"
 url = "2.5.8"
 syn = { version = "2", features = ["full", "visit", "extra-traits"] }

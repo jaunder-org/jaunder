@@ -1,0 +1,18 @@
+[package]
+name = "doctests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+syn = { version = "2", features = ["full", "visit", "extra-traits"] }
+# `span-locations` is what makes a fence's SOURCE line readable: without it every
+# `Span::start()` reports line 0, and the reconciliation key against libtest's
+# `(line N)` collapses. Same reason `xtask` enables it.
+proc-macro2 = { version = "1", features = ["span-locations"] }
+
+[dev-dependencies]
+tempfile = "3"
