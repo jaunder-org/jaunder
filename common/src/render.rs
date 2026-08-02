@@ -93,6 +93,7 @@ impl RenderedHtml {
     ///
     /// Takes `impl Into<String>` so callers (esp. fixtures) don't need `.to_string()`.
     #[must_use]
+    // rendered-html-from-trusted:allow the door's own definition; the gate pins its uses
     pub fn from_trusted(html: impl Into<String>) -> Self {
         Self(html.into())
     }
@@ -137,6 +138,7 @@ where
     D: serde::Deserializer<'de>,
 {
     use serde::Deserialize as _;
+    // rendered-html-from-trusted:allow rebuilds RenderedHtml from a wire DTO field our own server serialized (#445)
     String::deserialize(deserializer).map(RenderedHtml::from_trusted)
 }
 

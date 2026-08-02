@@ -63,14 +63,21 @@ and 6 can be separate commits at all.
 
 **Key risks / decisions:**
 
-1. **Formatter comment survival (highest risk, probed in Task 3).** Markers must
-   stay on the _site's_ line. `.rustfmt.toml` sets only `edition`, so
-   `wrap_comments` is off and rustfmt will not reflow them; the live risk is
-   `leptosfmt` on the two markers nested inside multi-line `view!` bodies. Task
-   3 lands the markers **before** any gate reads them so this surfaces as a
-   formatting diff, not a gate failure. If a formatter will not keep a marker on
-   its line, **stop and re-plan** — the alternative is a marker-carrying
-   attribute, a different design needing a new spec decision.
+1. **Formatter comment survival — RESOLVED in Task 3, and it changed the rule.**
+   Landing the markers before any gate read them (the whole point of Task 3's
+   position in the order) surfaced this as a formatting diff rather than a gate
+   failure. Written **trailing**, as the spec originally required, 7 of the 12
+   markers were relocated: `rustfmt` pushes a comment trailing an opening `{`
+   down onto the first line of the block, and `leptosfmt` moves one up or down
+   depending on where it sits in a `view!` body. Deterministic and idempotent,
+   but not predictable by any rule an author could hold in their head.
+
+   Written as standalone comment lines **directly above** each site, all twelve
+   stay put. That is now the canonical position; trailing is deliberately
+   **not** accepted, because it is exactly the form that silently moves. Spec
+   and ADR amended. Remaining residual risk: none observed — but any new site
+   should still be added markers-first and re-checked.
+
 2. **Order is load-bearing.** Markers (Task 3) precede every gate conversion.
    Deleting `EXEMPT_QUALIFIERS` before the three `ContentType` markers exist
    turns the tree red.
@@ -307,10 +314,12 @@ present and on their sites' lines.
 
 - [ ] **Step 1: Add the twelve markers**
 
-Each goes on the line carrying the matched ident. Re-derive line numbers; the
-text is fixed — it carries the reasons the allowlists held (AC19).
-`PostDisplay`'s single `×2` entry deliberately splits into two distinct reasons,
-which is the point of the change:
+Each goes as a **standalone comment line directly above** the line carrying the
+matched ident — never trailing it (measured: trailing relocates for 7 of the 12;
+standalone-above is stable for all 12). Re-derive line numbers; the text is
+fixed — it carries the reasons the allowlists held (AC19). `PostDisplay`'s
+single `×2` entry deliberately splits into two distinct reasons, which is the
+point of the change:
 
 | File                           | Site                                                    | Marker                                                                                                             |
 | ------------------------------ | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
@@ -327,20 +336,26 @@ which is the point of the change:
 | `web/src/posts/component.rs`   | `permalink_first_paint`                                 | `// html-sink:allow posts::render::permalink_article output — the projector's own permalink paint`                 |
 | `web/src/html.rs`              | `PreEscaped` in `from_rendered_html`                    | `// raw-html-door:allow re-wraps a RenderedHtml whose safety sanitization established (ADR-0079)`                  |
 
-- [ ] **Step 2: Prove the formatters preserve them (Key risk 1)**
+- [x] **Step 2: Prove the formatters preserve them (Key risk 1)** — **the risk
+      fired, and was resolved by measurement.** Written _trailing_ (the spec's
+      original rule), 7 of 12 markers relocated: `rustfmt` pushed the two
+      `fn from_trusted` signature markers **down** onto the first body line, and
+      `leptosfmt` moved five `view!`-related markers **up or down** depending on
+      context. All relocations were stable and idempotent; none were dropped.
+      Rewritten as standalone comment lines **directly above** each site, all
+      twelve stay put across repeated runs. The spec and ADR were amended to
+      make above-the-site the canonical position and to refuse trailing (it is
+      the form that silently moves). See the spec's "Why above the site rather
+      than trailing it".
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-778-allowlist-multiplicity -- cargo xtask check`
-Expected: PASS, and `git diff` shows **no formatter movement of any marker**.
+Expected: PASS, and a re-run moves no marker.
 
 Run:
-`rg -n 'html-sink:allow|raw-html-door:allow|rendered-html-from-trusted:allow' common/src web/src`
-Expected: twelve hits, each on a line that also contains its matched ident
-(`from_trusted`, `inner_html`, `PreEscaped`).
-
-**If `leptosfmt` moved or dropped a marker inside a `view!` body, STOP** and
-report it — a marker the formatter will not keep on its line invalidates the
-spec's placement decision.
+`rg -n -A1 'html-sink:allow|raw-html-door:allow|rendered-html-from-trusted:allow' common/src web/src`
+Expected: twelve hits, each on a comment-only line whose **next** line carries
+the matched ident (`from_trusted`, `inner_html`, `PreEscaped`).
 
 - [ ] **Step 3: Commit**
 
@@ -420,10 +435,10 @@ mod marker_tests {
 
     #[test]
     fn a_marked_site_is_exempt_and_enters_the_census() {
-        let c = classified("fn a() { GUARDED; } // guard:allow because reasons\n");
+        let c = classified("// guard:allow because reasons\nfn a() { GUARDED; }\n");
         assert!(c.unexempt.is_empty());
         assert_eq!(c.marked.len(), 1);
-        assert_eq!(c.marked[0].line, 1);
+        assert_eq!(c.marked[0].line, 2, "the census names the SITE line");
         assert_eq!(c.marked[0].reason, "because reasons");
         assert!(c.orphans.is_empty());
     }
@@ -439,30 +454,41 @@ mod marker_tests {
 
     #[test]
     fn a_bare_marker_is_unexempt() {
-        let c = classified("fn a() { GUARDED; } // guard:allow\n");
+        let c = classified("// guard:allow\nfn a() { GUARDED; }\n");
         assert_eq!(c.unexempt.len(), 1);
         assert!(matches!(c.unexempt[0].why, Why::NoReason));
         assert!(c.marked.is_empty());
     }
 
+    /// AC4. Trailing is the position the formatters relocate, so honoring it
+    /// would let someone write a marker that stops working on the next format.
+    /// It fails twice over: the site sees no marker above it, and the trailing
+    /// marker points at a line with no site.
     #[test]
-    fn a_marker_on_the_previous_line_does_not_exempt() {
-        let c = classified("// guard:allow reason\nfn a() { GUARDED; }\n");
+    fn a_trailing_marker_does_not_exempt() {
+        let c = classified("fn a() { GUARDED; } // guard:allow trailing\n");
         assert_eq!(c.unexempt.len(), 1);
-        assert_eq!(c.unexempt[0].line, 2);
+        assert!(matches!(c.unexempt[0].why, Why::Unmarked));
         assert_eq!(c.orphans, vec![1]);
     }
 
     #[test]
-    fn a_marker_on_the_following_line_does_not_exempt() {
-        let c = classified("fn a() { GUARDED; }\n// guard:allow reason\n");
+    fn a_marker_two_lines_above_does_not_exempt() {
+        let c = classified("// guard:allow far\n\nfn a() { GUARDED; }\n");
+        assert_eq!(c.unexempt.len(), 1);
+        assert_eq!(c.orphans, vec![1]);
+    }
+
+    #[test]
+    fn a_marker_below_the_site_does_not_exempt() {
+        let c = classified("fn a() { GUARDED; }\n// guard:allow below\n");
         assert_eq!(c.unexempt.len(), 1);
         assert_eq!(c.orphans, vec![2]);
     }
 
     #[test]
-    fn two_sites_on_one_marked_line_are_both_unexempt() {
-        let c = classified("fn a() { GUARDED; GUARDED; } // guard:allow reason\n");
+    fn two_sites_on_the_marked_line_are_both_unexempt() {
+        let c = classified("// guard:allow reason\nfn a() { GUARDED; GUARDED; }\n");
         assert_eq!(c.unexempt.len(), 2);
         assert!(c.unexempt.iter().all(|u| matches!(u.why, Why::Shared(2))));
         assert!(c.marked.is_empty());
@@ -476,15 +502,15 @@ mod marker_tests {
     }
 
     #[test]
-    fn a_marker_with_no_site_is_an_orphan() {
-        let c = classified("fn a() { harmless(); } // guard:allow reason\n");
+    fn a_marker_with_no_site_below_is_an_orphan() {
+        let c = classified("// guard:allow reason\nfn a() { harmless(); }\n");
         assert_eq!(c.orphans, vec![1]);
         assert!(c.unexempt.is_empty());
     }
 
     #[test]
     fn a_marker_on_a_test_code_site_is_not_an_orphan() {
-        let src = "#[cfg(test)]\nmod t {\n  fn f() { GUARDED; } // guard:allow fixture\n}\n";
+        let src = "#[cfg(test)]\nmod t {\n  // guard:allow fixture\n  fn f() { GUARDED; }\n}\n";
         let c = classified(src);
         assert!(c.orphans.is_empty());
         assert!(c.unexempt.is_empty());
@@ -495,13 +521,13 @@ mod marker_tests {
     /// are exempt wholesale, so it is not an orphan either.
     #[test]
     fn a_stale_marker_inside_test_code_is_not_an_orphan() {
-        let src = "#[cfg(test)]\nmod t {\n  fn f() { harmless(); } // guard:allow stale\n}\n";
+        let src = "#[cfg(test)]\nmod t {\n  // guard:allow stale\n  fn f() { harmless(); }\n}\n";
         assert!(classified(src).orphans.is_empty());
     }
 
     #[test]
     fn a_marker_inside_a_string_literal_exempts_nothing() {
-        let c = classified(r#"fn a() { GUARDED; let s = "// guard:allow x"; }"#);
+        let c = classified("fn b() { let s = \"// guard:allow x\"; }\nfn a() { GUARDED; }\n");
         assert_eq!(c.unexempt.len(), 1);
         assert!(c.orphans.is_empty());
     }
@@ -515,33 +541,42 @@ mod marker_tests {
 
     #[test]
     fn another_gates_marker_does_not_exempt() {
-        let c = classified("fn a() { GUARDED; } // other:allow reason\n");
+        let c = classified("// other:allow reason\nfn a() { GUARDED; }\n");
         assert_eq!(c.unexempt.len(), 1);
         assert!(c.orphans.is_empty(), "a foreign token is not this gate's orphan");
     }
 
     #[test]
-    fn a_site_inside_a_macro_body_is_exempted_on_its_own_line() {
-        let src = "fn a() -> V {\n    m! { GUARDED } // guard:allow reason\n}\n";
+    fn a_site_inside_a_macro_body_is_exempted_from_the_line_above() {
+        let src = "fn a() -> V {\n    // guard:allow reason\n    m! { GUARDED }\n}\n";
         let c = classified(src);
         assert!(c.unexempt.is_empty());
         assert_eq!(c.marked.len(), 1);
-        assert_eq!(c.marked[0].line, 2);
-    }
-
-    #[test]
-    fn a_multi_line_statement_is_marked_on_the_ident_line() {
-        let src = "fn a() {\n    take(\n        GUARDED, // guard:allow reason\n    );\n}\n";
-        let c = classified(src);
-        assert!(c.unexempt.is_empty());
         assert_eq!(c.marked[0].line, 3);
     }
 
     #[test]
-    fn the_census_comes_back_in_line_order() {
-        let src = "fn a() { GUARDED; } // guard:allow first\nfn b() { GUARDED; } // guard:allow second\n";
+    fn a_multi_line_statement_is_marked_above_the_ident_line() {
+        let src = "fn a() {\n    take(\n        // guard:allow reason\n        GUARDED,\n    );\n}\n";
         let c = classified(src);
-        assert_eq!(c.marked.iter().map(|m| m.line).collect::<Vec<_>>(), vec![1, 2]);
+        assert!(c.unexempt.is_empty());
+        assert_eq!(c.marked[0].line, 4);
+    }
+
+    /// AC9: above the IDENT's line, not above the statement that contains it.
+    #[test]
+    fn a_marker_above_the_statements_first_line_does_not_exempt() {
+        let src = "fn a() {\n    // guard:allow reason\n    take(\n        GUARDED,\n    );\n}\n";
+        let c = classified(src);
+        assert_eq!(c.unexempt.len(), 1);
+        assert_eq!(c.orphans, vec![2]);
+    }
+
+    #[test]
+    fn the_census_comes_back_in_line_order() {
+        let src = "// guard:allow first\nfn a() { GUARDED; }\n// guard:allow second\nfn b() { GUARDED; }\n";
+        let c = classified(src);
+        assert_eq!(c.marked.iter().map(|m| m.line).collect::<Vec<_>>(), vec![2, 4]);
     }
 }
 ```
@@ -562,10 +597,15 @@ range via `syn::spanned::Spanned::span(i).start().line` / `.end().line`. Add
 `scan` alongside `mentions`, returning mentions sorted by line plus the ranges.
 
 `classify` walks `found.mentions`, grouping by line for each line's site count,
-and consults `marker_on_line(source_line, token)`. Four outcomes — no marker,
-empty reason, count > 1, otherwise marked — each pinned by a Step 1 test.
-Orphans are every 1-based source line where `marker_on_line` returns `Some`,
-that carries no mention, and that falls inside no `test_ranges` entry.
+and consults `marker_on_line` on the line **immediately above** each mention
+(none when the mention is on line 1). Four outcomes — no marker above, empty
+reason, count > 1 on the marked line, otherwise marked — each pinned by a Step 1
+test. Orphans are every 1-based source line where `marker_on_line` returns
+`Some`, whose **next** line carries no mention, and that falls inside no
+`test_ranges` entry.
+
+Note the census records the **site's** line, not the marker's — that is the line
+a reader needs and the line the failure messages already print.
 
 - [ ] **Step 4: Run, verify pass**
 
@@ -627,6 +667,13 @@ Delete: `an_entry_covers_its_declared_count_and_no_more`,
 at `scan`.
 
 - [ ] **Step 2: Rewrite `html_sink_check`'s tests**
+
+> **Marker placement in every fixture below:** the code blocks in this task and
+> Task 6 were written against the original trailing-marker rule. Transpose each
+> one — the marker is a standalone comment line **directly above** its site.
+> `a_marked_sink_passes` and friends therefore read `// html-sink:allow …` on
+> its own line, then the `view!` line. Any fixture that keeps a trailing marker
+> is now testing AC4 (it must fail).
 
 **Keep unchanged:** `an_unlisted_sink_is_a_violation`,
 `set_inner_html_outside_a_macro_is_in_the_population`,
@@ -893,6 +940,9 @@ implementor and dies here; `server_fn_registrar_check.rs:182`'s
 `visit_expr_path` is an unrelated `syn::visit::Visit` method.
 
 - [ ] **Step 1: Rewrite the tests**
+
+> **Marker placement:** as in Task 5 — every marker in the fixtures below is a
+> standalone comment line **directly above** its site, not trailing it.
 
 **Delete:** `allowlisted_fn_is_clean`,
 `map_reference_in_allowlisted_fn_is_clean`,

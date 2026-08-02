@@ -779,6 +779,7 @@ impl ContentType {
     /// `RenderedHtml`'s XSS-sensitive door but exempts the `ContentType::` qualifier —
     /// this door mints a media type, never HTML.)
     #[must_use]
+    // rendered-html-from-trusted:allow ContentType's own door definition — mints a media type, never HTML (#584)
     pub(crate) fn from_trusted(content_type: impl Into<String>) -> Self {
         Self(content_type.into())
     }
@@ -874,9 +875,11 @@ pub fn detect_content_type(filename: &str) -> ContentType {
 
     for (extensions, content_type) in EXTENSIONS {
         if extensions.contains(&ext.as_str()) {
+            // rendered-html-from-trusted:allow ContentType from a detected, test-pinned media type — never HTML (#584)
             return ContentType::from_trusted(content_type);
         }
     }
+    // rendered-html-from-trusted:allow ContentType from the octet-stream literal — never HTML (#584)
     ContentType::from_trusted("application/octet-stream")
 }
 

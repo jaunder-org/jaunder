@@ -46,18 +46,24 @@ be claimed as closed.
 
 ## Decision
 
-**Gate exemptions become per-site marker comments on the site's own line, read
-by the gate.** The site _is_ the key — no fn name, no path, no ordinal — so
-scoping is structural rather than bookkept, it survives rename and file move,
-and the exempt set becomes **derived rather than declared**.
+**Gate exemptions become per-site marker comments on the line immediately above
+the site, read by the gate.** The key is one line — no fn name, no path, no
+ordinal — so scoping is structural rather than bookkept, it survives rename and
+file move, and the exempt set becomes **derived rather than declared**.
+
+**Honestly stated:** the key is not literally "the site" but "the line the
+marker points at". That line holds exactly one site or the gate fails, so the
+binding stays 1 marker : 1 site and is never a region — but it is one level of
+indirection off the strongest possible claim, and this spec does not pretend
+otherwise.
 
 This applies to all three gates together; converting one would leave
 `ident_gate` running two exemption mechanisms at once.
 
 ### Marker form
 
-`// <step>:allow <reason>` as the site line's real trailing comment, where
-`<step>` is the gate's own `Gate::step` value:
+`// <step>:allow <reason>` as a comment line of its own, **directly above** the
+site, where `<step>` is the gate's own `Gate::step` value:
 
 - `// raw-html-door:allow <reason>`
 - `// html-sink:allow <reason>`
@@ -75,6 +81,24 @@ populations — e.g.
 `view! { <div inner_html=PreEscaped(x).into_string()></div> }` is a sink _and_ a
 raw door — and one shared marker would silence both from one reason.
 
+**Why above the site rather than trailing it — measured, not chosen.** The
+obvious position is a trailing comment on the site's own line, and that is what
+this spec originally required. It does not survive the formatters, which own
+that position: `rustfmt` pushes a comment trailing an opening `{` down onto the
+first line of the block, and `leptosfmt` lifts or drops one depending on where
+it sits in a `view!` body. Written trailing, **7 of the 12 live sites relocate**
+— some above, some below, deterministically per syntactic context but not by any
+rule an author could predict.
+
+Written as a standalone comment line directly above the site, **all twelve stay
+put**, across repeated `cargo xtask check` runs, including the two
+`fn from_trusted` signatures (where the marker sits between `#[must_use]` and
+`pub fn`) and all five `view!`-related sinks. That is the one position both
+formatters preserve, so it is the position the gate reads. Trailing is
+deliberately **not** accepted: it is exactly the form that silently moves, and
+accepting it would invite writing a marker that stops working on the next
+format.
+
 **`line_comment` must be hardened before it polices a security gate.** Its
 current doc concedes _"Raw strings are not specially handled — rare in report
 lines, and a best-effort scan is sufficient here."_ That is true for coverage
@@ -90,17 +114,21 @@ promotion.
 - **A reason is required.** A bare marker fails. Nothing beyond non-emptiness is
   checked — prose quality is not machine-checkable and a length floor only
   teaches padding.
-- **A marked line must hold exactly one site of that gate.** Two or more is a
-  failure telling the author to split the line, so "one marker = one site" holds
-  by construction rather than by convention.
-- **An orphan marker fails.** A marker matching no site of its gate — because
-  the site was deleted, or moved off that line — is a live, pre-approved
-  exemption waiting for a future edit to land on it. This is also the _only_
-  property of a written exemption a machine can re-check (see "What re-checking
-  is possible" below), so it is where the strictness budget goes.
-- **The marker goes on the line the gate reports** — the matched ident's span
-  line, not the first or last line of the enclosing statement. This is already
-  the line the failure message prints as `file:line`.
+- **The line a marker points at must hold exactly one site of that gate.** Two
+  or more is a failure telling the author to split the line, so "one marker =
+  one site" holds by construction rather than by convention.
+- **An orphan marker fails.** A marker whose next line holds no site of its gate
+  — because the site was deleted, or moved — is a live, pre-approved exemption
+  waiting for a future edit to land on it. This is also the _only_ property of a
+  written exemption a machine can re-check (see "What re-checking is possible"
+  below), so it is where the strictness budget goes.
+- **The site is the line the gate reports** — the matched ident's span line, not
+  the first or last line of the enclosing statement. The marker goes on the line
+  immediately before it. The failure message prints the site as `file:line`, so
+  the author is told exactly which line to sit above.
+- **No comment-skipping.** The site must be on the marker's very next line. A
+  blank line, or a second comment, between marker and site makes the marker an
+  orphan and the site unmarked — two loud failures rather than one silent drift.
 
 ### Implementation seam
 
@@ -230,23 +258,28 @@ Each is stated so conformance can be checked from the tree or from a gate run.
 
 **Mechanism**
 
-- AC1 — A site carrying `// <step>:allow <reason>` on its own line passes its
-  gate.
+- AC1 — A site whose immediately preceding line is `// <step>:allow <reason>`
+  passes its gate.
 - AC2 — The same site with the marker removed **fails**, and the failure names
   `file:line`.
 - AC3 — A bare marker (`// html-sink:allow` with no following text) **fails**.
-- AC4 — A marker on the line _before_ or _after_ the site does not exempt it;
-  the site fails.
+- AC4 — A marker **trailing the site's own line**, or two or more lines above
+  it, does not exempt it; the site fails. (Trailing is the form the formatters
+  relocate, so it must never appear to work.)
 - AC5 — A marker appearing inside a string literal — **including a raw string**
   (`r"…"`, `r#"…"#`) — or in a doc comment (`///`, `//!`), does not exempt
   anything.
 - AC6 — A marker for one gate does not exempt a site belonging to another gate.
-- AC7 — A marked line holding two sites of the same gate **fails**, with
-  recovery text directing the author to split the line.
-- AC8 — A marker matching no site of its gate **fails**, naming the orphan's
-  `file:line`.
+- AC7 — A marker whose next line holds two sites of the same gate **fails**,
+  with recovery text directing the author to split the line.
+- AC8 — A marker whose next line holds no site of its gate **fails**, naming the
+  orphan's `file:line`.
 - AC9 — For a mention whose enclosing statement spans multiple lines, the marker
-  is honored on the **ident's** line and nowhere else.
+  is honored only directly above the **ident's** line — not above the
+  statement's first line.
+- AC9a — **Formatter stability:** after `cargo xtask check`, every marker is
+  still on the line immediately above its site. Re-running the gate moves
+  nothing.
 - AC10 — Test code (`#[cfg(test)]` module/impl/fn, `#[test]`/`#[rstest]` fn)
   remains exempt without markers, and an orphan marker in test code does not
   fail.
