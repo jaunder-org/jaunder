@@ -26,10 +26,17 @@ import {
   type Page,
   type TestInfo,
 } from "@playwright/test";
-import { drainActionsForTest, setCurrentActionTestKey } from "./actions";
+import {
+  drainActionsForTest,
+  setCurrentActionTestKey,
+  type ActionRecord,
+} from "./actions";
 import {
   attachTraceCapture,
+  type BootMark,
+  type NavigationRecord,
   type PagePerfSummary,
+  type RequestRecord,
   type TraceCapture,
 } from "./capture-trace";
 import {
@@ -67,7 +74,84 @@ type NavigationSummary = {
   commitToMountMs: number | null;
   domContentLoadedToLoadMs: number | null;
   requestFailed: boolean;
+  /** Decomposition of `commitToMountMs`. All document-relative (see
+   *  `capture-trace.ts`), so comparable to each other but not to the wall-clock
+   *  fields above. `null` where the document did not report the input. */
+  wasmFetchStartMs: number | null;
+  wasmFetchMs: number | null;
+  wasmInstantiateMs: number | null;
+  bootPhases: Record<string, number> | null;
+  /** Mount-ready → the last mount-path request finishing. Covers what
+   *  `commitToMountMs` does NOT: `data-mounted` is set the instant
+   *  `mount_to_body` returns, so the shell/route fetches resolve after it. */
+  mountToSettledMs: number | null;
 };
+
+/**
+ * Decompose one document's boot marks into consecutive phase durations.
+ *
+ * Ordered by observed `startTime` rather than by an expected name sequence, so a
+ * mark added in Rust that this file has never heard of still lands in the right
+ * place. Returns `null` when fewer than two marks were seen — one mark yields no
+ * interval, and reporting `{}` would read as "measured, all zero".
+ */
+function bootPhasesFrom(marks: BootMark[]): Record<string, number> | null {
+  if (marks.length < 2) return null;
+  const sorted = [...marks].sort(
+    (left, right) => left.startTime - right.startTime,
+  );
+  const phases: Record<string, number> = {};
+  for (let index = 1; index < sorted.length; index += 1) {
+    const from = sorted[index - 1];
+    const to = sorted[index];
+    phases[`${from.name}->${to.name}`] = to.startTime - from.startTime;
+  }
+  return phases;
+}
+
+/**
+ * The interval from mount-ready to the last mount-path request finishing, or
+ * `null` when no request qualifies.
+ *
+ * A "mount-path request" is defined mechanically (spec D6): it starts at or after
+ * the navigation committed, finishes after mount-ready, and starts BEFORE the
+ * earlier of the first timed action after mount-ready or the next navigation's
+ * start. That last clause is what keeps a post-mount user click's fetches from
+ * being counted as app boot cost.
+ */
+function mountToSettledMs(
+  navigation: NavigationRecord,
+  nextNavigationStartedMs: number | null,
+  requests: RequestRecord[],
+  actions: ActionRecord[],
+): number | null {
+  const { committedMs, mountedMs } = navigation;
+  if (committedMs === null || mountedMs === null) return null;
+
+  const firstActionAfterMount = actions
+    .filter((action) => action.startedMs >= mountedMs)
+    .reduce<
+      number | null
+    >((earliest, action) => (earliest === null || action.startedMs < earliest ? action.startedMs : earliest), null);
+  const boundary = [firstActionAfterMount, nextNavigationStartedMs]
+    .filter((value): value is number => value !== null)
+    .reduce<
+      number | null
+    >((lowest, value) => (lowest === null || value < lowest ? value : lowest), null);
+
+  const settledMs = requests
+    .filter(
+      (request) =>
+        request.startedMs >= committedMs &&
+        request.endedMs > mountedMs &&
+        (boundary === null || request.startedMs < boundary),
+    )
+    .reduce<
+      number | null
+    >((latest, request) => (latest === null || request.endedMs > latest ? request.endedMs : latest), null);
+
+  return settledMs === null ? null : settledMs - mountedMs;
+}
 
 // Per-test budgets scale up for two independent reasons, and a test can hit
 // either:
@@ -505,6 +589,11 @@ const test = base.extend<{
 
       const endMs = Date.now();
       const actions = drainActionsForTest(testKey);
+      // Per-document harvests are fired from `load` handlers, so they can still
+      // be in flight here. Awaiting them is what makes the boot decomposition
+      // available for EVERY navigation rather than just whichever ones happened
+      // to land before teardown.
+      await capture.settle();
       const pagePerfSummary: PagePerfSummary = await capture.readPagePerf(page);
 
       const sortedRequests = [...requests].sort(
@@ -543,6 +632,18 @@ const test = base.extend<{
             navigation.domContentLoadedMs !== null && navigation.loadMs !== null
               ? navigation.loadMs - navigation.domContentLoadedMs
               : null;
+          // `commitToMountMs` ends at `data-mounted`, which `csr` sets the instant
+          // `mount_to_body` returns — so the shell/route fetches are NOT in it.
+          // The boot marks decompose what IS in it; `mountToSettledMs` covers what
+          // follows. Sizing mount cost needs both (#801).
+          const timing = capture.timingFor(navigation.id);
+          const wasm = timing?.wasm ?? null;
+          const bootEntry = timing?.marks.find((mark) =>
+            mark.name.endsWith(".boot.entry"),
+          );
+          const next = navigations.find(
+            (entry) => entry.startedMs > navigation.startedMs,
+          );
           return {
             id: navigation.id,
             url: navigation.url,
@@ -553,6 +654,21 @@ const test = base.extend<{
             commitToMountMs,
             domContentLoadedToLoadMs,
             requestFailed: navigation.requestFailed,
+            wasmFetchStartMs: wasm?.startTime ?? null,
+            wasmFetchMs: wasm?.durationMs ?? null,
+            // Rust cannot see its own fetch or instantiation — it only starts
+            // running at `boot.entry` — so this span is derived, not marked.
+            wasmInstantiateMs:
+              wasm !== null && bootEntry !== undefined
+                ? bootEntry.startTime - wasm.responseEndMs
+                : null,
+            bootPhases: bootPhasesFrom(timing?.marks ?? []),
+            mountToSettledMs: mountToSettledMs(
+              navigation,
+              next?.startedMs ?? null,
+              requests,
+              actions,
+            ),
           };
         })
         .sort((left, right) => right.totalMs - left.totalMs);
@@ -622,6 +738,18 @@ const test = base.extend<{
         otlpAttribute(
           "e2e.navigation_top_dropped",
           navigations.length - topNavigations.length,
+        ),
+        // Every `jaunder.*` mark the CSR client emitted, per navigation, keyed by
+        // navigation id. Discovered by prefix — the names live only in Rust, so a
+        // new mark appears here with no change to this file.
+        otlpAttribute(
+          "e2e.boot_marks_json",
+          JSON.stringify(
+            navigations.map((navigation) => ({
+              id: navigation.id,
+              marks: capture.timingFor(navigation.id)?.marks ?? [],
+            })),
+          ),
         ),
       ].filter(
         (attribute): attribute is NonNullable<typeof attribute> =>

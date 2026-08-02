@@ -88,13 +88,46 @@ export type CaptureSink = {
   navigations: NavigationRecord[];
 };
 
+/** One `performance.mark` the CSR client emitted, document-relative. */
+export type BootMark = { name: string; startTime: number };
+
+/** The `.wasm` resource's timing within one document, document-relative. */
+export type WasmTiming = {
+  startTime: number;
+  durationMs: number;
+  responseEndMs: number;
+};
+
+/** Everything harvested from a single document, at its `load`. */
+export type DocumentTiming = {
+  marks: BootMark[];
+  wasm: WasmTiming | null;
+};
+
 export type TraceCapture = {
   /** Route records that START after this call to `phase`. */
   setPhase(phase: Phase): void;
   sinkFor(phase: Phase): CaptureSink;
   /** Read the client-side perf summary. Must be called while `page` is alive. */
   readPagePerf(page: Page): Promise<PagePerfSummary>;
+  /**
+   * Per-document timing for `navigationId`, harvested at that document's `load`.
+   *
+   * Harvested per navigation, NOT at teardown, because `performance` marks and
+   * resource entries are per-document — a full navigation wipes them. A single
+   * read at teardown could only ever see the last document, while the whole point
+   * is to decompose EVERY navigation's `commit_to_mount` (#794).
+   */
+  timingFor(navigationId: number): DocumentTiming | undefined;
+  /** Await the in-flight per-document harvests. Call before reading. */
+  settle(): Promise<void>;
 };
+
+/** Marks are discovered by PREFIX, never by an enumerated list of names. The
+ *  names live only in Rust (`client::perf`), so adding one needs no change here —
+ *  the property that keeps the two sides from drifting the way `MOUNTED_ATTR`
+ *  can. */
+const MARK_PREFIX = "jaunder.";
 
 const TOP_SLOW_RESOURCE_LIMIT = 20;
 const LONG_TASK_LIMIT = 20;
@@ -120,7 +153,51 @@ export async function attachTraceCapture(
   const navigationRequestIds = new Map<Request, number>();
   const navigationPhase = new Map<number, Phase>();
   const pageStates = new Map<Page, PageState>();
+  const documentTimings = new Map<number, DocumentTiming>();
+  const pendingHarvests: Promise<void>[] = [];
   let nextNavigationId = 1;
+
+  /**
+   * Snapshot this document's marks and `.wasm` resource timing before the next
+   * navigation wipes them.
+   *
+   * Everything returned is document-relative (`performance.timeOrigin`-based), so
+   * the values are comparable to each other but NOT to the Node-side `Date.now()`
+   * fields on `NavigationRecord`. The boot decomposition is computed entirely
+   * within this frame of reference; `mount_to_settled_ms` is computed entirely
+   * within the Node one. The two are never mixed.
+   */
+  const harvestDocument = async (page: Page, navigationId: number) => {
+    try {
+      const timing = await page.evaluate((prefix: string) => {
+        const marks = performance
+          .getEntriesByType("mark")
+          .filter((entry) => entry.name.startsWith(prefix))
+          .map((entry) => ({ name: entry.name, startTime: entry.startTime }));
+        const wasmEntry = (
+          performance.getEntriesByType(
+            "resource",
+          ) as PerformanceResourceTiming[]
+        )
+          .filter((entry) => entry.name.endsWith(".wasm"))
+          .sort((left, right) => left.startTime - right.startTime)[0];
+        return {
+          marks,
+          wasm: wasmEntry
+            ? {
+                startTime: wasmEntry.startTime,
+                durationMs: wasmEntry.duration,
+                responseEndMs: wasmEntry.responseEnd,
+              }
+            : null,
+        };
+      }, MARK_PREFIX);
+      documentTimings.set(navigationId, timing);
+    } catch {
+      // Page closed, or navigated again before the evaluate landed. A missing
+      // entry is reported as absent rather than as zeros.
+    }
+  };
 
   const stateFor = (page: Page): PageState => {
     let state = pageStates.get(page);
@@ -324,11 +401,14 @@ export async function attachTraceCapture(
 
     page.on("load", () => {
       if (state.active === null) return;
-      const navigation = findNavigation(state.active);
+      const navigationId = state.active;
+      const navigation = findNavigation(navigationId);
       if (!navigation) return;
       if (navigation.loadMs === null) {
         navigation.loadMs = Date.now();
       }
+      // Harvest THIS document's marks now — the next navigation clears them.
+      pendingHarvests.push(harvestDocument(page, navigationId));
     });
   };
 
@@ -341,6 +421,12 @@ export async function attachTraceCapture(
     },
     sinkFor(which: Phase) {
       return sinks[which];
+    },
+    timingFor(navigationId: number) {
+      return documentTimings.get(navigationId);
+    },
+    async settle() {
+      await Promise.all(pendingHarvests);
     },
     async readPagePerf(page: Page): Promise<PagePerfSummary> {
       const empty: PagePerfSummary = {
