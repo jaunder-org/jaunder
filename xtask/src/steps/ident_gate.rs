@@ -134,10 +134,6 @@ pub struct Mention {
     pub line: usize,
     /// Nearest enclosing fn name; empty at module scope.
     pub function: String,
-    /// Whether that fn is top-level (`fn_stack.len() == 1`). Only a top-level fn can
-    /// match an allowlist entry, so a nested fn shadowing an allowed name cannot
-    /// borrow its exemption.
-    pub top_level: bool,
 }
 
 /// What a gate counts as a member of its population — the one question the scan
@@ -145,22 +141,13 @@ pub struct Mention {
 /// structurally, from what the AST says, never from a pattern believed to
 /// characterise violations).
 ///
-/// All three hooks are required rather than defaulted: a gate must say what it does
+/// Both hooks are required rather than defaulted: a gate must say what it does
 /// *not* look at, because "I never implemented that hook" and "that construct is
 /// outside my population" are the same silence otherwise.
 pub trait Population {
     /// A bare ident in ordinary (non-macro) code, at any position — a call, a field,
     /// a path segment, a bare reference.
     fn ident(&self, id: &proc_macro2::Ident) -> bool;
-
-    /// A path expression in ordinary code (`Type::assoc`, `.map(Type::assoc)`), for
-    /// a gate whose membership depends on the path's *qualifier* and so cannot be
-    /// decided from the leaf ident alone.
-    ///
-    /// A gate that matches on [`Population::ident`] must return `false` here: `syn`
-    /// descends from a path into its segment idents, so answering `true` to both
-    /// would record the same site twice.
-    fn expr_path(&self, path: &syn::Path) -> bool;
 
     /// An ident inside a macro invocation's tokens. `trees[idx]` is `id`; the flat
     /// sibling stream is passed so a gate can read positional context (tokens carry
@@ -187,11 +174,6 @@ impl Population for AnyOf {
         self.0.iter().any(|name| id == *name)
     }
 
-    /// Nothing: the segment idents of a path are reached by [`Population::ident`].
-    fn expr_path(&self, _path: &syn::Path) -> bool {
-        false
-    }
-
     fn macro_ident(
         &self,
         id: &proc_macro2::Ident,
@@ -200,13 +182,6 @@ impl Population for AnyOf {
     ) -> bool {
         self.ident(id)
     }
-}
-
-/// Every **non-test** mention of `population` in the source, in line order. `Err` on
-/// a `syn` parse failure (fail-loud). Pure given the source, so gates unit-test
-/// through it directly.
-pub fn mentions<P: Population>(source: &str, population: &P) -> Result<Vec<Mention>, String> {
-    Ok(scan(source, population)?.mentions)
 }
 
 /// Every **non-test** mention of `population` in the source, in line order, plus
@@ -333,8 +308,8 @@ impl<P: Population> Scanner<'_, P> {
 
     /// Record a mention on `line`, unless it is test code.
     ///
-    /// Allowlisting happens later, in [`unjustified`], because a multiplicity can
-    /// only be judged once every site is in hand.
+    /// Marker lookup happens later, in [`classify`], because whether a marker
+    /// covers a site depends on how many sites share its line.
     fn record(&mut self, line: usize) {
         if self.test_depth > 0 {
             return;
@@ -342,7 +317,6 @@ impl<P: Population> Scanner<'_, P> {
         self.hits.push(Mention {
             line,
             function: self.fn_stack.last().cloned().unwrap_or_default(),
-            top_level: self.fn_stack.len() == 1,
         });
     }
 
@@ -413,8 +387,8 @@ impl<'ast, P: Population> syn::visit::Visit<'ast> for Scanner<'_, P> {
     /// A `use` declaration is the one construct outside every gate's population: it
     /// names something but reaches, mints and spends nothing — what it enables is
     /// its own ident occurrence, and that occurrence *is* in the population. So
-    /// skipping the tree loses no site, and it keeps a door costing **one** allowlist
-    /// entry rather than one for the door and one for the `use` that reached it. (An
+    /// skipping the tree loses no site, and it keeps a door costing **one** marker
+    /// rather than one for the door and one for the `use` that reached it. (An
     /// import with no call site cannot survive anyway: clippy denies an unused
     /// import.)
     fn visit_item_use(&mut self, _i: &'ast syn::ItemUse) {}
@@ -423,13 +397,6 @@ impl<'ast, P: Population> syn::visit::Visit<'ast> for Scanner<'_, P> {
         if self.population.ident(i) {
             self.record(i.span().start().line);
         }
-    }
-
-    fn visit_expr_path(&mut self, i: &'ast syn::ExprPath) {
-        if self.population.expr_path(&i.path) {
-            self.record(syn::spanned::Spanned::span(&i.path).start().line);
-        }
-        syn::visit::visit_expr_path(self, i);
     }
 
     /// `syn` stops at a macro invocation's boundary, so the tokens are walked by
@@ -472,7 +439,7 @@ pub struct Gate<P: Population> {
 
 impl<P: Population> Gate<P> {
     /// 1-based `(line, enclosing-fn)` of every mention in one source that this
-    /// gate's allowlist does not cover.
+    /// gate's markers do not cover, plus every orphan marker (empty fn name).
     ///
     /// Test-only: [`Gate::problems`] parses once and classifies itself, so this is
     /// the single-source convenience the gates' unit tests assert through — and
@@ -614,15 +581,15 @@ pub fn run_scan(
 
 #[cfg(test)]
 mod tests {
-    use super::{mentions, AnyOf};
+    use super::{scan, AnyOf};
 
     /// The scan reports mentions in line order regardless of traversal order, which
-    /// is what makes "the first `count` keep the exemption" a statement about the
-    /// source rather than about `syn`'s walk.
+    /// is what lets the marker rule be a statement about the source rather than
+    /// about `syn`'s walk.
     #[test]
     fn mentions_come_back_in_line_order() {
         let src = "fn a() { GUARDED; }\nfn b() { let _ = m! { GUARDED }; }\nfn c() { GUARDED; }\n";
-        let found = mentions(src, &AnyOf(&["GUARDED"])).unwrap();
+        let found = scan(src, &AnyOf(&["GUARDED"])).unwrap().mentions;
         assert_eq!(
             found.iter().map(|m| m.line).collect::<Vec<_>>(),
             vec![1, 2, 3]

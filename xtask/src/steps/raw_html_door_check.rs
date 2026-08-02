@@ -1,5 +1,5 @@
 //! The `raw-html-door` static check (#333): pins `PreEscaped` — maud's raw,
-//! unescaped-markup constructor — to an enumerated allowlist of production sites.
+//! unescaped-markup constructor — to enumerated, individually justified sites.
 //!
 //! `web`'s render layer carries trusted HTML in one type, `web::html::Markup`, and
 //! `Markup` is the only thing maud will splice into an `html!` without escaping it.
@@ -12,15 +12,14 @@
 //! **Population** (read structurally, ADR-0085 principle 1): every `PreEscaped`
 //! ident under [`POLICED_ROOTS`], in ordinary code **and inside macro token
 //! streams** — the render layer is `html!` bodies, so a gate blind to macro tokens
-//! would be blind to the whole layer. Every member fails unless an [`ALLOWLIST`]
-//! entry names its enclosing top-level fn *and* the entry's declared multiplicity
-//! still covers it, so a second door added inside an already-allowed fn is a
-//! failure rather than a silent absorption (ADR-0085 principle 4).
+//! would be blind to the whole layer. Every member fails unless the line
+//! **immediately above** it carries a `// raw-html-door:allow <reason>` marker
+//! (#778), so a second door added inside an already-marked fn is a failure rather
+//! than a silent absorption (ADR-0085 principle 4).
 //!
 //! The scan itself — test-code exemption, enclosing-fn tracking, the macro token
-//! walk, the multiplicity rule and the tree-wide reconciliation — is
-//! [`crate::steps::ident_gate`]; this module is the population, the allowlist and
-//! the prose.
+//! walk and the marker rule — is [`crate::steps::ident_gate`]; this module is the
+//! population and the prose.
 //!
 //! The one construct outside the population is a `use` declaration. An import names
 //! the constructor but cannot mint anything — the mint is the call, which is its own
@@ -36,9 +35,9 @@
 //! **Unreadable classes** (ADR-0085's honesty obligation) specific to this gate: a
 //! `use maud::PreEscaped as Raw` rename evades ident matching, as does a re-exported
 //! alias under any other name — `syn` has no name resolution. That is as visible in
-//! review as editing the allowlist. The classes inherent to the shared scan (the
-//! unwalked attribute-macro tokens, the fn-name-keyed allowlist, the absent call
-//! graph) are stated in [`crate::steps::ident_gate`]. A `syn` parse failure is a
+//! review as adding a marker. The classes inherent to the shared scan (the unwalked
+//! attribute-macro tokens, the unverifiable marker reason, the absent call graph)
+//! are stated in [`crate::steps::ident_gate`]. A `syn` parse failure is a
 //! **hard error** (a file we cannot walk could hide a door — a false pass).
 
 use crate::result::CommandResult;
@@ -216,7 +215,7 @@ mod tests {
 
     /// An import names the constructor but mints nothing, so it is outside the
     /// population — the call it enables is its own occurrence and is not. Being
-    /// inside would cost the one real door a second allowlist entry for its `use`.
+    /// inside would cost the one real door a second marker for its `use`.
     #[test]
     fn an_import_alone_is_outside_the_population() {
         let src = "use maud::PreEscaped;\n";

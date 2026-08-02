@@ -1,5 +1,5 @@
 //! The `html-sink` static check (#333): pins every unescaped-HTML sink —
-//! `inner_html` and `set_inner_html` — to an enumerated allowlist.
+//! `inner_html` and `set_inner_html` — to enumerated, individually justified sites.
 //!
 //! These are the DOM's raw doors. Whatever string reaches them is parsed as markup,
 //! so a value that was never escaped or sanitized becomes script. `web` reaches them
@@ -40,7 +40,7 @@
 //! nothing, but a wrapper method named something else does. A `use` declaration is
 //! outside the population: it reaches no sink, and what it enables is its own ident
 //! occurrence. The classes inherent to the shared scan (the unwalked attribute-macro
-//! tokens, the fn-name-keyed allowlist, and above all the absent call graph — a sink
+//! tokens, the unverifiable marker reason, and above all the absent call graph — a sink
 //! reached through a helper is flagged at the helper, never at the caller that
 //! supplied the untrusted string) are stated in [`crate::steps::ident_gate`]. A
 //! `syn` parse failure is a **hard error** (a file we cannot walk could hide a sink —
@@ -100,8 +100,9 @@ const GATE: Gate<AnyOf> = Gate {
     },
 };
 
-/// 1-based `(line, enclosing-fn)` of every sink the [`ALLOWLIST`] does not cover.
-/// Test-only: [`problems`] parses once and applies the allowlist itself, so this is
+/// 1-based `(line, enclosing-fn)` of every unmarked sink, plus every orphan marker
+/// (empty fn name).
+/// Test-only: [`problems`] parses once and classifies itself, so this is
 /// the single-source convenience the unit tests assert through.
 #[cfg(test)]
 fn violations(source: &str) -> Result<Vec<(usize, String)>, String> {
@@ -109,7 +110,7 @@ fn violations(source: &str) -> Result<Vec<(usize, String)>, String> {
 }
 
 /// The failure detail for every offending sink across the scanned files, or `None`
-/// when the tree matches the allowlist exactly.
+/// when every sink is marked.
 pub fn problems(scanned: &[(String, String)]) -> Option<String> {
     GATE.problems(scanned)
 }
@@ -142,8 +143,8 @@ mod tests {
         assert_eq!(violations(src).unwrap(), vec![]);
     }
 
-    /// The old ALLOWLIST exempted `PostDisplay` wholesale at count 2. A name buys
-    /// nothing now.
+    /// The old fn-keyed list exempted `PostDisplay` wholesale at count 2. A name
+    /// buys nothing now.
     #[test]
     fn a_formerly_allowlisted_fn_name_grants_nothing() {
         let src = r#"
