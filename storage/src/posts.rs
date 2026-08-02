@@ -298,6 +298,19 @@ pub(crate) const SELECT_POST_TAGS: &str = "SELECT pt.post_id, pt.tag_id, t.tag_s
      WHERE pt.post_id = $1
      ORDER BY t.tag_slug";
 
+/// Resolves a slug to its `tag_id` after the dialect-specific tag upsert. Only
+/// the upsert itself diverges (`INSERT OR IGNORE` vs `ON CONFLICT DO NOTHING`),
+/// so this lookup is shared here rather than duplicated per ADR-0019.
+pub(crate) const SELECT_TAG_ID_BY_SLUG: &str = "SELECT tag_id FROM tags WHERE tag_slug = $1";
+
+/// Drops one tag from a post, by slug, inside `set_post_tags`' transaction. The
+/// SQL is identical on both dialects, so it is shared here per ADR-0019.
+///
+/// `rows_affected` is deliberately never checked by callers: the slug came from
+/// the tags read in the same transaction, so "no row deleted" is not an error.
+pub(crate) const DELETE_POST_TAG_BY_SLUG: &str = "DELETE FROM post_tags
+     WHERE post_id = $1 AND tag_id = (SELECT tag_id FROM tags WHERE tag_slug = $2)";
+
 /// Maps [`SELECT_POST_TAGS`] rows to [`PostTag`].
 ///
 /// The row tuple's first two positions are `post_id` and `tag_id` — adjacent ids
@@ -687,6 +700,14 @@ pub trait PostStorage: Send + Sync {
     /// nothing at all.
     ///
     /// An empty `desired` **clears** the post's tags — it is not a no-op.
+    ///
+    /// `desired` is **unbounded at this layer**: storage stays policy-free, so
+    /// the per-post tag cap lives in `common::tag` with the rest of tag policy
+    /// rather than being re-asserted here. ADR-0092's "capped by construction"
+    /// is therefore enforced at the callers — both production front-ends, web
+    /// and `AtomPub`, route their input through `parse_and_validate_tags`, so
+    /// no production path can hand this method an unbounded set. A larger set
+    /// is executed faithfully; it is simply not reachable outside tests.
     ///
     /// # Errors
     ///

@@ -3,7 +3,10 @@ use chrono::{DateTime, Utc};
 use sqlx::{Pool, Sqlite};
 
 use crate::helpers::{post_record_from_row, PostRow};
-use crate::posts::{post_tag_diff, post_tags_from_rows, SELECT_POST_TAGS};
+use crate::posts::{
+    post_tag_diff, post_tags_from_rows, DELETE_POST_TAG_BY_SLUG, SELECT_POST_TAGS,
+    SELECT_TAG_ID_BY_SLUG,
+};
 use crate::{PostDialect, PostRecord, PostStore, TaggingError, UpdatePostError, UpdatePostInput};
 use common::ids::{PostId, TagId, UserId};
 use common::tag::{Tag, TagLabel};
@@ -180,11 +183,10 @@ impl PostDialect for Sqlite {
                     .bind(&slug)
                     .execute(&mut *conn)
                     .await?;
-                let tag_id =
-                    sqlx::query_scalar::<_, TagId>("SELECT tag_id FROM tags WHERE tag_slug = $1")
-                        .bind(&slug)
-                        .fetch_one(&mut *conn)
-                        .await?;
+                let tag_id = sqlx::query_scalar::<_, TagId>(SELECT_TAG_ID_BY_SLUG)
+                    .bind(&slug)
+                    .fetch_one(&mut *conn)
+                    .await?;
                 // OR IGNORE, not a bare INSERT: `desired` may carry two labels
                 // sharing a slug (post_tag_diff does not dedupe), and the first
                 // occurrence's casing must win.
@@ -202,14 +204,11 @@ impl PostDialect for Sqlite {
                 // rows_affected is deliberately not checked: the slug came from
                 // `existing`, read in this same transaction, so "no row deleted"
                 // is not an error condition.
-                sqlx::query(
-                    "DELETE FROM post_tags
-                     WHERE post_id = $1 AND tag_id = (SELECT tag_id FROM tags WHERE tag_slug = $2)",
-                )
-                .bind(post_id)
-                .bind(slug)
-                .execute(&mut *conn)
-                .await?;
+                sqlx::query(DELETE_POST_TAG_BY_SLUG)
+                    .bind(post_id)
+                    .bind(slug)
+                    .execute(&mut *conn)
+                    .await?;
             }
             Ok(())
         }

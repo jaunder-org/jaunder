@@ -903,6 +903,68 @@ async fn create_with_over_cap_categories_is_rejected(#[case] backend: Backend) {
     );
 }
 
+/// #771 (D9/D12): the update door carries the same cap guard as the create door.
+/// Without it `set_post_tags` would receive an unbounded `desired`, which is the
+/// precondition ADR-0092 relies on being enforced at the callers — so the guard
+/// needs its own test rather than riding on the create test's coverage.
+#[apply(backends)]
+#[tokio::test]
+async fn update_with_over_cap_categories_is_rejected(#[case] backend: Backend) {
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+    let post = session.seed_post().seed(&state).await;
+
+    state
+        .posts
+        .set_post_tags(post.post_id, &["original-tag".parse::<TagLabel>().unwrap()])
+        .await
+        .unwrap();
+
+    let app = make_app(&state, &base);
+
+    let categories = (0..=MAX_TAGS_PER_POST)
+        .map(|n| format!("  <category term=\"tag{n}\"/>"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let xml = format!(
+        r#"<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>Too many</title>
+  <content type="text">body</content>
+{categories}
+</entry>"#
+    );
+
+    let response = app
+        .clone()
+        .oneshot(atompub_put_xml(
+            &session,
+            &format!("posts/{}", post.post_id),
+            &xml,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // "Rejected rather than written": the post's tags are exactly what they were.
+    let fetched = app
+        .oneshot(atompub_get(&session, &format!("posts/{}", post.post_id)))
+        .await
+        .unwrap();
+    assert_eq!(fetched.status(), StatusCode::OK);
+    let body = body_string(fetched).await;
+    assert!(
+        body.contains("term=\"original-tag\""),
+        "over-cap update must leave the existing tag in place: {body}"
+    );
+    assert_eq!(
+        body.matches("<category").count(),
+        1,
+        "over-cap update must not add tags: {body}"
+    );
+}
+
 /// #771 (D9): categories that collapse to the same canonical slug become one tag,
 /// and the first occurrence's casing is the one that survives — the same dedupe
 /// the web door applies, now on the `AtomPub` door too.

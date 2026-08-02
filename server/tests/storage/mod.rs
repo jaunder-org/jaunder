@@ -19,10 +19,10 @@ use std::sync::Arc;
 use storage::{
     create_rendered_post, open_database, perform_post_update, update_rendered_post, AppState,
     AudienceError, ConfirmPasswordResetError, CreatePostError, CreateUserError, DbConnectOptions,
-    FeedCacheRow, GoLivePost, ListByTagError, PostCursor, PostFormat, PostRecord, PostUpdate,
-    PostgresSubscriptionStorage, ProfileUpdate, PublishUpdate, RegisterWithInviteError,
+    FeedCacheRow, GoLivePost, ListByTagError, PostCursor, PostFormat, PostRecord, PostTag,
+    PostUpdate, PostgresSubscriptionStorage, ProfileUpdate, PublishUpdate, RegisterWithInviteError,
     RenderedPostContent, RenderedPostUpdate, SessionAuthError, SqliteSubscriptionStorage,
-    SubscriptionStorage, TaggingError, UpdatePostError, UseEmailVerificationError, UseInviteError,
+    SubscriptionStorage, UpdatePostError, UseEmailVerificationError, UseInviteError,
     UsePasswordResetError, UserAuthError,
 };
 use tempfile::TempDir;
@@ -131,6 +131,22 @@ async fn drafts_of(state: &AppState, user_id: UserId, limit: &str) -> Vec<PostRe
         .list_drafts_by_user(user_id, None, parse_row_limit(limit), Utc::now())
         .await
         .expect("list_drafts_by_user failed")
+}
+
+/// The post's tags, read back through the normal post read path (#772 hydrates
+/// them onto the record, so there is no separate tag-read call to make).
+///
+/// Two dozen tag tests below re-read a post purely to assert on its tags; the
+/// unwrapping is noise that buries the assertion. Mirrors `slugs_of` in
+/// `storage/src/posts.rs`' test module, which extracted the same shape there.
+async fn tags_of(state: &AppState, post_id: PostId) -> Vec<PostTag> {
+    state
+        .posts
+        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
+        .await
+        .expect("get_post_by_id failed")
+        .expect("post exists")
+        .tags
 }
 
 async fn open_pool(base: &TempDir) -> SqlitePool {
@@ -3133,13 +3149,7 @@ async fn multiple_tags_on_single_post(#[case] backend: Backend) {
         .await
         .expect("set_post_tags failed");
 
-    let tags = state
-        .posts
-        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
-        .await
-        .expect("get_post_by_id failed")
-        .expect("post exists")
-        .tags;
+    let tags = tags_of(state, post_id).await;
 
     assert_eq!(tags.len(), 3);
     let tag_slugs: Vec<&str> = tags.iter().map(|t| t.tag_slug.as_ref()).collect();
@@ -3161,13 +3171,7 @@ async fn empty_tag_list(#[case] backend: Backend) {
 
     let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
-    let tags = state
-        .posts
-        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
-        .await
-        .expect("get_post_by_id failed")
-        .expect("post exists")
-        .tags;
+    let tags = tags_of(state, post_id).await;
 
     assert_eq!(tags.len(), 0);
 }
@@ -3199,20 +3203,8 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
         .await
         .expect("set_post_tags post2 failed");
 
-    let tags1 = state
-        .posts
-        .get_post_by_id(post1, &ViewerIdentity::Anonymous)
-        .await
-        .expect("get_post_by_id failed")
-        .expect("post exists")
-        .tags;
-    let tags2 = state
-        .posts
-        .get_post_by_id(post2, &ViewerIdentity::Anonymous)
-        .await
-        .expect("get_post_by_id failed")
-        .expect("post exists")
-        .tags;
+    let tags1 = tags_of(state, post1).await;
+    let tags2 = tags_of(state, post2).await;
 
     assert_eq!(tags1[0].tag_slug, "web-development");
     assert_eq!(tags2[0].tag_slug, "web-development");
@@ -3302,7 +3294,7 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
-async fn selective_untag(#[case] backend: Backend) {
+async fn restating_the_set_without_one_tag_drops_only_that_tag(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user = SeedUser::new()
@@ -3326,13 +3318,7 @@ async fn selective_untag(#[case] backend: Backend) {
         .await
         .expect("set_post_tags failed");
 
-    let tags = state
-        .posts
-        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
-        .await
-        .expect("get_post_by_id failed")
-        .expect("post exists")
-        .tags;
+    let tags = tags_of(state, post_id).await;
     assert_eq!(tags.len(), 3);
 
     // Dropping one tag is now expressed by restating the desired set without it.
@@ -3348,13 +3334,7 @@ async fn selective_untag(#[case] backend: Backend) {
         .await
         .expect("set_post_tags failed");
 
-    let tags = state
-        .posts
-        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
-        .await
-        .expect("get_post_by_id failed")
-        .expect("post exists")
-        .tags;
+    let tags = tags_of(state, post_id).await;
     assert_eq!(tags.len(), 2);
     let tag_slugs: Vec<&str> = tags.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert!(!tag_slugs.contains(&"tag-b"));
@@ -3388,13 +3368,7 @@ async fn numeric_tag(#[case] backend: Backend) {
         .await
         .expect("set_post_tags failed");
 
-    let tags = state
-        .posts
-        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
-        .await
-        .expect("get_post_by_id failed")
-        .expect("post exists")
-        .tags;
+    let tags = tags_of(state, post_id).await;
 
     assert_eq!(tags.len(), 3);
     let tag_slugs: Vec<&str> = tags.iter().map(|t| t.tag_slug.as_ref()).collect();
@@ -3480,13 +3454,7 @@ async fn many_tags_many_posts(#[case] backend: Backend) {
     }
 
     for post_id in &post_ids {
-        let tags_on_post = state
-            .posts
-            .get_post_by_id(*post_id, &ViewerIdentity::Anonymous)
-            .await
-            .expect("get_post_by_id failed")
-            .expect("post exists")
-            .tags;
+        let tags_on_post = tags_of(state, *post_id).await;
         assert_eq!(tags_on_post.len(), 5);
     }
 
@@ -3522,13 +3490,7 @@ async fn tag_all_numeric(#[case] backend: Backend) {
         .await
         .expect("set_post_tags failed");
 
-    let tags = state
-        .posts
-        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
-        .await
-        .expect("get_post_by_id failed")
-        .expect("post exists")
-        .tags;
+    let tags = tags_of(state, post_id).await;
 
     assert_eq!(tags.len(), 2);
     let tag_slugs: Vec<&str> = tags.iter().map(|t| t.tag_slug.as_ref()).collect();
@@ -3563,13 +3525,7 @@ async fn tag_hyphen_boundaries(#[case] backend: Backend) {
         .await
         .expect("set_post_tags failed");
 
-    let tags = state
-        .posts
-        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
-        .await
-        .expect("get_post_by_id failed")
-        .expect("post exists")
-        .tags;
+    let tags = tags_of(state, post_id).await;
 
     assert_eq!(tags.len(), 3);
 
@@ -3599,13 +3555,7 @@ async fn tag_with_long_display(#[case] backend: Backend) {
         .await
         .expect("set_post_tags failed");
 
-    let tags = state
-        .posts
-        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
-        .await
-        .expect("get_post_by_id failed")
-        .expect("post exists")
-        .tags;
+    let tags = tags_of(state, post_id).await;
 
     assert_eq!(tags.len(), 1);
     assert_eq!(tags[0].tag_display, long_display);
@@ -3646,26 +3596,14 @@ async fn tag_list_ordering(#[case] backend: Backend) {
         .await
         .expect("set_post_tags failed");
 
-    let tags1 = state
-        .posts
-        .get_post_by_id(post1, &ViewerIdentity::Anonymous)
-        .await
-        .expect("get_post_by_id failed")
-        .expect("post exists")
-        .tags;
+    let tags1 = tags_of(state, post1).await;
 
     assert_eq!(tags1.len(), 3);
     let slugs1: Vec<&str> = tags1.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert_eq!(slugs1, vec!["apple", "mango", "zebra"]);
 
     // Verify consistency on multiple calls
-    let tags1_again = state
-        .posts
-        .get_post_by_id(post1, &ViewerIdentity::Anonymous)
-        .await
-        .expect("get_post_by_id failed")
-        .expect("post exists")
-        .tags;
+    let tags1_again = tags_of(state, post1).await;
 
     assert_eq!(tags1_again.len(), 3);
     assert_eq!(tags1_again[0].tag_slug, "apple");
@@ -3693,22 +3631,10 @@ async fn tags_for_multiple_posts(#[case] backend: Backend) {
         .await
         .expect("set_post_tags failed");
 
-    let tags1 = state
-        .posts
-        .get_post_by_id(post1, &ViewerIdentity::Anonymous)
-        .await
-        .expect("get_post_by_id failed")
-        .expect("post exists")
-        .tags;
+    let tags1 = tags_of(state, post1).await;
     assert_eq!(tags1.len(), 0);
 
-    let tags2 = state
-        .posts
-        .get_post_by_id(post2, &ViewerIdentity::Anonymous)
-        .await
-        .expect("get_post_by_id failed")
-        .expect("post exists")
-        .tags;
+    let tags2 = tags_of(state, post2).await;
     assert_eq!(tags2.len(), 1);
 }
 
@@ -3738,13 +3664,7 @@ async fn tag_mixed_alphanumeric(#[case] backend: Backend) {
         .await
         .expect("set_post_tags failed");
 
-    let tags = state
-        .posts
-        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
-        .await
-        .expect("get_post_by_id failed")
-        .expect("post exists")
-        .tags;
+    let tags = tags_of(state, post_id).await;
 
     assert_eq!(tags.len(), 3);
     assert_eq!(tags[0].tag_slug, "3d-graphics");
@@ -3771,13 +3691,7 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
         .await
         .expect("set_post_tags failed");
 
-    let tags_before = state
-        .posts
-        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
-        .await
-        .expect("get_post_by_id failed")
-        .expect("post exists")
-        .tags;
+    let tags_before = tags_of(state, post_id).await;
     assert_eq!(tags_before.len(), 1);
     assert_eq!(tags_before[0].tag_display, "test");
 
@@ -3792,13 +3706,7 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
         .await
         .expect("set_post_tags failed");
 
-    let tags_after = state
-        .posts
-        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
-        .await
-        .expect("get_post_by_id failed")
-        .expect("post exists")
-        .tags;
+    let tags_after = tags_of(state, post_id).await;
     assert_eq!(tags_after.len(), 0);
 
     // List by tag again - should return empty list (tag exists but no posts have it)
@@ -3825,13 +3733,7 @@ async fn tag_creation_and_retrieval(#[case] backend: Backend) {
         .await
         .expect("set_post_tags failed");
 
-    let tags = state
-        .posts
-        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
-        .await
-        .expect("get_post_by_id failed")
-        .expect("post exists")
-        .tags;
+    let tags = tags_of(state, post_id).await;
 
     assert_eq!(tags.len(), 1);
     assert_eq!(tags[0].tag_slug, "rust");
@@ -3857,62 +3759,16 @@ async fn tag_normalization(#[case] backend: Backend) {
         .await
         .expect("set_post_tags failed");
 
-    let tags = state
-        .posts
-        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
-        .await
-        .expect("get_post_by_id failed")
-        .expect("post exists")
-        .tags;
+    let tags = tags_of(state, post_id).await;
 
     assert_eq!(tags.len(), 1);
     assert_eq!(tags[0].tag_slug, "rust-web"); // normalized
     assert_eq!(tags[0].tag_display, "Rust-Web"); // original preserved
 }
 
-#[apply(backends)]
-#[tokio::test]
-async fn clearing_tags_removes_the_row(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let state = &env.state;
-    let user = SeedUser::new()
-        .display_name("Charlie")
-        .seed(state)
-        .await
-        .user_id;
-
-    let post_id = SeedRawPost::new(user).seed(state).await.post_id;
-
-    state
-        .posts
-        .set_post_tags(post_id, &["python".parse::<TagLabel>().unwrap()])
-        .await
-        .expect("set_post_tags failed");
-
-    let tags = state
-        .posts
-        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
-        .await
-        .expect("get_post_by_id failed")
-        .expect("post exists")
-        .tags;
-    assert_eq!(tags.len(), 1);
-
-    state
-        .posts
-        .set_post_tags(post_id, &[])
-        .await
-        .expect("set_post_tags failed");
-
-    let tags = state
-        .posts
-        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
-        .await
-        .expect("get_post_by_id failed")
-        .expect("post exists")
-        .tags;
-    assert_eq!(tags.len(), 0);
-}
+// `clearing_tags_removes_the_row` lived here; `set_post_tags`' add/reconcile/clear
+// contract is a generic-contract test, homed in `storage/src/posts.rs` as
+// `set_post_tags_adds_removes_and_clears` (ADR-0053 §1, #771).
 
 #[apply(backends)]
 #[tokio::test]
@@ -4064,25 +3920,9 @@ async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
     assert_eq!(posts[0].post_id, post2);
 }
 
-#[apply(backends)]
-#[tokio::test]
-async fn set_post_tags_nonexistent_post_error(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let state = &env.state;
-    let result = state
-        .posts
-        .set_post_tags(
-            PostId::from(99999),
-            &["nonexistent-post".parse::<TagLabel>().unwrap()],
-        )
-        .await;
-    match result {
-        Err(TaggingError::PostNotFound) => {
-            // Expected
-        }
-        other => panic!("Expected PostNotFound, got {other:?}"),
-    }
-}
+// `set_post_tags_nonexistent_post_error` lived here; the `PostNotFound` contract
+// is a generic-contract test, homed in `storage/src/posts.rs` as
+// `set_post_tags_rejects_missing_post_but_allows_soft_deleted` (ADR-0053 §1, #771).
 
 #[apply(backends)]
 #[tokio::test]
@@ -4487,13 +4327,7 @@ async fn tag_edge_case_formats(#[case] backend: Backend) {
         .await
         .expect("numeric, hyphenated and mixed-case tags failed");
 
-    let tags = state
-        .posts
-        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
-        .await
-        .expect("get_post_by_id failed")
-        .expect("post exists")
-        .tags;
+    let tags = tags_of(state, post_id).await;
 
     assert_eq!(tags.len(), 3);
 }
@@ -4596,13 +4430,7 @@ async fn tag_display_preservation(#[case] backend: Backend) {
         .await
         .expect("set_post_tags failed");
 
-    let tags = state
-        .posts
-        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
-        .await
-        .expect("get_post_by_id failed")
-        .expect("post exists")
-        .tags;
+    let tags = tags_of(state, post_id).await;
 
     assert_eq!(tags.len(), 1);
     assert_eq!(tags[0].tag_display, "MySpecialTag");
@@ -4611,7 +4439,7 @@ async fn tag_display_preservation(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
-async fn untag_preserves_other_tags(#[case] backend: Backend) {
+async fn reconciling_to_a_smaller_set_preserves_the_surviving_tags(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user = SeedUser::new().seed(state).await.user_id;
@@ -4629,15 +4457,9 @@ async fn untag_preserves_other_tags(#[case] backend: Backend) {
             ],
         )
         .await
-        .expect("tag1/tag2/tag3 failed");
+        .expect("set_post_tags failed");
 
-    let tags = state
-        .posts
-        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
-        .await
-        .expect("get_post_by_id failed")
-        .expect("post exists")
-        .tags;
+    let tags = tags_of(state, post_id).await;
     assert_eq!(tags.len(), 3);
 
     // Restating the set without tag2 drops it and leaves the others in place.
@@ -4653,13 +4475,7 @@ async fn untag_preserves_other_tags(#[case] backend: Backend) {
         .await
         .expect("set_post_tags failed");
 
-    let tags = state
-        .posts
-        .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
-        .await
-        .expect("get_post_by_id failed")
-        .expect("post exists")
-        .tags;
+    let tags = tags_of(state, post_id).await;
     assert_eq!(tags.len(), 2);
     let tag_slugs: Vec<_> = tags.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert!(!tag_slugs.contains(&"tag2"));
