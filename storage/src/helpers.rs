@@ -30,20 +30,31 @@ use host::invite::InviteCode;
 // UserRecord helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) type UserRecordParts = (
-    UserId,
-    Username,
-    Option<DisplayName>,
-    Option<Bio>,
-    DateTime<Utc>,
-    Option<DateTime<Utc>>,
-    Option<Email>,
-    bool,
-    bool,
-);
+/// The parts a [`UserRecord`] is assembled from.
+///
+/// **Named fields, not a tuple.** `email_verified` and `is_operator` are adjacent
+/// `bool`s: as a positional tuple, swapping them compiled silently and turned a verified
+/// flag into an operator grant. Naming them makes a swap visible at the one place the
+/// mapping happens ([`user_record_from_row`]) instead of spreading a positional contract
+/// across every caller.
+///
+/// Not a decode target and deliberately **not** `#[derive(FromRow)]` — [`UserRow`] is the
+/// type rows decode into, and it stays a tuple alias precisely so the gate keeps policing
+/// its elements.
+pub(crate) struct UserRecordParts {
+    pub(crate) user_id: UserId,
+    pub(crate) username: Username,
+    pub(crate) display_name: Option<DisplayName>,
+    pub(crate) bio: Option<Bio>,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) last_authenticated_at: Option<DateTime<Utc>>,
+    pub(crate) email: Option<Email>,
+    pub(crate) email_verified: bool,
+    pub(crate) is_operator: bool,
+}
 
 pub(crate) fn build_user_record(
-    (
+    UserRecordParts {
         user_id,
         username,
         display_name,
@@ -53,7 +64,7 @@ pub(crate) fn build_user_record(
         email,
         email_verified,
         is_operator,
-    ): UserRecordParts,
+    }: UserRecordParts,
 ) -> UserRecord {
     // The `username`, `display_name`, and `email` columns decode straight into
     // their domain newtypes via the sqlx bridge (#438), which validates through
@@ -198,8 +209,36 @@ pub(crate) type UserRow = (
     bool,
 );
 
+/// The single positional→named boundary for a decoded user row.
+///
+/// [`UserRow`] is a tuple because that is what `query_as` decodes into; this is the one
+/// place its order is interpreted. Concentrating that here is the point of
+/// [`UserRecordParts`] having named fields: a mis-ordered pair is visible in one
+/// reviewable mapping rather than implied at every call site.
 pub(crate) fn user_record_from_row(row: UserRow) -> UserRecord {
-    build_user_record(row)
+    let (
+        user_id,
+        username,
+        display_name,
+        bio,
+        created_at,
+        last_authenticated_at,
+        email,
+        email_verified,
+        is_operator,
+    ) = row;
+
+    build_user_record(UserRecordParts {
+        user_id,
+        username,
+        display_name,
+        bio,
+        created_at,
+        last_authenticated_at,
+        email,
+        email_verified,
+        is_operator,
+    })
 }
 
 pub(crate) type SessionRow = (
@@ -427,17 +466,17 @@ mod tests {
     #[test]
     fn test_build_user_record() {
         let now = Utc::now();
-        let parts: UserRecordParts = (
-            UserId::from(1),
-            parse_username("alice"),
-            Some(parse_display_name("Alice")),
-            Some(parse_bio("Bio")),
-            now,
-            Some(now),
-            Some(parse_email("alice@example.com")),
-            true,
-            false,
-        );
+        let parts = UserRecordParts {
+            user_id: UserId::from(1),
+            username: parse_username("alice"),
+            display_name: Some(parse_display_name("Alice")),
+            bio: Some(parse_bio("Bio")),
+            created_at: now,
+            last_authenticated_at: Some(now),
+            email: Some(parse_email("alice@example.com")),
+            email_verified: true,
+            is_operator: false,
+        };
         let record = build_user_record(parts);
         assert_eq!(record.user_id, UserId::from(1));
         assert_eq!(record.username, "alice");

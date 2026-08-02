@@ -120,9 +120,15 @@
 //! because rule 3 supplies the target. Widening the population under #728 made this live:
 //! `smtp.rs`'s four `load_smtp_config` reads and three in `test_support.rs` are config-store
 //! lookups, not row reads, and they carry `not-a-decode-target` entries. Telling them apart
-//! by receiver name would be exactly the pattern search this gate forbids. Likewise
-//! [`Scanner::visit_item_type`] polices *every* tuple alias under the root, including
-//! `UserRecordParts`, which is a function-parameter tuple and never a `query_as` target.
+//! by receiver name would be exactly the pattern search this gate forbids.
+//!
+//! [`Scanner::visit_item_type`] polices *every* tuple alias under the root, whether or not
+//! it is a `query_as` target — it cannot tell, and guessing is what the enumerate-don't-search
+//! rule forbids. That reach had one instance, `helpers.rs`'s `UserRecordParts`, a
+//! function-parameter tuple that was never decoded into; #777 removed it by making the type a
+//! named struct, which it wanted to be anyway (its two adjacent `bool`s transposed silently).
+//! **The tuple-alias over-bite currently has no instance** — the reach remains, and the next
+//! function-parameter tuple alias declared under the root will land here again.
 //!
 //! # What this gate does not claim
 //!
@@ -711,26 +717,6 @@ const ALLOWLIST: &[Allowed] = &[
         category: Category::FlagOrCounter,
         reason: "is_operator — the same two-state shape; the authorization *decision* is a \
                  domain concept, but the stored bit is not",
-    },
-    Allowed {
-        file: "helpers.rs",
-        function: "",
-        target: "bool",
-        what: "UserRecordParts.7",
-        count: 1,
-        category: Category::NotADecodeTarget,
-        reason: "UserRecordParts is a function-parameter tuple, never a query_as target — the \
-                 gate polices every tuple alias under the root and cannot tell which are \
-                 decode targets without guessing, so this is over-bite, not residue",
-    },
-    Allowed {
-        file: "helpers.rs",
-        function: "",
-        target: "bool",
-        what: "UserRecordParts.8",
-        count: 1,
-        category: Category::NotADecodeTarget,
-        reason: "the is_operator half of the same function-parameter tuple",
     },
     Allowed {
         file: "users.rs",

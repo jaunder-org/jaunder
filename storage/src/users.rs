@@ -383,17 +383,19 @@ where
             .await
             .map_err(|e| UserAuthError::Internal(Box::new(e)))?;
 
-        Ok(crate::helpers::build_user_record((
-            user_id,
-            username,
-            display_name,
-            bio,
-            created_at,
-            Some(now),
-            email,
-            email_verified,
-            is_operator,
-        )))
+        Ok(crate::helpers::build_user_record(
+            crate::helpers::UserRecordParts {
+                user_id,
+                username,
+                display_name,
+                bio,
+                created_at,
+                last_authenticated_at: Some(now),
+                email,
+                email_verified,
+                is_operator,
+            },
+        ))
     }
 
     async fn get_user(&self, user_id: UserId) -> sqlx::Result<Option<UserRecord>> {

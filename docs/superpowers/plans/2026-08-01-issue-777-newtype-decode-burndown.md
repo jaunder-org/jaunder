@@ -419,29 +419,29 @@ at `:735-745` whose reason names #693.
 
 ### Task 13 — named struct + explicit mappings
 
-- [ ] **Files:** `storage/src/helpers.rs`, `storage/src/users.rs`.
+- [x] **Files:** `storage/src/helpers.rs`, `storage/src/users.rs`.
 
 Replace the 9-element tuple alias at `helpers.rs:32` with a named struct (**no
 `FromRow`** — it is not a decode target). `build_user_record` takes it by name.
 
-- [ ] `helpers.rs:417-428` — the test's positional tuple literal → named-field
+- [x] `helpers.rs:417-428` — the test's positional tuple literal → named-field
       construction.
-- [ ] `helpers.rs:200-201` — `user_record_from_row` gains an explicit `UserRow`
+- [x] `helpers.rs:200-201` — `user_record_from_row` gains an explicit `UserRow`
       → struct mapping. This is the point of the task: the adjacent-`bool`
       hazard is **concentrated** into one named, reviewable site, not
       eliminated.
-- [ ] `users.rs:385` — `build_user_record((…))` with a 9-element positional
+- [x] `users.rs:385` — `build_user_record((…))` with a 9-element positional
       tuple literal. **The site that matters:** it hand-assembles
       `email_verified, is_operator` from an `authenticate` row. Part B is not
       complete without it.
-- [ ] **Do not touch `UserRow`** (`helpers.rs:188-198`). It _is_ a genuine
+- [x] **Do not touch `UserRow`** (`helpers.rs:188-198`). It _is_ a genuine
       `query_as` target, stays a policed tuple alias, and keeps its
       `FlagOrCounter` entries (`:706-714`).
-- [ ] **Run:** `cargo nextest run -p storage helpers users`.
+- [x] **Run:** `cargo nextest run -p storage helpers users`.
 
 ### Task 14 — delete the two entries, fix the doc
 
-- [ ] **Files:** `xtask/src/steps/sqlx_newtype_decode_check.rs`.
+- [x] **Files:** `xtask/src/steps/sqlx_newtype_decode_check.rs`.
 
 Delete the entries keyed `UserRecordParts.7` (`:719`) and `.8` (`:730`). The
 unmatched-entry check in `problems()` (`:1515`, test at `:2203`) fails until
@@ -452,14 +452,15 @@ over-bite example; task 13 destroys it. Replace with a surviving instance, or
 state that the tuple-alias over-bite currently has none. **This is the only
 permitted prose change under `xtask/`.**
 
-- [ ] **Verify the non-goals:** `git diff wt-base-issue-777..HEAD -- xtask/`
+- [x] **Verify the non-goals:** `git diff wt-base-issue-777..HEAD -- xtask/`
       shows only the three entry deletions (tasks 12 and 14) plus the `:125` doc
       fix — no surviving entry's `category`/`count`/`reason` edited, no `count`
       increased, and no change to `target_index`, the rule 1/2/3 precedence,
       `POLICED_ROOT`, `BRIDGE_DERIVES`, `BRIDGE_ATTRIBUTES`, or
       `APPROVED_FOREIGN`.
-- [ ] **Run:** `cargo xtask validate --no-e2e` — green, allowlist at **57**.
-- [ ] **Gate + commit:**
+- [x] **Run:** `cargo xtask check` — green (its superset of steps; validate
+      --no-e2e is the verify-only twin), allowlist at **57**.
+- [x] **Gate + commit:**
       `refactor(storage): name the UserRecord parts and drop the tuple-alias over-bite (#777)`.
 
 ---
