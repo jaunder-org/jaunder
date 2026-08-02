@@ -284,28 +284,6 @@ pub async fn member_get(
         .into_response())
 }
 
-/// Reconciles the post's tags with a desired set of category terms.
-///
-/// Tags missing from `desired` are removed; desired categories not yet tagged
-/// are added. Each `desired` label is already valid (invalid `<category>` terms
-/// were skipped upstream in `entry_to_post_fields`).
-async fn apply_categories(
-    posts: &dyn storage::PostStorage,
-    post_id: PostId,
-    desired: &[TagLabel],
-) -> Result<(), HandlerError> {
-    let existing = posts.get_tags_for_post(post_id).await?;
-    let diff = storage::post_tag_diff(&existing, desired);
-
-    for label in diff.to_add {
-        posts.tag_post(post_id, label).await?;
-    }
-    for slug in diff.to_remove {
-        posts.untag_post(post_id, slug).await?;
-    }
-    Ok(())
-}
-
 /// `DELETE /atompub/{username}/posts/{post_id}` — soft-deletes a post.
 ///
 /// # Errors
@@ -425,7 +403,9 @@ pub async fn collection_post(
 
     // Fresh create: a non-conflict error propagates via `?`.
     let created = created?;
-    apply_categories(posts.as_ref(), created.post_id, &fields.categories).await?;
+    posts
+        .set_post_tags(created.post_id, &fields.categories)
+        .await?;
     let post = posts
         .get_post_by_id(created.post_id, &viewer)
         .await?
@@ -527,7 +507,7 @@ pub async fn member_put(
     )
     .await?;
 
-    apply_categories(posts.as_ref(), post_id, &fields.categories).await?;
+    posts.set_post_tags(post_id, &fields.categories).await?;
 
     // Load as the authenticated owner so a non-Public post is not hidden.
     let viewer = owner_viewer(subscriptions.as_ref(), &auth_user).await?;

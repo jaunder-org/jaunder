@@ -318,9 +318,9 @@ pub(crate) fn post_tags_from_rows(rows: Vec<(PostId, TagId, Tag, TagLabel)>) -> 
 /// The slug-level difference between a post's existing tags and a desired set
 /// of display tokens, as computed by [`post_tag_diff`].
 ///
-/// Borrows from both inputs; callers perform the actual `tag_post`/`untag_post`
-/// writes with their own error mapping.
-pub struct PostTagDiff<'a> {
+/// Borrows from both inputs. Applied by `set_post_tags` inside its transaction;
+/// no caller performs the writes itself (#771).
+pub(crate) struct PostTagDiff<'a> {
     /// Labels to add (their slug is not already present on the post).
     pub to_add: Vec<&'a TagLabel>,
     /// Existing tags to remove (their slug is not in the desired set).
@@ -336,10 +336,13 @@ pub struct PostTagDiff<'a> {
 /// existing tag with different display casing is a no-op (the existing row's
 /// casing is preserved by storage).
 ///
-/// This is the pure core shared by the `web` and `server`/`AtomPub` front-ends;
-/// each applies the result with its own error type.
+/// This is the pure core of `set_post_tags`, which applies the result inside its
+/// own transaction on both dialects (#771).
 #[must_use]
-pub fn post_tag_diff<'a>(existing: &'a [PostTag], desired: &'a [TagLabel]) -> PostTagDiff<'a> {
+pub(crate) fn post_tag_diff<'a>(
+    existing: &'a [PostTag],
+    desired: &'a [TagLabel],
+) -> PostTagDiff<'a> {
     use std::collections::HashSet;
 
     let existing_slugs: HashSet<Tag> = existing.iter().map(|t| t.tag_slug.clone()).collect();
@@ -437,33 +440,6 @@ pub fn parse_post_cursor(
             "cursor_created_at and cursor_post_id must be provided together",
         )),
     }
-}
-
-/// Diff the existing tag set against `desired` (a Vec of validated display
-/// tokens) and apply the difference: `tag_post` for new entries, `untag_post`
-/// for removed entries. Re-applying an existing tag with new display casing
-/// is a no-op at the slug level (the storage layer keys on slug); the
-/// display casing of the existing row is preserved.
-///
-/// # Errors
-///
-/// Returns a storage error if the existing tags cannot be read, or a server
-/// error (via `From<TaggingError>`) if a `tag_post`/`untag_post` write fails.
-pub async fn apply_post_tag_diff(
-    posts: &dyn PostStorage,
-    post_id: PostId,
-    desired: &[TagLabel],
-) -> InternalResult<()> {
-    let existing = posts.get_tags_for_post(post_id).await?;
-    let diff = post_tag_diff(&existing, desired);
-
-    for label in diff.to_add {
-        posts.tag_post(post_id, label).await?;
-    }
-    for slug in diff.to_remove {
-        posts.untag_post(post_id, slug).await?;
-    }
-    Ok(())
 }
 
 /// The shared public-permalink lookup used by both the `get_post` server fn and
@@ -3811,50 +3787,6 @@ mod tests {
         .await
         .unwrap();
         assert!(missing.is_none());
-    }
-
-    #[apply(backends)]
-    #[tokio::test]
-    async fn apply_post_tag_diff_adds_then_removes_tags(#[case] backend: Backend) {
-        let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let posts = &*env.state.posts;
-        let post_id = SeedRawPost::new(user_id)
-            .draft()
-            .seed(&env.state)
-            .await
-            .post_id;
-
-        // Adding two tags then reading back yields both slugs.
-        apply_post_tag_diff(
-            posts,
-            post_id,
-            &[parse_tag_label("rust"), parse_tag_label("web")],
-        )
-        .await
-        .unwrap();
-        let mut slugs: Vec<String> = posts
-            .get_tags_for_post(post_id)
-            .await
-            .unwrap()
-            .iter()
-            .map(|t| t.tag_slug.to_string())
-            .collect();
-        slugs.sort();
-        assert_eq!(slugs, vec!["rust".to_string(), "web".to_string()]);
-
-        // Narrowing the desired set removes the dropped tag.
-        apply_post_tag_diff(posts, post_id, &[parse_tag_label("rust")])
-            .await
-            .unwrap();
-        let remaining: Vec<String> = posts
-            .get_tags_for_post(post_id)
-            .await
-            .unwrap()
-            .iter()
-            .map(|t| t.tag_slug.to_string())
-            .collect();
-        assert_eq!(remaining, vec!["rust".to_string()]);
     }
 
     #[apply(backends)]

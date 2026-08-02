@@ -666,7 +666,7 @@ This is where **ADR-0092 compliance lands**.
 - Produces: no new API. `post_tag_diff` becomes `pub(crate)`;
   `apply_post_tag_diff` and `apply_categories` cease to exist.
 
-- [ ] **Step 1: Write the mock-counted call tests (AC1)**
+- [x] **Step 1: Write the mock-counted call tests (AC1)**
 
 **These go in `web/src/posts/api.rs`'s own `#[cfg(test)] mod tests` (`:780-828`)
 — not in `server/tests/web/web_posts.rs`.** That integration file contains
@@ -694,17 +694,22 @@ posts.expect_set_post_tags().times(1).returning(|_, _| Ok(()));
 posts.expect_set_post_tags().times(0);
 ```
 
-- [ ] **Step 2: Run them, verify they fail**
+- [x] **Step 2: Run them, verify they fail**
 
 ```
-cargo nextest run -p web posts::api
+cargo nextest run -p web --features server posts::api::server_tests
 ```
 
 Expected: **FAIL** — production still calls `tag_post`, so `set_post_tags` is
 never called (`times(1)` unsatisfied). No PostgreSQL wrapper needed: these are
-mock-backed in-crate tests, not DB-touching.
+mock-backed in-crate tests, not DB-touching. **`--features server` is
+required**: `server_tests` is `#[cfg(all(test, feature = "server"))]` and
+`web`'s default feature set is empty, so a bare `-p web` silently skips the
+whole module. Observed RED:
+`MockPostStorage::tag_post(…): No matching expectation found` (create) and
+`MockPostStorage::get_tags_for_post(…)` (both updates).
 
-- [ ] **Step 3: Move the web create site**
+- [x] **Step 3: Move the web create site**
 
 `web/src/posts/api.rs:221-230`. The loop and the read-back both go: the slugs
 the feed-event fan-out needs are already determined, since `tag_post` stored
@@ -722,7 +727,7 @@ exactly `TagLabel::slug()` (D10).
         .map_err(InternalError::storage)?;
 ```
 
-- [ ] **Step 4: Move the web update site**
+- [x] **Step 4: Move the web update site**
 
 `web/src/posts/api.rs:351-360`. `old_tag_slugs` is already in hand (bound at
 `:312` from the `get_post_by_id` at `:309`), so the union needs no second read.
@@ -737,7 +742,7 @@ exactly `TagLabel::slug()` (D10).
     }
 ```
 
-- [ ] **Step 5: Move both AtomPub sites and delete `apply_categories`**
+- [x] **Step 5: Move both AtomPub sites and delete `apply_categories`**
 
 Delete `apply_categories` entirely (`server/src/atompub/posts.rs:292-307`) and
 replace both call sites (`:428`, `:530`) with:
@@ -749,7 +754,7 @@ replace both call sites (`:428`, `:530`) with:
 (at `:428` the id is `created.post_id`). `TaggingError` already converts to
 `HandlerError` (`server/src/atompub/mod.rs:226`), so `?` still works.
 
-- [ ] **Step 6: Delete `apply_post_tag_diff`; demote `post_tag_diff` and
+- [x] **Step 6: Delete `apply_post_tag_diff`; demote `post_tag_diff` and
       `PostTagDiff`**
 
 Delete `storage/src/posts.rs:414-439` (the range starts at the leading doc
@@ -771,17 +776,25 @@ perform the actual `tag_post`/`untag_post` writes with their own error mapping"_
 
 Also drop `apply_post_tag_diff` from `web/src/posts/api.rs:52`'s import list.
 
-- [ ] **Step 7: Run the tests, verify they pass**
+Three references the plan did not list go dangling the moment those two helpers
+die, so they are fixed here rather than left broken for a commit:
+`apply_post_tag_diff_adds_then_removes_tags` (`storage/src/posts.rs:3792`) is
+**deleted** — its only caller is gone, and Task 1's
+`set_post_tags_adds_removes_and_clears` already covers the behaviour (Task 4
+Step 2 had scheduled the same deletion); `server/src/atompub/mod.rs:143` names
+`apply_categories` in `HandlerError`'s doc; and `common/src/test_support.rs:441`
+names `apply_post_tag_diff` (its `tag_post` mention stays for Task 4).
+
+- [x] **Step 7: Run the tests, verify they pass**
 
 ```
-cargo run --manifest-path tools/Cargo.toml -p devtool -- pg run -- cargo nextest run -p jaunder
-cargo run --manifest-path tools/Cargo.toml -p devtool -- pg run -- cargo nextest run -p storage
+cargo run --manifest-path tools/Cargo.toml -p devtool -- pg run -- cargo nextest run -p jaunder -p storage
 ```
 
 Expected: **PASS** — including the feed-event fan-out tests (AC9), which must
 show the same surfaces enqueued as before.
 
-- [ ] **Step 8: Gate and commit**
+- [x] **Step 8: Gate and commit**
 
 **No server-fn coverage regeneration is needed** — an earlier draft of this plan
 (and the spec's test-plan item 8) claimed otherwise, wrongly. Those artifacts

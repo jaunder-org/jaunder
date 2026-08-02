@@ -140,14 +140,13 @@ pub(crate) async fn required_base_url(
 
 /// The error type for the raw `AtomPub` HTTP handlers.
 ///
-/// Handlers and their helpers (`require_user_match`, `owned_post`,
-/// `apply_categories`) return this domain error; the single [`IntoResponse`]
-/// impl below is the **only** place an HTTP status is chosen, keeping
-/// `StatusCode` out of the helper layer (the boundary principle). Genuine
-/// internal failures are logged at `error` level as they are converted (see the
-/// `From` impls), so a `500` is never a blank, un-diagnosable response. The
-/// logged error is infrastructure detail (a storage/IO failure), not user
-/// content, so it carries no PII.
+/// Handlers and their helpers (`require_user_match`, `owned_post`) return this
+/// domain error; the single [`IntoResponse`] impl below is the **only** place an
+/// HTTP status is chosen, keeping `StatusCode` out of the helper layer (the
+/// boundary principle). Genuine internal failures are logged at `error` level as
+/// they are converted (see the `From` impls), so a `500` is never a blank,
+/// un-diagnosable response. The logged error is infrastructure detail (a
+/// storage/IO failure), not user content, so it carries no PII.
 #[derive(Debug)]
 pub enum HandlerError {
     /// Malformed request input (bad entry XML, bad cursor, empty filename). `400`.

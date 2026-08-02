@@ -49,9 +49,9 @@ use {
     leptos::prelude::*,
     std::{collections::BTreeSet, sync::Arc},
     storage::{
-        apply_post_tag_diff, fetch_post_record, find_draft_by_permalink_for_user,
-        parse_post_cursor, perform_post_creation, perform_post_update, FeedEventStorage,
-        PostCreation, PostStorage, PostUpdate, PublishUpdate, SiteConfigStorage,
+        fetch_post_record, find_draft_by_permalink_for_user, parse_post_cursor,
+        perform_post_creation, perform_post_update, FeedEventStorage, PostCreation, PostStorage,
+        PostUpdate, PublishUpdate, SiteConfigStorage,
     },
 };
 
@@ -218,13 +218,14 @@ pub async fn create(args: CreateArgs) -> WebResult<CreateResult> {
         summary: record.summary,
     };
 
-    for label in &validated_tags {
-        posts.tag_post(created.post_id, label).await?;
-    }
+    posts
+        .set_post_tags(created.post_id, &validated_tags)
+        .await?;
 
     let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
-    let tag_post_tags = posts.get_tags_for_post(created.post_id).await?;
-    let tag_slugs: BTreeSet<Tag> = tag_post_tags.iter().map(|t| t.tag_slug.clone()).collect();
+    // Slugs are known without a read-back: set_post_tags stores exactly
+    // TagLabel::slug() for each desired label (#771).
+    let tag_slugs: BTreeSet<Tag> = validated_tags.iter().map(TagLabel::slug).collect();
     enqueue_feed_events(feed_events.as_ref(), &auth.username, &tag_slugs)
         .await
         .map_err(InternalError::storage)?;
@@ -348,15 +349,13 @@ pub async fn update(args: UpdateArgs) -> WebResult<UpdateResult> {
     )
     .await?;
 
-    if let Some(new_tags) = new_tags {
-        apply_post_tag_diff(posts.as_ref(), post_id, &new_tags).await?;
-    }
-
-    // Fetch current tags after mutation and union with old tags
-    let current_tags = posts.get_tags_for_post(post_id).await?;
     let mut all_tag_slugs: BTreeSet<Tag> = old_tag_slugs;
-    for tag in current_tags {
-        all_tag_slugs.insert(tag.tag_slug);
+    if let Some(new_tags) = new_tags {
+        posts.set_post_tags(post_id, &new_tags).await?;
+        // Union old with new so both the vacated and the newly-occupied tag
+        // surfaces get regenerated. The new slugs need no read-back:
+        // set_post_tags stores exactly TagLabel::slug() (#771).
+        all_tag_slugs.extend(new_tags.iter().map(TagLabel::slug));
     }
 
     let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
@@ -778,18 +777,20 @@ mod server_tests {
     // Helper fns in this feature-gated test module aren't covered by clippy's
     // allow-{unwrap,expect}-in-tests, so allow the test-scaffolding panics.
     #![allow(clippy::unwrap_used, clippy::expect_used)]
-    use super::publish;
+    use super::{create, publish, update, CreateArgs, UpdateArgs};
     use crate::error::WebError;
     use crate::test_support::auth_parts;
     use chrono::Utc;
-    use common::ids::{PostId, UserId};
+    use common::ids::{ChannelId, PostId, UserId};
     use common::slug::Slug;
-    use common::test_support::parse_username;
+    use common::tag::TagLabel;
+    use common::test_support::{parse_tag_label, parse_username};
     use leptos::prelude::provide_context;
     use leptos::reactive::owner::Owner;
     use std::sync::Arc;
     use storage::{
-        MockPostStorage, PostFormat, PostRecord, PostStorage, RenderedHtml, UpdatePostError,
+        FeedEventStorage, MockFeedEventStorage, MockPostStorage, MockSubscriptionStorage,
+        PostFormat, PostRecord, PostStorage, RenderedHtml, SubscriptionStorage, UpdatePostError,
     };
 
     fn owned_post(user_id: UserId) -> PostRecord {
@@ -854,5 +855,126 @@ mod server_tests {
         let result = publish(PostId::from(1)).await;
         drop(owner);
         assert!(matches!(result.unwrap_err(), WebError::NotFound { .. }));
+    }
+
+    /// Wires an authenticated owner (user 1) over a caller-configured post store
+    /// plus a permissive feed-event store, so `create`/`update` run end-to-end
+    /// without a database. The mock's expectations are verified when the owner —
+    /// and with it the context-held `Arc` — is dropped.
+    fn mutation_owner(posts: MockPostStorage) -> Owner {
+        let owner = Owner::new();
+        owner.set();
+        provide_context(auth_parts(UserId::from(1), "alice"));
+        provide_context(Arc::new(posts) as Arc<dyn PostStorage>);
+        let mut events = MockFeedEventStorage::new();
+        events.expect_enqueue_many().returning(|_| Ok(()));
+        provide_context(Arc::new(events) as Arc<dyn FeedEventStorage>);
+        // `update` resolves a viewer before reading the post, and the account
+        // branch of that ladder looks the `local` channel up through storage.
+        let mut subscriptions = MockSubscriptionStorage::new();
+        subscriptions
+            .expect_local_channel_id()
+            .returning(|| Ok(ChannelId::from(1)));
+        provide_context(Arc::new(subscriptions) as Arc<dyn SubscriptionStorage>);
+        owner
+    }
+
+    fn create_args(tags: Option<Vec<TagLabel>>) -> CreateArgs {
+        CreateArgs {
+            body: "body".into(),
+            format: PostFormat::Markdown,
+            slug_override: None,
+            publish: false,
+            publish_at: None,
+            tags,
+            summary: None,
+            audience: None,
+        }
+    }
+
+    fn update_args(tags: Option<Vec<TagLabel>>) -> UpdateArgs {
+        UpdateArgs {
+            post_id: PostId::from(1),
+            body: "body".into(),
+            format: PostFormat::Markdown,
+            slug_override: None,
+            publish: false,
+            publish_at: None,
+            tags,
+            summary: None,
+            audience: None,
+        }
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn create_writes_every_tag_in_one_batched_call() {
+        // One `set_post_tags` call per mutation regardless of tag count — the
+        // ADR-0092 acquisition-count property, pinned the way
+        // `web/src/feed_events.rs` pins `enqueue_many` for the feed fan-out.
+        let mut posts = MockPostStorage::new();
+        posts
+            .expect_create_post()
+            .returning(|_input| Ok(PostId::from(1)));
+        posts
+            .expect_get_post_by_id()
+            .returning(|_id, _viewer| Ok(Some(owned_post(UserId::from(1)))));
+        posts
+            .expect_set_post_tags()
+            .times(1)
+            .withf(|_post_id, desired| desired.len() == 2)
+            .returning(|_, _| Ok(()));
+        let owner = mutation_owner(posts);
+        let result = create(create_args(Some(vec![
+            parse_tag_label("rust"),
+            parse_tag_label("web"),
+        ])))
+        .await;
+        drop(owner);
+        result.expect("create succeeds");
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn update_writes_every_tag_in_one_batched_call() {
+        let mut posts = MockPostStorage::new();
+        posts
+            .expect_get_post_by_id()
+            .returning(|_id, _viewer| Ok(Some(owned_post(UserId::from(1)))));
+        posts
+            .expect_update_post()
+            .returning(|_id, _user, _input| Ok(owned_post(UserId::from(1))));
+        posts
+            .expect_set_post_tags()
+            .times(1)
+            .withf(|_post_id, desired| desired.len() == 2)
+            .returning(|_, _| Ok(()));
+        let owner = mutation_owner(posts);
+        let result = update(update_args(Some(vec![
+            parse_tag_label("rust"),
+            parse_tag_label("web"),
+        ])))
+        .await;
+        drop(owner);
+        result.expect("update succeeds");
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn update_with_tags_unset_writes_no_tags_at_all() {
+        // `tags: None` means "leave them alone", so the tag write must not happen —
+        // not even a clearing one.
+        let mut posts = MockPostStorage::new();
+        posts
+            .expect_get_post_by_id()
+            .returning(|_id, _viewer| Ok(Some(owned_post(UserId::from(1)))));
+        posts
+            .expect_update_post()
+            .returning(|_id, _user, _input| Ok(owned_post(UserId::from(1))));
+        posts.expect_set_post_tags().times(0);
+        let owner = mutation_owner(posts);
+        let result = update(update_args(None)).await;
+        drop(owner);
+        result.expect("update succeeds");
     }
 }
