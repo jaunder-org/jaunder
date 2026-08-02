@@ -24,10 +24,14 @@ import {
   type Browser,
   type BrowserContext,
   type Page,
-  type Request,
   type TestInfo,
 } from "@playwright/test";
 import { drainActionsForTest, setCurrentActionTestKey } from "./actions";
+import {
+  attachTraceCapture,
+  type PagePerfSummary,
+  type TraceCapture,
+} from "./capture-trace";
 import {
   buildSpan,
   exportSpans,
@@ -41,43 +45,17 @@ import { readEmailLines, type CapturedEmail } from "./mail";
 import { MOUNTED_ATTR, MOUNTED_SELECTOR } from "./mount";
 import { pollUntil } from "./polling";
 
-type RequestRecord = {
-  method: string;
-  url: string;
-  resourceType: string;
-  startedMs: number;
-  endedMs: number;
-  durationMs: number;
-  failed: boolean;
-  failureText?: string;
+/** One extra context a spec opened via `tracedContext`, plus the client-side
+ *  perf read from it just before it closed. `_autoPerfSpan` turns each into an
+ *  `e2e.page` span. */
+type TracedContextRecord = {
+  capture: TraceCapture;
+  perf: PagePerfSummary | null;
 };
 
-type PagePerfSummary = {
-  navigation: {
-    domContentLoadedMs: number;
-    loadMs: number;
-    responseStartMs: number;
-  } | null;
-  resources: {
-    count: number;
-    totalDurationMs: number;
-    topSlow: Array<{ name: string; initiatorType: string; durationMs: number }>;
-  };
-  longTasks: Array<{ startTime: number; duration: number; name: string }>;
-};
-
-type NavigationRecord = {
-  id: number;
-  url: string;
-  startedMs: number;
-  committedMs: number | null;
-  domContentLoadedMs: number | null;
-  loadMs: number | null;
-  mountedMs: number | null;
-  requestFinishedMs: number | null;
-  requestFailed: boolean;
-  requestFailureText?: string;
-};
+/** Handoff from the `tracedContext` fixture to `_autoPerfSpan`, keyed by the
+ *  test's span id. Drained when the spans are built. */
+const tracedContextRecords = new Map<string, TracedContextRecord[]>();
 
 type NavigationSummary = {
   id: number;
@@ -301,6 +279,7 @@ export type Mailbox = {
 };
 
 const test = base.extend<{
+  _lifecycleStart: number;
   _autoTestTimeout: void;
   _autoPerfSpan: void;
   testSpanId: string;
@@ -320,6 +299,25 @@ const test = base.extend<{
   // It has to be a fixture, not a local in `_autoPerfSpan`: `user` and
   // `verifiedUser` build their own throwaway contexts and are independent
   // fixtures, so they cannot read a value minted inside another one.
+  // The earliest moment this test can observe. Everything before `_autoPerfSpan`
+  // — browser context mint, page creation, the rest of fixture setup — happens
+  // after this stamp and before that fixture's body, which is the only way to
+  // size it: `_autoPerfSpan` declares `{ page }`, so Playwright has already built
+  // the context and page by the time its own body runs (#794).
+  //
+  // ORDERING IS LOAD-BEARING AND FRAGILE. Playwright sets auto fixtures up in
+  // *registration* order (an insertion-ordered Map, stable-sorted worker-before-
+  // test), so this works only because this key precedes `_autoTestTimeout` and
+  // `_autoPerfSpan` in this object literal, and because it depends on nothing.
+  // Reorder the keys and `e2e.context_mint` silently collapses to zero width —
+  // which is exactly what its non-zero-duration check is there to catch.
+  _lifecycleStart: [
+    async ({}, use) => {
+      await use(Date.now());
+    },
+    { auto: true },
+  ],
+
   testSpanId: async ({}, use) => {
     await use(newSpanId());
   },
@@ -329,11 +327,38 @@ const test = base.extend<{
   // cannot be omitted at the call site.
   tracedContext: async ({ browser, testSpanId }, use) => {
     const { traceId } = traceContextFromEnvironment();
+    const opened: TracedContextRecord[] = [];
     await use(async (options) => {
       const context = await browser.newContext(options);
       await applyTestTraceparent(context, traceId, testSpanId);
+      // Same instrumentation the default page gets, through the same code path —
+      // extra contexts used to have none, so a multi-context test under-reported
+      // its own client cost (#794).
+      const capture = await attachTraceCapture(context);
+      capture.setPhase("test");
+      const record: TracedContextRecord = { capture, perf: null };
+      opened.push(record);
+
+      // Snapshot the client-side perf BEFORE the context closes. `on("close")`
+      // fires *after* closing, when `page.evaluate` would throw — and the caller
+      // owns this context's lifetime, so wrapping `close` is the only hook that
+      // reliably runs while a page is still alive.
+      const close = context.close.bind(context);
+      context.close = async (...args: Parameters<typeof close>) => {
+        const [page] = context.pages();
+        if (page !== undefined) {
+          record.perf = await capture.readPagePerf(page);
+        }
+        return close(...args);
+      };
       return context;
     });
+    // Hand the records to `_autoPerfSpan`, which builds the spans. It cannot
+    // read this fixture's value directly (it does not depend on it), and a
+    // module-level handoff keyed by span id is the same shape `actions.ts`
+    // already uses. Safe on ordering: auto fixtures set up first and so tear
+    // down last, meaning this runs before `_autoPerfSpan`'s teardown reads it.
+    tracedContextRecords.set(testSpanId, opened);
   },
 
   // Ambient whole-test timeout. `auto`, so it applies to EVERY test; Playwright
@@ -435,11 +460,30 @@ const test = base.extend<{
   },
 
   _autoPerfSpan: [
-    async ({ page, testSpanId }, use, testInfo) => {
-      // Optional experiment mode: warm the same browser context before tracing starts.
+    async ({ page, testSpanId, _lifecycleStart }, use, testInfo) => {
+      // `_lifecycleStart` was stamped before the browser context and page were
+      // built; this fixture's body runs after both, so the gap between them is
+      // the context-mint cost that used to be invisible.
+      const lifecycleStartMs = _lifecycleStart;
+      const perfSpanEntryMs = Date.now();
+
+      // Capture attaches BEFORE the warmup, so the warmup's own traffic is
+      // measured rather than invisible. Attribution is a separate concern and
+      // still waits (see below) — fusing the two is what left the warmup's
+      // duration measured nowhere (#794).
+      const capture = await attachTraceCapture(page.context());
+      const warmupStartMs = Date.now();
       await warmupPageContext(page, testInfo);
+      // `null` when warmup is off, so no `e2e.warmup` span is emitted at all
+      // rather than a misleading zero-width one.
+      const warmupEndMs = parseBooleanFlag(process.env.JAUNDER_E2E_WARMUP)
+        ? Date.now()
+        : null;
 
       const traceContext = traceContextFromEnvironment();
+      // Records starting from here belong to the test, not the warmup. Switched
+      // at the same moment as the traceparent so the two stay in lockstep.
+      capture.setPhase("test");
       // The test's own context, so its requests are attributable too. Applied
       // after the warmup so warmup traffic (which is not part of the test) stays
       // out of the attribution (#681).
@@ -450,206 +494,7 @@ const test = base.extend<{
       );
       const testStartMs = Date.now();
       const testKey = `${testInfo.file}::${testInfo.title}::${testInfo.project.name}::${testInfo.retry}`;
-      const requestStarts = new Map<Request, number>();
-      const requests: RequestRecord[] = [];
-      const navigationRequestIds = new Map<Request, number>();
-      const pendingNavigationIds: number[] = [];
-      const navigations: NavigationRecord[] = [];
-      let activeNavigationId: number | null = null;
-      let nextNavigationId = 1;
-
-      await page.exposeBinding("__jaunderRecordMount", (_source, value) => {
-        if (!value || typeof value !== "object") return;
-        const payload = value as { href?: unknown };
-        const href = typeof payload.href === "string" ? payload.href : null;
-        const nowMs = Date.now();
-
-        // The mount-ready marker should be attributed to the most recent matching
-        // navigation (`data-mounted` is set once per document).
-        for (let index = navigations.length - 1; index >= 0; index -= 1) {
-          const navigation = navigations[index];
-          if (navigation.mountedMs !== null) continue;
-          if (href !== null && navigation.url !== href) continue;
-          navigation.mountedMs = nowMs;
-          return;
-        }
-      });
-
-      // `addInitScript` serializes this callback into the page, so it cannot close
-      // over `MOUNTED_ATTR` from module scope — the attribute name is passed as the
-      // call's argument instead (#251).
-      await page.addInitScript((mountedAttr: string) => {
-        const globalScope = globalThis as typeof globalThis & {
-          __jaunderLongTasks?: Array<{
-            startTime: number;
-            duration: number;
-            name: string;
-          }>;
-          __jaunderMountNotified?: boolean;
-          __jaunderRecordMount?: (payload: { href: string }) => void;
-        };
-        globalScope.__jaunderLongTasks = [];
-        globalScope.__jaunderMountNotified = false;
-
-        const notifyMount = () => {
-          if (globalScope.__jaunderMountNotified) return;
-          const body = document.body;
-          if (!body || !body.hasAttribute(mountedAttr)) return;
-          globalScope.__jaunderMountNotified = true;
-          try {
-            globalScope.__jaunderRecordMount?.({ href: location.href });
-          } catch {
-            // Ignore cross-context bridge errors while collecting diagnostics.
-          }
-        };
-
-        notifyMount();
-        if (document.readyState === "loading") {
-          document.addEventListener("DOMContentLoaded", notifyMount, {
-            once: true,
-          });
-        }
-        try {
-          const mountObserver = new MutationObserver(() => notifyMount());
-          mountObserver.observe(document.documentElement, {
-            subtree: true,
-            attributes: true,
-            attributeFilter: [mountedAttr],
-          });
-        } catch {
-          // MutationObserver should always exist in browsers, but keep this defensive.
-        }
-
-        if (typeof PerformanceObserver === "undefined") return;
-        try {
-          const observer = new PerformanceObserver((list) => {
-            for (const entry of list.getEntries()) {
-              if (entry.entryType !== "longtask") continue;
-              globalScope.__jaunderLongTasks?.push({
-                startTime: entry.startTime,
-                duration: entry.duration,
-                name: entry.name || "longtask",
-              });
-            }
-          });
-          observer.observe({ type: "longtask", buffered: true });
-        } catch {
-          // LongTask API is not available in every engine build.
-        }
-      }, MOUNTED_ATTR);
-
-      page.on("request", (request) => {
-        requestStarts.set(request, Date.now());
-        if (
-          request.isNavigationRequest() &&
-          request.resourceType() === "document" &&
-          request.frame() === page.mainFrame()
-        ) {
-          const navigationId = nextNavigationId;
-          nextNavigationId += 1;
-          navigationRequestIds.set(request, navigationId);
-          pendingNavigationIds.push(navigationId);
-          navigations.push({
-            id: navigationId,
-            url: request.url(),
-            startedMs: Date.now(),
-            committedMs: null,
-            domContentLoadedMs: null,
-            loadMs: null,
-            mountedMs: null,
-            requestFinishedMs: null,
-            requestFailed: false,
-          });
-        }
-      });
-
-      page.on("requestfinished", (request) => {
-        const startedMs = requestStarts.get(request) ?? Date.now();
-        const endedMs = Date.now();
-        requests.push({
-          method: request.method(),
-          url: request.url(),
-          resourceType: request.resourceType(),
-          startedMs,
-          endedMs,
-          durationMs: endedMs - startedMs,
-          failed: false,
-        });
-
-        const navigationId = navigationRequestIds.get(request);
-        if (navigationId !== undefined) {
-          const navigation = navigations.find(
-            (entry) => entry.id === navigationId,
-          );
-          if (navigation) {
-            navigation.requestFinishedMs = endedMs;
-            navigation.url = request.url();
-          }
-        }
-      });
-
-      page.on("requestfailed", (request) => {
-        const startedMs = requestStarts.get(request) ?? Date.now();
-        const endedMs = Date.now();
-        requests.push({
-          method: request.method(),
-          url: request.url(),
-          resourceType: request.resourceType(),
-          startedMs,
-          endedMs,
-          durationMs: endedMs - startedMs,
-          failed: true,
-          failureText: request.failure()?.errorText,
-        });
-
-        const navigationId = navigationRequestIds.get(request);
-        if (navigationId !== undefined) {
-          const navigation = navigations.find(
-            (entry) => entry.id === navigationId,
-          );
-          if (navigation) {
-            navigation.requestFinishedMs = endedMs;
-            navigation.requestFailed = true;
-            navigation.requestFailureText = request.failure()?.errorText;
-            navigation.url = request.url();
-          }
-        }
-      });
-
-      page.on("framenavigated", (frame) => {
-        if (frame !== page.mainFrame()) return;
-        const navigationId = pendingNavigationIds.shift() ?? null;
-        if (navigationId === null) return;
-        activeNavigationId = navigationId;
-        const navigation = navigations.find(
-          (entry) => entry.id === navigationId,
-        );
-        if (!navigation) return;
-        navigation.committedMs = Date.now();
-        navigation.url = frame.url();
-      });
-
-      page.on("domcontentloaded", () => {
-        if (activeNavigationId === null) return;
-        const navigation = navigations.find(
-          (entry) => entry.id === activeNavigationId,
-        );
-        if (!navigation) return;
-        if (navigation.domContentLoadedMs === null) {
-          navigation.domContentLoadedMs = Date.now();
-        }
-      });
-
-      page.on("load", () => {
-        if (activeNavigationId === null) return;
-        const navigation = navigations.find(
-          (entry) => entry.id === activeNavigationId,
-        );
-        if (!navigation) return;
-        if (navigation.loadMs === null) {
-          navigation.loadMs = Date.now();
-        }
-      });
+      const { requests, navigations } = capture.sinkFor("test");
 
       setCurrentActionTestKey(testKey);
       try {
@@ -660,67 +505,7 @@ const test = base.extend<{
 
       const endMs = Date.now();
       const actions = drainActionsForTest(testKey);
-      let pagePerfSummary: PagePerfSummary = {
-        navigation: null,
-        resources: { count: 0, totalDurationMs: 0, topSlow: [] },
-        longTasks: [],
-      };
-
-      try {
-        pagePerfSummary = await page.evaluate(() => {
-          const navigation = performance.getEntriesByType("navigation")[0] as
-            | PerformanceNavigationTiming
-            | undefined;
-          const resources = performance.getEntriesByType(
-            "resource",
-          ) as PerformanceResourceTiming[];
-          const longTasks = (
-            (
-              globalThis as typeof globalThis & {
-                __jaunderLongTasks?: Array<{
-                  startTime: number;
-                  duration: number;
-                  name: string;
-                }>;
-              }
-            ).__jaunderLongTasks ?? []
-          ).slice(-20);
-
-          const topSlow = resources
-            .map((resource) => ({
-              name: resource.name,
-              initiatorType: resource.initiatorType,
-              durationMs: resource.duration,
-            }))
-            .sort((left, right) => right.durationMs - left.durationMs)
-            .slice(0, 20);
-
-          const totalDurationMs = resources.reduce(
-            (sum, resource) => sum + resource.duration,
-            0,
-          );
-
-          return {
-            navigation: navigation
-              ? {
-                  domContentLoadedMs:
-                    navigation.domContentLoadedEventEnd - navigation.startTime,
-                  loadMs: navigation.loadEventEnd - navigation.startTime,
-                  responseStartMs:
-                    navigation.responseStart - navigation.startTime,
-                }
-              : null,
-            resources: {
-              count: resources.length,
-              totalDurationMs,
-              topSlow,
-            },
-            longTasks,
-          };
-        });
-      } catch {
-        // Page may already be closed on failure paths.
-      }
+      const pagePerfSummary: PagePerfSummary = await capture.readPagePerf(page);
 
       const sortedRequests = [...requests].sort(
         (left, right) => right.durationMs - left.durationMs,
@@ -792,6 +577,13 @@ const test = base.extend<{
           "e2e.request_top_slow_json",
           JSON.stringify(topSlowRequests),
         ),
+        // Every capped list reports what it dropped, so truncation is never
+        // silent as the suite grows. Raising the caps would only move the cliff,
+        // and OTLP attribute size limits are real (#794).
+        otlpAttribute(
+          "e2e.request_top_slow_dropped",
+          requests.length - topSlowRequests.length,
+        ),
         otlpAttribute(
           "e2e.navigation_json",
           JSON.stringify(pagePerfSummary.navigation),
@@ -800,16 +592,36 @@ const test = base.extend<{
           "e2e.resource_summary_json",
           JSON.stringify(pagePerfSummary.resources),
         ),
+        // The two counts below are the genuinely lossy ones: unlike actions,
+        // requests and navigations, nothing else on the span records how many
+        // resource or long-task entries were discarded. `long_tasks_json` is
+        // worse still — a TAIL slice, so it is the EARLIEST long tasks that go.
+        otlpAttribute(
+          "e2e.resource_top_slow_dropped",
+          pagePerfSummary.resources.droppedCount,
+        ),
         otlpAttribute(
           "e2e.long_tasks_json",
           JSON.stringify(pagePerfSummary.longTasks),
         ),
+        otlpAttribute(
+          "e2e.long_tasks_dropped",
+          pagePerfSummary.longTasksDroppedCount,
+        ),
         otlpAttribute("e2e.action_count", actions.length),
         otlpAttribute("e2e.action_top_json", JSON.stringify(topActions)),
+        otlpAttribute(
+          "e2e.action_top_dropped",
+          actions.length - topActions.length,
+        ),
         otlpAttribute("e2e.navigation_count", navigations.length),
         otlpAttribute(
           "e2e.navigation_top_json",
           JSON.stringify(topNavigations),
+        ),
+        otlpAttribute(
+          "e2e.navigation_top_dropped",
+          navigations.length - topNavigations.length,
         ),
       ].filter(
         (attribute): attribute is NonNullable<typeof attribute> =>
@@ -882,22 +694,144 @@ const test = base.extend<{
         ),
       );
 
-      const span = buildSpan({
-        traceContext,
-        name: "e2e.test",
-        // The id the server already saw as the inbound traceparent's
-        // parent-span-id, so the span this test exports is the one its request
-        // spans point at (#681).
-        spanId: testSpanId,
-        kind: "client",
-        startMs: testStartMs,
-        endMs,
-        attributes,
-        events: [...requestEvents, ...actionEvents, ...navigationEvents],
-      });
+      // The lifecycle envelope. `e2e.test` keeps its own span id, its start/end
+      // range and its whole attribute set — widening it would have been the
+      // smaller change and would have silently redefined "in-span time", making
+      // every number the #788 investigation published non-comparable. Instead the
+      // previously-invisible phases become properly-contained sibling spans, so
+      // interval-union analysis works on them unchanged (#794).
+      //
+      // Reparenting `e2e.test` is safe by construction: the analyzer selects on
+      // the exact span name (`s.name == "e2e.test"`, so `e2e.test.lifecycle`
+      // cannot collide) and the flow-coverage extractor walks parent_span_id
+      // UPWARD to an `e2e.test`-named span, so an extra ancestor above it changes
+      // nothing (#681).
+      const lifecycleSpanId = newSpanId();
+      const exportStartMs = Date.now();
+
+      // Identity attributes every span in the tree carries. `e2e.project` is not
+      // decoration: `traces analyze --project <name>` drops any `e2e.`-prefixed
+      // span whose `e2e.project` differs, so an unstamped span reads as "wrong
+      // project" and the whole tree vanishes under that filter.
+      const identity = () =>
+        [
+          otlpAttribute("e2e.file", testInfo.file),
+          otlpAttribute("e2e.test", testInfo.title),
+          otlpAttribute("e2e.project", testInfo.project.name),
+        ].filter(
+          (attribute): attribute is NonNullable<typeof attribute> =>
+            attribute !== null,
+        );
+
+      const phaseSpan = (
+        name: string,
+        startMs: number,
+        phaseEndMs: number,
+        extra: ReturnType<typeof identity> = [],
+      ) =>
+        buildSpan({
+          traceContext,
+          name,
+          parentSpanId: lifecycleSpanId,
+          kind: "client",
+          startMs,
+          endMs: phaseEndMs,
+          attributes: [...identity(), ...extra],
+        });
+
+      const warmupSink = capture.sinkFor("warmup");
+      const spans = [
+        buildSpan({
+          traceContext,
+          name: "e2e.test.lifecycle",
+          spanId: lifecycleSpanId,
+          kind: "client",
+          startMs: lifecycleStartMs,
+          endMs: exportStartMs,
+          attributes: [
+            ...identity(),
+            otlpAttribute("e2e.status", testInfo.status),
+            otlpAttribute("e2e.retry", testInfo.retry),
+            otlpAttribute("e2e.total_ms", exportStartMs - lifecycleStartMs),
+          ].filter(
+            (attribute): attribute is NonNullable<typeof attribute> =>
+              attribute !== null,
+          ),
+        }),
+        phaseSpan("e2e.context_mint", lifecycleStartMs, perfSpanEntryMs),
+        buildSpan({
+          traceContext,
+          name: "e2e.test",
+          // The id the server already saw as the inbound traceparent's
+          // parent-span-id, so the span this test exports is the one its request
+          // spans point at (#681).
+          spanId: testSpanId,
+          parentSpanId: lifecycleSpanId,
+          kind: "client",
+          startMs: testStartMs,
+          endMs,
+          attributes,
+          events: [...requestEvents, ...actionEvents, ...navigationEvents],
+        }),
+        phaseSpan("e2e.teardown", endMs, exportStartMs),
+      ];
+
+      if (warmupEndMs !== null) {
+        // Warmup TRAFFIC stays unattributed by design (#681's orphan bucket);
+        // what was missing was its DURATION, which is measured nowhere today.
+        // These counts are the warmup's own, kept out of `e2e.test`'s.
+        spans.push(
+          phaseSpan(
+            "e2e.warmup",
+            warmupStartMs,
+            warmupEndMs,
+            [
+              otlpAttribute("e2e.request_count", warmupSink.requests.length),
+              otlpAttribute(
+                "e2e.navigation_count",
+                warmupSink.navigations.length,
+              ),
+            ].filter(
+              (attribute): attribute is NonNullable<typeof attribute> =>
+                attribute !== null,
+            ),
+          ),
+        );
+      }
+
+      // One span per extra context the spec opened via `tracedContext`. Without
+      // these a multi-context test under-reports its own client cost — the
+      // Private-post visibility test drives 9 `page.goto`s but reported
+      // navigation_count 3, because only the default page was instrumented.
+      for (const record of tracedContextRecords.get(testSpanId) ?? []) {
+        const sink = record.capture.sinkFor("test");
+        spans.push(
+          phaseSpan(
+            "e2e.page",
+            testStartMs,
+            endMs,
+            [
+              otlpAttribute("e2e.request_count", sink.requests.length),
+              otlpAttribute("e2e.navigation_count", sink.navigations.length),
+              otlpAttribute(
+                "e2e.resource_summary_json",
+                JSON.stringify(record.perf?.resources ?? null),
+              ),
+              otlpAttribute(
+                "e2e.navigation_json",
+                JSON.stringify(record.perf?.navigation ?? null),
+              ),
+            ].filter(
+              (attribute): attribute is NonNullable<typeof attribute> =>
+                attribute !== null,
+            ),
+          ),
+        );
+      }
+      tracedContextRecords.delete(testSpanId);
 
       try {
-        await exportSpans([span]);
+        await exportSpans(spans);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.warn(`[e2e-otel] test export failed: ${message}`);
