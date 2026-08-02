@@ -182,7 +182,7 @@ is free to work around is a gate that reports green.
   claim: a marker is **trusted, not verified** — the gate checks that a reason
   exists and still points at a site, never that it is true — and a marked site
   is exempt regardless of what value flows _into_ it, since there is no call
-  graph. See [the marker ADR](drafts/gate-exemptions-in-source-markers.md) for
+  graph. See [the marker ADR](0094-gate-exemptions-in-source-markers.md) for
   when a gate should prefer markers to a central list.
 
 - **`sqlx-newtype-bind`** (#438, #686, #696) **does not conform**, on two
@@ -234,7 +234,7 @@ condensed in the allowlist, with nothing keeping the two in sync. Where a site
 is a source line, the reason belongs on it, and the exempt set is then _derived_
 from the tree rather than declared beside the rule: a derived set cannot go
 stale, which is exactly what the multiplicity reconciliation existed to detect.
-See [the marker ADR](drafts/gate-exemptions-in-source-markers.md) for the
+See [the marker ADR](0094-gate-exemptions-in-source-markers.md) for the
 discriminator. It does not displace `sqlx-newtype-decode`'s central list, whose
 entries carry a rationale category and a tracking issue that no single site
 could hold.

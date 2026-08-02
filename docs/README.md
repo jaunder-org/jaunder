@@ -121,6 +121,7 @@ convention). See the Status column below for each ADR's current status.
 | [0091](adr/0091-text-enum-closed-string-enum-convention.md)        | `#[text_enum]` owns the closed-string-enum convention                                                        | accepted   |
 | [0092](adr/0092-sqlite-bounded-write-lock-occupancy.md)            | Bounded write-lock occupancy on the SQLite path                                                              | accepted   |
 | [0093](adr/0093-web-render-html-macro.md)                          | The web render layer builds markup with maud, not `format!`                                                  | accepted   |
+| [0094](adr/0094-gate-exemptions-in-source-markers.md)              | Gate exemptions are in-source site markers                                                                   | accepted   |
 
 <!-- adr-table:end -->
 

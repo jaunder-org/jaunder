@@ -1145,7 +1145,7 @@ name-keyed exemption work, and go with the last caller."
 
 - **ADR-0093** "What it creates": replace the `ALLOWED_FNS` follow-up paragraph
   with the landed decision, citing the new ADR by its
-  `docs/adr/drafts/gate-exemptions-in-source-markers.md` path (`promote`
+  `docs/adr/0094-gate-exemptions-in-source-markers.md` path (`promote`
   rewrites it to the numbered path at ship).
 - **ADR-0085**: add the three ident gates to **Conformance**, recording that
   they conform via in-source markers. Amend the Consequences sentence claiming
@@ -1166,7 +1166,7 @@ name-keyed exemption work, and go with the last caller."
 
 - [x] **Step 3: Verify the ADR draft covers AC25**
 
-Read `docs/adr/drafts/gate-exemptions-in-source-markers.md` and confirm it
+Read `docs/adr/0094-gate-exemptions-in-source-markers.md` and confirm it
 records everything AC25 lists: the marker decision and its rules; that a machine
 can re-check an _inferred_ exemption but never a _written_ one (so `cov:ignore`
 is permanent too and re-checkability separates neither population); that keying
@@ -1230,7 +1230,7 @@ number to adjust.
 
 - [x] **Step 3: Hand off to jaunder-ship**
 
-The ADR draft at `docs/adr/drafts/gate-exemptions-in-source-markers.md` is
+The ADR draft at `docs/adr/0094-gate-exemptions-in-source-markers.md` is
 gitignored and is numbered, moved, status-rewritten and staged by
 `cargo xtask adr promote` during **jaunder-ship**, after the final rebase onto
 `main`. No task here commits it.

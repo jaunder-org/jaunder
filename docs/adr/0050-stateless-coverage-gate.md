@@ -155,7 +155,7 @@ function of `(coverage report, source tree)`:
   easy to over-read: it protects the _structural_ exemptions only. A
   `cov:ignore` line is dropped from the executable set before the gate sees it,
   so it is never re-checked — consistent with Consequence 3 below, and the
-  reason [the marker ADR](drafts/gate-exemptions-in-source-markers.md) treats "a
+  reason [the marker ADR](0094-gate-exemptions-in-source-markers.md) treats "a
   machine can re-check what it inferred, never what a human wrote" as the
   dividing line.
 

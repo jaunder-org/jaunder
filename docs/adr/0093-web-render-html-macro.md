@@ -193,7 +193,7 @@ and the obvious repair was to give it the multiplicity its two siblings carry.
 That turned out to be the wrong key rather than a smaller version of the right
 one, so all three gates moved to in-source per-site markers and the central
 allowlists were deleted; see
-[the marker ADR](drafts/gate-exemptions-in-source-markers.md). And one soft spot
+[the marker ADR](0094-gate-exemptions-in-source-markers.md). And one soft spot
 the type system does not cover: `DISCOVERY_MARKER_ATTR` cannot be spliced as an
 attribute _name_ under any compile-time markup macro, so the literal is written
 in the `html!` and a unit test pins it against the const, keeping the `csr`
