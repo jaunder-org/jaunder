@@ -1513,7 +1513,7 @@ git commit -m "docs(common): positive companions for the token, etag, and post-b
 - Consumes: the gate from Task 5; the pattern from Task 8.
 - Produces: 4 doc comments with matched hidden preludes; no API change.
 
-- [ ] **Step 1: Pin the fixture values**
+- [x] **Step 1: Pin the fixture values**
 
 Same hazard as Task 8, and `ContentHash` is the sharpest case: `from_str`
 requires 64 lowercase hex digits (`common/src/media.rs:98-108`,
@@ -1524,7 +1524,7 @@ companion. Use
 Read `Filename`, `ContentType`, and `ProfferedFilename`'s validators and their
 unit tests in this file's `mod tests`, and take a literal each already accepts.
 
-- [ ] **Step 2: Add a companion to each of the four doc comments**
+- [x] **Step 2: Add a companion to each of the four doc comments**
 
 Three of the four are the recurring private-field / wrong-type pair:
 
@@ -1570,15 +1570,25 @@ already a normal dependency of `common`, so no manifest change is needed:
 /// ```
 ````
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate -- cargo test --workspace --doc`
-Expected: PASS — `common` gains 4 tests.
+Expected: PASS — `common` gains 4 tests. **Actual: 24 → 28 passed.**
 
 Run the Task 5 command. Expected: no `missing-companion` for `media.rs`.
+**Actual: clean; 18 fences → 10.**
 
-- [ ] **Step 4: Commit**
+**`ProfferedFilename` broke the template, and the first attempt failed loudly.**
+Its trailer is deliberately minimal — `FromStr`, `Deserialize`, `Clone`, `Debug`
+and nothing else — so the `let _read: &str = p.as_ref();` line every other
+companion uses does not compile (E0599). That omission _is_ the type's design,
+and the two negatives here assert exactly it. The companion instead exercises
+`Clone` and `Debug`, and resolves `serde_json` against a bare `&str` rather than
+through the value. Worth noting the failure was immediate and unambiguous: a
+companion that does not compile cannot be mistaken for a passing proof.
+
+- [x] **Step 4: Commit**
 
 ```bash
 git add common/src/media.rs
@@ -1600,7 +1610,7 @@ git commit -m "docs(common): positive companions for the media newtype proofs (#
 - Consumes: the gate from Task 5; the pattern from Tasks 8–9.
 - Produces: 2 doc comments with matched hidden preludes; no API change.
 
-- [ ] **Step 1: Confirm the sanitize-gated pair is actually in the run**
+- [x] **Step 1: Confirm the sanitize-gated pair is actually in the run**
 
 `:511`/`:518` sit inside `#[cfg(feature = "sanitize")] mod sanitized`
 (`common/src/render.rs:223`) and appear only because `--workspace` unification
@@ -1608,11 +1618,11 @@ enables the feature via `storage/Cargo.toml:12`. Confirm the Task 5 baseline
 lists `missing-companion` for both. If they are **absent**, the invocation
 regressed to a package-scoped one — fix that before continuing.
 
-- [ ] **Step 2: Add a companion to `RenderedHtml`@47**
+- [x] **Step 2: Add a companion to `RenderedHtml`@47**
 
 Same shape as Task 8, using `RenderedHtml::from_trusted` as the door.
 
-- [ ] **Step 3: Repair the `RenderOutput` companion at `:505`**
+- [x] **Step 3: Repair the `RenderOutput` companion at `:505`**
 
 The existing plain fence imports `{PostFormat, RenderOutput}` while the
 negatives import `{render, PostFormat, RenderOutput}` — so an unresolved
@@ -1656,17 +1666,26 @@ justify importing both:
 /// ```
 ````
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate -- cargo test --workspace --doc`
 Expected: PASS — `common` gains 1 test (`RenderedHtml`'s companion;
-`RenderOutput`'s already existed).
+`RenderOutput`'s already existed). **Actual: 28 → 29 passed.**
 
 Run the Task 5 command. Expected: `common/` is clean; the only remaining
-violations are the six in `macros/src/lib.rs` (Tasks 11 and 12).
+violations are the six in `macros/src/lib.rs` (Tasks 11 and 12). **Actual:
+exactly those six. All 20 of `common/`'s `compile_fail` blocks now carry matched
+companions.**
 
-- [ ] **Step 5: Commit**
+**The plan's fixture sketch was wrong about the real API and the tree's own code
+was right.** The existing blocks already used
+`RenderOutput::render(&"hello".to_owned().into(), &PostFormat::Markdown)` — a
+`&PostBody` built by `.into()` — so the repair only had to bring `:505`'s import
+line into line with the two negatives (adding the free `render`, and calling it
+so the import is used). No signature change was needed.
+
+- [x] **Step 5: Commit**
 
 ```bash
 git add common/src/render.rs
