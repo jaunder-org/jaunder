@@ -36,11 +36,10 @@ import {
   otlpAttribute,
   traceContextFromEnvironment,
 } from "./otel";
-import { BASE_URL, click, expectFlash, goto, login, register } from "./helpers";
-import { extractToken, readEmailLines, type CapturedEmail } from "./mail";
+import { BASE_URL, login, register, setAndVerifyEmail } from "./helpers";
+import { readEmailLines, type CapturedEmail } from "./mail";
 import { MOUNTED_ATTR, MOUNTED_SELECTOR } from "./mount";
 import { pollUntil } from "./polling";
-import { SEL } from "./selectors";
 
 type RequestRecord = {
   method: string;
@@ -430,14 +429,7 @@ const test = base.extend<{
     const page = await context.newPage();
     const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 15_000);
     await login(page, user.username, user.password, firstNav);
-    await goto(page, "/profile/email");
-    await page.fill('input[name="email"]', user.email);
-    await click(page, SEL.submit);
-    await expectFlash(page, "Check your email");
-    const mail = await mailbox.waitForNewEmail();
-    const token = extractToken(mail);
-    await goto(page, `/verify-email?token=${token}`);
-    await expectFlash(page, "verified");
+    await setAndVerifyEmail(page, user.email, mailbox);
     await context.close();
     await use(user);
   },

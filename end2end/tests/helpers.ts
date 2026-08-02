@@ -39,7 +39,7 @@
 
 import { expect, type Page } from "@playwright/test";
 import { withTimedAction } from "./actions";
-import { extractLink, type CapturedEmail } from "./mail";
+import { extractLink, extractToken, type CapturedEmail } from "./mail";
 import { waitForMount } from "./mount";
 import { SEL } from "./selectors";
 
@@ -155,9 +155,11 @@ export async function fillLoginForm(
   username: string,
   password: string,
 ): Promise<void> {
-  await page.fill(SEL.username, username);
-  await page.fill(SEL.password, password);
-  await click(page, SEL.submit);
+  await withTimedAction(page, "flow.fill_login_form", async () => {
+    await page.fill(SEL.username, username);
+    await page.fill(SEL.password, password);
+    await click(page, SEL.submit);
+  });
 }
 
 /**
@@ -174,9 +176,11 @@ export async function login(
   password: string,
   firstNavigationTimeoutMs?: number,
 ): Promise<void> {
-  await goto(page, "/login", { timeout: firstNavigationTimeoutMs });
-  await fillLoginForm(page, username, password);
-  await waitForSelector(page, SEL.logoutLink);
+  await withTimedAction(page, "flow.login", async () => {
+    await goto(page, "/login", { timeout: firstNavigationTimeoutMs });
+    await fillLoginForm(page, username, password);
+    await waitForSelector(page, SEL.logoutLink);
+  });
 }
 
 /**
@@ -239,6 +243,85 @@ export async function registerKnown(
 }
 
 /**
+ * Register a fresh account and log in as it on the same page, returning the
+ * credentials.
+ *
+ * The register-then-login round trip specs use to drive one account across
+ * contexts. Factored so the pair is delimited as a single flow in the trace
+ * rather than reading as two unrelated ones (#794).
+ */
+export async function registerAndLogin(
+  page: Page,
+  firstNavigationTimeoutMs: number,
+): Promise<{ username: string; password: string }> {
+  return withTimedAction(page, "flow.register_and_login", async () => {
+    const credentials = await registerKnown(page, firstNavigationTimeoutMs);
+    await login(
+      page,
+      credentials.username,
+      credentials.password,
+      firstNavigationTimeoutMs,
+    );
+    return credentials;
+  });
+}
+
+/**
+ * The minimal recipient-scoped mail waiter this module needs.
+ *
+ * Structural rather than an import of `fixtures.ts`'s `Mailbox`: `fixtures.ts`
+ * imports this module, so naming its type here would close a cycle.
+ */
+export type EmailWaiter = {
+  waitForNewEmail(timeoutMs?: number): Promise<CapturedEmail>;
+};
+
+/**
+ * Set the current (authenticated) page's email address and complete the
+ * verification round trip: submit the address, read the token out of the
+ * captured mail, and follow the verify link.
+ *
+ * Was written inline in the `verifiedUser` fixture and again in the email spec.
+ * Factored so the phases are delimited in the trace and the sequence has one
+ * home (#794).
+ */
+export async function setAndVerifyEmail(
+  page: Page,
+  email: string,
+  mailbox: EmailWaiter,
+): Promise<void> {
+  await withTimedAction(page, "flow.verify_email", async () => {
+    await goto(page, "/profile/email");
+    await page.fill('input[name="email"]', email);
+    await click(page, SEL.submit);
+    await expectFlash(page, "Check your email");
+    const mail = await mailbox.waitForNewEmail();
+    const token = extractToken(mail);
+    await goto(page, `/verify-email?token=${token}`);
+    await expectFlash(page, "verified");
+  });
+}
+
+/**
+ * Submit `/forgot-password` for `username`.
+ *
+ * Deliberately makes no assertion about the response: callers assert different
+ * things about it — the happy path expects a neutral confirmation that does not
+ * reveal whether the user exists, while the no-verified-email path expects an
+ * error — so the shared part stops at the submit.
+ */
+export async function requestPasswordReset(
+  page: Page,
+  username: string,
+): Promise<void> {
+  await withTimedAction(page, "flow.request_password_reset", async () => {
+    await goto(page, "/forgot-password");
+    await page.fill(SEL.username, username);
+    await click(page, SEL.submit);
+  });
+}
+
+/**
  * Subscribe the current (authenticated) page's user to `authorUsername` via the
  * author's profile page, waiting for the button to flip to "Unsubscribe".
  */
@@ -246,9 +329,11 @@ export async function subscribeTo(
   page: Page,
   authorUsername: string,
 ): Promise<void> {
-  await goto(page, `/~${authorUsername}`);
-  await click(page, 'button:has-text("Subscribe")');
-  await waitForSelector(page, 'button:has-text("Unsubscribe")');
+  await withTimedAction(page, "flow.subscribe", async () => {
+    await goto(page, `/~${authorUsername}`);
+    await click(page, 'button:has-text("Subscribe")');
+    await waitForSelector(page, 'button:has-text("Unsubscribe")');
+  });
 }
 
 /**
@@ -259,9 +344,11 @@ export async function unsubscribeFrom(
   page: Page,
   authorUsername: string,
 ): Promise<void> {
-  await goto(page, `/~${authorUsername}`);
-  await click(page, 'button:has-text("Unsubscribe")');
-  await waitForSelector(page, 'button:has-text("Subscribe")');
+  await withTimedAction(page, "flow.unsubscribe", async () => {
+    await goto(page, `/~${authorUsername}`);
+    await click(page, 'button:has-text("Unsubscribe")');
+    await waitForSelector(page, 'button:has-text("Subscribe")');
+  });
 }
 
 /**
@@ -293,10 +380,12 @@ export async function followEmailLink(
   email: CapturedEmail,
   pathPrefix: string,
 ): Promise<void> {
-  const link = extractLink(email);
-  expect(link).toMatch(
-    new RegExp(`^https://example\\.com${pathPrefix}\\?token=`),
-  );
-  const { pathname, search } = new URL(link);
-  await goto(page, `${pathname}${search}`);
+  await withTimedAction(page, "flow.follow_email_link", async () => {
+    const link = extractLink(email);
+    expect(link).toMatch(
+      new RegExp(`^https://example\\.com${pathPrefix}\\?token=`),
+    );
+    const { pathname, search } = new URL(link);
+    await goto(page, `${pathname}${search}`);
+  });
 }

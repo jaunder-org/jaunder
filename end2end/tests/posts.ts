@@ -56,15 +56,17 @@ export async function composePost(
   page: Page,
   opts: { body: string; summary?: string; slug?: string; publish: boolean },
 ): Promise<Locator> {
-  await goto(page, "/posts/new");
-  await page.fill(SEL.postBody, opts.body);
-  if (opts.summary !== undefined) {
-    await page.fill(SEL.postSummary, opts.summary);
-  }
-  if (opts.slug !== undefined) {
-    await page.fill('input[name="slug_override"]', opts.slug);
-  }
-  await click(page, SEL.publishButton(opts.publish ? "true" : "false"));
-  await waitForSelector(page, SEL.saveSummary);
-  return page.locator(SEL.saveSummary);
+  return withTimedAction(page, "flow.compose_post", async () => {
+    await goto(page, "/posts/new");
+    await page.fill(SEL.postBody, opts.body);
+    if (opts.summary !== undefined) {
+      await page.fill(SEL.postSummary, opts.summary);
+    }
+    if (opts.slug !== undefined) {
+      await page.fill('input[name="slug_override"]', opts.slug);
+    }
+    await click(page, SEL.publishButton(opts.publish ? "true" : "false"));
+    await waitForSelector(page, SEL.saveSummary);
+    return page.locator(SEL.saveSummary);
+  });
 }

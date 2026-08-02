@@ -6,6 +6,7 @@ import {
   waitForMount,
   fillLoginForm,
   followEmailLink,
+  requestPasswordReset,
 } from "./helpers";
 import { SEL } from "./selectors";
 
@@ -16,9 +17,7 @@ test("password reset flow completes successfully", async ({
   mailbox,
 }) => {
   // Request a password reset for this test's own verified user.
-  await goto(page, "/forgot-password");
-  await page.fill(SEL.username, verifiedUser.username);
-  await click(page, SEL.submit);
+  await requestPasswordReset(page, verifiedUser.username);
 
   // Page should show a neutral confirmation (not confirm whether user exists).
   await expect(page.locator("p")).toContainText(/check|sent|email/i);
@@ -81,10 +80,8 @@ test("forgot-password for user without verified email shows contact operator err
   page,
   user,
 }) => {
-  await goto(page, "/forgot-password");
   // A freshly-registered user exists but has no verified email.
-  await page.fill(SEL.username, user.username);
-  await click(page, SEL.submit);
+  await requestPasswordReset(page, user.username);
   await waitForSelector(page, SEL.error);
   await expect(page.locator(SEL.error)).toBeVisible();
 });
