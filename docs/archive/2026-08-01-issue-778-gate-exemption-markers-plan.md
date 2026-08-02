@@ -18,7 +18,7 @@ roots and prose.
 **Tech Stack:** Rust, `syn` / `proc-macro2`, `cargo nextest`, `cargo xtask`.
 
 **Spec:**
-[`docs/superpowers/specs/2026-08-01-issue-778-gate-exemption-markers.md`](../specs/2026-08-01-issue-778-gate-exemption-markers.md)
+[`2026-08-01-issue-778-gate-exemption-markers-spec.md`](2026-08-01-issue-778-gate-exemption-markers-spec.md)
 — the "what" and "why". This plan is the "how"; it does not restate the spec's
 analysis.
 
@@ -1211,9 +1211,9 @@ each gate's module doc states that a marker is trusted, not verified."
 **Files:** none.
 
 - [x] **Step 1: Run the full local gate** — PASSED, 39 steps green (30s, cached
-      Nix), including `clean-tree`, all three converted gates, `xtask-tests`, and
-      `coverage — 23950 executable lines, 0 failures, 0 guard violations, 0 CRAP
-      over threshold`.
+      Nix), including `clean-tree`, all three converted gates, `xtask-tests`,
+      and
+      `coverage — 23950 executable lines, 0 failures, 0 guard violations, 0 CRAP     over threshold`.
 
 Run (Bash background mode — long and cold):
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-778-allowlist-multiplicity -- cargo xtask validate --no-e2e`
