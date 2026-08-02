@@ -14,6 +14,8 @@ web-sys = { workspace = true, features = [
   "Element",
   "Node",
   "NodeList",
+  # `client::perf` marks the CSR boot phases through `window.performance` (#794).
+  "Performance",
   # The media file-picker + click-to-select glue relocated from `web` (#520).
   "Event",
   "EventTarget",

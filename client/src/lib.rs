@@ -5,35 +5,44 @@
 //! never our domain types. Depends on no workspace crate except `common`
 //! (+ `macros`). `web`/`csr` depend on `client`, never the reverse.
 //!
-//! Wasm-only: the crate-level `#![cfg(target_arch = "wasm32")]` below makes it
-//! an empty rlib on the host target (zero coverage-measured lines) and active
-//! only on wasm. Every module relocated here inherits that gate, so it needs no
-//! per-item `#[cfg]`.
+//! Wasm-only: every module that touches the browser carries
+//! `#[cfg(target_arch = "wasm32")]`, so on the host this is an all-but-empty
+//! rlib (zero coverage-measured lines from the browser glue). The one exception
+//! is [`perf`], whose mark-name contract is plain `&str` data and is therefore
+//! host-testable — it compiles on both targets, with the browser call behind its
+//! own `#[cfg]`.
 //!
 //! See docs/adr/0069-client-crate-wasm-only-home.md.
-#![cfg(target_arch = "wasm32")]
 
 /// Generic browser `localStorage` key/value primitive (#514). Raw string KV, no
 /// domain types — the `web`/`csr` home for what were scattered `web_sys::Storage`
 /// call sites.
+#[cfg(target_arch = "wasm32")]
 pub mod storage;
 
 /// Raw browser confirm-dialog primitive (`window.confirm`) relocated from `web` (#516).
 /// `web-sys` only, no domain types — unconditional (no `csr` gate).
+#[cfg(target_arch = "wasm32")]
 pub mod dialog;
 
 /// Generic browser DOM primitives (`text_content_by_id`, `remove_element_by_id`) —
 /// raw `web_sys`, no domain types. The CSR boot reads the projector seed blob and
 /// drops the server-painted `#app` through these (#519).
+#[cfg(target_arch = "wasm32")]
 pub mod dom;
+
+/// `performance.mark` names and emitter for the CSR boot phases (#794). Not
+/// wasm-gated as a whole: the names are the cross-language contract the e2e
+/// harness discovers by prefix, and they are pinned by host tests.
+pub mod perf;
 
 /// Reactive revalidation helpers — the browser-bound `Effect`/`Resource` plumbing behind
 /// `web`'s `Invalidator` idiom, relocated here (#515). Behind the `csr` feature because they
 /// need `leptos`; a host/server build of `client` stays leptos-free.
-#[cfg(feature = "csr")]
+#[cfg(all(target_arch = "wasm32", feature = "csr"))]
 pub mod reactive;
 
 /// Browser file-picker → `MultipartData` glue (#520), relocated from `web::media` so that
 /// crate names no `web_sys` type. Behind `csr` because it needs leptos's `NodeRef`.
-#[cfg(feature = "csr")]
+#[cfg(all(target_arch = "wasm32", feature = "csr"))]
 pub mod upload;
