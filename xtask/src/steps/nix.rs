@@ -44,6 +44,62 @@ pub fn coverage(result: &mut CommandResult) {
     result.coverage = report;
 }
 
+/// The Nix doctest check (#763): the producer runs the workspace doctests and
+/// reconciles them against the fence population read from the source; the consumer
+/// fails on a non-ok sentinel.
+///
+/// Doctests are the one suite `nextest` structurally cannot run, so the `coverage`
+/// check above never sees them. Reconciling — rather than merely running — is what
+/// stops a green report standing for a population that was never looked at.
+pub fn doctests(result: &mut CommandResult) {
+    result.push(build_check("nix-doctests", "doctests"));
+    let gate = build_check("nix-doctests-gate", "doctests-gate");
+    if !gate.ok {
+        // As with coverage: the authoritative detail is the producer's
+        // status.json, so report the violations rather than an opaque build
+        // failure.
+        let status_path = ".xtask/gcroots/doctests/status.json";
+        let detail = std::fs::read_to_string(status_path)
+            .ok()
+            .and_then(|s| doctests::status::DoctestStatus::from_json(&s).ok())
+            .map(|s| doctest_sentinel_detail(&s))
+            .unwrap_or_else(|| "doctest gate failed (no status.json)".to_string());
+        result.push(StepResult::fail("doctests").detail(detail));
+        return;
+    }
+    result.push(gate);
+}
+
+/// Render the in-sandbox doctest sentinel into a human detail. Pure + tested.
+///
+/// Each violation renders as `file:line [kind] detail`, with `kind` serde-rendered
+/// (kebab-case) rather than `Debug`-printed, so this message and the gate
+/// derivation's `jq` output read identically.
+fn doctest_sentinel_detail(status: &doctests::status::DoctestStatus) -> String {
+    use doctests::status::StatusCategory::{Infra, Ok, Violations};
+    match status.category {
+        Ok => "in-sandbox: doctests ok".to_string(),
+        Infra => format!(
+            "doctest emit could not run: {}",
+            status.infra_detail.as_deref().unwrap_or("unknown")
+        ),
+        Violations => {
+            let lines: Vec<String> = status
+                .violations
+                .iter()
+                .map(|v| {
+                    let kind = serde_json::to_string(&v.kind)
+                        .unwrap_or_default()
+                        .trim_matches('"')
+                        .to_string();
+                    format!("{}:{} [{}] {}", v.file, v.line, kind, v.detail)
+                })
+                .collect();
+            format!("{} violation(s):\n{}", lines.len(), lines.join("\n"))
+        }
+    }
+}
+
 /// Render the in-sandbox sentinel into a human `StepResult` detail. Pure +
 /// tested; the I/O (reading status.json, running nix build) stays in
 /// `coverage()`.
@@ -466,8 +522,39 @@ fn rescue_diagnostics(check: &str) {
 mod tests {
     use std::os::unix::fs::PermissionsExt;
 
-    use super::sentinel_detail;
+    use super::{doctest_sentinel_detail, sentinel_detail};
     use coverage::status::{CoverageStatus, StatusCategory};
+    use doctests::check::{Kind, Violation};
+    use doctests::status::DoctestStatus;
+
+    #[test]
+    fn doctest_sentinel_detail_names_each_violation() {
+        let s = DoctestStatus::from_violations(vec![Violation {
+            file: "common/src/token.rs".to_string(),
+            line: 56,
+            kind: Kind::NotRun,
+            detail: "scanned but never evaluated".to_string(),
+        }]);
+        let d = doctest_sentinel_detail(&s);
+        assert!(d.contains("common/src/token.rs:56"), "{d}");
+        // The kebab-case spelling, so this reads the same as the gate's jq output.
+        assert!(d.contains("[not-run]"), "{d}");
+        assert!(d.contains("scanned but never evaluated"), "{d}");
+    }
+
+    #[test]
+    fn doctest_sentinel_detail_is_terse_when_ok() {
+        let s = DoctestStatus::from_violations(Vec::new());
+        assert_eq!(doctest_sentinel_detail(&s), "in-sandbox: doctests ok");
+    }
+
+    #[test]
+    fn doctest_sentinel_detail_reports_an_infra_failure_as_such() {
+        let s = DoctestStatus::infra("could not spawn cargo");
+        let d = doctest_sentinel_detail(&s);
+        assert!(d.contains("could not spawn cargo"), "{d}");
+        assert!(!d.contains("violation"), "{d}");
+    }
 
     #[test]
     fn infra_detail_is_labeled_as_infrastructure() {

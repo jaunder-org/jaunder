@@ -194,6 +194,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "doctests"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "proc-macro2",
+ "serde",
+ "serde_json",
+ "syn",
+]
+
+[[package]]
 name = "errno"
 version = "0.3.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -753,6 +764,7 @@ dependencies = [
  "brotli",
  "clap",
  "coverage",
+ "doctests",
  "flate2",
  "proc-macro2",
  "quote",

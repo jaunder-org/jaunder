@@ -2024,7 +2024,7 @@ git commit -m "build(nix): doctests producer and gate check derivations (#763)"
   `doctests::status::DoctestStatus`.
 - Produces: `nix-doctests` and `nix-doctests-gate` steps.
 
-- [ ] **Step 1: Write the failing tests** in `xtask/src/steps/nix.rs`'s test
+- [x] **Step 1: Write the failing tests** in `xtask/src/steps/nix.rs`'s test
       module (`:466`)
 
 ```rust
@@ -2060,13 +2060,17 @@ git commit -m "build(nix): doctests producer and gate check derivations (#763)"
     }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate -- cargo test --manifest-path xtask/Cargo.toml`
 Expected: FAIL — `doctest_sentinel_detail` not defined.
 
-- [ ] **Step 3: Implement against the tests**
+A third test was added beyond the plan —
+`doctest_sentinel_detail_reports_an_infra_failure_as_such` — so the `Infra`
+category cannot silently render as "0 violations", which would read as success.
+
+- [x] **Step 3: Implement against the tests**
 
 Add `doctests = { path = "../tools/doctests" }` to `xtask/Cargo.toml`, alongside
 the existing `coverage = { path = "../tools/coverage" }` (`:18`).
@@ -2102,7 +2106,7 @@ pub fn doctests(result: &mut CommandResult) {
 fn doctest_sentinel_detail(status: &doctests::status::DoctestStatus) -> String;
 ```
 
-- [ ] **Step 4: Wire the call sites**
+- [x] **Step 4: Wire the call sites**
 
 `xtask/src/lib.rs`, immediately after each `steps::nix::coverage(&mut result);`:
 
@@ -2113,22 +2117,24 @@ Update the `--no-test` doc at `:91-99` to say it skips the Nix coverage **and
 doctest** checks, and that the host-side fence step (Task 15) still runs — the
 asymmetry AC5 requires be stated.
 
-- [ ] **Step 5: Run and verify**
+- [x] **Step 5: Run and verify**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate -- cargo test --manifest-path xtask/Cargo.toml`
-Expected: PASS.
+Expected: PASS. **Actual: 641 passed**, including the three new ones.
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate -- cargo xtask check`
 Expected: PASS, with `nix-doctests` and `nix-doctests-gate` present. Confirm
-with `jq -r '.steps[].name' .xtask/last-result.json`.
+with `jq -r '.steps[].name' .xtask/last-result.json`. **Actual: both present,
+both `ok=true`.**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate -- cargo xtask check --no-test`
-Expected: PASS, with **neither** step present.
+Expected: PASS, with **neither** step present. **Actual: neither present** — the
+only step matching `/doctest|coverage/` is the unrelated `server-fn-coverage`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add xtask/src/steps/nix.rs xtask/src/lib.rs xtask/Cargo.toml xtask/Cargo.lock
