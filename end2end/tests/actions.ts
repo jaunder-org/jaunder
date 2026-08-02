@@ -27,8 +27,17 @@ export function setCurrentActionTestKey(testKey: string | null): void {
   currentTestKey = testKey;
 }
 
+/**
+ * Time `action` and record it against the active test.
+ *
+ * `page` is nullable because not every timed action has one: the capture-file
+ * polls in `mail.ts` / `websub.ts` run out-of-band in node with no browser in
+ * scope, and threading a `Page` through them purely to satisfy the tracer would
+ * be churn at every call site *and* a lie. `ActionRecord.pageUrl` is already
+ * optional, so a page-less action simply records no URL (#794).
+ */
 export async function withTimedAction<T>(
-  page: Page,
+  page: Page | null,
   name: string,
   action: () => Promise<T>,
 ): Promise<T> {
@@ -45,7 +54,7 @@ export async function withTimedAction<T>(
         endedMs,
         durationMs: endedMs - startedMs,
         ok: true,
-        pageUrl: page.url(),
+        pageUrl: page?.url(),
       });
     }
     return result;
@@ -59,7 +68,7 @@ export async function withTimedAction<T>(
         endedMs,
         durationMs: endedMs - startedMs,
         ok: false,
-        pageUrl: page.url(),
+        pageUrl: page?.url(),
         error: error instanceof Error ? error.message : String(error),
       });
     }

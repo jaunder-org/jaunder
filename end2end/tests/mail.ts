@@ -7,18 +7,20 @@
  *
  * ## Usage
  *
- * Always prefer `waitForNewEmail(previousCount)` over any "wait for latest"
- * approach.  Snapshot the line count with `readEmailLines().length` *before*
- * triggering the action that sends the email, then pass that count to
- * `waitForNewEmail`.  This prevents returning a stale email written by a
- * previous test.
+ * Wait for mail through the **`mailbox` fixture**, not by reading this file
+ * directly: it is scoped to one recipient and keeps a per-test cursor, so
+ * parallel tests never consume each other's mail.
  *
- * Example:
  * ```ts
- * const emailsBefore = readEmailLines().length;
- * await page.click('button[type="submit"]'); // triggers the email
- * const email = await waitForNewEmail(emailsBefore);
+ * test("...", async ({ mailbox }) => {
+ *   await click(page, SEL.submit);          // triggers the email
+ *   const email = await mailbox.waitForNewEmail();
+ * });
  * ```
+ *
+ * A count-based `waitForNewEmail(previousCount)` used to live here. It had no
+ * callers — every site uses the fixture — so it was removed rather than carried
+ * forward (#794).
  */
 
 import * as fs from "fs";
@@ -47,30 +49,6 @@ export function readEmailLines(): string[] {
     .trim()
     .split("\n")
     .filter((line) => line.trim());
-}
-
-/**
- * Wait until the mail file has more lines than `previousCount`, then return
- * the newest email.
- *
- * Always pass the line count snapshotted *before* submitting the form so that
- * emails written by earlier tests in the same file do not satisfy the wait.
- */
-export async function waitForNewEmail(
-  previousCount: number,
-  timeoutMs = 5_000,
-): Promise<CapturedEmail> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const lines = readEmailLines();
-    if (lines.length > previousCount) {
-      return JSON.parse(lines[lines.length - 1]) as CapturedEmail;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(
-    `timed out waiting for new captured email at ${mailCaptureFile()}`,
-  );
 }
 
 /**

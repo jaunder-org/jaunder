@@ -1,4 +1,3 @@
-import type { Page } from "@playwright/test";
 import { goto, register, click, waitForMount, BASE_URL } from "./helpers";
 // `test` comes from the shared fixtures, not @playwright/test, so this spec emits
 // an `e2e.test` span and its traffic — including the direct `page.request.post`
@@ -10,20 +9,19 @@ import {
   slowBrowserFirstNavigationTimeoutMs,
 } from "./fixtures";
 import { readPingLines, waitForPingMatching } from "./websub";
+// `FEED_POLL_TIMEOUT_MS` is imported, not restated: this spec derives its
+// whole-test budget from it (#270), and `feeds.ts` owns the poll that consumes
+// it. Two copies would let the budget silently drift from the deadline again.
+import { fetchFeedContaining, FEED_POLL_TIMEOUT_MS } from "./feeds";
 import { SEL } from "./selectors";
 import { createPostViaApi } from "./posts";
+import { withTimedAction } from "./actions";
 
 const FORMATS: { ext: string; mime: string }[] = [
   { ext: "rss", mime: "application/rss+xml" },
   { ext: "atom", mime: "application/atom+xml" },
   { ext: "json", mime: "application/feed+json" },
 ];
-
-/** Per-fetch poll deadline for the eventually-consistent feed cache. The
- *  per-user-feeds test derives its whole-test budget from this and
- *  `FORMATS.length`, so adding a format or changing this value carries the budget
- *  with it — the coupling that had silently drifted before #270. */
-const FEED_POLL_TIMEOUT_MS = 25_000;
 
 /** Room for what the per-user-feeds test does *besides* polling: two `register()`
  *  cold-WASM navigations, three `createPostViaApi` writes, a logout and a
@@ -42,37 +40,6 @@ const PING_SETTLE_MS = 2_000;
  *  thinner than `FEED_SETUP_ALLOWANCE_MS`: comfortable once the `workers>=2`
  *  scaler applies (135s total against an 82s worst path), tight at `workers=1`. */
 const PING_SETUP_ALLOWANCE_MS = 8_000;
-
-// The feed cache is eventually consistent: a published post is visible
-// immediately on a cache miss, but the background worker can cache an earlier
-// snapshot (e.g. between two publishes), so reads may lag until the worker
-// regenerates. Poll until the feed reflects `marker`, then return the body and
-// content-type for assertions.
-async function fetchFeedContaining(
-  page: Page,
-  url: string,
-  marker: string,
-  timeoutMs = FEED_POLL_TIMEOUT_MS,
-): Promise<{ body: string; contentType: string }> {
-  const deadline = Date.now() + timeoutMs;
-  let lastBody = "";
-  while (Date.now() < deadline) {
-    const res = await page.request.get(url);
-    if (res.status() === 200) {
-      lastBody = await res.text();
-      if (lastBody.includes(marker)) {
-        return {
-          body: lastBody,
-          contentType: res.headers()["content-type"] ?? "",
-        };
-      }
-    }
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-  throw new Error(
-    `feed ${url} never contained "${marker}" within ${timeoutMs}ms; last body: ${lastBody.slice(0, 300)}`,
-  );
-}
 
 test("auto-discovery links are present on site home and user timeline, and resolve", async ({
   page,
@@ -295,7 +262,15 @@ test("publishing and editing a post each trigger a WebSub hub ping", async ({
 
   // Let the first ping wave fully settle before snapshotting for the edit, so
   // leftover publish-wave pings are not mistaken for the edit's ping.
-  await page.waitForTimeout(PING_SETTLE_MS);
+  //
+  // The suite's only `waitForTimeout`. #794 wraps it so the wait is at least
+  // *visible* in the trace (it was ~2 s of the ~18 s this test loses to
+  // uninstrumented waiting); #793 replaces the sleep with a condition. The
+  // duration stays `PING_SETTLE_MS` (#270), which this test's budget derives
+  // from — wrapping changes attribution, not timing.
+  await withTimedAction(page, "wait.settle", () =>
+    page.waitForTimeout(PING_SETTLE_MS),
+  );
   const beforeEdit = readPingLines().length;
 
   const editRes = await page.request.post(`${BASE_URL}/api/posts/update`, {

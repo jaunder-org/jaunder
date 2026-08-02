@@ -3,6 +3,7 @@
 // to monomorphize it (mirrors web/src/lib.rs).
 #![recursion_limit = "512"]
 
+use client::perf::{mark, BOOT_ENTRY, BOOT_MOUNT_DONE, BOOT_RENDER_START, BOOT_SEED_PARSED};
 use common::seed::PageSeed;
 use leptos::prelude::*;
 use web::app::App;
@@ -31,6 +32,7 @@ extern "C" {
 fn mount() {
     let seed = client::dom::text_content_by_id("jaunder-seed")
         .and_then(|json| serde_json::from_str::<PageSeed>(&json).ok());
+    mark(BOOT_SEED_PARSED);
     // App re-renders the identical content from `seed`, so removing the
     // server-painted copy avoids a duplicate paint without a visible flash (the
     // removal and remount happen in one synchronous task).
@@ -39,6 +41,7 @@ fn mount() {
     // RsdDiscovery mounted below produce the ONLY set (no invisible duplicate). Crawlers/
     // no-JS never run this, so their head is unchanged (#198).
     client::dom::remove_elements_by_selector(&format!("link[{}]", web::app::DISCOVERY_MARKER_ATTR));
+    mark(BOOT_RENDER_START);
     leptos::mount::mount_to_body(move || {
         provide_context(seed.clone());
         view! { <App /> }
@@ -47,8 +50,12 @@ fn mount() {
 
 #[wasm_bindgen::prelude::wasm_bindgen(start)]
 pub fn main() {
+    // First statement: `BOOT_ENTRY` is the wasm's own "I am running" timestamp, and
+    // the harness derives fetch/compile/instantiate from the gap before it.
+    mark(BOOT_ENTRY);
     _ = console_log::init_with_level(log::Level::Debug);
     console_error_panic_hook::set_once();
     mount();
+    mark(BOOT_MOUNT_DONE);
     mark_ready();
 }

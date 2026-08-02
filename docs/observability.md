@@ -15,7 +15,118 @@ test runner.
 
 ## End-to-End Tracing Layers
 
-E2E tracing currently has two complementary layers:
+### What is a span and what is an attribute (#794)
+
+This distinction is easy to get wrong — #788's write-up said "`action.timed`
+×1233 **spans**", but 1233 was the _entry count inside one attribute_. To be
+exact:
+
+- **Spans**: `e2e.test.lifecycle`, `e2e.test`, `e2e.warmup`, `e2e.context_mint`,
+  `e2e.page`, `e2e.teardown`, `e2e.flow.*` (browser side); `request`,
+  `storage.*`, `crypto.*` (server side).
+- **Per-test JSON attributes on `e2e.test`**: actions (`e2e.action_top_json`),
+  navigations (`e2e.navigation_top_json`), resources
+  (`e2e.resource_summary_json`), long tasks (`e2e.long_tasks_json`), slow
+  requests (`e2e.request_top_slow_json`). `action.timed` / `action.failed` /
+  `navigation.lifecycle` / `request.slow` are span **events**, not spans.
+
+Counting "spans named `action.timed`" therefore finds nothing; the data is
+inside the attribute blobs.
+
+### The per-test span tree
+
+```
+e2e.test.lifecycle              first auto-fixture stamp → just before OTLP export
+├── e2e.context_mint            browser context + page creation
+├── e2e.warmup                  only when JAUNDER_E2E_WARMUP is on
+├── e2e.test                    the test body — unchanged span id, range, attributes
+│   └── request, storage.*, …   server spans, attributed by traceparent
+├── e2e.page                    one per extra context opened via `tracedContext`
+└── e2e.teardown                span assembly, perf read-back
+```
+
+`e2e.test` was deliberately **not** widened to cover the lifecycle. Its span id
+is the #681 attribution join and its time range is what every existing analysis
+— including all of #788's numbers — means by "in-span time"; widening it would
+have silently redefined all of them. Reparenting it under the envelope is safe:
+the analyzer matches the exact name `e2e.test` (so `e2e.test.lifecycle` cannot
+collide), and the coverage extractor walks `parent_span_id` _upward_ to an
+`e2e.test`-named span, so an extra ancestor changes nothing.
+
+**Which `e2e.test` numbers remain comparable to #788.** Its span id and time
+range are unchanged, and so are `e2e.request_count` and `e2e.navigation_count` —
+that is exactly what the phase-tagged capture sink protects, since warmup now
+flows through the same instrumentation. But `e2e.action_count` and
+`e2e.action_top_json` **are not comparable**: #794 delimited the composite flows
+(`flow.login`, `flow.verify_email`, …) and wrapped the previously-invisible
+waits, so the action count legitimately rose. Diff the request and navigation
+counts across that boundary; do not diff the action counts.
+
+**Every `e2e.`-prefixed span must carry an `e2e.project` attribute.**
+`traces analyze --project <name>` drops any `e2e.`-named span whose
+`e2e.project` differs from the filter, so an unstamped span reads as "belongs to
+another project" and vanishes from filtered analysis.
+
+### The attribution floor — measured at ~176 ms/test
+
+Some per-test time cannot be measured from inside the fixture doing the
+measuring. Playwright tears fixtures down in reverse setup order, so
+`_autoPerfSpan`'s teardown — where the spans are built and `exportSpans` POSTs —
+runs _before_ `context.close()`. The OTLP export itself and the context teardown
+are therefore outside every span, permanently.
+
+Measured on `sqlite × chromium`, 127 tests
+(`cargo xtask traces analyze --playwright-report …`):
+
+|                                  | before (#788) | after (#794)                        |
+| -------------------------------- | ------------- | ----------------------------------- |
+| per-test time outside every span | **28–31 %**   | **3.9 %**                           |
+| absolute residual, per test      | —             | mean 176 ms, p50 171 ms, max 373 ms |
+
+**The residual behaves like a floor, not a cost.** Correlation between a test's
+reported duration and its unattributed time is **0.21** — near zero. A
+proportional overhead would correlate near 1; a fixed per-test cost correlates
+near 0. That is the evidence for calling this structural rather than merely
+un-instrumented, and it is why the high _percentages_ in the report all sit on
+short tests (a 1.6 s test with a 270 ms floor reads as 16 %, the same 270 ms).
+
+No threshold is gated on this. The number is recorded so a future change that
+moves it is visible; it was measured after the mechanism existed rather than
+guessed beforehand.
+
+### What the boot marks do and do not cover
+
+Marks are harvested per navigation at that document's `load` event. `goto` waits
+only for `domcontentloaded`, so **a navigation whose test finishes before `load`
+fires records no marks** — in the measured run, 73 navigations across 59 of 127
+tests carried them. Those navigations report the marks as _absent_, never as
+zeros, so a missing decomposition cannot be mistaken for an instant one.
+
+### Truncation is reported, never silent
+
+Five lists are capped. Each now emits a companion dropped-count, because raising
+a cap only moves the cliff and OTLP attribute size limits are real:
+
+| Attribute                   | Cap | Dropped count                   |
+| --------------------------- | --- | ------------------------------- |
+| `e2e.request_top_slow_json` | 20  | `e2e.request_top_slow_dropped`  |
+| `e2e.action_top_json`       | 30  | `e2e.action_top_dropped`        |
+| `e2e.navigation_top_json`   | 20  | `e2e.navigation_top_dropped`    |
+| `e2e.resource_summary_json` | 20  | `e2e.resource_top_slow_dropped` |
+| `e2e.long_tasks_json`       | 20  | `e2e.long_tasks_dropped`        |
+
+The last two are the ones that were genuinely lossy — the first three could
+already be derived against `e2e.*_count`. `long_tasks_json` is a **tail** slice,
+so it is the _earliest_ long tasks that are discarded.
+
+### Firefox reports zero long tasks — engine limitation, not a bug
+
+Gecko implements no `longtask` `PerformanceObserver`, so `e2e.long_tasks_json`
+is always empty on Firefox and `e2e.long_tasks_dropped` is always 0. There is
+nothing to fix and nothing to chase: the column is empty because the data source
+does not exist in that engine. Chromium reports normally.
+
+### The two layers
 
 - `e2e.test` (automatic, from `end2end/tests/fixtures.ts`)
   - one span per test
@@ -233,6 +344,45 @@ The analyzer reports:
   `navigation.commit_to_mount`, the commit → CSR mount-ready phase)
 - per-project/browser e2e duration breakdown
 - per-trace duration totals
+- per-test span coverage: Playwright-reported duration vs the time covered by
+  the lifecycle span tree, and the uncovered remainder
+
+### `commit_to_mount` stops at `data-mounted` — read `mount_to_settled_ms` too
+
+**`commit_to_mount` does not include the mount-path fetches.** `csr/src/lib.rs`
+sets `data-mounted` the instant `mount_to_body` returns:
+
+```rust
+mount();        // mount_to_body returns with Suspense fallbacks still in place
+mark_ready();   // data-mounted set HERE
+```
+
+`goto` / `waitForMount` — and therefore `commit_to_mount` — end at that point.
+The shell and route resources (`get_session`, the two warning-visibility checks,
+the route's timeline) resolve _afterwards_. Anyone sizing "mount cost" from
+`commit_to_mount` alone is measuring wasm fetch + compile + instantiate + init +
+first render, and nothing else.
+
+`mount_to_settled_ms` covers the remainder: mount-ready → the last mount-path
+request to finish before the next navigation commits. Note the fetches are
+**per-route and partly serialized** — `web/src/cockpit/component.rs` awaits the
+session reconcile before fetching the timeline — so there is no single "app
+settled" point in the app to hook, which is why this is derived from the request
+records rather than marked. See #801 for the mount-cost work itself.
+
+### Boot marks: prefix-discovered, unconditional
+
+The CSR client emits `performance.mark`s at its boot boundaries via
+`client::perf`. Two properties are deliberate:
+
+- **Discovered by prefix, never by name.** The harness exports every mark
+  matching `jaunder.`; the names live only in Rust. Adding a mark needs no
+  TypeScript change — unlike `MOUNTED_ATTR`, whose cross-language agreement is
+  only comment-enforced and can drift.
+- **Unconditional, not behind a cargo feature.** They are a handful of
+  microsecond-scale calls. Feature-gating them would mean the binary being
+  measured is not the binary being shipped, which quietly invalidates every
+  number they produce.
 
 To build both e2e VM checks and immediately analyze the produced traces, use:
 

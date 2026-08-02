@@ -9,19 +9,25 @@
  * ## Usage
  *
  * Snapshot the ping count with `readPingLines().length` *before* triggering the
- * action that should produce a ping, then pass that count to `waitForNewPing`.
- * This prevents returning a stale ping written by a previous test.
+ * action that should produce a ping, then pass that count to
+ * `waitForPingMatching`. This prevents returning a stale ping written by a
+ * previous test.
  *
  * ```ts
  * const pingsBefore = readPingLines().length;
  * await publishPost(page); // triggers feed regen + hub ping
- * const ping = await waitForNewPing(pingsBefore);
+ * const ping = await waitForPingMatching(pingsBefore, isUserFeed);
  * ```
+ *
+ * A count-only `waitForNewPing` used to live here. It had no callers — one
+ * publish enqueues events for several feeds, so every site needs the predicate
+ * form — and was removed rather than carried forward (#794).
  */
 
 import * as fs from "fs";
 
 import { capturePathViaTool } from "./capture";
+import { pollUntil } from "./polling";
 
 // Resolved lazily and memoized via `test-support capture-path` so the filename
 // convention lives only in the Rust `host` crate — never restated here.
@@ -47,31 +53,6 @@ export function readPingLines(): string[] {
 }
 
 /**
- * Wait until the capture file has more lines than `previousCount`, then return
- * the newest ping.
- *
- * The feed worker runs on a ~10s tick, so allow a generous default timeout.
- * Always pass the line count snapshotted *before* triggering the action so
- * pings written by earlier tests do not satisfy the wait.
- */
-export async function waitForNewPing(
-  previousCount: number,
-  timeoutMs = 30_000,
-): Promise<CapturedPing> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const lines = readPingLines();
-    if (lines.length > previousCount) {
-      return JSON.parse(lines[lines.length - 1]) as CapturedPing;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  throw new Error(
-    `timed out waiting for new captured WebSub ping at ${websubCaptureFile()}`,
-  );
-}
-
-/**
  * Wait for a ping (written after `previousCount` lines) whose `feed_url`
  * matches `predicate`, then return it.
  *
@@ -84,16 +65,24 @@ export async function waitForPingMatching(
   predicate: (feedUrl: string) => boolean,
   timeoutMs = 30_000,
 ): Promise<CapturedPing> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const lines = readPingLines();
-    for (let i = previousCount; i < lines.length; i++) {
-      const ping = JSON.parse(lines[i]) as CapturedPing;
-      if (predicate(ping.feed_url)) return ping;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  throw new Error(
-    `timed out waiting for a matching WebSub ping at ${websubCaptureFile()}`,
+  // Resolve the capture path BEFORE polling. `capturePathViaTool` throws when
+  // JAUNDER_CAPTURE_DIR is unset, and a throw inside the probe would be retried
+  // to the full timeout instead of failing loudly (#794).
+  const file = websubCaptureFile();
+  return pollUntil(
+    "wait.websub_ping",
+    () => {
+      const lines = readPingLines();
+      for (let i = previousCount; i < lines.length; i++) {
+        const ping = JSON.parse(lines[i]) as CapturedPing;
+        if (predicate(ping.feed_url)) return ping;
+      }
+      return undefined;
+    },
+    {
+      intervalMs: 250,
+      timeoutMs,
+      describe: `a matching WebSub ping at ${file}`,
+    },
   );
 }

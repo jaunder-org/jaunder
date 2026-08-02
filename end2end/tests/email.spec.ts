@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures";
-import { goto, login, click, expectFlash, followEmailLink } from "./helpers";
+import { goto, login, setAndVerifyEmail } from "./helpers";
 import { SEL } from "./selectors";
 
 // M3.10.11: Full email verification flow.
@@ -10,19 +10,9 @@ test("email verification flow completes successfully", async ({
 }) => {
   await login(page, user.username, user.password);
 
-  // Navigate to email settings and submit this user's unique address.
-  await goto(page, "/profile/email");
-  await page.fill('input[name="email"]', user.email);
-  await click(page, SEL.submit);
-
-  await expectFlash(page, "Check your email");
-
-  // Read this recipient's verification mail (recipient-scoped, parallel-safe) and
-  // follow the emitted link — asserting it is absolute, so a relative-link
-  // regression fails.
-  const email = await mailbox.waitForNewEmail();
-  await followEmailLink(page, email, "/verify-email");
-  await expectFlash(page, "verified");
+  // Submit the address, read this recipient's verification mail
+  // (recipient-scoped, parallel-safe), and follow the emitted link.
+  await setAndVerifyEmail(page, user.email, mailbox);
 
   // Confirm email is shown as verified on the profile page
   await goto(page, "/profile/email");

@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 
@@ -316,6 +316,13 @@ pub enum TracesCommand {
         /// Restrict analysis to one e2e project (filters only `e2e.`-named spans).
         #[arg(long)]
         project: Option<String>,
+        /// Playwright `json` reporter output(s), e.g.
+        /// `.xtask/diagnostics/e2e-sqlite-chromium/playwright-report-sqlite.json`.
+        /// Supplies the per-test span-coverage section's denominator — the traces
+        /// alone cannot say how long a test took wall-clock. Omit and that one
+        /// section is skipped with a note.
+        #[arg(long = "playwright-report")]
+        playwright_report: Vec<PathBuf>,
         /// One or more `otel-traces.jsonl` files.
         #[arg(required = true)]
         files: Vec<std::path::PathBuf>,
@@ -561,6 +568,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             top,
             trace,
             project,
+            playwright_report,
             files,
         }) => {
             let start = std::time::Instant::now();
@@ -568,7 +576,8 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let filters = traces::parse::Filters { trace, project };
             // A read/parse failure (missing file, malformed JSONL line) propagates
             // as Err → the exit-2 path in main.rs (spec §6), not a fail step.
-            let analysis = traces::analyze::analyze(&files, filters)?;
+            let reported = traces::report::ReportedDurations::from_paths(&playwright_report)?;
+            let analysis = traces::analyze::analyze(&files, filters, &reported)?;
             let n = analysis.span_count;
             result.traces = Some(traces::render::render(&analysis, top as usize));
             result.push(StepResult::ok("traces-analyze").detail(format!("{n} span(s)")));
@@ -586,13 +595,17 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             // A nix-build failure or a missing trace file propagates as Err → the
             // exit-2 path in main.rs (spec §5), not a fail step. `_tmp` guards the
             // extracted traces (untarred from each capture bundle) until analysis ends.
-            let (_tmp, files) = traces::run::collect_trace_files(cold, browser)?;
+            let (_tmp, files, reports) = traces::run::collect_trace_files(cold, browser)?;
             let n = files.len();
             let filters = traces::parse::Filters {
                 trace,
                 project: None,
             };
-            let analysis = traces::analyze::analyze(&files, filters)?;
+            // Paired per combo — see `ReportedDurations`: sqlite and postgres
+            // share test+project+retry keys, so an unpaired merge would let one
+            // backend's durations overwrite the other's.
+            let reported = traces::report::ReportedDurations::from_labeled(&reports)?;
+            let analysis = traces::analyze::analyze(&files, filters, &reported)?;
             result.traces = Some(traces::render::render(&analysis, top as usize));
             result.push(StepResult::ok("traces-run").detail(format!("{n} trace file(s)")));
             finalize(&mut result, start);
@@ -807,8 +820,13 @@ mod cli_tests {
                 top,
                 trace,
                 project,
+                playwright_report,
                 files,
             }) => {
+                assert!(
+                    playwright_report.is_empty(),
+                    "the flag is opt-in; omitting it must not conjure a report path",
+                );
                 assert_eq!(top, 40);
                 assert_eq!(trace, None);
                 assert_eq!(project.as_deref(), Some("firefox"));
@@ -936,6 +954,7 @@ mod cli_tests {
                 top: 25,
                 trace: None,
                 project: None,
+                playwright_report: Vec::new(),
                 files: vec![PathBuf::from("x.jsonl")],
             }),
         };
@@ -958,6 +977,7 @@ mod cli_tests {
                 top: 25,
                 trace: None,
                 project: None,
+                playwright_report: Vec::new(),
                 files: vec![PathBuf::from("/no/such/trace.jsonl")],
             }),
         };

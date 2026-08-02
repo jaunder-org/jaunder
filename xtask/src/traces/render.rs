@@ -10,7 +10,7 @@ use tabled::{Table, Tabled};
 
 use super::analyze::{
     Analysis, AssetRow, ByProjectRow, E2eTestRow, HotspotRow, LongTaskProjectRow, SlowSpanRow,
-    TargetRow, TraceTotalRow,
+    SpanCoverageRow, TargetRow, TraceTotalRow,
 };
 
 /// Format a millisecond value the way the Node reports did — three decimals.
@@ -94,6 +94,30 @@ impl From<&E2eTestRow> for E2eTestDisplay {
             actions: r.actions,
             requests: r.requests,
             trace_id: dash(&r.trace_id),
+            test: r.test.clone(),
+        }
+    }
+}
+
+#[derive(Tabled)]
+struct SpanCoverageDisplay {
+    project: String,
+    reported_ms: String,
+    covered_ms: String,
+    uncovered_ms: String,
+    #[tabled(rename = "uncovered_%")]
+    uncovered_pct: String,
+    test: String,
+}
+
+impl From<&SpanCoverageRow> for SpanCoverageDisplay {
+    fn from(r: &SpanCoverageRow) -> Self {
+        Self {
+            project: r.project.clone(),
+            reported_ms: ms(r.reported_ms),
+            covered_ms: ms(r.covered_ms),
+            uncovered_ms: ms(r.uncovered_ms),
+            uncovered_pct: format!("{:.1}", r.uncovered_pct),
             test: r.test.clone(),
         }
     }
@@ -236,6 +260,20 @@ pub fn render(analysis: &Analysis, top: usize) -> String {
         out.push_str(&format!("Project filter: {project}\n\n"));
     }
 
+    // First, because it is the question the others cannot answer: how much of
+    // each test's wall-clock is attributed to a named phase at all (#794).
+    if let Some(note) = &analysis.span_coverage_note {
+        out.push_str(&format!(
+            "== Per-test span coverage ==\n(skipped: {note})\n\n"
+        ));
+    } else {
+        section::<SpanCoverageDisplay>(
+            &mut out,
+            &format!("Top {top} tests by unattributed time (reported vs lifecycle-tree union)"),
+            &top_display(&analysis.span_coverage, top),
+        );
+    }
+
     section::<SlowSpanDisplay>(
         &mut out,
         &format!("Top {top} slowest spans"),
@@ -350,7 +388,14 @@ mod tests {
         use crate::traces::parse::{parse_spans, Filters};
         const FIXTURE: &str = include_str!("testdata/otel-traces-sample.jsonl");
         let spans = parse_spans(FIXTURE, &Filters::default(), "sample").unwrap();
-        let out = render(&analyze_spans(spans, None), 25);
+        let out = render(
+            &analyze_spans(
+                spans,
+                None,
+                &crate::traces::report::ReportedDurations::default(),
+            ),
+            25,
+        );
         // Node main() (:1139-1150) fixes this section order.
         let order = [
             "Top 25 slowest spans",

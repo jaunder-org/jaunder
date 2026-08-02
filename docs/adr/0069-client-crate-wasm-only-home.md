@@ -56,6 +56,23 @@ boundary ADR-0056 said could come later.
   target** and active only on `wasm32`. Every module relocated into `client`
   inherits the gate, so it carries **no per-item `#[cfg]`** and **no
   `#[client_only]`** marker.
+
+  **Amended 2026-08-02 (#794): the gate moved from the crate root to the module
+  boundary.** `client::perf` emits the CSR boot `performance.mark`s, and its
+  mark-name constants — the contract the e2e harness discovers by prefix — are
+  ordinary `&str`s worth host-testing (that every name carries the discovery
+  prefix, that none collide). So the crate-level `#![cfg]` was replaced by
+  gating the **`mod`/`use` items** for the wasm and host implementations, which
+  is also what the `target-arch-placement` check (#520) permits.
+
+  The charter is unchanged in substance: the wasm-only code is still wasm-only,
+  still behind one gate per module rather than per item, and pure logic still
+  does not move here. What is now admitted is a **host-compiled constant table
+  plus its no-op counterpart**, which carries a real host test obligation rather
+  than escaping one. The "empty on host" phrasing above is the mechanism that
+  was chosen in #520, not the principle; the principle is that `client` holds
+  browser glue and never our domain types.
+
 - **Depends on no workspace crate except `common` (+ `macros`).** It may take
   external browser-infrastructure deps the glue genuinely needs (`web-sys`,
   `js-sys`, `wasm-bindgen`, `wasm-bindgen-futures`). `web` and `csr` depend on

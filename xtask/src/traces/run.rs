@@ -64,10 +64,11 @@ pub fn browsers(browser: Option<E2eBrowser>) -> Vec<E2eBrowser> {
 pub fn collect_trace_files(
     cold: bool,
     browser: Option<E2eBrowser>,
-) -> Result<(TempDir, Vec<PathBuf>)> {
+) -> Result<(TempDir, Vec<PathBuf>, Vec<LabeledReport>)> {
     let tmp = TempDir::new()?;
     let browsers = browsers(browser);
     let mut files = Vec::new();
+    let mut reports: Vec<LabeledReport> = Vec::new();
     for backend in BACKENDS {
         for &browser in &browsers {
             let attr = e2e_attr(backend, browser, cold);
@@ -84,10 +85,45 @@ pub fn collect_trace_files(
                 browser.as_str()
             ));
             extract_trace(&tarball, &dest)?;
+            // `read_spans` labels every span with `path.display()`, so the
+            // report pairing below must key on exactly that string.
+            let source = dest.display().to_string();
             files.push(dest);
+
+            // The Playwright report sits beside the capture in the same store
+            // path. It is the span-coverage section's denominator (#794).
+            //
+            // Paired with THIS combo's trace-file name, which is what
+            // `Span.source` carries. Without the pairing, sqlite's and postgres's
+            // reports collide — `projectName` is the browser and names no
+            // backend, so both combos yield the same (test, project, retry) key
+            // with different durations.
+            //
+            // Deliberately NOT an error when absent: a pre-#794 check output has
+            // no reason to carry one, and the coverage section degrades to a
+            // stated note rather than taking the whole run down.
+            let report = playwright_report_path(&out, backend);
+            if report.exists() {
+                reports.push((source, report));
+            }
         }
     }
-    Ok((tmp, files))
+    Ok((tmp, files, reports))
+}
+
+/// One combo's Playwright report, paired with the `Span.source` label of the
+/// trace file it belongs to.
+///
+/// The pairing is load-bearing, not bookkeeping: `projectName` is the browser
+/// and names no backend, so sqlite's and postgres's reports produce identical
+/// `(test, project, retry)` keys with different durations. See
+/// [`super::report::ReportedDurations`].
+pub type LabeledReport = (String, PathBuf);
+
+/// Playwright's `json` reporter output inside a built e2e check's store path:
+/// `<out>/playwright-report-<backend>.json`.
+pub fn playwright_report_path(out: &str, backend: E2eBackend) -> PathBuf {
+    PathBuf::from(out).join(format!("playwright-report-{}.json", backend.as_str()))
 }
 
 /// Extract the single `capture/otel-traces.jsonl` member of a `capture-*.tar.gz`
