@@ -1166,7 +1166,7 @@ rg -n 'get_tags_for_post' . --glob '!docs/archive/**' --glob '!docs/superpowers/
 
 Expected: **PASS**, and the search prints nothing (AC2 complete).
 
-- [ ] **Step 4: Gate and commit**
+- [x] **Step 4: Gate and commit**
 
 ```
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-771-batch-tag-writes -- cargo xtask check
@@ -1177,7 +1177,7 @@ git add -A
 git commit -m "refactor(storage): drop get_tags_for_post; read tags off the post record (#771)"
 ```
 
-- [ ] **Step 5: Run the branch gate (AC13)**
+- [x] **Step 5: Run the branch gate (AC13)**
 
 ```
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-771-batch-tag-writes -- cargo xtask validate --no-e2e
