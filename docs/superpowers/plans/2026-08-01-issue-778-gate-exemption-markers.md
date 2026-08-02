@@ -581,14 +581,14 @@ mod marker_tests {
 }
 ```
 
-- [ ] **Step 2: Run, verify it does not build**
+- [x] **Step 2: Run, verify it does not build**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-778-allowlist-multiplicity -- cargo nextest run --manifest-path xtask/Cargo.toml marker_tests`
 Expected: **build failure** — `scan`, `classify`, `Why`, `Classified` not
 defined.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Add `test_ranges: Vec<(usize, usize)>` to `Scanner`. In `visit_item_mod` /
 `visit_item_impl` / `visit_item_fn` / `visit_impl_item_fn`, when the item is
@@ -659,7 +659,7 @@ pub struct Report {
 }
 ```
 
-- [ ] **Step 1: Rewrite the `ident_gate` allowlist tests**
+- [x] **Step 1: Rewrite the `ident_gate` allowlist tests**
 
 Delete: `an_entry_covers_its_declared_count_and_no_more`,
 `a_zero_count_entry_exempts_nothing`,
@@ -667,7 +667,7 @@ Delete: `an_entry_covers_its_declared_count_and_no_more`,
 (all test the deleted key). Keep `mentions_come_back_in_line_order`, retargeted
 at `scan`.
 
-- [ ] **Step 2: Rewrite `html_sink_check`'s tests**
+- [x] **Step 2: Rewrite `html_sink_check`'s tests**
 
 > **Marker placement in every fixture below:** the code blocks in this task and
 > Task 6 were written against the original trailing-marker rule. Transpose each
@@ -823,7 +823,7 @@ deliberately "2" — a site with no marker on its line, plus the marker sitting
 alone on line 3 as an orphan. That is the rule working, and pins AC9 from the
 failing direction.
 
-- [ ] **Step 3: Rewrite `raw_html_door_check`'s tests**
+- [x] **Step 3: Rewrite `raw_html_door_check`'s tests**
 
 **Keep:** the population tests, `unparseable_source_is_a_hard_error`, the
 `cfg(test)` / `cfg(not(test))` tests,
@@ -871,14 +871,14 @@ fn an_html_sink_marker_does_not_exempt_a_door() {
 }
 ```
 
-- [ ] **Step 4: Run, verify it does not build**
+- [x] **Step 4: Run, verify it does not build**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-778-allowlist-multiplicity -- cargo nextest run --manifest-path xtask/Cargo.toml`
 Expected: **build failure** — `Gate` still has `allowlist`, `Report` still
 requires `noun`/`vanished`.
 
-- [ ] **Step 5: Implement**
+- [x] **Step 5: Implement**
 
 In `ident_gate`: drop `allowlist` from `Gate` and `noun`/`vanished` from
 `Report`; add `marker_token` returning `format!("{}:allow", self.step)`; rewrite
@@ -904,14 +904,14 @@ In both gate modules: delete `ALLOWLIST` and the `Allowed` import, drop
 `noun`/`vanished`, and rewrite `recovery` to end with the marker instruction and
 "Currently marked:" in place of "Currently exempt:".
 
-- [ ] **Step 6: Run the suite and the gate**
+- [x] **Step 6: Run the suite and the gate**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-778-allowlist-multiplicity -- cargo xtask check`
 Expected: PASS. `rendered-html-from-trusted` is untouched and still uses
 `mentions`/`top_level`/`expr_path`, so nothing is dead yet.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add xtask/src/steps/ident_gate.rs xtask/src/steps/html_sink_check.rs xtask/src/steps/raw_html_door_check.rs
@@ -940,7 +940,7 @@ Deleting the `expr_path` hook is safe: `TrustedDoor` is its only real
 implementor and dies here; `server_fn_registrar_check.rs:182`'s
 `visit_expr_path` is an unrelated `syn::visit::Visit` method.
 
-- [ ] **Step 1: Rewrite the tests**
+- [x] **Step 1: Rewrite the tests**
 
 > **Marker placement:** as in Task 5 — every marker in the fixtures below is a
 > standalone comment line **directly above** its site, not trailing it.
@@ -1041,14 +1041,14 @@ fn problems_is_none_for_a_fully_marked_tree() {
 }
 ```
 
-- [ ] **Step 2: Run, verify failure**
+- [x] **Step 2: Run, verify failure**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-778-allowlist-multiplicity -- cargo nextest run --manifest-path xtask/Cargo.toml rendered_html`
 Expected: FAIL — `EXEMPT_QUALIFIERS` still exempts `ContentType`; the definition
 site is still invisible.
 
-- [ ] **Step 3: Implement the gate**
+- [x] **Step 3: Implement the gate**
 
 Delete `ALLOWED_FNS`, `EXEMPT_QUALIFIERS`, `TrustedDoor`,
 `macro_qualifier_is_exempt`, and the local `violations`/`problems`/`run` built
@@ -1074,13 +1074,13 @@ another type is \_marked* as such rather than self-exempting, and ends with the
 marker instruction and "Currently marked:". Then `violations` (`#[cfg(test)]`),
 `problems` and `run` delegate to `GATE`, matching `html_sink_check.rs:146-162`.
 
-- [ ] **Step 4: Delete the now-dead machinery**
+- [x] **Step 4: Delete the now-dead machinery**
 
 Remove `mentions`, `Mention::top_level`, `Population::expr_path`,
 `Scanner::visit_expr_path` and `AnyOf::expr_path` from `ident_gate`. Update
 `Population`'s trait doc, which explains why all hooks are required.
 
-- [ ] **Step 5: Verify the deletion (AC16)**
+- [x] **Step 5: Verify the deletion (AC16)**
 
 Run:
 `rg -n 'Allowed|unjustified|top_level|expr_path|EXEMPT_QUALIFIERS|macro_qualifier_is_exempt|TrustedDoor|ALLOWLIST|ALLOWED_FNS' xtask/src/steps/ident_gate.rs xtask/src/steps/html_sink_check.rs xtask/src/steps/raw_html_door_check.rs xtask/src/steps/rendered_html_from_trusted_check.rs`
@@ -1088,7 +1088,7 @@ Expected: no output. (Other `steps/` modules keep several of these names
 legitimately — see AC16's carve-out. `rg` is case-sensitive, and the classifier
 deliberately spells its field `unexempt`.)
 
-- [ ] **Step 6: Run the suite and the gate**
+- [x] **Step 6: Run the suite and the gate**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-778-allowlist-multiplicity -- cargo xtask check`
@@ -1096,7 +1096,7 @@ Expected: PASS — all three gates green against the twelve markers from Task 3,
 no dead-code warnings. A failure naming a site means its marker is missing or on
 the wrong line.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add xtask/src/steps/ident_gate.rs xtask/src/steps/rendered_html_from_trusted_check.rs
@@ -1126,7 +1126,7 @@ name-keyed exemption work, and go with the last caller."
   `0079-rendered-html-sanitization.md`, `0050-stateless-coverage-gate.md`
 - Modify: `common/src/media.rs`, `common/src/render.rs`
 
-- [ ] **Step 1: Module docs (AC20, AC21, AC28)**
+- [x] **Step 1: Module docs (AC20, AC21, AC28)**
 
 - `ident_gate`: delete the two-layer allowlist description, the `#778` reference
   at `:23`, and unreadable class 4 (the fn-name key — there is no name key now).
@@ -1141,7 +1141,7 @@ name-keyed exemption work, and go with the last caller."
   render layer's output, the same fn the projector paints) and that the
   uniformity is the point.
 
-- [ ] **Step 2: ADR corrections (AC26–AC29)**
+- [x] **Step 2: ADR corrections (AC26–AC29)**
 
 - **ADR-0093** "What it creates": replace the `ALLOWED_FNS` follow-up paragraph
   with the landed decision, citing the new ADR by its
@@ -1164,7 +1164,7 @@ name-keyed exemption work, and go with the last caller."
 - **`common/src/media.rs`:** the parenthetical claiming the `ContentType::`
   qualifier is exempt is false; the site is marked like any other.
 
-- [ ] **Step 3: Verify the ADR draft covers AC25**
+- [x] **Step 3: Verify the ADR draft covers AC25**
 
 Read `docs/adr/drafts/gate-exemptions-in-source-markers.md` and confirm it
 records everything AC25 lists: the marker decision and its rules; that a machine
@@ -1176,7 +1176,7 @@ accepted loss; that stakes set strictness rather than mechanism; the
 costs. Add anything missing — the draft is gitignored and ungated, so nothing
 else will catch a gap.
 
-- [ ] **Step 4: Verify no stale claim survives**
+- [x] **Step 4: Verify no stale claim survives**
 
 Run:
 `rg -n 'ALLOWED_FNS|allowlisted trusted-rebuild|in expression position' docs/adr common/src xtask/src/steps`
@@ -1186,13 +1186,13 @@ Expected: no output.
 ADR-0080 to state that the const no longer exists, and AC25's ADR records its
 deletion, so live prose mentions it by name on purpose.
 
-- [ ] **Step 5: Run the gate (doc-links and ADR format are gated)**
+- [x] **Step 5: Run the gate (doc-links and ADR format are gated)**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-778-allowlist-multiplicity -- cargo xtask check`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add xtask/src/steps docs/adr common/src/media.rs common/src/render.rs

@@ -198,10 +198,11 @@ impl PartialEq<&str> for RenderedHtml {
 //
 // It rests on one argument only — that typing a column as `RenderedHtml` is a deliberate,
 // reviewable act. Note what does *not* back it: the `rendered-html-from-trusted` gate does
-// **not** catch this. That gate matches `from_trusted` call sites in expression position;
-// a `FromRow` field typed `RenderedHtml` over the wrong column names no door at all and is
-// invisible to it. Widening the gate to flag `RenderedHtml`-typed row fields outside an
-// allowlist would close the hole — filed as #701.
+// **not** catch this. That gate matches the `from_trusted` ident wherever it appears
+// (#778 widened it to definitions and to other types' doors); a `FromRow` field typed
+// `RenderedHtml` over the wrong column names no door at all and is invisible to it.
+// Widening the gate to flag `RenderedHtml`-typed row fields would close the hole —
+// filed as #701.
 //
 // A *sanitizing* decode would have removed the risk outright and healed any pre-#445 row
 // on read. It was rejected: no deployed instance holds data, so it would guard only
