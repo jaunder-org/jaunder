@@ -2370,39 +2370,59 @@ git commit -m "docs(adr): draft the doctest gate decision and its ADR-0085 confo
 - Consumes: everything above.
 - Produces: the evidence AC20 requires, carried into the PR body at ship.
 
-- [ ] **Step 1: Capture the baseline coverage verdict**
+- [x] **Step 1: Capture the baseline coverage verdict**
 
-In a scratch worktree at `wt-base-issue-763` (`2ff62da1`), run
-`devtool run -- cargo xtask validate --no-e2e`, then record
-`jq '.coverage' .xtask/last-result.json`.
+Taken from this cycle's **first** gate run instead of a scratch worktree: that
+run was on a tree whose only change was the spec markdown, so its figure —
+`clean — 23892 executable line(s), 0 failures, 0 guard violations, 0 CRAP over threshold`
+— **is** the branch-point figure, and it came for free.
 
-- [ ] **Step 2: Run the full local gate on the branch**
+- [x] **Step 2: Run the full local gate on the branch**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate -- cargo xtask validate`
-Expected: exit 0. (Long — use Bash background mode.)
+Expected: exit 0. (Long — use Bash background mode.) **Actual: exit 0, all 41
+steps ok, including the full `{sqlite,postgres}×{chromium,firefox}` e2e
+matrix.**
 
-- [ ] **Step 3: Compare the coverage verdict**
+- [x] **Step 3: Compare the coverage verdict**
 
 Run: `jq '.coverage' .xtask/last-result.json` and diff against Step 1. Expected:
 the same verdict and the same executable-line count. A difference means doctest
 profraw reached the coverage profile, contradicting decision 11 — stop and
 diagnose before shipping.
 
-- [ ] **Step 4: Confirm the full step list**
+**Actual: identical.**
+`clean — 23892 executable line(s), 0 failures, 0 guard violations, 0 CRAP over threshold`.
+And not just at the endpoints: every one of the ~15 gate runs across this cycle
+reported 23892, through 8 new companions, 3 restructured fixtures, a promoted
+`text_enum` doctest and a new `Borrow<str>` proof. `--doc` contributes no
+profraw.
+
+(The verdict lives in the `coverage` step's `detail`, not in `.coverage` — that
+object carries only `failures`/`guard_violations`/`crap_fails`.)
+
+- [x] **Step 4: Confirm the full step list**
 
 Run: `jq -r '.steps[] | "\(.name) \(.ok)"' .xtask/last-result.json` Expected:
 `nix-doctests`, `nix-doctests-gate`, and `doctest-fences` all present and ok.
+**Actual: all three present, all ok.**
 
-- [ ] **Step 5: Record the evidence for the PR body**
+- [x] **Step 5: Record the evidence for the PR body**
 
 Capture, for **jaunder-ship**: the before/after coverage verdict; the fence
 census (0 `ignore`, 0 violations); and the before/after doctest counts —
 
-| crate    | before               | after                | why                                                                                            |
-| -------- | -------------------- | -------------------- | ---------------------------------------------------------------------------------------------- |
-| `common` | 21 passed            | 29 passed            | +8 companions (3 Task 8, 4 Task 9, 1 Task 10)                                                  |
-| `macros` | 17 passed, 2 ignored | 23 passed, 0 ignored | `:298`→`text`, `:353`→real (+1), `Borrow` negative (+1), 3 ordering companions, 1 control (+4) |
+| crate    | before               | after                | why                                                                                              |
+| -------- | -------------------- | -------------------- | ------------------------------------------------------------------------------------------------ |
+| `common` | 21 passed            | 29 passed            | +8 companions (3 Task 8, 4 Task 9, 1 Task 10)                                                    |
+| `macros` | 17 passed, 2 ignored | 21 passed, 0 ignored | `:298`→`text`, `:353`→real (+1), `Borrow` negative (+1), 1 control + 1 shared fixture fence (+2) |
+
+**Measured, not predicted:** `common` 21 → **29**, `macros` 17 passed / 2
+ignored → **21 passed / 0 ignored**. Total 38 → **50**. The `macros` row came in
+at 21 rather than the 23 sketched above, because the three ordering proofs share
+two new plain fences (a control and a fixture fence) rather than taking one
+companion each.
 
 Confirm the totals against the run rather than trusting this table — a mismatch
 means a companion was folded into an existing fence instead of added.
