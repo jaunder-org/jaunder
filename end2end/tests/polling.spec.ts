@@ -1,8 +1,11 @@
 /**
  * Tests for the polling primitive itself (#794, gap 6).
  *
- * These drive no browser — they declare no `page` fixture — but live as a spec
- * so they run in the same suite the primitive serves.
+ * These exercise no browser behaviour, but they are not browser-free: the
+ * `_autoPerfSpan` fixture is `auto` and depends on `page`, so Playwright still
+ * mints a context and page per test. They live as a spec rather than moving to
+ * a separate runner so the primitive is tested under the same fixtures its real
+ * callers run under.
  */
 
 import { test, expect } from "./fixtures";

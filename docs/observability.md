@@ -53,6 +53,15 @@ the analyzer matches the exact name `e2e.test` (so `e2e.test.lifecycle` cannot
 collide), and the coverage extractor walks `parent_span_id` _upward_ to an
 `e2e.test`-named span, so an extra ancestor changes nothing.
 
+**Which `e2e.test` numbers remain comparable to #788.** Its span id and time
+range are unchanged, and so are `e2e.request_count` and `e2e.navigation_count` —
+that is exactly what the phase-tagged capture sink protects, since warmup now
+flows through the same instrumentation. But `e2e.action_count` and
+`e2e.action_top_json` **are not comparable**: #794 delimited the composite flows
+(`flow.login`, `flow.verify_email`, …) and wrapped the previously-invisible
+waits, so the action count legitimately rose. Diff the request and navigation
+counts across that boundary; do not diff the action counts.
+
 **Every `e2e.`-prefixed span must carry an `e2e.project` attribute.**
 `traces analyze --project <name>` drops any `e2e.`-named span whose
 `e2e.project` differs from the filter, so an unstamped span reads as "belongs to

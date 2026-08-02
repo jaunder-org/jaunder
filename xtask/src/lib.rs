@@ -576,7 +576,8 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let filters = traces::parse::Filters { trace, project };
             // A read/parse failure (missing file, malformed JSONL line) propagates
             // as Err → the exit-2 path in main.rs (spec §6), not a fail step.
-            let analysis = traces::analyze::analyze(&files, filters, &playwright_report)?;
+            let reported = traces::report::ReportedDurations::from_paths(&playwright_report)?;
+            let analysis = traces::analyze::analyze(&files, filters, &reported)?;
             let n = analysis.span_count;
             result.traces = Some(traces::render::render(&analysis, top as usize));
             result.push(StepResult::ok("traces-analyze").detail(format!("{n} span(s)")));
@@ -600,7 +601,11 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                 trace,
                 project: None,
             };
-            let analysis = traces::analyze::analyze(&files, filters, &reports)?;
+            // Paired per combo — see `ReportedDurations`: sqlite and postgres
+            // share test+project+retry keys, so an unpaired merge would let one
+            // backend's durations overwrite the other's.
+            let reported = traces::report::ReportedDurations::from_labeled(&reports)?;
+            let analysis = traces::analyze::analyze(&files, filters, &reported)?;
             result.traces = Some(traces::render::render(&analysis, top as usize));
             result.push(StepResult::ok("traces-run").detail(format!("{n} trace file(s)")));
             finalize(&mut result, start);

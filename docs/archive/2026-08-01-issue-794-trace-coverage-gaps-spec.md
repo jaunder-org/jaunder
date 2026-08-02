@@ -238,11 +238,24 @@ are attributed to. AC-14 asserts that byte-identically rather than assuming it.
   every test, each with **non-zero** duration; `e2e.context_mint` starts at the
   `_autoTestTimeout` stamp and ends no later than `_autoPerfSpan`'s entry.
   `e2e.warmup` is exported exactly when `JAUNDER_E2E_WARMUP` is truthy.
-- **AC-3**: On an identical run, `e2e.test` is unchanged in **span id**,
-  **start/end range**, **attribute keys**, and the **values** of
-  `e2e.request_count`, `e2e.navigation_count` and `e2e.action_count`. (Parent is
-  deliberately excluded — D2.) Verified by comparing captures from `main` and
-  the branch.
+- **AC-3** — ⚠️ **amended during ship; as originally written it was
+  unsatisfiable.** It required `e2e.test`'s **attribute keys** and its
+  `e2e.action_count` **value** to be unchanged — but AC-15 mandates five new
+  dropped-count keys, AC-6 adds `e2e.boot_marks_json`, and AC-10/AC-17/AC-18
+  mandate new `flow.*` / `wait.*` timed actions, which necessarily raise
+  `e2e.action_count`. The clause contradicted four other criteria in the same
+  document. Caught by the pre-PR branch review, not by the author.
+
+  **What actually holds, and is what the invariant was for:** `e2e.test` keeps
+  its **span id**, its **start/end range**, and the **values of
+  `e2e.request_count` and `e2e.navigation_count`**. Those two counts are what
+  D1a's phase-tagged sink exists to protect — warmup traffic must not leak into
+  them — and they are unchanged. Parent is deliberately excluded (D2).
+
+  **Explicitly NOT comparable to #788 any more:** `e2e.action_count` and
+  `e2e.action_top_json`, which now include the newly-delimited composite flows
+  and waits. Anyone diffing those against #788's figures will draw a false
+  conclusion; the request and navigation counts are the like-for-like ones.
 - **AC-4** — ✅ **met**. `cargo xtask traces analyze` gained a per-test
   **span-coverage** section reporting, per test: Playwright-reported duration
   (joined from `playwright-report-<backend>.json` on test + project + retry),

@@ -118,6 +118,14 @@ function bootPhasesFrom(marks: BootMark[]): Record<string, number> | null {
  * earlier of the first timed action after mount-ready or the next navigation's
  * start. That last clause is what keeps a post-mount user click's fetches from
  * being counted as app boot cost.
+ *
+ * KNOWN APPROXIMATION: `requests` is the default context's sink, but `actions`
+ * is the whole test's — including `flow.*` driven on `tracedContext` pages. An
+ * action on an unrelated context can therefore close the boundary early and
+ * truncate this window, biasing the figure DOWN. Actions are not tagged with the
+ * context that ran them (`ActionRecord` carries a page URL, not an identity), so
+ * closing this needs a wider change than #794; an under-estimate was preferred
+ * to over-attributing a later navigation's fetches to this one.
  */
 function mountToSettledMs(
   navigation: NavigationRecord,
@@ -607,7 +615,7 @@ const test = base.extend<{
         .sort((left, right) => right.durationMs - left.durationMs)
         .slice(0, 30);
       const navigationSummary: NavigationSummary[] = navigations
-        .map((navigation): NavigationSummary => {
+        .map((navigation, index): NavigationSummary => {
           const endMs =
             navigation.mountedMs ??
             navigation.loadMs ??
@@ -641,9 +649,11 @@ const test = base.extend<{
           const bootEntry = timing?.marks.find((mark) =>
             mark.name.endsWith(".boot.entry"),
           );
-          const next = navigations.find(
-            (entry) => entry.startedMs > navigation.startedMs,
-          );
+          // Positional, not `startedMs >`: navigations are pushed in start order,
+          // and two can share a `Date.now()` millisecond. A `>` search skips the
+          // tied neighbour and lands on the one after it, widening the window so
+          // a later navigation's fetches get counted as this one's settle.
+          const next = navigations[index + 1];
           return {
             id: navigation.id,
             url: navigation.url,

@@ -9,14 +9,19 @@
  * ## Usage
  *
  * Snapshot the ping count with `readPingLines().length` *before* triggering the
- * action that should produce a ping, then pass that count to `waitForNewPing`.
- * This prevents returning a stale ping written by a previous test.
+ * action that should produce a ping, then pass that count to
+ * `waitForPingMatching`. This prevents returning a stale ping written by a
+ * previous test.
  *
  * ```ts
  * const pingsBefore = readPingLines().length;
  * await publishPost(page); // triggers feed regen + hub ping
- * const ping = await waitForNewPing(pingsBefore);
+ * const ping = await waitForPingMatching(pingsBefore, isUserFeed);
  * ```
+ *
+ * A count-only `waitForNewPing` used to live here. It had no callers — one
+ * publish enqueues events for several feeds, so every site needs the predicate
+ * form — and was removed rather than carried forward (#794).
  */
 
 import * as fs from "fs";
@@ -48,36 +53,6 @@ export function readPingLines(): string[] {
 }
 
 /**
- * Wait until the capture file has more lines than `previousCount`, then return
- * the newest ping.
- *
- * The feed worker runs on a ~10s tick, so allow a generous default timeout.
- * Always pass the line count snapshotted *before* triggering the action so
- * pings written by earlier tests do not satisfy the wait.
- */
-export async function waitForNewPing(
-  previousCount: number,
-  timeoutMs = 30_000,
-): Promise<CapturedPing> {
-  // Resolved before polling — see the note in `mail.ts`'s `waitForNewEmail`.
-  const file = websubCaptureFile();
-  return pollUntil(
-    "wait.websub_ping",
-    () => {
-      const lines = readPingLines();
-      return lines.length > previousCount
-        ? (JSON.parse(lines[lines.length - 1]) as CapturedPing)
-        : undefined;
-    },
-    {
-      intervalMs: 250,
-      timeoutMs,
-      describe: `a new captured WebSub ping at ${file}`,
-    },
-  );
-}
-
-/**
  * Wait for a ping (written after `previousCount` lines) whose `feed_url`
  * matches `predicate`, then return it.
  *
@@ -90,7 +65,9 @@ export async function waitForPingMatching(
   predicate: (feedUrl: string) => boolean,
   timeoutMs = 30_000,
 ): Promise<CapturedPing> {
-  // Resolved before polling — see the note in `mail.ts`'s `waitForNewEmail`.
+  // Resolve the capture path BEFORE polling. `capturePathViaTool` throws when
+  // JAUNDER_CAPTURE_DIR is unset, and a throw inside the probe would be retried
+  // to the full timeout instead of failing loudly (#794).
   const file = websubCaptureFile();
   return pollUntil(
     "wait.websub_ping",

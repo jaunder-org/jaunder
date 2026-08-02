@@ -492,7 +492,9 @@ pub fn span_coverage(spans: &[Span], reported: &ReportedDurations) -> Vec<SpanCo
                     .parse::<u64>()
                     .unwrap_or(0),
             };
-            let reported_ms = reported.get(&key)?;
+            // Scoped by the envelope's own trace file: sqlite and postgres produce
+            // identical (test, project, retry) keys with different durations.
+            let reported_ms = reported.get(&envelope.source, &key)?;
             let intervals: Vec<(f64, f64)> = children
                 .get(envelope.span_id.as_str())
                 .map(|kids| {
@@ -679,7 +681,7 @@ fn analyze_spans_inner(spans: Vec<Span>, project_filter: Option<String>) -> Anal
         long_task_by_project,
         resource_initiators,
         resource_assets,
-        // Filled in by `analyze_spans_with_report`, which owns the report join.
+        // Filled in by `analyze_spans`, which owns the report join.
         span_coverage: Vec::new(),
         span_coverage_note: None,
     }
@@ -691,13 +693,16 @@ fn analyze_spans_inner(spans: Vec<Span>, project_filter: Option<String>) -> Anal
 /// `reports` are Playwright `json` reporter outputs supplying the span-coverage
 /// section's denominator. Empty is fine — the section then renders a note saying
 /// why it is absent rather than silently omitting itself.
-pub fn analyze(inputs: &[PathBuf], filters: Filters, reports: &[PathBuf]) -> Result<Analysis> {
+pub fn analyze(
+    inputs: &[PathBuf],
+    filters: Filters,
+    reported: &ReportedDurations,
+) -> Result<Analysis> {
     let mut spans = Vec::new();
     for input in inputs {
         spans.extend(read_spans(input, &filters)?);
     }
-    let reported = ReportedDurations::from_paths(reports)?;
-    Ok(analyze_spans(spans, filters.project, &reported))
+    Ok(analyze_spans(spans, filters.project, reported))
 }
 
 #[cfg(test)]
@@ -1044,7 +1049,7 @@ mod tests {
         let file = dir.join("otel-traces.jsonl");
         std::fs::write(&file, FIXTURE).unwrap();
 
-        let via_file = analyze(&[file], Filters::default(), &[]).unwrap();
+        let via_file = analyze(&[file], Filters::default(), &ReportedDurations::default()).unwrap();
         let via_spans = analyze_spans(fixture_spans(), None, &ReportedDurations::default());
         std::fs::remove_dir_all(&dir).ok();
 

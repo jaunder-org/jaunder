@@ -6,6 +6,8 @@
  * `websub.ts` waiters, and a feed poll in each of `feeds.spec.ts` and
  * `visibility.spec.ts`. None was wrapped in `withTimedAction`, so every one was
  * invisible to the trace; the WebSub ping test lost ~17.6 s per combo that way.
+ * (Two of the six turned out to have no callers at all and were deleted rather
+ * than migrated, so four live sites use this.)
  *
  * Instrumenting six copies would have been six places to forget. Factoring them
  * into one instrumented helper makes the gap structurally unable to reopen:
@@ -38,6 +40,9 @@ export type PollOptions = {
  *
  * `name` is the timed-action name the wait is recorded under (`wait.mail`,
  * `wait.websub_ping`, `wait.feed`), so the wait is attributed in the trace.
+ *
+ * The real budget is `timeoutMs` plus one probe: the pre-probe below runs before
+ * `toPass` starts its own clock. Immaterial at the 5 s–30 s these sites use.
  */
 export async function pollUntil<T>(
   name: string,
