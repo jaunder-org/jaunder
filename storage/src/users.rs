@@ -12,6 +12,7 @@ use common::display_name::DisplayName;
 use common::email::Email;
 use common::ids::UserId;
 use common::password::Password;
+use common::stored_password_hash::StoredPasswordHash;
 use common::username::Username;
 
 use crate::helpers::{user_record_from_row, UserRow};
@@ -219,7 +220,7 @@ where
         Option<Bio>,
         DateTime<Utc>,
         Option<DateTime<Utc>>,
-        String,
+        StoredPasswordHash,
         Option<Email>,
         bool,
         bool,
@@ -275,7 +276,7 @@ where
              RETURNING user_id",
         )
         .bind(username)
-        .bind(password_hash.as_str())
+        .bind(&password_hash)
         .bind(display_name)
         .bind(now)
         .bind(is_operator)
@@ -314,7 +315,7 @@ where
                 Option<Bio>,
                 DateTime<Utc>,
                 Option<DateTime<Utc>>,
-                String,
+                StoredPasswordHash,
                 Option<Email>,
                 bool,
                 bool,
@@ -351,7 +352,7 @@ where
             // before rejecting. The result is intentionally discarded.
             let _ = crate::helpers::verify_password(
                 password.clone(),
-                crate::helpers::dummy_password_hash().to_string(),
+                crate::helpers::dummy_password_hash().clone(),
             )
             .await;
             return Err(UserAuthError::InvalidCredentials);
@@ -382,17 +383,19 @@ where
             .await
             .map_err(|e| UserAuthError::Internal(Box::new(e)))?;
 
-        Ok(crate::helpers::build_user_record((
-            user_id,
-            username,
-            display_name,
-            bio,
-            created_at,
-            Some(now),
-            email,
-            email_verified,
-            is_operator,
-        )))
+        Ok(crate::helpers::build_user_record(
+            crate::helpers::UserRecordParts {
+                user_id,
+                username,
+                display_name,
+                bio,
+                created_at,
+                last_authenticated_at: Some(now),
+                email,
+                email_verified,
+                is_operator,
+            },
+        ))
     }
 
     async fn get_user(&self, user_id: UserId) -> sqlx::Result<Option<UserRecord>> {
@@ -454,7 +457,7 @@ where
             .map_err(sqlx::Error::Io)?;
 
         sqlx::query("UPDATE users SET password_hash = $1 WHERE user_id = $2")
-            .bind(password_hash.as_str())
+            .bind(&password_hash)
             .bind(user_id)
             .execute(&self.pool)
             .await?;

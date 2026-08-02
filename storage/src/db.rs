@@ -18,11 +18,104 @@ use crate::AppState;
 // DbConnectOptions
 // ---------------------------------------------------------------------------
 
+/// Whether `s` carries a `PostgreSQL` scheme.
+///
+/// The single spelling of that predicate. [`DbConnectOptions::from_str`] needs it, and so
+/// does every CLI argument that parses straight to a `PgConnectOptions` — sqlx does not
+/// check the scheme itself, so those parsers must. Two copies of the prefix list could
+/// drift, and a drift here means accepting a URL the other half rejects.
+#[must_use]
+pub fn is_postgres_url(s: &str) -> bool {
+    s.starts_with("postgres://") || s.starts_with("postgresql://")
+}
+
+/// Replaces any password in `url` with `***`, in **both** spellings sqlx accepts.
+///
+/// - **userinfo** — `postgres://user:secret@host/db` → `postgres://user:***@host/db`
+/// - **query parameter** — `postgres://user@host/db?password=secret` → `…?password=***`
+///
+/// The second is easy to miss and equally live: sqlx-postgres maps a `password` query
+/// key straight onto the connection password (`options/parse.rs`, `"password" =>
+/// options.password(&value)`), so `postgres:///?password=x` is a working credential.
+/// Redacting only the userinfo would leave that spelling printing verbatim.
+///
+/// Returns the input unchanged when there is no password — which is why the existing
+/// passwordless `cli.rs` assertions are unaffected.
+fn redact_url_password(url: &str) -> String {
+    redact_password_query_param(&redact_userinfo_password(url))
+}
+
+/// The `user:secret@` half of [`redact_url_password`].
+fn redact_userinfo_password(url: &str) -> String {
+    let Some(scheme_end) = url.find("://") else {
+        return url.to_owned();
+    };
+    let authority_start = scheme_end + 3;
+    let rest = &url[authority_start..];
+    // The authority ends at the path, the query, or the fragment — whichever comes first.
+    let authority = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
+    let Some(at) = authority.rfind('@') else {
+        return url.to_owned();
+    };
+    let Some(colon) = authority[..at].find(':') else {
+        return url.to_owned();
+    };
+    format!(
+        "{}{}:***{}",
+        &url[..authority_start],
+        &authority[..colon],
+        &url[authority_start + at..],
+    )
+}
+
+/// The `?password=secret` half of [`redact_url_password`].
+fn redact_password_query_param(url: &str) -> String {
+    let Some(query_start) = url.find('?') else {
+        return url.to_owned();
+    };
+    let (head, rest) = url.split_at(query_start + 1);
+    let (query, fragment) = rest.find('#').map_or((rest, ""), |i| rest.split_at(i));
+
+    let redacted = query
+        .split('&')
+        .map(|param| match param.split_once('=') {
+            // Case-insensitive: redacting a key sqlx would ignore is harmless; missing
+            // one it honours is not.
+            Some((key, _)) if key.eq_ignore_ascii_case("password") => format!("{key}=***"),
+            _ => param.to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join("&");
+
+    format!("{head}{redacted}{fragment}")
+}
+
+/// The scheme of `s`, or `"(none)"` when it does not look like one.
+///
+/// Used for the parse-failure message. Deliberately conservative: anything that is not a
+/// plain scheme token is reported as `(none)` rather than echoed, so a malformed URL
+/// cannot leak its userinfo into an error (#693).
+fn url_scheme(s: &str) -> &str {
+    let candidate = s.split_once(':').map_or("", |(scheme, _)| scheme);
+    if !candidate.is_empty()
+        && candidate
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    {
+        candidate
+    } else {
+        "(none)"
+    }
+}
+
 /// Parsed connection options for a supported database backend.
 ///
 /// Constructed via [`FromStr`] at the CLI boundary; invalid or unsupported
 /// URLs are rejected there rather than inside application logic.
-#[derive(Clone, Debug)]
+///
+/// `Debug` and [`Display`](fmt::Display) both **redact the password** (ADR-0011). Use
+/// [`expose_url`](Self::expose_url) where the real URL is required.
+#[derive(Clone)]
 pub enum DbConnectOptions {
     Sqlite(SqliteConnectOptions),
     Postgres {
@@ -31,13 +124,53 @@ pub enum DbConnectOptions {
     },
 }
 
+impl DbConnectOptions {
+    /// The full connection URL, **including any password**.
+    ///
+    /// The single deliberate door past the redacting [`Display`](fmt::Display) — call it
+    /// only where the secret is genuinely required (recording a URL for later
+    /// reconnection, reopening a pool), never for logging or diagnostics. It is named to
+    /// be greppable so those sites stay countable.
+    #[must_use]
+    pub fn expose_url(&self) -> String {
+        match self {
+            DbConnectOptions::Sqlite(opts) => format!("sqlite:{}", opts.get_filename().display()),
+            DbConnectOptions::Postgres { url, .. } => url.clone(),
+        }
+    }
+}
+
+/// Hand-written so the password never renders.
+///
+/// Both arms matter. `url` obviously carries it; `options` does too, and sqlx's own
+/// `PgConnectOptions: Debug` cannot be told to redact — so it is **not printed**, and the
+/// non-secret parts worth diagnosing (host, port, database) are named individually
+/// instead.
+impl fmt::Debug for DbConnectOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DbConnectOptions::Sqlite(opts) => f
+                .debug_tuple("Sqlite")
+                .field(&opts.get_filename().display().to_string())
+                .finish(),
+            DbConnectOptions::Postgres { url, options } => f
+                .debug_struct("Postgres")
+                .field("url", &redact_url_password(url))
+                .field("host", &options.get_host())
+                .field("port", &options.get_port())
+                .field("database", &options.get_database())
+                .finish(),
+        }
+    }
+}
+
 impl fmt::Display for DbConnectOptions {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             DbConnectOptions::Sqlite(opts) => {
                 write!(f, "sqlite:{}", opts.get_filename().display())
             }
-            DbConnectOptions::Postgres { url, .. } => f.write_str(url),
+            DbConnectOptions::Postgres { url, .. } => f.write_str(&redact_url_password(url)),
         }
     }
 }
@@ -48,15 +181,19 @@ impl FromStr for DbConnectOptions {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.starts_with("sqlite:") {
             Ok(DbConnectOptions::Sqlite(s.parse()?))
-        } else if s.starts_with("postgres://") || s.starts_with("postgresql://") {
+        } else if is_postgres_url(s) {
             Ok(DbConnectOptions::Postgres {
                 url: s.to_owned(),
                 options: s.parse()?,
             })
         } else {
+            // Names the **scheme**, never the URL. `StorageArgs.db` is parsed by clap via
+            // this impl, so `JAUNDER_DB=postgre://user:secret@host/db` — a one-character
+            // typo — used to print the credential straight to stderr (#693).
             Err(sqlx::Error::Configuration(
                 format!(
-                    "unsupported database URL '{s}'; supported schemes are sqlite: and postgres://"
+                    "unsupported database URL scheme '{}'; supported schemes are sqlite: and postgres://",
+                    url_scheme(s)
                 )
                 .into(),
             ))
@@ -222,7 +359,10 @@ mod tests {
             .parse::<DbConnectOptions>()
             .unwrap();
         assert!(matches!(pg, DbConnectOptions::Postgres { .. }));
-        assert_eq!(pg.to_string(), "postgres://user:pass@localhost/db");
+        // `Display` now redacts (#693); `expose_url` is the door to the real URL. This
+        // assertion previously pinned the unredacted rendering — i.e. it asserted the leak.
+        assert_eq!(pg.to_string(), "postgres://user:***@localhost/db");
+        assert_eq!(pg.expose_url(), "postgres://user:pass@localhost/db");
 
         let pgs = "postgresql://user:pass@localhost/db"
             .parse::<DbConnectOptions>()
@@ -244,6 +384,150 @@ mod tests {
     fn test_db_connect_options_invalid_postgres() {
         let invalid = "postgres://[invalid]".parse::<DbConnectOptions>();
         assert!(invalid.is_err());
+    }
+
+    /// The regression guard for the `Display` → file → `FromStr` → connect round-trip.
+    ///
+    /// `test_support` records a per-test URL that `backup.rs` reads back and reconnects
+    /// with. That recorder now uses `expose_url`, so redacting `Display` cannot break it —
+    /// this test is what says so. It does not fail today only because the default test URL
+    /// happens to be passwordless.
+    #[test]
+    fn expose_url_round_trips_a_password_bearing_url() {
+        let raw = "postgres://app:hunter2@localhost/jaunder";
+        let opts: DbConnectOptions = raw.parse().unwrap();
+
+        assert_eq!(opts.expose_url(), raw, "the password must survive");
+
+        let reparsed: DbConnectOptions = opts.expose_url().parse().unwrap();
+        assert_eq!(reparsed.expose_url(), raw, "and survive a round-trip");
+    }
+
+    /// The live leak #693 found: `StorageArgs.db` is parsed by clap through `FromStr`, so
+    /// a one-character scheme typo printed the credential to stderr.
+    #[test]
+    fn parse_failure_names_the_scheme_not_the_url() {
+        let err = "postgre://u:hunter2@h/db"
+            .parse::<DbConnectOptions>()
+            .unwrap_err();
+        let msg = err.to_string();
+
+        assert!(!msg.contains("hunter2"), "leaked the password: {msg}");
+        assert!(!msg.contains("u:hunter2"), "leaked the userinfo: {msg}");
+        assert!(msg.contains("postgre"), "should name the scheme: {msg}");
+    }
+
+    #[test]
+    fn debug_and_display_redact_the_password() {
+        let opts: DbConnectOptions = "postgres://app:hunter2@localhost/jaunder".parse().unwrap();
+
+        let shown = format!("{opts}");
+        let debugged = format!("{opts:?}");
+
+        for rendered in [&shown, &debugged] {
+            assert!(!rendered.contains("hunter2"), "leaked: {rendered}");
+            assert!(!rendered.contains(":hunter2@"), "leaked: {rendered}");
+        }
+
+        // Still useful for diagnosis.
+        assert!(shown.contains("app:***@localhost"), "{shown}");
+        assert!(debugged.contains("localhost"), "{debugged}");
+        assert!(debugged.contains("jaunder"), "{debugged}");
+    }
+
+    /// A passwordless URL renders unchanged — which is why the five `cli.rs`
+    /// `to_string()` assertions need no edits.
+    #[test]
+    fn redaction_leaves_a_passwordless_url_alone() {
+        let raw = "postgres://jaunder@localhost/jaunder";
+        let opts: DbConnectOptions = raw.parse().unwrap();
+        assert_eq!(opts.to_string(), raw);
+    }
+
+    /// The three "nothing to redact" shapes, driven directly: `redact_url_password` is
+    /// deliberately total, so each early return is a real branch.
+    #[test]
+    fn redaction_passes_through_urls_with_no_password() {
+        // No `://` at all — defensive; `DbConnectOptions` never builds one, but the
+        // function is total and the branch is live.
+        assert_eq!(
+            redact_url_password("sqlite:jaunder.db"),
+            "sqlite:jaunder.db"
+        );
+        // No userinfo.
+        assert_eq!(
+            redact_url_password("postgres://localhost/db"),
+            "postgres://localhost/db"
+        );
+        // Userinfo, but no password.
+        assert_eq!(
+            redact_url_password("postgres://user@localhost/db"),
+            "postgres://user@localhost/db"
+        );
+    }
+
+    /// sqlx accepts the password as a query parameter as well as in the userinfo
+    /// (`options/parse.rs`: `"password" => options.password(&value)`), so redacting only
+    /// the userinfo left a working credential printing verbatim. Caught in review.
+    #[test]
+    fn redaction_covers_the_query_parameter_spelling() {
+        let opts: DbConnectOptions = "postgres://app@localhost/jaunder?password=hunter2"
+            .parse()
+            .unwrap();
+
+        for rendered in [format!("{opts}"), format!("{opts:?}")] {
+            assert!(!rendered.contains("hunter2"), "leaked: {rendered}");
+            assert!(rendered.contains("password=***"), "{rendered}");
+        }
+
+        // …and `expose_url` still yields the real thing, since that is its whole job.
+        assert!(opts.expose_url().contains("password=hunter2"));
+    }
+
+    #[test]
+    fn redaction_covers_both_spellings_at_once_and_spares_other_params() {
+        assert_eq!(
+            redact_url_password(
+                "postgres://app:pw@localhost/jaunder?sslmode=require&password=hunter2"
+            ),
+            "postgres://app:***@localhost/jaunder?sslmode=require&password=***"
+        );
+    }
+
+    #[test]
+    fn redaction_matches_the_password_key_case_insensitively() {
+        assert_eq!(
+            redact_url_password("postgres://app@h/db?PassWord=hunter2"),
+            "postgres://app@h/db?PassWord=***"
+        );
+    }
+
+    /// A password-bearing userinfo with a query string: the authority must end at the
+    /// `?`, not swallow it.
+    #[test]
+    fn redaction_bounds_the_authority_at_the_query() {
+        assert_eq!(
+            redact_url_password("postgres://app:pw@localhost?sslmode=require"),
+            "postgres://app:***@localhost?sslmode=require"
+        );
+    }
+
+    #[test]
+    fn parse_failure_reports_no_scheme_when_there_is_none() {
+        let err = "just-a-path".parse::<DbConnectOptions>().unwrap_err();
+        assert!(err.to_string().contains("(none)"), "{err}");
+    }
+
+    #[test]
+    fn sqlite_renders_its_path_through_every_door() {
+        let opts: DbConnectOptions = "sqlite:/tmp/jaunder.db".parse().unwrap();
+
+        assert_eq!(opts.expose_url(), "sqlite:/tmp/jaunder.db");
+        assert_eq!(opts.to_string(), "sqlite:/tmp/jaunder.db");
+
+        let debugged = format!("{opts:?}");
+        assert!(debugged.contains("Sqlite"), "{debugged}");
+        assert!(debugged.contains("/tmp/jaunder.db"), "{debugged}");
     }
 
     // guard:no-backend — asserts DbConnectOptions→backend routing; connects lazily, no live pool

@@ -20,6 +20,7 @@ use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
 use common::session_label::SessionLabel;
 use common::slug::Slug;
+use common::stored_password_hash::StoredPasswordHash;
 use common::tag::{Tag, TagLabel};
 use common::token::TokenHash;
 use common::username::Username;
@@ -29,20 +30,31 @@ use host::invite::InviteCode;
 // UserRecord helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) type UserRecordParts = (
-    UserId,
-    Username,
-    Option<DisplayName>,
-    Option<Bio>,
-    DateTime<Utc>,
-    Option<DateTime<Utc>>,
-    Option<Email>,
-    bool,
-    bool,
-);
+/// The parts a [`UserRecord`] is assembled from.
+///
+/// **Named fields, not a tuple.** `email_verified` and `is_operator` are adjacent
+/// `bool`s: as a positional tuple, swapping them compiled silently and turned a verified
+/// flag into an operator grant. Naming them makes a swap visible at the one place the
+/// mapping happens ([`user_record_from_row`]) instead of spreading a positional contract
+/// across every caller.
+///
+/// Not a decode target and deliberately **not** `#[derive(FromRow)]` — [`UserRow`] is the
+/// type rows decode into, and it stays a tuple alias precisely so the gate keeps policing
+/// its elements.
+pub(crate) struct UserRecordParts {
+    pub(crate) user_id: UserId,
+    pub(crate) username: Username,
+    pub(crate) display_name: Option<DisplayName>,
+    pub(crate) bio: Option<Bio>,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) last_authenticated_at: Option<DateTime<Utc>>,
+    pub(crate) email: Option<Email>,
+    pub(crate) email_verified: bool,
+    pub(crate) is_operator: bool,
+}
 
 pub(crate) fn build_user_record(
-    (
+    UserRecordParts {
         user_id,
         username,
         display_name,
@@ -52,7 +64,7 @@ pub(crate) fn build_user_record(
         email,
         email_verified,
         is_operator,
-    ): UserRecordParts,
+    }: UserRecordParts,
 ) -> UserRecord {
     // The `username`, `display_name`, and `email` columns decode straight into
     // their domain newtypes via the sqlx bridge (#438), which validates through
@@ -197,8 +209,36 @@ pub(crate) type UserRow = (
     bool,
 );
 
+/// The single positional→named boundary for a decoded user row.
+///
+/// [`UserRow`] is a tuple because that is what `query_as` decodes into; this is the one
+/// place its order is interpreted. Concentrating that here is the point of
+/// [`UserRecordParts`] having named fields: a mis-ordered pair is visible in one
+/// reviewable mapping rather than implied at every call site.
 pub(crate) fn user_record_from_row(row: UserRow) -> UserRecord {
-    build_user_record(row)
+    let (
+        user_id,
+        username,
+        display_name,
+        bio,
+        created_at,
+        last_authenticated_at,
+        email,
+        email_verified,
+        is_operator,
+    ) = row;
+
+    build_user_record(UserRecordParts {
+        user_id,
+        username,
+        display_name,
+        bio,
+        created_at,
+        last_authenticated_at,
+        email,
+        email_verified,
+        is_operator,
+    })
 }
 
 pub(crate) type SessionRow = (
@@ -333,8 +373,18 @@ pub(crate) fn password_reset_claim_error(
 // Cryptographic operations
 // ---------------------------------------------------------------------------
 
+/// Hashes `password`, returning the [`StoredPasswordHash`] that goes in the column.
+///
+/// Returns the newtype rather than a `String` because ADR-0063 §5 requires an existing
+/// newtype on **every** surface carrying its value — read *and* write. Producing a bare
+/// `String` here would leave callers re-deriving the type at the assignment, which §5
+/// names explicitly as the pattern to avoid.
 #[tracing::instrument(name = "crypto.password.hash", skip(password))]
-pub(crate) async fn hash_password(password: common::password::Password) -> io::Result<String> {
+pub(crate) async fn hash_password(
+    password: common::password::Password,
+) -> io::Result<StoredPasswordHash> {
+    use std::str::FromStr;
+
     // Test-only hash-failure injection. Gated on `test` (storage's own unit tests) OR the
     // `test-utils` feature (enabled by `server`'s dev-dependencies) so the cross-backend
     // integration tests can exercise the `Internal` / validate-before-hash paths too;
@@ -344,10 +394,12 @@ pub(crate) async fn hash_password(password: common::password::Password) -> io::R
         return Err(io::Error::other("forced hash error"));
     }
 
-    tokio::task::spawn_blocking(move || password.hash())
+    let hashed = tokio::task::spawn_blocking(move || password.hash())
         .await
         .map_err(io::Error::other)?
-        .map_err(io::Error::other)
+        .map_err(io::Error::other)?;
+
+    StoredPasswordHash::from_str(&hashed).map_err(io::Error::other)
 }
 
 /// Throwaway password hashed once to seed [`dummy_password_hash`].
@@ -370,31 +422,55 @@ const DUMMY_PASSWORD_HASH_FALLBACK: &str =
 /// outcomes take the same time. It is computed once with the same default
 /// Argon2 parameters as real password hashes (`Password::hash`), so the dummy
 /// verification costs the same as a genuine one.
-pub(crate) fn dummy_password_hash() -> &'static str {
+pub(crate) fn dummy_password_hash() -> &'static StoredPasswordHash {
     use common::password::Password;
     use std::str::FromStr;
     use std::sync::OnceLock;
 
-    static HASH: OnceLock<String> = OnceLock::new();
+    static HASH: OnceLock<StoredPasswordHash> = OnceLock::new();
     HASH.get_or_init(|| {
         Password::from_str(DUMMY_PASSWORD)
             .ok()
             .and_then(|p| p.hash().ok())
-            .unwrap_or_else(|| DUMMY_PASSWORD_HASH_FALLBACK.to_string())
+            .and_then(|h| StoredPasswordHash::from_str(&h).ok())
+            .unwrap_or_else(fallback_dummy_password_hash)
     })
+}
+
+/// [`DUMMY_PASSWORD_HASH_FALLBACK`] as a [`StoredPasswordHash`].
+///
+/// A named function rather than an inline closure so the fallback is reachable from a
+/// test: it is otherwise taken only when Argon2 hashing itself fails, which no test can
+/// induce without breaking password hashing globally. Extracting it keeps the branch
+/// covered honestly instead of `cov:ignore`-ing a permanent blind spot — and gives the
+/// constant the validity test it never had.
+fn fallback_dummy_password_hash() -> StoredPasswordHash {
+    use std::str::FromStr;
+
+    // A `match`, not `.unwrap_or_else(|_| unreachable!(…))`: on one line the
+    // `unwrap_or_else` call is *covered* even though its closure never runs, which trips
+    // the A1-guard (a covered line inside an `unreachable!` span means the exemption's
+    // premise is falsified). Here only the `Err` arm carries the assertion, and it stays
+    // genuinely unexecuted.
+    match StoredPasswordHash::from_str(DUMMY_PASSWORD_HASH_FALLBACK) {
+        Ok(hash) => hash,
+        Err(_) => unreachable!("the fallback hash constant is non-empty"),
+    }
 }
 
 #[tracing::instrument(name = "crypto.password.verify", skip(password, hash))]
 pub(crate) async fn verify_password(
     password: common::password::Password,
-    hash: String,
+    hash: StoredPasswordHash,
 ) -> io::Result<bool> {
     #[cfg(test)]
     if password.as_ref() == "force-verify-error-for-test-coverage" {
         return Err(io::Error::other("forced verify error"));
     }
 
-    tokio::task::spawn_blocking(move || password.verify(&hash))
+    // `as_ref` is the only door out of the secret surface; argon2 owns the verdict on
+    // whether the stored string is a hash it can parse.
+    tokio::task::spawn_blocking(move || password.verify(hash.as_ref()))
         .await
         .map_err(io::Error::other)?
         .map_err(io::Error::other)
@@ -414,17 +490,17 @@ mod tests {
     #[test]
     fn test_build_user_record() {
         let now = Utc::now();
-        let parts: UserRecordParts = (
-            UserId::from(1),
-            parse_username("alice"),
-            Some(parse_display_name("Alice")),
-            Some(parse_bio("Bio")),
-            now,
-            Some(now),
-            Some(parse_email("alice@example.com")),
-            true,
-            false,
-        );
+        let parts = UserRecordParts {
+            user_id: UserId::from(1),
+            username: parse_username("alice"),
+            display_name: Some(parse_display_name("Alice")),
+            bio: Some(parse_bio("Bio")),
+            created_at: now,
+            last_authenticated_at: Some(now),
+            email: Some(parse_email("alice@example.com")),
+            email_verified: true,
+            is_operator: false,
+        };
         let record = build_user_record(parts);
         assert_eq!(record.user_id, UserId::from(1));
         assert_eq!(record.username, "alice");
@@ -508,6 +584,8 @@ mod tests {
     #[tokio::test]
     async fn test_hash_and_verify_password() {
         let password: common::password::Password = parse_password("password123");
+        // No `.parse()` here: `hash_password` returns the newtype, per ADR-0063 §5. A
+        // re-derive at the assignment is exactly what that section forbids.
         let hash = hash_password(password.clone()).await.unwrap();
 
         assert!(verify_password(password.clone(), hash.clone())
@@ -521,7 +599,10 @@ mod tests {
     // guard:no-backend — password hashing/verification; no database
     #[tokio::test]
     async fn test_verify_password_rejects_invalid_hash() {
-        let err = verify_password(parse_password("password123"), "not-a-hash".to_string())
+        // `StoredPasswordHash` accepts this — its invariant is only non-emptiness, so
+        // argon2 remains the single arbiter of whether a stored string is a usable hash.
+        let malformed: StoredPasswordHash = "not-a-hash".parse().expect("non-empty");
+        let err = verify_password(parse_password("password123"), malformed)
             .await
             .unwrap_err();
 
@@ -744,11 +825,37 @@ mod tests {
         // verification does real work and returns Ok(false) for a non-matching
         // password — not a fast Err that would reintroduce a timing oracle.
         let wrong = parse_password("definitely-not-the-dummy");
-        let result = verify_password(wrong, dummy_password_hash().to_string())
+        let result = verify_password(wrong, dummy_password_hash().clone())
             .await
             .expect("dummy hash must be well-formed");
         assert!(!result, "a non-matching password must verify to false");
     }
+
+    // guard:no-backend — password verification against a constant; no database
+    #[tokio::test]
+    async fn fallback_dummy_password_hash_is_a_valid_verifiable_hash() {
+        // The fallback is only taken if runtime Argon2 hashing fails, so nothing else
+        // exercises it — yet it must be a well-formed Argon2 hash for the same reason the
+        // runtime one must: a fast `Err` on the absent-user path would reintroduce the
+        // timing oracle this whole mechanism exists to close. Until now, nothing checked
+        // that the constant was still valid.
+        let wrong = parse_password("definitely-not-the-dummy");
+        let result = verify_password(wrong, fallback_dummy_password_hash())
+            .await
+            .expect("the fallback hash constant must be well-formed");
+        assert!(!result, "a non-matching password must verify to false");
+    }
+
+    // No parameter-parity test for the fallback, deliberately.
+    //
+    // `dummy_password_hash_matches_real_hash_parameters` can assert parity because it
+    // hashes at runtime, so it picks up whatever Argon2 parameters are active. The
+    // fallback is a *fixed* constant carrying production parameters, so under a
+    // `cheap-kdf` build (which the coverage derivation uses) it cannot match a runtime
+    // hash — asserting it would be asserting something false. The consequence is worth
+    // stating: the fallback's timing equalization is only exact in production builds,
+    // which is inherent to hard-coding it and is why it is a last resort rather than the
+    // primary path.
 
     #[test]
     fn dummy_password_hash_matches_real_hash_parameters() {
@@ -760,7 +867,7 @@ mod tests {
             .expect("hashing succeeds");
         // PHC format: $argon2id$v=19$<params>$<salt>$<hash>
         let params = |h: &str| h.split('$').nth(3).map(str::to_owned);
-        assert_eq!(params(dummy_password_hash()), params(&real));
+        assert_eq!(params(dummy_password_hash().as_ref()), params(&real));
     }
 
     #[test]

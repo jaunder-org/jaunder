@@ -65,7 +65,7 @@ mod tests {
     #[tokio::test]
     async fn unique_postgres_database_is_dropped_on_guard_drop() {
         let (options, guard) = unique_postgres_url().await;
-        let db_name = db_name_from_url(&options.to_string());
+        let db_name = db_name_from_url(&options.expose_url());
 
         assert!(
             database_exists(&db_name).await,

@@ -4,9 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use sqlx::postgres::PgConnectOptions;
-
-use crate::cli::{Commands, SiteConfigAction, StorageArgs};
+use crate::cli::{AppTarget, BootstrapDb, Commands, SiteConfigAction, StorageArgs};
 use crate::mailer::LettreMailSender;
 use crate::runtime_file;
 use common::absolute_url::compose;
@@ -16,14 +14,13 @@ use common::email::Email;
 use common::invite::InviteTtlHours;
 use common::mailer::{EmailMessage, MailSender};
 use common::password::Password;
+use common::pg_role_password::PgRolePassword;
 use common::session_label::SessionLabel;
 use common::token::RawToken;
 use common::username::Username;
 use host::capture;
 use storage::load_smtp_config;
-use storage::{
-    export_backup, restore_backup, BackupExportOptions, BackupRestoreOptions, DbConnectOptions,
-};
+use storage::{export_backup, restore_backup, BackupExportOptions, BackupRestoreOptions};
 use storage::{init_storage, open_database, open_existing_database};
 
 /// Parse an optional CLI password string into `Option<Password>` (`None` stays
@@ -140,16 +137,6 @@ pub async fn cmd_init(storage: &StorageArgs, skip_if_exists: bool) -> anyhow::Re
     Ok(())
 }
 
-fn require_postgres_options(
-    opts: &DbConnectOptions,
-    label: &str,
-) -> anyhow::Result<PgConnectOptions> {
-    match opts {
-        DbConnectOptions::Postgres { options, .. } => Ok(options.clone()),
-        DbConnectOptions::Sqlite(_) => Err(anyhow::anyhow!("{label} must be a PostgreSQL URL")),
-    }
-}
-
 /// Maps a [`storage::PgBootstrapError`] to a user-facing CLI error.
 fn describe_bootstrap_error(err: storage::PgBootstrapError) -> anyhow::Error {
     match err {
@@ -165,28 +152,27 @@ fn describe_bootstrap_error(err: storage::PgBootstrapError) -> anyhow::Error {
 
 /// Bootstraps a `PostgreSQL` database and application role.
 ///
+/// Every argument is already validated by the time it arrives: the CLI is the parse
+/// boundary, so a non-`PostgreSQL` URL, a URL naming no database, and an empty password
+/// are all rejected at argument parsing rather than here (#693).
+///
 /// # Errors
 ///
 /// Returns an error if the bootstrap connection fails, or if the role or
 /// database already exists.
 pub async fn cmd_create_pg_db(
-    bootstrap_db: &str,
-    app_db_url: &str,
-    app_role_password: &str,
+    bootstrap_db: &BootstrapDb,
+    app_db: &AppTarget,
+    app_role_password: &PgRolePassword,
 ) -> anyhow::Result<()> {
-    let bootstrap_options = require_postgres_options(&bootstrap_db.parse()?, "--bootstrap-db")?;
-    let app_options = require_postgres_options(&app_db_url.parse()?, "--app-db")?;
-    let app_role = app_options.get_username().to_owned();
-    let database_name = app_options
-        .get_database()
-        .ok_or_else(|| anyhow::anyhow!("--app-db must include a PostgreSQL database name"))?
-        .to_owned();
+    let app_role = app_db.role();
+    let database_name = app_db.database();
 
     storage::create_postgres_database_and_role(
-        &bootstrap_options,
-        &app_role,
+        bootstrap_db.options(),
+        app_role,
         app_role_password,
-        &database_name,
+        database_name,
     )
     .await
     .map_err(describe_bootstrap_error)?;
@@ -664,6 +650,17 @@ pub async fn cmd_serve(
     // Telemetry is owned by `run`, which holds the TelemetryGuard across this
     // call (see `server/src/main.rs`); `cmd_serve` does not init it, matching
     // every other `cmd_*`.
+    // cov:ignore-start -- live serve glue: unreachable by host tests (the sole
+    // cmd_serve test returns early at prepare_server). The covered pieces live in
+    // serve_with_shutdown + spawn_shutdown_supervisor, exercised by the signal
+    // tests; this only wires them to the prepared server. Mirrors jaunder-uox1.
+    //
+    // The marker starts at the destructuring, not below it: completing this binding
+    // *is* the prepare_server-succeeded path, so the same rationale covers it. These
+    // lines used to report covered incidentally — the `?` statement's span was
+    // attributed through the early-return case — which made them a coverage result no
+    // test actually earned, and one that moved with unrelated codegen changes (#693
+    // shifted it).
     let PreparedServer {
         listener,
         router,
@@ -673,10 +670,6 @@ pub async fn cmd_serve(
     } = prepare_server(storage, bind, prod, runtime_file).await?;
 
     tracing::info!(bind = %bind, prod, "starting HTTP server");
-    // cov:ignore-start -- live serve glue: unreachable by host tests (the sole
-    // cmd_serve test returns early at prepare_server). The covered pieces live in
-    // serve_with_shutdown + spawn_shutdown_supervisor, exercised by the signal
-    // tests; this only wires them to the prepared server. Mirrors jaunder-uox1.
     // Keep the worker schedulers alive for the lifetime of the serve loop.
     let _backup_scheduler = backup_scheduler;
     let _feed_scheduler = feed_scheduler;
@@ -807,47 +800,13 @@ mod tests {
         assert_eq!(err.to_string(), expected);
     }
 
-    #[test]
-    fn test_require_postgres_options() {
-        let pg_url = "postgres://user:pass@localhost/db";
-        let opts: DbConnectOptions = pg_url.parse().unwrap();
-        assert!(require_postgres_options(&opts, "test").is_ok());
-
-        let sqlite_url = "sqlite:test.db";
-        let opts: DbConnectOptions = sqlite_url.parse().unwrap();
-        let err = require_postgres_options(&opts, "test").unwrap_err();
-        assert!(err.to_string().contains("test must be a PostgreSQL URL"));
-    }
-
-    #[tokio::test]
-    async fn cmd_create_pg_db_rejects_non_postgres_app_db() {
-        let err = cmd_create_pg_db(
-            "postgres://bootstrap:secret@localhost/postgres",
-            "sqlite:/tmp/jaunder.db",
-            "secret",
-        )
-        .await
-        .unwrap_err();
-
-        assert!(err
-            .to_string()
-            .contains("--app-db must be a PostgreSQL URL"));
-    }
-
-    #[tokio::test]
-    async fn cmd_create_pg_db_requires_database_name() {
-        let err = cmd_create_pg_db(
-            "postgres://bootstrap:secret@localhost/postgres",
-            "postgres://app:secret@localhost",
-            "secret",
-        )
-        .await
-        .unwrap_err();
-
-        assert!(err
-            .to_string()
-            .contains("--app-db must include a PostgreSQL database name"));
-    }
+    // `test_require_postgres_options`, `cmd_create_pg_db_rejects_non_postgres_app_db` and
+    // `cmd_create_pg_db_requires_database_name` used to live here. All three tested states
+    // that are now unrepresentable: `PgBootstrapArgs` holds a `PgConnectOptions` and an
+    // `AppTarget`, so a non-PostgreSQL URL or one naming no database is rejected at
+    // argument parsing and `require_postgres_options` has no callers left. The
+    // replacements are `app_target_rejects_*` and
+    // `create_pg_db_rejects_a_non_postgres_bootstrap_url` in `cli.rs`.
 
     #[test]
     fn default_backup_path_is_under_storage_backups() {

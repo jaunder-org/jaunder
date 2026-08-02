@@ -24,6 +24,8 @@ pub mod mailer;
 pub mod media;
 pub mod pagination;
 pub mod password;
+pub mod pg_identifier;
+pub mod pg_role_password;
 pub mod post_body;
 pub mod post_summary;
 pub mod post_title;
@@ -36,6 +38,7 @@ pub mod site;
 pub mod slug;
 pub mod smtp_password;
 pub mod smtp_username;
+pub mod stored_password_hash;
 pub mod tag;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

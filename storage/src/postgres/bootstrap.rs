@@ -5,6 +5,8 @@
 //! identifiers and password literals cannot be supplied through bind
 //! placeholders, so the SQL is assembled with explicit quoting helpers.
 
+use common::pg_identifier::{PgDatabaseName, PgRoleName};
+use common::pg_role_password::PgRolePassword;
 use sqlx::postgres::PgConnectOptions;
 use sqlx::{Connection, PgConnection};
 
@@ -32,6 +34,23 @@ pub enum PgBootstrapError {
 /// resolution, because bootstrap credentials come from the URL, not the
 /// application environment.
 ///
+/// The three trailing parameters were once three adjacent `&str`, with a credential in
+/// the middle — every permutation compiled (#693). They are three distinct types now, so
+/// a transposition is a compile error rather than a silent mis-provision:
+///
+/// ```compile_fail
+/// use common::pg_identifier::{PgDatabaseName, PgRoleName};
+/// use common::pg_role_password::PgRolePassword;
+/// use sqlx::postgres::PgConnectOptions;
+/// use storage::create_postgres_database_and_role;
+/// # async fn f(bootstrap: &PgConnectOptions) {
+/// let pw: PgRolePassword = "p".parse().unwrap();
+/// let db: PgDatabaseName = "d".parse().unwrap();
+/// // `db` is a PgDatabaseName, but the role slot needs a PgRoleName
+/// let _ = create_postgres_database_and_role(bootstrap, &db, &pw, &db).await;
+/// # }
+/// ```
+///
 /// # Errors
 ///
 /// Returns [`PgBootstrapError::RoleExists`] or
@@ -39,22 +58,26 @@ pub enum PgBootstrapError {
 /// exists, or [`PgBootstrapError::Sqlx`] for any other failure.
 pub async fn create_postgres_database_and_role(
     bootstrap: &PgConnectOptions,
-    app_role: &str,
-    app_role_password: &str,
-    database_name: &str,
+    app_role: &PgRoleName,
+    app_role_password: &PgRolePassword,
+    database_name: &PgDatabaseName,
 ) -> Result<(), PgBootstrapError> {
     let mut admin_conn = PgConnection::connect_with(bootstrap).await?;
 
     // The role name is an identifier and the password appears in a utility
     // statement, so this SQL must be assembled with the quoting helpers rather
     // than query placeholders.
+    //
+    // `as_ref()` is the *only* place the password leaves its newtype: the `secret`
+    // surface has no `Display`/serde/`Deref`/owned-`String`, so any other use of it
+    // here would fail to compile.
     let role_sql = format!(
         "CREATE ROLE {} WITH LOGIN PASSWORD {}",
         quote_identifier(app_role),
-        quote_literal(app_role_password),
+        quote_literal(app_role_password.as_ref()),
     );
     if !execute_utility(&mut admin_conn, &role_sql, "42710").await? {
-        return Err(PgBootstrapError::RoleExists(app_role.to_owned()));
+        return Err(PgBootstrapError::RoleExists(app_role.to_string()));
     }
 
     // CREATE DATABASE ... OWNER ... is another identifier-bearing utility
@@ -65,7 +88,7 @@ pub async fn create_postgres_database_and_role(
         quote_identifier(app_role),
     );
     if !execute_utility(&mut admin_conn, &create_db_sql, "42P04").await? {
-        return Err(PgBootstrapError::DatabaseExists(database_name.to_owned()));
+        return Err(PgBootstrapError::DatabaseExists(database_name.to_string()));
     }
 
     Ok(())
@@ -123,9 +146,12 @@ mod tests {
         // PostgreSQL server and is covered by the PostgreSQL VM checks.
         let bootstrap: PgConnectOptions =
             "postgres://postgres@localhost:1/postgres".parse().unwrap();
+        let app_role: PgRoleName = "app_role".parse().unwrap();
+        let password: PgRolePassword = "secret".parse().unwrap();
+        let app_db: PgDatabaseName = "app_db".parse().unwrap();
         let _ = tokio::time::timeout(
             Duration::from_millis(50),
-            create_postgres_database_and_role(&bootstrap, "app_role", "secret", "app_db"),
+            create_postgres_database_and_role(&bootstrap, &app_role, &password, &app_db),
         )
         .await;
     }
@@ -150,7 +176,11 @@ mod tests {
             .await
             .expect("pre-create database");
 
-        let error = create_postgres_database_and_role(&bootstrap, &role_name, "secret", &db_name)
+        let app_role: PgRoleName = role_name.parse().expect("role name");
+        let password: PgRolePassword = "secret".parse().expect("password");
+        let app_db: PgDatabaseName = db_name.parse().expect("database name");
+
+        let error = create_postgres_database_and_role(&bootstrap, &app_role, &password, &app_db)
             .await
             .expect_err("database already exists");
         assert!(matches!(error, PgBootstrapError::DatabaseExists(_)));
