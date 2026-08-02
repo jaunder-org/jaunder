@@ -56,11 +56,17 @@ pub const SPA_SHELL: &str = include_str!("../../../csr/index.html");
 #[must_use]
 pub fn render_head(seed: &PageSeed) -> Markup {
     let (title, description) = match seed {
-        PageSeed::Permalink(post) => (
-            post.title
-                .clone()
-                .map_or_else(|| format!("Post by {}", post.username), String::from),
-            post.summary.as_deref().unwrap_or_default().to_owned(),
+        PageSeed::Permalink(authored) => (
+            authored.post.title.clone().map_or_else(
+                || format!("Post by {}", authored.post.username),
+                String::from,
+            ),
+            authored
+                .post
+                .summary
+                .as_deref()
+                .unwrap_or_default()
+                .to_owned(),
         ),
         PageSeed::Profile { username, .. } => (format!("Posts by {username}"), String::new()),
         PageSeed::SiteTimeline(_) => ("Jaunder".to_string(), String::new()),
@@ -272,6 +278,17 @@ mod tests {
             "{head}"
         );
         assert!(head.contains("<meta property=\"og:title\""), "{head}");
+    }
+
+    // A titleless post still needs a `<title>`: this is the SEO payload the public
+    // surface stays server-rendered for, so an empty one is a real defect rather than
+    // a cosmetic one. The author's name is the fallback.
+    #[test]
+    fn permalink_head_falls_back_to_the_author_when_a_post_has_no_title() {
+        let mut untitled = sample_post();
+        untitled.post.title = None;
+        let head = render_head(&PageSeed::Permalink(untitled)).into_string();
+        assert!(head.contains("<title>Post by alice</title>"), "{head}");
     }
 
     #[test]

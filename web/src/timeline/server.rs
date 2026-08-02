@@ -5,21 +5,22 @@
 //! projector (anonymous viewer) — one query, no drift — and every one of them
 //! assembles its page through [`page_from_rows`], so the over-fetch/has-more
 //! rule is spelled exactly once.
+//!
+//! The cursor arrives already parsed: the endpoints take a bundled
+//! [`PageCursor`] and project it with `storage::keyset_cursor`, so no `fetch_*`
+//! here has a half-a-cursor case to reject.
 
-use common::ids::{PostId, UserId};
+use common::ids::UserId;
 use common::pagination::PageSize;
-use common::seed::TimelinePage;
+use common::seed::{PageCursor, TimelinePage};
 use common::tag::Tag;
 use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::{viewer_user_id, ViewerIdentity};
-use storage::{
-    list_by_tag_rows, parse_post_cursor, to_post_cursor, PostCursor, PostRecord, PostStorage,
-    UserStorage,
-};
+use storage::{list_by_tag_rows, to_post_cursor, PostCursor, PostRecord, PostStorage, UserStorage};
 
 use crate::error::{InternalError, InternalResult};
-use crate::posts::timeline_post_summary;
+use crate::posts::rendered_post;
 
 /// Assemble a cursor-paginated [`TimelinePage`] from one over-fetched row set
 /// (`page_size + 1` rows detect `has_more`). Shared by every `fetch_*` below.
@@ -32,15 +33,20 @@ pub(super) fn page_from_rows(
     // `PageSize`, so neither is spelled by hand here (#696).
     let has_more = page_size.has_more(rows.len());
     rows.truncate(page_size.page_len());
-    let next_cursor = has_more.then(|| rows.last().map(to_post_cursor)).flatten();
+    let next_cursor = has_more
+        .then(|| rows.last().map(to_post_cursor))
+        .flatten()
+        .map(|c| PageCursor {
+            created_at: UtcInstant::from(c.created_at),
+            post_id: c.post_id,
+        });
     let posts = rows
         .into_iter()
-        .filter_map(|post| timeline_post_summary(post, viewer_user_id))
+        .filter_map(|post| rendered_post(post, viewer_user_id))
         .collect();
     TimelinePage {
         posts,
-        next_cursor_created_at: next_cursor.as_ref().map(|c| UtcInstant::from(c.created_at)),
-        next_cursor_post_id: next_cursor.as_ref().map(|c| c.post_id),
+        next_cursor,
         has_more,
     }
 }
@@ -50,17 +56,14 @@ pub(super) fn page_from_rows(
 ///
 /// # Errors
 ///
-/// Returns a validation error for an unparseable cursor, or a storage error if
-/// the listing query fails.
+/// Returns a storage error if the listing query fails.
 pub async fn fetch_user_posts(
     posts: &dyn PostStorage,
     viewer: &ViewerIdentity,
     username: &Username,
-    cursor_created_at: Option<chrono::DateTime<chrono::Utc>>,
-    cursor_post_id: Option<PostId>,
+    cursor: Option<PostCursor>,
     limit: Option<PageSize>,
 ) -> InternalResult<TimelinePage> {
-    let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
     let page_size = limit.unwrap_or_default();
     let rows = posts
         .list_published_by_user(
@@ -79,16 +82,13 @@ pub async fn fetch_user_posts(
 ///
 /// # Errors
 ///
-/// Returns a validation error for an unparseable cursor, or a storage error if
-/// the listing query fails.
+/// Returns a storage error if the listing query fails.
 pub async fn fetch_local_timeline(
     posts: &dyn PostStorage,
     viewer: &ViewerIdentity,
-    cursor_created_at: Option<chrono::DateTime<chrono::Utc>>,
-    cursor_post_id: Option<PostId>,
+    cursor: Option<PostCursor>,
     limit: Option<PageSize>,
 ) -> InternalResult<TimelinePage> {
-    let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
     let page_size = limit.unwrap_or_default();
     let rows = posts
         .list_published(
@@ -106,17 +106,14 @@ pub async fn fetch_local_timeline(
 ///
 /// # Errors
 ///
-/// Returns a validation error for an unparseable cursor, or a storage error if
-/// the listing query fails.
+/// Returns a storage error if the listing query fails.
 pub async fn fetch_posts_by_tag(
     posts: &dyn PostStorage,
     viewer: &ViewerIdentity,
     tag: &Tag,
-    cursor_created_at: Option<chrono::DateTime<chrono::Utc>>,
-    cursor_post_id: Option<PostId>,
+    cursor: Option<PostCursor>,
     limit: Option<PageSize>,
 ) -> InternalResult<TimelinePage> {
-    let cursor = parse_post_cursor(cursor_created_at, cursor_post_id)?;
     let page_size = limit.unwrap_or_default();
     let rows = list_by_tag_rows(
         posts
@@ -137,8 +134,7 @@ pub async fn fetch_posts_by_tag(
 ///
 /// # Errors
 ///
-/// Returns a validation error for an unparseable cursor, a not-found error for
-/// an unknown user, or a storage error.
+/// Returns a not-found error for an unknown user, or a storage error.
 pub async fn fetch_user_posts_by_tag(
     posts: &dyn PostStorage,
     users: &dyn UserStorage,
@@ -249,7 +245,6 @@ mod tests {
                 &ViewerIdentity::Anonymous,
                 &parse_username("alice"),
                 None,
-                None,
                 Some(page_size),
             )
             .await
@@ -282,15 +277,9 @@ mod tests {
             .expect_list_published()
             .withf(move |_c, limit, _v, _n| *limit == expected)
             .returning(|_c, _l, _v, _n| Ok(vec![]));
-        fetch_local_timeline(
-            &posts,
-            &ViewerIdentity::Anonymous,
-            None,
-            None,
-            Some(page_size),
-        )
-        .await
-        .expect("local timeline succeeds");
+        fetch_local_timeline(&posts, &ViewerIdentity::Anonymous, None, Some(page_size))
+            .await
+            .expect("local timeline succeeds");
 
         // `fetch_posts_by_tag` — site-wide by-tag. This is the site that regressed.
         let mut posts = MockPostStorage::new();
@@ -302,7 +291,6 @@ mod tests {
             &posts,
             &ViewerIdentity::Anonymous,
             &"rust".parse::<Tag>().expect("valid tag"),
-            None,
             None,
             Some(page_size),
         )
@@ -323,7 +311,6 @@ mod tests {
             &posts,
             &ViewerIdentity::Anonymous,
             &"rust".parse::<Tag>().unwrap(),
-            None,
             None,
             None,
         )

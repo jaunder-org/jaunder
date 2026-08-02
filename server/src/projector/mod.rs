@@ -39,7 +39,7 @@ use crate::soft_path::SoftPath;
 use std::sync::Arc;
 use storage::{fetch_post_record, PostStorage, UserStorage};
 use web::app::{render_head, render_shell, PREPAINT_SCRIPT};
-use web::posts::post_response;
+use web::posts::authored_post;
 use web::timeline::{
     fetch_local_timeline, fetch_posts_by_tag, fetch_user_posts, fetch_user_posts_by_tag,
 };
@@ -191,7 +191,7 @@ fn permalink_response(
 ) -> Response {
     match result {
         // Anonymous viewer ⇒ never the author, so `is_author = false`.
-        Ok(Some(record)) => cacheable(headers, &PageSeed::Permalink(post_response(record, false))),
+        Ok(Some(record)) => cacheable(headers, &PageSeed::Permalink(authored_post(record, false))),
         // No *public* post here: a draft its author must see, or nothing at all.
         // Serve the shell so the CSR client resolves it with the session.
         Ok(None) => shell_response(shell),
@@ -206,7 +206,6 @@ async fn site_timeline(
     let result = fetch_local_timeline(
         posts.as_ref(),
         &ViewerIdentity::Anonymous,
-        None,
         None,
         Some(PageSize::default()),
     )
@@ -262,7 +261,6 @@ async fn profile(
             &ViewerIdentity::Anonymous,
             &username,
             None,
-            None,
             Some(PageSize::default()),
         )
         .await
@@ -297,7 +295,6 @@ async fn site_tag(
         posts.as_ref(),
         &ViewerIdentity::Anonymous,
         &tag,
-        None,
         None,
         Some(PageSize::default()),
     )
@@ -399,8 +396,7 @@ mod tests {
         use common::seed::{PageSeed, TimelinePage};
         let doc = document(&PageSeed::SiteTimeline(TimelinePage {
             posts: vec![],
-            next_cursor_created_at: None,
-            next_cursor_post_id: None,
+            next_cursor: None,
             has_more: false,
         }));
         assert!(doc.contains(web::app::PREPAINT_SCRIPT), "{doc}");
@@ -428,8 +424,7 @@ mod tests {
         }
         let doc = document(&PageSeed::SiteTimeline(TimelinePage {
             posts: vec![],
-            next_cursor_created_at: None,
-            next_cursor_post_id: None,
+            next_cursor: None,
             has_more: false,
         }));
         let spa_shell = include_str!("../../../csr/index.html");

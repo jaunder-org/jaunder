@@ -28,6 +28,12 @@ leptos `#[server]` fns, serde wire DTOs, `cargo nextest`, Playwright e2e
   it yourself first so it passes clean (**`jaunder-commit`**).
 - **`cargo xtask validate` refuses a dirty tree.** `HANDOFF.md` is uncommitted
   scaffolding and must be deleted before the final gate (Task 11).
+- **Never stage `HANDOFF.md`.** It is a deliverable of nothing — it gets
+  deleted, not committed. Its index state flaps during the cycle (something in
+  the gate un-stages it), which makes it look like state that was lost and
+  should be restored. A Task 8 subagent re-`git add`ed it for exactly that
+  reason and it had to be unstaged before the commit. Any task brief that
+  mentions the working tree should say this outright.
 - Wire DTOs keep
   `#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]`. `PageCursor`
   is the sole exception and additionally keeps `Copy` (spec D6).
@@ -36,6 +42,17 @@ leptos `#[server]` fns, serde wire DTOs, `cargo nextest`, Playwright e2e
   `test-backend-pattern` guard.
 - **Every AC grep must be run against the pre-change tree and observed to fail**
   before it counts as satisfied (spec, "Acceptance criteria" preamble).
+- **`cargo nextest run -p web <name>` silently runs nothing for a
+  `#[cfg(feature = "server")]` test.** That feature only unifies on when
+  `-p jaunder` is in the graph, so a targeted run reports `no tests to run` —
+  which reads as success and is how a "red first" step can be faked without
+  anyone noticing. Always include `-p jaunder`, and treat `no tests to run` as a
+  failure of the command, not a pass. (Found during Task 5.)
+- **A task's Files list is a starting point, not a closed set.** Type-coupled
+  renames force edits the plan did not enumerate — Task 5 hit two
+  (`component.rs`'s `format_post_time` call and `docs/web-style-guide.md`'s
+  component table). Follow the compiler and the AC greps, and report what the
+  list missed.
 
 ## Scope
 
@@ -626,7 +643,7 @@ Spec D5. 23 sites / 7 files.
   `pub fn rendered_post(post: PostRecord, viewer_user_id: Option<UserId>) -> Option<RenderedPost>`
   — **still fallible** (AC6c).
 
-- [ ] **Step 1: Write the failing test that pins the draft guard**
+- [x] **Step 1: Write the failing test that pins the draft guard**
 
 This is the task's silent-failure mode: once `published_at` is optional, nothing
 type-level forces the bail, and dropping it leaks drafts into public listings.
@@ -666,19 +683,19 @@ fn rendered_post_returns_none_for_a_draft() {
 }
 ```
 
-- [ ] **Step 2: Run it, verify it fails**
+- [x] **Step 2: Run it, verify it fails**
 
 Run: `cargo nextest run -p web rendered_post_returns_none_for_a_draft` Expected:
 FAIL — `rendered_post` not defined.
 
-- [ ] **Step 3: Rename the type and make `published_at` optional**
+- [x] **Step 3: Rename the type and make `published_at` optional**
 
 In `common/src/seed.rs`, rename `TimelinePostSummary` → `RenderedPost` and
 change `published_at: UtcInstant` → `Option<UtcInstant>`. Update the doc
 comment, which currently says "A published post row returned by timeline listing
 endpoints" — it is now also what `PostPage` feeds `PostCard`.
 
-- [ ] **Step 4: Rename the builder, keeping its guard**
+- [x] **Step 4: Rename the builder, keeping its guard**
 
 `server.rs:9` `timeline_post_summary` → `rendered_post`. **Keep**
 `-> Option<RenderedPost>` and **keep** `let published_at = post.published_at?;`
@@ -689,7 +706,7 @@ at `:13`, wrapping the value:
 unchanged** — the `filter_map` still drops the `None`s, which is what keeps
 drafts out of public listings.
 
-- [ ] **Step 5: Converge the two `PostView` builders**
+- [x] **Step 5: Converge the two `PostView` builders**
 
 `render.rs:116` currently reads `format_post_time(post.published_at)`. With the
 field optional it becomes identical to `:97`:
@@ -702,24 +719,33 @@ Both call sites now build `PostView` identically — this is what AC12a's
 byte-identical paint depends on. Update the `:283-284` test fixture's
 `published_at` to `Some(...)`.
 
-- [ ] **Step 6: Update the remaining sites**
+- [x] **Step 6: Update the remaining sites**
 
-`component.rs:971`'s rebuild keeps its `unwrap_or` **for now** (Task 6 deletes
-the whole block); `:15`'s preamble comment names the old type and must be
+`component.rs:971`'s rebuild is wasm-only but still type-checked (the
+`wasm-clippy` gate step), so its `published_at` had to change: it now passes
+`fetched.published_at` straight through, and `PostDisplay` applies the same
+`unwrap_or(created_at)` as `render_posts` — the Step 5 convergence, which makes
+the fabrication redundant rather than merely re-wrapped. Task 6 still deletes
+the whole block. `:15`'s preamble comment names the old type and must be
 updated. `timeline/` (3 sites + the `mod.rs:6` doc), `api.rs:622-640`'s
-round-trip test.
+round-trip test, and `docs/web-style-guide.md`'s shared-component table.
 
-- [ ] **Step 7: Run the suites, verify they pass**
+- [x] **Step 7: Run the suites, verify they pass**
 
 Run: `cargo nextest run -p common -p web -p server` Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 cargo xtask check
-git add common/src/seed.rs web/src
+git add -u   # tracked modifications only; HANDOFF.md is untracked and must not be added
 git commit -m "refactor(common/seed): TimelinePostSummary -> RenderedPost, published_at optional (#569)"
 ```
+
+Stage with `git add -u`, not a pathspec: the gate's fix mode reformats files
+after the subagent's last run, so a pathspec commit can land a tree that was
+never checked. `-u` also leaves the untracked `HANDOFF.md` alone, which
+`git add -A` would sweep in.
 
 ---
 
@@ -747,7 +773,7 @@ shape.
   `pub fn authored_post(post: PostRecord, is_author: bool) -> AuthoredPost`.
   `PageSeed::Permalink(AuthoredPost)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Retarget `post_response_carries_summary` (`server.rs:121`) through the nesting,
 and pin that a draft's `published_at` is `None` rather than fabricated:
@@ -774,19 +800,19 @@ fn authored_post_leaves_a_draft_published_at_none() {
 }
 ```
 
-- [ ] **Step 2: Run them, verify they fail**
+- [x] **Step 2: Run them, verify they fail**
 
 Run: `cargo nextest run -p web authored_post` Expected: FAIL — `authored_post`
 not defined.
 
-- [ ] **Step 3: Implement the nested type**
+- [x] **Step 3: Implement the nested type**
 
 In `common/src/seed.rs`, replace `PostResponse` with the Interfaces shape. **No
 `#[serde(flatten)]`** (spec D5 — it buffers through `Content` and re-drives the
 `deserialize_rendered_html` hook). `PageSeed::Permalink(AuthoredPost)` at
 `:114`.
 
-- [ ] **Step 4: Rewrite the builder**
+- [x] **Step 4: Rewrite the builder**
 
 `server.rs:53` `post_response` → `authored_post`, returning the nested shape.
 
@@ -806,7 +832,7 @@ the seed path, which AC12a would surface as a paint diff with no obvious cause.
 Build the inner `RenderedPost` inline in `authored_post`, preserving all three
 derivations exactly.
 
-- [ ] **Step 5: Collapse the hand rebuild**
+- [x] **Step 5: Collapse the hand rebuild**
 
 `component.rs:971-986`'s 16-line, 12-field rebuild — including the
 `published_at: fetched.published_at.unwrap_or(fetched.created_at)` fabrication —
@@ -816,30 +842,42 @@ becomes:
 let summary = fetched.post.clone();
 ```
 
-- [ ] **Step 6: Repoint `permalink_article`**
+- [x] **Step 6: Repoint `permalink_article`**
 
 `render.rs:89` takes `&AuthoredPost` and reads through `.post`, or takes
 `&RenderedPost` and callers pass `&seed.post`. Prefer the latter — the two
 builders then share one body and the convergence AC12a depends on is structural
 rather than incidental.
 
-- [ ] **Step 7: Update the remaining sites**
+- [x] **Step 7: Update the remaining sites**
 
 `mod.rs:69,73`; `projector/mod.rs:44,192`; `storage/src/posts.rs:432`'s doc
 comment; `web_posts.rs:6,1964`; `component.rs:15`'s preamble comment (it
 explains why `:437` spells `audiences::Summary` — keep that explanation, update
 the type names).
 
-- [ ] **Step 8: Run the suites, verify they pass**
+Also type-forced, and not on the list: `web/src/app/render.rs`'s `render_head`
+(the permalink title/description read through `.post`), `api.rs`'s
+`get`/`get_preview` return types and the `authored_post_marks_draft_state…`
+test, and `component.rs`'s `EditPostPage` (`get_preview`'s
+slug/summary/tags/post_id/published_at reads). The `component.rs:15` preamble
+named only `DraftSummary`/`PostSummary`/`TagSummary`, none of which this task
+renames — left as is.
 
-Run: `cargo nextest run -p common -p web -p server -p storage` Expected: PASS.
+- [x] **Step 8: Run the suites, verify they pass**
 
-- [ ] **Step 9: Verify AC1, AC6, AC6a, AC6b**
+Run: `cargo nextest run -p common -p web -p jaunder -p storage` (the server
+crate is packaged as `jaunder`; `-p server` matches nothing). Expected: PASS.
+
+- [x] **Step 9: Verify AC1, AC6, AC6a, AC6b**
 
 ```bash
 rg 'pub struct \w*(Result|Response)\b' web/src/posts common/src/seed.rs   # nothing
 rg 'TimelinePostSummary|PostResponse'                                     # nothing
-rg 'unwrap_or\(.*created_at\)' web/src/posts/component.rs                 # nothing
+# AC6a is about the fabricated `published_at` *field*, not the time-label
+# fallback: `PostDisplay`'s `format_post_time(published_at.unwrap_or(created_at))`
+# is the same expression `render.rs` uses and must stay for the paint to coincide.
+rg 'published_at:\s*.*unwrap_or' web/src common server                    # nothing
 rg -n 'PostCard' web/src/posts/mod.rs   # the COMPONENT must still be re-exported
 ```
 
@@ -878,7 +916,7 @@ Spec D6. 62 sites / 9 files.
   with `#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]`.
   `TimelinePage { posts: Vec<RenderedPost>, next_cursor: Option<PageCursor>, has_more: bool }`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 In `common/src/seed.rs`, pin that the pair travels together and round-trips:
 
@@ -899,12 +937,12 @@ fn page_cursor_round_trips_and_is_absent_as_a_whole() {
 }
 ```
 
-- [ ] **Step 2: Run it, verify it fails**
+- [x] **Step 2: Run it, verify it fails**
 
 Run: `cargo nextest run -p common page_cursor_round_trips` Expected: FAIL —
 `PageCursor` not defined.
 
-- [ ] **Step 3: Move, rename, and re-derive the cursor**
+- [x] **Step 3: Move, rename, and re-derive the cursor**
 
 Move `TimelineCursor` from `web/src/timeline/state.rs:21-29` into
 `common/src/seed.rs` as `PageCursor`. Its current derives are
@@ -913,7 +951,7 @@ Move `TimelineCursor` from `web/src/timeline/state.rs:21-29` into
 relies on. Keep the doc comment explaining that bundling makes a half-cursor
 unrepresentable.
 
-- [ ] **Step 4: Change `TimelinePage` and delete `from_page`**
+- [x] **Step 4: Change `TimelinePage` and delete `from_page`**
 
 `TimelinePage` gets one `next_cursor: Option<PageCursor>` in place of the two
 flat fields. `TimelineCursor::from_page` (`state.rs:36-44`) reconciled a
@@ -924,7 +962,7 @@ region is deliberate: the region no longer exists, the same justification the
 spec gives for `api.rs:711` and `state.rs:332`. Name it in the commit message so
 the deletion is not mistaken for attrition.
 
-- [ ] **Step 5: Update the construction sites**
+- [x] **Step 5: Update the construction sites**
 
 `listing.rs:41-51` stops splitting: `next_cursor` goes straight in. The eight
 struct-literal sites (`page_state.rs:190-194`, `render.rs` ×4,
@@ -932,17 +970,27 @@ struct-literal sites (`page_state.rs:190-194`, `render.rs` ×4,
 `next_cursor_created_at: None, next_cursor_post_id: None` pair into one
 `next_cursor: None`.
 
-- [ ] **Step 6: Run the suites, verify they pass**
+- [x] **Step 6: Run the suites, verify they pass**
 
-Run: `cargo nextest run -p common -p web -p server` Expected: PASS.
+Run: `devtool pg run -- cargo nextest run -p common -p web -p jaunder` (the
+server crate's package name is `jaunder`, and `-p web` alone silently skips the
+`#[cfg(feature = "server")]` tests) Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 cargo xtask check
-git add common/src/seed.rs web/src server/src server/tests
+git restore --staged .   # the index arrives pre-populated; clear it first
+git add -u
 git commit -m "refactor(common/seed): TimelinePage carries Option<PageCursor> (#569)"
 ```
+
+**Clear the index before staging.** Something in the gate's fix mode leaves
+every modified file staged, so `git add <path>` reads as "also include this",
+not "include only this" — a partial commit built that way silently sweeps in
+everything else. That mistake was made once in this cycle (a docs-only spec
+commit that captured all of Task 6) and had to be undone with
+`git reset --soft`.
 
 ---
 
@@ -956,7 +1004,9 @@ Spec D6. 60 further sites / 3 files. **Wire change** on six endpoints.
   (the `#[server(…)]` attributes — **each gains `input = Json`**) and `:115`,
   `:139`, `:161`, `:262`, `:286` + bodies (27 sites);
   `web/src/posts/api.rs:439-444` (attribute + 3 sites)
-- Modify: `web/src/timeline/state.rs:50-55` (delete `into_query`), `:229`,
+- Modify: `web/src/timeline/state.rs` (delete the free fn `cursor_into_query` —
+  Task 7 had to demote it from an associated fn, since `PageCursor` now lives in
+  `common` and a foreign type cannot take an inherent `impl` in `web`), `:229`,
   `:332-342` (delete its test)
 - Modify: **`web/src/timeline/component.rs:26`** — `spawn_load_more`'s `F` bound
   is `FnOnce(Option<UtcInstant>, Option<PostId>, …)` and drops to one cursor
@@ -978,7 +1028,7 @@ Spec D6. 60 further sites / 3 files. **Wire change** on six endpoints.
   — `list_by_user`, `list_local_timeline`, `list_home_feed`, `list_by_tag`,
   `list_by_user_and_tag`, `list_drafts`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Two contracts: the cursor round-trips end to end, **and** the request is
 JSON-shaped. The second is the one that pins the codec change — without it,
@@ -1026,14 +1076,14 @@ async fn paginated_listing_accepts_a_nested_json_cursor(#[case] backend: Backend
 }
 ```
 
-- [ ] **Step 2: Run them, verify they fail**
+- [x] **Step 2: Run them, verify they fail**
 
 Run:
 `cargo nextest run -p server 'timeline_page_two_uses_the_cursor|nested_json_cursor'`
 Expected: FAIL — `list_user_posts_form` still takes two cursor arguments; the
 JSON body is rejected by the urlencoded codec.
 
-- [ ] **Step 3: Switch the six endpoints to `input = Json`**
+- [x] **Step 3: Switch the six endpoints to `input = Json`**
 
 They use the **default form-urlencoded codec** today, which cannot carry a
 nested struct. This is the repo's existing rule, not a new one: `create`
@@ -1052,7 +1102,7 @@ rewrite all six `*_form` helpers (`web_posts.rs:664`, `:699`, `:721`, `:736`,
 `parts.push(format!("cursor_created_at={created_at}"))`) and must post JSON
 instead.
 
-- [ ] **Step 4: Change the six signatures**
+- [x] **Step 4: Change the six signatures**
 
 ```rust
 pub async fn list_by_user(username: Username, cursor: Option<PageCursor>, limit: Option<PageSize>) -> WebResult<TimelinePage>;
@@ -1065,20 +1115,26 @@ pub async fn list_drafts(cursor: Option<PageCursor>, limit: Option<PageSize>) ->
 
 Each body feeds `parse_post_cursor` from the one value instead of two `Option`s.
 
-- [ ] **Step 5: Delete `into_query` and repoint every caller**
+- [x] **Step 5: Delete `cursor_into_query` and repoint every caller**
 
-`TimelineCursor::into_query` (`state.rs:50-55`) existed only to split the
-newtype back into the flat pair. With no flat pair left it is **deleted**, along
-with `cursor_into_query_splits_or_empties` (`:332`) — the region it covered no
-longer exists, the same justification as Task 4's `:711`. `state.rs:229` passes
-the cursor through.
+The free fn `cursor_into_query` in `web/src/timeline/state.rs` existed only to
+split the cursor back into the flat pair. With no flat pair left it is
+**deleted**, along with its test `cursor_into_query_splits_or_empties` — the
+region it covered no longer exists, the same justification as Task 4's duplicate
+arg test. `state.rs`'s `begin_load_more` passes the cursor through instead.
+
+**Name corrected after Task 7.** This step originally named
+`TimelineCursor::into_query` with line numbers. Task 7 moved `PageCursor` into
+`common`, so `web` can no longer write an inherent `impl` for it, and the
+associated fn became a module-private free fn. Locate by symbol; the old line
+numbers are stale.
 
 `spawn_load_more`'s generic bound at **`web/src/timeline/component.rs:26`** —
 `F: FnOnce(Option<UtcInstant>, Option<PostId>, …)` — drops to a single cursor
 parameter, and its three closures (`posts/component.rs:1048`, `:1563`, `:1633`)
 follow.
 
-- [ ] **Step 6: Repoint the five non-paginating call sites**
+- [x] **Step 6: Repoint the five non-paginating call sites**
 
 These pass `None, None` today and are easy to miss because they do not paginate
 — but they will not compile:
@@ -1100,11 +1156,11 @@ a call:
 - `web/src/cockpit/component.rs:56` —
   `spawn_load_more(state.timeline, list_home_feed)`
 
-- [ ] **Step 7: Run the suites, verify they pass**
+- [x] **Step 7: Run the suites, verify they pass**
 
 Run: `cargo nextest run -p web -p server` Expected: PASS.
 
-- [ ] **Step 8: Verify AC7, AC7a, AC7b**
+- [x] **Step 8: Verify AC7, AC7a, AC7b**
 
 ```bash
 rg 'next_cursor_created_at|next_cursor_post_id|TimelineCursor'   # expect: nothing
@@ -1113,13 +1169,31 @@ rg 'into_query'                                                    # expect: not
 rg -c 'input = Json' web/src/posts/api/listing.rs                 # expect: 5
 ```
 
-- [ ] **Step 9: Commit**
+Satisfying the second grep forced a step this task's brief did not name: the
+three `fetch_*` helpers still took the flat
+`(cursor_created_at, cursor_post_id)` pair. They now take `Option<PostCursor>` —
+converging on `fetch_user_posts_by_tag`, which already did — so the split lives
+once, in `listing::keyset_cursor`, and the projector's four call sites drop
+their second `None`.
+
+- [x] **Step 9: Commit**
 
 ```bash
 cargo xtask check
-git add web/src server/tests
+git restore --staged .          # the index arrives pre-populated
+git restore --staged HANDOFF.md # belt and braces: it must never be committed
+git add -u
 git commit -m "refactor(web/posts): paginated server fns take Option<PageCursor> (#569)"
 ```
+
+Wider than planned by three files, each forced rather than chosen:
+`xtask/src/steps/server_fn_tracing_check.rs` (the `server-fn-tracing` gate
+rejected `PageCursor` as an unclassified argument type), the three `fetch_*`
+helpers plus their projector call sites (AC7a's grep is unreachable without
+them), and the `list_rejects_invalid_cursor_inputs` cluster (its "must be
+provided together" assertion became unreachable through these endpoints once a
+half-cursor stopped being representable — rewritten to assert the rejection
+names `post_id`, not weakened).
 
 ---
 
@@ -1366,12 +1440,16 @@ git diff wt-base-issue-569..HEAD -- server/tests/ web/src/ common/src/ end2end/
 Every deleted or relaxed assertion must trace to a specific authorized deletion.
 The plan authorizes exactly four:
 
-| Deleted                                           | Authorized by   |
-| ------------------------------------------------- | --------------- |
-| `api.rs:711 update_post_args_rejects_…`           | spec D3, AC14   |
-| `state.rs:332 cursor_into_query_splits_or_…`      | spec D6, Task 8 |
-| `state.rs:312 cursor_from_page_needs_both_…`      | spec D6, Task 7 |
-| assertions on `created_at`/`summary`/`updated_at` | spec D1, D7     |
+| Deleted                                                           | Authorized by   |
+| ----------------------------------------------------------------- | --------------- |
+| `update_post_args_rejects_unknown_format_token`                   | spec D3, AC14   |
+| `cursor_from_page_needs_both_components` (+ its `page(…)` helper) | spec D6, Task 7 |
+| `cursor_into_query_splits_or_empties`                             | spec D6, Task 8 |
+| assertions on `created_at`/`summary`/`updated_at`                 | spec D1, D7     |
+
+Named by symbol, not line: every line number in this plan has shifted at least
+once. Task 7's entry covers two removals — the test and the `page(…)` helper it
+was the sole user of.
 
 Anything else is attrition — restore it.
 

@@ -34,7 +34,7 @@ pub fn CockpitPage() -> impl IntoView {
         move || refresh_version.get(),
         move |_| async move {
             resolve_initial_page(session.reconcile.await, || {
-                list_home_feed(None, None, Some(PageSize::default()))
+                list_home_feed(None, Some(PageSize::default()))
             })
             .await
         },

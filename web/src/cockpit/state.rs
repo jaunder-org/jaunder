@@ -125,8 +125,7 @@ mod tests {
     fn page() -> TimelinePage {
         TimelinePage {
             posts: vec![sample_summary()],
-            next_cursor_created_at: None,
-            next_cursor_post_id: None,
+            next_cursor: None,
             has_more: false,
         }
     }

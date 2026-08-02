@@ -24,7 +24,7 @@ use common::{
     visibility::AudienceSelection,
 };
 
-use common::seed::PostResponse;
+use common::seed::{AuthoredPost, PageCursor};
 
 use crate::error::WebResult;
 
@@ -39,7 +39,7 @@ use common::visibility::{audience_targets_or_public, targets_to_audience_selecti
 // Server-only imports for the #[server] fn bodies (gated on `feature = "server"`).
 #[cfg(feature = "server")]
 use {
-    super::server::{not_found_error, post_response, private_post_not_found_error},
+    super::server::{authored_post, not_found_error, private_post_not_found_error},
     crate::auth::require_auth,
     crate::error::InternalError,
     crate::feed_events::enqueue_feed_events,
@@ -49,9 +49,9 @@ use {
     leptos::prelude::*,
     std::{collections::BTreeSet, sync::Arc},
     storage::{
-        fetch_post_record, find_draft_by_permalink_for_user, parse_post_cursor,
-        perform_post_creation, perform_post_update, FeedEventStorage, PostCreation, PostStorage,
-        PostUpdate, PublishUpdate, SiteConfigStorage,
+        fetch_post_record, find_draft_by_permalink_for_user, keyset_cursor, perform_post_creation,
+        perform_post_update, FeedEventStorage, PostCreation, PostStorage, PostUpdate,
+        PublishUpdate, SiteConfigStorage,
     },
 };
 
@@ -203,7 +203,7 @@ pub async fn create(post: PostInputs) -> WebResult<SavedPost> {
 
 /// Retrieves a post by its permalink.
 #[macros::server]
-pub async fn get(username: Username, date: PermalinkDate, slug: Slug) -> WebResult<PostResponse> {
+pub async fn get(username: Username, date: PermalinkDate, slug: Slug) -> WebResult<AuthoredPost> {
     let posts = expect_context::<Arc<dyn PostStorage>>();
 
     let viewer = viewer_identity().await;
@@ -211,7 +211,7 @@ pub async fn get(username: Username, date: PermalinkDate, slug: Slug) -> WebResu
         let is_author = require_auth()
             .await
             .is_ok_and(|auth| auth.user_id == post.user_id);
-        return Ok(post_response(post, is_author));
+        return Ok(authored_post(post, is_author));
     }
 
     // The visibility-filtered lookup above found nothing public at this
@@ -230,12 +230,12 @@ pub async fn get(username: Username, date: PermalinkDate, slug: Slug) -> WebResu
         .await?
         .ok_or_else(not_found_error)?;
 
-    Ok(post_response(draft, true))
+    Ok(authored_post(draft, true))
 }
 
 /// Retrieves a draft preview for the authenticated author.
 #[macros::server]
-pub async fn get_preview(post_id: PostId) -> WebResult<PostResponse> {
+pub async fn get_preview(post_id: PostId) -> WebResult<AuthoredPost> {
     let auth = require_auth()
         .await
         .map_err(|e| private_post_not_found_error(&e))?;
@@ -250,7 +250,7 @@ pub async fn get_preview(post_id: PostId) -> WebResult<PostResponse> {
         return Err(not_found_error());
     }
 
-    Ok(post_response(post, true))
+    Ok(authored_post(post, true))
 }
 
 /// Updates an existing post for the authenticated author.
@@ -376,17 +376,19 @@ pub async fn get_audience_selection(post_id: PostId) -> WebResult<AudienceSelect
 }
 
 /// Lists drafts for the authenticated user.
-#[macros::server]
+// The JSON input codec, unlike the crate's flat-scalar endpoints: a nested
+// `PageCursor` cannot travel through the default form-urlencoded one. Same rule
+// that already puts `create` and `update` on JSON — the other server fns taking
+// a struct.
+#[macros::server(input = Json)]
 pub async fn list_drafts(
-    cursor_created_at: Option<UtcInstant>,
-    cursor_post_id: Option<PostId>,
+    cursor: Option<PageCursor>,
     limit: Option<PageSize>,
 ) -> WebResult<Vec<DraftSummary>> {
     let auth = require_auth().await?;
     let posts = expect_context::<Arc<dyn PostStorage>>();
 
-    let parsed_cursor =
-        parse_post_cursor(cursor_created_at.map(UtcInstant::value), cursor_post_id)?;
+    let parsed_cursor = keyset_cursor(cursor);
     let page_size = limit.unwrap_or_default();
     let drafts = posts
         .list_drafts_by_user(
@@ -529,13 +531,13 @@ mod tests {
     // `RenderedHtml` (the type has no blanket `Deserialize`). Covers the sole wire
     // reconstruction door.
     #[test]
-    fn timeline_summary_round_trips_rendered_html_via_trusted_rebuild() {
+    fn rendered_post_round_trips_rendered_html_via_trusted_rebuild() {
         use common::ids::PostId;
         use common::render::RenderedHtml;
-        use common::seed::TimelinePostSummary;
+        use common::seed::RenderedPost;
         use common::test_support::{parse_root_relative_url, parse_utc_instant};
 
-        let original = TimelinePostSummary {
+        let original = RenderedPost {
             post_id: PostId::from(1),
             username: parse_username("alice"),
             title: Some("T".into()),
@@ -543,14 +545,14 @@ mod tests {
             slug: "hello".parse::<Slug>().unwrap(),
             rendered_html: RenderedHtml::from_trusted("<p>hi</p>"),
             created_at: parse_utc_instant("2026-01-01T00:00:00Z"),
-            published_at: parse_utc_instant("2026-01-01T00:00:00Z"),
+            published_at: Some(parse_utc_instant("2026-01-01T00:00:00Z")),
             permalink: Some(parse_root_relative_url("/~alice/2026/01/01/hello")),
             is_author: false,
             is_draft: true,
             tags: vec![],
         };
         let json = serde_json::to_string(&original).unwrap();
-        let round_tripped: TimelinePostSummary = serde_json::from_str(&json).unwrap();
+        let round_tripped: RenderedPost = serde_json::from_str(&json).unwrap();
         assert_eq!(round_tripped.rendered_html.as_ref(), "<p>hi</p>");
         // `is_draft` is a plain bool with no custom serde — pin that it survives.
         assert!(round_tripped.is_draft);
@@ -619,8 +621,8 @@ mod tests {
 
     #[cfg(feature = "server")]
     #[test]
-    fn timeline_post_summary_keeps_titleless_posts_titleless() {
-        use crate::posts::server::timeline_post_summary;
+    fn rendered_post_keeps_titleless_posts_titleless() {
+        use crate::posts::server::rendered_post;
         use chrono::{TimeZone, Utc};
         use common::{
             ids::{PostId, UserId},
@@ -631,7 +633,7 @@ mod tests {
         let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
         let slug = "titleless-note".parse::<Slug>().unwrap();
 
-        let summary = timeline_post_summary(
+        let summary = rendered_post(
             PostRecord {
                 post_id: PostId::from(1),
                 user_id: UserId::from(2),
@@ -662,8 +664,8 @@ mod tests {
 
     #[cfg(feature = "server")]
     #[test]
-    fn post_response_marks_draft_state_from_published_at() {
-        use crate::posts::server::post_response;
+    fn authored_post_marks_draft_state_from_published_at() {
+        use crate::posts::server::authored_post;
         use chrono::{TimeZone, Utc};
         use common::{
             ids::{PostId, UserId},
@@ -675,7 +677,7 @@ mod tests {
         let author_username = parse_username("author");
         let slug = "hello-world".parse::<Slug>().unwrap();
 
-        let draft = post_response(
+        let draft = authored_post(
             PostRecord {
                 post_id: PostId::from(1),
                 user_id: UserId::from(2),
@@ -694,11 +696,11 @@ mod tests {
             },
             true,
         );
-        assert!(draft.is_draft);
-        assert!(draft.published_at.is_none());
-        assert_eq!(draft.username, "author");
+        assert!(draft.post.is_draft);
+        assert!(draft.post.published_at.is_none());
+        assert_eq!(draft.post.username, "author");
 
-        let published = post_response(
+        let published = authored_post(
             PostRecord {
                 post_id: PostId::from(2),
                 user_id: UserId::from(2),
@@ -717,8 +719,8 @@ mod tests {
             },
             false,
         );
-        assert!(!published.is_draft);
-        assert!(published.published_at.is_some());
+        assert!(!published.post.is_draft);
+        assert!(published.post.published_at.is_some());
     }
 }
 

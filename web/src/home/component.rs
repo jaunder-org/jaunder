@@ -40,7 +40,7 @@ pub fn HomePage() -> impl IntoView {
     // performed via the client-side action column, reflect immediately.
     let initial_page = Resource::new(
         move || refresh_version.get(),
-        |_| list_local_timeline(None, None, Some(PageSize::default())),
+        |_| list_local_timeline(None, Some(PageSize::default())),
     );
 
     wire_timeline_resolve(state, initial_page);

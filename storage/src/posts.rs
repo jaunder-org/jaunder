@@ -13,6 +13,7 @@ use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
 use common::root_relative_url::RootRelativeUrl;
+use common::seed::PageCursor;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::username::Username;
@@ -449,11 +450,26 @@ pub fn parse_post_cursor(
     }
 }
 
+/// Projects a wire [`PageCursor`] onto the storage-side [`PostCursor`].
+///
+/// Infallible by construction, not by omission: the boundary parse ADR-0063 §4
+/// asks for has already happened one layer out, at the `#[server]` argument —
+/// `PageCursor` bundles the keyset components, so arg-decode rejects a half
+/// cursor before any handler body runs. Nothing is left here to reject, which is
+/// the whole point of taking the pair as one type rather than two `Option`s.
+#[must_use]
+pub fn keyset_cursor(cursor: Option<PageCursor>) -> Option<PostCursor> {
+    cursor.map(|c| PostCursor {
+        created_at: c.created_at.value(),
+        post_id: c.post_id,
+    })
+}
+
 /// The shared public-permalink lookup used by both the `get_post` server fn and
 /// the non-reactive public projector.
 ///
 /// Validates the date, then does the visibility-filtered store lookup for
-/// `viewer`. The caller maps the record to a `PostResponse` with its own
+/// `viewer`. The caller maps the record to an `AuthoredPost` with its own
 /// `is_author` (the projector always anonymous → `false`; the server fn derives
 /// it from the session), so there is one query and no drift between the two
 /// public surfaces.

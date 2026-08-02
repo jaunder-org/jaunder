@@ -522,9 +522,31 @@ contract**, so `post` is required, not incidental.
 nests `RenderedPost` as a field named `post`, with no `#[serde(flatten)]`. The
 builders are `rendered_post` and `authored_post`.
 
-**AC6a.** `RenderedPost.published_at` is `Option<UtcInstant>`, and
-`rg 'unwrap_or\(.*created_at\)' web/src/posts/component.rs` returns nothing —
-the fabrication at `:979-981` is gone, replaced by a clone of the nested value.
+**AC6a.** `RenderedPost.published_at` is `Option<UtcInstant>`, and `PostPage` no
+longer hand-builds a post row from a fetched detail:
+`rg 'RenderedPost\s*\{|TimelinePostSummary\s*\{' web/src/posts/component.rs`
+returns nothing — the field-by-field rebuild is replaced by a clone of the
+nested value.
+
+**Corrected 2026-08-01.** This criterion originally read
+`rg 'unwrap_or\(.*created_at\)' web/src/posts/component.rs` returns nothing.
+That was wrong in **both** directions, and each error is instructive:
+
+- **False positive after the change.** `PostDisplay` legitimately computes its
+  time label as `format_post_time(post.published_at.unwrap_or(post.created_at))`
+  — the identical expression `render.rs`'s two converged builders use, and it
+  **must stay** or the projector and CSR paints stop coinciding (ADR-0044). The
+  original grep cannot tell that expression from the fabricated field it was
+  aimed at.
+- **False green before the change.** The obvious narrowing,
+  `rg 'published_at:\s*.*unwrap_or'`, matches nothing on the pre-change tree
+  either — rustfmt had wrapped the fabricated assignment across three lines, so
+  a single-line pattern never saw it. It would have "passed" without the change
+  ever being made.
+
+The replacement targets the structural fact the criterion is actually about —
+that no post row is constructed by hand in that file — and was verified to match
+`TimelinePostSummary {` on the pre-change tree and nothing after.
 
 **AC6b.** The `PostCard` **component** still exists under that exact name and is
 still re-exported from `web/src/posts/mod.rs` — the rename must not have taken

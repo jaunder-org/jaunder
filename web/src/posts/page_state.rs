@@ -190,8 +190,7 @@ mod tests {
     fn page(has_more: bool) -> TimelinePage {
         TimelinePage {
             posts: Vec::new(),
-            next_cursor_created_at: None,
-            next_cursor_post_id: None,
+            next_cursor: None,
             has_more,
         }
     }

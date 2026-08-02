@@ -7,7 +7,7 @@
 //! queries in `server` — the vertical owned neither until #714, which moved them
 //! out of `posts/api/listing.rs` so that `(vertical, ident)` could be a key the
 //! compiler enforces. The wire types they exchange
-//! (`TimelinePage`/`TimelinePostSummary`) are defined in `common::seed` and
+//! (`TimelinePage`/`RenderedPost`) are defined in `common::seed` and
 //! reached through `crate::posts`.
 //!
 //! Alongside them sit the pure host-tested `state` and `render` leaves and the
@@ -27,7 +27,7 @@ mod server;
 
 pub(crate) mod render;
 mod state;
-pub use state::{LoadStatus, NoIdentity, TimelineCursor, TimelinePaint, TimelineState};
+pub use state::{LoadStatus, NoIdentity, TimelinePaint, TimelineState};
 
 pub use api::{
     list_by_tag, list_by_user, list_by_user_and_tag, list_home_feed, list_local_timeline,

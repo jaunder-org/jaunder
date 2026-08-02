@@ -58,10 +58,10 @@ pub use api::{
 // Re-exported for the `server` crate's public projector, which maps the fetched
 // record the same way this vertical does (one projection, no drift), and for
 // `crate::timeline`, whose listing queries project their rows through the same
-// summary builder. `post_response` is a wire-type builder that stays in `web`;
+// summary builder. `authored_post` is a wire-type builder that stays in `web`;
 // the projector imports the effectful `fetch_post_record` straight from `storage`.
 #[cfg(feature = "server")]
-pub use server::{post_response, timeline_post_summary};
+pub use server::{authored_post, rendered_post};
 
 // The wasm-only reactive UI (ADR-0070): the post widgets and the routed page
 // components (moved from `pages/`, #323). Re-exported so the `pages/` router keeps

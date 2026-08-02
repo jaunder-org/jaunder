@@ -124,18 +124,18 @@ Always reach for an existing shared helper before writing a new layout primitive
 (`web/src/{avatar,icon,taglist,topbar}/`, exposing `Avatar`, `Icon`, `TagList`,
 `Topbar`); the rest are co-located in their owning verticals (ADR-0070):
 
-| Helper                            | Purpose                                             |
-| --------------------------------- | --------------------------------------------------- |
-| `Topbar`                          | Page header (see §1)                                |
-| `BackupBanner`                    | Global "backups not configured" banner              |
-| `Avatar`                          | User initials chip; size in px                      |
-| `Icon`                            | Sidebar / inline accents                            |
-| `PostCard`                        | Renders a `TimelinePostSummary` with author actions |
-| `PostDisplay`                     | Renders a post without the author action column     |
-| `PostCreateForm`                  | Compose-new-post form (compact and full variants)   |
-| `InlineComposer`                  | Home-feed inline composer with flash                |
-| `ComposerFields`                  | Body textarea + format toggle, reusable             |
-| `MediaUploadButton`, `MediaPanel` | File-picker wired to `/media/upload`                |
+| Helper                            | Purpose                                           |
+| --------------------------------- | ------------------------------------------------- |
+| `Topbar`                          | Page header (see §1)                              |
+| `BackupBanner`                    | Global "backups not configured" banner            |
+| `Avatar`                          | User initials chip; size in px                    |
+| `Icon`                            | Sidebar / inline accents                          |
+| `PostCard`                        | Renders a `RenderedPost` with author actions      |
+| `PostDisplay`                     | Renders a post without the author action column   |
+| `PostCreateForm`                  | Compose-new-post form (compact and full variants) |
+| `InlineComposer`                  | Home-feed inline composer with flash              |
+| `ComposerFields`                  | Body textarea + format toggle, reusable           |
+| `MediaUploadButton`, `MediaPanel` | File-picker wired to `/media/upload`              |
 
 For list views, the available CSS primitives are:
 

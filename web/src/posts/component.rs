@@ -12,7 +12,7 @@ use leptos_router::hooks::{use_navigate, use_params_map};
 use leptos_router::NavigateOptions;
 
 // `Summary` is module-qualified at its use site: this file already has
-// `DraftSummary`, `PostSummary`, `TagSummary` and `TimelinePostSummary` in scope, and
+// `DraftSummary`, `PostSummary` and `TagSummary` in scope, and
 // a bare `Summary` among them says nothing about which one it is.
 use crate::audiences::{self, list_mine};
 use crate::avatar::Avatar;
@@ -46,7 +46,7 @@ use common::pagination::PageSize;
 use common::post_summary::PostSummary;
 use common::render::PostFormat;
 use common::root_relative_url::RootRelativeUrl;
-use common::seed::{PageSeed, PostResponse, TagSummary, TimelinePostSummary};
+use common::seed::{AuthoredPost, PageSeed, RenderedPost, TagSummary};
 use common::slug::Slug;
 use common::tag::Tag;
 use common::time::utc_instant_from_local;
@@ -153,7 +153,7 @@ pub fn ComposerFields(
 )]
 #[component]
 pub fn PostDisplay(
-    post: TimelinePostSummary,
+    post: RenderedPost,
     banner: Option<String>,
     /// Linking context for the tag chips in the footer; defaults to
     /// site-wide.
@@ -161,7 +161,7 @@ pub fn PostDisplay(
     tag_context: TagContext,
     #[prop(optional)] children: Option<Children>,
 ) -> impl IntoView {
-    let time_label = crate::posts::render::format_post_time(post.published_at);
+    let time_label = crate::posts::render::format_post_time(post.display_time());
     // Built once and shared by both arms so the authored content column is the SAME
     // pure, viewer-independent render the projector paints (#181, ADR-0044 D4) — no
     // hand-rebuilt markup and no is_author-driven content change that could diverge
@@ -229,7 +229,7 @@ fn marker_matches(author: &Username) -> bool {
 
 #[component]
 pub fn PostCard(
-    post: TimelinePostSummary,
+    post: RenderedPost,
     banner: Option<String>,
     /// Linking context for the footer tag chips; defaults to site-wide.
     #[prop(default = TagContext::SiteWide)]
@@ -885,13 +885,13 @@ pub fn CreatePostPage() -> impl IntoView {
 /// First-paint view for [`PostPage`]'s `Suspense`: the projector-seeded content
 /// (flash-free) when the server painted this permalink, or a spinner while the
 /// reactive fetch runs (client-side navigation, no seed).
-fn permalink_first_paint(seed_post: Option<PostResponse>) -> AnyView {
+fn permalink_first_paint(seed_post: Option<AuthoredPost>) -> AnyView {
     match seed_post {
-        Some(post) => {
+        Some(seed) => {
             // Just the article — this fallback sits inside the reactive PostPage's
             // own `j-scroll`/`j-page`. `display:contents` keeps the host wrapper out
             // of the layout so it coincides with the projector's permalink page.
-            let html = crate::posts::render::permalink_article(&post).into_string();
+            let html = crate::posts::render::permalink_article(&seed.post).into_string();
             // html-sink:allow posts::render::permalink_article output — the projector's own permalink paint
             view! { <div style="display:contents" inner_html=html></div> }.into_any()
         }
@@ -974,28 +974,13 @@ pub fn PostPage() -> impl IntoView {
                         match post.await {
                             Ok(fetched) => {
                                 let banner = fetched
+                                    .post
                                     .is_draft
                                     .then_some("Draft - visible only to you".to_string());
-                                let summary = TimelinePostSummary {
-                                    post_id: fetched.post_id,
-                                    username: fetched.username.clone(),
-                                    title: fetched.title.clone(),
-                                    summary: fetched.summary.clone(),
-                                    slug: fetched.slug.clone(),
-                                    rendered_html: fetched.rendered_html.clone(),
-                                    created_at: fetched.created_at,
-                                    published_at: fetched
-                                        .published_at
-                                        .unwrap_or(fetched.created_at),
-                                    permalink: fetched.permalink.clone(),
-                                    is_author: fetched.is_author,
-                                    is_draft: fetched.is_draft,
-                                    tags: fetched.tags.clone(),
-                                };
-                                let username_for_tags = fetched.username.clone();
+                                let username_for_tags = fetched.post.username.clone();
                                 view! {
                                     <PostCard
-                                        post=summary
+                                        post=fetched.post
                                         banner=banner
                                         tag_context=TagContext::ForUser(username_for_tags)
                                         on_unpublish=on_unpublish
@@ -1034,7 +1019,7 @@ pub fn UserTimelinePage() -> impl IntoView {
     let initial_page = Resource::new(
         move || (username.get(), mutate_version.get()),
         |(username, _)| async move {
-            list_by_user(user_query(username)?, None, None, Some(PageSize::default())).await
+            list_by_user(user_query(username)?, None, Some(PageSize::default())).await
         },
     );
 
@@ -1053,8 +1038,8 @@ pub fn UserTimelinePage() -> impl IntoView {
 
     let on_load_more = Callback::new(move |()| {
         if let Ok(username) = user_query(username.get_untracked()) {
-            spawn_load_more(state, move |created_at, post_id, limit| {
-                list_by_user(username, created_at, post_id, limit)
+            spawn_load_more(state, move |cursor, limit| {
+                list_by_user(username, cursor, limit)
             });
         }
     });
@@ -1153,16 +1138,16 @@ pub fn EditPostPage() -> impl IntoView {
                     Ok(fetched) => {
                         body.set(String::from(fetched.body.clone()));
                         format.set(fetched.format);
-                        slug_field.value.set(fetched.slug.to_string());
+                        slug_field.value.set(fetched.post.slug.to_string());
                         summary_field
                             .value
-                            .set(fetched.summary.as_deref().unwrap_or_default().to_owned());
-                        post_tags.set(fetched.tags.clone());
+                            .set(fetched.post.summary.as_deref().unwrap_or_default().to_owned());
+                        post_tags.set(fetched.post.tags.clone());
                         if let Ok(selection) = current_audience.await {
                             audience.set(selection);
                         }
-                        let post_id = fetched.post_id;
-                        let is_published = fetched.published_at.is_some();
+                        let post_id = fetched.post.post_id;
+                        let is_published = fetched.post.published_at.is_some();
                         let dispatch_update = move |publish: bool| {
                             update_post_action
                                 .dispatch(super::Update {
@@ -1398,7 +1383,7 @@ pub fn DraftsPage() -> impl IntoView {
                 delete_action.version().get(),
             )
         },
-        |_| list_drafts(None, None, Some(PageSize::default())),
+        |_| list_drafts(None, Some(PageSize::default())),
     );
 
     view! {
@@ -1549,9 +1534,7 @@ pub fn SiteTagPage() -> impl IntoView {
 
     let initial_page = Resource::new(
         move || (tag.get(), mutate_version.get()),
-        |(tag, _)| async move {
-            list_by_tag(tag_query(tag)?, None, None, Some(PageSize::default())).await
-        },
+        |(tag, _)| async move { list_by_tag(tag_query(tag)?, None, Some(PageSize::default())).await },
     );
 
     let state = TimelineState::default();
@@ -1568,8 +1551,8 @@ pub fn SiteTagPage() -> impl IntoView {
 
     let on_load_more = Callback::new(move |()| {
         if let Ok(tag_value) = tag_query(tag.get_untracked()) {
-            spawn_load_more(state, move |created_at, post_id, limit| {
-                list_by_tag(tag_value, created_at, post_id, limit)
+            spawn_load_more(state, move |cursor, limit| {
+                list_by_tag(tag_value, cursor, limit)
             });
         }
     });
@@ -1619,7 +1602,7 @@ pub fn UserTagPage() -> impl IntoView {
         move || (username.get(), tag.get(), mutate_version.get()),
         |(username, tag, _)| async move {
             let (username, tag) = user_tag_query(username, tag)?;
-            list_by_user_and_tag(username, tag, None, None, Some(PageSize::default())).await
+            list_by_user_and_tag(username, tag, None, Some(PageSize::default())).await
         },
     );
 
@@ -1638,8 +1621,8 @@ pub fn UserTagPage() -> impl IntoView {
         if let Ok((username_value, tag_value)) =
             user_tag_query(username.get_untracked(), tag.get_untracked())
         {
-            spawn_load_more(state, move |created_at, post_id, limit| {
-                list_by_user_and_tag(username_value, tag_value, created_at, post_id, limit)
+            spawn_load_more(state, move |cursor, limit| {
+                list_by_user_and_tag(username_value, tag_value, cursor, limit)
             });
         }
     });
