@@ -8,9 +8,10 @@
  * gives every test a scaled `DEFAULT_TEST_BUDGET_MS` whole-test budget, so tests
  * no longer name `testInfo` or a raw budget just to set a timeout. That budget
  * covers every test in the suite (#270) — reaching for `setTestBudget(ms)` is not
- * the default move. The two tests that do call it poll an eventually-consistent
- * feed whose own deadlines exceed the ambient budget; both derive their budget
- * from those deadlines rather than restating a number. The `firstNav` fixture
+ * the default move. The two tests that do call it poll for eventually-consistent
+ * state — one the feed cache, one the WebSub hub-ping capture — on deadlines that
+ * exceed the ambient budget; both derive their budget from those deadlines rather
+ * than restating a number. The `firstNav` fixture
  * value and `registeredPage` fixture supply the scaled cold-WASM first-nav budget
  * and a pre-registered page. This module also exports the underlying
  * slow-browser / worker-contention scalers (`slowBrowser*`), which remain the way
@@ -223,8 +224,11 @@ export function slowBrowserFirstNavigationTimeoutMs(
  *  19 green CI runs x 4 combos. The 18 per-test budgets deleted in #270 were
  *  validated at `workers>=2`. At `workers=1` the contention scale is 1.0, so
  *  chromium gets 30s here — and `cargo xtask e2e-local` defaults to 1 worker
- *  against the slower debug wasm build. If the heaviest specs (visibility,
- *  audiences) start timing out there, that is this trade-off surfacing: run with
+ *  against the slower debug wasm build. The sharpest case is
+ *  `visibility.spec.ts`'s "Public post is visible to anonymous" test: it polls a
+ *  hard 25s deadline of its own, so at 30s it has only ~5s left for setup, and a
+ *  whole-test timeout there is that collision rather than a slow test. If the
+ *  heaviest specs (visibility, audiences) start timing out there, run with
  *  `JAUNDER_E2E_WORKERS=2`, or re-add a deliberate budget derived from whatever
  *  deadline the test actually needs. Do not raise this constant to fix it —
  *  `test.slow()` triples it, so raising it inflates the suite's largest budgets

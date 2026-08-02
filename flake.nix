@@ -960,8 +960,9 @@
         # Pinned to workers=1 (the warm gate runs at 2, see above): these measure
         # per-navigation cold cost, where worker contention would corrupt the
         # attribution, and they keep the default 2 GB VM (more Firefox workers
-        # would OOM it, #61). Note workers=1 also means the whole-test scale is
-        # 1.0 rather than 1.5 — see DEFAULT_TEST_BUDGET_MS in
+        # would OOM it, #61). Note workers=1 also drops chromium's whole-test
+        # scale to 1.0 from the gate's 1.5 (firefox takes max(2.2, contention),
+        # so it is unaffected) — see DEFAULT_TEST_BUDGET_MS in
         # end2end/tests/fixtures.ts (#270).
         e2eColdPackages = pkgs.lib.listToAttrs (
           map (c: {
