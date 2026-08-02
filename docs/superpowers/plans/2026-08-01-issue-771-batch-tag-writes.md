@@ -1130,7 +1130,7 @@ writes at `:623` and `:26` belong to Task 4.)_
   #772).
 - Produces: `get_tags_for_post` no longer exists.
 
-- [ ] **Step 1: Rewrite every read site**
+- [x] **Step 1: Rewrite every read site**
 
 Mechanical, one shape throughout:
 
@@ -1151,13 +1151,13 @@ Where the test asserts on a _missing_ post's tags, `get_post_by_id` returns
 shape in the commit message. Where a viewer other than anonymous is needed for
 visibility, pass it.
 
-- [ ] **Step 2: Delete the method**
+- [x] **Step 2: Delete the method**
 
 Remove from `PostStorage` (`storage/src/posts.rs:690`) and the generic
 `PostStore` impl (`:1520-1553`). It is not a `PostDialect` method, so no dialect
 files change. The mock regenerates.
 
-- [ ] **Step 3: Run everything, verify it passes**
+- [x] **Step 3: Run everything, verify it passes**
 
 ```
 cargo run --manifest-path tools/Cargo.toml -p devtool -- pg run -- cargo nextest run -p storage -p jaunder

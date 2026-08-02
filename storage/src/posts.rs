@@ -698,9 +698,6 @@ pub trait PostStorage: Send + Sync {
         desired: &[TagLabel],
     ) -> Result<(), TaggingError>;
 
-    /// Returns all tags associated with a specific post.
-    async fn get_tags_for_post(&self, post_id: PostId) -> sqlx::Result<Vec<PostTag>>;
-
     /// Lists published posts that carry a specific tag, applying the
     /// viewer-resolution filter. See ADR-0020.
     ///
@@ -1517,41 +1514,6 @@ where
         desired: &[TagLabel],
     ) -> Result<(), TaggingError> {
         DB::set_post_tags(&self.pool, post_id, desired).await
-    }
-
-    /// The row tuple's first two positions are `post_id` and `tag_id` — adjacent
-    /// ids of the same width. Typing them as `PostId`/`TagId` rather than `i64`
-    /// is what stops a swapped destructuring from compiling (ADR-0063 §2); the
-    /// SELECT's column order is the only thing that pairs them otherwise.
-    #[tracing::instrument(
-        name = "storage.posts.get_tags_for_post",
-        skip(self),
-        fields(db.system = DB::DB_SYSTEM)
-    )]
-    async fn get_tags_for_post(&self, post_id: PostId) -> sqlx::Result<Vec<PostTag>> {
-        let rows = sqlx::query_as::<_, (PostId, TagId, Tag, TagLabel)>(
-            "SELECT pt.post_id, pt.tag_id, t.tag_slug, pt.tag_display
-             FROM post_tags pt
-             JOIN tags t ON pt.tag_id = t.tag_id
-             WHERE pt.post_id = $1
-             ORDER BY t.tag_slug",
-        )
-        .bind(post_id)
-        .fetch_all(&self.pool)
-        .await?;
-
-        // `tag_slug`/`tag_display` decode straight into `Tag`/`TagLabel` via the
-        // sqlx bridge (#438), so a malformed stored value is rejected as a
-        // column-decode error above; this is a straight field-move.
-        Ok(rows
-            .into_iter()
-            .map(|(post_id, tag_id, tag_slug, tag_display)| PostTag {
-                post_id,
-                tag_id,
-                tag_slug,
-                tag_display,
-            })
-            .collect())
     }
 
     #[tracing::instrument(
@@ -3748,7 +3710,12 @@ mod tests {
             .await
             .unwrap();
 
-        let tags = posts.get_tags_for_post(post_id).await.unwrap();
+        let tags = posts
+            .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
+            .await
+            .expect("get_post_by_id failed")
+            .expect("post exists")
+            .tags;
         assert_eq!(tags.len(), 1);
         assert_eq!(tags[0].tag_slug, "rust"); // canonical slug (lowercased)
         assert_eq!(tags[0].tag_display, "Rust"); // author casing preserved
