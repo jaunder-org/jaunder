@@ -10,8 +10,8 @@ use common::test_support::parse_invite_ttl_hours;
 use common::username::Username;
 use jaunder::cli::StorageArgs;
 use jaunder::commands::{
-    cmd_app_password_create, cmd_backup, cmd_create_pg_db, cmd_init, cmd_restore, cmd_serve,
-    cmd_smtp_test, cmd_user_create, cmd_user_invite, prepare_server,
+    cmd_app_password_create, cmd_backup, cmd_init, cmd_restore, cmd_serve, cmd_smtp_test,
+    cmd_user_create, cmd_user_invite, prepare_server,
 };
 use storage::{open_database, open_existing_database, BackupMode};
 use tempfile::TempDir;
@@ -99,19 +99,10 @@ async fn cmd_init_fails_on_invalid_path(#[case] backend: Backend) {
     assert!(result.is_err());
 }
 
-// guard:no-backend — rejects a non-Postgres bootstrap URL before any DB work; a
-// pure URL-validation error path that never provisions or connects.
-#[tokio::test]
-async fn cmd_create_pg_db_rejects_non_postgres_urls() {
-    let err = cmd_create_pg_db(
-        "sqlite:/tmp/bootstrap.db",
-        "postgres://jaunder@localhost/jaunder",
-        "secret",
-    )
-    .await
-    .unwrap_err();
-    assert!(err.to_string().contains("PostgreSQL URL"));
-}
+// `cmd_create_pg_db_rejects_non_postgres_urls` used to live here. A non-Postgres
+// bootstrap URL is no longer representable — `PgBootstrapArgs.bootstrap_db` is a
+// `PgConnectOptions`, so clap rejects it at argument parsing. The replacement is
+// `create_pg_db_rejects_a_non_postgres_bootstrap_url` in `server/src/cli.rs`.
 
 // M1.5.4: cmd_serve fails with an appropriate error when the storage path has
 // not been initialized.

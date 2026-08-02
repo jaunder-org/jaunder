@@ -1,11 +1,15 @@
 use std::fmt;
+use std::str::FromStr;
 use std::{net::SocketAddr, path::PathBuf};
 
 use clap::{Args, Parser, Subcommand};
+use sqlx::postgres::PgConnectOptions;
 
 use common::backup::BackupMode;
 use common::display_name::DisplayName;
 use common::invite::InviteTtlHours;
+use common::pg_identifier::{InvalidPgDatabaseName, InvalidPgRoleName, PgDatabaseName, PgRoleName};
+use common::pg_role_password::PgRolePassword;
 use common::username::Username;
 use storage::DbConnectOptions;
 
@@ -36,21 +40,154 @@ pub struct StorageArgs {
     pub db: DbConnectOptions,
 }
 
+/// A URL whose scheme is not `PostgreSQL`.
+#[derive(Debug, thiserror::Error)]
+#[error("{flag} must be a PostgreSQL URL")]
+pub struct InvalidPgUrl {
+    flag: &'static str,
+}
+
+/// Rejects a URL whose scheme is not `PostgreSQL`.
+///
+/// **sqlx does not do this.** `PgConnectOptions::from_str("sqlite:/tmp/jaunder.db")`
+/// *succeeds*: with no authority the username falls back to the OS user and the path
+/// becomes the database, yielding `role="mdorman", database="tmp/jaunder.db"`. So a
+/// mistyped scheme would silently provision a role named after whoever ran the command.
+/// The scheme check in [`DbConnectOptions::from_str`] is load-bearing, and anything that
+/// parses straight to `PgConnectOptions` has to repeat it.
+fn require_postgres_scheme(s: &str, flag: &'static str) -> Result<(), InvalidPgUrl> {
+    if s.starts_with("postgres://") || s.starts_with("postgresql://") {
+        Ok(())
+    } else {
+        Err(InvalidPgUrl { flag })
+    }
+}
+
+/// The superuser connection `create-pg-db` provisions with — the only argument whose
+/// full connection options the command actually needs, because it is the one we connect
+/// with. See [`require_postgres_scheme`] for why this is a newtype and not a bare
+/// `PgConnectOptions`.
+///
+/// No `Debug`: `PgConnectOptions` carries the bootstrap password.
+#[derive(Clone)]
+pub struct BootstrapDb(PgConnectOptions);
+
+impl BootstrapDb {
+    /// The superuser connection options.
+    #[must_use]
+    pub fn options(&self) -> &PgConnectOptions {
+        &self.0
+    }
+}
+
+/// Why a `--bootstrap-db` value is unusable.
+#[derive(Debug, thiserror::Error)]
+pub enum InvalidBootstrapDb {
+    /// Not a `PostgreSQL` scheme.
+    #[error(transparent)]
+    Scheme(#[from] InvalidPgUrl),
+    /// Right scheme, but unparseable.
+    #[error("--bootstrap-db must be a PostgreSQL URL: {0}")]
+    Url(#[from] sqlx::Error),
+}
+
+impl FromStr for BootstrapDb {
+    type Err = InvalidBootstrapDb;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        require_postgres_scheme(s, "--bootstrap-db")?;
+        Ok(BootstrapDb(s.parse()?))
+    }
+}
+
+/// The application role and database named by `--app-db`.
+///
+/// The URL is parsed here, at the CLI boundary, and **only these two identifiers are
+/// kept**: `create-pg-db` never connects to the application database — it creates a
+/// database and a role to own it, and reads nothing else from that URL. Holding a whole
+/// `PgConnectOptions` would carry several hundred bytes of connection state the command
+/// never touches, and would let a non-`PostgreSQL` URL, or one with no database name,
+/// survive until the command rejected it a layer later.
+///
+/// A useful consequence: because the URL is discarded, `AppTarget` **cannot** carry the
+/// password an `--app-db` URL may contain, so `Debug` here is safe to derive.
+#[derive(Clone, Debug)]
+pub struct AppTarget {
+    role: PgRoleName,
+    database: PgDatabaseName,
+}
+
+impl AppTarget {
+    /// The role that will own the application database.
+    #[must_use]
+    pub fn role(&self) -> &PgRoleName {
+        &self.role
+    }
+
+    /// The application database to create.
+    #[must_use]
+    pub fn database(&self) -> &PgDatabaseName {
+        &self.database
+    }
+}
+
+/// Why an `--app-db` value is not a usable [`AppTarget`].
+#[derive(Debug, thiserror::Error)]
+pub enum InvalidAppTarget {
+    /// Not a `PostgreSQL` scheme.
+    #[error(transparent)]
+    Scheme(#[from] InvalidPgUrl),
+    /// Right scheme, but unparseable.
+    #[error("--app-db must be a PostgreSQL URL: {0}")]
+    Url(#[from] sqlx::Error),
+    /// Parseable, but names no database.
+    #[error("--app-db must include a PostgreSQL database name")]
+    MissingDatabase,
+    /// The role name failed its invariant.
+    #[error(transparent)]
+    Role(#[from] InvalidPgRoleName),
+    /// The database name failed its invariant.
+    #[error(transparent)]
+    Database(#[from] InvalidPgDatabaseName),
+}
+
+impl FromStr for AppTarget {
+    type Err = InvalidAppTarget;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        require_postgres_scheme(s, "--app-db")?;
+        let options: PgConnectOptions = s.parse()?;
+        Ok(AppTarget {
+            role: options.get_username().parse()?,
+            database: options
+                .get_database()
+                .ok_or(InvalidAppTarget::MissingDatabase)?
+                .parse()?,
+        })
+    }
+}
+
+/// The three arguments were once three adjacent `String`s — any permutation parsed, and
+/// the middle one is a credential (#693). Three distinct types now, so a transposition is
+/// a compile error and each value validates at the parse boundary.
+///
+/// Only `bootstrap_db` carries connection options, because it is the only one we connect
+/// with. See [`AppTarget`] for why `--app-db` keeps two identifiers instead.
 #[derive(Args, Clone)]
 pub struct PgBootstrapArgs {
     /// `PostgreSQL` URL for a bootstrap/superuser role.
     ///
     /// This command only supports `PostgreSQL` URLs.
     #[arg(long)]
-    pub bootstrap_db: String,
+    pub bootstrap_db: BootstrapDb,
 
     /// `PostgreSQL` URL for the long-term application role and target database.
     #[arg(long = "app-db")]
-    pub app_db: String,
+    pub app_db: AppTarget,
 
     /// Password to set on the application role being created.
     #[arg(long)]
-    pub app_role_password: String,
+    pub app_role_password: PgRolePassword,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
@@ -316,9 +453,76 @@ mod tests {
         let Commands::CreatePgDb { pg } = cli.command.expect("subcommand") else {
             unreachable!("parse yields Commands::CreatePgDb")
         };
-        assert_eq!(pg.bootstrap_db, "postgres://postgres@localhost/postgres");
-        assert_eq!(pg.app_db, "postgres://jaunder@localhost/jaunder");
-        assert_eq!(pg.app_role_password, "secret");
+        // Asserted on the parsed values, not a rendered URL — so this test has no
+        // dependence on how a connection string is formatted or redacted.
+        assert_eq!(pg.bootstrap_db.options().get_username(), "postgres");
+        assert_eq!(pg.bootstrap_db.options().get_database(), Some("postgres"));
+        assert_eq!(pg.app_db.role().to_string(), "jaunder");
+        assert_eq!(pg.app_db.database().to_string(), "jaunder");
+        // `as_ref()`, not `==`: the secret surface has no `PartialEq` by design.
+        assert_eq!(pg.app_role_password.as_ref(), "secret");
+    }
+
+    #[test]
+    fn app_target_extracts_role_and_database() {
+        let target: AppTarget = "postgres://jaunder@localhost/jaunder_db".parse().unwrap();
+        assert_eq!(target.role().to_string(), "jaunder");
+        assert_eq!(target.database().to_string(), "jaunder_db");
+    }
+
+    // Replaces `cmd_create_pg_db_rejects_non_postgres_app_db`: the rejection moved to the
+    // parse boundary, so a non-PostgreSQL `--app-db` can no longer reach the command.
+    //
+    // The scheme check this drives is **not** redundant with sqlx. `PgConnectOptions`
+    // parses "sqlite:/tmp/jaunder.db" *successfully* — with no authority it defaults the
+    // role to the OS user and takes "tmp/jaunder.db" as the database. Without the explicit
+    // check, this input would provision a role named after whoever ran the command.
+    #[test]
+    fn app_target_rejects_a_non_postgres_url() {
+        let err = "sqlite:/tmp/jaunder.db".parse::<AppTarget>().unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("--app-db must be a PostgreSQL URL"));
+    }
+
+    #[test]
+    fn bootstrap_db_rejects_a_non_postgres_url() {
+        // `.err()` rather than `.unwrap_err()`: the latter needs `BootstrapDb: Debug`,
+        // which it deliberately does not have — it holds the bootstrap password.
+        let err = "sqlite:/tmp/bootstrap.db"
+            .parse::<BootstrapDb>()
+            .err()
+            .expect("a sqlite URL is not a bootstrap URL");
+        assert!(err
+            .to_string()
+            .contains("--bootstrap-db must be a PostgreSQL URL"));
+    }
+
+    // Replaces `cmd_create_pg_db_requires_database_name`, for the same reason.
+    #[test]
+    fn app_target_rejects_a_url_with_no_database() {
+        let err = "postgres://app@localhost".parse::<AppTarget>().unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("--app-db must include a PostgreSQL database name"));
+    }
+
+    // Replaces `run_create_pg_db_rejects_non_postgres_urls` in main.rs: `bootstrap_db` is
+    // a `PgConnectOptions`, so a non-PostgreSQL bootstrap URL cannot be constructed —
+    // clap rejects it during argument parsing rather than the command rejecting it later.
+    #[test]
+    fn create_pg_db_rejects_a_non_postgres_bootstrap_url() {
+        let result = Cli::try_parse_from([
+            "jaunder",
+            "create-pg-db",
+            "--bootstrap-db",
+            "sqlite:/tmp/bootstrap.db",
+            "--app-db",
+            "postgres://jaunder@localhost/jaunder",
+            "--app-role-password",
+            "secret",
+        ]);
+        assert!(result.is_err());
     }
 
     #[test]

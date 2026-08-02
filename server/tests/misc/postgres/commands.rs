@@ -29,9 +29,13 @@ async fn cmd_create_pg_db_provisions_role_and_database() {
         .await
         .unwrap();
 
-    cmd_create_pg_db(&bootstrap, &app, "bootstrap-secret")
-        .await
-        .unwrap();
+    cmd_create_pg_db(
+        &bootstrap.parse().unwrap(),
+        &app.parse().unwrap(),
+        &"bootstrap-secret".parse().unwrap(),
+    )
+    .await
+    .unwrap();
 
     let role_exists =
         sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $1)")
@@ -99,9 +103,13 @@ async fn cmd_create_pg_db_fails_if_role_already_exists() {
         .await
         .unwrap();
 
-    let err = cmd_create_pg_db(&bootstrap, &app, "bootstrap-secret")
-        .await
-        .unwrap_err();
+    let err = cmd_create_pg_db(
+        &bootstrap.parse().unwrap(),
+        &app.parse().unwrap(),
+        &"bootstrap-secret".parse().unwrap(),
+    )
+    .await
+    .unwrap_err();
     assert!(err.to_string().contains("already exists"));
 
     let db_exists = sqlx::query_scalar::<_, bool>(

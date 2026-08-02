@@ -339,21 +339,31 @@ mod tests {
         task.abort();
     }
 
+    // Covers the `Commands::CreatePgDb` dispatch arm.
+    //
+    // This replaces `run_create_pg_db_rejects_non_postgres_urls`, which built a `Cli`
+    // holding a sqlite bootstrap URL — now unrepresentable, since `BootstrapDb` rejects a
+    // non-PostgreSQL scheme at parse time (`create_pg_db_rejects_a_non_postgres_bootstrap_url`
+    // in `cli.rs`). So the arguments here are *valid*; the bootstrap URL simply points at a
+    // closed port, and the command fails fast at the admin connection. That exercises the
+    // dispatch without provisioning anything.
     #[tokio::test]
-    async fn run_create_pg_db_rejects_non_postgres_urls() {
+    async fn run_create_pg_db_dispatches() {
         let cli = Cli {
             command: Some(Commands::CreatePgDb {
                 pg: PgBootstrapArgs {
-                    bootstrap_db: "sqlite:/tmp/bootstrap.db".to_owned(),
-                    app_db: "postgres://jaunder@localhost/jaunder".to_owned(),
-                    app_role_password: std::iter::repeat_n('z', 20).collect(),
+                    bootstrap_db: "postgres://postgres@localhost:1/postgres".parse().unwrap(),
+                    app_db: "postgres://jaunder@localhost/jaunder".parse().unwrap(),
+                    app_role_password: "hunter2".parse().unwrap(),
                 },
             }),
             verbose: false,
         };
 
-        let err = run(cli).await.unwrap_err();
-        assert!(err.to_string().contains("PostgreSQL URL"));
+        assert!(
+            run(cli).await.is_err(),
+            "bootstrap connection to a closed port must fail"
+        );
     }
 
     #[tokio::test]

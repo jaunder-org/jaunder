@@ -24,6 +24,8 @@ pub mod mailer;
 pub mod media;
 pub mod pagination;
 pub mod password;
+pub mod pg_identifier;
+pub mod pg_role_password;
 pub mod post_body;
 pub mod post_summary;
 pub mod post_title;
