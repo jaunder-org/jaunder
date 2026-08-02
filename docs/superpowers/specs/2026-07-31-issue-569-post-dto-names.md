@@ -561,10 +561,16 @@ returns nothing in `web/`. Neither `into_query` nor
 distinct pages, seeding page 2 from `first_page.next_cursor` rather than from a
 row field. The capability is preserved, not deleted.
 
-**AC9.** `DerivedPostMetadata` and `derive_post_metadata` do not exist anywhere.
-`derive_post_title` returns `Option<(Option<PostTitle>, String)>`.
-`fallback_label` has exactly **one call site** in `common/src/render.rs`, and
-`PostSummary::truncated` has none in that file.
+**AC9.** `DerivedPostMetadata` and `derive_post_metadata` do not exist in
+**source or live docs** — `rg 'DerivedPostMetadata|derive_post_metadata'`
+returns hits only under `docs/archive/` and in superseded spec/plan documents,
+which are frozen records of what was true when they were written and must
+**not** be rewritten. `docs/adr/` is _not_ frozen in this respect: an ADR that
+points at a live code seam is corrected, since a dangling symbol misleads the
+next reader (ADR-0024 `:36` is the one such case). `derive_post_title` returns
+`Option<(Option<PostTitle>, String)>`. `fallback_label` has exactly **one call
+site** in `common/src/render.rs`, and `PostSummary::truncated` has none in that
+file.
 
 **AC9a.** The three `common/src/render.rs` tests that asserted on
 `summary_label` (`:1119`, `:1149`, `:1162`) still exist and assert on what the

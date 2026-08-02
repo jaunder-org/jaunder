@@ -28,9 +28,9 @@ use crate::media::MediaUpload;
 use crate::posts::{
     draft_row_display, get, get_audience_selection, get_default_audience_selection, get_preview,
     list_drafts, notify, notify_with_fallback, parse_permalink_route, publish_redirect,
-    seeded_page, tag_query, user_query, user_tag_query, with_post_id, Create, CreateArgs,
-    CreateResult, Delete, DraftRowDisplay, DraftSummary, ListingRoute, PermalinkRoute, Publish,
-    PublishResult, Unpublish, UpdateArgs, UpdateResult,
+    seeded_page, tag_query, user_query, user_tag_query, with_post_id, Create, Delete,
+    DraftRowDisplay, DraftSummary, ListingRoute, PermalinkRoute, PostInputs, Publish, SavedPost,
+    Unpublish,
 };
 use crate::subscriptions::SubscribeButton;
 use crate::taglist::TagCtx as TagContext;
@@ -271,14 +271,16 @@ pub fn PostCard(
         move || unpublish_action.value().get(),
         // Unpublish prefers its own callback and falls back to the shared mutate one —
         // a per-caller policy, so it is the host-tested `notify_with_fallback` (#306).
-        move |()| notify_with_fallback(on_unpublish, on_mutate),
+        // The returned `SavedPost` is deliberately unread: this caller navigates to
+        // /drafts regardless (#783 tracks using the moved permalink here).
+        move |_| notify_with_fallback(on_unpublish, on_mutate),
     );
     // Client-only navigation side-effect (web-style-guide §9): react to the
     // resolved publish action, mirroring EditPostPage's publish redirect.
     let navigate = use_navigate();
     on_settled_ok(
         move || publish_action.value().get(),
-        move |published: PublishResult| {
+        move |published: SavedPost| {
             // Publishing can move the permalink (a draft's URL is created_at-based;
             // once published it becomes published_at-based), so navigate client-side to
             // the server-returned canonical permalink rather than the now-stale current
@@ -479,7 +481,7 @@ fn audience_checkbox(
 pub fn PostCreateForm(
     compact: bool,
     #[prop(optional)] username: Option<Username>,
-    #[prop(into)] on_success: Callback<CreateResult>,
+    #[prop(into)] on_success: Callback<SavedPost>,
     #[prop(default = 6)] rows: u32,
     #[prop(default = "What\u{2019}s on your mind?")] placeholder: &'static str,
     /// Called on every textarea input event (compact mode only).
@@ -530,7 +532,7 @@ pub fn PostCreateForm(
     if compact {
         let dispatch_save = move |_| {
             create_action.dispatch(Create {
-                args: CreateArgs {
+                post: PostInputs {
                     body: body.get().into(),
                     format: format.get(),
                     slug_override: None,
@@ -544,7 +546,7 @@ pub fn PostCreateForm(
         };
         let dispatch_publish = move |_| {
             create_action.dispatch(Create {
-                args: CreateArgs {
+                post: PostInputs {
                     body: body.get().into(),
                     format: format.get(),
                     slug_override: None,
@@ -624,7 +626,7 @@ pub fn PostCreateForm(
         let slug_field = Field::<Slug>::optional();
         let dispatch_create = move |publish: bool| {
             create_action.dispatch(Create {
-                args: CreateArgs {
+                post: PostInputs {
                     body: body.get().into(),
                     format: format.get(),
                     slug_override: slug_field.parsed(),
@@ -760,7 +762,7 @@ pub fn PostCreateForm(
 pub fn InlineComposer(username: Username, on_publish: WriteSignal<u32>) -> impl IntoView {
     let flash: RwSignal<Option<(String, String)>> = RwSignal::new(None);
 
-    let on_success = Callback::new(move |created: CreateResult| {
+    let on_success = Callback::new(move |created: SavedPost| {
         use leptos_dom::helpers::set_timeout;
         use std::time::Duration;
         let url = created.permalink.to_string();
@@ -810,7 +812,7 @@ pub fn CreatePostPage() -> impl IntoView {
     // Server-confirmed gate: await the shared session reconcile (an expired cookie
     // must not show the create form) (#591).
     let session = crate::auth::use_session();
-    let last_result: RwSignal<Option<CreateResult>> = RwSignal::new(None);
+    let last_result: RwSignal<Option<SavedPost>> = RwSignal::new(None);
 
     view! {
         <Topbar title="New post" sub="Long-form" />
@@ -1164,8 +1166,8 @@ pub fn EditPostPage() -> impl IntoView {
                         let dispatch_update = move |publish: bool| {
                             update_post_action
                                 .dispatch(super::Update {
-                                    args: UpdateArgs {
-                                        post_id,
+                                    post_id,
+                                    post: PostInputs {
                                         body: body.get().into(),
                                         format: format.get(),
                                         slug_override: slug_field.parsed(),
@@ -1360,7 +1362,7 @@ fn EditSaveOutcome(action: ServerAction<super::Update>) -> impl IntoView {
             action
                 .value()
                 .get()
-                .map(|result: Result<UpdateResult, WebError>| match result {
+                .map(|result: Result<SavedPost, WebError>| match result {
                     Ok(updated) if updated.published_at.is_none() => {
                         let slug_value = updated.slug.to_string();
                         let slug_for_attr = slug_value.clone();
@@ -1420,7 +1422,7 @@ pub fn DraftsPage() -> impl IntoView {
                     publish_action
                         .value()
                         .get()
-                        .map(|result: Result<PublishResult, WebError>| match result {
+                        .map(|result: Result<SavedPost, WebError>| match result {
                             Ok(published) => {
                                 view! {
                                     <p class="success">

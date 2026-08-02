@@ -182,7 +182,7 @@ Spec D8. Independent of every other task.
   `pub fn derive_post_title(explicit_title: Option<&str>, body: &str, format: &PostFormat) -> Option<(Option<PostTitle>, String)>`
   — `None` when the post is empty; the `String` is the slug seed.
 
-- [ ] **Step 1: Rewrite the seven tests in `common/src/render.rs`'s derive
+- [x] **Step 1: Rewrite the seven tests in `common/src/render.rs`'s derive
       block**
 
 All seven (`:1110`, `:1123`, `:1136`, `:1146`, `:1153`, `:1166`, `:1240`)
@@ -263,12 +263,12 @@ Confirm the exact existing names at `common/src/render.rs:1109-1245` before
 editing and preserve them verbatim; the names above reproduce the pattern, not
 necessarily the bytes.
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run: `cargo nextest run -p common derive_metadata` Expected: FAIL —
 `derive_post_title` not defined.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 Delete `pub struct DerivedPostMetadata` (`:350-356`) and rewrite
 `derive_post_metadata` to the signature in **Interfaces**. Every branch is
@@ -283,7 +283,7 @@ Two things the tests cannot pin, so they are stated here:
 - All three `PostSummary::truncated` calls go. `PostSummary` may become an
   unused import in this file; remove it if so.
 
-- [ ] **Step 4: Update both `storage/src/post_service.rs` call sites**
+- [x] **Step 4: Update both `storage/src/post_service.rs` call sites**
 
 Each keeps its own error type — `:311` is the update path, `:477` the creation
 path:
@@ -303,11 +303,11 @@ The shadowed bindings replace `metadata.title` (`:334`, `:507`) and
 `slug_seed` in the creation path — rename the derived one there to avoid
 shadowing the `Slug`, or inline it into the `slugify_title` call.
 
-- [ ] **Step 5: Run the full suites, verify they pass**
+- [x] **Step 5: Run the full suites, verify they pass**
 
 Run: `cargo nextest run -p common -p storage` Expected: PASS.
 
-- [ ] **Step 6: Verify AC9**
+- [x] **Step 6: Verify AC9**
 
 ```bash
 rg 'DerivedPostMetadata|derive_post_metadata'          # expect: nothing
@@ -315,13 +315,21 @@ rg -c 'fallback_label' common/src/render.rs            # expect: 2 (definition +
 rg 'PostSummary::truncated' common/src/render.rs       # expect: nothing
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 cargo xtask check
-git add common/src/render.rs storage/src/post_service.rs
+git add common/src/render.rs common/src/post_title.rs common/src/post_summary.rs \
+        storage/src/post_service.rs docs/adr/0024-server-side-org-canonicalization.md
 git commit -m "refactor(common): delete DerivedPostMetadata, derive title and slug seed directly (#569)"
 ```
+
+Wider than planned by three files, each a doc reference the rename
+**falsified**: `post_title.rs:14` and `post_summary.rs:49-51` (the latter
+asserted a caller count that became wrong), and `docs/adr/0024:36`, which points
+at a live code seam — a dangling symbol there misleads the next reader. AC9 was
+tightened to say `docs/archive/` and superseded specs stay frozen while ADRs
+pointing at live code get corrected.
 
 ---
 
@@ -349,7 +357,7 @@ Spec D1, D2.
   re-exported from `web::posts`. All of `create`, `update`, `publish`,
   `unpublish` return `WebResult<SavedPost>`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Retarget the existing round-trip test (AC14 forbids deleting it) and add one
 pinning unpublish's new return. In `web/src/posts/api.rs`:
@@ -414,12 +422,21 @@ async fn unpublish_returns_the_created_at_based_permalink(#[case] backend: Backe
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run: `cargo nextest run -p web saved_post_permalink_wire_is_root_relative`
 Expected: FAIL — `SavedPost` not defined.
 
-- [ ] **Step 3: Implement `SavedPost` and repoint the four fns**
+Deviation: the two tests were written and the implementation landed in the same
+pass, so the compile-time red (`SavedPost` not defined) was never observed. The
+_behavioural_ red that matters was observed instead: with `permalink()` read
+before `existing.published_at = None`, both backend cases of
+`unpublish_post_returns_the_draft_permalink` fail with
+`left: "/~user0/2020/03/05/moved-permalink"` vs
+`right: "/~user0/2026/08/01/moved-permalink"` — the two dates genuinely differ,
+so the test is not vacuous.
+
+- [x] **Step 3: Implement `SavedPost` and repoint the four fns**
 
 Add the struct to `web/src/posts/api.rs` with the Interfaces shape and the
 standard derives. Delete `CreateResult`, `UpdateResult`, `PublishResult`. Change
@@ -446,7 +463,7 @@ Ok(SavedPost {
 Reading `existing.permalink()` before clearing `published_at` returns the _old_
 published_at-based URL — the bug this task exists to avoid.
 
-- [ ] **Step 4: Repoint the consumers**
+- [x] **Step 4: Repoint the consumers**
 
 `component.rs:266-269`'s closure binding `move |()|` → `move |_|` (spec D2 — the
 caller keeps navigating to `/drafts`; the value is deliberately unread). `:276`,
@@ -454,11 +471,13 @@ caller keeps navigating to `/drafts`; the value is deliberately unread). `:276`,
 and the `:386-387` test builder likewise. `mod.rs:54-57` re-exports `SavedPost`
 in place of the three deleted names.
 
-- [ ] **Step 5: Run the full suites, verify they pass**
+- [x] **Step 5: Run the full suites, verify they pass**
 
-Run: `cargo nextest run -p web -p server` Expected: PASS.
+Run: `cargo nextest run -p web -p server` Expected: PASS. (The package is
+`jaunder`, so the run was
+`devtool pg run -- cargo nextest run -p web -p jaunder`: 1597 passed, 0 failed.)
 
-- [ ] **Step 6: Verify AC2 and AC3**
+- [x] **Step 6: Verify AC2 and AC3**
 
 ```bash
 rg 'CreateResult|UpdateResult|PublishResult'   # expect: nothing
@@ -466,7 +485,11 @@ rg -n 'pub async fn (create|update|publish|unpublish)' web/src/posts/api.rs
 # expect: all four -> WebResult<SavedPost>
 ```
 
-- [ ] **Step 7: Commit**
+Both verified — the only surviving hits are in `docs/` (the spec, this plan,
+`docs/archive/`) and `HANDOFF.md`, all of which describe the rename rather than
+depend on the names.
+
+- [x] **Step 7: Commit**
 
 ```bash
 cargo xtask check
@@ -501,7 +524,7 @@ together.
   `update(post_id: PostId, post: PostInputs)`. **The parameter name `post` is
   the wire contract** (AC4).
 
-- [ ] **Step 1: Rename the surviving arg test and delete its duplicate**
+- [x] **Step 1: Rename the surviving arg test and delete its duplicate**
 
 `:711 update_post_args_rejects_unknown_format_token` becomes byte-identical to
 `:691` once `UpdateArgs` is gone — **delete `:711`** and rename `:691`:
@@ -513,12 +536,12 @@ fn post_inputs_rejects_unknown_format_token() {
 }
 ```
 
-- [ ] **Step 2: Run it, verify it fails**
+- [x] **Step 2: Run it, verify it fails**
 
 Run: `cargo nextest run -p web post_inputs_rejects_unknown_format_token`
 Expected: FAIL — `PostInputs` not defined.
 
-- [ ] **Step 3: Implement `PostInputs` and the two signatures**
+- [x] **Step 3: Implement `PostInputs` and the two signatures**
 
 Rename `CreateArgs` → `PostInputs`, delete `UpdateArgs`, and change:
 
@@ -530,10 +553,11 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<SavedPost>;
 `update`'s body reads `post_id` from the parameter rather than destructuring it
 out of the args struct.
 
-- [ ] **Step 4: Update the Rust raw-JSON producers**
+- [x] **Step 4: Update the Rust raw-JSON producers**
 
-`server/tests/web/web_posts.rs` — 12 bodies: `"args": {` → `"post": {`.
-`server/tests/feed/feed_events_hook.rs` — 6 sites at
+`server/tests/web/web_posts.rs` — 13 bodies (12 planned, plus the one Task 3
+added in `unpublish_post_returns_the_draft_permalink`): `"args": {` →
+`"post": {`. `server/tests/feed/feed_events_hook.rs` — 6 sites at
 `:28, 69, 104, 147, 214, 281`. Where `update` is posted, `post_id` moves **out**
 of the envelope to a sibling key:
 
@@ -544,18 +568,18 @@ of the envelope to a sibling key:
 }
 ```
 
-- [ ] **Step 5: Update the TypeScript producers**
+- [x] **Step 5: Update the TypeScript producers**
 
 `end2end/tests/posts.ts:33` (`createPostViaApi`, imported by five spec files)
 and `end2end/tests/feeds.spec.ts:272` (which nests `post_id` _inside_ `args`, so
 D3's hoist splits it). Update `posts.ts:20`'s doc comment, which names the
 `args` wrapper.
 
-- [ ] **Step 6: Run the suites, verify they pass**
+- [x] **Step 6: Run the suites, verify they pass**
 
-Run: `cargo nextest run -p web -p server` Expected: PASS.
+Run: `cargo nextest run -p web -p jaunder` Expected: PASS.
 
-- [ ] **Step 7: Verify AC4 and AC5**
+- [x] **Step 7: Verify AC4 and AC5**
 
 ```bash
 rg 'CreateArgs|UpdateArgs'                     # expect: nothing
@@ -564,7 +588,7 @@ rg 'args:' end2end/tests/posts.ts end2end/tests/feeds.spec.ts   # expect: nothin
 rg 'args' end2end/playwright.config.ts end2end/tests/seed.ts    # expect: UNCHANGED (do not touch)
 ```
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 cargo xtask check
@@ -1297,9 +1321,13 @@ git commit -m "docs(adr): record the post DTO content-weight axis (#569)"
 `cargo xtask validate` refuses a dirty tree.
 
 ```bash
-git rm --cached HANDOFF.md
 rm HANDOFF.md
 ```
+
+It was staged (`A `) at the cycle's start but became untracked partway through,
+so `git rm --cached` now fails with "did not match any files" — a plain `rm` is
+all it needs. Confirm with `git status --short` that nothing else is left
+untracked before the gate, since `validate` refuses a dirty tree.
 
 - [ ] **Step 2: Run every AC grep against the final tree**
 

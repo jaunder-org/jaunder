@@ -11,7 +11,7 @@ use macros::StrNewtype;
 /// wire values are trimmed identically to in-process construction.
 ///
 /// Collapsing an empty-after-trim title to `None` is the caller's job (the field is
-/// `Option<PostTitle>` and `derive_post_metadata` decides presence), not this type's.
+/// `Option<PostTitle>` and `derive_post_title` decides presence), not this type's.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, StrNewtype)]
 #[str_newtype(infallible)]
 pub struct PostTitle(String);

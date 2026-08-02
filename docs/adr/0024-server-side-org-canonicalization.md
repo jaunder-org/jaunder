@@ -33,10 +33,11 @@ elements _and_ embedded header lines) where it can diverge?
 them. Neither side may corrupt the other.** Concretely:
 
 **1. The server normalizes every ingested Org body to one canonical,
-metadata-free form** at the existing `extract_org_title`/`derive_post_metadata`
-seam — by _keeping_ the stripped body it currently discards. Only headers the
-server stores structurally are stripped (today `#+TITLE:`). **Unrecognized
-`#+FOO:` header lines stay in the body verbatim** and round-trip. No
+metadata-free form** at the existing `extract_org_title`/`derive_post_title`
+seam (named `derive_post_metadata` when this ADR was written; renamed in #569) —
+by _keeping_ the stripped body it currently discards. Only headers the server
+stores structurally are stripped (today `#+TITLE:`). **Unrecognized `#+FOO:`
+header lines stay in the body verbatim** and round-trip. No
 `#+KEYWORDS:`/`#+DESCRIPTION:` parsing is added — those arrive structurally on
 both paths (web form fields; Atom elements from Emacs).
 
