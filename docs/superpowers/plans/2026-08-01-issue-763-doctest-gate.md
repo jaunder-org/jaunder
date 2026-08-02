@@ -1912,7 +1912,7 @@ git commit -m "test(macros): prove the secret surface omits Borrow<str> (#763)"
 - Produces: `checks.<system>.doctests` and `checks.<system>.doctests-gate` (Task
   14).
 
-- [ ] **Step 1: Add the producer derivation**
+- [x] **Step 1: Add the producer derivation**
 
 Mirror `coverage` (`flake.nix:1115-1199`) but far lighter — no PostgreSQL, no
 llvm-cov, no CSR bundle. Keep the `LD_LIBRARY_PATH` export: the `common` doctest
@@ -1946,7 +1946,7 @@ doctests = craneLib.mkCargoDerivation (
 );
 ```
 
-- [ ] **Step 2: Add the gate consumer**
+- [x] **Step 2: Add the gate consumer**
 
 Mirror `coverage-gate` (`flake.nix:1205-1220`):
 
@@ -1969,7 +1969,7 @@ doctests-gate =
     '';
 ```
 
-- [ ] **Step 3: Correct the stale comment at `flake.nix:315-318`**
+- [x] **Step 3: Correct the stale comment at `flake.nix:315-318`**
 
 It reads "Tests are covered by the separate `nextest` check". There is no
 `nextest` check; the suite runs inside `coverage`. Reword to name `coverage`,
@@ -1977,17 +1977,31 @@ and note that doctests are covered by the new `doctests` check — nextest
 structurally cannot run them, which is why they need their own. (Authorized by
 this plan, not the spec.)
 
-- [ ] **Step 4: Verify both derivations build**
+- [x] **Step 4: Verify both derivations build**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate -- nix build -L --accept-flake-config .#checks.x86_64-linux.doctests-gate`
-Expected: exit 0. (Long/cold — use Bash background mode.)
+Expected: exit 0. (Long/cold — use Bash background mode.) **Actual: exit 0.**
 
 Then break one proof (make a `compile_fail` compile), rebuild, and confirm the
 gate fails with that fence named on stderr in `file:line [kind] detail` form.
-Revert.
+Revert. **Actual:**
 
-- [ ] **Step 5: Commit**
+```
+doctest gate failed: category=violations
+common/src/token.rs:93 [failed] the runner reported this doctest as FAILED. recovery: read the run log for the compiler output.
+```
+
+**The first attempt at breaking it did not break it, which is itself
+informative.** Changing `raw == hash` to `raw == raw` left the gate green —
+because `RawToken` derives no `PartialEq` at all (the bearer-token profile omits
+it deliberately), so that line also fails to compile. The proof still
+discriminates for the claim it makes: a `PartialEq<TokenHash> for RawToken` impl
+would make `raw == hash` compile without needing `PartialEq<Self>`. Breaking it
+required a line that genuinely compiles (`let _ = 1;`). `git diff` confirms the
+file is byte-identical to its committed state afterwards.
+
+- [x] **Step 5: Commit**
 
 ```bash
 git add flake.nix
