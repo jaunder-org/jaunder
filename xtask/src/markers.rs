@@ -10,8 +10,19 @@
 //! not — but *where a comment legally begins* must have one answer, tested once.
 //!
 //! That question is not trivial, which is why it is here rather than open-coded twice:
-//! a `//` inside a string, a char literal, a raw string, or a doc comment is **not** a
-//! comment, and reading one as a marker would exempt a site nobody exempted.
+//! a `//` inside a string, a char literal, a raw string, a `/* … */` block, or a doc
+//! comment is **not** a comment, and reading one as a marker would exempt a site
+//! nobody exempted.
+//!
+//! **Two entry points, because a line is not always enough context.**
+//! [`line_comment`] judges one line in isolation, which is right for the coverage
+//! gate: its input is an `llvm-cov` report where each row is one line of text and
+//! there is no file to carry state through. [`line_comments`] walks a whole source
+//! file and carries lexical state across lines, which is what a gate policing
+//! **source** must use — the interior of a multi-line string, of a multi-line raw
+//! string, or of a block comment all look like ordinary lines one at a time, and
+//! their `//` looks like a comment. Both forms fail closed at their own boundary,
+//! but only the file-aware one has the whole boundary in view.
 
 /// True iff `marker` is the first whitespace-delimited token of `comment` (the text
 /// after `//`, as returned by [`line_comment`]). Anchoring marker recognition to the
@@ -80,18 +91,145 @@ pub fn line_comment(src: &str) -> Option<&str> {
     None
 }
 
-/// The reason text of a `token` marker on `line`, or `None` when the line carries
-/// no such marker. `Some("")` means the marker is present but **bare** — a
-/// distinction each gate prices for itself: coverage accepts a bare `cov:ignore`,
-/// the XSS gates fail one.
-pub fn marker_on_line<'a>(line: &'a str, token: &str) -> Option<&'a str> {
-    let comment = line_comment(line)?;
+/// The reason text of a `token` marker in `comment` (the text after `//`), or
+/// `None` when that comment carries no such marker. `Some("")` means the marker is
+/// present but **bare** — a distinction each gate prices for itself: coverage
+/// accepts a bare `cov:ignore`, the XSS gates fail one.
+pub fn marker_in_comment<'a>(comment: &'a str, token: &str) -> Option<&'a str> {
     if !comment_marker_is(comment, token) {
         return None;
     }
     // `comment_marker_is` just proved the first token matches, so this slice is in
     // bounds and lands exactly past the token.
     Some(comment.trim_start()[token.len()..].trim())
+}
+
+/// The reason text of a `token` marker on `line`, judging `line` **in isolation**.
+///
+/// Correct only where lines genuinely are independent — the coverage gate's
+/// `llvm-cov` report, where each row is one line of text and there is no file to
+/// carry state through. **Do not use this to police source files:** a line that is
+/// the interior of a multi-line string literal, or sits inside a `/* … */` block,
+/// looks like an ordinary line here and its `//` looks like a comment. Use
+/// [`line_comments`], which walks the whole file.
+pub fn marker_on_line<'a>(line: &'a str, token: &str) -> Option<&'a str> {
+    marker_in_comment(line_comment(line)?, token)
+}
+
+/// The real trailing line comment of **every line** in `source`, indexed by
+/// `line - 1`, walking the file once so that lexical state carries across lines.
+///
+/// This is the form a source-policing gate must use. [`line_comment`] answers the
+/// same question for one line in isolation, and a line is not enough context: a
+/// `//` that opens the interior of a multi-line string, a multi-line raw string, or
+/// a `/* … */` block is not a comment, and reading it as one hands out an exemption
+/// nobody wrote (#778). Rust block comments **nest**, so depth is tracked rather
+/// than matched.
+///
+/// A doc comment (`///`, `//!`) yields `None` for its line: it documents behavior
+/// and can never carry an exemption, so a marker quoted in prose stays inert.
+/// **One entry per line, by construction.** The vector is built by mapping over
+/// `source.lines()`, carrying lexer state between them, rather than by pushing an
+/// entry whenever the scanner meets a `\n`. That distinction is load-bearing: with
+/// the pushing form, any path that consumes a newline without pushing (a
+/// `\`-continued string, a char-literal jump) silently drops an entry and skews
+/// **every line number after it** — which, in a gate that maps markers to sites by
+/// line, mis-attributes exemptions rather than failing.
+pub fn line_comments(source: &str) -> Vec<Option<&str>> {
+    let mut state = Lex::Code;
+    source
+        .lines()
+        .map(|line| {
+            let (comment, next) = scan_line(line, state);
+            state = next;
+            comment
+        })
+        .collect()
+}
+
+/// Scan one line (which contains no `\n`) from `state`, returning its real trailing
+/// comment and the state the next line starts in.
+fn scan_line(line: &str, state: Lex) -> (Option<&str>, Lex) {
+    let bytes = line.as_bytes();
+    let mut state = state;
+    let mut i = 0;
+    while i < bytes.len() {
+        match state {
+            Lex::Code => match bytes[i] {
+                b'/' if bytes.get(i + 1) == Some(&b'/') => {
+                    // A real line comment runs to end of line. `///` and `//!` are
+                    // documentation and can carry no marker.
+                    let doc = matches!(bytes.get(i + 2), Some(&b'/') | Some(&b'!'));
+                    return (if doc { None } else { Some(&line[i + 2..]) }, Lex::Code);
+                }
+                b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                    state = Lex::Block(1);
+                    i += 2;
+                }
+                b'"' => {
+                    state = Lex::Str;
+                    i += 1;
+                }
+                b'r' => match raw_string_hashes(bytes, i) {
+                    Some(hashes) => {
+                        state = Lex::Raw(hashes);
+                        i += 1 + hashes + 1;
+                    }
+                    None => i += 1,
+                },
+                // A `'` that does not open a well-formed char literal is a lifetime
+                // tick; stepping one byte leaves the rest of the line readable.
+                b'\'' => i += char_literal_len(&bytes[i..]).unwrap_or(1),
+                _ => i += 1,
+            },
+            Lex::Str => match bytes[i] {
+                // A trailing `\` continues the string onto the next line; `i += 2`
+                // then simply runs off the end, which is the correct reading.
+                b'\\' => i += 2,
+                b'"' => {
+                    state = Lex::Code;
+                    i += 1;
+                }
+                _ => i += 1,
+            },
+            Lex::Raw(hashes) => {
+                if bytes[i] == b'"' && (0..hashes).all(|k| bytes.get(i + 1 + k) == Some(&b'#')) {
+                    state = Lex::Code;
+                    i += 1 + hashes;
+                } else {
+                    i += 1;
+                }
+            }
+            Lex::Block(depth) => {
+                if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'*') {
+                    state = Lex::Block(depth + 1);
+                    i += 2;
+                } else if bytes[i] == b'*' && bytes.get(i + 1) == Some(&b'/') {
+                    state = if depth == 1 {
+                        Lex::Code
+                    } else {
+                        Lex::Block(depth - 1)
+                    };
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+    }
+    (None, state)
+}
+
+/// Lexical state carried across lines by [`line_comments`].
+#[derive(Clone, Copy)]
+enum Lex {
+    Code,
+    /// Inside a `"…"` string literal.
+    Str,
+    /// Inside a raw string literal, carrying its hash count.
+    Raw(usize),
+    /// Inside a `/* … */` block comment, carrying nesting depth.
+    Block(usize),
 }
 
 /// Whether a raw-string literal opens at `i`, and with how many `#`s. `None` when
@@ -167,7 +305,7 @@ fn char_literal_len(bytes: &[u8]) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{comment_marker_is, line_comment, marker_on_line};
+    use super::{comment_marker_is, line_comment, line_comments, marker_on_line};
 
     #[test]
     fn line_comment_ignores_markers_inside_strings_and_finds_real_comments() {
@@ -308,5 +446,101 @@ mod tests {
     #[test]
     fn marker_on_line_finds_nothing_on_an_uncommented_line() {
         assert_eq!(marker_on_line("code()", "html-sink:allow"), None);
+    }
+
+    // ---- `line_comments`: the file-aware form. Each of these is a line that reads
+    // as a comment in isolation and is not one in context — the false-PASS class a
+    // per-line scan cannot see.
+
+    /// **The invariant every line number depends on.** `line_comments` must return
+    /// exactly one entry per source line: the gate maps markers to sites by line, so
+    /// a dropped entry does not fail — it shifts every later line and starts
+    /// attributing exemptions to the wrong code. An earlier draft pushed one entry
+    /// per `\n` the scanner happened to meet and lost three on `common/src/media.rs`.
+    #[test]
+    fn line_comments_returns_exactly_one_entry_per_line() {
+        for src in [
+            "",
+            "a();\n",
+            "a();",
+            "a(); // c\nb();\n",
+            "let s = \"a\nb\";\nc();\n",
+            "let s = r#\"a\nb\n\"#;\nc();\n",
+            "/*\n*\n*/\nc();\n",
+            "let s = \"tail \\\ncontinued\";\nc();\n",
+            "let c = 'x'; let d = '\\''; fn f<'a>() {}\nc();\n",
+            "/// doc with a \" quote and an apostrophe's tick\nfn f() {}\n",
+        ] {
+            assert_eq!(
+                line_comments(src).len(),
+                src.lines().count(),
+                "entry count must track line count for {src:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_line_inside_a_multi_line_string_is_not_a_comment() {
+        let src = "let s = \"a\n// html-sink:allow x\";\ncode();\n";
+        assert_eq!(line_comments(src), vec![None, None, None]);
+    }
+
+    #[test]
+    fn a_line_inside_a_multi_line_raw_string_is_not_a_comment() {
+        let src = "let s = r#\"a\n// html-sink:allow x\n\"#;\ncode();\n";
+        assert_eq!(line_comments(src), vec![None, None, None, None]);
+    }
+
+    #[test]
+    fn a_marker_inside_a_block_comment_is_not_a_trailing_comment() {
+        assert_eq!(line_comments("/* // html-sink:allow x */\n"), vec![None]);
+    }
+
+    #[test]
+    fn a_marker_inside_a_multi_line_block_comment_is_inert() {
+        let src = "/*\n// html-sink:allow x\n*/\ncode();\n";
+        assert_eq!(line_comments(src), vec![None, None, None, None]);
+    }
+
+    /// Rust block comments nest, so a naive first-`*/` scan would leave the block
+    /// early and start reading its tail as code.
+    #[test]
+    fn nested_block_comments_are_tracked_by_depth() {
+        let src = "/* outer /* inner */ // still inside\n*/\ncode(); // real\n";
+        let got = line_comments(src);
+        assert_eq!(got[0], None, "still inside the outer block");
+        assert_eq!(got[2], Some(" real"));
+    }
+
+    #[test]
+    fn a_real_comment_after_a_closed_multi_line_string_is_found() {
+        let src = "let s = \"a\nb\"; // html-sink:allow real\ncode();\n";
+        assert_eq!(line_comments(src)[1], Some(" html-sink:allow real"));
+    }
+
+    #[test]
+    fn line_comments_indexes_by_line_and_keeps_doc_comments_inert() {
+        let src = "a(); // one\n/// two\nb(); // three\n";
+        assert_eq!(line_comments(src), vec![Some(" one"), None, Some(" three")]);
+    }
+
+    #[test]
+    fn line_comments_agrees_with_line_comment_on_independent_lines() {
+        // Where there is no cross-line state, the two forms must not disagree —
+        // otherwise the coverage gate and the XSS gates would read markers
+        // differently.
+        for line in [
+            "boom() // cov:ignore",
+            "let s = \"// cov:ignore\";",
+            "fn f<'a>() {} // cov:ignore",
+            "/// cov:ignore",
+            "plain()",
+        ] {
+            assert_eq!(
+                line_comments(line).first().copied().flatten(),
+                line_comment(line),
+                "disagreement on {line:?}"
+            );
+        }
     }
 }

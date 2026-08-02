@@ -1210,20 +1210,25 @@ each gate's module doc states that a marker is trusted, not verified."
 
 **Files:** none.
 
-- [ ] **Step 1: Run the full local gate**
+- [x] **Step 1: Run the full local gate** — PASSED, 39 steps green (30s, cached
+      Nix), including `clean-tree`, all three converted gates, `xtask-tests`, and
+      `coverage — 23950 executable lines, 0 failures, 0 guard violations, 0 CRAP
+      over threshold`.
 
 Run (Bash background mode — long and cold):
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-778-allowlist-multiplicity -- cargo xtask validate --no-e2e`
 Expected: PASS (AC31).
 
-- [ ] **Step 2: Confirm the marker census matches the spec**
+- [x] **Step 2: Confirm the marker census matches the spec** — twelve exactly
+      (`posts` 3, `media` 3, `render` 2, `feed_path` 1, `html` 1, `sidebar` 1,
+      `home` 1).
 
 Run:
 `rg -c 'html-sink:allow|raw-html-door:allow|rendered-html-from-trusted:allow' common/src web/src`
 Expected: twelve total. A different count is a finding to investigate, not a
 number to adjust.
 
-- [ ] **Step 3: Hand off to jaunder-ship**
+- [x] **Step 3: Hand off to jaunder-ship**
 
 The ADR draft at `docs/adr/drafts/gate-exemptions-in-source-markers.md` is
 gitignored and is numbered, moved, status-rewritten and staged by

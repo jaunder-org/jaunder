@@ -49,6 +49,16 @@
 //! 5. A marked site is exempt regardless of what value flows *into* it. Narrowing
 //!    the exemption from a function to a line shrinks that window (class 3 above
 //!    is why it cannot be closed) but does not shut it.
+//! 6. The test-code exemption is decided by a **substring**, not by parsing the
+//!    `cfg` predicate: [`is_test_cfg`] asks whether the attribute's tokens mention
+//!    `test` and not `not`. So `#[cfg(feature = "test-utils")]` reads as test code
+//!    and its members are dropped from the population entirely — no marker owed,
+//!    no census row. Nothing under the policed roots currently matches *and*
+//!    encloses a gate ident, so there is no live hole; it is recorded because it
+//!    is structurally the pattern-decided exemption #778 removed on the qualifier
+//!    side (ADR-0085 principle 3), and because the marker work made it
+//!    load-bearing in a second place (`test_ranges`, which suppresses orphan
+//!    reports). Parsing the predicate would close it.
 //!
 //! A `syn` parse failure is a **hard error** everywhere (ADR-0085 principle 6): a
 //! file we cannot walk could hide a member, and a gate that quietly shrinks its own
@@ -212,10 +222,13 @@ pub fn scan<P: Population>(source: &str, population: &P) -> Result<Scan, String>
 /// not an exemption at all: the site sees nothing above it, and the marker itself
 /// points at a line with no site, so it fails twice over.
 pub fn classify(source: &str, found: &Scan, token: &str) -> Classified {
-    let lines: Vec<&str> = source.lines().collect();
+    // File-aware, deliberately: a per-line read would treat the interior of a
+    // multi-line string or of a `/* … */` block as ordinary code and hand its `//`
+    // the force of a marker — an exemption nobody wrote, on a security gate.
+    let comments = crate::markers::line_comments(source);
     // 1-based line → the marker's reason, for every line carrying this gate's token.
     let marker_at = |line: usize| -> Option<&str> {
-        crate::markers::marker_on_line(lines.get(line.checked_sub(1)?)?, token)
+        crate::markers::marker_in_comment((*comments.get(line.checked_sub(1)?)?)?, token)
     };
 
     let mut sites_on_line: HashMap<usize, usize> = HashMap::new();
@@ -249,7 +262,7 @@ pub fn classify(source: &str, found: &Scan, token: &str) -> Classified {
 
     // An orphan is a marker whose very next line holds no site. Test regions are
     // exempt wholesale, so a marker inside one is never an orphan.
-    for line in 1..=lines.len() {
+    for line in 1..=comments.len() {
         if marker_at(line).is_some()
             && !sites_on_line.contains_key(&(line + 1))
             && !found.in_test_code(line)
@@ -705,6 +718,30 @@ mod marker_tests {
     #[test]
     fn a_marker_inside_a_string_literal_exempts_nothing() {
         let c = classified("fn b() { let s = \"// guard:allow x\"; }\nfn a() { GUARDED; }\n");
+        assert_eq!(c.unexempt.len(), 1);
+        assert!(c.orphans.is_empty());
+    }
+
+    /// The false-PASS a per-line scan allows: the marker text is the interior of a
+    /// multi-line string, so it is not a comment and exempts nothing.
+    #[test]
+    fn a_marker_inside_a_multi_line_string_exempts_nothing() {
+        let src = "fn b() { let s = \"a\n// guard:allow x\"; }\nfn a() { GUARDED; }\n";
+        let c = classified(src);
+        assert_eq!(c.unexempt.len(), 1, "the site must stay unexempt");
+        assert!(c.orphans.is_empty());
+    }
+
+    #[test]
+    fn a_marker_inside_a_multi_line_raw_string_exempts_nothing() {
+        let src = "fn b() { let s = r#\"a\n// guard:allow x\n\"#; }\nfn a() { GUARDED; }\n";
+        assert_eq!(classified(src).unexempt.len(), 1);
+    }
+
+    #[test]
+    fn a_marker_inside_a_block_comment_exempts_nothing() {
+        let src = "/* // guard:allow x */\nfn a() { GUARDED; }\n";
+        let c = classified(src);
         assert_eq!(c.unexempt.len(), 1);
         assert!(c.orphans.is_empty());
     }
