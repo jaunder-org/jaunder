@@ -20,6 +20,7 @@ use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
 use common::session_label::SessionLabel;
 use common::slug::Slug;
+use common::stored_password_hash::StoredPasswordHash;
 use common::tag::{Tag, TagLabel};
 use common::token::TokenHash;
 use common::username::Username;
@@ -370,31 +371,43 @@ const DUMMY_PASSWORD_HASH_FALLBACK: &str =
 /// outcomes take the same time. It is computed once with the same default
 /// Argon2 parameters as real password hashes (`Password::hash`), so the dummy
 /// verification costs the same as a genuine one.
-pub(crate) fn dummy_password_hash() -> &'static str {
+pub(crate) fn dummy_password_hash() -> &'static StoredPasswordHash {
     use common::password::Password;
     use std::str::FromStr;
     use std::sync::OnceLock;
 
-    static HASH: OnceLock<String> = OnceLock::new();
+    static HASH: OnceLock<StoredPasswordHash> = OnceLock::new();
     HASH.get_or_init(|| {
         Password::from_str(DUMMY_PASSWORD)
             .ok()
             .and_then(|p| p.hash().ok())
-            .unwrap_or_else(|| DUMMY_PASSWORD_HASH_FALLBACK.to_string())
+            .and_then(|h| StoredPasswordHash::from_str(&h).ok())
+            // cov:ignore-start — the fallback is reached only if Argon2 hashing of
+            // DUMMY_PASSWORD fails, which no test can induce without breaking password
+            // hashing globally. It exists so initialization stays infallible (no
+            // unwrap/expect in production); the constant is known-good, so the parse
+            // inside cannot fail either.
+            .unwrap_or_else(|| {
+                StoredPasswordHash::from_str(DUMMY_PASSWORD_HASH_FALLBACK)
+                    .unwrap_or_else(|_| unreachable!("the fallback hash is non-empty"))
+            })
+        // cov:ignore-stop
     })
 }
 
 #[tracing::instrument(name = "crypto.password.verify", skip(password, hash))]
 pub(crate) async fn verify_password(
     password: common::password::Password,
-    hash: String,
+    hash: StoredPasswordHash,
 ) -> io::Result<bool> {
     #[cfg(test)]
     if password.as_ref() == "force-verify-error-for-test-coverage" {
         return Err(io::Error::other("forced verify error"));
     }
 
-    tokio::task::spawn_blocking(move || password.verify(&hash))
+    // `as_ref` is the only door out of the secret surface; argon2 owns the verdict on
+    // whether the stored string is a hash it can parse.
+    tokio::task::spawn_blocking(move || password.verify(hash.as_ref()))
         .await
         .map_err(io::Error::other)?
         .map_err(io::Error::other)
@@ -508,7 +521,11 @@ mod tests {
     #[tokio::test]
     async fn test_hash_and_verify_password() {
         let password: common::password::Password = parse_password("password123");
-        let hash = hash_password(password.clone()).await.unwrap();
+        let hash: StoredPasswordHash = hash_password(password.clone())
+            .await
+            .unwrap()
+            .parse()
+            .expect("a fresh hash is non-empty");
 
         assert!(verify_password(password.clone(), hash.clone())
             .await
@@ -521,7 +538,10 @@ mod tests {
     // guard:no-backend — password hashing/verification; no database
     #[tokio::test]
     async fn test_verify_password_rejects_invalid_hash() {
-        let err = verify_password(parse_password("password123"), "not-a-hash".to_string())
+        // `StoredPasswordHash` accepts this — its invariant is only non-emptiness, so
+        // argon2 remains the single arbiter of whether a stored string is a usable hash.
+        let malformed: StoredPasswordHash = "not-a-hash".parse().expect("non-empty");
+        let err = verify_password(parse_password("password123"), malformed)
             .await
             .unwrap_err();
 
@@ -744,7 +764,7 @@ mod tests {
         // verification does real work and returns Ok(false) for a non-matching
         // password — not a fast Err that would reintroduce a timing oracle.
         let wrong = parse_password("definitely-not-the-dummy");
-        let result = verify_password(wrong, dummy_password_hash().to_string())
+        let result = verify_password(wrong, dummy_password_hash().clone())
             .await
             .expect("dummy hash must be well-formed");
         assert!(!result, "a non-matching password must verify to false");
@@ -760,7 +780,7 @@ mod tests {
             .expect("hashing succeeds");
         // PHC format: $argon2id$v=19$<params>$<salt>$<hash>
         let params = |h: &str| h.split('$').nth(3).map(str::to_owned);
-        assert_eq!(params(dummy_password_hash()), params(&real));
+        assert_eq!(params(dummy_password_hash().as_ref()), params(&real));
     }
 
     #[test]

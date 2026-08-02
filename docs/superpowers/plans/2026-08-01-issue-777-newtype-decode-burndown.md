@@ -382,7 +382,7 @@ via clap's `FromStr` (`cli.rs:35-36`).
 
 ### Task 11 — `PasswordHash`
 
-- [ ] **Files:** create `common/src/password_hash.rs`; register in
+- [x] **Files:** create `common/src/stored_password_hash.rs`; register in
       `common/src/lib.rs`.
 
 Unlike `PgRolePassword` this **is** a stored secret, so it takes the sqlx bridge
@@ -396,21 +396,21 @@ pub struct PasswordHash(String);
 
 with a hand-written `FromStr` rejecting empty and its own error type.
 
-- [ ] **Test:** accepts non-empty; rejects empty; `Debug` is redacted; `as_ref`
+- [x] **Test:** accepts non-empty; rejects empty; `Debug` is redacted; `as_ref`
       round-trips.
-- [ ] **Run:** `cargo nextest run -p common password_hash`.
+- [x] **Run:** `cargo nextest run -p common stored_password_hash`.
 
 ### Task 12 — type `authenticate`'s row, delete the entry
 
-- [ ] **Files:** `storage/src/users.rs`,
+- [x] **Files:** `storage/src/users.rs`,
       `xtask/src/steps/sqlx_newtype_decode_check.rs`.
 
 `users.rs::authenticate`'s `query_as` tuple element 6 (`password_hash`) becomes
 `PasswordHash`, decoding through the bridge. Delete the `DeferredNewtype` entry
 at `:735-745` whose reason names #693.
 
-- [ ] **Run:** `cargo nextest run -p storage users`, then `cargo xtask check`.
-- [ ] **Gate + commit:**
+- [x] **Run:** `cargo nextest run -p storage users`, then `cargo xtask check`.
+- [x] **Gate + commit:**
       `feat(users): decode password_hash into a secret newtype (#693)`.
 
 ---
@@ -458,7 +458,7 @@ permitted prose change under `xtask/`.**
       increased, and no change to `target_index`, the rule 1/2/3 precedence,
       `POLICED_ROOT`, `BRIDGE_DERIVES`, `BRIDGE_ATTRIBUTES`, or
       `APPROVED_FOREIGN`.
-- [ ] **Run:** `cargo xtask validate --no-e2e` — green, allowlist at **56**.
+- [ ] **Run:** `cargo xtask validate --no-e2e` — green, allowlist at **57**.
 - [ ] **Gate + commit:**
       `refactor(storage): name the UserRecord parts and drop the tuple-alias over-bite (#777)`.
 

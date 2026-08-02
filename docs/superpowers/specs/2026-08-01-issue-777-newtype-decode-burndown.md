@@ -273,21 +273,43 @@ issue closed **and the entry deleted**, or the issue explicitly re-scoped with
 the reason recorded. So #693 cannot close while this stands, and the earlier
 drafts of this spec missed it entirely.
 
-- **A5.1** `PasswordHash` — a `#[str_newtype(secret, sqlx)]` type in `common/`.
-  Unlike `PgRolePassword` this **is** a stored secret, so it takes the sqlx
-  bridge, exactly like `SmtpPassword` (`common/src/smtp_password.rs:23-25`) —
-  the `users` row then decodes `password_hash` straight into it.
+- **A5.1** `StoredPasswordHash` — a `#[str_newtype(secret, sqlx)]` type in
+  `common/`. Named for the _stored string_, because `argon2::PasswordHash`
+  already means the parsed PHC structure. Unlike `PgRolePassword` this **is** a
+  stored secret, so it takes the sqlx bridge, exactly like `SmtpPassword` — the
+  `users` row then decodes `password_hash` straight into it.
+
+  Its invariant is **only non-emptiness**. Validating the PHC format here would
+  fork the definition of "a hash we can verify against" between this type and
+  argon2's parser; a malformed hash still fails, at `verify_password`, and
+  surfaces as the same `UserAuthError::Internal` as today
+  (`authenticate_with_corrupted_hash_returns_internal_error` pins this).
+
 - **A5.2** `users.rs::authenticate`'s `query_as` tuple element 6 becomes
-  `PasswordHash`, and the allowlist entry at `:735-745` is **deleted**.
+  `StoredPasswordHash` — in the query _and_ in the generic `impl`'s
+  where-clause, which spells the same tuple and must mirror it.
+
+  **The entry is replaced, not deleted.** Typing `password_hash` discharges the
+  `deferred-newtype` residue, but the decode still has two unapproved leaves —
+  `email_verified` and `is_operator`, both `bool`. Those are legitimately
+  primitive: `helpers.rs` already carries `flag-or-counter` entries for the
+  identical flags, and #777 explicitly forbids newtyping them. So the site keeps
+  an entry, under the rationale that was always true of its bool leaves and was
+  merely subsumed by the deferred one.
+
+  This is **not** the category-widening the Non-goals forbid: the new category
+  is applied verbatim from the existing sibling entries for the same two
+  columns, and the deferred obligation is genuinely discharged rather than
+  relabelled.
 
 This is a scope increase over #693 as written, adopted because the allowlist
 entry names #693 as its owner and #777's acceptance makes closing #693
-conditional on discharging it. The alternative — re-pointing the reason at a
-successor issue — would edit a surviving entry's `reason`, which the Non-goals
-forbid.
+conditional on discharging it.
 
-**Acceptance:** the allowlist drops 59 → **56** (this entry plus B1's two).
-`authenticate`'s decode target contains no bare `String`.
+**Acceptance:** `authenticate`'s decode target contains no bare `String`; the
+surviving entry for it names only the two `bool` flags, and no
+`deferred-newtype` entry names #693. The allowlist count is unchanged by A5 (the
+entry is replaced), and reaches **57** after B1's two deletions.
 
 ---
 
@@ -343,9 +365,10 @@ tuple-alias over-bite currently has no instance. This is the only permitted
 
 **Acceptance:** the two `helpers.rs` `UserRecordParts.7`/`.8` entries (`:719`,
 `:730`) are **deleted** — the gate's unmatched-entry check in `problems()`
-(`:1515`, test at `:2203`) fails until they are. Combined with A5.2's deletion
-the allowlist reaches **56**. `UserRow`'s two `FlagOrCounter` entries
-(`:706-714`) are **unchanged**. `cargo xtask validate --no-e2e` is green.
+(`:1515`, test at `:2203`) fails until they are. The allowlist reaches **57**
+(A5.2 replaces an entry rather than removing one, so these two deletions are the
+only count change). `UserRow`'s two `FlagOrCounter` entries (`:706-714`) are
+**unchanged**. `cargo xtask validate --no-e2e` is green.
 
 ---
 
@@ -357,10 +380,19 @@ tick.
 
 **Mechanically checkable:**
 
-- No surviving allowlist entry has its `category`, `count`, or `reason` edited.
-  The only entry changes are **three deletions**: A5.2's
-  `users.rs::authenticate` entry and B1's two `UserRecordParts` entries. 59
-  → 56.
+- No allowlist entry **untouched by this work** has its `category`, `count`, or
+  `reason` edited. The entry changes are exactly: **two deletions** (B1's
+  `UserRecordParts` pair) and **one replacement** (A5.2's
+  `users.rs::authenticate`). 59 → **57**.
+
+  The replacement needs stating plainly, because "recategorise instead of fix"
+  is precisely the cheat this section polices. It is legitimate here only
+  because the deferred obligation was genuinely discharged — `password_hash` is
+  a typed `StoredPasswordHash` now — and the new category is copied verbatim
+  from the existing `flag-or-counter` entries for the very same two `bool`
+  columns. Had the hash stayed a `String`, relabelling would have been the
+  cheat.
+
 - No change to `target_index`, the rule 1/2/3 precedence, `POLICED_ROOT`,
   `BRIDGE_DERIVES`, `BRIDGE_ATTRIBUTES`, or `APPROVED_FOREIGN`.
 - No entry `count` field is increased.

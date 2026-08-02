@@ -735,13 +735,14 @@ const ALLOWLIST: &[Allowed] = &[
     Allowed {
         file: "users.rs",
         function: "authenticate",
-        target: "(UserId,Username,Option<DisplayName>,Option<Bio>,DateTime<Utc>,Option<DateTime<Utc>>,String,Option<Email>,bool,bool,)",
+        target: "(UserId,Username,Option<DisplayName>,Option<Bio>,DateTime<Utc>,Option<DateTime<Utc>>,StoredPasswordHash,Option<Email>,bool,bool,)",
         count: 1,
         what: "\"SELECTuser_id,username,display_name,bio,created_at,last_authenticated_at,password_hash,email,email_verified,is_operatorFROMusersWHEREusername=$1\"",
-        category: Category::DeferredNewtype,
-        reason: "the password_hash column decodes as String; every other element is typed. \
-                 Hashes are a secret-bearing value that wants its own newtype — deferred to \
-                 #693, which owns the secret-newtype vertical",
+        category: Category::FlagOrCounter,
+        reason: "email_verified and is_operator — the same two-state flags the helpers.rs \
+                 entries describe, and the only unapproved leaves left here. The \
+                 password_hash element was this entry's deferred-newtype residue (#693) and \
+                 is now StoredPasswordHash, decoding through its bridge",
     },
     // ---- config values: #687 owns the key half, nothing owns the value half ----
     Allowed {

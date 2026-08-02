@@ -12,6 +12,7 @@ use common::display_name::DisplayName;
 use common::email::Email;
 use common::ids::UserId;
 use common::password::Password;
+use common::stored_password_hash::StoredPasswordHash;
 use common::username::Username;
 
 use crate::helpers::{user_record_from_row, UserRow};
@@ -219,7 +220,7 @@ where
         Option<Bio>,
         DateTime<Utc>,
         Option<DateTime<Utc>>,
-        String,
+        StoredPasswordHash,
         Option<Email>,
         bool,
         bool,
@@ -314,7 +315,7 @@ where
                 Option<Bio>,
                 DateTime<Utc>,
                 Option<DateTime<Utc>>,
-                String,
+                StoredPasswordHash,
                 Option<Email>,
                 bool,
                 bool,
@@ -351,7 +352,7 @@ where
             // before rejecting. The result is intentionally discarded.
             let _ = crate::helpers::verify_password(
                 password.clone(),
-                crate::helpers::dummy_password_hash().to_string(),
+                crate::helpers::dummy_password_hash().clone(),
             )
             .await;
             return Err(UserAuthError::InvalidCredentials);
