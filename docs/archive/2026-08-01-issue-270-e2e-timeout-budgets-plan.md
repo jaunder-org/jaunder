@@ -5,7 +5,7 @@
 > use checkbox (`- [ ]`) syntax for tracking.
 
 **Spec:**
-[`2026-08-01-issue-270-e2e-timeout-budgets.md`](../specs/2026-08-01-issue-270-e2e-timeout-budgets.md)
+[`2026-08-01-issue-270-e2e-timeout-budgets-spec.md`](2026-08-01-issue-270-e2e-timeout-budgets-spec.md)
 — criteria referenced as A1–A10. Issue: #270.
 
 **Goal:** Delete the 18 `setTestBudget` sites that protect nothing, and make the
@@ -302,7 +302,7 @@ rg -n -A4 'setTestBudget\(' /home/mdorman/src/jaunder/.claude/worktrees/issue-27
 Confirm by inspection: `:179` → 3 × 2 × 25 000 + 30 000 = **180 000**; `:245` →
 2 × 40 000 + 2 000 + 8 000 = **90 000**.
 
-- [ ] **Step 4: Gate**
+- [x] **Step 4: Gate**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-270-e2e-timeout-budgets -- cargo xtask check
@@ -329,7 +329,7 @@ git commit -m "test(e2e): derive the two surviving budgets from their deadlines 
   `docs/observability.md:434`, `docs/adr/0012-environment-aware-timeouts.md:30`,
   `flake.nix:792-794` and `:960-963`
 
-- [ ] **Step 1: `fixtures.ts` — the budget docstrings and the workers=1 caveat**
+- [x] **Step 1: `fixtures.ts` — the budget docstrings and the workers=1 caveat**
 
 Update **three** places so none instructs the reader to reach for
 `setTestBudget` by default — say instead that the ambient budget covers every
@@ -355,8 +355,8 @@ Add to the `DEFAULT_TEST_BUDGET_MS` docstring (A10):
  *  run with JAUNDER_E2E_WORKERS=2 or re-add a deliberate budget.
 ```
 
-- [ ] **Step 2: `helpers.ts:23-27` — rewrite, preserving the `test.slow()`
-      rule**
+- [x] **Step 2: `helpers.ts:23-27` — rewrite, preserving the `test.slow()`
+      rule** → confirmed verbatim at `helpers.ts:28-29`.
 
 The block currently tells the reader to call `setTestBudget(ms)` for a larger
 budget. Rewrite so it describes the ambient budget as sufficient, and a test
@@ -364,7 +364,7 @@ needing more as a signal to measure first. **The final clause — "Do not combin
 with `test.slow()` — the scaled budget already covers Firefox" — must survive
 verbatim** (Global Constraints).
 
-- [ ] **Step 3: The three out-of-tree docs**
+- [x] **Step 3: The three out-of-tree docs**
 
 `CONTRIBUTING.md:285-289`, `docs/observability.md:434` and
 `docs/adr/0012-environment-aware-timeouts.md:30` each teach
@@ -374,7 +374,7 @@ describe the ambient budget, keeping their surrounding content intact. ADR-0012
 is an accepted ADR: amend the sentence factually, do not restructure it (same
 treatment ADR-0028 got in #229).
 
-- [ ] **Step 4: `flake.nix` — the stale workers=4 commentary**
+- [x] **Step 4: `flake.nix` — the stale workers=4 commentary**
 
 `:792-794` ("the #155 workers=4 flip sets 4") and `:960-963` ("overriding the
 workers=4 gate default") describe a gate default that `:930` already contradicts
@@ -383,7 +383,7 @@ configured: warm combos run at the config default of 2, cold packages at 1.
 **Comments only — no Nix behaviour changes** (A6: `workerContentionScale` keeps
 all four rungs).
 
-- [ ] **Step 5: Verify no doc still teaches the removed workflow**
+- [x] **Step 5: Verify no doc still teaches the removed workflow**
 
 The out-of-tree docs teach **`slowBrowserTimeoutMs`** as the whole-test-budget
 idiom, not `setTestBudget` — so probe for that, or the check is vacuous (it
@@ -398,7 +398,8 @@ Expected: each surviving mention describes it as the
 to set a whole-test budget. This is a read, not a count — confirm by inspecting
 the three edited regions.
 
-- [ ] **Step 6: Confirm the untouched invariants (A5, A6)**
+- [x] **Step 6: Confirm the untouched invariants (A5, A6)** → diff touches comments
+      only; no constant or scaler line changed; all four ladder rungs intact.
 
 ```bash
 git -C /home/mdorman/src/jaunder/.claude/worktrees/issue-270-e2e-timeout-budgets diff wt-base-issue-270...HEAD -- end2end/tests/fixtures.ts
@@ -410,7 +411,7 @@ Expected: the diff touches only comments/docstrings.
 `workerContentionScale` must be **absent from the diff** — that turns A5/A6's
 "unchanged" from an assertion into an observation.
 
-- [ ] **Step 7: Gate**
+- [x] **Step 7: Gate**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-270-e2e-timeout-budgets -- cargo xtask check
@@ -419,7 +420,7 @@ devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-270-e2e-time
 Expected: PASS. `doc-links` and `adr-format` run inside it, so an ADR edit that
 breaks either fails here.
 
-- [ ] **Step 8: Commit** (only after Step 7 is green)
+- [x] **Step 8: Commit** (only after Step 7 is green) → `502bc4ed`.
 
 ```bash
 git add end2end/tests/fixtures.ts end2end/tests/helpers.ts CONTRIBUTING.md \
@@ -437,7 +438,26 @@ breaks either fails there.
 **Files:** none — verification only. No commit unless a combo reveals a
 regression.
 
-- [ ] **Step 1: Run each combo and check it before starting the next**
+> **Verification moved to CI (decided mid-execution).** The first local attempt —
+> `sqlite/firefox`, run alone — died on the 1020 s Playwright cap having completed only
+> **66 of 121** tests, against 547 s for the full combo earlier the same day. Host load
+> average was **45** (another session's `rustc`/`clippy`/`cc1plus` build, ~3×
+> oversubscribing the box).
+>
+> The single failure was `password_reset.spec.ts:13` — **not one of the 18** — with
+> `Test timeout of 66000ms exceeded while setting up "verifiedUser"`, i.e. the *ambient*
+> budget this cycle did not change, blown during fixture setup. Meanwhile 8 of the 18
+> deleted-budget tests **passed** in that same run, including all three `atompub` sites
+> and all five `audiences` ones (the four 120 s budgets among them).
+>
+> So the local box cannot produce trustworthy timing evidence right now, and CI is
+> strictly the better instrument: one combo per runner, no contention — the same source
+> the spec's measurements came from. Steps 1–3 below are therefore executed against CI
+> artifacts after the PR opens, not locally.
+
+- [ ] **Step 1: Run each combo and check it before starting the next** — superseded;
+      CI's four matrix jobs are the run. Download each
+      `e2e-diagnostics-<backend>-<browser>` artifact from the PR's CI run.
 
 `.xtask/last-result.json` is **single-slot** — `xtask/src/result.rs:121`
 recreates it on every run — so the flaky count for a combo is destroyed by the
