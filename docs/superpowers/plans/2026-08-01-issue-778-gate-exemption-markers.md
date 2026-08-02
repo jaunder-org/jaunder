@@ -312,7 +312,7 @@ and inherited by cov:ignore."
 **Interfaces:** Produces twelve marker comments that Tasks 5–6 rely on being
 present and on their sites' lines.
 
-- [ ] **Step 1: Add the twelve markers**
+- [x] **Step 1: Add the twelve markers**
 
 Each goes as a **standalone comment line directly above** the line carrying the
 matched ident — never trailing it (measured: trailing relocates for 7 of the 12;
@@ -357,7 +357,7 @@ Run:
 Expected: twelve hits, each on a comment-only line whose **next** line carries
 the matched ident (`from_trusted`, `inner_html`, `PreEscaped`).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit** — `86da72ed`
 
 ```bash
 git add common/src/render.rs common/src/media.rs common/src/feed/feed_path.rs web/src/home/component.rs web/src/sidebar/component.rs web/src/posts/component.rs web/src/html.rs
@@ -419,7 +419,7 @@ pub fn classify(source: &str, found: &Scan, token: &str) -> Classified;
 Purely additive — `mentions`, `Allowed` and the old allowlist path stay until
 Tasks 5–6, so every existing test keeps passing.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```rust
 #[cfg(test)]
@@ -607,7 +607,8 @@ test. Orphans are every 1-based source line where `marker_on_line` returns
 Note the census records the **site's** line, not the marker's — that is the line
 a reader needs and the line the failure messages already print.
 
-- [ ] **Step 4: Run, verify pass**
+- [x] **Step 4: Run, verify pass** — 23/23 `ident_gate` tests (18 new marker
+      tests + the 5 pre-existing).
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-778-allowlist-multiplicity -- cargo nextest run --manifest-path xtask/Cargo.toml`
