@@ -267,7 +267,10 @@ impl Backend {
                     .unwrap();
                 // Record the per-test DB URL so raw-SQL helpers reuse this exact
                 // database rather than minting a fresh (empty) template clone.
-                std::fs::write(dir.path().join(PG_URL_FILE), url.to_string())
+                // `expose_url`, not `to_string`: this URL is read back by
+                // `recorded_postgres_url` and reconnected with, so it must keep any
+                // password. `Display` redacts.
+                std::fs::write(dir.path().join(PG_URL_FILE), url.expose_url())
                     .expect("write recorded Postgres URL");
                 (state, TestBase::postgres(dir, guard, pool))
             }

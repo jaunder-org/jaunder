@@ -149,7 +149,8 @@ async fn open_pool(base: &TempDir) -> SqlitePool {
 
 async fn open_pg_pool() -> (PgPool, PostgresDbGuard) {
     let (url, guard) = template_postgres_url().await;
-    let pool = PgPool::connect(&url.to_string()).await.unwrap();
+    // `expose_url`, not `to_string`: we are connecting, so the password must survive.
+    let pool = PgPool::connect(&url.expose_url()).await.unwrap();
     (pool, guard)
 }
 

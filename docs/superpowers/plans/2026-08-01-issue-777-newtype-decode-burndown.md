@@ -291,7 +291,7 @@ Fix every site (this list is the grep, not recall):
 
 ### Task 7 — `expose_url()` + switch all three consumers **(prerequisite for task 10)**
 
-- [ ] **Files:** `storage/src/db.rs`, `storage/src/test_support.rs`,
+- [x] **Files:** `storage/src/db.rs`, `storage/src/test_support.rs`,
       `storage/src/postgres/teardown.rs`, `server/tests/storage/mod.rs`.
 
 ```rust
@@ -307,25 +307,25 @@ impl DbConnectOptions {
 Switch every consumer that needs a connectable/persistable URL — the spec's A3.4
 table:
 
-- [ ] `storage/src/test_support.rs:270` —
+- [x] `storage/src/test_support.rs:270` —
       `fs::write(PG_URL_FILE, url.to_string())`; read back by `backup.rs:617`
       via `from_str` → connect.
-- [ ] `server/tests/storage/mod.rs:152` — `PgPool::connect(&url.to_string())`, a
+- [x] `server/tests/storage/mod.rs:152` — `PgPool::connect(&url.to_string())`, a
       second direct `Display`→connect path.
-- [ ] `storage/src/postgres/teardown.rs:68` —
+- [x] `storage/src/postgres/teardown.rs:68` —
       `db_name_from_url(&options.to_string())`; switch for consistency (the db
       name sits after the credential, so it would survive either way).
-- [ ] **Test:** round-trip a **password-bearing** `DbConnectOptions` through
+- [x] **Test:** round-trip a **password-bearing** `DbConnectOptions` through
       `expose_url()` → `from_str`, asserting the password survives. This is the
       regression guard for the round-trip two drafts of the spec missed.
-- [ ] **Verify the enumeration:**
+- [x] **Verify the enumeration:**
       `rg '\.to_string\(\)' storage/src server/tests/storage/` shows no
       remaining `DbConnectOptions` receiver used to connect or persist.
-- [ ] **Run:** `cargo nextest run -p storage db test_support`.
+- [x] **Run:** `cargo nextest run -p storage db test_support`.
 
 ### Task 8 — redacting `Debug`
 
-- [ ] **Files:** `storage/src/db.rs` — remove `Debug` from the derive at `:25`;
+- [x] **Files:** `storage/src/db.rs` — remove `Debug` from the derive at `:25`;
       hand-write it.
 
 Both arms carry the password when the URL did (`db.rs:54` parses `options` from
@@ -349,31 +349,31 @@ impl fmt::Debug for DbConnectOptions {
 }
 ```
 
-- [ ] **Test:** `{:?}` of a password-bearing value contains neither the password
+- [x] **Test:** `{:?}` of a password-bearing value contains neither the password
       nor `:hunter2@`, and still names the host and database (so the redaction
       stays useful for diagnosis).
 
 ### Task 9 — `FromStr` error names the scheme
 
-- [ ] **Files:** `storage/src/db.rs:57-61`.
+- [x] **Files:** `storage/src/db.rs:57-61`.
 
 Replace `format!("unsupported database URL '{s}'; …")` with a message naming
 only the offending **scheme**. This is the live leak:
 `JAUNDER_DB=postgre://user:secret@host/db` prints the credential to stderr today
 via clap's `FromStr` (`cli.rs:35-36`).
 
-- [ ] **Test:** parsing `postgre://u:hunter2@h/db` yields an error containing
+- [x] **Test:** parsing `postgre://u:hunter2@h/db` yields an error containing
       neither `hunter2` nor `u:hunter2`, and containing `postgre`.
 
 ### Task 10 — redacting `Display` **(after task 7)**
 
-- [ ] **Files:** `storage/src/db.rs:40`. Redact the **password component only**.
-- [ ] **Test:** `{}` of a password-bearing value contains neither the password
+- [x] **Files:** `storage/src/db.rs:40`. Redact the **password component only**.
+- [x] **Test:** `{}` of a password-bearing value contains neither the password
       nor `:hunter2@`.
-- [ ] **Verify unmodified:** the 5 `cli.rs` `to_string()` tests
+- [x] **Verify unmodified:** the 5 `cli.rs` `to_string()` tests
       (`:478,488,499,513,525`) pass **without edits**, as do task 6's rewritten
       URL assertions. If any needs editing, the redaction is too broad.
-- [ ] **Gate + commit:** `cargo xtask check`, then
+- [x] **Gate + commit:** `cargo xtask check`, then
       `fix(db): stop rendering the database password in errors, Debug and Display (#693)`.
 
 ---
