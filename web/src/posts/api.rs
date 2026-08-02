@@ -97,7 +97,7 @@ pub struct SavedPost {
 /// Nesting rather than collapsing the two types is deliberate: nothing converts
 /// between them, and a flat union would put `title`, `summary_label`, and
 /// `edit_url` on every mutation response, where nothing reads them. See
-/// `docs/adr/drafts/post-dto-content-weight-axis.md` (rule 3) before re-filing
+/// `docs/adr/0097-post-dto-content-weight-axis.md` (rule 3) before re-filing
 /// the field overlap as duplication.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UnpublishedPost {

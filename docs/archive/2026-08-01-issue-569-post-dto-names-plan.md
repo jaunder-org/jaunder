@@ -1365,7 +1365,7 @@ Spec D9. Uses **`jaunder-adr`** (numberless draft in `docs/adr/drafts/`;
 
 **Files:**
 
-- Create: `docs/adr/drafts/post-dto-content-weight-axis.md`
+- Create: `docs/adr/0097-post-dto-content-weight-axis.md`
 
 **Interfaces:**
 

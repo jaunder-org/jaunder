@@ -98,7 +98,7 @@ pub struct TimelinePage {
 ///
 /// A shared core plus an extension rather than a union with [`RenderedPost`]:
 /// merging the two would ship a `PostBody` on every timeline row that never
-/// reads one. See `docs/adr/drafts/post-dto-content-weight-axis.md` (rule 2).
+/// reads one. See `docs/adr/0097-post-dto-content-weight-axis.md` (rule 2).
 ///
 /// Nested rather than `#[serde(flatten)]`: flatten buffers the whole map through
 /// serde's `Content` and re-drives any `deserialize_with` — and `post` carries
