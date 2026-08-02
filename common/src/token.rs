@@ -53,24 +53,49 @@ pub fn validate_shape(s: &str) -> Result<(), InvalidTokenShape> {
 /// only path between them, there is no reverse conversion, and no cross-type
 /// `PartialEq` — so each of these does **not** compile, which is why
 /// `revoke_session(raw_token)` and `raw == stored_hash` cannot typecheck either:
-/// ```compile_fail
-/// let _ = common::token::RawToken("abc".to_string()); // private field
+/// The positive companion shows the identical fixture compiles — both paths resolve
+/// and `FromStr` is in scope for both types — so each `compile_fail` below fails for
+/// the missing conversion rather than for a moved path. (Fixture lines are hidden
+/// with `#`.)
+///
 /// ```
-/// ```compile_fail
+/// use common::token::{RawToken, TokenHash};
 /// use std::str::FromStr;
-/// let raw = common::token::RawToken::from_str("abc").unwrap();
-/// let _h: common::token::TokenHash = raw.into(); // no RawToken -> TokenHash conversion
+/// let raw = RawToken::from_str("abc").unwrap();
+/// let hash = TokenHash::from_str("abc").unwrap();
+/// let _read: &str = raw.as_ref();
 /// ```
+///
+/// No public constructor:
 /// ```compile_fail
-/// use std::str::FromStr;
-/// let hash = common::token::TokenHash::from_str("abc").unwrap();
-/// let _r: common::token::RawToken = hash.into(); // no reverse conversion
+/// # use common::token::{RawToken, TokenHash};
+/// # use std::str::FromStr;
+/// let _ = RawToken("abc".to_string()); // private field
 /// ```
+///
+/// No `RawToken` -> `TokenHash` conversion:
 /// ```compile_fail
-/// use std::str::FromStr;
-/// let raw = common::token::RawToken::from_str("abc").unwrap();
-/// let hash = common::token::TokenHash::from_str("abc").unwrap();
-/// let _ = raw == hash; // no cross-type PartialEq
+/// # use common::token::{RawToken, TokenHash};
+/// # use std::str::FromStr;
+/// # let raw = RawToken::from_str("abc").unwrap();
+/// let _h: TokenHash = raw.into();
+/// ```
+///
+/// No reverse conversion:
+/// ```compile_fail
+/// # use common::token::{RawToken, TokenHash};
+/// # use std::str::FromStr;
+/// # let hash = TokenHash::from_str("abc").unwrap();
+/// let _r: RawToken = hash.into();
+/// ```
+///
+/// No cross-type `PartialEq`:
+/// ```compile_fail
+/// # use common::token::{RawToken, TokenHash};
+/// # use std::str::FromStr;
+/// # let raw = RawToken::from_str("abc").unwrap();
+/// # let hash = TokenHash::from_str("abc").unwrap();
+/// let _ = raw == hash;
 /// ```
 // `no_sqlx`: a `RawToken` must be hashed to a `TokenHash` before it touches the DB,
 // so it deliberately gets no `sqlx::Encode` — `.bind(raw_token)` is a compile error

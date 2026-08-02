@@ -1305,7 +1305,7 @@ git commit -m "test(doctests): fixture crates pinning rustdoc collection behavio
 - Consumes: the gate from Task 5.
 - Produces: zero `ignore` fences — a precondition for Tasks 14–15.
 
-- [ ] **Step 1: Convert the four illustration-only fences to `text`**
+- [x] **Step 1: Convert the four illustration-only fences to `text`**
 
 Change ` ```ignore ` to ` ```text ` at:
 
@@ -1325,7 +1325,7 @@ Change ` ```ignore ` to ` ```text ` at:
 Add one sentence above each explaining why it is an illustration, so the marker
 carries its reason at the site (D4).
 
-- [ ] **Step 2: Promote the `text_enum` fence to a real doctest**
+- [x] **Step 2: Promote the `text_enum` fence to a real doctest**
 
 `macros/src/lib.rs:353` becomes a plain fence with concrete variants, `sqlx`
 dropped from the attribute (the `sqlx = []` feature carries no deps, so the
@@ -1334,12 +1334,13 @@ call sites add `sqlx`. `macros`' dev-dependencies already carry `serde`,
 `serde_json`, and `strum` with `derive` for exactly this
 (`macros/Cargo.toml:28-36`).
 
-- [ ] **Step 3: Verify the three roots the producer can see**
+- [x] **Step 3: Verify the three roots the producer can see**
 
 Run the Task 5 command. Expected: zero `banned-attribute` and zero `not-run`;
-only `missing-companion` remain (26 of them).
+only `missing-companion` remain (26 of them). **Actual: exactly that** — 32
+`missing-companion` records over the same 26 fences, nothing else.
 
-- [ ] **Step 4: Verify the two `xtask` fences separately**
+- [x] **Step 4: Verify the two `xtask` fences separately**
 
 The producer does not scan `xtask/` (that is Task 15). Until then, check
 directly:
@@ -1348,11 +1349,16 @@ Run:
 `rg -n '```ignore' /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate/xtask /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate/tools || true`
 Expected: no matches.
 
+Expected: no matches. **Actual: only two hits, both inside test string literals
+in `check.rs`** — the tests asserting `ignore` is banned. No real fences.
+
 Also run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate -- cargo test --workspace --doc`
 Expected: PASS, `macros` now reports **0 ignored** and one more passing test.
+**Actual: `macros` 18 passed, 0 ignored** (was 17 + 2 ignored); `common`
+unchanged at 21.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add xtask/src/steps/proffered_filename_check.rs macros/src/lib.rs web/src/reactive/scope.rs
@@ -1374,7 +1380,7 @@ git commit -m "docs(doctests): retire every ignore fence — text, or a real exa
 - Consumes: the gate from Task 5.
 - Produces: 3 doc comments with matched hidden preludes; no API change.
 
-- [ ] **Step 1: Pin the fixture values before writing anything**
+- [x] **Step 1: Pin the fixture values before writing anything**
 
 Companions **execute**, unlike the `compile_fail` blocks they are derived from,
 so every constructor call must succeed or the doctest run fails on a panic. Read
@@ -1394,7 +1400,7 @@ each type's validator and pick a literal it accepts:
 
 Run each candidate through `cargo test --workspace --doc` before moving on.
 
-- [ ] **Step 2: Restructure each doc comment to the macros pattern**
+- [x] **Step 2: Restructure each doc comment to the macros pattern**
 
 For each: add one plain companion fence, then rewrite every `compile_fail` in
 the same doc comment so its prelude is `#`-hidden and every hidden line also
@@ -1469,16 +1475,23 @@ separates:
 
 with both negatives hiding that prelude.
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate -- cargo test --workspace --doc`
 Expected: PASS — `common` gains 3 tests; every `compile_fail` still passes.
+**Actual: `common` 21 → 24 passed, 0 failed.**
 
 Run the Task 5 command. Expected: no `missing-companion` for `token.rs`,
-`etag.rs`, `post_body.rs`.
+`etag.rs`, `post_body.rs`. **Actual: all three clean; 26 fences → 18.**
 
-- [ ] **Step 4: Commit**
+**Fixture values differed from the plan's sketch**, which is why Step 1 exists:
+`PostBody` and `RenderedHtml` both take `&str` at their doors (`From<&str>` via
+`str_newtype(infallible)`, and `from_trusted(impl Into<String>)`), so the plan's
+`.to_string()` calls were unnecessary. `ETag::from_str` does require the
+double-quoted form, as predicted.
+
+- [x] **Step 4: Commit**
 
 ```bash
 git add common/src/token.rs common/src/etag.rs common/src/post_body.rs

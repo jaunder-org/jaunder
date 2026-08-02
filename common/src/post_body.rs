@@ -11,14 +11,38 @@ use macros::StrNewtype;
 /// single (pure-wrap) construction door, through which the derived `Deserialize` also
 /// routes, so a `PostBody` serializes as a plain string.
 ///
-/// A `PostBody` is not a `RenderedHtml`, and neither converts to the other:
-/// ```compile_fail
-/// fn want_html(_: common::render::RenderedHtml) {}
-/// want_html(common::post_body::PostBody::from("x"));
+/// A `PostBody` is not a `RenderedHtml`, and neither converts to the other.
+///
+/// The positive companion shows the identical fixture compiles — both paths resolve
+/// and both construction doors accept a `&str` — so each `compile_fail` below fails
+/// for the type mismatch rather than because a door changed shape. (Fixture lines
+/// are hidden with `#`.)
+///
 /// ```
+/// use common::post_body::PostBody;
+/// use common::render::RenderedHtml;
+/// let body = PostBody::from("x");
+/// let html = RenderedHtml::from_trusted("x");
+/// let _b: &str = body.as_ref();
+/// let _h: &str = html.as_ref();
+/// ```
+///
+/// A `PostBody` is not a `RenderedHtml`:
 /// ```compile_fail
-/// fn want_body(_: common::post_body::PostBody) {}
-/// want_body(common::render::RenderedHtml::from_trusted("x"));
+/// # use common::post_body::PostBody;
+/// # use common::render::RenderedHtml;
+/// # let body = PostBody::from("x");
+/// fn want_html(_: RenderedHtml) {}
+/// want_html(body);
+/// ```
+///
+/// …nor the reverse:
+/// ```compile_fail
+/// # use common::post_body::PostBody;
+/// # use common::render::RenderedHtml;
+/// # let html = RenderedHtml::from_trusted("x");
+/// fn want_body(_: PostBody) {}
+/// want_body(html);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash, StrNewtype)]
 #[str_newtype(infallible)]
