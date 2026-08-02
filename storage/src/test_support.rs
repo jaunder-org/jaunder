@@ -995,7 +995,7 @@ impl SeedRawPost {
         self
     }
 
-    /// Tags applied via `tag_post` right after the insert by `.seed`/`.create`. Ignored by
+    /// Tags applied via `set_post_tags` right after the insert by `.seed`/`.create`. Ignored by
     /// `.build` (which does not write) — guarded by a `debug_assert!`.
     #[must_use]
     pub fn tags<I, S>(mut self, tags: I) -> Self
@@ -1058,17 +1058,20 @@ impl SeedRawPost {
     ///
     /// # Panics
     ///
-    /// If applying a `.tags()` label via `tag_post` fails (tagging is happy-path setup).
+    /// If applying the `.tags()` labels via `set_post_tags` fails (tagging is happy-path setup).
     pub async fn create(mut self, state: &Arc<AppState>) -> Result<SeededPost, CreatePostError> {
         let tags = std::mem::take(&mut self.tags);
         let input = self.into_input();
         let post_id = state.posts.create_post(&input).await?;
-        for tag in &tags {
+        // The `is_empty` guard is safe only here: the post was just created, so
+        // clearing and no-op coincide. `set_post_tags(id, &[])` on an existing
+        // post means *clear* (#771 D11).
+        if !tags.is_empty() {
             state
                 .posts
-                .tag_post(post_id, tag)
+                .set_post_tags(post_id, &tags)
                 .await
-                .expect("seed tag_post should succeed");
+                .expect("seed set_post_tags should succeed");
         }
         Ok(SeededPost {
             post_id,

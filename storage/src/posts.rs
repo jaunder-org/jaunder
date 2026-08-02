@@ -367,19 +367,13 @@ pub enum TaggingError {
     /// The target post does not exist.
     #[error("post not found")]
     PostNotFound,
-    /// The specified tag does not exist.
-    #[error("tag not found")]
-    TagNotFound,
-    /// The post is already associated with this tag.
-    #[error("post is already tagged with this tag")]
-    AlreadyTagged,
     /// An unexpected database error occurred.
     #[error(transparent)]
     Internal(#[from] sqlx::Error),
 }
 
 impl From<TaggingError> for host::error::InternalError {
-    /// Preserves the current wire class of the `tag_post`/`untag_post` lift:
+    /// Preserves the current wire class of the `set_post_tags` lift:
     /// the former `web` sites used `InternalError::server_message(e.to_string())`
     /// (kind `Internal`, public `"server operation failed"`). Routing through
     /// `server` keeps that projection while carrying the typed `TaggingError`
@@ -684,12 +678,6 @@ pub trait PostStorage: Send + Sync {
         limit: RowLimit,
     ) -> sqlx::Result<Vec<PostRecord>>;
 
-    /// Associates a post with a tag. If the tag doesn't exist, it is created.
-    async fn tag_post(&self, post_id: PostId, tag: &TagLabel) -> Result<(), TaggingError>;
-
-    /// Removes a tag association from a post.
-    async fn untag_post(&self, post_id: PostId, tag_slug: &Tag) -> Result<(), TaggingError>;
-
     /// Makes the post's tags equal `desired`, in one transaction (#771, ADR-0092).
     ///
     /// The read, the diff and the writes all happen under a single write-lock
@@ -703,7 +691,7 @@ pub trait PostStorage: Send + Sync {
     /// # Errors
     ///
     /// [`TaggingError::PostNotFound`] if the post does not exist. Soft-deleted
-    /// posts are tagged normally, matching the previous per-tag behaviour.
+    /// posts are tagged normally.
     async fn set_post_tags(
         &self,
         post_id: PostId,
@@ -822,18 +810,19 @@ pub trait PostStorage: Send + Sync {
 /// Backend-specific divergence for [`PostStore`].
 ///
 /// Two consts capture SQL-fragment divergence shared by many methods:
-/// [`TAGS_SUBQUERY`][PostDialect::TAGS_SUBQUERY] (SQLite `json_group_array`
+/// [`TAGS_SUBQUERY`][PostDialect::TAGS_SUBQUERY] (`SQLite` `json_group_array`
 /// vs Postgres `json_agg`/`::text`) and
-/// [`PERMALINK_DATE_CLAUSE`][PostDialect::PERMALINK_DATE_CLAUSE] (SQLite
+/// [`PERMALINK_DATE_CLAUSE`][PostDialect::PERMALINK_DATE_CLAUSE] (`SQLite`
 /// `date(...)` vs Postgres `date(... AT TIME ZONE 'UTC') = $3::date`).
 ///
-/// The two transaction-bearing mutations [`update_post`][PostDialect::update_post]
-/// (Postgres locks the row with `FOR UPDATE`) and
-/// [`tag_post`][PostDialect::tag_post] (SQLite `INSERT OR IGNORE` vs Postgres
-/// `INSERT … ON CONFLICT DO NOTHING`) are monomorphised per backend, as is
-/// [`untag_post`][PostDialect::untag_post], whose `.rows_affected()` call has no
-/// generic form in sqlx 0.8. Everything else is shared on [`PostStore`].
-/// See ADR-0019.
+/// The two transaction-bearing mutations are monomorphised per backend:
+/// [`update_post`][PostDialect::update_post] (Postgres locks the row with
+/// `FOR UPDATE`) and [`set_post_tags`][PostDialect::set_post_tags], which
+/// diverges twice over — the transaction shape (`SQLite` drives a manual
+/// `BEGIN IMMEDIATE`, Postgres locks the post row with `FOR UPDATE`; ADR-0021)
+/// and the upsert dialect (`SQLite` `INSERT OR IGNORE` vs Postgres
+/// `INSERT … ON CONFLICT DO NOTHING`). Everything else is shared on
+/// [`PostStore`]. See ADR-0019.
 #[async_trait]
 pub trait PostDialect: Backend {
     /// Correlated JSON tag-aggregation subquery (on `p.post_id`) spelled in
@@ -871,22 +860,6 @@ pub trait PostDialect: Backend {
         editor_user_id: UserId,
         input: &UpdatePostInput,
     ) -> Result<PostRecord, UpdatePostError>;
-
-    /// Associate `post_id` with `tag` (its slug is the canonical key, its label
-    /// the stored casing), creating the tag if it does not yet exist.
-    async fn tag_post(
-        pool: &Pool<Self>,
-        post_id: PostId,
-        tag: &TagLabel,
-    ) -> Result<(), TaggingError>;
-
-    /// Remove a tag association; returns [`TaggingError::TagNotFound`] when no
-    /// row was deleted.
-    async fn untag_post(
-        pool: &Pool<Self>,
-        post_id: PostId,
-        tag_slug: &Tag,
-    ) -> Result<(), TaggingError>;
 
     /// Reconcile the post's tags to `desired` in one transaction. Monomorphised
     /// because the serialization differs: `SQLite` opens `BEGIN IMMEDIATE`,
@@ -926,8 +899,8 @@ pub(crate) const POSTS_REFERENCING_MEDIA_FROM_WHERE: &str = "\
 ///
 /// Every read and the non-transactional shared mutations live here, splicing
 /// [`PostDialect::TAGS_SUBQUERY`] / [`PostDialect::PERMALINK_DATE_CLAUSE`] into
-/// otherwise-identical SQL; the transaction-bearing and `rows_affected`
-/// mutations delegate to [`PostDialect`]. See ADR-0019.
+/// otherwise-identical SQL; the transaction-bearing mutations delegate to
+/// [`PostDialect`]. See ADR-0019.
 pub struct PostStore<DB: Database> {
     pool: Pool<DB>,
 }
@@ -1534,15 +1507,6 @@ where
     }
 
     #[tracing::instrument(
-        name = "storage.posts.tag",
-        skip(self),
-        fields(db.system = DB::DB_SYSTEM)
-    )]
-    async fn tag_post(&self, post_id: PostId, tag: &TagLabel) -> Result<(), TaggingError> {
-        DB::tag_post(&self.pool, post_id, tag).await
-    }
-
-    #[tracing::instrument(
         name = "storage.posts.set_post_tags",
         skip(self, desired),
         fields(db.system = DB::DB_SYSTEM, tag_count = desired.len())
@@ -1553,15 +1517,6 @@ where
         desired: &[TagLabel],
     ) -> Result<(), TaggingError> {
         DB::set_post_tags(&self.pool, post_id, desired).await
-    }
-
-    #[tracing::instrument(
-        name = "storage.posts.untag",
-        skip(self),
-        fields(db.system = DB::DB_SYSTEM)
-    )]
-    async fn untag_post(&self, post_id: PostId, tag_slug: &Tag) -> Result<(), TaggingError> {
-        DB::untag_post(&self.pool, post_id, tag_slug).await
     }
 
     /// The row tuple's first two positions are `post_id` and `tag_id` — adjacent
@@ -2956,30 +2911,14 @@ mod tests {
     }
 
     #[test]
-    fn tagging_error_display_tag_not_found() {
-        let err = TaggingError::TagNotFound;
-        assert_eq!(err.to_string(), "tag not found");
-    }
-
-    #[test]
-    fn tagging_error_display_already_tagged() {
-        let err = TaggingError::AlreadyTagged;
-        assert_eq!(err.to_string(), "post is already tagged with this tag");
-    }
-
-    #[test]
     fn tagging_error_debug() {
         let err = TaggingError::PostNotFound;
         let debug_str = format!("{err:?}");
         assert!(debug_str.contains("PostNotFound"));
 
-        let err2 = TaggingError::TagNotFound;
+        let err2 = TaggingError::Internal(sqlx::Error::RowNotFound);
         let debug_str2 = format!("{err2:?}");
-        assert!(debug_str2.contains("TagNotFound"));
-
-        let err3 = TaggingError::AlreadyTagged;
-        let debug_str3 = format!("{err3:?}");
-        assert!(debug_str3.contains("AlreadyTagged"));
+        assert!(debug_str2.contains("Internal"));
     }
 
     #[test]
@@ -3560,14 +3499,15 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn tag_post_insert_error_returns_internal(#[case] backend: Backend) {
+    async fn set_post_tags_insert_error_returns_internal(#[case] backend: Backend) {
         let env = backend.setup().await;
         let uid = SeedUser::new().seed(&env.state).await.user_id;
         let post_id = SeedRawPost::new(uid).draft().seed(&env.state).await.post_id;
 
-        // Break the post_tags INSERT (but not the existence check or tag insert) so it
-        // returns a non-unique Database error: exercises the catch-all Internal arm and
-        // the BEGIN IMMEDIATE rollback path on an unexpected failure.
+        // Break the post_tags statements inside the transaction (but not the
+        // post-existence check, which reads `posts`) so they return a plain
+        // Database error: exercises the catch-all Internal arm and the
+        // BEGIN IMMEDIATE / FOR UPDATE rollback path on an unexpected failure.
         env.base
             .pool()
             .execute("ALTER TABLE post_tags RENAME COLUMN tag_display TO tag_display_x")
@@ -3577,7 +3517,7 @@ mod tests {
         let result = env
             .state
             .posts
-            .tag_post(post_id, &parse_tag_label("rust"))
+            .set_post_tags(post_id, &[parse_tag_label("rust")])
             .await;
         assert!(matches!(result, Err(TaggingError::Internal(_))));
     }
@@ -3680,7 +3620,7 @@ mod tests {
         assert_eq!(internal.public_message(), "storage operation failed");
     }
 
-    // The `tag_post`/`untag_post` lift masked as a server error
+    // The `set_post_tags` lift masked as a server error
     // (`"server operation failed"`, kind `Internal`); the typed `TaggingError`
     // is now preserved on the operator side rather than stringified.
     #[test]
@@ -3791,7 +3731,7 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn tag_post_round_trips_slug_and_label(#[case] backend: Backend) {
+    async fn set_post_tags_round_trips_slug_and_label(#[case] backend: Backend) {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let posts = &*env.state.posts;
@@ -3804,7 +3744,7 @@ mod tests {
         // Tagging with a case-preserving label stores the canonical slug and the
         // author's casing; both read back intact on either backend.
         posts
-            .tag_post(post_id, &parse_tag_label("Rust"))
+            .set_post_tags(post_id, &[parse_tag_label("Rust")])
             .await
             .unwrap();
 
@@ -3825,7 +3765,7 @@ mod tests {
         let posts = &*env.state.posts;
 
         // `create_post` binds a typed `Slug`, `Option<&PostTitle>`, and `&PostBody`;
-        // `tag_post` binds a `TagLabel`. The read decodes the `slug`/`title`/`body`/
+        // `set_post_tags` binds a `TagLabel`. The read decodes the `slug`/`title`/`body`/
         // author-`username` columns and the JSON `tag_slug`/`tag_display` straight
         // back into their newtypes — exercising both bridge directions (#438).
         let body: PostBody = "the round-trip body".into();
@@ -3836,7 +3776,7 @@ mod tests {
             .await;
         let post_id = post.post_id;
         posts
-            .tag_post(post_id, &parse_tag_label("Rust"))
+            .set_post_tags(post_id, &[parse_tag_label("Rust")])
             .await
             .unwrap();
 

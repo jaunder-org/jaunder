@@ -620,7 +620,7 @@ async fn update_removes_categories_not_in_new_entry(#[case] backend: Backend) {
 
     state
         .posts
-        .tag_post(post.post_id, &"original-tag".parse::<TagLabel>().unwrap())
+        .set_post_tags(post.post_id, &["original-tag".parse::<TagLabel>().unwrap()])
         .await
         .unwrap();
 

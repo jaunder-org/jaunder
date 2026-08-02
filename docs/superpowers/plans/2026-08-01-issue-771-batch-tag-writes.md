@@ -963,7 +963,7 @@ git commit -m "fix(atompub): cap and dedupe ingested categories (#771)"
 - Produces: `tag_post`, `untag_post`, `TaggingError::AlreadyTagged`,
   `TaggingError::TagNotFound` no longer exist.
 
-- [ ] **Step 1: Convert every `tag_post`/`untag_post` call site — loops and
+- [x] **Step 1: Convert every `tag_post`/`untag_post` call site — loops and
       singles alike**
 
 **Scope warning:** `server/tests/storage/mod.rs` holds roughly **90** `tag_post`
@@ -1012,7 +1012,7 @@ on an existing post means _clear_ (D11).
   `:4311`, `:4357`, `:5758` per the issue; re-locate them, line numbers have
   drifted).
 
-- [ ] **Step 2: Rewrite the three orphaned storage tests**
+- [x] **Step 2: Rewrite the three orphaned storage tests**
 
 Re-express against `set_post_tags`: `tag_post_insert_error_returns_internal`
 (`storage/src/posts.rs:3330`) — closed-pool error path;
@@ -1020,7 +1020,7 @@ Re-express against `set_post_tags`: `tag_post_insert_error_returns_internal`
 1's add/remove/clear test, so **delete it** rather than duplicate;
 `tag_post_round_trips_slug_and_label` (`:3605`) — slug/label round-trip.
 
-- [ ] **Step 3: Delete the tests pinning removed behaviour**
+- [x] **Step 3: Delete the tests pinning removed behaviour**
 
 These pinned the strictness D4 removes. Delete each, naming in the commit
 message the behaviour that no longer exists and that idempotence (Task 1) is its
@@ -1039,7 +1039,7 @@ wholesale).
 (`:422-425`) is orphaned; deleting the whole test would drop two unrelated,
 still-valid assertions.
 
-- [ ] **Step 4: Delete the primitives and the dead variants**
+- [x] **Step 4: Delete the primitives and the dead variants**
 
 Remove `tag_post`/`untag_post` from `PostStorage` (`storage/src/posts.rs:684`,
 `:687`), `PostDialect` (`:853`, `:861`), both dialect impls
@@ -1050,7 +1050,7 @@ leading doc comments). The mockall mock regenerates from the trait — and the
 only other `PostStorage` implementor is `PostStore<DB>` (`posts.rs:909`), so
 nothing else needs touching.
 
-- [ ] **Step 5: Fix the decode-gate entries**
+- [x] **Step 5: Fix the decode-gate entries**
 
 `xtask/src/steps/sqlx_newtype_decode_check.rs:597-614`. A stale entry is a hard
 failure (`:1557`), so both `tag_post` entries must go: **delete** the
@@ -1058,7 +1058,7 @@ failure (`:1557`), so both `tag_post` entries must go: **delete** the
 not `bool`) and **delete** the `sqlite/posts.rs` one too — Task 1 already added
 its `set_post_tags` replacement.
 
-- [ ] **Step 6: Fix the docs that name the deleted items (AC11)**
+- [x] **Step 6: Fix the docs that name the deleted items (AC11)**
 
 These include **rustdoc intra-doc links**, which the `doc-links` gate checks:
 
@@ -1077,7 +1077,7 @@ These include **rustdoc intra-doc links**, which the `doc-links` gate checks:
   `set_post_tags`. ADR-0021 and ADR-0063 mention it only as historical narrative
   — **leave those alone**.
 
-- [ ] **Step 7: Run everything, verify it passes**
+- [x] **Step 7: Run everything, verify it passes**
 
 ```
 cargo run --manifest-path tools/Cargo.toml -p devtool -- pg run -- cargo nextest run -p storage -p jaunder
@@ -1095,7 +1095,7 @@ rg -n 'AlreadyTagged|TaggingError::TagNotFound' . --glob '!docs/archive/**' --gl
 The two ADR globs are excluded deliberately: D14 leaves ADR-0021 and ADR-0063
 alone, since they name the primitives only as historical narrative.
 
-- [ ] **Step 8: Gate and commit**
+- [x] **Step 8: Gate and commit**
 
 ```
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-771-batch-tag-writes -- cargo xtask check

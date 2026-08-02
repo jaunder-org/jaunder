@@ -430,7 +430,7 @@ mod tests {
             StatusCode::BAD_REQUEST
         );
         assert_eq!(
-            status(TaggingError::AlreadyTagged.into()),
+            status(TaggingError::PostNotFound.into()),
             StatusCode::INTERNAL_SERVER_ERROR
         );
     }

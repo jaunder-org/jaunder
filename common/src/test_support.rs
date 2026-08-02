@@ -438,7 +438,7 @@ pub fn parse_tag(s: &str) -> Tag {
 
 /// Parse `s` into a valid [`TagLabel`] (a case-preserving tag label) for tests — the
 /// single place a test tag-label literal is parsed, so a malformed fixture fails loudly
-/// and the parse isn't re-spelled at every `tag_post`/`set_post_tags` call site.
+/// and the parse isn't re-spelled at every `set_post_tags` call site.
 ///
 /// # Panics
 ///

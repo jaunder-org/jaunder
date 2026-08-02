@@ -47,10 +47,10 @@ newtypes, paired only where both travel.** For tags:
   hand-written `FromStr` that trims, rejects empty, and validates that the
   trimmed input has a valid canonical form; the original casing is stored). It
   exposes `slug(&self) -> Tag` (infallible by the construction invariant). Every
-  place a label travels — `PostTag.tag_display`, `tag_post`, `post_tag_diff`'s
-  desired set, atompub category ingest, `TagSummary.display`, the create/update
-  wire arg, and `parse_and_validate_tags`'s output — is a `TagLabel`, never a
-  bare `String`.
+  place a label travels — `PostTag.tag_display`, the desired set handed to
+  `set_post_tags` (the sole tag write since #771) and on to `post_tag_diff`,
+  atompub category ingest, `TagSummary.display`, the create/update wire arg, and
+  `parse_and_validate_tags`'s output — is a `TagLabel`, never a bare `String`.
 
 The two are paired explicitly where the N-side needs both:
 `PostTag { tag_slug: Tag, tag_display: TagLabel }`,
