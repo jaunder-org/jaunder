@@ -338,10 +338,18 @@ demonstrates it.
 
 ### The proofs are not vacuous
 
-**AC15.** Every `compile_fail` in the tree carries at least one `#`-hidden line,
-and each hidden line appears verbatim in a plain passing fence within the same
-doc comment. There is no exemption (decision 6). Violations fail the gate,
-naming the fence and the unmatched line.
+**AC15.** Every `compile_fail` in the tree carries at least one **non-empty**
+`#`-hidden line, and each hidden line appears verbatim in a plain passing fence
+within the same doc comment. There is no exemption (decision 6). Violations fail
+the gate, naming the fence and the unmatched line.
+
+Two details the pre-ship review found were load-bearing, both closed:
+**non-empty** (a bare `/// #` is a hidden _blank_ line, and a blank needle
+matches nothing, so accepting it would let one invisible character opt a block
+out of the whole rule), and the scanner must classify hidden lines from the
+**trimmed** text (rustdoc's `map_line` trims before testing for `# `, so an
+indented `///   # …` is part of the compiled fixture — a scanner that called it
+visible would leave a real prelude line outside the matched set).
 
 Concretely in `common/`: 8 doc comments gain a companion (`RawToken`;
 `ContentHash`, `Filename`, `ProfferedFilename`, `ContentType`; `ETag`;

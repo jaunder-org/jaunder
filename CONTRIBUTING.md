@@ -423,6 +423,61 @@ single file, so they have no file segment).
 `cargo nextest list -p jaunder` shows every registered Rust test with its full
 `<subsystem>::…` path.
 
+### Doctests and the fence vocabulary
+
+`cargo nextest` structurally cannot run doctests, so they are gated separately
+by the `doctests`/`doctests-gate` Nix checks (the root workspace) plus the
+host-side `doctest-fences` step (`xtask/` and `tools/`, which no Nix check can
+see). The gate does not merely run them: it reads every rustdoc fence out of the
+source with `syn` and **reconciles** that population against what the runner
+reported, in both directions. A fence that exists but never ran is a failure,
+and so is a reported doctest the scanner did not find.
+
+Run them directly with `cargo test --workspace --doc`. Use `--workspace`, never
+`-p`: package scoping silently drops the `#[cfg(feature = "sanitize")]` fences
+in `common/src/render.rs`, because nothing in a narrower package set enables the
+feature.
+
+**Exactly three fence forms are accepted**, compared with whitespace removed:
+
+| form                | means                                                  |
+| ------------------- | ------------------------------------------------------ |
+| ` ``` `             | a passing example — runs                               |
+| ` ```compile_fail ` | a negative proof — must NOT compile                    |
+| ` ```text `         | an illustration, not a test — not collected by rustdoc |
+
+Everything else fails the gate, including `ignore`, `no_run`, `should_panic`,
+and language tags. Two of those are actively dangerous: `ignore` **is**
+collected and reported by libtest, so it silences a proof while still looking
+like a test; and a wholly unrecognized word makes rustdoc skip the block **with
+no warning at all**, so a typo deletes a proof and reports green forever. Fences
+inside a multi-line `#[doc = "…"]` value are also rejected — libtest keys them
+by the attribute's line plus a markdown offset, which the reconciliation key
+cannot address.
+
+**Every `compile_fail` needs a positive companion.** A `compile_fail` passes if
+its snippet fails to compile _for any reason_ — a renamed path, an import that
+stopped resolving — so it can rot into vacuous truth while still reporting
+green. The rule:
+
+- the negative carries its fixture as `#`-hidden lines (at least one non-empty),
+  and
+- every hidden line appears verbatim in a plain fence **in the same doc
+  comment**.
+
+`macros/src/lib.rs`'s `StrNewtype` docs are the worked example. Scoping to one
+doc comment is deliberate: a file-wide rule would let one companion "cover"
+negatives whose fixture it shares nothing with.
+
+When writing a negative, ask what would happen if the property it forbids were
+_added_. Assert on `.into()` rather than on a function argument — Rust never
+coerces an argument through `From`, so `takes_foo(a_string)` fails for any two
+distinct types and would keep failing even after the `From` impl the doc forbids
+appears.
+
+Test data that happens to be Rust must **not** be named `.rs`, or the gate will
+police it; see `tools/doctests/testdata/`, which uses `.rs.txt`.
+
 ### PostgreSQL-backed Rust tests
 
 The integration suite is backend-parametric via
