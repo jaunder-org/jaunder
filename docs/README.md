@@ -123,6 +123,7 @@ convention). See the Status column below for each ADR's current status.
 | [0093](adr/0093-web-render-html-macro.md)                          | The web render layer builds markup with maud, not `format!`                                                  | accepted   |
 | [0094](adr/0094-gate-exemptions-in-source-markers.md)              | Gate exemptions are in-source site markers                                                                   | accepted   |
 | [0095](adr/0095-doctest-gate-enumerates-the-fence-population.md)   | The doctest gate enumerates the fence population                                                             | accepted   |
+| [0096](adr/0096-e2e-trace-capture-vs-attribution.md)               | E2e perf capture is separate from trace attribution, under a lifecycle envelope                              | accepted   |
 
 <!-- adr-table:end -->
 

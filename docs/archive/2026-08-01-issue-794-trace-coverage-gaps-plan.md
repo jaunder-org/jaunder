@@ -23,7 +23,7 @@ metrics, decompose `commit_to_mount`.
 referenced by decision (D1…D8) and criterion (AC-1…AC-23). Don't re-derive
 rationale.
 
-**ADR draft:** `docs/adr/drafts/e2e-trace-capture-vs-attribution.md`.
+**ADR draft:** `docs/adr/0096-e2e-trace-capture-vs-attribution.md`.
 
 ## Global Constraints
 
