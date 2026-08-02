@@ -373,8 +373,18 @@ pub(crate) fn password_reset_claim_error(
 // Cryptographic operations
 // ---------------------------------------------------------------------------
 
+/// Hashes `password`, returning the [`StoredPasswordHash`] that goes in the column.
+///
+/// Returns the newtype rather than a `String` because ADR-0063 §5 requires an existing
+/// newtype on **every** surface carrying its value — read *and* write. Producing a bare
+/// `String` here would leave callers re-deriving the type at the assignment, which §5
+/// names explicitly as the pattern to avoid.
 #[tracing::instrument(name = "crypto.password.hash", skip(password))]
-pub(crate) async fn hash_password(password: common::password::Password) -> io::Result<String> {
+pub(crate) async fn hash_password(
+    password: common::password::Password,
+) -> io::Result<StoredPasswordHash> {
+    use std::str::FromStr;
+
     // Test-only hash-failure injection. Gated on `test` (storage's own unit tests) OR the
     // `test-utils` feature (enabled by `server`'s dev-dependencies) so the cross-backend
     // integration tests can exercise the `Internal` / validate-before-hash paths too;
@@ -384,10 +394,12 @@ pub(crate) async fn hash_password(password: common::password::Password) -> io::R
         return Err(io::Error::other("forced hash error"));
     }
 
-    tokio::task::spawn_blocking(move || password.hash())
+    let hashed = tokio::task::spawn_blocking(move || password.hash())
         .await
         .map_err(io::Error::other)?
-        .map_err(io::Error::other)
+        .map_err(io::Error::other)?;
+
+    StoredPasswordHash::from_str(&hashed).map_err(io::Error::other)
 }
 
 /// Throwaway password hashed once to seed [`dummy_password_hash`].
@@ -421,17 +433,29 @@ pub(crate) fn dummy_password_hash() -> &'static StoredPasswordHash {
             .ok()
             .and_then(|p| p.hash().ok())
             .and_then(|h| StoredPasswordHash::from_str(&h).ok())
-            // cov:ignore-start — the fallback is reached only if Argon2 hashing of
-            // DUMMY_PASSWORD fails, which no test can induce without breaking password
-            // hashing globally. It exists so initialization stays infallible (no
-            // unwrap/expect in production); the constant is known-good, so the parse
-            // inside cannot fail either.
-            .unwrap_or_else(|| {
-                StoredPasswordHash::from_str(DUMMY_PASSWORD_HASH_FALLBACK)
-                    .unwrap_or_else(|_| unreachable!("the fallback hash is non-empty"))
-            })
-        // cov:ignore-stop
+            .unwrap_or_else(fallback_dummy_password_hash)
     })
+}
+
+/// [`DUMMY_PASSWORD_HASH_FALLBACK`] as a [`StoredPasswordHash`].
+///
+/// A named function rather than an inline closure so the fallback is reachable from a
+/// test: it is otherwise taken only when Argon2 hashing itself fails, which no test can
+/// induce without breaking password hashing globally. Extracting it keeps the branch
+/// covered honestly instead of `cov:ignore`-ing a permanent blind spot — and gives the
+/// constant the validity test it never had.
+fn fallback_dummy_password_hash() -> StoredPasswordHash {
+    use std::str::FromStr;
+
+    // A `match`, not `.unwrap_or_else(|_| unreachable!(…))`: on one line the
+    // `unwrap_or_else` call is *covered* even though its closure never runs, which trips
+    // the A1-guard (a covered line inside an `unreachable!` span means the exemption's
+    // premise is falsified). Here only the `Err` arm carries the assertion, and it stays
+    // genuinely unexecuted.
+    match StoredPasswordHash::from_str(DUMMY_PASSWORD_HASH_FALLBACK) {
+        Ok(hash) => hash,
+        Err(_) => unreachable!("the fallback hash constant is non-empty"),
+    }
 }
 
 #[tracing::instrument(name = "crypto.password.verify", skip(password, hash))]
@@ -560,11 +584,9 @@ mod tests {
     #[tokio::test]
     async fn test_hash_and_verify_password() {
         let password: common::password::Password = parse_password("password123");
-        let hash: StoredPasswordHash = hash_password(password.clone())
-            .await
-            .unwrap()
-            .parse()
-            .expect("a fresh hash is non-empty");
+        // No `.parse()` here: `hash_password` returns the newtype, per ADR-0063 §5. A
+        // re-derive at the assignment is exactly what that section forbids.
+        let hash = hash_password(password.clone()).await.unwrap();
 
         assert!(verify_password(password.clone(), hash.clone())
             .await
@@ -808,6 +830,32 @@ mod tests {
             .expect("dummy hash must be well-formed");
         assert!(!result, "a non-matching password must verify to false");
     }
+
+    // guard:no-backend — password verification against a constant; no database
+    #[tokio::test]
+    async fn fallback_dummy_password_hash_is_a_valid_verifiable_hash() {
+        // The fallback is only taken if runtime Argon2 hashing fails, so nothing else
+        // exercises it — yet it must be a well-formed Argon2 hash for the same reason the
+        // runtime one must: a fast `Err` on the absent-user path would reintroduce the
+        // timing oracle this whole mechanism exists to close. Until now, nothing checked
+        // that the constant was still valid.
+        let wrong = parse_password("definitely-not-the-dummy");
+        let result = verify_password(wrong, fallback_dummy_password_hash())
+            .await
+            .expect("the fallback hash constant must be well-formed");
+        assert!(!result, "a non-matching password must verify to false");
+    }
+
+    // No parameter-parity test for the fallback, deliberately.
+    //
+    // `dummy_password_hash_matches_real_hash_parameters` can assert parity because it
+    // hashes at runtime, so it picks up whatever Argon2 parameters are active. The
+    // fallback is a *fixed* constant carrying production parameters, so under a
+    // `cheap-kdf` build (which the coverage derivation uses) it cannot match a runtime
+    // hash — asserting it would be asserting something false. The consequence is worth
+    // stating: the fallback's timing equalization is only exact in production builds,
+    // which is inherent to hard-coding it and is why it is a last resort rather than the
+    // primary path.
 
     #[test]
     fn dummy_password_hash_matches_real_hash_parameters() {

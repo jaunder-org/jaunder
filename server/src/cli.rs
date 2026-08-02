@@ -56,7 +56,7 @@ pub struct InvalidPgUrl {
 /// The scheme check in [`DbConnectOptions::from_str`] is load-bearing, and anything that
 /// parses straight to `PgConnectOptions` has to repeat it.
 fn require_postgres_scheme(s: &str, flag: &'static str) -> Result<(), InvalidPgUrl> {
-    if s.starts_with("postgres://") || s.starts_with("postgresql://") {
+    if storage::is_postgres_url(s) {
         Ok(())
     } else {
         Err(InvalidPgUrl { flag })

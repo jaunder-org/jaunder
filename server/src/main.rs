@@ -360,10 +360,20 @@ mod tests {
             verbose: false,
         };
 
-        assert!(
-            run(cli).await.is_err(),
-            "bootstrap connection to a closed port must fail"
-        );
+        let err = run(cli).await.expect_err("a closed port must fail");
+
+        // Assert *which* failure: a bare `is_err()` would also pass if the arguments were
+        // rejected, which would mean the dispatch this test exists to cover never ran.
+        let msg = err.to_string();
+        for argument_rejection in [
+            "must be a PostgreSQL URL",
+            "must include a PostgreSQL database name",
+        ] {
+            assert!(
+                !msg.contains(argument_rejection),
+                "arguments are valid; the failure must come from the connection: {msg}"
+            );
+        }
     }
 
     #[tokio::test]

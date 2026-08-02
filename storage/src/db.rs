@@ -18,18 +18,42 @@ use crate::AppState;
 // DbConnectOptions
 // ---------------------------------------------------------------------------
 
-/// Replaces the password in a URL's userinfo with `***`, leaving everything else intact.
+/// Whether `s` carries a `PostgreSQL` scheme.
 ///
-/// `postgres://user:secret@host/db` becomes `postgres://user:***@host/db`. Returns the
-/// input unchanged when there is no userinfo password — which is why the existing
+/// The single spelling of that predicate. [`DbConnectOptions::from_str`] needs it, and so
+/// does every CLI argument that parses straight to a `PgConnectOptions` — sqlx does not
+/// check the scheme itself, so those parsers must. Two copies of the prefix list could
+/// drift, and a drift here means accepting a URL the other half rejects.
+#[must_use]
+pub fn is_postgres_url(s: &str) -> bool {
+    s.starts_with("postgres://") || s.starts_with("postgresql://")
+}
+
+/// Replaces any password in `url` with `***`, in **both** spellings sqlx accepts.
+///
+/// - **userinfo** — `postgres://user:secret@host/db` → `postgres://user:***@host/db`
+/// - **query parameter** — `postgres://user@host/db?password=secret` → `…?password=***`
+///
+/// The second is easy to miss and equally live: sqlx-postgres maps a `password` query
+/// key straight onto the connection password (`options/parse.rs`, `"password" =>
+/// options.password(&value)`), so `postgres:///?password=x` is a working credential.
+/// Redacting only the userinfo would leave that spelling printing verbatim.
+///
+/// Returns the input unchanged when there is no password — which is why the existing
 /// passwordless `cli.rs` assertions are unaffected.
 fn redact_url_password(url: &str) -> String {
+    redact_password_query_param(&redact_userinfo_password(url))
+}
+
+/// The `user:secret@` half of [`redact_url_password`].
+fn redact_userinfo_password(url: &str) -> String {
     let Some(scheme_end) = url.find("://") else {
         return url.to_owned();
     };
     let authority_start = scheme_end + 3;
     let rest = &url[authority_start..];
-    let authority = &rest[..rest.find('/').unwrap_or(rest.len())];
+    // The authority ends at the path, the query, or the fragment — whichever comes first.
+    let authority = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
     let Some(at) = authority.rfind('@') else {
         return url.to_owned();
     };
@@ -42,6 +66,28 @@ fn redact_url_password(url: &str) -> String {
         &authority[..colon],
         &url[authority_start + at..],
     )
+}
+
+/// The `?password=secret` half of [`redact_url_password`].
+fn redact_password_query_param(url: &str) -> String {
+    let Some(query_start) = url.find('?') else {
+        return url.to_owned();
+    };
+    let (head, rest) = url.split_at(query_start + 1);
+    let (query, fragment) = rest.find('#').map_or((rest, ""), |i| rest.split_at(i));
+
+    let redacted = query
+        .split('&')
+        .map(|param| match param.split_once('=') {
+            // Case-insensitive: redacting a key sqlx would ignore is harmless; missing
+            // one it honours is not.
+            Some((key, _)) if key.eq_ignore_ascii_case("password") => format!("{key}=***"),
+            _ => param.to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join("&");
+
+    format!("{head}{redacted}{fragment}")
 }
 
 /// The scheme of `s`, or `"(none)"` when it does not look like one.
@@ -135,7 +181,7 @@ impl FromStr for DbConnectOptions {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.starts_with("sqlite:") {
             Ok(DbConnectOptions::Sqlite(s.parse()?))
-        } else if s.starts_with("postgres://") || s.starts_with("postgresql://") {
+        } else if is_postgres_url(s) {
             Ok(DbConnectOptions::Postgres {
                 url: s.to_owned(),
                 options: s.parse()?,
@@ -417,6 +463,52 @@ mod tests {
         assert_eq!(
             redact_url_password("postgres://user@localhost/db"),
             "postgres://user@localhost/db"
+        );
+    }
+
+    /// sqlx accepts the password as a query parameter as well as in the userinfo
+    /// (`options/parse.rs`: `"password" => options.password(&value)`), so redacting only
+    /// the userinfo left a working credential printing verbatim. Caught in review.
+    #[test]
+    fn redaction_covers_the_query_parameter_spelling() {
+        let opts: DbConnectOptions = "postgres://app@localhost/jaunder?password=hunter2"
+            .parse()
+            .unwrap();
+
+        for rendered in [format!("{opts}"), format!("{opts:?}")] {
+            assert!(!rendered.contains("hunter2"), "leaked: {rendered}");
+            assert!(rendered.contains("password=***"), "{rendered}");
+        }
+
+        // …and `expose_url` still yields the real thing, since that is its whole job.
+        assert!(opts.expose_url().contains("password=hunter2"));
+    }
+
+    #[test]
+    fn redaction_covers_both_spellings_at_once_and_spares_other_params() {
+        assert_eq!(
+            redact_url_password(
+                "postgres://app:pw@localhost/jaunder?sslmode=require&password=hunter2"
+            ),
+            "postgres://app:***@localhost/jaunder?sslmode=require&password=***"
+        );
+    }
+
+    #[test]
+    fn redaction_matches_the_password_key_case_insensitively() {
+        assert_eq!(
+            redact_url_password("postgres://app@h/db?PassWord=hunter2"),
+            "postgres://app@h/db?PassWord=***"
+        );
+    }
+
+    /// A password-bearing userinfo with a query string: the authority must end at the
+    /// `?`, not swallow it.
+    #[test]
+    fn redaction_bounds_the_authority_at_the_query() {
+        assert_eq!(
+            redact_url_password("postgres://app:pw@localhost?sslmode=require"),
+            "postgres://app:***@localhost?sslmode=require"
         );
     }
 

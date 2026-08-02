@@ -650,6 +650,17 @@ pub async fn cmd_serve(
     // Telemetry is owned by `run`, which holds the TelemetryGuard across this
     // call (see `server/src/main.rs`); `cmd_serve` does not init it, matching
     // every other `cmd_*`.
+    // cov:ignore-start -- live serve glue: unreachable by host tests (the sole
+    // cmd_serve test returns early at prepare_server). The covered pieces live in
+    // serve_with_shutdown + spawn_shutdown_supervisor, exercised by the signal
+    // tests; this only wires them to the prepared server. Mirrors jaunder-uox1.
+    //
+    // The marker starts at the destructuring, not below it: completing this binding
+    // *is* the prepare_server-succeeded path, so the same rationale covers it. These
+    // lines used to report covered incidentally — the `?` statement's span was
+    // attributed through the early-return case — which made them a coverage result no
+    // test actually earned, and one that moved with unrelated codegen changes (#693
+    // shifted it).
     let PreparedServer {
         listener,
         router,
@@ -659,10 +670,6 @@ pub async fn cmd_serve(
     } = prepare_server(storage, bind, prod, runtime_file).await?;
 
     tracing::info!(bind = %bind, prod, "starting HTTP server");
-    // cov:ignore-start -- live serve glue: unreachable by host tests (the sole
-    // cmd_serve test returns early at prepare_server). The covered pieces live in
-    // serve_with_shutdown + spawn_shutdown_supervisor, exercised by the signal
-    // tests; this only wires them to the prepared server. Mirrors jaunder-uox1.
     // Keep the worker schedulers alive for the lifetime of the serve loop.
     let _backup_scheduler = backup_scheduler;
     let _feed_scheduler = feed_scheduler;

@@ -276,7 +276,7 @@ where
              RETURNING user_id",
         )
         .bind(username)
-        .bind(password_hash.as_str())
+        .bind(&password_hash)
         .bind(display_name)
         .bind(now)
         .bind(is_operator)
@@ -457,7 +457,7 @@ where
             .map_err(sqlx::Error::Io)?;
 
         sqlx::query("UPDATE users SET password_hash = $1 WHERE user_id = $2")
-            .bind(password_hash.as_str())
+            .bind(&password_hash)
             .bind(user_id)
             .execute(&self.pool)
             .await?;
