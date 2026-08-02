@@ -2292,7 +2292,7 @@ git commit -m "build(xtask): reconcile the xtask and tools fence population (#76
 
 **Files:**
 
-- Create: `docs/adr/drafts/doctest-gate-enumerates-the-fence-population.md`
+- Create: `docs/adr/0095-doctest-gate-enumerates-the-fence-population.md`
 - Modify: `tools/doctests/src/lib.rs`, `tools/doctests/src/check.rs` (module
   docs)
 
