@@ -1,7 +1,6 @@
 import {
   test,
   expect,
-  setTestBudget,
   slowBrowserFirstNavigationTimeoutMs,
   type NewTracedContext,
 } from "./fixtures";
@@ -109,7 +108,6 @@ test("Private post: hidden from anonymous and non-subscriber, visible to author"
   page,
   tracedContext,
 }, testInfo) => {
-  setTestBudget(60_000);
   const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
 
   const author = await registerKnown(page, firstNav);
@@ -158,7 +156,6 @@ test("Subscribers post: visible after Subscribe, hidden again after Unsubscribe"
   page,
   tracedContext,
 }, testInfo) => {
-  setTestBudget(60_000);
   const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
 
   const author = await registerKnown(page, firstNav);
@@ -214,7 +211,6 @@ test("Named audience: assigned member sees a Friends post; an unassigned non-mem
   page,
   tracedContext,
 }, testInfo) => {
-  setTestBudget(90_000);
   const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
 
   const author = await registerKnown(page, firstNav);
@@ -287,7 +283,6 @@ test("Public post is visible to anonymous and appears in the feed; Subscribers p
   page,
   tracedContext,
 }, testInfo) => {
-  setTestBudget(90_000);
   const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
 
   const author = await registerKnown(page, firstNav);

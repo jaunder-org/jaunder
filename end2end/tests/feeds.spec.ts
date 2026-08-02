@@ -53,7 +53,6 @@ async function fetchFeedContaining(
 test("auto-discovery links are present on site home and user timeline, and resolve", async ({
   page,
 }, info) => {
-  setTestBudget(60_000);
   const username = await register(
     page,
     slowBrowserFirstNavigationTimeoutMs(info, 30_000),
@@ -116,7 +115,6 @@ test("auto-discovery links are present on site home and user timeline, and resol
 test("head discovery links update across a client-side nav, staying a single set", async ({
   page,
 }, info) => {
-  setTestBudget(60_000);
   await register(page, slowBrowserFirstNavigationTimeoutMs(info, 30_000));
   // Seed a public post carrying a tag so its footer renders a clickable tag chip.
   await createPostViaApi(page, {
@@ -289,8 +287,6 @@ test("publishing and editing a post each trigger a WebSub hub ping", async ({
 test("feed honors If-None-Match with a 304 and empty body", async ({
   page,
 }, info) => {
-  setTestBudget(60_000);
-
   const username = await register(
     page,
     slowBrowserFirstNavigationTimeoutMs(info, 30_000),
@@ -317,8 +313,6 @@ test("feed honors If-None-Match with a 304 and empty body", async ({
 test("user with no posts serves a valid empty feed in each format", async ({
   page,
 }, info) => {
-  setTestBudget(60_000);
-
   const username = await register(
     page,
     slowBrowserFirstNavigationTimeoutMs(info, 30_000),
