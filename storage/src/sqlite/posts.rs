@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{Pool, Sqlite};
 
 use crate::helpers::{post_record_from_row, PostRow};
+use crate::posts::{post_tag_diff, post_tags_from_rows, SELECT_POST_TAGS};
 use crate::{PostDialect, PostRecord, PostStore, TaggingError, UpdatePostError, UpdatePostInput};
 use common::ids::{PostId, TagId, UserId};
 use common::tag::{Tag, TagLabel};
@@ -228,6 +229,91 @@ impl PostDialect for Sqlite {
             Err(TaggingError::TagNotFound)
         } else {
             Ok(())
+        }
+    }
+
+    async fn set_post_tags(
+        pool: &Pool<Sqlite>,
+        post_id: PostId,
+        desired: &[TagLabel],
+    ) -> Result<(), TaggingError> {
+        // ADR-0021: BEGIN IMMEDIATE takes the write lock up front, so the read
+        // below is not a shared->reserved upgrade — and the whole read-diff-write
+        // is serialized under one acquisition (ADR-0092), which also closes the
+        // TOCTOU the old separate autocommit read left open. sqlx's Transaction
+        // issues its own deferred BEGIN, so drive the transaction manually on a
+        // raw connection, mirroring update_post / create_user_with_invite.
+        let mut conn = pool.acquire().await?;
+        sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
+
+        let result: Result<(), TaggingError> = async {
+            // No `deleted_at` filter: soft-deleted posts stay taggable, as before.
+            let post_exists: bool =
+                sqlx::query_scalar("SELECT COUNT(*) > 0 FROM posts WHERE post_id = $1")
+                    .bind(post_id)
+                    .fetch_one(&mut *conn)
+                    .await?;
+            if !post_exists {
+                return Err(TaggingError::PostNotFound);
+            }
+
+            let rows = sqlx::query_as::<_, (PostId, TagId, Tag, TagLabel)>(SELECT_POST_TAGS)
+                .bind(post_id)
+                .fetch_all(&mut *conn)
+                .await?;
+            let existing = post_tags_from_rows(rows);
+            let diff = post_tag_diff(&existing, desired);
+
+            for label in diff.to_add {
+                let slug = label.slug();
+                sqlx::query("INSERT OR IGNORE INTO tags (tag_slug) VALUES ($1)")
+                    .bind(&slug)
+                    .execute(&mut *conn)
+                    .await?;
+                let tag_id =
+                    sqlx::query_scalar::<_, TagId>("SELECT tag_id FROM tags WHERE tag_slug = $1")
+                        .bind(&slug)
+                        .fetch_one(&mut *conn)
+                        .await?;
+                // OR IGNORE, not a bare INSERT: `desired` may carry two labels
+                // sharing a slug (post_tag_diff does not dedupe), and the first
+                // occurrence's casing must win.
+                sqlx::query(
+                    "INSERT OR IGNORE INTO post_tags (post_id, tag_id, tag_display) VALUES ($1, $2, $3)",
+                )
+                .bind(post_id)
+                .bind(tag_id)
+                .bind(label)
+                .execute(&mut *conn)
+                .await?;
+            }
+
+            for slug in diff.to_remove {
+                // rows_affected is deliberately not checked: the slug came from
+                // `existing`, read in this same transaction, so "no row deleted"
+                // is not an error condition.
+                sqlx::query(
+                    "DELETE FROM post_tags
+                     WHERE post_id = $1 AND tag_id = (SELECT tag_id FROM tags WHERE tag_slug = $2)",
+                )
+                .bind(post_id)
+                .bind(slug)
+                .execute(&mut *conn)
+                .await?;
+            }
+            Ok(())
+        }
+        .await;
+
+        match result {
+            Ok(()) => {
+                sqlx::query("COMMIT").execute(&mut *conn).await?;
+                Ok(())
+            }
+            Err(error) => {
+                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                Err(error)
+            }
         }
     }
 }
