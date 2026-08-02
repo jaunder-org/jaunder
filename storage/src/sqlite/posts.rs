@@ -3,6 +3,10 @@ use chrono::{DateTime, Utc};
 use sqlx::{Pool, Sqlite};
 
 use crate::helpers::{post_record_from_row, PostRow};
+use crate::posts::{
+    post_tag_diff, post_tags_from_rows, DELETE_POST_TAG_BY_SLUG, SELECT_POST_TAGS,
+    SELECT_TAG_ID_BY_SLUG,
+};
 use crate::{PostDialect, PostRecord, PostStore, TaggingError, UpdatePostError, UpdatePostInput};
 use common::ids::{PostId, TagId, UserId};
 use common::tag::{Tag, TagLabel};
@@ -141,59 +145,72 @@ impl PostDialect for Sqlite {
         }
     }
 
-    async fn tag_post(
+    async fn set_post_tags(
         pool: &Pool<Sqlite>,
         post_id: PostId,
-        tag: &TagLabel,
+        desired: &[TagLabel],
     ) -> Result<(), TaggingError> {
-        // The slug is the canonical key; the label carries the author's casing.
-        let slug = tag.slug();
-
-        // ADR-0021: take the write lock up front with BEGIN IMMEDIATE rather than a
-        // deferred BEGIN, so the SELECT->INSERT step performs no shared->reserved lock
-        // upgrade (the SQLITE_BUSY-on-upgrade failure mode). sqlx's Transaction issues
-        // its own deferred BEGIN, so drive the transaction manually on a raw connection,
-        // mirroring update_post / create_user_with_invite / sqlite/backup.rs.
+        // ADR-0021: BEGIN IMMEDIATE takes the write lock up front, so the read
+        // below is not a shared->reserved upgrade — and the whole read-diff-write
+        // is serialized under one acquisition (ADR-0092), which also closes the
+        // TOCTOU the old separate autocommit read left open. sqlx's Transaction
+        // issues its own deferred BEGIN, so drive the transaction manually on a
+        // raw connection, mirroring update_post / create_user_with_invite.
         let mut conn = pool.acquire().await?;
         sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
 
         let result: Result<(), TaggingError> = async {
+            // No `deleted_at` filter: soft-deleted posts stay taggable, as before.
             let post_exists: bool =
                 sqlx::query_scalar("SELECT COUNT(*) > 0 FROM posts WHERE post_id = $1")
                     .bind(post_id)
                     .fetch_one(&mut *conn)
                     .await?;
-
             if !post_exists {
                 return Err(TaggingError::PostNotFound);
             }
 
-            sqlx::query("INSERT OR IGNORE INTO tags (tag_slug) VALUES ($1)")
-                .bind(&slug)
-                .execute(&mut *conn)
+            let rows = sqlx::query_as::<_, (PostId, TagId, Tag, TagLabel)>(SELECT_POST_TAGS)
+                .bind(post_id)
+                .fetch_all(&mut *conn)
                 .await?;
+            let existing = post_tags_from_rows(rows);
+            let diff = post_tag_diff(&existing, desired);
 
-            let tag_id =
-                sqlx::query_scalar::<_, TagId>("SELECT tag_id FROM tags WHERE tag_slug = $1")
+            for label in diff.to_add {
+                let slug = label.slug();
+                sqlx::query("INSERT OR IGNORE INTO tags (tag_slug) VALUES ($1)")
+                    .bind(&slug)
+                    .execute(&mut *conn)
+                    .await?;
+                let tag_id = sqlx::query_scalar::<_, TagId>(SELECT_TAG_ID_BY_SLUG)
                     .bind(&slug)
                     .fetch_one(&mut *conn)
                     .await?;
-
-            match sqlx::query(
-                "INSERT INTO post_tags (post_id, tag_id, tag_display) VALUES ($1, $2, $3)",
-            )
-            .bind(post_id)
-            .bind(tag_id)
-            .bind(tag)
-            .execute(&mut *conn)
-            .await
-            {
-                Ok(_) => Ok(()),
-                Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
-                    Err(TaggingError::AlreadyTagged)
-                }
-                Err(e) => Err(TaggingError::Internal(e)),
+                // OR IGNORE, not a bare INSERT: `desired` may carry two labels
+                // sharing a slug (post_tag_diff does not dedupe), and the first
+                // occurrence's casing must win.
+                sqlx::query(
+                    "INSERT OR IGNORE INTO post_tags (post_id, tag_id, tag_display) VALUES ($1, $2, $3)",
+                )
+                .bind(post_id)
+                .bind(tag_id)
+                .bind(label)
+                .execute(&mut *conn)
+                .await?;
             }
+
+            for slug in diff.to_remove {
+                // rows_affected is deliberately not checked: the slug came from
+                // `existing`, read in this same transaction, so "no row deleted"
+                // is not an error condition.
+                sqlx::query(DELETE_POST_TAG_BY_SLUG)
+                    .bind(post_id)
+                    .bind(slug)
+                    .execute(&mut *conn)
+                    .await?;
+            }
+            Ok(())
         }
         .await;
 
@@ -206,28 +223,6 @@ impl PostDialect for Sqlite {
                 let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
                 Err(error)
             }
-        }
-    }
-
-    async fn untag_post(
-        pool: &Pool<Sqlite>,
-        post_id: PostId,
-        tag_slug: &Tag,
-    ) -> Result<(), TaggingError> {
-        let rows_deleted = sqlx::query(
-            "DELETE FROM post_tags
-             WHERE post_id = $1 AND tag_id = (SELECT tag_id FROM tags WHERE tag_slug = $2)",
-        )
-        .bind(post_id)
-        .bind(tag_slug)
-        .execute(pool)
-        .await?
-        .rows_affected();
-
-        if rows_deleted == 0 {
-            Err(TaggingError::TagNotFound)
-        } else {
-            Ok(())
         }
     }
 }

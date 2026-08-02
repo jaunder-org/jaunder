@@ -23,7 +23,7 @@ async fn service_document_returns_200_with_app_password(#[case] backend: Backend
     let post = session.seed_post().seed(&state).await;
     state
         .posts
-        .tag_post(post.post_id, &"rust".parse::<TagLabel>().unwrap())
+        .set_post_tags(post.post_id, &["rust".parse::<TagLabel>().unwrap()])
         .await
         .unwrap();
     let app = make_app(&state, &base);

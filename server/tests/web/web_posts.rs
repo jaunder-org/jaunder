@@ -1892,12 +1892,13 @@ async fn list_user_posts_carries_tags_per_post(#[case] backend: Backend) {
     // (#772) rather than coinciding with insertion order.
     state
         .posts
-        .tag_post(created.post_id, &"web".parse::<TagLabel>().unwrap())
-        .await
-        .unwrap();
-    state
-        .posts
-        .tag_post(created.post_id, &"Rust".parse::<TagLabel>().unwrap())
+        .set_post_tags(
+            created.post_id,
+            &[
+                "web".parse::<TagLabel>().unwrap(),
+                "Rust".parse::<TagLabel>().unwrap(),
+            ],
+        )
         .await
         .unwrap();
 
@@ -1936,7 +1937,10 @@ async fn get_post_carries_tags(#[case] backend: Backend) {
 
     state
         .posts
-        .tag_post(created.post_id, &"Performance".parse::<TagLabel>().unwrap())
+        .set_post_tags(
+            created.post_id,
+            &["Performance".parse::<TagLabel>().unwrap()],
+        )
         .await
         .unwrap();
 
@@ -2001,9 +2005,14 @@ async fn create_post_applies_tags_from_param(#[case] backend: Backend) {
 
     let stored_tags = state
         .posts
-        .get_tags_for_post(created.post_id)
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
         .await
-        .unwrap();
+        .unwrap()
+        .expect("post exists")
+        .tags;
     let slugs: Vec<&str> = stored_tags.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert_eq!(slugs, vec!["rust", "web-dev"]);
     assert!(stored_tags.iter().any(|t| t.tag_display == "Rust"));
@@ -2110,9 +2119,14 @@ async fn update_post_applies_tag_set_diff(#[case] backend: Backend) {
 
     let stored = state
         .posts
-        .get_tags_for_post(created.post_id)
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
         .await
-        .unwrap();
+        .unwrap()
+        .expect("post exists")
+        .tags;
     let slugs: Vec<&str> = stored.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert_eq!(slugs, vec!["new-tag", "rust"]);
 }
@@ -2298,9 +2312,14 @@ async fn update_post_with_tags_unset_leaves_existing_tags_alone(#[case] backend:
 
     let stored = state
         .posts
-        .get_tags_for_post(created.post_id)
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
         .await
-        .unwrap();
+        .unwrap()
+        .expect("post exists")
+        .tags;
     let slugs: Vec<&str> = stored.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert_eq!(slugs, vec!["keep"]);
 }

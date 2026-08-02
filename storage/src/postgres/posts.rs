@@ -3,6 +3,10 @@ use chrono::{DateTime, Utc};
 use sqlx::{Pool, Postgres};
 
 use crate::helpers::{post_record_from_row, PostRow};
+use crate::posts::{
+    post_tag_diff, post_tags_from_rows, DELETE_POST_TAG_BY_SLUG, SELECT_POST_TAGS,
+    SELECT_TAG_ID_BY_SLUG,
+};
 use crate::{PostDialect, PostRecord, PostStore, TaggingError, UpdatePostError, UpdatePostInput};
 use common::ids::{PostId, TagId, UserId};
 use common::tag::{Tag, TagLabel};
@@ -131,80 +135,71 @@ impl PostDialect for Postgres {
         post_record_from_row(row).map_err(UpdatePostError::Internal)
     }
 
-    async fn tag_post(
+    async fn set_post_tags(
         pool: &Pool<Postgres>,
         post_id: PostId,
-        tag: &TagLabel,
+        desired: &[TagLabel],
     ) -> Result<(), TaggingError> {
-        // The slug is the canonical key; the label carries the author's casing.
-        let slug = tag.slug();
-
         let mut tx = pool.begin().await?;
 
-        let post_exists: bool =
-            sqlx::query_scalar("SELECT COUNT(*) > 0 FROM posts WHERE post_id = $1")
-                .bind(post_id)
-                .fetch_one(&mut *tx)
-                .await?;
-
-        if !post_exists {
+        // FOR UPDATE locks the post row for the whole read-diff-write, so a
+        // concurrent set_post_tags cannot interleave under READ COMMITTED
+        // (ADR-0021; mirrors update_post). It doubles as the existence check.
+        // No `deleted_at` filter: soft-deleted posts stay taggable, as before.
+        let exists = sqlx::query_scalar::<_, PostId>(
+            "SELECT post_id FROM posts WHERE post_id = $1 FOR UPDATE",
+        )
+        .bind(post_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if exists.is_none() {
             tx.rollback().await.ok();
             return Err(TaggingError::PostNotFound);
         }
 
-        sqlx::query("INSERT INTO tags (tag_slug) VALUES ($1) ON CONFLICT DO NOTHING")
-            .bind(&slug)
+        let rows = sqlx::query_as::<_, (PostId, TagId, Tag, TagLabel)>(SELECT_POST_TAGS)
+            .bind(post_id)
+            .fetch_all(&mut *tx)
+            .await?;
+        let existing = post_tags_from_rows(rows);
+        let diff = post_tag_diff(&existing, desired);
+
+        for label in diff.to_add {
+            let slug = label.slug();
+            sqlx::query("INSERT INTO tags (tag_slug) VALUES ($1) ON CONFLICT DO NOTHING")
+                .bind(&slug)
+                .execute(&mut *tx)
+                .await?;
+            let tag_id = sqlx::query_scalar::<_, TagId>(SELECT_TAG_ID_BY_SLUG)
+                .bind(&slug)
+                .fetch_one(&mut *tx)
+                .await?;
+            // ON CONFLICT DO NOTHING, not a bare INSERT: `desired` may carry two
+            // labels sharing a slug (post_tag_diff does not dedupe), and the
+            // first occurrence's casing must win.
+            sqlx::query(
+                "INSERT INTO post_tags (post_id, tag_id, tag_display) VALUES ($1, $2, $3)
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(post_id)
+            .bind(tag_id)
+            .bind(label)
             .execute(&mut *tx)
             .await?;
+        }
 
-        let tag_id = sqlx::query_scalar::<_, TagId>("SELECT tag_id FROM tags WHERE tag_slug = $1")
-            .bind(&slug)
-            .fetch_one(&mut *tx)
-            .await?;
-
-        let result =
-            sqlx::query("INSERT INTO post_tags (post_id, tag_id, tag_display) VALUES ($1, $2, $3)")
+        for slug in diff.to_remove {
+            // rows_affected is deliberately not checked: the slug came from
+            // `existing`, read in this same transaction, so "no row deleted" is
+            // not an error condition.
+            sqlx::query(DELETE_POST_TAG_BY_SLUG)
                 .bind(post_id)
-                .bind(tag_id)
-                .bind(tag)
+                .bind(slug)
                 .execute(&mut *tx)
-                .await;
-
-        match result {
-            Ok(_) => {
-                tx.commit().await?;
-                Ok(())
-            }
-            Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
-                tx.rollback().await.ok();
-                Err(TaggingError::AlreadyTagged)
-            }
-            Err(e) => {
-                tx.rollback().await.ok();
-                Err(TaggingError::Internal(e))
-            }
+                .await?;
         }
-    }
 
-    async fn untag_post(
-        pool: &Pool<Postgres>,
-        post_id: PostId,
-        tag_slug: &Tag,
-    ) -> Result<(), TaggingError> {
-        let rows_deleted = sqlx::query(
-            "DELETE FROM post_tags
-             WHERE post_id = $1 AND tag_id = (SELECT tag_id FROM tags WHERE tag_slug = $2)",
-        )
-        .bind(post_id)
-        .bind(tag_slug)
-        .execute(pool)
-        .await?
-        .rows_affected();
-
-        if rows_deleted == 0 {
-            Err(TaggingError::TagNotFound)
-        } else {
-            Ok(())
-        }
+        tx.commit().await?;
+        Ok(())
     }
 }

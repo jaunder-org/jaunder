@@ -234,7 +234,7 @@ async fn feed_contains_only_public_posts(#[case] backend: Backend) {
 }
 
 /// #772: the feed reads tags off the records `list_published_in_window` already
-/// returned instead of issuing one `get_tags_for_post` per post. This pins the
+/// returned instead of issuing one per-post tag query. This pins the
 /// observable contract that must survive that switch — tags still reach the body,
 /// slug-ordered even when written in the opposite order.
 ///

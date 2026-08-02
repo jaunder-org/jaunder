@@ -98,10 +98,12 @@ pub fn entry_to_post_fields(entry: &Entry, default_format: PostFormat) -> PostFi
     // atom `<category term>` values are arbitrary RFC-4287 protocol strings (the
     // atom `Entry` model holds them as `String`, not our domain tag) — this is the
     // boundary where a conforming term becomes a `TagLabel`. `entry_to_post_fields`
-    // is infallible, so an invalid term is silently skipped here (the sole ingest
-    // skip — `post_tag_diff` no longer filters, since every `TagLabel` it receives
-    // is already valid). Dropping a malformed term keeps one bad category from
-    // failing the whole entry (R5).
+    // is infallible, so an invalid term is silently skipped here: dropping a
+    // malformed term keeps one bad category from failing the whole entry (R5).
+    // Skipping is the *only* policy applied here — the set is neither deduped nor
+    // capped. The handlers run `common::tag::parse_and_validate_tags` on this vec
+    // before any write, so an over-cap entry is a `400` rather than an unbounded
+    // batched tag write (#771 D9, ADR-0092).
     let categories = entry
         .categories()
         .iter()

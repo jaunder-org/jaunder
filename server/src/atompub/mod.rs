@@ -140,14 +140,13 @@ pub(crate) async fn required_base_url(
 
 /// The error type for the raw `AtomPub` HTTP handlers.
 ///
-/// Handlers and their helpers (`require_user_match`, `owned_post`,
-/// `apply_categories`) return this domain error; the single [`IntoResponse`]
-/// impl below is the **only** place an HTTP status is chosen, keeping
-/// `StatusCode` out of the helper layer (the boundary principle). Genuine
-/// internal failures are logged at `error` level as they are converted (see the
-/// `From` impls), so a `500` is never a blank, un-diagnosable response. The
-/// logged error is infrastructure detail (a storage/IO failure), not user
-/// content, so it carries no PII.
+/// Handlers and their helpers (`require_user_match`, `owned_post`) return this
+/// domain error; the single [`IntoResponse`] impl below is the **only** place an
+/// HTTP status is chosen, keeping `StatusCode` out of the helper layer (the
+/// boundary principle). Genuine internal failures are logged at `error` level as
+/// they are converted (see the `From` impls), so a `500` is never a blank,
+/// un-diagnosable response. The logged error is infrastructure detail (a
+/// storage/IO failure), not user content, so it carries no PII.
 #[derive(Debug)]
 pub enum HandlerError {
     /// Malformed request input (bad entry XML, bad cursor, empty filename). `400`.
@@ -229,6 +228,17 @@ impl From<storage::TaggingError> for HandlerError {
     fn from(err: storage::TaggingError) -> Self {
         log_internal(&err);
         HandlerError::Internal
+    }
+}
+
+impl From<common::tag::TagValidationError> for HandlerError {
+    /// An over-cap or otherwise invalid category set is the client's error, not
+    /// an internal one — unlike `TaggingError`, which is always an internal
+    /// inconsistency. Bounding this is what keeps the batched tag write capped by
+    /// construction (#771, ADR-0092). `BadRequest` is a unit variant, so the
+    /// error text is dropped: the status is the whole client-facing answer.
+    fn from(_: common::tag::TagValidationError) -> Self {
+        HandlerError::BadRequest
     }
 }
 
@@ -420,7 +430,7 @@ mod tests {
             StatusCode::BAD_REQUEST
         );
         assert_eq!(
-            status(TaggingError::AlreadyTagged.into()),
+            status(TaggingError::PostNotFound.into()),
             StatusCode::INTERNAL_SERVER_ERROR
         );
     }

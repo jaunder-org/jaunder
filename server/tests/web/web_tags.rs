@@ -105,13 +105,10 @@ async fn list_tags_clamps_limit_to_max(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let post = seed_user_and_tagged_post(&state, "post-3", &[]).await;
     // 60 tags — exceeds the MAX_TAG_LIMIT of 50.
-    for n in 0..60 {
-        state
-            .posts
-            .tag_post(post, &format!("tag{n:02}").parse::<TagLabel>().unwrap())
-            .await
-            .unwrap();
-    }
+    let labels: Vec<TagLabel> = (0..60)
+        .map(|n| format!("tag{n:02}").parse().expect("valid tag label"))
+        .collect();
+    state.posts.set_post_tags(post, &labels).await.unwrap();
 
     let (status, body) = post_json(
         &state,
@@ -131,13 +128,10 @@ async fn list_tags_clamps_limit_to_max(#[case] backend: Backend) {
 async fn list_tags_uses_default_limit_when_unspecified(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let post = seed_user_and_tagged_post(&state, "post-4", &[]).await;
-    for n in 0..20 {
-        state
-            .posts
-            .tag_post(post, &format!("tag{n:02}").parse::<TagLabel>().unwrap())
-            .await
-            .unwrap();
-    }
+    let labels: Vec<TagLabel> = (0..20)
+        .map(|n| format!("tag{n:02}").parse().expect("valid tag label"))
+        .collect();
+    state.posts.set_post_tags(post, &labels).await.unwrap();
 
     let (status, body) = post_json(
         &state,

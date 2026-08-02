@@ -196,11 +196,8 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
     // Value interop (DEC-D): the timestamp survives with its value.
     assert_eq!(post.published_at, Some(fixture_published_at()));
 
-    let tags = state
-        .posts
-        .get_tags_for_post(ids.public_post)
-        .await
-        .expect("get tags");
+    // Tags ride along on the post record already read above (#771).
+    let tags = &post.tags;
     assert_eq!(tags.len(), 1);
     assert_eq!(tags[0].tag_slug, "backup-test");
     assert_eq!(tags[0].tag_display, "Backup-Test");
