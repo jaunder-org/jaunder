@@ -36,7 +36,26 @@ pub enum PgBootstrapError {
 ///
 /// The three trailing parameters were once three adjacent `&str`, with a credential in
 /// the middle — every permutation compiled (#693). They are three distinct types now, so
-/// a transposition is a compile error rather than a silent mis-provision:
+/// a transposition is a compile error rather than a silent mis-provision.
+///
+/// The positive companion shows the identical fixture compiles when the arguments are in
+/// the right slots, so the `compile_fail` below fails for the transposition rather than
+/// for a moved path or a changed signature (#763):
+///
+/// ```
+/// use common::pg_identifier::{PgDatabaseName, PgRoleName};
+/// use common::pg_role_password::PgRolePassword;
+/// use sqlx::postgres::PgConnectOptions;
+/// use storage::create_postgres_database_and_role;
+/// # async fn f(bootstrap: &PgConnectOptions) {
+/// let pw: PgRolePassword = "p".parse().unwrap();
+/// let role: PgRoleName = "r".parse().unwrap();
+/// let db: PgDatabaseName = "d".parse().unwrap();
+/// let _ = create_postgres_database_and_role(bootstrap, &role, &pw, &db).await;
+/// # }
+/// ```
+///
+/// …and the transposed call does not:
 ///
 /// ```compile_fail
 /// use common::pg_identifier::{PgDatabaseName, PgRoleName};
