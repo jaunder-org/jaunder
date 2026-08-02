@@ -220,7 +220,7 @@ match on those, not on the numbers.
 **Interfaces:** produces `FEED_POLL_TIMEOUT_MS`, `FEED_SETUP_ALLOWANCE_MS`,
 `PING_WAIT_MS`, `PING_SETTLE_MS` as module constants in `feeds.spec.ts`.
 
-- [ ] **Step 1: Name the poll timeout and derive the `:179` budget**
+- [x] **Step 1: Name the poll timeout and derive the `:179` budget**
 
 Replace the literal default on `fetchFeedContaining` with a named constant,
 declared next to `FORMATS`:
@@ -255,7 +255,7 @@ setTestBudget(
 That evaluates to 180_000 (A2). The increase over today's 150_000 is deliberate
 — see the plan header.
 
-- [ ] **Step 2: Name the ping constants and derive the `:245` budget**
+- [x] **Step 2: Name the ping constants and derive the `:245` budget**
 
 Declare next to the others:
 
@@ -289,7 +289,11 @@ const PING_SETUP_ALLOWANCE_MS = 8_000;
 
 That evaluates to 90_000 — **unchanged behaviour**, now derived (A3).
 
-- [ ] **Step 3: Verify the arithmetic didn't move**
+- [x] **Step 3: Verify the arithmetic didn't move** → 180 000 and 90 000,
+      confirmed by evaluating the constants out of the source. (First check
+      reported a false MISMATCH — the verification regex stopped at the `]` in
+      the type annotation and counted 1 format instead of 3; the instrument was
+      wrong, not the code.)
 
 ```bash
 rg -n -A4 'setTestBudget\(' /home/mdorman/src/jaunder/.claude/worktrees/issue-270-e2e-timeout-budgets/end2end/tests/feeds.spec.ts
@@ -306,7 +310,7 @@ devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-270-e2e-time
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit** → `dd2c0d78`.
 
 ```bash
 git add end2end/tests/feeds.spec.ts

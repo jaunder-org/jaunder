@@ -789,9 +789,9 @@
                 imports = [ self.nixosModules.jaunder ];
 
                 virtualisation.memorySize = vmMemory;
-                # Default (null) leaves the nixosTest core count alone; the #155
-                # workers=4 flip sets 4 (workers>1 needs the cores; 1 vCPU
-                # timeshares and starves the client render).
+                # Default (null) leaves the nixosTest core count alone; the warm
+                # gate sets 2, matching its worker count (workers>1 needs the
+                # cores; 1 vCPU timeshares and starves the client render).
                 virtualisation.cores = lib.mkIf (vmCores != null) vmCores;
                 environment.systemPackages = [
                   pkgs.postgresql_16
@@ -957,10 +957,12 @@
         # NOT part of the gate — built on demand by
         # `cargo xtask traces run --cold` to capture cold-cache OTel
         # navigation traces for performance diagnostics (see docs/observability.md).
-        # Pinned to workers=1 (overriding the workers=4 gate default): these
-        # measure per-navigation cold cost, where worker contention would corrupt
-        # the attribution, and they keep the default 2 GB VM (4 Firefox workers
-        # would OOM it, #61).
+        # Pinned to workers=1 (the warm gate runs at 2, see above): these measure
+        # per-navigation cold cost, where worker contention would corrupt the
+        # attribution, and they keep the default 2 GB VM (more Firefox workers
+        # would OOM it, #61). Note workers=1 also means the whole-test scale is
+        # 1.0 rather than 1.5 — see DEFAULT_TEST_BUDGET_MS in
+        # end2end/tests/fixtures.ts (#270).
         e2eColdPackages = pkgs.lib.listToAttrs (
           map (c: {
             name = "e2e-${c.backend}-${c.browser}-cold";

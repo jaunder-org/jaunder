@@ -431,8 +431,15 @@ scales the post-navigation `.j-post-body` assertion (it used the global 5 s
 
 ## Timeout Budgeting
 
-E2E tests should use `slowBrowserTimeoutMs(testInfo, chromiumBudgetMs)` from
-`end2end/tests/fixtures.ts` instead of hard-coded timeout numbers.
+Whole-test budgets are ambient: an auto fixture gives every test a scaled
+`DEFAULT_TEST_BUDGET_MS`, and it covers the whole suite — #270 deleted 18 of the
+20 per-test budgets after measuring that they guarded nothing. The two that
+remain derive their budget from polling deadlines that genuinely exceed the
+ambient one.
+
+For an individual assertion that needs longer on a slow browser, use
+`slowBrowserTimeoutMs(testInfo, chromiumBudgetMs)` from
+`end2end/tests/fixtures.ts` instead of a hard-coded timeout number.
 
 For first document navigation in a test (typically the coldest path), use
 `slowBrowserFirstNavigationTimeoutMs(testInfo, chromiumBudgetMs)`.
