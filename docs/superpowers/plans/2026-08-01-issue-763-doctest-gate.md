@@ -2157,7 +2157,7 @@ git commit -m "build(xtask): run the doctest gate in check and validate (#763)"
   `crate::files::with_extension`, `crate::git::tracked_files`.
 - Produces: a `doctest-fences` step covering the two roots no Nix check can see.
 
-- [ ] **Step 1: Write the failing tests** in `xtask/src/steps/doctest_fences.rs`
+- [x] **Step 1: Write the failing tests** in `xtask/src/steps/doctest_fences.rs`
 
 ```rust
 #[cfg(test)]
@@ -2189,13 +2189,23 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate -- cargo test --manifest-path xtask/Cargo.toml`
 Expected: FAIL — `run_path`, `git::tracked_files` not defined.
 
-- [ ] **Step 3: Implement against the tests**
+**It failed for a better reason than "not defined".** The scan-root coverage
+test reported `src/adr.rs falls under 0 scan roots`:
+`cargo test --manifest-path xtask/Cargo.toml` runs with `xtask/` as its cwd, and
+`git ls-files` lists only what is beneath the cwd, with paths relative to it.
+Fixed by asking from `git::toplevel` — which already existed as `pub(crate)`, so
+the "new" helper the plan called for was really a visibility change plus
+`tracked_files`. The test now also asserts it saw more than 100 files, so a
+future partial-tree query fails loudly rather than vacuously passing over a
+short list.
+
+- [x] **Step 3: Implement against the tests**
 
 Add to `xtask/src/git.rs`, matching the module's `(dir: &Path, …)` convention
 (`git.rs:37-82`):
@@ -2244,17 +2254,32 @@ following `sqlx_newtype_decode_check.rs:569-583`.
 `steps::sqlx_newtype_decode_check::run(&mut result);` in **both** the `Check`
 (`:411`) and `Validate` (`:451`) arms, outside any `no_test` guard.
 
-- [ ] **Step 5: Run and verify**
+- [x] **Step 4: Wire the call sites**
+
+- [x] **Step 5: Run and verify**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate -- cargo test --manifest-path xtask/Cargo.toml`
-Expected: PASS.
+Expected: PASS. **Actual: 645 passed.**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate -- cargo xtask check --no-test`
 Expected: PASS, with `doctest-fences` present (it runs in every mode).
 
-- [ ] **Step 6: Commit**
+**Its first real run failed — on this crate's own fixtures.** The six
+`tools/doctests/testdata/*.rs` files carry deliberately-broken fences that no
+crate compiles (the harness `include_str!`s them), so the scanner correctly saw
+eight fences "in the tree, absent from the run". The gate was right; the
+population definition was wrong. Fixed structurally, by renaming them `.rs.txt`
+so they leave the population, rather than by carving a `testdata/` exemption
+into it — which is also what the repo's other fixture trees do (they are never
+`.rs`). Note the recovery the gate suggested, marking them ` ```text `, would
+have destroyed the very thing they exist to pin: a gate's advice is not always
+the right fix.
+
+**Actual after the rename: `doctest-fences ok=true`.**
+
+- [x] **Step 6: Commit**
 
 ```bash
 git add xtask/src/steps/doctest_fences.rs xtask/src/lib.rs xtask/src/git.rs

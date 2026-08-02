@@ -25,6 +25,7 @@ mod steps {
     pub mod adr_check;
     pub mod build_csr;
     pub mod doc_links;
+    pub mod doctest_fences;
     pub mod e2e_local;
     pub mod flaky;
     pub mod host_tests;
@@ -416,6 +417,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::thin_components::run(&mut result);
             steps::sqlx_newtype_bind_check::run(&mut result);
             steps::sqlx_newtype_decode_check::run(&mut result);
+            steps::doctest_fences::run(&mut result);
             steps::rendered_html_from_trusted_check::run(&mut result);
             steps::raw_html_door_check::run(&mut result);
             steps::html_sink_check::run(&mut result);
@@ -459,6 +461,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::thin_components::run(&mut result);
             steps::sqlx_newtype_bind_check::run(&mut result);
             steps::sqlx_newtype_decode_check::run(&mut result);
+            steps::doctest_fences::run(&mut result);
             steps::rendered_html_from_trusted_check::run(&mut result);
             steps::raw_html_door_check::run(&mut result);
             steps::html_sink_check::run(&mut result);

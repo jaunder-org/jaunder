@@ -66,12 +66,19 @@ mod tests {
     use crate::check::{problems, Kind, ScannedFile};
     use crate::libtest::run_entries;
 
-    const ORDERING_CONTROL: &str = include_str!("../testdata/ordering_control.rs");
-    const CFG_FEATURE: &str = include_str!("../testdata/cfg_feature.rs");
-    const CFG_TEST_MODULE: &str = include_str!("../testdata/cfg_test_module.rs");
-    const UNKNOWN_TAG: &str = include_str!("../testdata/unknown_tag.rs");
-    const FAILING: &str = include_str!("../testdata/failing.rs");
-    const BIN_ONLY: &str = include_str!("../testdata/bin_only.rs");
+    // `.rs.txt`, not `.rs`: these are test DATA, not any crate's source. Under a
+    // `.rs` name the doctest gate would (correctly) see their deliberately-broken
+    // fences as part of the population it polices and report every one as never
+    // run — and the recovery it suggests, marking them ```text, would destroy the
+    // very thing they exist to pin. Keeping them out of the population
+    // structurally beats carving a `testdata/` hole in it, and matches the repo's
+    // other fixture trees, which are never `.rs` either.
+    const ORDERING_CONTROL: &str = include_str!("../testdata/ordering_control.rs.txt");
+    const CFG_FEATURE: &str = include_str!("../testdata/cfg_feature.rs.txt");
+    const CFG_TEST_MODULE: &str = include_str!("../testdata/cfg_test_module.rs.txt");
+    const UNKNOWN_TAG: &str = include_str!("../testdata/unknown_tag.rs.txt");
+    const FAILING: &str = include_str!("../testdata/failing.rs.txt");
+    const BIN_ONLY: &str = include_str!("../testdata/bin_only.rs.txt");
 
     fn scanned(source: &str) -> Vec<ScannedFile> {
         vec![ScannedFile {
