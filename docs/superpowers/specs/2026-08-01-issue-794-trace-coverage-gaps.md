@@ -243,14 +243,15 @@ are attributed to. AC-14 asserts that byte-identically rather than assuming it.
   `e2e.request_count`, `e2e.navigation_count` and `e2e.action_count`. (Parent is
   deliberately excluded — D2.) Verified by comparing captures from `main` and
   the branch.
-- **AC-4**: `cargo xtask traces analyze` gains a per-test **span-coverage**
-  section reporting, per test: Playwright-reported duration (joined from
-  `playwright-report-<backend>.json`), lifecycle-tree covered time, and the
-  uncovered remainder. On a before/after `cargo xtask traces run`, the uncovered
-  remainder falls from the measured 28–31 % baseline to a value recorded in
-  `docs/observability.md` as the D3 floor. **No threshold is pre-committed**:
-  the floor is measured, not assumed, and the AC is met by the drop plus the
-  recorded number.
+- **AC-4** — ✅ **met**. `cargo xtask traces analyze` gained a per-test
+  **span-coverage** section reporting, per test: Playwright-reported duration
+  (joined from `playwright-report-<backend>.json` on test + project + retry),
+  lifecycle-tree covered time (interval **union**), and the uncovered remainder.
+  Measured on `sqlite × chromium`, 127 tests: **28–31 % → 3.9 %** aggregate.
+  Residual mean 176 ms/test (p50 171, max 373); correlation with test duration
+  **0.21**, i.e. a fixed floor rather than a proportional cost — which is the
+  evidence for D3's claim. Recorded in `docs/observability.md`. **No threshold
+  was pre-committed**: the floor was measured after the mechanism existed.
 
 ### Gap 2 — `commit_to_mount` decomposition
 
@@ -289,15 +290,22 @@ are attributed to. AC-14 asserts that byte-identically rather than assuming it.
   `attachTraceCapture(context, …)` called from exactly two sites:
   `_autoPerfSpan` and `tracedContext`. No page-level instrumentation is
   duplicated.
-- **AC-13**: The Private-post visibility test exports one `e2e.page` span per
-  instrumented page, and the **sum** of `navigation_count` over its lifecycle
-  tree is exactly N — where N is measured once on the branch and committed to
-  the spec, rather than asserted equal to its `page.goto` count (a `goto` is not
-  1:1 with a recorded navigation: client-side `pushState` routing produces
+- **AC-13** — ✅ **met**. "Private post: hidden from anonymous and
+  non-subscriber, visible to author" exports **4** `e2e.page` spans, and the sum
+  of `navigation_count` over its lifecycle tree is **8** (3 on the default
+  page + 5 across the extra contexts). #788 measured `navigation_count` = 3 for
+  this test — the default page alone — so the under-reporting gap is closed and
+  the figure is now a committed literal.
+
+  Deliberately not asserted equal to the test's `page.goto` count: a `goto` is
+  not 1:1 with a recorded navigation (client-side `pushState` routing produces
   navigations with no `goto`, and an aborted or same-document `goto` may not
-  commit).
-- **AC-14**: `docs/coverage/server-fns.json` regenerates **byte-identical** to
-  the committed snapshot, and the orphan bucket's reason set is unchanged.
+  commit). Suite-wide the run emitted 27 `e2e.page` spans.
+
+- **AC-14** — ✅ **met**. `cargo xtask e2e sqlite chromium` reported
+  `server-fn-coverage-verify — 54 covered; snapshot current`: byte-identical
+  snapshot, orphan reason set unchanged, with `e2e.test` reparented under the
+  envelope. D2's "reparenting cannot break #681" argument holds empirically.
 
 ### Gap 5 — truncation marker
 

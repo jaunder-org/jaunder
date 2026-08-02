@@ -58,7 +58,7 @@ collide), and the coverage extractor walks `parent_span_id` _upward_ to an
 `e2e.project` differs from the filter, so an unstamped span reads as "belongs to
 another project" and vanishes from filtered analysis.
 
-### The attribution floor
+### The attribution floor — measured at ~176 ms/test
 
 Some per-test time cannot be measured from inside the fixture doing the
 measuring. Playwright tears fixtures down in reverse setup order, so
@@ -66,9 +66,32 @@ measuring. Playwright tears fixtures down in reverse setup order, so
 runs _before_ `context.close()`. The OTLP export itself and the context teardown
 are therefore outside every span, permanently.
 
-This is the known floor, not an oversight. It is named here rather than absorbed
-into a rounded number, so a future reader can tell "not yet instrumented" from
-"structurally unmeasurable".
+Measured on `sqlite × chromium`, 127 tests
+(`cargo xtask traces analyze --playwright-report …`):
+
+|                                  | before (#788) | after (#794)                        |
+| -------------------------------- | ------------- | ----------------------------------- |
+| per-test time outside every span | **28–31 %**   | **3.9 %**                           |
+| absolute residual, per test      | —             | mean 176 ms, p50 171 ms, max 373 ms |
+
+**The residual behaves like a floor, not a cost.** Correlation between a test's
+reported duration and its unattributed time is **0.21** — near zero. A
+proportional overhead would correlate near 1; a fixed per-test cost correlates
+near 0. That is the evidence for calling this structural rather than merely
+un-instrumented, and it is why the high _percentages_ in the report all sit on
+short tests (a 1.6 s test with a 270 ms floor reads as 16 %, the same 270 ms).
+
+No threshold is gated on this. The number is recorded so a future change that
+moves it is visible; it was measured after the mechanism existed rather than
+guessed beforehand.
+
+### What the boot marks do and do not cover
+
+Marks are harvested per navigation at that document's `load` event. `goto` waits
+only for `domcontentloaded`, so **a navigation whose test finishes before `load`
+fires records no marks** — in the measured run, 73 navigations across 59 of 127
+tests carried them. Those navigations report the marks as _absent_, never as
+zeros, so a missing decomposition cannot be mistaken for an instant one.
 
 ### Truncation is reported, never silent
 

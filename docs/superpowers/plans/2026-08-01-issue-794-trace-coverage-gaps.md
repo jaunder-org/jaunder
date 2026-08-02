@@ -59,6 +59,14 @@ only the VM path does (`flake.nix:616-618`).
   must be **re-run** before each `verify`, or `verify` silently checks a stale
   capture.
 
+### `-p xtask` does not work
+
+`xtask/Cargo.toml` declares its own `[workspace]`, so xtask is **not** a member
+of the root workspace: `cargo … -p xtask` fails with "package ID specification
+`xtask` did not match any packages" (and unhelpfully suggests `maik`). Use
+`--manifest-path xtask/Cargo.toml`. `-p client` is fine — `client` IS a root
+workspace member.
+
 ## Review header
 
 **Scope — in:** all eight gaps, in `end2end/tests/`, `client/`, `csr/`,
@@ -777,12 +785,14 @@ Closes AC-4's tooling half.
       overlapping children must not double-count — and the remainder is
       `playwright_duration - covered`, never negative.
 
-- [ ] **Step 4:** Run `cargo nextest run -p xtask traces` → FAIL
+- [ ] **Step 4:** Run
+      `cargo nextest run --manifest-path xtask/Cargo.toml traces` → FAIL
 - [ ] **Step 5: Implement.** The denominator is the Playwright report joined on
       test title + project — **not** `e2e.total_ms` (`fixtures.ts:770`), the
       span's own duration. Name the report path in the section header so the
       source is explicit.
-- [ ] **Step 6:** Run `cargo nextest run -p xtask traces` → PASS
+- [ ] **Step 6:** Run
+      `cargo nextest run --manifest-path xtask/Cargo.toml traces` → PASS
 - [ ] **Step 7: Commit**
 
 ```bash
