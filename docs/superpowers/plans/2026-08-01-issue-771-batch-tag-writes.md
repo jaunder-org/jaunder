@@ -834,7 +834,7 @@ git commit -m "perf(tags): one batched write per tag mutation on all four paths 
 - Consumes: `common::tag::parse_and_validate_tags`, `TagValidationError`.
 - Produces: `impl From<TagValidationError> for HandlerError` yielding a 4xx.
 
-- [ ] **Step 1: Write the failing bounding tests (AC8)**
+- [x] **Step 1: Write the failing bounding tests (AC8)**
 
 `server/tests/atompub/atompub_posts.rs`, `#[apply(backends)]`:
 
@@ -853,7 +853,7 @@ git commit -m "perf(tags): one batched write per tag mutation on all four paths 
 Write these as three real tests with concrete Atom entry bodies, following the
 existing entry-construction helpers in that file.
 
-- [ ] **Step 2: Run them, verify they fail**
+- [x] **Step 2: Run them, verify they fail**
 
 ```
 cargo run --manifest-path tools/Cargo.toml -p devtool -- pg run -- cargo nextest run -p jaunder --test integration atompub_posts
@@ -863,7 +863,7 @@ Expected: **FAIL** — over-cap currently succeeds (no cap), duplicates currentl
 produce one row only by accident of D4's conflict-tolerance rather than by
 dedupe.
 
-- [ ] **Step 3: Add the error bridge**
+- [x] **Step 3: Add the error bridge**
 
 `TagValidationError` today only bridges to `host::error::InternalError`
 (`host/src/error.rs:394`), which AtomPub does not use — so nothing currently
@@ -889,7 +889,7 @@ impl From<common::tag::TagValidationError> for HandlerError {
 No blanket `From` impl exists on `HandlerError` (`mod.rs:195-285`), so this
 conflicts with nothing.
 
-- [ ] **Step 4: Validate at the two handlers — _before_ any storage mutation**
+- [x] **Step 4: Validate at the two handlers — _before_ any storage mutation**
 
 `entry_to_post_fields` is deliberately **infallible** (`mapping.rs:83-125`,
 contract at `:98-104`), so do **not** make it fallible — validate the categories
@@ -917,7 +917,7 @@ The `set_post_tags` call then takes `&categories`.
 Also fix the now-stale comment at `mapping.rs:102` referring to
 `post_tag_diff`'s filtering.
 
-- [ ] **Step 5: Run the tests, verify they pass**
+- [x] **Step 5: Run the tests, verify they pass**
 
 ```
 cargo run --manifest-path tools/Cargo.toml -p devtool -- pg run -- cargo nextest run -p jaunder --test integration atompub
@@ -926,7 +926,7 @@ cargo run --manifest-path tools/Cargo.toml -p devtool -- pg run -- cargo nextest
 Expected: **PASS**. Existing AtomPub tests must stay green — none posts more
 than three `<category>` elements, so none is over-cap.
 
-- [ ] **Step 6: Gate and commit**
+- [x] **Step 6: Gate and commit**
 
 ```
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-771-batch-tag-writes -- cargo xtask check

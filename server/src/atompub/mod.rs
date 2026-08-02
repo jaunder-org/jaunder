@@ -231,6 +231,17 @@ impl From<storage::TaggingError> for HandlerError {
     }
 }
 
+impl From<common::tag::TagValidationError> for HandlerError {
+    /// An over-cap or otherwise invalid category set is the client's error, not
+    /// an internal one — unlike `TaggingError`, which is always an internal
+    /// inconsistency. Bounding this is what keeps the batched tag write capped by
+    /// construction (#771, ADR-0092). `BadRequest` is a unit variant, so the
+    /// error text is dropped: the status is the whole client-facing answer.
+    fn from(_: common::tag::TagValidationError) -> Self {
+        HandlerError::BadRequest
+    }
+}
+
 impl From<storage::PerformCreationError> for HandlerError {
     fn from(err: storage::PerformCreationError) -> Self {
         use storage::PerformCreationError as E;

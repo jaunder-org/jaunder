@@ -344,6 +344,9 @@ pub async fn collection_post(
     let default_format =
         storage::get_default_post_format(user_config.as_ref(), auth_user.user_id).await?;
     let fields = entry_to_post_fields(&entry, default_format);
+    // Bound the tag set before anything is written: an over-cap entry must be
+    // rejected, not created-then-rejected (#771 D9/D12, ADR-0092).
+    let categories = common::tag::parse_and_validate_tags(fields.categories)?;
     // Non-draft entries honor the wire `<published>`: a future time schedules
     // the post, a past time backdates it; absent falls back to "now".
     let published_at = if fields.is_draft {
@@ -403,9 +406,7 @@ pub async fn collection_post(
 
     // Fresh create: a non-conflict error propagates via `?`.
     let created = created?;
-    posts
-        .set_post_tags(created.post_id, &fields.categories)
-        .await?;
+    posts.set_post_tags(created.post_id, &categories).await?;
     let post = posts
         .get_post_by_id(created.post_id, &viewer)
         .await?
@@ -478,6 +479,9 @@ pub async fn member_put(
     let default_format =
         storage::get_default_post_format(user_config.as_ref(), auth_user.user_id).await?;
     let fields = entry_to_post_fields(&entry, default_format);
+    // Bound the tag set before anything is written: an over-cap entry must be
+    // rejected, not updated-then-rejected (#771 D9/D12, ADR-0092).
+    let categories = common::tag::parse_and_validate_tags(fields.categories)?;
 
     // AtomPub has no audience picker; preserve the post's existing targeting
     // across the edit rather than resetting it.
@@ -507,7 +511,7 @@ pub async fn member_put(
     )
     .await?;
 
-    posts.set_post_tags(post_id, &fields.categories).await?;
+    posts.set_post_tags(post_id, &categories).await?;
 
     // Load as the authenticated owner so a non-Public post is not hidden.
     let viewer = owner_viewer(subscriptions.as_ref(), &auth_user).await?;

@@ -3,7 +3,7 @@ use axum::{
     http::{header, Request, StatusCode},
 };
 use common::ids::PostId;
-use common::tag::TagLabel;
+use common::tag::{TagLabel, MAX_TAGS_PER_POST};
 use common::test_support::permalink_date;
 use tower::ServiceExt;
 
@@ -857,6 +857,125 @@ async fn create_skips_invalid_category(#[case] backend: Backend) {
     assert!(
         !body.contains("has spaces"),
         "invalid category leaked: {body}"
+    );
+}
+
+/// #771 (D9/AC8, ADR-0092): an entry carrying more than `MAX_TAGS_PER_POST`
+/// distinct categories is *rejected* rather than written — the batched tag write
+/// stays capped by construction. Validation runs before any storage mutation, so
+/// the post is not created either.
+#[apply(backends)]
+#[tokio::test]
+async fn create_with_over_cap_categories_is_rejected(#[case] backend: Backend) {
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+    let app = make_app(&state, &base);
+
+    let categories = (0..=MAX_TAGS_PER_POST)
+        .map(|n| format!("  <category term=\"tag{n}\"/>"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let xml = format!(
+        r#"<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>Too many</title>
+  <content type="text">body</content>
+{categories}
+</entry>"#
+    );
+
+    let response = app
+        .clone()
+        .oneshot(atompub_post_xml(&session, "posts", &xml))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // "Rejected rather than written": nothing was created on the way to the 400.
+    let listed = app.oneshot(atompub_get(&session, "posts")).await.unwrap();
+    assert_eq!(listed.status(), StatusCode::OK);
+    let body = body_string(listed).await;
+    assert_eq!(
+        body.matches("<entry").count(),
+        0,
+        "over-cap entry must not create a post: {body}"
+    );
+}
+
+/// #771 (D9): categories that collapse to the same canonical slug become one tag,
+/// and the first occurrence's casing is the one that survives — the same dedupe
+/// the web door applies, now on the `AtomPub` door too.
+#[apply(backends)]
+#[tokio::test]
+async fn create_dedupes_categories_keeping_first_casing(#[case] backend: Backend) {
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+    let app = make_app(&state, &base);
+
+    let xml = r#"<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>Dupes</title>
+  <content type="text">body</content>
+  <category term="Rust"/>
+  <category term="rust"/>
+</entry>"#;
+
+    let response = app
+        .oneshot(atompub_post_xml(&session, "posts", xml))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = body_string(response).await;
+    assert_eq!(
+        body.matches("<category").count(),
+        1,
+        "duplicate categories should collapse to one tag: {body}"
+    );
+    assert!(
+        body.contains("term=\"Rust\""),
+        "the first occurrence's casing should win: {body}"
+    );
+}
+
+/// #771 (D9) narrows `AtomPub` category handling for *over-cap* entries only — a
+/// single *malformed* term is still skipped leniently rather than failing the
+/// whole entry (R5, `docs/atompub-marsedit-acceptance.md`).
+#[apply(backends)]
+#[tokio::test]
+async fn create_skips_malformed_category_beside_a_valid_one(#[case] backend: Backend) {
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+    let app = make_app(&state, &base);
+
+    let xml = r#"<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>Lenient</title>
+  <content type="text">body</content>
+  <category term="rust"/>
+  <category term="has spaces"/>
+</entry>"#;
+
+    let response = app
+        .oneshot(atompub_post_xml(&session, "posts", xml))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = body_string(response).await;
+    assert_eq!(
+        body.matches("<category").count(),
+        1,
+        "the valid term should survive alone: {body}"
+    );
+    assert!(
+        body.contains("term=\"rust\""),
+        "the valid term should be kept: {body}"
+    );
+    assert!(
+        !body.contains("has spaces"),
+        "malformed category leaked: {body}"
     );
 }
 
