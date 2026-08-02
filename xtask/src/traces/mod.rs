@@ -8,4 +8,5 @@
 pub mod analyze;
 pub mod parse;
 pub mod render;
+pub mod report;
 pub mod run;

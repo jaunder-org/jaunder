@@ -38,6 +38,62 @@ pub struct Span {
     pub raw: Value,
 }
 
+/// A span's `[start, end)` in milliseconds, read from the raw OTLP nanosecond
+/// fields.
+///
+/// `Span` carries only `duration_ms`, which is enough to rank but not to take a
+/// union: two 100 ms children of one parent cover 200 ms if disjoint and 100 ms
+/// if they overlap, and only the timestamps distinguish those. The span-coverage
+/// section needs the union, so it needs these (#794).
+///
+/// Returns `None` when either bound is absent or unparseable, so a malformed span
+/// is excluded from coverage rather than silently contributing a zero-length or
+/// wildly-wrong interval.
+pub fn span_interval_ms(raw: &Value) -> Option<(f64, f64)> {
+    let nanos = |key: &str| -> Option<f64> {
+        let value = raw.get(key)?;
+        // OTLP encodes uint64 as either a JSON string or a number.
+        value
+            .as_str()
+            .and_then(|text| text.parse::<f64>().ok())
+            .or_else(|| value.as_f64())
+    };
+    let start = nanos("startTimeUnixNano")? / 1_000_000.0;
+    let end = nanos("endTimeUnixNano")? / 1_000_000.0;
+    if !start.is_finite() || !end.is_finite() || end < start {
+        return None;
+    }
+    Some((start, end))
+}
+
+/// Total length covered by `intervals`, counting overlaps once.
+///
+/// Sorting by start and merging is what makes this a union rather than a sum —
+/// the distinction the section depends on, since `e2e.test` and an `e2e.page`
+/// span for a concurrently-driven context genuinely overlap in time.
+pub fn interval_union_ms(mut intervals: Vec<(f64, f64)>) -> f64 {
+    if intervals.is_empty() {
+        return 0.0;
+    }
+    intervals.sort_by(|left, right| {
+        left.0
+            .partial_cmp(&right.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut total = 0.0;
+    let (mut current_start, mut current_end) = intervals[0];
+    for &(start, end) in &intervals[1..] {
+        if start > current_end {
+            total += current_end - current_start;
+            current_start = start;
+            current_end = end;
+        } else if end > current_end {
+            current_end = end;
+        }
+    }
+    total + (current_end - current_start)
+}
+
 /// The two span filters `traces analyze` accepts.
 #[derive(Debug, Default, Clone)]
 pub struct Filters {
@@ -224,6 +280,55 @@ mod tests {
 
     fn line(spans: Value) -> String {
         json!({ "resourceSpans": [{ "scopeSpans": [{ "spans": spans }] }] }).to_string()
+    }
+
+    #[test]
+    fn interval_union_counts_overlap_once() {
+        // The whole reason coverage is a union and not a sum: e2e.test and an
+        // e2e.page span for a concurrently-driven context overlap in real runs.
+        assert_eq!(interval_union_ms(vec![(0.0, 100.0), (50.0, 150.0)]), 150.0);
+    }
+
+    #[test]
+    fn interval_union_sums_disjoint_and_ignores_order() {
+        assert_eq!(interval_union_ms(vec![(200.0, 250.0), (0.0, 100.0)]), 150.0);
+    }
+
+    #[test]
+    fn interval_union_absorbs_a_contained_interval() {
+        assert_eq!(interval_union_ms(vec![(0.0, 100.0), (25.0, 50.0)]), 100.0);
+    }
+
+    #[test]
+    fn interval_union_of_nothing_is_zero() {
+        assert_eq!(interval_union_ms(vec![]), 0.0);
+    }
+
+    #[test]
+    fn span_interval_reads_string_and_numeric_nanos() {
+        let as_string = json!({
+            "startTimeUnixNano": "1000000",
+            "endTimeUnixNano": "3000000",
+        });
+        assert_eq!(span_interval_ms(&as_string), Some((1.0, 3.0)));
+        let as_number = json!({
+            "startTimeUnixNano": 1_000_000u64,
+            "endTimeUnixNano": 3_000_000u64,
+        });
+        assert_eq!(span_interval_ms(&as_number), Some((1.0, 3.0)));
+    }
+
+    #[test]
+    fn span_interval_rejects_missing_or_inverted_bounds() {
+        // Excluded from coverage rather than contributing a bogus interval.
+        assert_eq!(span_interval_ms(&json!({})), None);
+        assert_eq!(
+            span_interval_ms(&json!({
+                "startTimeUnixNano": "3000000",
+                "endTimeUnixNano": "1000000",
+            })),
+            None,
+        );
     }
 
     #[test]

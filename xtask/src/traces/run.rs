@@ -64,10 +64,11 @@ pub fn browsers(browser: Option<E2eBrowser>) -> Vec<E2eBrowser> {
 pub fn collect_trace_files(
     cold: bool,
     browser: Option<E2eBrowser>,
-) -> Result<(TempDir, Vec<PathBuf>)> {
+) -> Result<(TempDir, Vec<PathBuf>, Vec<PathBuf>)> {
     let tmp = TempDir::new()?;
     let browsers = browsers(browser);
     let mut files = Vec::new();
+    let mut reports = Vec::new();
     for backend in BACKENDS {
         for &browser in &browsers {
             let attr = e2e_attr(backend, browser, cold);
@@ -85,9 +86,25 @@ pub fn collect_trace_files(
             ));
             extract_trace(&tarball, &dest)?;
             files.push(dest);
+
+            // The Playwright report sits beside the capture in the same store
+            // path. It is the span-coverage section's denominator (#794).
+            // Deliberately NOT an error when absent: a pre-#794 check output has
+            // no reason to carry one, and the coverage section degrades to a
+            // stated note rather than taking the whole run down.
+            let report = playwright_report_path(&out, backend);
+            if report.exists() {
+                reports.push(report);
+            }
         }
     }
-    Ok((tmp, files))
+    Ok((tmp, files, reports))
+}
+
+/// Playwright's `json` reporter output inside a built e2e check's store path:
+/// `<out>/playwright-report-<backend>.json`.
+pub fn playwright_report_path(out: &str, backend: E2eBackend) -> PathBuf {
+    PathBuf::from(out).join(format!("playwright-report-{}.json", backend.as_str()))
 }
 
 /// Extract the single `capture/otel-traces.jsonl` member of a `capture-*.tar.gz`

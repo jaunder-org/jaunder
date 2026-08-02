@@ -7,12 +7,17 @@
 //! [`super::render`]'s job. Port of the twelve `print*` functions in
 //! `scripts/analyze-otel-traces`.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::Result;
 use serde_json::Value;
 
-use super::parse::{get_attr, parse_json_attr, read_spans, to_url_path, Filters, Span};
+use super::parse::{
+    get_attr, interval_union_ms, parse_json_attr, read_spans, span_interval_ms, to_url_path,
+    Filters, Span,
+};
+use super::report::{AttemptKey, ReportedDurations};
 
 /// Parse an `e2e.*` integer-count attribute (`0` when absent/non-numeric),
 /// matching Node's `Number(getAttr(...) || "0")`.
@@ -115,6 +120,32 @@ pub struct Analysis {
     pub resource_initiators: Vec<HotspotRow>,
     /// Slow resource assets, `max_ms` desc. Section 7b.
     pub resource_assets: Vec<AssetRow>,
+    /// Per-test span coverage, largest uncovered remainder first. Section 13 (#794).
+    pub span_coverage: Vec<SpanCoverageRow>,
+    /// Why the coverage section is empty, when it is. `None` means it has rows.
+    /// Never silently absent: an empty section and an unsupplied report look
+    /// identical otherwise, and one of those is a broken build.
+    pub span_coverage_note: Option<String>,
+}
+
+/// The `e2e.test.lifecycle` envelope introduced in #794. Its children are the
+/// named phases; the union of those is what "covered" means.
+pub const LIFECYCLE_SPAN_NAME: &str = "e2e.test.lifecycle";
+
+/// One row of "per-test span coverage" (#794, AC-4).
+///
+/// `covered_ms` is the interval **union** of the lifecycle envelope's children —
+/// how much of the attempt's wall-clock lands inside a *named* phase. Comparing
+/// that against Playwright's own duration is what makes the previously-invisible
+/// fixture overhead visible as a number rather than an inference.
+#[derive(Debug, Clone)]
+pub struct SpanCoverageRow {
+    pub project: String,
+    pub test: String,
+    pub reported_ms: f64,
+    pub covered_ms: f64,
+    pub uncovered_ms: f64,
+    pub uncovered_pct: f64,
 }
 
 /// One row of the "slowest spans" table (Node `printSlowest` :189-214).
@@ -427,8 +458,120 @@ fn resource_sections(spans: &[Span]) -> (Vec<HotspotRow>, Vec<AssetRow>) {
     (initiator_rows, asset_rows)
 }
 
+/// Per-test span coverage: how much of each attempt's wall-clock lands inside a
+/// named phase of the lifecycle tree (#794, AC-4).
+///
+/// Covered time is the interval **union of the envelope's children**, not the
+/// envelope's own duration. The envelope spans the whole lifecycle by
+/// construction, so measuring it against Playwright's duration would report ~100 %
+/// coverage no matter how much time sat between the phases. The union of the named
+/// phases is the honest numerator.
+///
+/// A test with no matching report entry is skipped rather than rendered with a
+/// zero denominator — see `report::ReportedDurations`.
+pub fn span_coverage(spans: &[Span], reported: &ReportedDurations) -> Vec<SpanCoverageRow> {
+    let mut children: HashMap<&str, Vec<&Span>> = HashMap::new();
+    for span in spans {
+        if span.parent_span_id.is_empty() {
+            continue;
+        }
+        children
+            .entry(span.parent_span_id.as_str())
+            .or_default()
+            .push(span);
+    }
+
+    let mut rows: Vec<SpanCoverageRow> = spans
+        .iter()
+        .filter(|span| span.name == LIFECYCLE_SPAN_NAME)
+        .filter_map(|envelope| {
+            let key = AttemptKey {
+                test: get_attr(&envelope.raw, "e2e.test"),
+                project: get_attr(&envelope.raw, "e2e.project"),
+                retry: get_attr(&envelope.raw, "e2e.retry")
+                    .parse::<u64>()
+                    .unwrap_or(0),
+            };
+            let reported_ms = reported.get(&key)?;
+            let intervals: Vec<(f64, f64)> = children
+                .get(envelope.span_id.as_str())
+                .map(|kids| {
+                    kids.iter()
+                        .filter_map(|kid| span_interval_ms(&kid.raw))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let covered_ms = interval_union_ms(intervals);
+            // Clamped: clock skew between the Node-side span stamps and
+            // Playwright's own timing can put covered marginally above reported,
+            // and a negative "uncovered" would read as nonsense.
+            let uncovered_ms = (reported_ms - covered_ms).max(0.0);
+            Some(SpanCoverageRow {
+                project: project_label(&key.project),
+                test: key.test,
+                reported_ms,
+                covered_ms,
+                uncovered_ms,
+                uncovered_pct: if reported_ms > 0.0 {
+                    uncovered_ms / reported_ms * 100.0
+                } else {
+                    0.0
+                },
+            })
+        })
+        .collect();
+    sort_desc_by(&mut rows, |row| row.uncovered_ms);
+    rows
+}
+
 /// Compute the whole [`Analysis`] from already-parsed spans. No I/O.
-pub fn analyze_spans(spans: Vec<Span>, project_filter: Option<String>) -> Analysis {
+///
+/// `reported` supplies the span-coverage section's denominator — Playwright's own
+/// per-test wall-clock, which does not live in the traces. Pass
+/// `&ReportedDurations::default()` when there is no report; the section then
+/// carries a note saying so rather than rendering as fully-covered.
+pub fn analyze_spans(
+    spans: Vec<Span>,
+    project_filter: Option<String>,
+    reported: &ReportedDurations,
+) -> Analysis {
+    let coverage = span_coverage(&spans, reported);
+    let coverage_note = coverage_note(&spans, reported, &coverage);
+    let mut analysis = analyze_spans_inner(spans, project_filter);
+    analysis.span_coverage = coverage;
+    analysis.span_coverage_note = coverage_note;
+    analysis
+}
+
+/// Explain an empty coverage section, so "no report supplied" is never mistaken
+/// for "everything is attributed".
+fn coverage_note(
+    spans: &[Span],
+    reported: &ReportedDurations,
+    coverage: &[SpanCoverageRow],
+) -> Option<String> {
+    if !coverage.is_empty() {
+        return None;
+    }
+    if reported.is_empty() {
+        return Some(
+            "no --playwright-report supplied; per-test coverage needs Playwright's \
+             own durations as the denominator"
+                .to_owned(),
+        );
+    }
+    if !spans.iter().any(|s| s.name == LIFECYCLE_SPAN_NAME) {
+        return Some(format!(
+            "no `{LIFECYCLE_SPAN_NAME}` spans in the capture (pre-#794 traces have none)"
+        ));
+    }
+    Some(format!(
+        "no lifecycle span matched a report entry ({} attempt(s) in the report)",
+        reported.len()
+    ))
+}
+
+fn analyze_spans_inner(spans: Vec<Span>, project_filter: Option<String>) -> Analysis {
     let mut slowest_spans: Vec<SlowSpanRow> = spans
         .iter()
         .map(|s| SlowSpanRow {
@@ -536,17 +679,25 @@ pub fn analyze_spans(spans: Vec<Span>, project_filter: Option<String>) -> Analys
         long_task_by_project,
         resource_initiators,
         resource_assets,
+        // Filled in by `analyze_spans_with_report`, which owns the report join.
+        span_coverage: Vec::new(),
+        span_coverage_note: None,
     }
 }
 
 /// Read + parse every input, then analyze. `filters.project` is carried into
 /// `Analysis.project_filter` for the render header.
-pub fn analyze(inputs: &[PathBuf], filters: Filters) -> Result<Analysis> {
+///
+/// `reports` are Playwright `json` reporter outputs supplying the span-coverage
+/// section's denominator. Empty is fine — the section then renders a note saying
+/// why it is absent rather than silently omitting itself.
+pub fn analyze(inputs: &[PathBuf], filters: Filters, reports: &[PathBuf]) -> Result<Analysis> {
     let mut spans = Vec::new();
     for input in inputs {
         spans.extend(read_spans(input, &filters)?);
     }
-    Ok(analyze_spans(spans, filters.project))
+    let reported = ReportedDurations::from_paths(reports)?;
+    Ok(analyze_spans(spans, filters.project, &reported))
 }
 
 #[cfg(test)]
@@ -560,12 +711,173 @@ mod tests {
         parse_spans(FIXTURE, &Filters::default(), "sample").unwrap()
     }
 
+    // --- span coverage (#794, AC-4) -----------------------------------------
+    //
+    // Built inline rather than added to the shared fixture: several tests above
+    // assert exact span counts against it, so growing it would redden them for
+    // reasons unrelated to what they check.
+
+    fn attr(key: &str, value: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({ "key": key, "value": value })
+    }
+
+    /// One span at `[start_ms, end_ms)`, in the shape `parse_spans` reads.
+    fn timed_span(
+        name: &str,
+        span_id: &str,
+        parent: &str,
+        start_ms: u64,
+        end_ms: u64,
+        extra: Vec<serde_json::Value>,
+    ) -> serde_json::Value {
+        let mut attributes = vec![attr(
+            "e2e.project",
+            serde_json::json!({ "stringValue": "chromium" }),
+        )];
+        attributes.extend(extra);
+        serde_json::json!({
+            "name": name,
+            "spanId": span_id,
+            "parentSpanId": parent,
+            "startTimeUnixNano": (start_ms * 1_000_000).to_string(),
+            "endTimeUnixNano": (end_ms * 1_000_000).to_string(),
+            "attributes": attributes,
+        })
+    }
+
+    /// A lifecycle envelope with two children that OVERLAP, plus the identity
+    /// attributes the report join needs.
+    fn lifecycle_tree() -> Vec<Span> {
+        let identity = || {
+            vec![
+                attr("e2e.test", serde_json::json!({ "stringValue": "logs in" })),
+                attr("e2e.retry", serde_json::json!({ "intValue": "0" })),
+            ]
+        };
+        let line = serde_json::json!({
+            "resourceSpans": [{
+                "scopeSpans": [{
+                    "spans": [
+                        timed_span("e2e.test.lifecycle", "aa", "", 1_000, 1_500, identity()),
+                        // 1000-1200 and 1150-1300 overlap by 50ms: union is 300,
+                        // a naive sum would say 350.
+                        timed_span("e2e.context_mint", "bb", "aa", 1_000, 1_200, vec![]),
+                        timed_span("e2e.test", "cc", "aa", 1_150, 1_300, vec![]),
+                    ]
+                }]
+            }]
+        });
+        parse_spans(&line.to_string(), &Filters::default(), "coverage").unwrap()
+    }
+
+    fn reported(ms: f64) -> ReportedDurations {
+        ReportedDurations::from_value(&serde_json::json!({
+            "suites": [{
+                "specs": [{
+                    "title": "logs in",
+                    "tests": [{
+                        "projectName": "chromium",
+                        "results": [{ "retry": 0, "duration": ms }]
+                    }]
+                }]
+            }]
+        }))
+    }
+
+    #[test]
+    fn span_coverage_unions_overlapping_children() {
+        let rows = span_coverage(&lifecycle_tree(), &reported(500.0));
+        assert_eq!(rows.len(), 1);
+        // The point of the section: overlapping phases are counted once.
+        assert_eq!(rows[0].covered_ms, 300.0);
+        assert_eq!(rows[0].reported_ms, 500.0);
+        assert_eq!(rows[0].uncovered_ms, 200.0);
+        assert!((rows[0].uncovered_pct - 40.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn span_coverage_measures_children_not_the_envelope() {
+        // The envelope spans 1000-1500 by construction, so measuring IT would
+        // report full coverage however much time sat between the phases.
+        let rows = span_coverage(&lifecycle_tree(), &reported(500.0));
+        assert!(
+            rows[0].covered_ms < 500.0,
+            "covered must come from the named phases, not the envelope",
+        );
+    }
+
+    #[test]
+    fn span_coverage_clamps_a_negative_remainder() {
+        // Clock skew can put covered marginally above reported; a negative
+        // "uncovered" would render as nonsense.
+        let rows = span_coverage(&lifecycle_tree(), &reported(100.0));
+        assert_eq!(rows[0].uncovered_ms, 0.0);
+    }
+
+    #[test]
+    fn span_coverage_skips_a_test_absent_from_the_report() {
+        let rows = span_coverage(&lifecycle_tree(), &ReportedDurations::default());
+        assert!(
+            rows.is_empty(),
+            "no denominator means no row — never a zero-denominator row",
+        );
+    }
+
+    #[test]
+    fn coverage_note_distinguishes_no_report_from_no_lifecycle_spans() {
+        // An empty section and a missing report must not look alike.
+        let no_report = analyze_spans(lifecycle_tree(), None, &ReportedDurations::default());
+        assert!(no_report
+            .span_coverage_note
+            .as_deref()
+            .unwrap()
+            .contains("playwright-report"));
+
+        let no_lifecycle = analyze_spans(fixture_spans(), None, &reported(500.0));
+        assert!(no_lifecycle
+            .span_coverage_note
+            .as_deref()
+            .unwrap()
+            .contains("lifecycle"));
+    }
+
+    #[test]
+    fn coverage_note_is_absent_when_the_section_has_rows() {
+        let analysis = analyze_spans(lifecycle_tree(), None, &reported(500.0));
+        assert!(analysis.span_coverage_note.is_none());
+        assert_eq!(analysis.span_coverage.len(), 1);
+    }
+
+    #[test]
+    fn retry_attempts_join_separately() {
+        // Spans are exported per attempt; joining a retry's spans against attempt
+        // 0's wall-clock would silently mis-state coverage.
+        let rows = span_coverage(&lifecycle_tree(), &reported(500.0));
+        assert_eq!(rows.len(), 1, "retry 0 matched exactly one report entry");
+
+        let only_retry_one = ReportedDurations::from_value(&serde_json::json!({
+            "suites": [{
+                "specs": [{
+                    "title": "logs in",
+                    "tests": [{
+                        "projectName": "chromium",
+                        "results": [{ "retry": 1, "duration": 500.0 }]
+                    }]
+                }]
+            }]
+        }));
+        assert!(
+            span_coverage(&lifecycle_tree(), &only_retry_one).is_empty(),
+            "a retry-0 span tree must not match a retry-1 report entry",
+        );
+    }
+
     #[test]
     fn slowest_spans_sorted_desc_and_complete() {
         let spans = fixture_spans();
         let n = spans.len();
         assert!(n > 0, "fixture must have spans");
-        let a = analyze_spans(spans, None);
+        let a = analyze_spans(spans, None, &ReportedDurations::default());
         assert_eq!(a.span_count, n);
         // Every span present (not sliced), sorted by duration descending.
         assert_eq!(a.slowest_spans.len(), n);
@@ -579,7 +891,7 @@ mod tests {
 
     #[test]
     fn slowest_e2e_tests_only_e2e_test_spans() {
-        let a = analyze_spans(fixture_spans(), None);
+        let a = analyze_spans(fixture_spans(), None, &ReportedDurations::default());
         // Two e2e.test spans in the fixture; the HTTP spans are excluded.
         assert_eq!(a.slowest_e2e_tests.len(), 2);
         // Slowest first: firefox (5000ms) then chromium (3000ms).
@@ -594,7 +906,7 @@ mod tests {
 
     #[test]
     fn by_project_groups_and_averages() {
-        let a = analyze_spans(fixture_spans(), None);
+        let a = analyze_spans(fixture_spans(), None, &ReportedDurations::default());
         // One row per project, each with a single test; sorted by avg_ms desc.
         assert_eq!(a.by_project.len(), 2);
         let ff = &a.by_project[0];
@@ -610,7 +922,7 @@ mod tests {
 
     #[test]
     fn trace_totals_sum_per_trace() {
-        let a = analyze_spans(fixture_spans(), None);
+        let a = analyze_spans(fixture_spans(), None, &ReportedDurations::default());
         assert_eq!(a.trace_totals.len(), 2);
         // Trace 1: e2e.test 5000 + GET 200 = 5200 (2 spans); largest first.
         let t1 = &a.trace_totals[0];
@@ -623,7 +935,7 @@ mod tests {
 
     #[test]
     fn action_hotspots_from_action_top_json() {
-        let a = analyze_spans(fixture_spans(), None);
+        let a = analyze_spans(fixture_spans(), None, &ReportedDurations::default());
         // "click" appears in both e2e tests (120.5 firefox, 60 chromium); "fill"
         // only in firefox. Sorted by max desc → click, fill.
         assert_eq!(a.action_hotspots.len(), 2);
@@ -637,7 +949,7 @@ mod tests {
 
     #[test]
     fn navigation_phase_and_targets() {
-        let a = analyze_spans(fixture_spans(), None);
+        let a = analyze_spans(fixture_spans(), None, &ReportedDurations::default());
         // Only the firefox span has valid navigation JSON (chromium's is malformed).
         let total = a
             .navigation_phase_hotspots
@@ -660,7 +972,7 @@ mod tests {
 
     #[test]
     fn long_tasks_hotspots_and_by_project() {
-        let a = analyze_spans(fixture_spans(), None);
+        let a = analyze_spans(fixture_spans(), None, &ReportedDurations::default());
         // "longtask" in both (90 firefox, 70 chromium); "self" only firefox; the
         // chromium "bad" task (-10) is dropped by the <0 guard.
         let longtask = &a.long_task_hotspots[0];
@@ -681,7 +993,7 @@ mod tests {
 
     #[test]
     fn resource_initiators_and_assets() {
-        let a = analyze_spans(fixture_spans(), None);
+        let a = analyze_spans(fixture_spans(), None, &ReportedDurations::default());
         // Initiators: fetch (300) then script (120 + 110), sorted by max desc.
         assert_eq!(a.resource_initiators[0].name, "fetch");
         assert_eq!(a.resource_initiators[0].max_ms, 300.0);
@@ -708,7 +1020,11 @@ mod tests {
             project: Some("firefox".into()),
         };
         let spans = parse_spans(FIXTURE, &filters, "sample").unwrap();
-        let a = analyze_spans(spans, filters.project.clone());
+        let a = analyze_spans(
+            spans,
+            filters.project.clone(),
+            &ReportedDurations::default(),
+        );
         // Carried for the render header.
         assert_eq!(a.project_filter.as_deref(), Some("firefox"));
         // Only the firefox e2e.test survives; the chromium one is filtered out.
@@ -728,8 +1044,8 @@ mod tests {
         let file = dir.join("otel-traces.jsonl");
         std::fs::write(&file, FIXTURE).unwrap();
 
-        let via_file = analyze(&[file], Filters::default()).unwrap();
-        let via_spans = analyze_spans(fixture_spans(), None);
+        let via_file = analyze(&[file], Filters::default(), &[]).unwrap();
+        let via_spans = analyze_spans(fixture_spans(), None, &ReportedDurations::default());
         std::fs::remove_dir_all(&dir).ok();
 
         assert_eq!(via_file.span_count, via_spans.span_count);
