@@ -2301,7 +2301,7 @@ git commit -m "build(xtask): reconcile the xtask and tools fence population (#76
 - Consumes: everything above.
 - Produces: the numberless draft `cargo xtask adr promote` numbers at ship.
 
-- [ ] **Step 1: Write the ADR draft**
+- [x] **Step 1: Write the ADR draft**
 
 Follow the **jaunder-adr** skill's draft flow (numberless, in
 `docs/adr/drafts/`). Content, per AC18:
@@ -2328,7 +2328,7 @@ Follow the **jaunder-adr** skill's draft flow (numberless, in
 - **Consequences:** every new `compile_fail` now costs a companion; `ignore` is
   no longer available anywhere in the tree.
 
-- [ ] **Step 2: Write the module docs**
+- [x] **Step 2: Write the module docs**
 
 `tools/doctests/src/lib.rs` gets the crate-level doc: what the gate governs, the
 three accepted fence forms, and the two halves (workspace producer, host step).
@@ -2341,13 +2341,18 @@ nextest only; the `--doc` run stays outside instrumentation). AC19 names the
 scanner module specifically, so this is the one that must carry it. Follow the
 `sqlx_newtype_decode_check.rs:1-80` precedent.
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate -- cargo xtask check`
 Expected: PASS — including `adr-check`, which validates draft structure.
 
-- [ ] **Step 4: Commit**
+Note the draft is **gitignored** until `cargo xtask adr promote` numbers it at
+ship, so `git add docs/adr/drafts` stages only the tracked `README.md`. The
+draft itself reaches git for the first time already numbered, which is the point
+of the draft-out-of-git flow.
+
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/adr/drafts tools/doctests/src/lib.rs tools/doctests/src/check.rs

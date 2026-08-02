@@ -40,6 +40,21 @@
 //! Scoping to one doc comment is load-bearing. A file-wide or "any plain fence
 //! nearby" rule would let one companion silently cover negatives whose fixtures it
 //! shares nothing with — the region-scoped exemption ADR-0085 principle 4 forbids.
+//!
+//! # Why doctests do not feed the coverage gate
+//!
+//! They deliberately do not, and the reason is worth stating where the code lives
+//! rather than leaving the next reader to wonder whether it was an oversight.
+//! `cargo llvm-cov --doctests` is unstable, and ADR-0050's stateless coverage gate
+//! measures the nextest suite only. So the `--doc` run happens **outside** any
+//! llvm-cov instrumentation and contributes no profraw: adding these ~50 doctests
+//! moves the coverage numbers by exactly zero lines, which is asserted at ship by
+//! diffing the gate's verdict against the branch point.
+//!
+//! That also means coverage is not evidence about doctests, in either direction. A
+//! doctest cannot raise a coverage figure, and a coverage figure says nothing about
+//! whether the fence population was evaluated. This module is the only thing that
+//! answers the latter.
 
 use serde::{Deserialize, Serialize};
 
