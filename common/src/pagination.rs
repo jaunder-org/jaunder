@@ -112,7 +112,7 @@ impl PageSize {
     /// Rows to fetch for exactly one page, with **no** has-more probe.
     ///
     /// For a listing that returns a page and does not report whether another exists —
-    /// the media listing and the draft listing, which have no "load more" affordance.
+    /// the media listing and the tag dropdown, which have no "load more" affordance.
     /// Contrast [`Self::fetch_limit`], which fetches the extra probing row; using that
     /// one here would return a row the caller then has to know to discard.
     #[must_use]

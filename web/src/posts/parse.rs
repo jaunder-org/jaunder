@@ -6,7 +6,7 @@
 //! The components call these fns and wrap the returned plain data in `view!`
 //! markup; the `#[cfg(test)] mod tests` below pin the valid and edge cases.
 
-use crate::posts::DraftSummary;
+use crate::posts::UnpublishedPost;
 use common::slug::Slug;
 use common::time::PermalinkDate;
 use common::username::Username;
@@ -70,15 +70,19 @@ pub struct DraftRowDisplay {
 }
 
 /// Compute the displayed title and the scheduled-badge text for a draft row. A
-/// scheduled post (future `published_at`) carries `scheduled_at` and gets a badge
-/// marking it distinctly from a true draft on this shared "not-yet-live" surface.
-pub fn draft_row_display(draft: &DraftSummary) -> DraftRowDisplay {
+/// scheduled post gets a badge marking it distinctly from a true draft on this
+/// shared "not-yet-live" surface.
+pub fn draft_row_display(draft: &UnpublishedPost) -> DraftRowDisplay {
     let label = draft
         .title
         .clone()
         .map_or_else(|| draft.summary_label.to_string(), String::from);
+    // `list_drafts` only returns true drafts (`published_at` NULL) and scheduled
+    // posts (`published_at` in the future), so a `Some` here is necessarily a
+    // scheduled time — that is what makes the badge text correct.
     let scheduled_badge = draft
-        .scheduled_at
+        .post
+        .published_at
         .map(|when| format!("Scheduled for {when}"));
     DraftRowDisplay {
         label,
@@ -89,6 +93,7 @@ pub fn draft_row_display(draft: &DraftSummary) -> DraftRowDisplay {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::posts::SavedPost;
     use common::ids::PostId;
     use common::test_support::{
         parse_post_summary, parse_post_title, parse_root_relative_url, parse_slug, parse_username,
@@ -180,17 +185,17 @@ mod tests {
         );
     }
 
-    fn draft(title: Option<&str>, scheduled: Option<&str>) -> DraftSummary {
-        DraftSummary {
-            post_id: PostId::from(1),
+    fn draft(title: Option<&str>, scheduled: Option<&str>) -> UnpublishedPost {
+        UnpublishedPost {
+            post: SavedPost {
+                post_id: PostId::from(1),
+                slug: parse_slug("my-post"),
+                published_at: scheduled.map(parse_utc_instant),
+                permalink: parse_root_relative_url("/~alice/2026/01/01/my-post"),
+            },
             title: title.map(parse_post_title),
             summary_label: parse_post_summary("fallback label"),
-            slug: parse_slug("my-post"),
-            created_at: parse_utc_instant("2026-01-01T00:00:00Z"),
-            updated_at: parse_utc_instant("2026-01-01T00:00:00Z"),
-            scheduled_at: scheduled.map(parse_utc_instant),
             edit_url: parse_root_relative_url("/posts/1/edit"),
-            permalink: parse_root_relative_url("/~alice/2026/01/01/my-post"),
         }
     }
 

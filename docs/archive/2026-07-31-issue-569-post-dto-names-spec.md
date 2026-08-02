@@ -589,10 +589,21 @@ returns hits only under `docs/archive/` and in superseded spec/plan documents,
 which are frozen records of what was true when they were written and must
 **not** be rewritten. `docs/adr/` is _not_ frozen in this respect: an ADR that
 points at a live code seam is corrected, since a dangling symbol misleads the
-next reader (ADR-0024 `:36` is the one such case). `derive_post_title` returns
-`Option<(Option<PostTitle>, String)>`. `fallback_label` has exactly **one call
-site** in `common/src/render.rs`, and `PostSummary::truncated` has none in that
-file.
+next reader (ADR-0024 `:36` and
+`docs/superpowers/specs/2026-06-16-emacs-blogging-frontend-design.md` `:297` are
+the two such cases — the latter is a live design doc, neither archived nor
+superseded). `derive_post_title` returns `Option<(Option<PostTitle>, String)>`.
+**`first_meaningful_line`** has exactly **one call site** in
+`common/src/render.rs`, and `PostSummary::truncated` has none in that file.
+
+**Amended 2026-08-02.** This clause named `fallback_label` and expected one call
+site; the symbol no longer exists. The review-fix commit `c8b97ea5` renamed it
+`first_meaningful_line` — it was named for the summary label it fed, and that
+label was deleted by D8 — so the criterion as written was unsatisfiable: the
+grep returns **zero** hits, not one. The rename was justified in that commit but
+the spec was never updated to match, which is precisely the drift the two
+earlier amendments (AC6a, and D6's `input = Json`) were committed separately to
+avoid. Amended here on the same terms.
 
 **AC9a.** The three `common/src/render.rs` tests that asserted on
 `summary_label` (`:1119`, `:1149`, `:1162`) still exist and assert on what the

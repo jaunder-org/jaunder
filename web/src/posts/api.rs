@@ -50,8 +50,8 @@ use {
     std::{collections::BTreeSet, sync::Arc},
     storage::{
         fetch_post_record, find_draft_by_permalink_for_user, keyset_cursor, perform_post_creation,
-        perform_post_update, FeedEventStorage, PostCreation, PostStorage, PostUpdate,
-        PublishUpdate, SiteConfigStorage,
+        perform_post_update, to_post_cursor, wire_cursor, FeedEventStorage, PostCreation,
+        PostStorage, PostUpdate, PublishUpdate, SiteConfigStorage,
     },
 };
 
@@ -84,21 +84,38 @@ pub struct SavedPost {
     pub permalink: RootRelativeUrl,
 }
 
-/// A draft row returned by [`list_drafts`].
+/// One of the author's not-yet-public posts, as a row in an [`UnpublishedPage`].
+///
+/// Named for the predicate the listing selects on, not for "draft": `list_drafts`
+/// returns true drafts (`published_at` NULL) **and** scheduled posts
+/// (`published_at` in the future), so "draft" would be wrong for half the set.
+///
+/// The identity/publication-state quartet is the nested [`SavedPost`] every
+/// post-mutating endpoint already answers with; what this type adds is what the
+/// row needs to paint itself — the label and the edit action's target.
+///
+/// Nesting rather than collapsing the two types is deliberate: nothing converts
+/// between them, and a flat union would put `title`, `summary_label`, and
+/// `edit_url` on every mutation response, where nothing reads them. See
+/// `docs/adr/drafts/post-dto-content-weight-axis.md` (rule 3) before re-filing
+/// the field overlap as duplication.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DraftSummary {
-    pub post_id: PostId,
+pub struct UnpublishedPost {
+    pub post: SavedPost,
     pub title: Option<PostTitle>,
     pub summary_label: PostSummary,
-    pub slug: Slug,
-    pub created_at: UtcInstant,
-    pub updated_at: UtcInstant,
-    /// UTC publication instant for a *scheduled* post (`published_at`
-    /// in the future); `None` for true drafts. Drives the "Scheduled for …"
-    /// author marker.
-    pub scheduled_at: Option<UtcInstant>,
     pub edit_url: RootRelativeUrl,
-    pub permalink: RootRelativeUrl,
+}
+
+/// A cursor-paginated page of the author's unpublished posts, returned by
+/// [`list_drafts`] — the drafts-surface counterpart of
+/// [`TimelinePage`](common::seed::TimelinePage).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UnpublishedPage {
+    pub posts: Vec<UnpublishedPost>,
+    /// Where the next page starts; `None` on the last page.
+    pub next_cursor: Option<PageCursor>,
+    pub has_more: bool,
 }
 
 /// The author-supplied content of a post — the shared RPC input contract for
@@ -375,7 +392,7 @@ pub async fn get_audience_selection(post_id: PostId) -> WebResult<AudienceSelect
     Ok(targets_to_audience_selection(&targets))
 }
 
-/// Lists drafts for the authenticated user.
+/// Lists the authenticated user's unpublished posts (drafts and scheduled).
 // The JSON input codec, unlike the crate's flat-scalar endpoints: a nested
 // `PageCursor` cannot travel through the default form-urlencoded one. Same rule
 // that already puts `create` and `update` on JSON — the other server fns taking
@@ -384,42 +401,52 @@ pub async fn get_audience_selection(post_id: PostId) -> WebResult<AudienceSelect
 pub async fn list_drafts(
     cursor: Option<PageCursor>,
     limit: Option<PageSize>,
-) -> WebResult<Vec<DraftSummary>> {
+) -> WebResult<UnpublishedPage> {
     let auth = require_auth().await?;
     let posts = expect_context::<Arc<dyn PostStorage>>();
 
     let parsed_cursor = keyset_cursor(cursor);
     let page_size = limit.unwrap_or_default();
-    let drafts = posts
+    let mut rows = posts
         .list_drafts_by_user(
             auth.user_id,
             parsed_cursor.as_ref(),
-            page_size.exact_limit(),
+            page_size.fetch_limit(),
             chrono::Utc::now(),
         )
         .await?;
 
-    Ok(drafts
+    // The same derivation `crate::timeline`'s `page_from_rows` performs, spelled
+    // here only because that helper is typed to `TimelinePage`/`RenderedPost`.
+    // Both halves of the has-more rule still come off `PageSize` rather than
+    // hand-rolled arithmetic, so the two sites cannot drift apart (#696).
+    let has_more = page_size.has_more(rows.len());
+    rows.truncate(page_size.page_len());
+    let next_cursor = has_more
+        .then(|| rows.last().map(to_post_cursor))
+        .flatten()
+        .map(|c| wire_cursor(&c));
+
+    let unpublished = rows
         .into_iter()
-        .map(|draft| {
-            let permalink = draft.permalink();
-            // `list_drafts_by_user` only returns drafts (`published_at`
-            // NULL) and scheduled posts (`published_at` in the future), so
-            // a `Some(published_at)` here is necessarily a scheduled time.
-            let scheduled_at = draft.published_at.map(UtcInstant::from);
-            DraftSummary {
+        .map(|draft| UnpublishedPost {
+            post: SavedPost {
                 post_id: draft.post_id,
-                title: draft.title.clone(),
-                summary_label: draft.fallback_summary_label(),
                 slug: draft.slug.clone(),
-                created_at: UtcInstant::from(draft.created_at),
-                updated_at: UtcInstant::from(draft.updated_at),
-                scheduled_at,
-                edit_url: root_relative_path(format!("/posts/{}/edit", draft.post_id)),
-                permalink,
-            }
+                published_at: draft.published_at.map(UtcInstant::from),
+                permalink: draft.permalink(),
+            },
+            title: draft.title.clone(),
+            summary_label: draft.fallback_summary_label(),
+            edit_url: root_relative_path(format!("/posts/{}/edit", draft.post_id)),
         })
-        .collect())
+        .collect();
+
+    Ok(UnpublishedPage {
+        posts: unpublished,
+        next_cursor,
+        has_more,
+    })
 }
 
 /// Publishes an existing draft owned by the authenticated user.
@@ -582,6 +609,45 @@ mod tests {
         assert!(serde_json::from_str::<SavedPost>(&absolute).is_err());
     }
 
+    // The drafts wire nests the identity/publication quartet under `post` rather than
+    // flattening it, so a client reads the same `SavedPost` shape here as it does from
+    // create/update/publish. Round-trip the page to pin that nesting, and the
+    // cursor/has-more envelope that lets the surface turn a page at all.
+    #[test]
+    fn unpublished_page_wire_nests_the_saved_post() {
+        use super::{SavedPost, UnpublishedPage, UnpublishedPost};
+        use common::ids::PostId;
+        use common::seed::PageCursor;
+        use common::test_support::{
+            parse_post_summary, parse_root_relative_url, parse_utc_instant,
+        };
+
+        let page = UnpublishedPage {
+            posts: vec![UnpublishedPost {
+                post: SavedPost {
+                    post_id: PostId::from(1),
+                    slug: "hello".parse::<Slug>().unwrap(),
+                    published_at: Some(parse_utc_instant("2099-01-01T00:00:00Z")),
+                    permalink: parse_root_relative_url("/~alice/2099/01/01/hello"),
+                },
+                title: None,
+                summary_label: parse_post_summary("fallback label"),
+                edit_url: parse_root_relative_url("/posts/1/edit"),
+            }],
+            next_cursor: Some(PageCursor {
+                created_at: parse_utc_instant("2026-01-01T00:00:00Z"),
+                post_id: PostId::from(1),
+            }),
+            has_more: true,
+        };
+        let json = serde_json::to_string(&page).unwrap();
+        assert!(json.contains("\"post\":{"), "row must nest `post`: {json}");
+        assert_eq!(
+            serde_json::from_str::<UnpublishedPage>(&json).unwrap(),
+            page
+        );
+    }
+
     #[test]
     fn candidate_slug_returns_seed_for_first_attempt() {
         let base: Slug = "hello-world".parse().unwrap();
@@ -729,11 +795,12 @@ mod server_tests {
     // Helper fns in this feature-gated test module aren't covered by clippy's
     // allow-{unwrap,expect}-in-tests, so allow the test-scaffolding panics.
     #![allow(clippy::unwrap_used, clippy::expect_used)]
-    use super::{create, publish, update, PostInputs};
+    use super::{create, list_drafts, publish, update, PostInputs};
     use crate::error::WebError;
     use crate::test_support::auth_parts;
     use chrono::Utc;
     use common::ids::{ChannelId, PostId, UserId};
+    use common::pagination::PageSize;
     use common::slug::Slug;
     use common::tag::TagLabel;
     use common::test_support::{parse_tag_label, parse_username};
@@ -778,6 +845,58 @@ mod server_tests {
             .returning(move |_id, _user| outcome());
         provide_context(Arc::new(posts) as Arc<dyn PostStorage>);
         owner
+    }
+
+    fn draft_row(post_id: i64) -> PostRecord {
+        PostRecord {
+            post_id: PostId::from(post_id),
+            ..owned_post(UserId::from(1))
+        }
+    }
+
+    /// The probing-row twin of `listing.rs`'s
+    /// `every_paginated_fetcher_asks_storage_for_the_probing_row`, which cannot reach
+    /// this path: `list_drafts` is a `#[server]` fn needing an owner and an
+    /// authenticated context, not a plain fetcher.
+    ///
+    /// It shipped as `exact_limit()` — exactly the page, no probe — which pins
+    /// `has_more` to `false` and `next_cursor` to `None` forever, so the drafts surface
+    /// can never turn a page. That is the regression `fetch_posts_by_tag` already
+    /// suffered once; asserting the limit here is what keeps it from recurring.
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn list_drafts_asks_storage_for_the_probing_row() {
+        for (returned, expect_more) in [(5usize, false), (6usize, true)] {
+            let page_size = PageSize::clamped(5);
+            let owner = Owner::new();
+            owner.set();
+            provide_context(auth_parts(UserId::from(1), "alice"));
+            let mut posts = MockPostStorage::new();
+            posts
+                .expect_list_drafts_by_user()
+                .withf(move |_uid, _cursor, limit, _now| *limit == page_size.fetch_limit())
+                .returning(move |_uid, _cursor, _limit, _now| {
+                    // `try_from(...).unwrap_or` rather than an `as` cast: total, and the
+                    // ids only have to be distinct.
+                    Ok((0..returned)
+                        .map(|i| draft_row(i64::try_from(i).unwrap_or(0) + 1))
+                        .collect())
+                });
+            provide_context(Arc::new(posts) as Arc<dyn PostStorage>);
+
+            let page = list_drafts(None, Some(page_size)).await;
+            drop(owner);
+            let page = page.expect("listing succeeds");
+
+            assert_eq!(page.has_more, expect_more, "has_more for {returned} rows");
+            assert_eq!(
+                page.next_cursor.is_some(),
+                expect_more,
+                "a cursor exactly when another page exists"
+            );
+            // The probing row never reaches the caller.
+            assert_eq!(page.posts.len(), returned.min(page_size.page_len()));
+        }
     }
 
     // guard:no-backend — mock store

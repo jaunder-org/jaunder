@@ -50,9 +50,9 @@ pub use page_state::{
 // registrar keep the stable `crate::posts::…` paths despite living in `api.rs`.
 pub use api::{
     create, delete, get, get_audience_selection, get_default_audience_selection, get_preview,
-    list_drafts, publish, unpublish, update, Create, Delete, DraftSummary, Get,
-    GetAudienceSelection, GetDefaultAudienceSelection, GetPreview, ListDrafts, PostInputs, Publish,
-    SavedPost, Unpublish, Update,
+    list_drafts, publish, unpublish, update, Create, Delete, Get, GetAudienceSelection,
+    GetDefaultAudienceSelection, GetPreview, ListDrafts, PostInputs, Publish, SavedPost, Unpublish,
+    UnpublishedPage, UnpublishedPost, Update,
 };
 
 // Re-exported for the `server` crate's public projector, which maps the fetched

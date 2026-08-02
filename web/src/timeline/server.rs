@@ -12,12 +12,13 @@
 
 use common::ids::UserId;
 use common::pagination::PageSize;
-use common::seed::{PageCursor, TimelinePage};
+use common::seed::TimelinePage;
 use common::tag::Tag;
-use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::{viewer_user_id, ViewerIdentity};
-use storage::{list_by_tag_rows, to_post_cursor, PostCursor, PostRecord, PostStorage, UserStorage};
+use storage::{
+    list_by_tag_rows, to_post_cursor, wire_cursor, PostCursor, PostRecord, PostStorage, UserStorage,
+};
 
 use crate::error::{InternalError, InternalResult};
 use crate::posts::rendered_post;
@@ -36,10 +37,7 @@ pub(super) fn page_from_rows(
     let next_cursor = has_more
         .then(|| rows.last().map(to_post_cursor))
         .flatten()
-        .map(|c| PageCursor {
-            created_at: UtcInstant::from(c.created_at),
-            post_id: c.post_id,
-        });
+        .map(|c| wire_cursor(&c));
     let posts = rows
         .into_iter()
         .filter_map(|post| rendered_post(post, viewer_user_id))
@@ -265,6 +263,10 @@ mod tests {
     /// covers `fetch_user_posts` only, and the tag fetchers had just an
     /// error-propagation test. Asserting the limit for **each** fetcher is what closes
     /// that gap, and it is cheap because the assertion is the same one.
+    ///
+    /// `list_drafts` is guarded by a twin in `super::super`'s test module: it is a
+    /// `#[server]` fn rather than a plain fetcher, so it needs a reactive owner and an
+    /// authenticated context this module's fetchers do not.
     // guard:no-backend — mock store
     #[tokio::test]
     async fn every_paginated_fetcher_asks_storage_for_the_probing_row() {

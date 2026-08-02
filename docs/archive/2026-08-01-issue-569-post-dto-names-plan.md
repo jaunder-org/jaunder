@@ -210,6 +210,15 @@ names a field that no longer exists. Renaming the other six is unauthorized
 churn and would make AC9a's audit — _are the three `summary_label` tests still
 present?_ — harder rather than easier.
 
+> **Reversed later in the cycle, deliberately.** All seven were renamed
+> `derive_post_title_*` in commit `c8b97ea5`, as an accepted finding from the
+> Tasks 2–4 review: they were named for `DerivedPostMetadata`, a struct this
+> branch deleted. The instruction above was sound **while the change was in
+> flight** — it kept AC9a's audit unambiguous — and expired once that audit
+> passed. Left in place rather than rewritten, because a plan that quietly edits
+> its own instructions to match what happened stops being a record of what was
+> decided when.
+
 The three that asserted on `summary_label` (`:1119`, `:1149`, `:1162`) now
 assert on what the function returns:
 
@@ -327,10 +336,15 @@ Run: `cargo nextest run -p common -p storage` Expected: PASS.
 - [x] **Step 6: Verify AC9**
 
 ```bash
-rg 'DerivedPostMetadata|derive_post_metadata'          # expect: nothing
-rg -c 'fallback_label' common/src/render.rs            # expect: 2 (definition + one call)
-rg 'PostSummary::truncated' common/src/render.rs       # expect: nothing
+rg 'DerivedPostMetadata|derive_post_metadata'             # expect: nothing
+rg -c 'first_meaningful_line' common/src/render.rs        # expect: 2 (definition + one call)
+rg 'PostSummary::truncated' common/src/render.rs          # expect: nothing
 ```
+
+The second line originally read `rg -c 'fallback_label'`. That function was
+renamed `first_meaningful_line` in `c8b97ea5` — it was named for the summary
+label it fed, which D8 deleted — so the check as written returns **zero**, not
+two, and would read as a failure. Spec AC9 was amended to match.
 
 - [x] **Step 7: Commit**
 
@@ -1220,7 +1234,7 @@ Spec D7. 16 sites / 5 files. Depends on Tasks 3, 7, and 8.
   `pub struct UnpublishedPage { pub posts: Vec<UnpublishedPost>, pub next_cursor: Option<PageCursor>, pub has_more: bool }`;
   `list_drafts(cursor: Option<PageCursor>, limit: Option<PageSize>) -> WebResult<UnpublishedPage>`.
 
-- [ ] **Step 1: Rewrite the pagination test to seed from the page, not a row**
+- [x] **Step 1: Rewrite the pagination test to seed from the page, not a row**
 
 `web_posts.rs:1024` currently feeds `first_entry.created_at` back as the cursor
 (`:1087`). With `created_at` off the row, it seeds from the page (AC8a) — the
@@ -1242,7 +1256,7 @@ assert_eq!(second_page.posts.len(), 1, "body: {body}");
 assert_ne!(first_entry.post.post_id, second_page.posts[0].post.post_id);
 ```
 
-- [ ] **Step 2: Rewrite `draft_row_display`'s tests for the renamed field**
+- [x] **Step 2: Rewrite `draft_row_display`'s tests for the renamed field**
 
 `parse.rs:183-191`'s builder loses `created_at`/`updated_at`, nests `post`, and
 spells `published_at`. The badge behaviour is unchanged — a `Some` still means
@@ -1264,18 +1278,18 @@ fn unpublished(title: Option<&str>, scheduled: Option<&str>) -> UnpublishedPost 
 }
 ```
 
-- [ ] **Step 3: Run them, verify they fail**
+- [x] **Step 3: Run them, verify they fail**
 
 Run: `cargo nextest run -p web -p server drafts` Expected: FAIL —
 `UnpublishedPost` / `UnpublishedPage` not defined.
 
-- [ ] **Step 4: Implement both types**
+- [x] **Step 4: Implement both types**
 
 Replace `DraftSummary` with the two Interfaces shapes in `web/src/posts/api.rs`.
 `published_at` replaces `scheduled_at` and moves into the nested `SavedPost`;
 `created_at` and `updated_at` are gone.
 
-- [ ] **Step 5: Switch `list_drafts` to the probing row — without this the page
+- [x] **Step 5: Switch `list_drafts` to the probing row — without this the page
       is born broken**
 
 `api.rs:457` passes `page_size.exact_limit()`. With no probing row there is
@@ -1285,7 +1299,7 @@ and Step 1's test would fail at `.expect("page 1 has more…")`. Change it to
 `page_size.fetch_limit()`. The storage trait already supports it:
 `list_drafts_by_user` takes `limit: RowLimit` (`storage/src/posts.rs:634-640`).
 
-- [ ] **Step 6: Extend the probing-row guard to cover `list_drafts`**
+- [x] **Step 6: Extend the probing-row guard to cover `list_drafts`**
 
 `web/src/posts/api/listing.rs:404-451`
 (`every_paginated_fetcher_asks_storage_for_the_probing_row`) exists because
@@ -1294,7 +1308,7 @@ died. That guard does not currently reach `list_drafts`. Extend it — or add a
 mock-store twin beside it — so the same regression cannot recur on this path.
 This is the test that makes Step 5 stick.
 
-- [ ] **Step 7: Rewrite `list_drafts` itself**
+- [x] **Step 7: Rewrite `list_drafts` itself**
 
 It builds `UnpublishedPost { post: SavedPost { .. }, .. }` per row and returns
 an `UnpublishedPage`. **`page_from_rows` (`listing.rs:32-52`) is not reusable**
@@ -1306,7 +1320,7 @@ parallel so the drift #696 removed does not return.
 The comment at `:466-468` explaining that a `Some` here is necessarily future
 **moves to `draft_row_display`**, which is now where that fact is used.
 
-- [ ] **Step 8: Update `draft_row_display` and the component**
+- [x] **Step 8: Update `draft_row_display` and the component**
 
 `parse.rs:75` takes `&UnpublishedPost`; `:80-82` reads `.post.published_at` and
 spells the future-ness itself:
@@ -1322,11 +1336,11 @@ let scheduled_badge = row
 `.posts`; `:1477`'s `render_draft_row` takes `UnpublishedPost` and reads
 `draft.post.post_id`, `draft.post.permalink`.
 
-- [ ] **Step 9: Run the suites, verify they pass**
+- [x] **Step 9: Run the suites, verify they pass**
 
 Run: `cargo nextest run -p web -p server` Expected: PASS.
 
-- [ ] **Step 10: Verify AC8 and AC8a**
+- [x] **Step 10: Verify AC8 and AC8a**
 
 ```bash
 rg 'DraftSummary'                       # expect: nothing
@@ -1358,7 +1372,7 @@ Spec D9. Uses **`jaunder-adr`** (numberless draft in `docs/adr/drafts/`;
 - Consumes: the final type names from Tasks 3, 5, 6, 9.
 - Produces: the ADR draft AC10 checks for.
 
-- [ ] **Step 1: Write the draft**
+- [x] **Step 1: Write the draft**
 
 It must record, per D9:
 
@@ -1373,23 +1387,43 @@ It must record, per D9:
   is the point — otherwise the overlap gets re-filed as duplication, which is
   exactly how #747 came to be written.
 
-- [ ] **Step 2: Verify the format gate**
+- [x] **Step 2: Verify the format gate**
 
 Run: `cargo xtask check` Expected: `[ ok ] adr-format`,
 `[ ok ] adr-readme-parity`.
 
-- [ ] **Step 3: Commit**
+Note both pass **trivially** here: a draft is numberless and lives in a
+subdirectory, so it is invisible to those gates until `promote` numbers it.
+Getting the draft's format right is therefore unenforced — line 1 must be
+exactly `# ADR-DRAFT: <Title>` and the status line must be a single bare token —
+or promotion yields an ADR that fails the gate at ship, which is the worst
+moment to find out.
 
-```bash
-git add docs/adr/drafts/post-dto-content-weight-axis.md
-git commit -m "docs(adr): record the post DTO content-weight axis (#569)"
-```
+- [x] **Step 3: There is no commit — the draft is deliberately out of git**
+
+`docs/adr/drafts/` is gitignored (`.gitignore:48`), which is the whole point of
+the flow (ADR-0048, #219): the number is assigned at ship by
+`cargo xtask adr promote`, after the final rebase, so it cannot collide with
+another branch picking "the next free number" concurrently. The draft's first
+appearance in git history is already numbered.
+
+Confirm with `git check-ignore -v docs/adr/drafts/<slug>.md` rather than
+assuming.
+
+**Two things this hands to `jaunder-ship`:**
+
+1. Run `cargo xtask adr promote` **after** the final rebase onto `main`, then
+   commit what it stages (it also folds in `sync-readme`; `docs/README.md`'s
+   table is generated — do not hand-edit it).
+2. **The pen is per-checkout.** If a copy of this draft exists in the main
+   checkout, it is still a numberless draft _there_ and the next `promote` run
+   in that checkout would number it a second time. Delete it before shipping.
 
 ---
 
 ### Task 11: Final gate
 
-- [ ] **Step 1: Delete the handoff scaffolding**
+- [x] **Step 1: Delete the handoff scaffolding**
 
 `HANDOFF.md` is uncommitted scaffolding, not a deliverable, and
 `cargo xtask validate` refuses a dirty tree.
@@ -1403,7 +1437,7 @@ so `git rm --cached` now fails with "did not match any files" — a plain `rm` i
 all it needs. Confirm with `git status --short` that nothing else is left
 untracked before the gate, since `validate` refuses a dirty tree.
 
-- [ ] **Step 2: Run every AC grep against the final tree**
+- [x] **Step 2: Run every AC grep against the final tree**
 
 Each must now return nothing (they were each observed to match before the
 change):
@@ -1420,14 +1454,59 @@ rg 'args:' end2end/tests/posts.ts end2end/tests/feeds.spec.ts
 rg 'unwrap_or\(.*created_at\)' web/src/posts/component.rs
 ```
 
-- [ ] **Step 3: Full validation including the e2e matrix** (AC15)
+- [x] **Step 3: Full validation including the e2e matrix** (AC15)
 
 Run: `cargo xtask validate` Expected: PASS, including the four-combo e2e matrix.
 **This is the only thing that verifies the ten wire changes** — treat a failure
 here as a real defect, not flake, and root-cause before re-running.
 
-- [ ] **Step 4: Review the test diff against AC13** — a human/agent read, not a
+**It did fail the first time, and root-causing it mattered.** `nix-e2e` exited 1
+with sqlite/firefox reporting **exit 124 — a timeout, not an assertion
+failure**. Evidence gathered before re-running:
+
+- Both chromium combos finished **118/118**; sqlite/firefox stopped at
+  **107/118** and postgres/firefox never printed a test line.
+- **No Playwright failure marker anywhere** in the firefox output.
+- It ran _through_ every spec this branch affects — `posts.spec.ts`,
+  `feeds.spec.ts`, `authed-cls.spec.ts`, and `timeline-cls.spec.ts:78` (the
+  ADR-0044 paint probe, at 105/106). It stalled on `unicode-slug.spec.ts`,
+  unrelated to any DTO.
+- The only 500s in the log are on `/api/audiences/create`, `/api/auth/login`,
+  and `/api/email/verify` — deliberate error-path tests, none on a changed
+  endpoint.
+
+Diagnosis: four VMs contending on a machine that had been running back-to-back
+Nix gates for hours. The re-run passed in **11 minutes vs 21**, with derivations
+already built — consistent with contention, not with a defect. Recorded here
+because "e2e went red" on this branch is exactly the report that should _not_ be
+waved off, and the way to tell the two apart is the exit code plus how far each
+combo got.
+
+- [x] **Step 4: Review the test diff against AC13** — a human/agent read, not a
       gate
+
+**Result: PASS.** Six genuine deletions, every one on the authorized list below
+(the `from_page` and `cursor_into_query` functions themselves plus their two
+tests, the duplicate arg test, and the `page(…)` helper). Every other removed
+`fn` in the branch diff is a rename or a signature change where the function
+survives.
+
+Every removed assertion traces to a dropped field or a message made unreachable
+by construction, and each was replaced by an equivalent or stronger one:
+
+- three `summary_label` assertions → the field is gone (D8); those tests survive
+  renamed
+- three `next_cursor_created_at.is_some()` → the field is gone (D6)
+- `response.summary` → now `authored.post.summary` through the nesting
+- two drafts `published_at` → now `.post.published_at`; the scheduled-marker one
+  gained a stronger failure message
+- `"must be provided together"` → the one needing real scrutiny. Unreachable
+  through those endpoints once `PageCursor` made a half cursor unrepresentable.
+  **Not dropped**: the rewrite asserts the rejection _names `post_id`_, so it
+  still proves which component was missing, and the original invariant keeps its
+  own storage-side test.
+
+Net **+17 assertions** across the branch (48 removed, 65 added).
 
 AC13's substantive clause is "**No assertion is weakened or deleted beyond what
 the dropped fields force**," which no command can check. Read the whole test

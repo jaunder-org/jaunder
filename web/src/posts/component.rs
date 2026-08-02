@@ -12,8 +12,8 @@ use leptos_router::hooks::{use_navigate, use_params_map};
 use leptos_router::NavigateOptions;
 
 // `Summary` is module-qualified at its use site: this file already has
-// `DraftSummary`, `PostSummary` and `TagSummary` in scope, and
-// a bare `Summary` among them says nothing about which one it is.
+// `PostSummary` and `TagSummary` in scope, and a bare `Summary` among them says
+// nothing about which one it is.
 use crate::audiences::{self, list_mine};
 use crate::avatar::Avatar;
 use crate::error::WebError;
@@ -29,8 +29,8 @@ use crate::posts::{
     draft_row_display, get, get_audience_selection, get_default_audience_selection, get_preview,
     list_drafts, notify, notify_with_fallback, parse_permalink_route, publish_redirect,
     seeded_page, tag_query, user_query, user_tag_query, with_post_id, Create, Delete,
-    DraftRowDisplay, DraftSummary, ListingRoute, PermalinkRoute, PostInputs, Publish, SavedPost,
-    Unpublish,
+    DraftRowDisplay, ListingRoute, PermalinkRoute, PostInputs, Publish, SavedPost, Unpublish,
+    UnpublishedPage, UnpublishedPost,
 };
 use crate::subscriptions::SubscribeButton;
 use crate::taglist::TagCtx as TagContext;
@@ -1442,18 +1442,19 @@ pub fn DraftsPage() -> impl IntoView {
 /// owns the awaiting.
 #[component]
 fn DraftList(
-    drafts: Result<Vec<DraftSummary>, WebError>,
+    drafts: Result<UnpublishedPage, WebError>,
     publish_action: ServerAction<Publish>,
     delete_action: ServerAction<Delete>,
 ) -> impl IntoView {
     match drafts {
-        Ok(list) => {
-            if list.is_empty() {
+        Ok(page) => {
+            if page.posts.is_empty() {
                 view! { <p>"You have no drafts."</p> }.into_any()
             } else {
                 view! {
                     <ul class="j-draft-list">
-                        {list
+                        {page
+                            .posts
                             .into_iter()
                             .map(|draft| render_draft_row(draft, publish_action, delete_action))
                             .collect::<Vec<_>>()}
@@ -1467,11 +1468,11 @@ fn DraftList(
 }
 
 fn render_draft_row(
-    draft: DraftSummary,
+    draft: UnpublishedPost,
     publish_action: ServerAction<Publish>,
     delete_action: ServerAction<Delete>,
 ) -> impl IntoView {
-    let post_id = i64::from(draft.post_id);
+    let post_id = i64::from(draft.post.post_id);
     // Pure title + scheduled-badge-text computation (host-tested in `super::parse`);
     // only the `view!` markup stays here.
     let DraftRowDisplay {
@@ -1487,11 +1488,11 @@ fn render_draft_row(
                 <div class="j-draft-row-content">
                     <strong>{label}</strong>
                     " ("
-                    {draft.slug.to_string()}
+                    {draft.post.slug.to_string()}
                     ") "
                     {scheduled_badge}
                     " "
-                    <a href=String::from(draft.permalink)>"Permalink"</a>
+                    <a href=String::from(draft.post.permalink)>"Permalink"</a>
                 </div>
                 <div class="j-draft-actions">
                     <a class="j-btn" href=String::from(draft.edit_url)>

@@ -16,6 +16,7 @@ use common::root_relative_url::RootRelativeUrl;
 use common::seed::PageCursor;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
+use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::{AudienceTarget, TargetKind, ViewerIdentity};
 use host::error::{InternalError, InternalResult};
@@ -463,6 +464,17 @@ pub fn keyset_cursor(cursor: Option<PageCursor>) -> Option<PostCursor> {
         created_at: c.created_at.value(),
         post_id: c.post_id,
     })
+}
+
+/// Projects the storage-side [`PostCursor`] back onto the wire [`PageCursor`] a
+/// page hands the client as its `next_cursor` — the inverse of
+/// [`keyset_cursor`], and kept beside it so the round trip reads as one pair.
+#[must_use]
+pub fn wire_cursor(cursor: &PostCursor) -> PageCursor {
+    PageCursor {
+        created_at: UtcInstant::from(cursor.created_at),
+        post_id: cursor.post_id,
+    }
 }
 
 /// The shared public-permalink lookup used by both the `get_post` server fn and

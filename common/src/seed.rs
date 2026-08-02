@@ -96,6 +96,10 @@ pub struct TimelinePage {
 /// Returned by the `get_post`/`get_post_preview` server fns and carried by
 /// [`PageSeed::Permalink`], which serves drafts as well as published posts.
 ///
+/// A shared core plus an extension rather than a union with [`RenderedPost`]:
+/// merging the two would ship a `PostBody` on every timeline row that never
+/// reads one. See `docs/adr/drafts/post-dto-content-weight-axis.md` (rule 2).
+///
 /// Nested rather than `#[serde(flatten)]`: flatten buffers the whole map through
 /// serde's `Content` and re-drives any `deserialize_with` — and `post` carries
 /// one on `rendered_html`. The seed travels server→client within a single
