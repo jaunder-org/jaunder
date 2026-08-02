@@ -41,7 +41,7 @@ mod text_enum;
 /// Applying the derive to anything but a single-field tuple struct is a compile error:
 ///
 /// ```compile_fail
-/// use macros::StrNewtype;
+/// # use macros::StrNewtype;
 /// #[derive(StrNewtype)]
 /// struct NotATuple { s: String }
 /// ```
@@ -218,7 +218,7 @@ pub fn str_newtype_derive(item: TokenStream) -> TokenStream {
 /// Applying the derive to anything but a single-field tuple struct is a compile error:
 ///
 /// ```compile_fail
-/// use macros::IdNewtype;
+/// # use macros::IdNewtype;
 /// #[derive(IdNewtype)]
 /// struct NotATuple { n: i64 }
 /// ```
@@ -272,7 +272,7 @@ pub fn id_newtype_derive(item: TokenStream) -> TokenStream {
 /// Applying the derive to anything but a single-field tuple struct is a compile error:
 ///
 /// ```compile_fail
-/// use macros::NumNewtype;
+/// # use macros::NumNewtype;
 /// #[derive(NumNewtype)]
 /// #[num_newtype(inner = u32)]
 /// struct NotATuple { n: u32 }

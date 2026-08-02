@@ -1714,7 +1714,7 @@ one line in the negative both satisfies the rule and makes the proof honest: the
 negative now demonstrably fails for the named-field struct, not for an
 unresolved `macros` import.
 
-- [ ] **Step 1: Hide the import line in each negative**
+- [x] **Step 1: Hide the import line in each negative**
 
 `macros/src/lib.rs:43-47` becomes:
 
@@ -1729,7 +1729,7 @@ unresolved `macros` import.
 `:220-224` and `:274-279` likewise, hiding `use macros::IdNewtype;` and
 `use macros::NumNewtype;` respectively.
 
-- [ ] **Step 2: Verify**
+- [x] **Step 2: Verify**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate -- cargo test --workspace --doc`
@@ -1737,9 +1737,9 @@ Expected: PASS, same test count as before (hiding a line does not change
 collection).
 
 Run the Task 5 command. Expected: the only remaining violations are
-`macros/src/lib.rs:145`, `:158`, `:173`.
+`macros/src/lib.rs:145`, `:158`, `:173`. **Actual: exactly those three.**
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add macros/src/lib.rs
