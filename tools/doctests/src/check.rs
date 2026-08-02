@@ -32,10 +32,15 @@
 //! already used in one place, is a positive companion carrying the identical
 //! fixture: if the companion compiles, the negative failed for the stated reason.
 //!
-//! Made mechanical: every `compile_fail` must carry at least one `#`-hidden line,
-//! and every hidden line must appear verbatim in some plain fence in the **same
-//! doc comment**. The hidden prelude *is* the fixture, so matching it is precisely
-//! what proves the negative discriminates. There is no exemption.
+//! Made mechanical: every `compile_fail` must carry at least one **non-empty**
+//! `#`-hidden line, and every hidden line must appear verbatim in some plain fence
+//! in the **same doc comment**. The hidden prelude *is* the fixture, so matching it
+//! is precisely what proves the negative discriminates. There is no exemption.
+//!
+//! "Non-empty" is load-bearing rather than pedantic: `/// #` is a hidden *blank*
+//! line, and a blank needle matches nothing, so accepting it as the prelude would
+//! let one invisible character opt a `compile_fail` out of the entire rule. Worse
+//! than `ignore`, which at least shows up in a diff as a word.
 //!
 //! Scoping to one doc comment is load-bearing. A file-wide or "any plain fence
 //! nearby" rule would let one companion silently cover negatives whose fixtures it
@@ -142,15 +147,21 @@ pub fn fence_violations(file: &str, scan: &Scan) -> Vec<Violation> {
         if info != COMPILE_FAIL {
             continue;
         }
-        if fence.hidden.is_empty() {
+        // A *non-empty* hidden line, specifically. `/// #` alone parses to a hidden
+        // line that is the empty string, and empty needles are unmatchable (below),
+        // so accepting it would let one invisible character exempt a `compile_fail`
+        // from the whole non-vacuity rule — a self-exemption worse than `ignore`,
+        // since `+/// #` renders as nothing at all and reads as a stray blank line
+        // in a diff.
+        if !fence.hidden.iter().any(|h| !h.is_empty()) {
             out.push(Violation {
                 file: file.to_string(),
                 line: fence.line,
                 kind: Kind::MissingCompanion,
-                detail: "a `compile_fail` carries no `#`-hidden prelude, so nothing ties it to \
-                         a positive companion and it would still pass if its paths stopped \
-                         resolving. recovery: hide the fixture lines with `# ` and repeat them \
-                         in a plain fence in this doc comment."
+                detail: "a `compile_fail` carries no non-empty `#`-hidden prelude, so nothing \
+                         ties it to a positive companion and it would still pass if its paths \
+                         stopped resolving. recovery: hide the fixture lines with `# ` and \
+                         repeat them in a plain fence in this doc comment."
                     .to_string(),
             });
             continue;
@@ -399,6 +410,33 @@ mod tests {
         // rule that catches macros/src/lib.rs:43, :220 and :274.
         let src = "\n/// ```\n/// let a = 1;\n/// ```\n///\n/// ```compile_fail\n/// let _: i32 = \"x\";\n/// ```\npub struct A;\n";
         assert_eq!(kinds(src), vec![Kind::MissingCompanion]);
+    }
+
+    #[test]
+    fn a_blank_hidden_line_does_not_satisfy_the_companion_rule() {
+        // `/// #` parses to a hidden line that is the empty string, and empty
+        // needles are unmatchable — so accepting it would let one invisible
+        // character exempt a `compile_fail` from the entire non-vacuity rule.
+        // Worse than `ignore`: it renders as nothing and reads as a stray blank
+        // line in a diff.
+        let src = "\n/// ```compile_fail\n/// #\n/// let _ = totally_unmatched();\n/// ```\npub struct A;\n";
+        assert_eq!(kinds(src), vec![Kind::MissingCompanion]);
+    }
+
+    #[test]
+    fn an_indented_hidden_line_must_also_be_matched() {
+        // rustdoc hides it, so it is a real compiled fixture line; if the scanner
+        // called it visible it would escape the match requirement and could rot
+        // unnoticed.
+        let src = "\n/// ```\n/// # use foo::Bar;\n/// let _ = Bar;\n/// ```\n///\n/// ```compile_fail\n/// # use foo::Bar;\n///   # use foo::Unmatched;\n/// let _: i32 = Bar;\n/// ```\npub struct A;\n";
+        let v = violations(src);
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert_eq!(v[0].kind, Kind::MissingCompanion);
+        assert!(
+            v[0].detail.contains("use foo::Unmatched;"),
+            "{}",
+            v[0].detail
+        );
     }
 
     #[test]

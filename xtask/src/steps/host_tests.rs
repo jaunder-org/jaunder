@@ -15,7 +15,7 @@ pub fn run(sh: &Shell, result: &mut CommandResult) {
         "cargo",
         &["test", "--manifest-path", "xtask/Cargo.toml"],
     ));
-    // `tools/` (devtool + coverage) is its own virtual workspace, excluded from
+    // `tools/` (devtool + coverage + doctests) is its own virtual workspace, excluded from
     // the coverage check's source and built `doCheck = false`, so its unit tests —
     // devtool's pg/coverage logic — would otherwise only be compiled by clippy,
     // never executed.

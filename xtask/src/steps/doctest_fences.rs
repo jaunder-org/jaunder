@@ -20,7 +20,6 @@ use std::path::Path;
 use doctests::check::{problems, ScannedFile};
 use doctests::roots;
 
-use crate::files;
 use crate::result::{CommandResult, StepResult};
 
 /// A repo-relative path as the runner prints it for a `--manifest-path <root>` run:
@@ -32,8 +31,13 @@ fn run_path(root: &str, path: &str) -> String {
         .to_string()
 }
 
-/// Run one root's doctests, capturing combined output.
-fn run_doctests(root: &str) -> std::io::Result<String> {
+/// Run one root's doctests, capturing combined output and whether it succeeded.
+///
+/// The exit status is **not** discarded. For a root that has fences, a broken
+/// build shows up anyway (no `test …` lines, so every fence reads as `NotRun`);
+/// but for a root with *zero* fences — `tools/` today — a `cargo test --doc` that
+/// fails outright would otherwise produce zero violations and a green step.
+fn run_doctests(root: &str) -> std::io::Result<(String, bool)> {
     let out = std::process::Command::new("cargo")
         .args([
             "test",
@@ -44,7 +48,7 @@ fn run_doctests(root: &str) -> std::io::Result<String> {
         .output()?;
     let mut combined = String::from_utf8_lossy(&out.stdout).into_owned();
     combined.push_str(&String::from_utf8_lossy(&out.stderr));
-    Ok(combined)
+    Ok((combined, out.status.success()))
 }
 
 /// Scan and reconcile both host roots, pushing one `doctest-fences` step.
@@ -52,23 +56,39 @@ pub fn run(result: &mut CommandResult) {
     let mut violations = Vec::new();
     let mut hard_errors = Vec::new();
 
+    // `git ls-files`, not a filesystem walk. A walk descends into `xtask/target/`
+    // and `tools/target/`, where build scripts emit generated `.rs` — so the
+    // population would depend on whether the machine had built recently, and a
+    // dependency bump could put a third party's doc fence (or a file `syn` cannot
+    // parse) into a gate the developer has no way to satisfy.
+    let tracked = match crate::git::toplevel(Path::new("."))
+        .and_then(|top| crate::git::tracked_files(Path::new(&top), "*.rs"))
+    {
+        Ok(tracked) => tracked,
+        Err(e) => {
+            result.push(
+                StepResult::fail("doctest-fences")
+                    .detail(format!("cannot enumerate tracked sources: {e}")),
+            );
+            return;
+        }
+    };
+
     for root in roots::HOST {
-        let files = match files::with_extension(Path::new(root), "rs") {
-            Ok(files) => files,
-            Err(e) => {
-                // A root that cannot be enumerated is a root the gate cannot
-                // police; it fails rather than shrinking the population.
-                hard_errors.push(format!("cannot scan {root}: {e}"));
-                continue;
-            }
-        };
-        let mut scanned = Vec::with_capacity(files.len());
-        for p in &files {
-            let path = p.display().to_string();
-            match std::fs::read_to_string(p) {
+        let prefix = format!("{root}/");
+        let paths: Vec<&String> = tracked.iter().filter(|p| p.starts_with(&prefix)).collect();
+        if paths.is_empty() {
+            // A root that yields nothing is a root that moved: silently scanning
+            // an empty population is the one way this gate must never be green.
+            hard_errors.push(format!("scan root {root} matched no tracked .rs files"));
+            continue;
+        }
+        let mut scanned = Vec::with_capacity(paths.len());
+        for path in paths {
+            match std::fs::read_to_string(path) {
                 Ok(source) => scanned.push(ScannedFile {
-                    run_path: run_path(root, &path),
-                    path,
+                    run_path: run_path(root, path),
+                    path: path.clone(),
                     source,
                 }),
                 // Same reasoning as an unparseable file: an unread file is
@@ -79,7 +99,15 @@ pub fn run(result: &mut CommandResult) {
             }
         }
         match run_doctests(root) {
-            Ok(output) => violations.extend(problems(&scanned, &output)),
+            Ok((output, ok)) => {
+                if !ok && doctests::libtest::run_entries(&output).is_empty() {
+                    hard_errors.push(format!(
+                        "{root} doctests exited non-zero and reported no tests — the run \
+                         failed before any fence was evaluated."
+                    ));
+                }
+                violations.extend(problems(&scanned, &output));
+            }
             Err(e) => hard_errors.push(format!("cannot run {root} doctests: {e}")),
         }
     }
