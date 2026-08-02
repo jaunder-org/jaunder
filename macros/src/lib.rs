@@ -295,7 +295,13 @@ pub fn num_newtype_derive(item: TokenStream) -> TokenStream {
 /// Write it fully qualified — `#[macros::server]`, never `use`d — so it cannot be
 /// confused with leptos's `#[server]`, which this expands to.
 ///
-/// ```ignore
+/// Illustration, not a test: the fn body is an ellipsis, `AudienceId`/`AudienceName`/
+/// `WebResult` live in `common`/`web` rather than this crate's dev-dependencies, and
+/// the macro's first act is `Span::call_site().file()` with a hard placement check —
+/// so a doctest's synthetic path fails it by construction (see the `cov:ignore` note
+/// below).
+///
+/// ```text
 /// #[macros::server(skip(name))]
 /// pub async fn rename(audience_id: AudienceId, name: AudienceName) -> WebResult<()> {
 ///     …
@@ -350,16 +356,31 @@ pub fn sqlx_bridge_derive(item: TokenStream) -> TokenStream {
 /// The standard shape for a **closed string enum** (ADR-0075 as amended by #746): one
 /// attribute that owns the whole convention.
 ///
-/// ```ignore
-/// #[text_enum(
-///     sqlx,
+/// ```
+/// use std::str::FromStr;
+/// #[macros::text_enum(
 ///     error = InvalidPostFormat,
 ///     message = "post format must be \"markdown\", \"org\", or \"html\"",
 /// )]
 /// #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, strum::VariantArray)]
 /// #[strum(serialize_all = "snake_case")]
-/// pub enum PostFormat { … }
+/// pub enum PostFormat {
+///     #[default]
+///     Markdown,
+///     Org,
+///     Html,
+/// }
+///
+/// assert_eq!(PostFormat::Markdown.to_string(), "markdown");
+/// assert_eq!(PostFormat::from_str("org"), Ok(PostFormat::Org));
+/// assert!(PostFormat::from_str("rtf").is_err());
+/// assert_eq!(serde_json::to_string(&PostFormat::Html).unwrap(), "\"html\"");
 /// ```
+///
+/// A production call site adds `sqlx` as the first argument to also emit the storage
+/// bridge. It is omitted here because this crate's `sqlx` feature carries no
+/// dependency — it exists only so the emitted `#[cfg(feature = "sqlx")]` is a
+/// recognized value — so the bridge cannot expand in a doctest of this crate.
 ///
 /// It **injects** `strum`'s `AsRefStr`/`Display`/`EnumString`/`IntoStaticStr` and the
 /// `#[strum(parse_err_ty, parse_err_fn)]` pair, and **generates** the named parse error,

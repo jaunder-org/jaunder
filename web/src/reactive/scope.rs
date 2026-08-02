@@ -13,7 +13,13 @@
 /// scopes never collide by type (a bare `Invalidator` in context would). A *local*
 /// scope needs no newtype — a bare `Invalidator` suffices.
 ///
-/// ```ignore
+/// Illustration, not a test: the macro is `pub(crate) use` only, and this module is
+/// reached solely through `#[cfg(any(target_arch = "wasm32", test))]` in [`super`].
+/// rustdoc sets `cfg(doctest)` but **not** `cfg(test)`, so a host doc run never
+/// compiles this file at all. The real exercise is [`super`]'s `tests` module, which
+/// has to go through the re-export chain anyway (see the module header).
+///
+/// ```text
 /// invalidator_scope! {
 ///     /// The audience-list refetch scope.
 ///     struct AudienceList

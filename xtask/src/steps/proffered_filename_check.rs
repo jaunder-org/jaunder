@@ -16,7 +16,10 @@
 //! **The discriminator is bare-versus-wrapped, not field-versus-not.** The serve route's
 //! legitimate position *is* a struct field:
 //!
-//! ```ignore
+//! Illustration, not a test: `SoftPath`, `ProfferedFilename` and `Deserialize` are
+//! `server`/`common` types, none of them in this crate's dependency graph.
+//!
+//! ```text
 //! #[derive(Deserialize)]
 //! pub struct ServeParams {
 //!     pub filename: SoftPath<ProfferedFilename>,
@@ -104,7 +107,11 @@ fn is_wrapped(line: &str, at: usize) -> bool {
 /// Imports are tracked as a small state machine rather than by line prefix, because a
 /// braced import routinely wraps:
 ///
-/// ```ignore
+/// Input data to the scanner, not a test: it is a `&str` this fn is fed, and `common`
+/// is not in this crate's dependency graph. The real assertions are in this file's
+/// `tests` module, which passes exactly this shape through `violations`.
+///
+/// ```text
 /// use common::media::{
 ///     detect_content_type, media_path, ContentHash, Filename, MediaSource,
 ///     ProfferedFilename,
