@@ -1762,7 +1762,7 @@ git commit -m "docs(macros): hide the import prelude in the non-tuple-struct pro
 - Consumes: the gate from Task 5.
 - Produces: a tree with **zero** violations — the precondition for Tasks 13–15.
 
-- [ ] **Step 1: Add `Borrow` to the positive companion**
+- [x] **Step 1: Add `Borrow` to the positive companion**
 
 `macros/src/lib.rs:69-79` gains `# use std::borrow::Borrow;` to its hidden
 prelude and a visible line exercising it on a `&str`, so the new negative cannot
@@ -1784,7 +1784,7 @@ pass on an unresolved import:
 /// ```
 ````
 
-- [ ] **Step 2: Add the `Borrow<str>` negative**
+- [x] **Step 2: Add the `Borrow<str>` negative**
 
 ADR-0063:140 names `Deref<str>` **and** `Borrow<str>` as the secret's omissions;
 only `Deref` had a proof. Add, immediately after the `Deref` block at
@@ -1805,14 +1805,30 @@ only `Deref` had a proof. Add, immediately after the `Deref` block at
 /// ```
 ````
 
-- [ ] **Step 3: Verify the new negative actually discriminates**
+- [x] **Step 3: Verify the new negative actually discriminates**
+
+**Done.** A scratch crate carrying the same `secret` fixture plus a hand-written
+`impl Borrow<str> for Sec` makes the identical fence report
+`Test compiled successfully, but it's marked compile_fail`. So the block in
+`macros/src/lib.rs` fails for the missing impl and nothing else.
 
 Hand-write `impl std::borrow::Borrow<str> for Sec` into a scratch crate carrying
 the same fixture and confirm the block then **compiles** — i.e. that it would
 stop being a `compile_fail`. Revert. A negative that would pass either way is
 exactly the vacuity this cycle exists to eliminate; do not skip this step.
 
-- [ ] **Step 4: Make the three ordering proofs discriminate**
+- [x] **Step 4: Make the three ordering proofs discriminate**
+
+**Done differently from the plan's sketch, and better.** The plan proposed
+changing the _shared_ secret fixture to
+`#[derive(Clone, PartialEq, Eq, StrNewtype)]` uniformly, which would have forced
+matching edits to all five working negatives (`:82`–`:130`) plus the new
+`Borrow` one. Instead the three ordering proofs get their own fixtures —
+`SecOrd`, `SecSerdeOrd`, `Unordered` — carried by two new plain fences in the
+same doc comment: a **control** (`assert!(Ordered("a") < Ordered("b"))` on an
+un-suppressed newtype with identical derives) and a fixture fence showing all
+three suppressed types compile and do carry `PartialEq`. Nothing else in the doc
+comment had to move.
 
 `macros/src/lib.rs:145`, `:158` (governed by the prose at `:141-144`) and `:173`
 today prove nothing: their fixtures derive no `PartialEq`, so `a < b` fails to
@@ -1855,7 +1871,7 @@ absence of ordering, which is what that comment always claimed). Note in prose
 that the fixture derives `PartialEq`/`Eq` to make the proof discriminate, while
 the live `no_ord` consumer `RawToken` deliberately does not.
 
-- [ ] **Step 5: Verify**
+- [x] **Step 5: Verify**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-763-doctest-gate -- cargo test --workspace --doc`
@@ -1868,7 +1884,13 @@ Run the Task 5 command. Expected: **zero violations of any kind.** This is the
 point at which the tree is clean and the gate may be wired in. Do not start Task
 13 until this holds.
 
-- [ ] **Step 6: Commit**
+**Actual: `category: "ok"`, 0 violations.** `macros` doctests 18 → 21. The three
+ordering blocks still report `compile fail ... ok` while the control beside them
+passes as a plain test — the discrimination argument is now checkable rather
+than asserted. The reciprocal claim at `macros/tests/str_newtype.rs:239-243` is
+rewritten too, so neither half of that circle points at the other any more.
+
+- [x] **Step 6: Commit**
 
 ```bash
 git add macros/src/lib.rs

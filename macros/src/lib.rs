@@ -69,13 +69,15 @@ mod text_enum;
 /// ```
 /// # use macros::StrNewtype;
 /// # use std::str::FromStr;
+/// # use std::borrow::Borrow;
 /// # #[derive(Clone, StrNewtype)]
 /// # #[str_newtype(secret)]
 /// # struct Sec(String);
 /// # impl FromStr for Sec { type Err = std::convert::Infallible; fn from_str(s: &str) -> Result<Self, Self::Err> { Ok(Sec(s.to_owned())) } }
 /// let s = Sec("x".to_owned());
-/// let _read: &str = s.as_ref();               // explicit borrowed read is allowed
-/// let _ = serde_json::to_string(s.as_ref());  // serde_json resolves (a &str serializes)
+/// let _read: &str = s.as_ref();                    // explicit borrowed read is allowed
+/// let _ = serde_json::to_string(s.as_ref());       // serde_json resolves (a &str serializes)
+/// let _b: &str = Borrow::borrow(s.as_ref());       // Borrow resolves, on a &str
 /// ```
 ///
 /// No `Display`:
@@ -138,47 +140,104 @@ mod text_enum;
 /// let _: &str = &s;
 /// ```
 ///
-/// No ordering — a secret is never sorted or used as a `BTreeMap` key (#761). Like the
-/// `no_ord` block below, these two document intent rather than discriminate: the fixture
-/// derives no `PartialEq`, so `a < b` would fail to compile even if the macro *did* emit
-/// ordering for a secret. `str_newtype_secret_omits_ordering` is the actual guard.
+/// No `Borrow<str>` — the other omission ADR-0063 names alongside `Deref`, and the
+/// reason the companion above resolves `Borrow`: without that import in scope, this
+/// block would fail for an unresolved name rather than a missing impl.
 /// ```compile_fail
 /// # use macros::StrNewtype;
 /// # use std::str::FromStr;
+/// # use std::borrow::Borrow;
 /// # #[derive(Clone, StrNewtype)]
 /// # #[str_newtype(secret)]
 /// # struct Sec(String);
 /// # impl FromStr for Sec { type Err = std::convert::Infallible; fn from_str(s: &str) -> Result<Self, Self::Err> { Ok(Sec(s.to_owned())) } }
-/// # let a = Sec("a".to_owned());
-/// # let b = Sec("b".to_owned());
-/// let _ = a < b;
+/// # let s = Sec("x".to_owned());
+/// let _: &str = Borrow::borrow(&s);
 /// ```
 ///
-/// …nor on the inbound `secret, serde` variant:
+/// # No ordering, and the control that makes that a proof
+///
+/// A secret is never sorted or used as a `BTreeMap` key, and `#[str_newtype(no_ord)]`
+/// suppresses the ordering half for a type that deliberately has none (`RawToken`).
+///
+/// These three proofs used to derive no `PartialEq`, which made them **vacuous**:
+/// `a < b` would have failed to compile even if the macro *did* emit ordering, so
+/// they documented intent rather than discriminating. (Their prose said so, and
+/// pointed at a unit test as "the actual guard" — while that test pointed back at
+/// these doctests. Neither guarded anything.)
+///
+/// Each fixture now derives `PartialEq, Eq`, so `a < b` can only fail for the missing
+/// `PartialOrd`. The control below is what makes that argument checkable: the same
+/// shape *without* a suppressing option orders, so the failures are about ordering
+/// and not about the fixture.
+///
+/// ```
+/// use macros::StrNewtype;
+/// use std::str::FromStr;
+/// #[derive(Clone, PartialEq, Eq, StrNewtype)]
+/// struct Ordered(String);
+/// impl FromStr for Ordered { type Err = std::convert::Infallible; fn from_str(s: &str) -> Result<Self, Self::Err> { Ok(Ordered(s.to_owned())) } }
+/// // CONTROL: an un-suppressed newtype with the same derives DOES order.
+/// assert!(Ordered("a".to_owned()) < Ordered("b".to_owned()));
+/// ```
+///
+/// The three suppressed fixtures, which compile and do carry `PartialEq`:
+/// ```
+/// # use macros::StrNewtype;
+/// # use std::str::FromStr;
+/// #[derive(Clone, PartialEq, Eq, StrNewtype)]
+/// #[str_newtype(secret)]
+/// struct SecOrd(String);
+/// impl FromStr for SecOrd { type Err = std::convert::Infallible; fn from_str(s: &str) -> Result<Self, Self::Err> { Ok(SecOrd(s.to_owned())) } }
+/// #[derive(Clone, PartialEq, Eq, StrNewtype)]
+/// #[str_newtype(secret, serde)]
+/// struct SecSerdeOrd(String);
+/// impl FromStr for SecSerdeOrd { type Err = std::convert::Infallible; fn from_str(s: &str) -> Result<Self, Self::Err> { Ok(SecSerdeOrd(s.to_owned())) } }
+/// #[derive(Clone, PartialEq, Eq, StrNewtype)]
+/// #[str_newtype(no_ord)]
+/// struct Unordered(String);
+/// impl FromStr for Unordered { type Err = std::convert::Infallible; fn from_str(s: &str) -> Result<Self, Self::Err> { Ok(Unordered(s.to_owned())) } }
+/// // `PartialEq` is present on all three — so `<` below cannot be failing for it.
+/// assert!(SecOrd("a".to_owned()) == SecOrd("a".to_owned()));
+/// ```
+///
+/// A secret does not order:
 /// ```compile_fail
 /// # use macros::StrNewtype;
 /// # use std::str::FromStr;
-/// # #[derive(Clone, StrNewtype)]
+/// # #[derive(Clone, PartialEq, Eq, StrNewtype)]
+/// # #[str_newtype(secret)]
+/// # struct SecOrd(String);
+/// # impl FromStr for SecOrd { type Err = std::convert::Infallible; fn from_str(s: &str) -> Result<Self, Self::Err> { Ok(SecOrd(s.to_owned())) } }
+/// let a = SecOrd("a".to_owned());
+/// let b = SecOrd("b".to_owned());
+/// let _ = a < b;
+/// ```
+///
+/// …nor the inbound `secret, serde` variant:
+/// ```compile_fail
+/// # use macros::StrNewtype;
+/// # use std::str::FromStr;
+/// # #[derive(Clone, PartialEq, Eq, StrNewtype)]
 /// # #[str_newtype(secret, serde)]
-/// # struct Sec(String);
-/// # impl FromStr for Sec { type Err = std::convert::Infallible; fn from_str(s: &str) -> Result<Self, Self::Err> { Ok(Sec(s.to_owned())) } }
-/// # let a = Sec("a".to_owned());
-/// # let b = Sec("b".to_owned());
+/// # struct SecSerdeOrd(String);
+/// # impl FromStr for SecSerdeOrd { type Err = std::convert::Infallible; fn from_str(s: &str) -> Result<Self, Self::Err> { Ok(SecSerdeOrd(s.to_owned())) } }
+/// let a = SecSerdeOrd("a".to_owned());
+/// let b = SecSerdeOrd("b".to_owned());
 /// let _ = a < b;
 /// ```
 ///
-/// `#[str_newtype(no_ord)]` suppresses just the ordering half, for a type that
-/// deliberately derives no `PartialEq`/`Eq` (`RawToken`). Everything else stands:
-///
+/// …nor a `no_ord` newtype, which keeps the rest of the trailer
+/// (`str_newtype::no_ord_keeps_the_rest_of_the_trailer` covers that half):
 /// ```compile_fail
 /// # use macros::StrNewtype;
 /// # use std::str::FromStr;
-/// # #[derive(Clone, StrNewtype)]
+/// # #[derive(Clone, PartialEq, Eq, StrNewtype)]
 /// # #[str_newtype(no_ord)]
 /// # struct Unordered(String);
 /// # impl FromStr for Unordered { type Err = std::convert::Infallible; fn from_str(s: &str) -> Result<Self, Self::Err> { Ok(Unordered(s.to_owned())) } }
-/// # let a = Unordered("a".to_owned());
-/// # let b = Unordered("b".to_owned());
+/// let a = Unordered("a".to_owned());
+/// let b = Unordered("b".to_owned());
 /// let _ = a < b;
 /// ```
 ///
