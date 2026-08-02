@@ -39,6 +39,7 @@ import {
 import { BASE_URL, click, expectFlash, goto, login, register } from "./helpers";
 import { extractToken, readEmailLines, type CapturedEmail } from "./mail";
 import { MOUNTED_ATTR, MOUNTED_SELECTOR } from "./mount";
+import { pollUntil } from "./polling";
 import { SEL } from "./selectors";
 
 type RequestRecord = {
@@ -398,21 +399,22 @@ const test = base.extend<{
     // Seed the cursor at any pre-existing matching mail (there should be none,
     // since the address is unique to this test).
     let cursor = matching().length;
-    const waitForNewEmail = async (
-      timeoutMs = 5_000,
-    ): Promise<CapturedEmail> => {
-      const deadline = Date.now() + timeoutMs;
-      while (Date.now() < deadline) {
-        const mails = matching();
-        if (mails.length > cursor) {
+    const waitForNewEmail = async (timeoutMs = 5_000): Promise<CapturedEmail> =>
+      pollUntil(
+        "wait.mail",
+        () => {
+          const mails = matching();
+          if (mails.length <= cursor) return undefined;
           const next = mails[cursor];
           cursor += 1;
           return next;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-      throw new Error(`timed out waiting for email to ${user.email}`);
-    };
+        },
+        {
+          intervalMs: 100,
+          timeoutMs,
+          describe: `an email to ${user.email}`,
+        },
+      );
     await use({ waitForNewEmail });
   },
 

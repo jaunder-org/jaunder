@@ -15,6 +15,7 @@ import {
   subscribeTo,
   unsubscribeFrom,
 } from "./helpers";
+import { fetchFeedContainingOrUndefined } from "./feeds";
 import { SEL } from "./selectors";
 
 // Content Visibility — Layer A end-to-end (Task 22).
@@ -304,19 +305,18 @@ test("Public post is visible to anonymous and appears in the feed; Subscribers p
 
   // The published feed contains the Public post and excludes the Subscribers one.
   // The feed is eventually consistent, so poll until the public marker appears.
+  //
+  // The non-throwing variant deliberately: on timeout this test's own two
+  // assertions produce a content diff, and the *second* one — that the
+  // subscribers-only post is absent — still runs. A throwing wait would skip
+  // both and report a bare timeout instead (#794).
   const feedUrl = `${BASE_URL}/~${author.username}/feed.atom`;
-  const deadline = Date.now() + 25_000;
-  let body = "";
-  while (Date.now() < deadline) {
-    const res = await page.request.get(feedUrl);
-    if (res.status() === 200) {
-      body = await res.text();
-      if (body.includes("Public Broadcast")) {
-        break;
-      }
-    }
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
+  const feed = await fetchFeedContainingOrUndefined(
+    page,
+    feedUrl,
+    "Public Broadcast",
+  );
+  const body = feed?.body ?? "";
   expect(body, "feed contains the Public post").toContain("Public Broadcast");
   expect(body, "feed excludes the Subscribers-only post").not.toContain(
     "Feed Subscribers Only",

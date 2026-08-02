@@ -24,6 +24,7 @@
 import * as fs from "fs";
 
 import { capturePathViaTool } from "./capture";
+import { pollUntil } from "./polling";
 
 // Resolved lazily and memoized via `test-support capture-path` so the filename
 // convention lives only in the Rust `host` crate — never restated here.
@@ -60,16 +61,23 @@ export async function waitForNewEmail(
   previousCount: number,
   timeoutMs = 5_000,
 ): Promise<CapturedEmail> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const lines = readEmailLines();
-    if (lines.length > previousCount) {
-      return JSON.parse(lines[lines.length - 1]) as CapturedEmail;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(
-    `timed out waiting for new captured email at ${mailCaptureFile()}`,
+  // Resolve the capture path BEFORE polling. `capturePathViaTool` throws when
+  // JAUNDER_CAPTURE_DIR is unset, and a throw inside the probe would be retried
+  // to the full timeout instead of failing loudly (#794).
+  const file = mailCaptureFile();
+  return pollUntil(
+    "wait.mail",
+    () => {
+      const lines = readEmailLines();
+      return lines.length > previousCount
+        ? (JSON.parse(lines[lines.length - 1]) as CapturedEmail)
+        : undefined;
+    },
+    {
+      intervalMs: 100,
+      timeoutMs,
+      describe: `a new captured email at ${file}`,
+    },
   );
 }
 

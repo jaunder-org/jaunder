@@ -22,6 +22,7 @@
 import * as fs from "fs";
 
 import { capturePathViaTool } from "./capture";
+import { pollUntil } from "./polling";
 
 // Resolved lazily and memoized via `test-support capture-path` so the filename
 // convention lives only in the Rust `host` crate — never restated here.
@@ -58,16 +59,21 @@ export async function waitForNewPing(
   previousCount: number,
   timeoutMs = 30_000,
 ): Promise<CapturedPing> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const lines = readPingLines();
-    if (lines.length > previousCount) {
-      return JSON.parse(lines[lines.length - 1]) as CapturedPing;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  throw new Error(
-    `timed out waiting for new captured WebSub ping at ${websubCaptureFile()}`,
+  // Resolved before polling — see the note in `mail.ts`'s `waitForNewEmail`.
+  const file = websubCaptureFile();
+  return pollUntil(
+    "wait.websub_ping",
+    () => {
+      const lines = readPingLines();
+      return lines.length > previousCount
+        ? (JSON.parse(lines[lines.length - 1]) as CapturedPing)
+        : undefined;
+    },
+    {
+      intervalMs: 250,
+      timeoutMs,
+      describe: `a new captured WebSub ping at ${file}`,
+    },
   );
 }
 
@@ -84,16 +90,22 @@ export async function waitForPingMatching(
   predicate: (feedUrl: string) => boolean,
   timeoutMs = 30_000,
 ): Promise<CapturedPing> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const lines = readPingLines();
-    for (let i = previousCount; i < lines.length; i++) {
-      const ping = JSON.parse(lines[i]) as CapturedPing;
-      if (predicate(ping.feed_url)) return ping;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  throw new Error(
-    `timed out waiting for a matching WebSub ping at ${websubCaptureFile()}`,
+  // Resolved before polling — see the note in `mail.ts`'s `waitForNewEmail`.
+  const file = websubCaptureFile();
+  return pollUntil(
+    "wait.websub_ping",
+    () => {
+      const lines = readPingLines();
+      for (let i = previousCount; i < lines.length; i++) {
+        const ping = JSON.parse(lines[i]) as CapturedPing;
+        if (predicate(ping.feed_url)) return ping;
+      }
+      return undefined;
+    },
+    {
+      intervalMs: 250,
+      timeoutMs,
+      describe: `a matching WebSub ping at ${file}`,
+    },
   );
 }
