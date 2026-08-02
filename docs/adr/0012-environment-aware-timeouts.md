@@ -27,7 +27,11 @@ based on the observed performance characteristics of the target browser.
 - Timeouts are calculated using multipliers derived from observed p90 hydration
   latency for each browser.
 - Helper functions in `end2end/tests/fixtures.ts`:
-  - `slowBrowserTimeoutMs(testInfo, chromiumBudgetMs)`: For whole-test budgets.
+  - `slowBrowserTimeoutMs(testInfo, chromiumBudgetMs)`: For scaling an
+    individual wait. (It also backs the ambient whole-test budget, which since
+    #270 is how essentially every test gets its budget — per-test budgets are
+    the exception, reserved for tests whose own polling deadlines exceed the
+    ambient one.)
   - `slowBrowserFirstNavigationTimeoutMs(testInfo, chromiumBudgetMs)`: For the
     initial (coldest) navigation.
 - Tests specify a "base" budget (for Chromium), which is then scaled for other

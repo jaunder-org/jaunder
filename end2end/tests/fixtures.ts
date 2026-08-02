@@ -6,11 +6,16 @@
  *
  * Timeout scaling is ambient (#261): a second auto fixture (`_autoTestTimeout`)
  * gives every test a scaled `DEFAULT_TEST_BUDGET_MS` whole-test budget, so tests
- * no longer name `testInfo` or a raw budget just to set a timeout. Tests needing
- * more call `setTestBudget(ms)`; the `firstNav` fixture value and `registeredPage`
- * fixture supply the scaled cold-WASM first-nav budget and a pre-registered page.
- * This module also exports the underlying slow-browser / worker-contention scalers
- * (`slowBrowser*`) for the sites that still size a budget explicitly.
+ * no longer name `testInfo` or a raw budget just to set a timeout. That budget
+ * covers every test in the suite (#270) — reaching for `setTestBudget(ms)` is not
+ * the default move. The two tests that do call it poll for eventually-consistent
+ * state — one the feed cache, one the WebSub hub-ping capture — on deadlines that
+ * exceed the ambient budget; both derive their budget from those deadlines rather
+ * than restating a number. The `firstNav` fixture
+ * value and `registeredPage` fixture supply the scaled cold-WASM first-nav budget
+ * and a pre-registered page. This module also exports the underlying
+ * slow-browser / worker-contention scalers (`slowBrowser*`), which remain the way
+ * to size an individual assertion or navigation.
  */
 
 import {
@@ -210,10 +215,24 @@ export function slowBrowserFirstNavigationTimeoutMs(
 }
 
 /** The ambient whole-test budget every test receives via the `_autoTestTimeout`
- *  auto fixture (scaled per browser / worker contention). Tests needing more
- *  call `setTestBudget(ms)`; tests needing less simply inherit this. 30_000 is
- *  the largest whole-test budget the suite used before scaling was made ambient,
- *  so the default only ever raises a test's budget, never tightens it. */
+ *  auto fixture (scaled per browser / worker contention). Every test in the suite
+ *  fits inside it; the two that call `setTestBudget(ms)` do so because their own
+ *  polling deadlines exceed it, not because they are merely slow (#270).
+ *
+ *  Sized against the suite's measured worst case: at `workers=2` this scales to
+ *  45s chromium / 66s elsewhere, against a measured worst of 24.2s / 34.6s over
+ *  19 green CI runs x 4 combos. The 18 per-test budgets deleted in #270 were
+ *  validated at `workers>=2`. At `workers=1` the contention scale is 1.0, so
+ *  chromium gets 30s here — and `cargo xtask e2e-local` defaults to 1 worker
+ *  against the slower debug wasm build. The sharpest case is
+ *  `visibility.spec.ts`'s "Public post is visible to anonymous" test: it polls a
+ *  hard 25s deadline of its own, so at 30s it has only ~5s left for setup, and a
+ *  whole-test timeout there is that collision rather than a slow test. If the
+ *  heaviest specs (visibility, audiences) start timing out there, run with
+ *  `JAUNDER_E2E_WORKERS=2`, or re-add a deliberate budget derived from whatever
+ *  deadline the test actually needs. Do not raise this constant to fix it —
+ *  `test.slow()` triples it, so raising it inflates the suite's largest budgets
+ *  3:1. */
 export const DEFAULT_TEST_BUDGET_MS = 30_000;
 
 /** Raise the current test's whole-test budget to a scaled `chromiumBudgetMs`.
@@ -320,8 +339,9 @@ const test = base.extend<{
   // Ambient whole-test timeout. `auto`, so it applies to EVERY test; Playwright
   // sets up auto fixtures before any requested fixture, so this budget is in
   // force before `user`/`verifiedUser`/`registeredPage` setup runs (covering the
-  // out-of-band flows that used to hand-roll their own `setTimeout`). Tests
-  // needing more than the default call `setTestBudget(ms)` in their body.
+  // out-of-band flows that used to hand-roll their own `setTimeout`). The default
+  // covers every test; the rare test whose own deadlines exceed it derives a
+  // budget with `setTestBudget(ms)` (#270).
   _autoTestTimeout: [
     async ({}, use, testInfo) => {
       testInfo.setTimeout(

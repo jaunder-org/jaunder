@@ -282,8 +282,11 @@ job. Running every combo in parallel across runners cuts e2e wall-clock;
 - For e2e perf diagnostics, set `JAUNDER_E2E_WARMUP=1` before `playwright test`
   to warm each test page context before test instrumentation; tune with
   `JAUNDER_E2E_WARMUP_URL` and `JAUNDER_E2E_WARMUP_TIMEOUT_MS`.
-- For e2e tests on slow browsers, use
-  `slowBrowserTimeoutMs(testInfo, chromiumBudgetMs)` for whole-test budgets and
+- Whole-test budgets are **ambient** — an auto fixture gives every test a scaled
+  `DEFAULT_TEST_BUDGET_MS`, which covers the entire suite (#270). Don't set one
+  per test; a test that genuinely needs more is a signal to measure it first.
+- For individual waits on slow browsers, use
+  `slowBrowserTimeoutMs(testInfo, chromiumBudgetMs)` for an assertion and
   `slowBrowserFirstNavigationTimeoutMs(testInfo, chromiumBudgetMs)` for first
   navigation waits (see
   [ADR-0012](docs/adr/0012-environment-aware-timeouts.md)).

@@ -22,8 +22,10 @@
  *
  * - Whole-test timeout scaling is ambient (see `fixtures.ts`): every test gets a
  *   scaled `DEFAULT_TEST_BUDGET_MS` automatically, so tests no longer hand-roll
- *   `test.setTimeout(slowBrowserTimeoutMs(...))`.  A test needing a larger budget
- *   calls `setTestBudget(ms)` as its first line.  Do not combine with
+ *   `test.setTimeout(slowBrowserTimeoutMs(...))`.  That budget covers every test
+ *   in the suite (#270), so needing more is a signal, not a routine: measure the
+ *   test first, and only then add a `setTestBudget(ms)` derived from whatever
+ *   deadline actually exceeds the ambient budget.  Do not combine with
  *   `test.slow()` — the scaled budget already covers Firefox.
  *
  * - Use `login(page, username, password)` for any test that needs an

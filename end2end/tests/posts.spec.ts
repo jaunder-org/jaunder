@@ -1,7 +1,6 @@
 import {
   test,
   expect,
-  setTestBudget,
   slowBrowserFirstNavigationTimeoutMs,
   slowBrowserTimeoutMs,
 } from "./fixtures";
@@ -797,7 +796,6 @@ test("tag chip on permalink navigates to site tag listing", async ({
 test("editing a post updates tag chips and tag listing pages", async ({
   registeredPage: page,
 }) => {
-  setTestBudget(60_000);
   // Use tags unique to this test so cross-test pollution can't affect the
   // /tags/:tag listing checks below.
   const { permalink, post_id } = await createPostViaApi(page, {

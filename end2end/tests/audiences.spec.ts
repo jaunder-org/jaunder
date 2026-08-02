@@ -1,9 +1,4 @@
-import {
-  test,
-  expect,
-  setTestBudget,
-  slowBrowserFirstNavigationTimeoutMs,
-} from "./fixtures";
+import { test, expect, slowBrowserFirstNavigationTimeoutMs } from "./fixtures";
 import { goto, click, register, subscribeTo, failServerFn } from "./helpers";
 
 // Audiences management UI (`/audiences`, converged into `web::audiences`).
@@ -27,7 +22,6 @@ test("Audiences: CRUD + membership toggle re-fetch without list remount or flash
   page,
   tracedContext,
 }, testInfo) => {
-  setTestBudget(120_000);
   const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
 
   const author = await register(page, firstNav);
@@ -215,7 +209,6 @@ test("Audiences: a failed subscriber-roster fetch surfaces an error, not an empt
   page,
   tracedContext,
 }, testInfo) => {
-  setTestBudget(120_000);
   const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
   const author = await register(page, firstNav);
 
@@ -255,7 +248,6 @@ test("Audiences: a failed subscriber-roster fetch surfaces an error, not an empt
 test("Audiences: a genuinely empty roster still shows the empty message", async ({
   page,
 }, testInfo) => {
-  setTestBudget(120_000);
   const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
   await register(page, firstNav);
 
@@ -278,7 +270,6 @@ test("Audiences: refresh pulls a mid-session new subscriber into the checklists"
   page,
   tracedContext,
 }, testInfo) => {
-  setTestBudget(120_000);
   const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
   const author = await register(page, firstNav);
 
@@ -318,7 +309,6 @@ test("Audiences: refresh pulls a mid-session new subscriber into the checklists"
 test("Audiences: create-name client-side validation gates submit", async ({
   page,
 }, testInfo) => {
-  setTestBudget(60_000);
   const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
   await register(page, firstNav);
 

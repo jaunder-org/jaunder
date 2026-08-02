@@ -1,9 +1,4 @@
-import {
-  test,
-  expect,
-  setTestBudget,
-  slowBrowserFirstNavigationTimeoutMs,
-} from "./fixtures";
+import { test, expect, slowBrowserFirstNavigationTimeoutMs } from "./fixtures";
 import { goto, login, click, waitForSelector } from "./helpers";
 import { SEL } from "./selectors";
 import { extractInviteCode } from "./mail";
@@ -30,10 +25,6 @@ test("invite link registration completes end-to-end", async ({
   user,
   mailbox,
 }) => {
-  // Full round trip: operator login + email delivery + a cold fresh-context
-  // registration all in one test.
-  setTestBudget(45_000);
-
   // Establish invite-only and a base URL so invites::create can build the link
   // (`{base_url}/register?invite_code=<code>`); it errors without a base URL.
   seedConfigViaTool("site.registration_policy", "invite_only");

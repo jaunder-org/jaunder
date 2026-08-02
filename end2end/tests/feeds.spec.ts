@@ -19,6 +19,30 @@ const FORMATS: { ext: string; mime: string }[] = [
   { ext: "json", mime: "application/feed+json" },
 ];
 
+/** Per-fetch poll deadline for the eventually-consistent feed cache. The
+ *  per-user-feeds test derives its whole-test budget from this and
+ *  `FORMATS.length`, so adding a format or changing this value carries the budget
+ *  with it — the coupling that had silently drifted before #270. */
+const FEED_POLL_TIMEOUT_MS = 25_000;
+
+/** Room for what the per-user-feeds test does *besides* polling: two `register()`
+ *  cold-WASM navigations, three `createPostViaApi` writes, a logout and a
+ *  `waitForURL`. Needed as an explicit term because at `workers=1` the whole-test
+ *  scale is 1.0, so the budget gets no inflation from the scaler. */
+const FEED_SETUP_ALLOWANCE_MS = 30_000;
+
+/** How long the WebSub ping test waits for each hub ping to land. */
+const PING_WAIT_MS = 40_000;
+
+/** Settle window between the publish wave and the edit wave. Always fully
+ *  consumed, so it counts toward that test's worst path. */
+const PING_SETTLE_MS = 2_000;
+
+/** Room for registration and the two API writes in the ping test. Deliberately
+ *  thinner than `FEED_SETUP_ALLOWANCE_MS`: comfortable once the `workers>=2`
+ *  scaler applies (135s total against an 82s worst path), tight at `workers=1`. */
+const PING_SETUP_ALLOWANCE_MS = 8_000;
+
 // The feed cache is eventually consistent: a published post is visible
 // immediately on a cache miss, but the background worker can cache an earlier
 // snapshot (e.g. between two publishes), so reads may lag until the worker
@@ -28,7 +52,7 @@ async function fetchFeedContaining(
   page: Page,
   url: string,
   marker: string,
-  timeoutMs = 25_000,
+  timeoutMs = FEED_POLL_TIMEOUT_MS,
 ): Promise<{ body: string; contentType: string }> {
   const deadline = Date.now() + timeoutMs;
   let lastBody = "";
@@ -53,7 +77,6 @@ async function fetchFeedContaining(
 test("auto-discovery links are present on site home and user timeline, and resolve", async ({
   page,
 }, info) => {
-  setTestBudget(60_000);
   const username = await register(
     page,
     slowBrowserFirstNavigationTimeoutMs(info, 30_000),
@@ -116,7 +139,6 @@ test("auto-discovery links are present on site home and user timeline, and resol
 test("head discovery links update across a client-side nav, staying a single set", async ({
   page,
 }, info) => {
-  setTestBudget(60_000);
   await register(page, slowBrowserFirstNavigationTimeoutMs(info, 30_000));
   // Seed a public post carrying a tag so its footer renders a clickable tag chip.
   await createPostViaApi(page, {
@@ -176,7 +198,14 @@ test("crawler path keeps the projector discovery links (no wasm)", async ({
 test("per-user feeds contain only that user's posts, newest first, in all formats", async ({
   page,
 }, info) => {
-  setTestBudget(150_000);
+  // Worst path: one `fetchFeedContaining` per format for each of two users, each
+  // polling up to FEED_POLL_TIMEOUT_MS. Derived rather than restated so it cannot
+  // drift from the deadlines it exists to cover — if the whole-test budget were
+  // ever the smaller of the two, it would preempt the poll and replace its
+  // diagnostic ("never contained X within Nms") with a bare timeout.
+  setTestBudget(
+    FORMATS.length * 2 * FEED_POLL_TIMEOUT_MS + FEED_SETUP_ALLOWANCE_MS,
+  );
 
   const alice = await register(
     page,
@@ -242,7 +271,9 @@ test("per-user feeds contain only that user's posts, newest first, in all format
 test("publishing and editing a post each trigger a WebSub hub ping", async ({
   page,
 }, info) => {
-  setTestBudget(90_000);
+  // Worst path: two ping waits plus the settle = 82s. The allowance covers
+  // registration and the two API writes.
+  setTestBudget(2 * PING_WAIT_MS + PING_SETTLE_MS + PING_SETUP_ALLOWANCE_MS);
 
   const username = await register(
     page,
@@ -258,13 +289,13 @@ test("publishing and editing a post each trigger a WebSub hub ping", async ({
   const firstPing = await waitForPingMatching(
     beforePublish,
     isUserFeed,
-    40_000,
+    PING_WAIT_MS,
   );
   expect(firstPing.feed_url).toContain(`/~${username}/feed`);
 
   // Let the first ping wave fully settle before snapshotting for the edit, so
   // leftover publish-wave pings are not mistaken for the edit's ping.
-  await page.waitForTimeout(2_000);
+  await page.waitForTimeout(PING_SETTLE_MS);
   const beforeEdit = readPingLines().length;
 
   const editRes = await page.request.post(`${BASE_URL}/api/posts/update`, {
@@ -280,7 +311,11 @@ test("publishing and editing a post each trigger a WebSub hub ping", async ({
   });
   expect(editRes.ok(), "posts::update").toBeTruthy();
 
-  const secondPing = await waitForPingMatching(beforeEdit, isUserFeed, 40_000);
+  const secondPing = await waitForPingMatching(
+    beforeEdit,
+    isUserFeed,
+    PING_WAIT_MS,
+  );
   expect(secondPing.feed_url).toContain(`/~${username}/feed`);
 });
 
@@ -289,8 +324,6 @@ test("publishing and editing a post each trigger a WebSub hub ping", async ({
 test("feed honors If-None-Match with a 304 and empty body", async ({
   page,
 }, info) => {
-  setTestBudget(60_000);
-
   const username = await register(
     page,
     slowBrowserFirstNavigationTimeoutMs(info, 30_000),
@@ -317,8 +350,6 @@ test("feed honors If-None-Match with a 304 and empty body", async ({
 test("user with no posts serves a valid empty feed in each format", async ({
   page,
 }, info) => {
-  setTestBudget(60_000);
-
   const username = await register(
     page,
     slowBrowserFirstNavigationTimeoutMs(info, 30_000),
