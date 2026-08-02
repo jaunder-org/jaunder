@@ -31,7 +31,8 @@ use crate::media::ContentHash;
 /// invariant on read-back.
 ///
 /// The wrapped `String` is private, so an arbitrary `String` cannot masquerade as an
-/// `ETag` (mirroring the `ContentHash`/`ContentType` doctests):
+/// `ETag` (mirroring the `ContentHash`/`ContentType` doctests).
+///
 /// The positive companion shows the identical fixture compiles — the path resolves
 /// and the validating door accepts a double-quoted value — so each `compile_fail`
 /// below fails for the private field, not for a moved path. (Fixture lines are
@@ -51,12 +52,13 @@ use crate::media::ContentHash;
 /// let _ = ETag("\"abc\"".to_string()); // private field
 /// ```
 ///
-/// A `String` is not an `ETag`:
+/// A `String` does not convert to an `ETag` (asserted on `.into()`, so the proof
+/// still fails if a `From<String>` impl is added — a function argument would not,
+/// since an argument is never coerced through `From`):
 /// ```compile_fail
 /// # use common::etag::ETag;
 /// # use std::str::FromStr;
-/// fn takes_etag(_: ETag) {}
-/// takes_etag("\"abc\"".to_string());
+/// let _e: ETag = "\"abc\"".to_string().into();
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash, StrNewtype)]
 pub struct ETag(String);

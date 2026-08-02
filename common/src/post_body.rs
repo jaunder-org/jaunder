@@ -27,13 +27,15 @@ use macros::StrNewtype;
 /// let _h: &str = html.as_ref();
 /// ```
 ///
-/// A `PostBody` is not a `RenderedHtml`:
+/// No `PostBody` -> `RenderedHtml` conversion. Asserted on `.into()`, not on a
+/// function argument: Rust never coerces an argument through `From`, so
+/// `want_html(body)` would fail for any two distinct types and would keep failing
+/// even if the `From` impl this forbids were added.
 /// ```compile_fail
 /// # use common::post_body::PostBody;
 /// # use common::render::RenderedHtml;
 /// # let body = PostBody::from("x");
-/// fn want_html(_: RenderedHtml) {}
-/// want_html(body);
+/// let _h: RenderedHtml = body.into();
 /// ```
 ///
 /// …nor the reverse:
@@ -41,8 +43,7 @@ use macros::StrNewtype;
 /// # use common::post_body::PostBody;
 /// # use common::render::RenderedHtml;
 /// # let html = RenderedHtml::from_trusted("x");
-/// fn want_body(_: PostBody) {}
-/// want_body(html);
+/// let _b: PostBody = html.into();
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash, StrNewtype)]
 #[str_newtype(infallible)]

@@ -52,7 +52,8 @@ pub fn validate_shape(s: &str) -> Result<(), InvalidTokenShape> {
 /// The type stays distinct from [`TokenHash`]: hashing (`host::token::hash`) is the
 /// only path between them, there is no reverse conversion, and no cross-type
 /// `PartialEq` — so each of these does **not** compile, which is why
-/// `revoke_session(raw_token)` and `raw == stored_hash` cannot typecheck either:
+/// `revoke_session(raw_token)` and `raw == stored_hash` cannot typecheck either.
+///
 /// The positive companion shows the identical fixture compiles — both paths resolve
 /// and `FromStr` is in scope for both types — so each `compile_fail` below fails for
 /// the missing conversion rather than for a moved path. (Fixture lines are hidden
