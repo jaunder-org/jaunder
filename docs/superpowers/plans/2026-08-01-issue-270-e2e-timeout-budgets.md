@@ -142,13 +142,13 @@ and whether it runs per-combo or on the aggregate. Reference #270. Label
 **Interfaces:** consumes nothing; after this task `setTestBudget` has exactly 2
 callers, both in `feeds.spec.ts` (Task 3 reworks them).
 
-- [ ] **Step 1: Delete the 18 calls**
+- [x] **Step 1: Delete the 18 calls**
 
 Remove the `setTestBudget(N);` line at each site listed above, plus the blank
 line it leaves if the body now starts with one. **Do not** touch
 `feeds.spec.ts:179` or `:245`.
 
-- [ ] **Step 2: Drop the now-unused imports**
+- [x] **Step 2: Drop the now-unused imports**
 
 `visibility.spec.ts`, `audiences.spec.ts`, `atompub.spec.ts`, `posts.spec.ts`
 and `invite.spec.ts` no longer call `setTestBudget` at all — remove it from each
@@ -156,7 +156,8 @@ file's `from "./fixtures"` import list. `feeds.spec.ts` keeps it (2 callers
 remain). `posts.spec.ts` still imports `slowBrowserTimeoutMs` for `:364`/`:636`
 — keep that.
 
-- [ ] **Step 3: Verify the counts**
+- [x] **Step 3: Verify the counts** → 8 lines, exactly as tabulated; no spec
+      file other than `feeds.spec.ts`.
 
 ```bash
 rg -n 'setTestBudget' /home/mdorman/src/jaunder/.claude/worktrees/issue-270-e2e-timeout-budgets/end2end/tests/
@@ -179,7 +180,7 @@ are later tasks' work. A1's real assertion at this step is the negative one: no
 There is no tooling equivalent — `noUnusedLocals` is off and `setTestBudget`
 still exists, so a stale import type-checks clean.
 
-- [ ] **Step 4: Gate**
+- [x] **Step 4: Gate**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-270-e2e-timeout-budgets -- cargo xtask check
@@ -187,7 +188,8 @@ devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-270-e2e-time
 
 Expected: PASS. `tsc` is what catches a mistyped or half-removed import.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit** → `571d18a7`, 25 deletions (18 calls + 5 import
+      specifiers + 2 stray blank lines).
 
 ```bash
 git add end2end/tests/feeds.spec.ts end2end/tests/visibility.spec.ts \
