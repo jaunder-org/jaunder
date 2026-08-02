@@ -1,5 +1,5 @@
 //! The `raw-html-door` static check (#333): pins `PreEscaped` — maud's raw,
-//! unescaped-markup constructor — to an enumerated allowlist of production sites.
+//! unescaped-markup constructor — to enumerated, individually justified sites.
 //!
 //! `web`'s render layer carries trusted HTML in one type, `web::html::Markup`, and
 //! `Markup` is the only thing maud will splice into an `html!` without escaping it.
@@ -12,15 +12,14 @@
 //! **Population** (read structurally, ADR-0085 principle 1): every `PreEscaped`
 //! ident under [`POLICED_ROOTS`], in ordinary code **and inside macro token
 //! streams** — the render layer is `html!` bodies, so a gate blind to macro tokens
-//! would be blind to the whole layer. Every member fails unless an [`ALLOWLIST`]
-//! entry names its enclosing top-level fn *and* the entry's declared multiplicity
-//! still covers it, so a second door added inside an already-allowed fn is a
-//! failure rather than a silent absorption (ADR-0085 principle 4).
+//! would be blind to the whole layer. Every member fails unless the line
+//! **immediately above** it carries a `// raw-html-door:allow <reason>` marker
+//! (#778), so a second door added inside an already-marked fn is a failure rather
+//! than a silent absorption (ADR-0085 principle 4).
 //!
 //! The scan itself — test-code exemption, enclosing-fn tracking, the macro token
-//! walk, the multiplicity rule and the tree-wide reconciliation — is
-//! [`crate::steps::ident_gate`]; this module is the population, the allowlist and
-//! the prose.
+//! walk and the marker rule — is [`crate::steps::ident_gate`]; this module is the
+//! population and the prose.
 //!
 //! The one construct outside the population is a `use` declaration. An import names
 //! the constructor but cannot mint anything — the mint is the call, which is its own
@@ -36,13 +35,13 @@
 //! **Unreadable classes** (ADR-0085's honesty obligation) specific to this gate: a
 //! `use maud::PreEscaped as Raw` rename evades ident matching, as does a re-exported
 //! alias under any other name — `syn` has no name resolution. That is as visible in
-//! review as editing the allowlist. The classes inherent to the shared scan (the
-//! unwalked attribute-macro tokens, the fn-name-keyed allowlist, the absent call
-//! graph) are stated in [`crate::steps::ident_gate`]. A `syn` parse failure is a
+//! review as adding a marker. The classes inherent to the shared scan (the unwalked
+//! attribute-macro tokens, the unverifiable marker reason, the absent call graph)
+//! are stated in [`crate::steps::ident_gate`]. A `syn` parse failure is a
 //! **hard error** (a file we cannot walk could hide a door — a false pass).
 
 use crate::result::CommandResult;
-use crate::steps::ident_gate::{self, Allowed, AnyOf, Gate, Report};
+use crate::steps::ident_gate::{self, AnyOf, Gate, Report};
 
 /// Source roots scanned recursively for `.rs` files — the same production `src`
 /// trees [`crate::steps::rendered_html_from_trusted_check`] polices, not the
@@ -63,61 +62,44 @@ const POLICED_ROOTS: &[&str] = &[
 /// The constructor ident this guard pins.
 const DOORS: &[&str] = &["PreEscaped"];
 
-/// Every production raw door, each with its reason.
+/// The gate: population, roots and prose. Exemptions are in-source markers on the
+/// line above each door (#778), so there is no list here.
 ///
-/// One entry, and the design intends it to stay that way: `Markup` is the render
-/// layer's trusted carrier and composes into `html!` unescaped by construction, so
-/// ordinary markup never needs a door. Only a value whose safety was *established*
-/// elsewhere does.
-///
-/// The count on each entry is load-bearing — see [`Allowed`].
-const ALLOWLIST: &[Allowed] = &[
-    // `web/src/html.rs` — `Markup::from_rendered_html`, the crate's single raw door,
-    // carrying the `// XSS SAFETY:` comment beside it. It re-wraps a
-    // `common::render::RenderedHtml`, whose invariant `RenderedHtml::sanitize`
-    // established by scrubbing (ADR-0079); this only inherits it, which is why the
-    // value may be emitted unescaped. Everything else in `web` builds markup with
-    // `html!`, where maud escapes text for us.
-    Allowed {
-        function: "from_rendered_html",
-        count: 1,
-        reason: "re-wraps a RenderedHtml whose safety sanitization established (ADR-0079)",
-    },
-];
-
-/// The gate: population, allowlist, roots and prose.
+/// One door today, and the design intends it to stay that way: `Markup` is the
+/// render layer's trusted carrier and composes into `html!` unescaped by
+/// construction, so ordinary markup never needs a door. Only a value whose safety was
+/// *established* elsewhere does — a `RenderedHtml` that `RenderedHtml::sanitize`
+/// scrubbed (ADR-0079). `web/src/html.rs`'s `Markup::from_rendered_html` is that
+/// door, and its marker sits beside the `// XSS SAFETY:` prose that explains it.
 const GATE: Gate<AnyOf> = Gate {
     step: "raw-html-door",
     roots: POLICED_ROOTS,
     population: AnyOf(DOORS),
-    allowlist: ALLOWLIST,
     report: Report {
         subject: "`PreEscaped`",
-        verdict: "is not an allowlisted raw-HTML door — markup minted here reaches the DOM \
+        verdict: "is not a marked raw-HTML door — markup minted here reaches the DOM \
                   unescaped (XSS) (#333)",
-        noun: "raw door(s)",
-        vanished: "The door is gone — delete the entry.",
         recovery: "  recovery: `PreEscaped` asserts trust rather than establishing it. Trusted \
                    markup already has a carrier — build it with `html!` and wrap it in `Markup`, \
                    which composes unescaped by construction and needs no door. The only value \
                    that legitimately needs the raw door is a `RenderedHtml`, whose safety \
                    `RenderedHtml::sanitize` established; reach it through \
-                   `Markup::from_rendered_html`. If this really is a new door, add an ALLOWLIST \
-                   entry with its multiplicity and a written reason in \
-                   xtask/src/steps/raw_html_door_check.rs. Currently exempt:",
+                   `Markup::from_rendered_html`. If this really is a new door, say why in a \
+                   `// raw-html-door:allow <reason>` comment on the line IMMEDIATELY ABOVE it — \
+                   not trailing it, which the formatters move. Currently marked:",
     },
 };
 
-/// 1-based `(line, enclosing-fn)` of every mention the real [`ALLOWLIST`] does not
-/// cover. Test-only: [`problems`] parses once and applies the allowlist itself, so
-/// this is the single-source convenience the unit tests assert through.
+/// 1-based `(line, enclosing-fn)` of every unmarked mention, plus every orphan
+/// marker (empty fn name). Test-only: [`problems`] parses once and classifies itself,
+/// so this is the single-source convenience the unit tests assert through.
 #[cfg(test)]
 fn violations(source: &str) -> Result<Vec<(usize, String)>, String> {
     GATE.violations(source)
 }
 
 /// The failure detail for every offending mention across the scanned files, or
-/// `None` when the tree matches the allowlist exactly.
+/// `None` when every door is marked.
 pub fn problems(scanned: &[(String, String)]) -> Option<String> {
     GATE.problems(scanned)
 }
@@ -134,32 +116,34 @@ mod tests {
     use super::{problems, violations};
 
     /// The crate's one door, as `web/src/html.rs` writes it — the `use` that reaches
-    /// the constructor plus the single call. Both name `PreEscaped`; only the call is
-    /// in the population, which is what makes ONE entry the right cost.
+    /// the constructor plus the single marked call. Both name `PreEscaped`; only the
+    /// call is in the population, which is what makes ONE marker the right cost.
     const THE_DOOR: &str = r#"
         use maud::{PreEscaped, Render};
 
         impl Markup {
             pub fn from_rendered_html(html: &RenderedHtml) -> Self {
                 // XSS SAFETY: inherited from sanitization (ADR-0079).
+                // raw-html-door:allow re-wraps a RenderedHtml whose safety sanitization established (ADR-0079)
                 Self(PreEscaped(html.as_ref()).into_string())
             }
         }
     "#;
 
     #[test]
-    fn the_allowed_door_at_its_declared_multiplicity_passes() {
+    fn the_marked_door_passes() {
         assert_eq!(violations(THE_DOOR).unwrap(), vec![]);
     }
 
-    /// ADR-0085 principle 4: the entry is scoped to a site with a multiplicity, so a
-    /// SECOND door inside the same allowed fn is a violation, not absorbed.
+    /// ADR-0085 principle 4: the exemption is scoped to a line, so a SECOND door in
+    /// the same fn is a violation rather than absorbed by a fn-keyed entry.
     #[test]
-    fn a_second_door_inside_the_allowed_fn_is_a_violation() {
+    fn a_second_door_inside_the_marked_fn_is_a_violation() {
         let src = r#"
             impl Markup {
                 pub fn from_rendered_html(html: &RenderedHtml) -> Self {
                     let _ = PreEscaped("<b>".to_string());
+                    // raw-html-door:allow inherits sanitize's invariant (ADR-0079)
                     Self(PreEscaped(html.to_string()))
                 }
             }
@@ -167,21 +151,34 @@ mod tests {
         assert_eq!(violations(src).unwrap().len(), 1);
     }
 
-    /// A nested fn shadowing an allowed name must not borrow the entry's exemption —
-    /// the allowlist is pinned to a *top-level* fn.
+    /// The fn name bought the old exemption; it buys nothing now.
     #[test]
-    fn a_nested_fn_shadowing_the_allowed_name_is_still_flagged() {
+    fn a_formerly_allowlisted_fn_name_grants_nothing() {
         let src = r#"
-            fn outer(html: &RenderedHtml) -> Markup {
-                fn from_rendered_html(html: &RenderedHtml) -> Markup {
-                    Markup(PreEscaped(html.to_string()))
-                }
-                from_rendered_html(html)
+            fn from_rendered_html(html: &RenderedHtml) -> Markup {
+                Markup(PreEscaped(html.to_string()))
             }
         "#;
-        let hits = violations(src).unwrap();
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].1, "from_rendered_html");
+        assert_eq!(violations(src).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_bare_marker_fails() {
+        let src =
+            "fn f(s: &str) -> Markup {\n    // raw-html-door:allow\n    Markup(PreEscaped(s))\n}\n";
+        assert_eq!(violations(src).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_orphan_marker_fails() {
+        let src = "// raw-html-door:allow stale\nfn f() { harmless(); }\n";
+        assert_eq!(violations(src).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_html_sink_marker_does_not_exempt_a_door() {
+        let src = "fn f(s: &str) -> Markup {\n    // html-sink:allow wrong gate\n    Markup(PreEscaped(s))\n}\n";
+        assert_eq!(violations(src).unwrap().len(), 1);
     }
 
     /// The whole reason this gate exists: the render layer is macro bodies now.
@@ -218,7 +215,7 @@ mod tests {
 
     /// An import names the constructor but mints nothing, so it is outside the
     /// population — the call it enables is its own occurrence and is not. Being
-    /// inside would cost the one real door a second allowlist entry for its `use`.
+    /// inside would cost the one real door a second marker for its `use`.
     #[test]
     fn an_import_alone_is_outside_the_population() {
         let src = "use maud::PreEscaped;\n";
@@ -273,42 +270,35 @@ mod tests {
         assert!(violations("fn broken( {").is_err());
     }
 
-    /// The tree as it stands: one door, in the one fn the allowlist names.
+    /// The tree as it stands: one door, marked.
     fn the_real_tree() -> Vec<(String, String)> {
         vec![("web/src/html.rs".to_string(), THE_DOOR.to_string())]
     }
 
     #[test]
-    fn problems_is_none_for_the_one_declared_door() {
+    fn problems_is_none_for_the_marked_door() {
         assert_eq!(problems(&the_real_tree()), None);
     }
 
-    /// The cross-file hole a fn-name key would otherwise leave: a *second* file grows
-    /// a fn named `from_rendered_html` with a door, and the per-file pass hands it the
-    /// entry's exemption. The tree-wide reconciliation is what refuses it.
+    /// The cross-file hole a fn-name key left: a *second* file grows a fn named
+    /// `from_rendered_html` with a door and inherits the entry's exemption. There is
+    /// no name to inherit now — the new door is simply unmarked.
     #[test]
-    fn a_same_named_fn_in_another_file_breaks_the_declared_multiplicity() {
+    fn a_same_named_fn_in_another_file_gets_no_exemption() {
         let mut scanned = the_real_tree();
         scanned.push((
             "web/src/posts/render.rs".to_string(),
             "fn from_rendered_html(s: &str) -> Markup { Markup(PreEscaped(s)) }\n".to_string(),
         ));
         let detail = problems(&scanned).expect("a problem");
-        assert!(
-            detail.contains("declares 1 raw door(s), the tree has 2"),
-            "{detail}"
-        );
+        assert!(detail.contains("web/src/posts/render.rs:1"), "{detail}");
     }
 
-    /// A door that disappears leaves a stale entry, which is an exemption nobody is
-    /// re-justifying. Deleting the entry is part of deleting the door.
+    /// An empty tree has no doors and no markers, so there is nothing to fail — the
+    /// staleness class the declared list created is gone with the list.
     #[test]
-    fn a_vanished_door_leaves_a_stale_entry_that_fails() {
-        let detail = problems(&[]).expect("a problem");
-        assert!(
-            detail.contains("The door is gone — delete the entry."),
-            "{detail}"
-        );
+    fn an_empty_tree_is_clean() {
+        assert_eq!(problems(&[]), None);
     }
 
     #[test]
@@ -320,9 +310,12 @@ mod tests {
         ));
         let detail = problems(&scanned).expect("a problem");
         assert!(detail.contains("web/src/x.rs:1"));
-        assert!(detail.contains("not an allowlisted raw-HTML door"));
-        assert!(detail.contains("ALLOWLIST"));
-        assert!(detail.contains("fn `from_rendered_html` ×1"));
+        assert!(detail.contains("not a marked raw-HTML door"));
+        assert!(detail.contains("raw-html-door:allow"));
+        assert!(
+            detail.contains("web/src/html.rs:8 — re-wraps a RenderedHtml"),
+            "the derived census names the real door: {detail}"
+        );
     }
 
     #[test]

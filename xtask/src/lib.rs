@@ -10,6 +10,7 @@ mod doc_links;
 mod files;
 pub mod git;
 mod ids;
+pub mod markers;
 mod nix_build;
 pub mod pr;
 mod result;

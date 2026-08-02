@@ -776,9 +776,14 @@ impl ContentType {
     /// to enumerate every mint site, each pinned by a test that the value is valid
     /// (`detect_content_type_outputs_are_valid`, `feed_path::…::format_content_types`).
     /// (The `#398` `rendered-html-from-trusted` gate reserves the `from_trusted` name for
-    /// `RenderedHtml`'s XSS-sensitive door but exempts the `ContentType::` qualifier —
-    /// this door mints a media type, never HTML.)
+    /// `RenderedHtml`'s XSS-sensitive door. Since `#778` it no longer exempts the
+    /// `ContentType::` qualifier by pattern — that failed open on an aliased qualifier —
+    /// so each site below carries its own marker saying this door mints a media type,
+    /// never HTML. That is what makes the "grep to enumerate every mint site"
+    /// instruction above something the gate enforces rather than a request. `#790`
+    /// tracks renaming this door to remove the collision outright.)
     #[must_use]
+    // rendered-html-from-trusted:allow ContentType's own door definition — mints a media type, never HTML (#584)
     pub(crate) fn from_trusted(content_type: impl Into<String>) -> Self {
         Self(content_type.into())
     }
@@ -874,9 +879,11 @@ pub fn detect_content_type(filename: &str) -> ContentType {
 
     for (extensions, content_type) in EXTENSIONS {
         if extensions.contains(&ext.as_str()) {
+            // rendered-html-from-trusted:allow ContentType from a detected, test-pinned media type — never HTML (#584)
             return ContentType::from_trusted(content_type);
         }
     }
+    // rendered-html-from-trusted:allow ContentType from the octet-stream literal — never HTML (#584)
     ContentType::from_trusted("application/octet-stream")
 }
 

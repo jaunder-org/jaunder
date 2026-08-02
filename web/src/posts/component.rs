@@ -186,6 +186,7 @@ pub fn PostDisplay(
         // anonymous view, so this is the only path that must coincide.
         None => {
             let inner = crate::posts::render::render_post_inner(&view).into_string();
+            // html-sink:allow posts::render::render_post_inner output — the same pure render the projector paints (#179)
             view! { <article class="j-post" inner_html=inner></article> }.into_any()
         }
         // Authored layout (own posts, with the action column). The content column is
@@ -201,6 +202,7 @@ pub fn PostDisplay(
                 <article class="j-post">
                     <Avatar name=post.username.clone() size=38 />
                     <div style="min-width:0;display:flex;gap:8px;align-items:flex-start">
+                        // html-sink:allow posts::render::render_post_content output — the projector's own paint (#181)
                         <div style="flex:1;min-width:0" inner_html=inner_content></div>
                         {children()}
                     </div>
@@ -888,6 +890,7 @@ fn permalink_first_paint(seed_post: Option<PostResponse>) -> AnyView {
             // own `j-scroll`/`j-page`. `display:contents` keeps the host wrapper out
             // of the layout so it coincides with the projector's permalink page.
             let html = crate::posts::render::permalink_article(&post).into_string();
+            // html-sink:allow posts::render::permalink_article output — the projector's own permalink paint
             view! { <div style="display:contents" inner_html=html></div> }.into_any()
         }
         None => view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any(),

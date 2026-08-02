@@ -66,6 +66,7 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
         <aside class="j-sidebar">
             {move || match session.get() {
                 None => {
+                    // html-sink:allow sidebar::markup::render_sidebar output — the anonymous paint the projector emits
                     view! { <div style="display:contents" inner_html=anon_html.clone()></div> }
                         .into_any()
                 }

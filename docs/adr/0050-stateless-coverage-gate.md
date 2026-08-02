@@ -143,6 +143,22 @@ function of `(coverage report, source tree)`:
   / `crap:allow` marker — no out-of-band generated files, no merge-driver, no
   candidate-file promotion ritual. A fresh clone needs no coverage-specific git
   config.
+
+  **This is the general mechanism, not a coverage-only trick (#778).** The XSS
+  gates adopted the same written-exemption marker, and the two now share the
+  primitive that decides where a comment legally begins
+  (`xtask/src/markers.rs`). They price it differently on purpose: `cov:ignore`
+  allows a bare marker and a block form because its population is ~700 sites
+  whose worst case is an untested line, while a `<gate>:allow` requires a
+  reason, forbids a block form, and fails when it points at nothing — few sites,
+  catastrophic each. Note also what the A1 guard does **not** do, since it is
+  easy to over-read: it protects the _structural_ exemptions only. A
+  `cov:ignore` line is dropped from the executable set before the gate sees it,
+  so it is never re-checked — consistent with Consequence 3 below, and the
+  reason [the marker ADR](0094-gate-exemptions-in-source-markers.md) treats "a
+  machine can re-check what it inferred, never what a human wrote" as the
+  dividing line.
+
 - **Accepted protection tradeoffs (equivalent-or-weaker, not stricter).** Stated
   plainly here and in `CONTRIBUTING.md`:
   1. **Component bodies: weaker.** _(No longer applies as of #520.)_ A new

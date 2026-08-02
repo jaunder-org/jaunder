@@ -65,6 +65,7 @@ impl Markup {
         // is what "this string is markup, not text" is *spelled* as in maud, and it
         // is the token the `raw-html-door` gate keys on — which is what catches the
         // real hazard, a `PreEscaped(user_input)` appearing anywhere else in `web`.
+        // raw-html-door:allow re-wraps a RenderedHtml whose safety sanitization established (ADR-0079)
         Self(PreEscaped(html.as_ref()).into_string())
     }
 

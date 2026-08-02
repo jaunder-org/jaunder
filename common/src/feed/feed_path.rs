@@ -94,6 +94,7 @@ impl FeedFormat {
             FeedFormat::Atom => "application/atom+xml; charset=utf-8",
             FeedFormat::Json => "application/feed+json",
         };
+        // rendered-html-from-trusted:allow ContentType from a fixed &'static feed media type — never HTML (#584)
         ContentType::from_trusted(literal)
     }
 }

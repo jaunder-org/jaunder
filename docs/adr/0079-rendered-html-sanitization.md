@@ -86,10 +86,11 @@ Supporting choices:
   the original argument against having one. Accepted on a single ground: typing
   a column as `RenderedHtml` is a deliberate, reviewable act. The
   `rendered-html-from-trusted` gate does **not** cover it — that gate matches
-  `from_trusted` call sites in expression position, whereas a `FromRow` field
-  typed over the wrong column names no door at all. This is the one residual
-  risk in the design that nothing mechanical enforces; widening the gate to flag
-  `RenderedHtml`-typed row fields outside an allowlist is filed as
+  the `from_trusted` ident wherever it appears (#778 widened it to definitions
+  and to other types' doors), whereas a `FromRow` field typed over the wrong
+  column names no door at all. This is the one residual risk in the design that
+  nothing mechanical enforces; widening the gate to flag `RenderedHtml`-typed
+  row fields is filed as
   [#701](https://github.com/jaunder-org/jaunder/issues/701).
 - **`from_trusted` survives, narrowed to inherited trust.** It is down to one
   production call site, and the gate keeps it greppable and confined.

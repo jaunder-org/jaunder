@@ -1,5 +1,5 @@
 //! The `html-sink` static check (#333): pins every unescaped-HTML sink —
-//! `inner_html` and `set_inner_html` — to an enumerated allowlist.
+//! `inner_html` and `set_inner_html` — to enumerated, individually justified sites.
 //!
 //! These are the DOM's raw doors. Whatever string reaches them is parsed as markup,
 //! so a value that was never escaped or sanitized becomes script. `web` reaches them
@@ -22,16 +22,15 @@
 //! than sit outside the gate's reach. A population scoped to where we expect the
 //! construct to appear is a hypothesis, not an enumeration.
 //!
-//! Every member fails unless an [`ALLOWLIST`] entry names its enclosing top-level fn
-//! *and* the entry's declared multiplicity still covers it. The multiplicity is what
-//! keeps an entry site-scoped rather than fn-scoped (ADR-0085 principle 4):
-//! `PostDisplay` genuinely holds two sinks, its entry says two, and a third is a
-//! failure rather than an absorption.
+//! Every member fails unless the line **immediately above** it carries a
+//! `// html-sink:allow <reason>` marker (#778). The marker is what keeps the
+//! exemption scoped to one site rather than to a function (ADR-0085 principle 4):
+//! `PostDisplay` genuinely holds two sinks, and each argues for itself instead of
+//! sharing one fn-keyed entry that a third would silently join.
 //!
 //! The scan itself — test-code exemption, enclosing-fn tracking, the macro token
-//! walk, the multiplicity rule and the tree-wide reconciliation — is
-//! [`crate::steps::ident_gate`]; this module is the population, the allowlist and
-//! the prose.
+//! walk and the marker rule — is [`crate::steps::ident_gate`]; this module is the
+//! population and the prose.
 //!
 //! Test/fixture code (anything under a `#[cfg(test)]` module/impl/fn, or a
 //! `#[test]`/`#[rstest]` fn) is exempt.
@@ -41,14 +40,14 @@
 //! nothing, but a wrapper method named something else does. A `use` declaration is
 //! outside the population: it reaches no sink, and what it enables is its own ident
 //! occurrence. The classes inherent to the shared scan (the unwalked attribute-macro
-//! tokens, the fn-name-keyed allowlist, and above all the absent call graph — a sink
+//! tokens, the unverifiable marker reason, and above all the absent call graph — a sink
 //! reached through a helper is flagged at the helper, never at the caller that
 //! supplied the untrusted string) are stated in [`crate::steps::ident_gate`]. A
 //! `syn` parse failure is a **hard error** (a file we cannot walk could hide a sink —
 //! a false pass).
 
 use crate::result::CommandResult;
-use crate::steps::ident_gate::{self, Allowed, AnyOf, Gate, Report};
+use crate::steps::ident_gate::{self, AnyOf, Gate, Report};
 
 /// Source roots scanned recursively for `.rs` files — the production `src` trees,
 /// not the `tests/` integration crates (whose fixtures inject freely). The sinks all
@@ -69,79 +68,41 @@ const POLICED_ROOTS: &[&str] = &[
 /// `Element::set_inner_html`.
 const SINKS: &[&str] = &["inner_html", "set_inner_html"];
 
-/// Every production sink, each with its reason. The reasons all have the same shape,
-/// and that is the point: the injected value is the output of the *pure render
-/// layer* — the identical fn the projector server-renders — so it is markup we
-/// built, escaped by maud, never a string that arrived from outside.
+/// The gate: population, roots and prose. Exemptions are in-source markers on the
+/// line above each sink (#778), so there is no list here.
 ///
-/// The count on each entry is load-bearing — see [`Allowed`]. `PostDisplay` is why
-/// it cannot simply be 1: its two sinks are the anonymous and authored layouts of
-/// the same article, indistinguishable to any key a human would keep correct.
+/// **The reasons those markers carry all have the same shape, and that is the
+/// point:** the injected value is the output of the *pure render layer* — the
+/// identical fn the projector server-renders — so it is markup we built, escaped by
+/// maud, never a string that arrived from outside. A marker that cannot say that is
+/// a sink that should not exist.
 ///
-/// Entries name **fns**, not lines: the fn name is the key the gate matches on, and
-/// a line number in a comment is checked by nothing and rots on the next edit.
-const ALLOWLIST: &[Allowed] = &[
-    // `web/src/posts/component.rs`. Two sinks: the anonymous layout (the whole
-    // article inner) and the authored layout (the content column the action overlay
-    // sits beside). Both inject `posts::render::render_post_inner` /
-    // `render_post_content` output — the same pure fn the public projector paints
-    // (#179/#181, ADR-0041 §4), which is what makes the seeded first paint and the
-    // reactive re-render coincide.
-    Allowed {
-        function: "PostDisplay",
-        count: 2,
-        reason: "posts::render output — the same pure render the projector paints (#179/#181)",
-    },
-    // `web/src/posts/component.rs`. Injects `posts::render::permalink_article`
-    // output for the projector-seeded permalink, so the `Suspense` fallback is
-    // byte-for-byte the paint it replaces.
-    Allowed {
-        function: "permalink_first_paint",
-        count: 1,
-        reason: "posts::render::permalink_article output — the projector's own permalink paint",
-    },
-    // `web/src/home/component.rs`. Injects `home::render::render_masthead` output
-    // into the timeline gate's `children` slot — the shared pure fn the projector
-    // renders too (ADR-0041 §2), with no `view!` twin to drift.
-    Allowed {
-        function: "HomePage",
-        count: 1,
-        reason: "home::render::render_masthead output — the shared pure fn (ADR-0041 §2)",
-    },
-    // `web/src/sidebar/component.rs`. Injects `sidebar::markup::render_sidebar`
-    // output for the anonymous viewer, so a marker-seeded first paint and the
-    // reactive re-render coincide (#181/#591).
-    Allowed {
-        function: "Sidebar",
-        count: 1,
-        reason: "sidebar::markup::render_sidebar output — the anonymous paint the projector emits",
-    },
-];
-
-/// The gate: population, allowlist, roots and prose.
+/// (Until #778 the reasons lived here, keyed by enclosing fn with a multiplicity.
+/// `PostDisplay` was the case that forced the count: its two sinks are the anonymous
+/// and authored layouts of the same article, indistinguishable to any key a human
+/// would keep correct. Each now carries its own marker and its own reason, which is
+/// what the count was standing in for.)
 const GATE: Gate<AnyOf> = Gate {
     step: "html-sink",
     roots: POLICED_ROOTS,
     population: AnyOf(SINKS),
-    allowlist: ALLOWLIST,
     report: Report {
         subject: "an unescaped-HTML sink",
-        verdict: "is not allowlisted — whatever string reaches it is parsed as markup (XSS) (#333)",
-        noun: "sink(s)",
-        vanished: "The sink is gone — delete the entry.",
+        verdict: "is not marked — whatever string reaches it is parsed as markup (XSS) (#333)",
         recovery:
             "  recovery: an unescaped sink is only safe when the string was built by our own \
                    render layer — a `Markup`, or a `RenderedHtml` that `RenderedHtml::sanitize` \
                    scrubbed. If the value came from anywhere else, do not inject it: render it as \
                    text, where maud escapes it. If this is a genuine coincidence sink (the \
-                   projector paints the same markup), add an ALLOWLIST entry with its \
-                   multiplicity and a written reason in xtask/src/steps/html_sink_check.rs. \
-                   Currently exempt:",
+                   projector paints the same markup), say so in a \
+                   `// html-sink:allow <reason>` comment on the line IMMEDIATELY ABOVE the sink \
+                   — not trailing it, which the formatters move. Currently marked:",
     },
 };
 
-/// 1-based `(line, enclosing-fn)` of every sink the [`ALLOWLIST`] does not cover.
-/// Test-only: [`problems`] parses once and applies the allowlist itself, so this is
+/// 1-based `(line, enclosing-fn)` of every unmarked sink, plus every orphan marker
+/// (empty fn name).
+/// Test-only: [`problems`] parses once and classifies itself, so this is
 /// the single-source convenience the unit tests assert through.
 #[cfg(test)]
 fn violations(source: &str) -> Result<Vec<(usize, String)>, String> {
@@ -149,7 +110,7 @@ fn violations(source: &str) -> Result<Vec<(usize, String)>, String> {
 }
 
 /// The failure detail for every offending sink across the scanned files, or `None`
-/// when the tree matches the allowlist exactly.
+/// when every sink is marked.
 pub fn problems(scanned: &[(String, String)]) -> Option<String> {
     GATE.problems(scanned)
 }
@@ -165,19 +126,101 @@ pub fn run(result: &mut CommandResult) {
 mod tests {
     use super::{problems, violations};
 
-    /// `PostDisplay` legitimately holds TWO sinks; its entry says so.
+    /// `PostDisplay` legitimately holds TWO sinks, and each now argues for itself.
     #[test]
-    fn an_allowlisted_fn_at_its_declared_multiplicity_passes() {
+    fn two_sinks_in_one_fn_each_need_their_own_marker() {
         let src = r#"
             fn PostDisplay(view: PostView) -> AnyView {
                 if a {
+                    // html-sink:allow anonymous layout — posts::render output (#179)
                     view! { <article inner_html=inner></article> }.into_any()
                 } else {
+                    // html-sink:allow authored layout — posts::render output (#181)
                     view! { <div inner_html=inner_content></div> }.into_any()
                 }
             }
         "#;
         assert_eq!(violations(src).unwrap(), vec![]);
+    }
+
+    /// The old fn-keyed list exempted `PostDisplay` wholesale at count 2. A name
+    /// buys nothing now.
+    #[test]
+    fn a_formerly_allowlisted_fn_name_grants_nothing() {
+        let src = r#"
+            fn PostDisplay(view: PostView) -> AnyView {
+                view! { <article inner_html=inner></article> }.into_any()
+            }
+        "#;
+        assert_eq!(violations(src).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_marked_sink_passes() {
+        let src = r#"
+            fn anything(html: Markup) -> AnyView {
+                // html-sink:allow pure render output
+                view! { <div inner_html=html></div> }.into_any()
+            }
+        "#;
+        assert_eq!(violations(src).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn a_bare_marker_fails() {
+        let src = "fn f() {\n    // html-sink:allow\n    el.set_inner_html(h);\n}\n";
+        assert_eq!(violations(src).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_orphan_marker_fails() {
+        let src = "// html-sink:allow stale\nfn f() { harmless(); }\n";
+        assert_eq!(violations(src).unwrap().len(), 1);
+    }
+
+    /// Trailing is the form the formatters relocate, so it must never appear to
+    /// work: the site is unmarked AND the marker is an orphan.
+    #[test]
+    fn a_trailing_marker_does_not_exempt() {
+        let src = "fn f() { el.set_inner_html(h); } // html-sink:allow trailing\n";
+        assert_eq!(violations(src).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_doc_comment_marker_does_not_exempt() {
+        let src = "/// html-sink:allow prose\nfn f() { el.set_inner_html(h); }\n";
+        assert_eq!(violations(src).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn two_sinks_on_the_marked_line_fail() {
+        let src = "fn f() {\n    // html-sink:allow r\n    el.set_inner_html(a); el.set_inner_html(b);\n}\n";
+        assert_eq!(violations(src).unwrap().len(), 2);
+    }
+
+    /// A call whose arguments wrap: the ident is still on the statement's first
+    /// line, so the marker above that line is correct and the sink passes.
+    #[test]
+    fn a_wrapped_call_is_marked_above_its_ident_line() {
+        let src =
+            "fn f() {\n    // html-sink:allow pure render output\n    el.set_inner_html(\n        h,\n    );\n}\n";
+        assert_eq!(violations(src).unwrap(), vec![]);
+    }
+
+    /// But the marker binds to the IDENT's line, not to the statement's. When the
+    /// sink is nested deeper, marking the outer statement exempts nothing — an
+    /// orphan marker plus an unmarked sink.
+    #[test]
+    fn marking_the_statement_instead_of_the_ident_line_exempts_nothing() {
+        let src =
+            "fn f() {\n    // html-sink:allow wrong line\n    wrap(\n        el.set_inner_html(h),\n    );\n}\n";
+        assert_eq!(violations(src).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_raw_html_door_marker_does_not_exempt_a_sink() {
+        let src = "fn f() {\n    // raw-html-door:allow wrong gate\n    el.set_inner_html(h);\n}\n";
+        assert_eq!(violations(src).unwrap().len(), 1);
     }
 
     #[test]
@@ -205,19 +248,6 @@ mod tests {
     }
 
     #[test]
-    fn exceeding_a_declared_multiplicity_is_a_violation() {
-        let src = r#"
-            fn Sidebar() -> AnyView {
-                view! {
-                    <div inner_html=anon_html.clone()></div>
-                    <aside inner_html=anon_html.clone()></aside>
-                }.into_any()
-            }
-        "#;
-        assert_eq!(violations(src).unwrap().len(), 1);
-    }
-
-    #[test]
     fn a_comment_mentioning_inner_html_does_not_trip() {
         let src = r#"
             /// Injected via `inner_html` so the paint coincides.
@@ -229,23 +259,6 @@ mod tests {
     #[test]
     fn unparseable_source_is_a_hard_error() {
         assert!(violations("fn broken( {").is_err());
-    }
-
-    /// A nested fn shadowing an allowed name must not borrow the entry's exemption —
-    /// the allowlist is pinned to a *top-level* fn.
-    #[test]
-    fn a_nested_fn_shadowing_an_allowed_name_is_still_flagged() {
-        let src = r#"
-            fn outer() -> AnyView {
-                fn Sidebar() -> AnyView {
-                    view! { <div inner_html=anon_html></div> }.into_any()
-                }
-                Sidebar()
-            }
-        "#;
-        let hits = violations(src).unwrap();
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].1, "Sidebar");
     }
 
     #[test]
@@ -272,9 +285,8 @@ mod tests {
         assert_eq!(violations(src).unwrap().len(), 1);
     }
 
-    /// The five real sites, in their four fns — the shape the tree has today. Both
-    /// halves of the rule must hold at once: nothing unjustified, and every entry's
-    /// declared multiplicity reconciled against the whole tree.
+    /// The five real sites, in their four fns — the shape the tree has today, each
+    /// carrying the marker it carries in production.
     fn the_real_tree() -> Vec<(String, String)> {
         vec![
             (
@@ -282,11 +294,14 @@ mod tests {
                 r#"
                     fn PostDisplay(view: PostView) -> AnyView {
                         match children {
+                            // html-sink:allow anonymous layout — posts::render output (#179)
                             None => view! { <article inner_html=inner></article> }.into_any(),
+                            // html-sink:allow authored layout — posts::render output (#181)
                             Some(c) => view! { <div inner_html=inner_content></div> }.into_any(),
                         }
                     }
                     fn permalink_first_paint(seed: Option<PostResponse>) -> AnyView {
+                        // html-sink:allow permalink_article output — the projector's own paint
                         view! { <div inner_html=html></div> }.into_any()
                     }
                 "#
@@ -296,6 +311,7 @@ mod tests {
                 "web/src/home/component.rs".to_string(),
                 r#"
                     fn HomePage() -> impl IntoView {
+                        // html-sink:allow render_masthead output — the shared pure fn (ADR-0041 §2)
                         view! { <div inner_html=masthead.clone()></div> }
                     }
                 "#
@@ -305,6 +321,7 @@ mod tests {
                 "web/src/sidebar/component.rs".to_string(),
                 r#"
                     fn Sidebar() -> impl IntoView {
+                        // html-sink:allow render_sidebar output — the anonymous paint
                         view! { <div inner_html=anon_html.clone()></div> }
                     }
                 "#
@@ -314,15 +331,15 @@ mod tests {
     }
 
     #[test]
-    fn problems_is_none_for_the_four_allowlisted_fns_at_their_multiplicities() {
+    fn problems_is_none_for_the_fully_marked_tree() {
         assert_eq!(problems(&the_real_tree()), None);
     }
 
-    /// The cross-file hole a fn-name key would otherwise leave: a *second* file
-    /// grows a fn named `Sidebar` with a sink, and the per-file pass hands it the
-    /// entry's exemption. The tree-wide reconciliation is what refuses it.
+    /// The cross-file hole a fn-name key left: a *second* file grows a fn named
+    /// `Sidebar` with a sink and inherits the entry's exemption. There is no name to
+    /// inherit now — the new sink is simply unmarked.
     #[test]
-    fn a_same_named_fn_in_another_file_breaks_the_declared_multiplicity() {
+    fn a_same_named_fn_in_another_file_gets_no_exemption() {
         let mut scanned = the_real_tree();
         scanned.push((
             "web/src/admin/component.rs".to_string(),
@@ -330,21 +347,15 @@ mod tests {
                 .to_string(),
         ));
         let detail = problems(&scanned).expect("a problem");
-        assert!(
-            detail.contains("declares 1 sink(s), the tree has 2"),
-            "{detail}"
-        );
+        assert!(detail.contains("web/src/admin/component.rs:1"), "{detail}");
     }
 
-    /// A sink that disappears leaves a stale entry, which is an exemption nobody is
-    /// re-justifying. Deleting the entry is part of deleting the sink.
+    /// An empty tree has no sinks and no markers, so there is nothing to reconcile
+    /// and nothing to fail — the staleness class the old declared list created is
+    /// gone with the list.
     #[test]
-    fn a_vanished_sink_leaves_a_stale_entry_that_fails() {
-        let detail = problems(&[]).expect("a problem");
-        assert!(
-            detail.contains("The sink is gone — delete the entry."),
-            "{detail}"
-        );
+    fn an_empty_tree_is_clean() {
+        assert_eq!(problems(&[]), None);
     }
 
     #[test]
@@ -357,9 +368,56 @@ mod tests {
         ));
         let detail = problems(&scanned).expect("a problem");
         assert!(detail.contains("web/src/x.rs:1"));
-        assert!(detail.contains("an unescaped-HTML sink in fn `sneaky` is not allowlisted"));
-        assert!(detail.contains("ALLOWLIST"));
-        assert!(detail.contains("fn `PostDisplay` ×2"));
+        assert!(detail.contains("an unescaped-HTML sink in fn `sneaky` is not marked"));
+        assert!(detail.contains("html-sink:allow"));
+    }
+
+    /// The census is derived from the scan, so it lists the sites the tree actually
+    /// has — it cannot describe a site that is gone.
+    #[test]
+    fn problems_ends_with_the_derived_census() {
+        let mut scanned = the_real_tree();
+        scanned.push((
+            "web/src/x.rs".to_string(),
+            "fn sneaky(html: String) -> AnyView { view! { <div inner_html=html></div> }.into_any() }\n"
+                .to_string(),
+        ));
+        let detail = problems(&scanned).expect("a problem");
+        assert!(
+            detail.contains("web/src/home/component.rs:4 — render_masthead output — the shared pure fn (ADR-0041 §2)"),
+            "{detail}"
+        );
+    }
+
+    #[test]
+    fn problems_reports_a_bare_marker_distinctly() {
+        let scanned = vec![(
+            "web/src/x.rs".to_string(),
+            "fn f() {\n    // html-sink:allow\n    el.set_inner_html(h);\n}\n".to_string(),
+        )];
+        let detail = problems(&scanned).expect("a problem");
+        assert!(detail.contains("bare"), "{detail}");
+    }
+
+    #[test]
+    fn problems_reports_a_shared_line_distinctly() {
+        let scanned = vec![(
+            "web/src/x.rs".to_string(),
+            "fn f() {\n    // html-sink:allow r\n    el.set_inner_html(a); el.set_inner_html(b);\n}\n"
+                .to_string(),
+        )];
+        let detail = problems(&scanned).expect("a problem");
+        assert!(detail.contains("split the line"), "{detail}");
+    }
+
+    #[test]
+    fn problems_reports_an_orphan_marker_distinctly() {
+        let scanned = vec![(
+            "web/src/x.rs".to_string(),
+            "// html-sink:allow stale\nfn f() { harmless(); }\n".to_string(),
+        )];
+        let detail = problems(&scanned).expect("a problem");
+        assert!(detail.contains("stale exemption"), "{detail}");
     }
 
     #[test]

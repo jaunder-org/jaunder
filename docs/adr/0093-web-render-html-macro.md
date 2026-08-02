@@ -178,18 +178,23 @@ every ordinary text slot through the raw constructor.
 ## Consequences
 
 **What this commits us to.** New markup in `web` is written in `html!`, returns
-`Markup`, and reaches the DOM only through an allowlisted sink. Adding an
-`inner_html` or a second use of the raw door costs a reviewed allowlist entry —
-the ADR-0085 friction, accepted deliberately. It also commits every render fn
-and the `#[component]` beside it to reading in **different** syntaxes; that is
-the priced cost of decision 2, not an oversight to be fixed later by
-re-litigating the library.
+`Markup`, and reaches the DOM only through a marked sink. Adding an `inner_html`
+or a second use of the raw door costs a reviewed marker carrying a written
+reason (#778; a central allowlist entry when this ADR was accepted) — the
+ADR-0085 friction, accepted deliberately. It also commits every render fn and
+the `#[component]` beside it to reading in **different** syntaxes; that is the
+priced cost of decision 2, not an oversight to be fixed later by re-litigating
+the library.
 
-**What it creates.** Follow-up work on the `from_trusted` gate's `ALLOWED_FNS`,
-which exempts by _function_ — an ADR-0085 principle-4 region-scoped exemption,
-pre-existing and filed as
-[#778](https://github.com/jaunder-org/jaunder/issues/778). And one soft spot the
-type system does not cover: `DISCOVERY_MARKER_ATTR` cannot be spliced as an
+**What it creates.** [#778](https://github.com/jaunder-org/jaunder/issues/778)
+is done, and it went further than this paragraph anticipated. The `from_trusted`
+gate exempted by _function_ — an ADR-0085 principle-4 region-scoped exemption —
+and the obvious repair was to give it the multiplicity its two siblings carry.
+That turned out to be the wrong key rather than a smaller version of the right
+one, so all three gates moved to in-source per-site markers and the central
+allowlists were deleted; see
+[the marker ADR](0094-gate-exemptions-in-source-markers.md). And one soft spot
+the type system does not cover: `DISCOVERY_MARKER_ATTR` cannot be spliced as an
 attribute _name_ under any compile-time markup macro, so the literal is written
 in the `html!` and a unit test pins it against the const, keeping the `csr`
 drift guard loud.

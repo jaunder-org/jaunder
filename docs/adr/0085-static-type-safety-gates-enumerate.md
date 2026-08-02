@@ -162,6 +162,29 @@ is free to work around is a gate that reports green.
   column correspondence, so two adjacent `DateTime<Utc>` columns transpose
   invisibly (#751).
 
+- **`raw-html-door`, `html-sink` and `rendered-html-from-trusted`** (#333, #398,
+  #445, #778) conform. Each reads its population structurally — an ident under
+  the production roots, in ordinary code and inside macro token streams — and
+  denies every member unless the line immediately above it carries a
+  `// <gate-step>:allow <reason>` marker. They share one scan
+  (`xtask/src/steps/ident_gate.rs`), so a fix to the test-code exemption or the
+  macro walk cannot land in two of three.
+
+  They satisfy principle 4 by a different route than `sqlx-newtype-decode`: the
+  exemption is keyed to a line rather than to a name plus a count, so there is
+  no multiplicity to reconcile and no fn name for a second file to shadow. #778
+  records why the count was the wrong instrument here — it leaves the entry
+  region-scoped with a cardinality assertion attached, which passes a door
+  _swapped_ inside an allowed fn.
+
+  Their honesty obligation is discharged in `ident_gate`'s module doc. Two
+  classes are worth naming here because they bound what any marker mechanism can
+  claim: a marker is **trusted, not verified** — the gate checks that a reason
+  exists and still points at a site, never that it is true — and a marked site
+  is exempt regardless of what value flows _into_ it, since there is no call
+  graph. See [the marker ADR](0094-gate-exemptions-in-source-markers.md) for
+  when a gate should prefer markers to a central list.
+
 - **`sqlx-newtype-bind`** (#438, #686, #696) **does not conform**, on two
   counts.
   - It violates principle 3: a violation is `region.contains(".as_ref()")` or
@@ -202,6 +225,19 @@ entry is a deliberate, reviewed statement that a site is genuinely primitive,
 and it lives next to the rule that would otherwise flag it. That co-location
 also discharges the recurring "record why these sites are fine so nobody
 re-audits them" requirement without a separate prose document to go stale.
+
+**Amended by #778 on _which_ co-location.** The requirement stands; the claim
+that the **gate file** is where it is discharged does not. The reader who needs
+the justification is reading the **code**, not the gate — and the three XSS
+gates were carrying every reason twice, once in prose beside the site and once
+condensed in the allowlist, with nothing keeping the two in sync. Where a site
+is a source line, the reason belongs on it, and the exempt set is then _derived_
+from the tree rather than declared beside the rule: a derived set cannot go
+stale, which is exactly what the multiplicity reconciliation existed to detect.
+See [the marker ADR](0094-gate-exemptions-in-source-markers.md) for the
+discriminator. It does not displace `sqlx-newtype-decode`'s central list, whose
+entries carry a rationale category and a tracking issue that no single site
+could hold.
 
 **What it creates.** #716 is re-framed from an acknowledged gap into scheduled
 work. Rebuilding `sqlx-newtype-bind` to enumerate will require an allowlist for
