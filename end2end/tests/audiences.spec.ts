@@ -1,5 +1,5 @@
-import { test, expect, slowBrowserFirstNavigationTimeoutMs } from "./fixtures";
-import { goto, click, register, subscribeTo, failServerFn } from "./helpers";
+import { test, expect } from "./fixtures";
+import { goto, click, signInAsNewUser, subscribeTo, failServerFn } from "./helpers";
 
 // Audiences management UI (`/audiences`, converged into `web::audiences`).
 //
@@ -21,15 +21,14 @@ import { goto, click, register, subscribeTo, failServerFn } from "./helpers";
 test("Audiences: CRUD + membership toggle re-fetch without list remount or flash", async ({
   page,
   tracedContext,
-}, testInfo) => {
-  const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
+}) => {
 
-  const author = await register(page, firstNav);
+  const author = await signInAsNewUser(page);
 
   // A subscriber X so the author has someone to add to an audience.
   const xCtx = await tracedContext();
   const xPage = await xCtx.newPage();
-  const userX = await register(xPage, firstNav);
+  const userX = await signInAsNewUser(xPage);
   await subscribeTo(xPage, author);
   await xCtx.close();
 
@@ -168,9 +167,8 @@ test("Audiences: CRUD + membership toggle re-fetch without list remount or flash
 
 test("Audiences: a list fetch error surfaces the error node, not an empty list", async ({
   page,
-}, testInfo) => {
-  const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
-  await register(page, firstNav);
+}) => {
+  await signInAsNewUser(page);
 
   // Force the audience-list resource to fail before the page loads it.
   await failServerFn(page, "audiences/list_mine");
@@ -184,9 +182,8 @@ test("Audiences: a list fetch error surfaces the error node, not an empty list",
 
 test("Audiences: a members fetch error surfaces the error node, not an empty checklist", async ({
   page,
-}, testInfo) => {
-  const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
-  await register(page, firstNav);
+}) => {
+  await signInAsNewUser(page);
   await goto(page, "/audiences");
 
   // Force the members resource to fail, then create an audience whose checklist will fetch.
@@ -208,14 +205,13 @@ test("Audiences: a members fetch error surfaces the error node, not an empty che
 test("Audiences: a failed subscriber-roster fetch surfaces an error, not an empty roster", async ({
   page,
   tracedContext,
-}, testInfo) => {
-  const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
-  const author = await register(page, firstNav);
+}) => {
+  const author = await signInAsNewUser(page);
 
   // A real subscriber X, so an empty roster would be a lie — the exact #346 bug.
   const xCtx = await tracedContext();
   const xPage = await xCtx.newPage();
-  await register(xPage, firstNav);
+  await signInAsNewUser(xPage);
   await subscribeTo(xPage, author);
   await xCtx.close();
 
@@ -247,9 +243,8 @@ test("Audiences: a failed subscriber-roster fetch surfaces an error, not an empt
 // the error state — it still shows the empty message and no error node.
 test("Audiences: a genuinely empty roster still shows the empty message", async ({
   page,
-}, testInfo) => {
-  const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
-  await register(page, firstNav);
+}) => {
+  await signInAsNewUser(page);
 
   await goto(page, "/audiences");
   await page.fill('input[placeholder="Audience name"]', "Friends");
@@ -269,9 +264,8 @@ test("Audiences: a genuinely empty roster still shows the empty message", async 
 test("Audiences: refresh pulls a mid-session new subscriber into the checklists", async ({
   page,
   tracedContext,
-}, testInfo) => {
-  const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
-  const author = await register(page, firstNav);
+}) => {
+  const author = await signInAsNewUser(page);
 
   await goto(page, "/audiences");
   await page.fill('input[placeholder="Audience name"]', "Friends");
@@ -285,7 +279,7 @@ test("Audiences: refresh pulls a mid-session new subscriber into the checklists"
   // A subscriber arrives mid-session (another user's session).
   const xCtx = await tracedContext();
   const xPage = await xCtx.newPage();
-  const userX = await register(xPage, firstNav);
+  const userX = await signInAsNewUser(xPage);
   await subscribeTo(xPage, author);
   await xCtx.close();
 
@@ -308,9 +302,8 @@ test("Audiences: refresh pulls a mid-session new subscriber into the checklists"
 // name never reaches the (malicious-only) decode-time rejection.
 test("Audiences: create-name client-side validation gates submit", async ({
   page,
-}, testInfo) => {
-  const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
-  await register(page, firstNav);
+}) => {
+  await signInAsNewUser(page);
 
   await goto(page, "/audiences");
   const nameInput = 'input[placeholder="Audience name"]';

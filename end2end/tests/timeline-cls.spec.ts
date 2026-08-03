@@ -23,7 +23,7 @@
  * projector-painted, so it has nothing to coincide with.
  */
 import { test, expect, slowBrowserTimeoutMs } from "./fixtures";
-import { register } from "./helpers";
+import { signInAsNewUser } from "./helpers";
 import { createPostViaApi } from "./posts";
 import { expectNoShiftAcrossMount } from "./layout-shift";
 
@@ -77,14 +77,13 @@ const ROUTES: {
 for (const route of ROUTES) {
   test(`${route.name} : projector paint does not shift across mount`, async ({
     page,
-    firstNav,
   }, testInfo) => {
-    // Register a fresh user and publish one short post tagged with their own
+    // Seed a fresh user and publish one short post tagged with their own
     // username. The username is unique per run, so it doubles as a collision-free
     // tag — which gives the three scoped routes a page whose only row is ours, and
     // scopes the row locator to THIS test's post. Short body: no wrap, so a reflow
     // cannot masquerade as a shift.
-    const username = await register(page, firstNav);
+    const username = await signInAsNewUser(page);
     await createPostViaApi(page, { body: "cls probe", tags: [username] });
 
     await expectNoShiftAcrossMount(page, {

@@ -16,18 +16,16 @@
  * `body[data-mounted]`, never a timer) — safe under `workers>1` (#182).
  */
 import { test, expect, slowBrowserTimeoutMs } from "./fixtures";
-import { register } from "./helpers";
+import { signInAsNewUser } from "./helpers";
 import { createPostViaApi } from "./posts";
 import { expectNoShiftAcrossMount } from "./layout-shift";
 
 test("authed owner: own-post action column is additive (no content shift)", async ({
   page,
-  firstNav,
 }, testInfo) => {
-  // register() (not the registeredPage fixture) so we get the username to scope the
-  // measurement to the owner's OWN post among the many on `/`; register returns the
-  // username string.
-  const username = await register(page, firstNav);
+  // signInAsNewUser (not the registeredPage fixture) so we get the username to
+  // scope the measurement to the owner's OWN post among the many on `/`.
+  const username = await signInAsNewUser(page);
   await createPostViaApi(page, { body: "cls probe" }); // short → no wrap/reflow
 
   // The owner's own post, scoped by author handle (`@username`, rendered at
