@@ -5,12 +5,13 @@ import {
   goto,
   click,
   waitForSelector,
-  login,
+  signInAs,
   fillLoginForm,
 } from "./helpers";
 import { SEL } from "./selectors";
 
 test("register page shows form", async ({ page }) => {
+  // Holdout (spec D6): proves /register renders.
   await goto(page, "/register");
 
   await expect(page.locator("h1")).toHaveText("Register");
@@ -19,6 +20,7 @@ test("register page shows form", async ({ page }) => {
 });
 
 test("register rejects a too-short password client-side", async ({ page }) => {
+  // Holdout (spec D6): proves client-side validation.
   await goto(page, "/register");
 
   await page.fill(SEL.username, "validusername");
@@ -34,6 +36,7 @@ test("register rejects a too-short password client-side", async ({ page }) => {
 });
 
 test("register with open policy succeeds", async ({ page }) => {
+  // Holdout (spec D6): registration::register coverage.
   const username = `newuser${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
   await goto(page, "/register");
 
@@ -46,6 +49,7 @@ test("register with open policy succeeds", async ({ page }) => {
 });
 
 test("login page shows form", async ({ page }) => {
+  // Holdout (spec D6): proves /login renders.
   await goto(page, "/login");
 
   await expect(page.locator("h1")).toHaveText("Login");
@@ -57,6 +61,7 @@ test("login with valid credentials succeeds", async ({
   page,
   user,
 }, testInfo) => {
+  // Holdout (spec D6): auth::login coverage.
   const perf = createPerfProbe(testInfo, "auth_login_success");
 
   await goto(page, "/login");
@@ -88,6 +93,7 @@ test("login navigates client-side without a full document reload", async ({
   page,
   user,
 }) => {
+  // Holdout (spec D6): login is a pushState, not a reload (#591).
   await goto(page, "/login");
   await page.evaluate(() => {
     (window as Window & { __jaunderNoReload?: boolean }).__jaunderNoReload =
@@ -112,7 +118,9 @@ test("logout navigates client-side without a full document reload", async ({
   page,
   user,
 }) => {
-  await login(page, user.username, user.password);
+  // Seeded session (login-as-setup); the logout itself is the subject.
+  await signInAs(page, user.username);
+  await goto(page, "/");
   await page.evaluate(() => {
     (window as Window & { __jaunderNoReload?: boolean }).__jaunderNoReload =
       true;
@@ -131,6 +139,7 @@ test("logout navigates client-side without a full document reload", async ({
 });
 
 test("login with wrong password shows error", async ({ page }) => {
+  // Holdout (spec D6): the login error path.
   await goto(page, "/login");
 
   await fillLoginForm(page, "testlogin", "wrongpassword!");
@@ -144,7 +153,9 @@ test("logout page logs out", async ({ page, user }) => {
   // navigates to "/" on the same resolution that would render a success message, so
   // there is no perceivable "You have been logged out." page. This test pins that the
   // flow ends signed-out at "/"; the LogoutPage render carries no success branch.
-  await login(page, user.username, user.password);
+  // Seeded session (login-as-setup); the logout itself is the subject.
+  await signInAs(page, user.username);
+  await goto(page, "/");
 
   // Use the rendered logout link to avoid Firefox navigation abort races.
   await click(page, SEL.logoutLink);
@@ -161,7 +172,9 @@ test("sidebar reverts to signed-out state after logout", async ({
   page,
   user,
 }) => {
-  await login(page, user.username, user.password);
+  // Seeded session (login-as-setup); the logout itself is the subject.
+  await signInAs(page, user.username);
+  await goto(page, "/");
   // a[href='/logout'] only renders when auth Suspense resolves, confirming the
   // user is shown.
   await expect(page.locator(".j-sb-foot")).toContainText(user.username);
