@@ -10,7 +10,7 @@ import {
   goto,
   click,
   waitForSelector,
-  login,
+  signInAs,
   registerKnown,
   subscribeTo,
   unsubscribeFrom,
@@ -62,12 +62,7 @@ async function expectPostVisible(
   try {
     const page = await ctx.newPage();
     if (loginAs) {
-      await login(
-        page,
-        loginAs.username,
-        loginAs.password,
-        firstNavigationTimeoutMs,
-      );
+      await signInAs(page, loginAs.username);
     }
     await goto(page, permalink, { timeout: firstNavigationTimeoutMs });
     await expect(page.locator("article h1")).toHaveText(title);
@@ -88,12 +83,7 @@ async function expectPostHidden(
   try {
     const page = await ctx.newPage();
     if (loginAs) {
-      await login(
-        page,
-        loginAs.username,
-        loginAs.password,
-        firstNavigationTimeoutMs,
-      );
+      await signInAs(page, loginAs.username);
     }
     await goto(page, permalink, { timeout: firstNavigationTimeoutMs });
     await expect(page.locator(SEL.error)).toContainText("Post not found");

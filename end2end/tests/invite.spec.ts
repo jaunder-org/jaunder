@@ -1,5 +1,5 @@
 import { test, expect, slowBrowserFirstNavigationTimeoutMs } from "./fixtures";
-import { goto, login, click, waitForSelector } from "./helpers";
+import { goto, signInAs, click, waitForSelector } from "./helpers";
 import { SEL } from "./selectors";
 import { extractInviteCode } from "./mail";
 import { seedConfigViaTool } from "./seed";
@@ -33,7 +33,7 @@ test("invite link registration completes end-to-end", async ({
   // The operator sends an invite to this test's mailbox recipient via the
   // /invites UI (shows a "Page not found." fallback unless invite_only, which
   // we just set).
-  await login(page, "testoperator", "testpassword123");
+  await signInAs(page, "testoperator");
   await goto(page, "/invites");
   await page.fill('input[name="recipient_email"]', user.email);
   await page.fill('input[name="expires_in_hours"]', "168");
@@ -46,6 +46,7 @@ test("invite link registration completes end-to-end", async ({
 
   // A fresh, logged-out visitor follows the invite link and registers. No code
   // is typed — the register page carries it from the URL as a hidden field.
+  // Holdout (spec D6): invite-gated registration (#433) through the real UI.
   const context = await tracedContext();
   try {
     const invitee = await context.newPage();
@@ -86,6 +87,7 @@ test("invite link registration completes end-to-end", async ({
 test("invite-only /register with no code shows guidance and no submit button", async ({
   page,
 }) => {
+  // Holdout (spec D6): the invite-only guidance branch.
   await seedConfigViaTool("site.registration_policy", "invite_only");
   const firstNav = slowBrowserFirstNavigationTimeoutMs(test.info(), 15_000);
 
@@ -110,7 +112,7 @@ test("invites page shows not-found fallback when not invite-only", async ({
   await seedConfigViaTool("site.registration_policy", "open");
   const firstNav = slowBrowserFirstNavigationTimeoutMs(test.info(), 15_000);
 
-  await login(page, "testoperator", "testpassword123");
+  await signInAs(page, "testoperator");
   await goto(page, "/invites", { timeout: firstNav });
 
   await expect(page.locator('p:has-text("Page not found.")')).toBeVisible();

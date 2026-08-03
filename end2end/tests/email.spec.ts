@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures";
-import { goto, login, setAndVerifyEmail } from "./helpers";
+import { goto, signInAs, setAndVerifyEmail } from "./helpers";
 import { SEL } from "./selectors";
 
 // M3.10.11: Full email verification flow.
@@ -8,7 +8,7 @@ test("email verification flow completes successfully", async ({
   user,
   mailbox,
 }) => {
-  await login(page, user.username, user.password);
+  await signInAs(page, user.username);
 
   // Submit the address, read this recipient's verification mail
   // (recipient-scoped, parallel-safe), and follow the emitted link.
@@ -26,7 +26,7 @@ test("email form gates submit until a valid address is entered", async ({
   page,
   user,
 }) => {
-  await login(page, user.username, user.password);
+  await signInAs(page, user.username);
   await goto(page, "/profile/email");
 
   const emailInput = page.locator('input[name="email"]');

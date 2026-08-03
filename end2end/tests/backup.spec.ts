@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures";
-import { goto, login, waitForSelector } from "./helpers";
+import { goto, signInAs, waitForSelector } from "./helpers";
 import { SEL } from "./selectors";
 
 // #453: the schedule field is client-validated (ValidatedInput<BackupSchedule>, ADR-0065) —
@@ -9,7 +9,7 @@ import { SEL } from "./selectors";
 test("backup schedule field gates submit until a valid cron is entered", async ({
   page,
 }) => {
-  await login(page, "testoperator", "testpassword123");
+  await signInAs(page, "testoperator");
   await goto(page, "/admin/backups");
 
   await waitForSelector(page, 'input[name="schedule"]');
@@ -48,7 +48,7 @@ test("backup schedule field gates submit until a valid cron is entered", async (
 test("backup mode select is generated from the enum variants", async ({
   page,
 }) => {
-  await login(page, "testoperator", "testpassword123");
+  await signInAs(page, "testoperator");
   await goto(page, "/admin/backups");
 
   await waitForSelector(page, 'select[name="mode"]');
@@ -71,7 +71,7 @@ test("backup mode select is generated from the enum variants", async ({
 test("backup retention field gates submit until a count of at least 1 is entered", async ({
   page,
 }) => {
-  await login(page, "testoperator", "testpassword123");
+  await signInAs(page, "testoperator");
   await goto(page, "/admin/backups");
 
   await waitForSelector(page, 'input[name="retention_count"]');
@@ -102,7 +102,7 @@ test("backup retention field gates submit until a count of at least 1 is entered
 test("backup destination round-trips and clears via omission", async ({
   page,
 }) => {
-  await login(page, "testoperator", "testpassword123");
+  await signInAs(page, "testoperator");
   await goto(page, "/admin/backups");
   await waitForSelector(page, 'input[name="destination_path"]');
 
