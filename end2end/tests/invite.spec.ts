@@ -9,11 +9,11 @@ import { seedConfigViaTool } from "./seed";
 // serial `*-admin` Playwright project (after the parallel main project), exactly
 // like admin-site.spec, and never overlaps specs that register users under the
 // seeded `open` policy. The default is restored in afterAll.
-test.afterAll(() => {
+test.afterAll(async () => {
   // Restore both globals this spec mutates so a later serial `-admin` spec can't
   // inherit them (Test A sets base_url; both tests set the policy).
-  seedConfigViaTool("site.registration_policy", "open");
-  seedConfigViaTool("site.base_url", "");
+  await seedConfigViaTool("site.registration_policy", "open");
+  await seedConfigViaTool("site.base_url", "");
 });
 
 // Test A — the main flow: an operator emails an invite, and the invitee follows
@@ -27,8 +27,8 @@ test("invite link registration completes end-to-end", async ({
 }) => {
   // Establish invite-only and a base URL so invites::create can build the link
   // (`{base_url}/register?invite_code=<code>`); it errors without a base URL.
-  seedConfigViaTool("site.registration_policy", "invite_only");
-  seedConfigViaTool("site.base_url", "https://example.com");
+  await seedConfigViaTool("site.registration_policy", "invite_only");
+  await seedConfigViaTool("site.base_url", "https://example.com");
 
   // The operator sends an invite to this test's mailbox recipient via the
   // /invites UI (shows a "Page not found." fallback unless invite_only, which
@@ -86,7 +86,7 @@ test("invite link registration completes end-to-end", async ({
 test("invite-only /register with no code shows guidance and no submit button", async ({
   page,
 }) => {
-  seedConfigViaTool("site.registration_policy", "invite_only");
+  await seedConfigViaTool("site.registration_policy", "invite_only");
   const firstNav = slowBrowserFirstNavigationTimeoutMs(test.info(), 15_000);
 
   await goto(page, "/register", { timeout: firstNav });
@@ -107,7 +107,7 @@ test("invite-only /register with no code shows guidance and no submit button", a
 test("invites page shows not-found fallback when not invite-only", async ({
   page,
 }) => {
-  seedConfigViaTool("site.registration_policy", "open");
+  await seedConfigViaTool("site.registration_policy", "open");
   const firstNav = slowBrowserFirstNavigationTimeoutMs(test.info(), 15_000);
 
   await login(page, "testoperator", "testpassword123");

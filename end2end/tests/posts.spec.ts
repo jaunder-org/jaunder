@@ -423,13 +423,11 @@ test("per-user timeline lists published posts with pagination", async ({
 
   const username = await register(page, firstNav);
 
-  await perf.timed("seed_posts", async () => {
-    seedPostsViaTool(
-      username,
-      TIMELINE_PAGE_SIZE + TIMELINE_OVERFLOW_COUNT,
-      "Timeline Post",
-    );
-  });
+  await seedPostsViaTool(
+    username,
+    TIMELINE_PAGE_SIZE + TIMELINE_OVERFLOW_COUNT,
+    "Timeline Post",
+  );
 
   await goto(page, `/~${username}`, { timeout: firstNav });
 
@@ -460,17 +458,13 @@ test("home page shows local timeline for unauthenticated users", async ({
 }, testInfo) => {
   const perf = createPerfProbe(testInfo, "home_local_timeline");
 
-  await perf.timed("seed_author_one", async () => {
-    const u1 = await register(page, firstNav);
-    seedPostsViaTool(u1, LOCAL_TIMELINE_AUTHOR_COUNT, "Local Author One");
-  });
+  const u1 = await register(page, firstNav);
+  await seedPostsViaTool(u1, LOCAL_TIMELINE_AUTHOR_COUNT, "Local Author One");
 
   const secondContext = await tracedContext();
   const secondPage = await secondContext.newPage();
-  await perf.timed("seed_author_two", async () => {
-    const u2 = await register(secondPage, firstNav);
-    seedPostsViaTool(u2, LOCAL_TIMELINE_AUTHOR_COUNT, "Local Author Two");
-  });
+  const u2 = await register(secondPage, firstNav);
+  await seedPostsViaTool(u2, LOCAL_TIMELINE_AUTHOR_COUNT, "Local Author Two");
 
   const guestContext = await tracedContext();
   const guestPage = await guestContext.newPage();
@@ -511,17 +505,13 @@ test("cockpit /app shows the authenticated home feed with pagination", async ({
 }, testInfo) => {
   const perf = createPerfProbe(testInfo, "home_authenticated_feed");
 
-  await perf.timed("seed_self", async () => {
-    const me = await register(page, firstNav);
-    seedPostsViaTool(me, HOME_FEED_SELF_COUNT, "Home Feed Mine");
-  });
+  const me = await register(page, firstNav);
+  await seedPostsViaTool(me, HOME_FEED_SELF_COUNT, "Home Feed Mine");
 
   const secondContext = await tracedContext();
   const secondPage = await secondContext.newPage();
-  await perf.timed("seed_other", async () => {
-    const other = await register(secondPage, firstNav);
-    seedPostsViaTool(other, HOME_FEED_OTHER_COUNT, "Home Feed Other");
-  });
+  const other = await register(secondPage, firstNav);
+  await seedPostsViaTool(other, HOME_FEED_OTHER_COUNT, "Home Feed Other");
 
   await goto(page, "/app", { timeout: firstNav });
 
