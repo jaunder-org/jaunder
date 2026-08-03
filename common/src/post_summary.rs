@@ -47,9 +47,8 @@ impl PostSummary {
     /// `NumNewtype::clamped` and the `RenderedHtml::from_trusted` model. It guarantees the
     /// length cap but **not** non-emptiness (that half of the invariant is enforced only
     /// by [`FromStr`]/serde); callers must pass non-empty input, which the `debug_assert!`
-    /// pins in test/debug builds. The only callers are the two label producers —
-    /// `storage::PostRecord::fallback_summary_label` and
-    /// `common::render::derive_post_metadata` — each of which falls back through a
+    /// pins in test/debug builds. The only caller is the label producer
+    /// `storage::PostRecord::fallback_summary_label`, which falls back through a
     /// non-empty body line, title, then slug.
     ///
     /// The cut today is a raw scalar-count boundary (`chars().take(MAX)`), which can slice

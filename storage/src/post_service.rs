@@ -15,7 +15,7 @@ use common::ids::{ChannelId, PostId, UserId};
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
-use common::render::{derive_post_metadata, RenderOutput};
+use common::render::{derive_post_title, RenderOutput};
 use common::slug::{slugify_title, InvalidSlug, Slug};
 use common::visibility::AudienceTarget;
 
@@ -307,8 +307,8 @@ pub async fn perform_post_update(
         summary,
         audiences,
     } = input;
-    let metadata =
-        derive_post_metadata(title, &body, &format).ok_or(PerformUpdateError::EmptyPost)?;
+    let (title, slug_seed) =
+        derive_post_title(title, &body, &format).ok_or(PerformUpdateError::EmptyPost)?;
 
     // Derive the title from the *original* body above, then canonicalize the stored
     // Org body (ADR-0024): strip the title-source line, keep everything else. Web and
@@ -323,7 +323,7 @@ pub async fn perform_post_update(
         // Pre-validated at the boundary (wire/CLI); updates keep the slug as-is,
         // no collision dedup.
         Some(slug) => slug.clone(),
-        None => slugify_title(&metadata.slug_seed)
+        None => slugify_title(&slug_seed)
             .parse::<Slug>()
             .map_err(|_| PerformUpdateError::InvalidSlug)?,
     };
@@ -331,7 +331,7 @@ pub async fn perform_post_update(
     let rendered = RenderOutput::render(&body, &format);
     let (unpublish, explicit_published_at) = publish.into_inputs();
     let input = UpdatePostInput {
-        title: metadata.title,
+        title,
         slug,
         body,
         format,
@@ -473,8 +473,9 @@ pub async fn perform_post_creation(
         audiences,
         idempotency_key,
     } = input;
-    let metadata =
-        derive_post_metadata(title, &body, &format).ok_or(PerformCreationError::EmptyPost)?;
+    // The raw text a slug is generated from, before slugification and validation.
+    let (title, derived_slug_seed) =
+        derive_post_title(title, &body, &format).ok_or(PerformCreationError::EmptyPost)?;
 
     // Derive the title from the *original* body above, then canonicalize the stored
     // Org body (ADR-0024): strip the title-source line, keep everything else. Web and
@@ -491,7 +492,7 @@ pub async fn perform_post_creation(
         Some(slug) => slug.clone(),
         // slugify_title never fails, but funnel it through from_str (the single
         // chokepoint) rather than bypass-constructing a Slug.
-        None => slugify_title(&metadata.slug_seed)
+        None => slugify_title(&derived_slug_seed)
             .parse()
             .map_err(PerformCreationError::InvalidSlug)?,
     };
@@ -504,7 +505,7 @@ pub async fn perform_post_creation(
             storage,
             RenderedPostContent {
                 user_id,
-                title: metadata.title.clone(),
+                title: title.clone(),
                 slug,
                 body: body.clone(),
                 format,

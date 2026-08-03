@@ -24,7 +24,7 @@ use common::{
     visibility::AudienceSelection,
 };
 
-use common::seed::PostResponse;
+use common::seed::{AuthoredPost, PageCursor};
 
 use crate::error::WebResult;
 
@@ -39,7 +39,7 @@ use common::visibility::{audience_targets_or_public, targets_to_audience_selecti
 // Server-only imports for the #[server] fn bodies (gated on `feature = "server"`).
 #[cfg(feature = "server")]
 use {
-    super::server::{not_found_error, post_response, private_post_not_found_error},
+    super::server::{authored_post, not_found_error, private_post_not_found_error},
     crate::auth::require_auth,
     crate::error::InternalError,
     crate::feed_events::enqueue_feed_events,
@@ -49,9 +49,9 @@ use {
     leptos::prelude::*,
     std::{collections::BTreeSet, sync::Arc},
     storage::{
-        fetch_post_record, find_draft_by_permalink_for_user, parse_post_cursor,
-        perform_post_creation, perform_post_update, FeedEventStorage, PostCreation, PostStorage,
-        PostUpdate, PublishUpdate, SiteConfigStorage,
+        fetch_post_record, find_draft_by_permalink_for_user, keyset_cursor, perform_post_creation,
+        perform_post_update, to_post_cursor, wire_cursor, FeedEventStorage, PostCreation,
+        PostStorage, PostUpdate, PublishUpdate, SiteConfigStorage,
     },
 };
 
@@ -67,76 +67,63 @@ fn root_relative_path(path: String) -> RootRelativeUrl {
     url
 }
 
-/// Result returned by [`create`].
+/// The saved post's identity, publication state, and where to find it.
+///
+/// One type for all four post-mutating endpoints ([`create`], [`update`],
+/// [`publish`], [`unpublish`]): they answer the same question — what the post is
+/// now — so a caller that handles one handles all of them. `published_at` is the
+/// draft/published discriminant every consumer reads (never the instant itself),
+/// which is why it stays `Option` even on the paths that always publish.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CreateResult {
+pub struct SavedPost {
     pub post_id: PostId,
     pub slug: Slug,
-    pub created_at: UtcInstant,
     pub published_at: Option<UtcInstant>,
     /// Canonical permalink, always present — for a draft it is the created_at-based
     /// URL the permalink view renders for the author.
     pub permalink: RootRelativeUrl,
-    pub summary: Option<PostSummary>,
 }
 
-/// Result returned by [`update`].
+/// One of the author's not-yet-public posts, as a row in an [`UnpublishedPage`].
+///
+/// Named for the predicate the listing selects on, not for "draft": `list_drafts`
+/// returns true drafts (`published_at` NULL) **and** scheduled posts
+/// (`published_at` in the future), so "draft" would be wrong for half the set.
+///
+/// The identity/publication-state quartet is the nested [`SavedPost`] every
+/// post-mutating endpoint already answers with; what this type adds is what the
+/// row needs to paint itself — the label and the edit action's target.
+///
+/// Nesting rather than collapsing the two types is deliberate: nothing converts
+/// between them, and a flat union would put `title`, `summary_label`, and
+/// `edit_url` on every mutation response, where nothing reads them. See
+/// `docs/adr/0097-post-dto-content-weight-axis.md` (rule 3) before re-filing
+/// the field overlap as duplication.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct UpdateResult {
-    pub post_id: PostId,
-    pub slug: Slug,
-    pub published_at: Option<UtcInstant>,
-    /// Canonical permalink, always present (created_at-based for a draft).
-    pub permalink: RootRelativeUrl,
-    pub summary: Option<PostSummary>,
-}
-
-/// A draft row returned by [`list_drafts`].
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DraftSummary {
-    pub post_id: PostId,
+pub struct UnpublishedPost {
+    pub post: SavedPost,
     pub title: Option<PostTitle>,
     pub summary_label: PostSummary,
-    pub slug: Slug,
-    pub created_at: UtcInstant,
-    pub updated_at: UtcInstant,
-    /// UTC publication instant for a *scheduled* post (`published_at`
-    /// in the future); `None` for true drafts. Drives the "Scheduled for …"
-    /// author marker.
-    pub scheduled_at: Option<UtcInstant>,
     pub edit_url: RootRelativeUrl,
-    pub permalink: RootRelativeUrl,
 }
 
-/// Result returned by [`publish`].
+/// A cursor-paginated page of the author's unpublished posts, returned by
+/// [`list_drafts`] — the drafts-surface counterpart of
+/// [`TimelinePage`](common::seed::TimelinePage).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PublishResult {
-    pub post_id: PostId,
-    pub slug: Slug,
-    pub published_at: UtcInstant,
-    pub permalink: RootRelativeUrl,
+pub struct UnpublishedPage {
+    pub posts: Vec<UnpublishedPost>,
+    /// Where the next page starts; `None` on the last page.
+    pub next_cursor: Option<PageCursor>,
+    pub has_more: bool,
 }
 
-/// Bundled arguments for [`create`]. The eight fields are the RPC input
-/// contract; bundling them into a typed struct nests the JSON wire under `args`
-/// (#299).
+/// The author-supplied content of a post — the shared RPC input contract for
+/// both [`create`] and [`update`], which differ only in whether a `post_id`
+/// names an existing post. Bundling nests the JSON wire under the parameter
+/// name, `post` (#299).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreateArgs {
-    pub body: PostBody,
-    pub format: PostFormat,
-    pub slug_override: Option<Slug>,
-    pub publish: bool,
-    pub publish_at: Option<UtcInstant>,
-    pub tags: Option<Vec<TagLabel>>,
-    pub summary: Option<PostSummary>,
-    pub audience: Option<AudienceSelection>,
-}
-
-/// Bundled arguments for [`update`]. Like [`CreateArgs`] with a leading
-/// `post_id`; bundling nests the JSON wire under `args` (#299).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UpdateArgs {
-    pub post_id: PostId,
+pub struct PostInputs {
     pub body: PostBody,
     pub format: PostFormat,
     pub slug_override: Option<Slug>,
@@ -155,8 +142,8 @@ pub struct UpdateArgs {
 /// server and the wasm client). The browser converts the author's local
 /// `datetime-local` value to UTC before sending.
 #[macros::server(input = Json, skip_all)]
-pub async fn create(args: CreateArgs) -> WebResult<CreateResult> {
-    let CreateArgs {
+pub async fn create(post: PostInputs) -> WebResult<SavedPost> {
+    let PostInputs {
         body,
         format,
         slug_override,
@@ -165,7 +152,7 @@ pub async fn create(args: CreateArgs) -> WebResult<CreateResult> {
         tags,
         summary,
         audience,
-    } = args;
+    } = post;
     let auth = require_auth().await?;
     let posts = expect_context::<Arc<dyn PostStorage>>();
 
@@ -203,19 +190,16 @@ pub async fn create(args: CreateArgs) -> WebResult<CreateResult> {
     )
     .await?;
 
-    let created_at = UtcInstant::from(record.created_at);
     let published_at = record.published_at.map(UtcInstant::from);
     // The canonical permalink is always available — for a draft it is the
     // created_at-based URL the permalink view renders for the author.
     let permalink = record.permalink();
 
-    let created = CreateResult {
+    let created = SavedPost {
         post_id: record.post_id,
         slug: record.slug,
-        created_at,
         published_at,
         permalink,
-        summary: record.summary,
     };
 
     posts
@@ -236,7 +220,7 @@ pub async fn create(args: CreateArgs) -> WebResult<CreateResult> {
 
 /// Retrieves a post by its permalink.
 #[macros::server]
-pub async fn get(username: Username, date: PermalinkDate, slug: Slug) -> WebResult<PostResponse> {
+pub async fn get(username: Username, date: PermalinkDate, slug: Slug) -> WebResult<AuthoredPost> {
     let posts = expect_context::<Arc<dyn PostStorage>>();
 
     let viewer = viewer_identity().await;
@@ -244,7 +228,7 @@ pub async fn get(username: Username, date: PermalinkDate, slug: Slug) -> WebResu
         let is_author = require_auth()
             .await
             .is_ok_and(|auth| auth.user_id == post.user_id);
-        return Ok(post_response(post, is_author));
+        return Ok(authored_post(post, is_author));
     }
 
     // The visibility-filtered lookup above found nothing public at this
@@ -263,12 +247,12 @@ pub async fn get(username: Username, date: PermalinkDate, slug: Slug) -> WebResu
         .await?
         .ok_or_else(not_found_error)?;
 
-    Ok(post_response(draft, true))
+    Ok(authored_post(draft, true))
 }
 
 /// Retrieves a draft preview for the authenticated author.
 #[macros::server]
-pub async fn get_preview(post_id: PostId) -> WebResult<PostResponse> {
+pub async fn get_preview(post_id: PostId) -> WebResult<AuthoredPost> {
     let auth = require_auth()
         .await
         .map_err(|e| private_post_not_found_error(&e))?;
@@ -283,7 +267,7 @@ pub async fn get_preview(post_id: PostId) -> WebResult<PostResponse> {
         return Err(not_found_error());
     }
 
-    Ok(post_response(post, true))
+    Ok(authored_post(post, true))
 }
 
 /// Updates an existing post for the authenticated author.
@@ -291,9 +275,8 @@ pub async fn get_preview(post_id: PostId) -> WebResult<PostResponse> {
 /// `publish_at` is an optional UTC instant from the editor's datetime control.
 /// See `create` for why it crosses the boundary as a [`UtcInstant`].
 #[macros::server(input = Json, skip_all)]
-pub async fn update(args: UpdateArgs) -> WebResult<UpdateResult> {
-    let UpdateArgs {
-        post_id,
+pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<SavedPost> {
+    let PostInputs {
         body,
         format,
         slug_override,
@@ -302,7 +285,7 @@ pub async fn update(args: UpdateArgs) -> WebResult<UpdateResult> {
         tags,
         summary,
         audience,
-    } = args;
+    } = post;
     let auth = require_auth().await?;
     let posts = expect_context::<Arc<dyn PostStorage>>();
 
@@ -368,12 +351,11 @@ pub async fn update(args: UpdateArgs) -> WebResult<UpdateResult> {
     let permalink = record.permalink();
 
     host::metrics::post(host::metrics::PostEvent::Updated);
-    Ok(UpdateResult {
+    Ok(SavedPost {
         post_id,
         slug: record.slug,
         published_at,
         permalink,
-        summary: record.summary,
     })
 }
 
@@ -410,54 +392,66 @@ pub async fn get_audience_selection(post_id: PostId) -> WebResult<AudienceSelect
     Ok(targets_to_audience_selection(&targets))
 }
 
-/// Lists drafts for the authenticated user.
-#[macros::server]
+/// Lists the authenticated user's unpublished posts (drafts and scheduled).
+// The JSON input codec, unlike the crate's flat-scalar endpoints: a nested
+// `PageCursor` cannot travel through the default form-urlencoded one. Same rule
+// that already puts `create` and `update` on JSON — the other server fns taking
+// a struct.
+#[macros::server(input = Json)]
 pub async fn list_drafts(
-    cursor_created_at: Option<UtcInstant>,
-    cursor_post_id: Option<PostId>,
+    cursor: Option<PageCursor>,
     limit: Option<PageSize>,
-) -> WebResult<Vec<DraftSummary>> {
+) -> WebResult<UnpublishedPage> {
     let auth = require_auth().await?;
     let posts = expect_context::<Arc<dyn PostStorage>>();
 
-    let parsed_cursor =
-        parse_post_cursor(cursor_created_at.map(UtcInstant::value), cursor_post_id)?;
+    let parsed_cursor = keyset_cursor(cursor);
     let page_size = limit.unwrap_or_default();
-    let drafts = posts
+    let mut rows = posts
         .list_drafts_by_user(
             auth.user_id,
             parsed_cursor.as_ref(),
-            page_size.exact_limit(),
+            page_size.fetch_limit(),
             chrono::Utc::now(),
         )
         .await?;
 
-    Ok(drafts
+    // The same derivation `crate::timeline`'s `page_from_rows` performs, spelled
+    // here only because that helper is typed to `TimelinePage`/`RenderedPost`.
+    // Both halves of the has-more rule still come off `PageSize` rather than
+    // hand-rolled arithmetic, so the two sites cannot drift apart (#696).
+    let has_more = page_size.has_more(rows.len());
+    rows.truncate(page_size.page_len());
+    let next_cursor = has_more
+        .then(|| rows.last().map(to_post_cursor))
+        .flatten()
+        .map(|c| wire_cursor(&c));
+
+    let unpublished = rows
         .into_iter()
-        .map(|draft| {
-            let permalink = draft.permalink();
-            // `list_drafts_by_user` only returns drafts (`published_at`
-            // NULL) and scheduled posts (`published_at` in the future), so
-            // a `Some(published_at)` here is necessarily a scheduled time.
-            let scheduled_at = draft.published_at.map(UtcInstant::from);
-            DraftSummary {
+        .map(|draft| UnpublishedPost {
+            post: SavedPost {
                 post_id: draft.post_id,
-                title: draft.title.clone(),
-                summary_label: draft.fallback_summary_label(),
                 slug: draft.slug.clone(),
-                created_at: UtcInstant::from(draft.created_at),
-                updated_at: UtcInstant::from(draft.updated_at),
-                scheduled_at,
-                edit_url: root_relative_path(format!("/posts/{}/edit", draft.post_id)),
-                permalink,
-            }
+                published_at: draft.published_at.map(UtcInstant::from),
+                permalink: draft.permalink(),
+            },
+            title: draft.title.clone(),
+            summary_label: draft.fallback_summary_label(),
+            edit_url: root_relative_path(format!("/posts/{}/edit", draft.post_id)),
         })
-        .collect())
+        .collect();
+
+    Ok(UnpublishedPage {
+        posts: unpublished,
+        next_cursor,
+        has_more,
+    })
 }
 
 /// Publishes an existing draft owned by the authenticated user.
 #[macros::server]
-pub async fn publish(post_id: PostId) -> WebResult<PublishResult> {
+pub async fn publish(post_id: PostId) -> WebResult<SavedPost> {
     let auth = require_auth().await?;
     let posts = expect_context::<Arc<dyn PostStorage>>();
 
@@ -479,10 +473,10 @@ pub async fn publish(post_id: PostId) -> WebResult<PublishResult> {
         .map_err(InternalError::storage)?;
 
     host::metrics::post(host::metrics::PostEvent::Published);
-    Ok(PublishResult {
+    Ok(SavedPost {
         post_id: updated.post_id,
         slug: updated.slug.clone(),
-        published_at: UtcInstant::from(published_at),
+        published_at: Some(UtcInstant::from(published_at)),
         permalink: updated.permalink(),
     })
 }
@@ -519,11 +513,11 @@ pub async fn delete(post_id: PostId) -> WebResult<()> {
 
 /// Reverts a published post owned by the authenticated user back to draft status.
 #[macros::server]
-pub async fn unpublish(post_id: PostId) -> WebResult<()> {
+pub async fn unpublish(post_id: PostId) -> WebResult<SavedPost> {
     let auth = require_auth().await?;
     let posts = expect_context::<Arc<dyn PostStorage>>();
 
-    let existing = posts
+    let mut existing = posts
         .get_post_by_id(post_id, &viewer_identity().await)
         .await?
         .ok_or_else(|| InternalError::not_found("Post"))?;
@@ -540,7 +534,17 @@ pub async fn unpublish(post_id: PostId) -> WebResult<()> {
         .await
         .map_err(InternalError::storage)?;
 
-    Ok(())
+    // Reverting to draft moves the permalink back to its created_at-based form,
+    // and `permalink()` keys off `published_at` — so the record we loaded before
+    // the write must be cleared first, or we would hand the caller the stale
+    // published URL it is navigating away from.
+    existing.published_at = None;
+    Ok(SavedPost {
+        post_id,
+        slug: existing.slug.clone(),
+        published_at: None,
+        permalink: existing.permalink(),
+    })
 }
 
 #[cfg(test)]
@@ -554,13 +558,13 @@ mod tests {
     // `RenderedHtml` (the type has no blanket `Deserialize`). Covers the sole wire
     // reconstruction door.
     #[test]
-    fn timeline_summary_round_trips_rendered_html_via_trusted_rebuild() {
+    fn rendered_post_round_trips_rendered_html_via_trusted_rebuild() {
         use common::ids::PostId;
         use common::render::RenderedHtml;
-        use common::seed::TimelinePostSummary;
+        use common::seed::RenderedPost;
         use common::test_support::{parse_root_relative_url, parse_utc_instant};
 
-        let original = TimelinePostSummary {
+        let original = RenderedPost {
             post_id: PostId::from(1),
             username: parse_username("alice"),
             title: Some("T".into()),
@@ -568,14 +572,14 @@ mod tests {
             slug: "hello".parse::<Slug>().unwrap(),
             rendered_html: RenderedHtml::from_trusted("<p>hi</p>"),
             created_at: parse_utc_instant("2026-01-01T00:00:00Z"),
-            published_at: parse_utc_instant("2026-01-01T00:00:00Z"),
+            published_at: Some(parse_utc_instant("2026-01-01T00:00:00Z")),
             permalink: Some(parse_root_relative_url("/~alice/2026/01/01/hello")),
             is_author: false,
             is_draft: true,
             tags: vec![],
         };
         let json = serde_json::to_string(&original).unwrap();
-        let round_tripped: TimelinePostSummary = serde_json::from_str(&json).unwrap();
+        let round_tripped: RenderedPost = serde_json::from_str(&json).unwrap();
         assert_eq!(round_tripped.rendered_html.as_ref(), "<p>hi</p>");
         // `is_draft` is a plain bool with no custom serde — pin that it survives.
         assert!(round_tripped.is_draft);
@@ -586,26 +590,62 @@ mod tests {
     // root-relative value round-trips, and an absolute URL is rejected at
     // JSON decode by the newtype's validating serde bridge (no in-body parse).
     #[test]
-    fn publish_result_permalink_wire_is_root_relative() {
-        use super::PublishResult;
+    fn saved_post_permalink_wire_is_root_relative() {
+        use super::SavedPost;
         use common::ids::PostId;
         use common::test_support::{parse_root_relative_url, parse_utc_instant};
 
-        let original = PublishResult {
+        let original = SavedPost {
             post_id: PostId::from(1),
             slug: "hello".parse::<Slug>().unwrap(),
-            published_at: parse_utc_instant("2026-01-01T00:00:00Z"),
+            published_at: Some(parse_utc_instant("2026-01-01T00:00:00Z")),
             permalink: parse_root_relative_url("/~alice/2026/01/01/hello"),
         };
         let json = serde_json::to_string(&original).unwrap();
         // A root-relative permalink round-trips over the wire.
-        assert_eq!(
-            serde_json::from_str::<PublishResult>(&json).unwrap(),
-            original
-        );
+        assert_eq!(serde_json::from_str::<SavedPost>(&json).unwrap(), original);
         // Swapping the field to an absolute URL is rejected at decode.
         let absolute = json.replace("/~alice/2026/01/01/hello", "https://evil.example/x");
-        assert!(serde_json::from_str::<PublishResult>(&absolute).is_err());
+        assert!(serde_json::from_str::<SavedPost>(&absolute).is_err());
+    }
+
+    // The drafts wire nests the identity/publication quartet under `post` rather than
+    // flattening it, so a client reads the same `SavedPost` shape here as it does from
+    // create/update/publish. Round-trip the page to pin that nesting, and the
+    // cursor/has-more envelope that lets the surface turn a page at all.
+    #[test]
+    fn unpublished_page_wire_nests_the_saved_post() {
+        use super::{SavedPost, UnpublishedPage, UnpublishedPost};
+        use common::ids::PostId;
+        use common::seed::PageCursor;
+        use common::test_support::{
+            parse_post_summary, parse_root_relative_url, parse_utc_instant,
+        };
+
+        let page = UnpublishedPage {
+            posts: vec![UnpublishedPost {
+                post: SavedPost {
+                    post_id: PostId::from(1),
+                    slug: "hello".parse::<Slug>().unwrap(),
+                    published_at: Some(parse_utc_instant("2099-01-01T00:00:00Z")),
+                    permalink: parse_root_relative_url("/~alice/2099/01/01/hello"),
+                },
+                title: None,
+                summary_label: parse_post_summary("fallback label"),
+                edit_url: parse_root_relative_url("/posts/1/edit"),
+            }],
+            next_cursor: Some(PageCursor {
+                created_at: parse_utc_instant("2026-01-01T00:00:00Z"),
+                post_id: PostId::from(1),
+            }),
+            has_more: true,
+        };
+        let json = serde_json::to_string(&page).unwrap();
+        assert!(json.contains("\"post\":{"), "row must nest `post`: {json}");
+        assert_eq!(
+            serde_json::from_str::<UnpublishedPage>(&json).unwrap(),
+            page
+        );
     }
 
     #[test]
@@ -626,10 +666,10 @@ mod tests {
     // `input = Json` codec) — no in-body parse. Build a valid value, serialize, then
     // corrupt only the format token so the test never hardcodes the full wire shape.
     #[test]
-    fn create_post_args_rejects_unknown_format_token() {
-        use super::CreateArgs;
+    fn post_inputs_rejects_unknown_format_token() {
+        use super::PostInputs;
         use common::render::PostFormat;
-        let args = CreateArgs {
+        let post = PostInputs {
             body: "hi".into(),
             format: PostFormat::Markdown,
             slug_override: None,
@@ -639,38 +679,16 @@ mod tests {
             summary: None,
             audience: None,
         };
-        let json = serde_json::to_string(&args).unwrap();
-        assert!(serde_json::from_str::<CreateArgs>(&json).is_ok());
+        let json = serde_json::to_string(&post).unwrap();
+        assert!(serde_json::from_str::<PostInputs>(&json).is_ok());
         let bad = json.replace("\"markdown\"", "\"bogus\"");
-        assert!(serde_json::from_str::<CreateArgs>(&bad).is_err());
-    }
-
-    #[test]
-    fn update_post_args_rejects_unknown_format_token() {
-        use super::UpdateArgs;
-        use common::ids::PostId;
-        use common::render::PostFormat;
-        let args = UpdateArgs {
-            post_id: PostId::from(1),
-            body: "hi".into(),
-            format: PostFormat::Markdown,
-            slug_override: None,
-            publish: false,
-            publish_at: None,
-            tags: None,
-            summary: None,
-            audience: None,
-        };
-        let json = serde_json::to_string(&args).unwrap();
-        assert!(serde_json::from_str::<UpdateArgs>(&json).is_ok());
-        let bad = json.replace("\"markdown\"", "\"bogus\"");
-        assert!(serde_json::from_str::<UpdateArgs>(&bad).is_err());
+        assert!(serde_json::from_str::<PostInputs>(&bad).is_err());
     }
 
     #[cfg(feature = "server")]
     #[test]
-    fn timeline_post_summary_keeps_titleless_posts_titleless() {
-        use crate::posts::server::timeline_post_summary;
+    fn rendered_post_keeps_titleless_posts_titleless() {
+        use crate::posts::server::rendered_post;
         use chrono::{TimeZone, Utc};
         use common::{
             ids::{PostId, UserId},
@@ -681,7 +699,7 @@ mod tests {
         let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
         let slug = "titleless-note".parse::<Slug>().unwrap();
 
-        let summary = timeline_post_summary(
+        let summary = rendered_post(
             PostRecord {
                 post_id: PostId::from(1),
                 user_id: UserId::from(2),
@@ -712,8 +730,8 @@ mod tests {
 
     #[cfg(feature = "server")]
     #[test]
-    fn post_response_marks_draft_state_from_published_at() {
-        use crate::posts::server::post_response;
+    fn authored_post_marks_draft_state_from_published_at() {
+        use crate::posts::server::authored_post;
         use chrono::{TimeZone, Utc};
         use common::{
             ids::{PostId, UserId},
@@ -725,7 +743,7 @@ mod tests {
         let author_username = parse_username("author");
         let slug = "hello-world".parse::<Slug>().unwrap();
 
-        let draft = post_response(
+        let draft = authored_post(
             PostRecord {
                 post_id: PostId::from(1),
                 user_id: UserId::from(2),
@@ -744,11 +762,11 @@ mod tests {
             },
             true,
         );
-        assert!(draft.is_draft);
-        assert!(draft.published_at.is_none());
-        assert_eq!(draft.username, "author");
+        assert!(draft.post.is_draft);
+        assert!(draft.post.published_at.is_none());
+        assert_eq!(draft.post.username, "author");
 
-        let published = post_response(
+        let published = authored_post(
             PostRecord {
                 post_id: PostId::from(2),
                 user_id: UserId::from(2),
@@ -767,8 +785,8 @@ mod tests {
             },
             false,
         );
-        assert!(!published.is_draft);
-        assert!(published.published_at.is_some());
+        assert!(!published.post.is_draft);
+        assert!(published.post.published_at.is_some());
     }
 }
 
@@ -777,11 +795,12 @@ mod server_tests {
     // Helper fns in this feature-gated test module aren't covered by clippy's
     // allow-{unwrap,expect}-in-tests, so allow the test-scaffolding panics.
     #![allow(clippy::unwrap_used, clippy::expect_used)]
-    use super::{create, publish, update, CreateArgs, UpdateArgs};
+    use super::{create, list_drafts, publish, update, PostInputs};
     use crate::error::WebError;
     use crate::test_support::auth_parts;
     use chrono::Utc;
     use common::ids::{ChannelId, PostId, UserId};
+    use common::pagination::PageSize;
     use common::slug::Slug;
     use common::tag::TagLabel;
     use common::test_support::{parse_tag_label, parse_username};
@@ -826,6 +845,58 @@ mod server_tests {
             .returning(move |_id, _user| outcome());
         provide_context(Arc::new(posts) as Arc<dyn PostStorage>);
         owner
+    }
+
+    fn draft_row(post_id: i64) -> PostRecord {
+        PostRecord {
+            post_id: PostId::from(post_id),
+            ..owned_post(UserId::from(1))
+        }
+    }
+
+    /// The probing-row twin of `listing.rs`'s
+    /// `every_paginated_fetcher_asks_storage_for_the_probing_row`, which cannot reach
+    /// this path: `list_drafts` is a `#[server]` fn needing an owner and an
+    /// authenticated context, not a plain fetcher.
+    ///
+    /// It shipped as `exact_limit()` — exactly the page, no probe — which pins
+    /// `has_more` to `false` and `next_cursor` to `None` forever, so the drafts surface
+    /// can never turn a page. That is the regression `fetch_posts_by_tag` already
+    /// suffered once; asserting the limit here is what keeps it from recurring.
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn list_drafts_asks_storage_for_the_probing_row() {
+        for (returned, expect_more) in [(5usize, false), (6usize, true)] {
+            let page_size = PageSize::clamped(5);
+            let owner = Owner::new();
+            owner.set();
+            provide_context(auth_parts(UserId::from(1), "alice"));
+            let mut posts = MockPostStorage::new();
+            posts
+                .expect_list_drafts_by_user()
+                .withf(move |_uid, _cursor, limit, _now| *limit == page_size.fetch_limit())
+                .returning(move |_uid, _cursor, _limit, _now| {
+                    // `try_from(...).unwrap_or` rather than an `as` cast: total, and the
+                    // ids only have to be distinct.
+                    Ok((0..returned)
+                        .map(|i| draft_row(i64::try_from(i).unwrap_or(0) + 1))
+                        .collect())
+                });
+            provide_context(Arc::new(posts) as Arc<dyn PostStorage>);
+
+            let page = list_drafts(None, Some(page_size)).await;
+            drop(owner);
+            let page = page.expect("listing succeeds");
+
+            assert_eq!(page.has_more, expect_more, "has_more for {returned} rows");
+            assert_eq!(
+                page.next_cursor.is_some(),
+                expect_more,
+                "a cursor exactly when another page exists"
+            );
+            // The probing row never reaches the caller.
+            assert_eq!(page.posts.len(), returned.min(page_size.page_len()));
+        }
     }
 
     // guard:no-backend — mock store
@@ -879,22 +950,10 @@ mod server_tests {
         owner
     }
 
-    fn create_args(tags: Option<Vec<TagLabel>>) -> CreateArgs {
-        CreateArgs {
-            body: "body".into(),
-            format: PostFormat::Markdown,
-            slug_override: None,
-            publish: false,
-            publish_at: None,
-            tags,
-            summary: None,
-            audience: None,
-        }
-    }
-
-    fn update_args(tags: Option<Vec<TagLabel>>) -> UpdateArgs {
-        UpdateArgs {
-            post_id: PostId::from(1),
+    /// The content half of a mutation call. `create` and `update` take the same
+    /// `PostInputs`; `update` names the post it edits in a separate argument.
+    fn post_inputs(tags: Option<Vec<TagLabel>>) -> PostInputs {
+        PostInputs {
             body: "body".into(),
             format: PostFormat::Markdown,
             slug_override: None,
@@ -925,7 +984,7 @@ mod server_tests {
             .withf(|_post_id, desired| desired.len() == 2)
             .returning(|_, _| Ok(()));
         let owner = mutation_owner(posts);
-        let result = create(create_args(Some(vec![
+        let result = create(post_inputs(Some(vec![
             parse_tag_label("rust"),
             parse_tag_label("web"),
         ])))
@@ -950,10 +1009,10 @@ mod server_tests {
             .withf(|_post_id, desired| desired.len() == 2)
             .returning(|_, _| Ok(()));
         let owner = mutation_owner(posts);
-        let result = update(update_args(Some(vec![
-            parse_tag_label("rust"),
-            parse_tag_label("web"),
-        ])))
+        let result = update(
+            PostId::from(1),
+            post_inputs(Some(vec![parse_tag_label("rust"), parse_tag_label("web")])),
+        )
         .await;
         drop(owner);
         result.expect("update succeeds");
@@ -973,7 +1032,7 @@ mod server_tests {
             .returning(|_id, _user, _input| Ok(owned_post(UserId::from(1))));
         posts.expect_set_post_tags().times(0);
         let owner = mutation_owner(posts);
-        let result = update(update_args(None)).await;
+        let result = update(PostId::from(1), post_inputs(None)).await;
         drop(owner);
         result.expect("update succeeds");
     }

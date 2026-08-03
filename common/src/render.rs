@@ -1,11 +1,10 @@
-//! Pure post-body rendering and title/metadata derivation.
+//! Pure post-body rendering and title derivation.
 //!
 //! Format-driven transformation of post bodies to HTML plus extraction of
-//! titles, slug seeds, and summary labels. No storage or database concerns.
+//! titles and slug seeds. No storage or database concerns.
 
 use std::fmt;
 
-use crate::post_summary::PostSummary;
 use crate::post_title::PostTitle;
 
 /// The format/markup language used to author a post body.
@@ -595,60 +594,40 @@ mod sanitized {
 #[cfg(feature = "sanitize")]
 pub use sanitized::{extract_media_refs, render, RenderOutput, INERT_ATTRS, MEDIA_URL_ATTRS};
 
-/// Metadata derived from a post body used for slug generation and display.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DerivedPostMetadata {
-    pub title: Option<PostTitle>,
-    pub slug_seed: String,
-    pub summary_label: PostSummary,
-}
-
-/// Derives the public title, slug seed, and fallback label for a post.
+/// Derives a post's public title and the seed its slug is seeded from.
+///
 /// The body is stored verbatim by the caller — this function never mutates it.
-pub fn derive_post_metadata(
+/// `None` means the post is empty: there is no title and no non-blank line to
+/// seed a slug from, so there is nothing to store.
+pub fn derive_post_title(
     explicit_title: Option<&str>,
     body: &str,
     format: &PostFormat,
-) -> Option<DerivedPostMetadata> {
+) -> Option<(Option<PostTitle>, String)> {
     let explicit_title = explicit_title
         .map(str::trim)
         .filter(|title| !title.is_empty());
     let body = body.trim();
 
-    if let Some(title) = explicit_title {
-        let title = title.to_owned();
-        let label = fallback_label(body).unwrap_or_else(|| title.clone());
-        return Some(DerivedPostMetadata {
-            title: Some(PostTitle::from(title.clone())),
-            slug_seed: title,
-            summary_label: PostSummary::truncated(&label),
-        });
-    }
-
-    let extracted_title = match format {
+    // An explicit title wins outright, so the body is only parsed for one when
+    // there is none — hence `or_else`, not `or`.
+    let title = explicit_title.map(str::to_owned).or_else(|| match format {
         PostFormat::Markdown => extract_markdown_title(body).map(|(title, _)| title),
         PostFormat::Org => extract_org_title(body).map(|(title, _)| title),
         PostFormat::Html => None,
-    };
+    });
 
-    if let Some(title) = extracted_title {
-        let label = fallback_label(body).unwrap_or_else(|| title.clone());
-        return Some(DerivedPostMetadata {
-            title: Some(PostTitle::from(title.clone())),
-            slug_seed: title,
-            summary_label: PostSummary::truncated(&label),
-        });
+    if let Some(title) = title {
+        return Some((Some(PostTitle::from(title.clone())), title));
     }
 
-    let label = fallback_label(body)?;
-    Some(DerivedPostMetadata {
-        title: None,
-        slug_seed: label.clone(),
-        summary_label: PostSummary::truncated(&label),
-    })
+    // An untitled post seeds its slug from the first non-blank line, so this call
+    // is also the empty-post gate: no such line means there is nothing to store.
+    let seed = first_meaningful_line(body)?;
+    Some((None, seed))
 }
 
-fn fallback_label(body: &str) -> Option<String> {
+fn first_meaningful_line(body: &str) -> Option<String> {
     body.lines()
         .map(str::trim)
         .find(|line| !line.is_empty())
@@ -913,65 +892,63 @@ mod tests {
     }
 
     #[test]
-    fn derive_metadata_prefers_explicit_title() {
-        let metadata = derive_post_metadata(
+    fn derive_post_title_prefers_explicit_title() {
+        let (title, slug_seed) = derive_post_title(
             Some(" Explicit "),
             "# Body Heading\ntext",
             &PostFormat::Markdown,
         )
         .unwrap();
-        assert_eq!(metadata.title.as_deref(), Some("Explicit"));
-        assert_eq!(metadata.slug_seed, "Explicit");
-        assert_eq!(metadata.summary_label, "# Body Heading");
+        assert_eq!(title.as_deref(), Some("Explicit"));
+        assert_eq!(slug_seed, "Explicit");
     }
 
     #[test]
-    fn derive_metadata_extracts_markdown_h1() {
-        let metadata = derive_post_metadata(
+    fn derive_post_title_extracts_markdown_h1() {
+        let (title, slug_seed) = derive_post_title(
             None,
             "\n# Article Title\n\nBody text",
             &PostFormat::Markdown,
         )
         .unwrap();
-        assert_eq!(metadata.title.as_deref(), Some("Article Title"));
-        assert_eq!(metadata.slug_seed, "Article Title");
-        // body is not a field of DerivedPostMetadata — the caller retains the original
+        assert_eq!(title.as_deref(), Some("Article Title"));
+        assert_eq!(slug_seed, "Article Title");
+        // the body is not returned — the caller retains the original
     }
 
     #[test]
-    fn derive_metadata_extracts_org_title() {
-        let metadata =
-            derive_post_metadata(None, "#+title: Org Title\n\nBody text", &PostFormat::Org)
-                .unwrap();
-        assert_eq!(metadata.title.as_deref(), Some("Org Title"));
-        assert_eq!(metadata.slug_seed, "Org Title");
-        // body is not a field of DerivedPostMetadata — the caller retains the original
+    fn derive_post_title_extracts_org_title() {
+        let (title, slug_seed) =
+            derive_post_title(None, "#+title: Org Title\n\nBody text", &PostFormat::Org).unwrap();
+        assert_eq!(title.as_deref(), Some("Org Title"));
+        assert_eq!(slug_seed, "Org Title");
+        // the body is not returned — the caller retains the original
     }
 
     #[test]
-    fn derive_metadata_for_html_extracts_no_title_but_keeps_fallback_label() {
-        let metadata = derive_post_metadata(None, "<p>Hello world</p>", &PostFormat::Html).unwrap();
-        assert_eq!(metadata.title, None);
-        assert!(!metadata.summary_label.is_empty());
+    fn derive_post_title_for_html_extracts_no_title_and_seeds_slug_from_the_body() {
+        let (title, slug_seed) =
+            derive_post_title(None, "<p>Hello world</p>", &PostFormat::Html).unwrap();
+        assert_eq!(title, None);
+        assert_eq!(slug_seed, "<p>Hello world</p>");
     }
 
     #[test]
-    fn derive_metadata_allows_titleless_notes() {
-        let metadata = derive_post_metadata(
+    fn derive_post_title_allows_titleless_notes() {
+        let (title, slug_seed) = derive_post_title(
             None,
             "A compact note\nwith more text",
             &PostFormat::Markdown,
         )
         .unwrap();
-        assert_eq!(metadata.title, None);
-        assert_eq!(metadata.slug_seed, "A compact note");
-        assert_eq!(metadata.summary_label, "A compact note");
+        assert_eq!(title, None);
+        assert_eq!(slug_seed, "A compact note");
     }
 
     #[test]
-    fn derive_metadata_rejects_empty_posts() {
+    fn derive_post_title_rejects_empty_posts() {
         assert_eq!(
-            derive_post_metadata(None, "   \n\t", &PostFormat::Markdown),
+            derive_post_title(None, "   \n\t", &PostFormat::Markdown),
             None
         );
     }
@@ -988,7 +965,7 @@ mod tests {
     #[test]
     fn extract_markdown_title_skips_leading_blanks_then_finds_heading() {
         // Leading blank lines before the heading exercise the blank-skip branch.
-        // (`derive_post_metadata` trims the body first, so this branch is only
+        // (`derive_post_title` trims the body first, so this branch is only
         // reachable by calling the helper directly.)
         let result = extract_markdown_title("\n\n# Title\n\nBody");
         assert_eq!(result, Some(("Title".to_string(), "Body".to_string())));
@@ -1043,11 +1020,11 @@ mod tests {
     }
 
     #[test]
-    fn derive_metadata_extracts_org_level1_heading() {
-        let metadata =
-            derive_post_metadata(None, "* Org Heading\n\nBody text", &PostFormat::Org).unwrap();
-        assert_eq!(metadata.title.as_deref(), Some("Org Heading"));
-        assert_eq!(metadata.slug_seed, "Org Heading");
+    fn derive_post_title_extracts_org_level1_heading() {
+        let (title, slug_seed) =
+            derive_post_title(None, "* Org Heading\n\nBody text", &PostFormat::Org).unwrap();
+        assert_eq!(title.as_deref(), Some("Org Heading"));
+        assert_eq!(slug_seed, "Org Heading");
     }
 
     #[test]

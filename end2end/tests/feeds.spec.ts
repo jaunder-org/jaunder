@@ -275,8 +275,8 @@ test("publishing and editing a post each trigger a WebSub hub ping", async ({
 
   const editRes = await page.request.post(`${BASE_URL}/api/posts/update`, {
     data: {
-      args: {
-        post_id,
+      post_id,
+      post: {
         body: "# Ping On Publish\n\nEdited body",
         format: "markdown",
         slug_override: null,

@@ -1,7 +1,7 @@
 //! Timeline pagination — the host-tested model (ADR-0070 §6): the
-//! `TimelineCursor` newtype, the `LoadStatus` enum, and the reactive
-//! `TimelineState` signal bundle that wraps them. Everything here is ungated and
-//! coverage-measured; the signal bundle is exercised under a reactive `Owner`
+//! `LoadStatus` enum and the reactive `TimelineState` signal bundle that holds it
+//! alongside the `common::seed::PageCursor` a page hands back. Everything here is
+//! ungated and coverage-measured; the bundle is exercised under a reactive `Owner`
 //! (the `web::reactive` / `forms::Field` / `tags::input_state` convention), which
 //! is what makes its transitions testable at all — they were invisible to the
 //! coverage gate while the bundle lived in the wasm-only `component.rs` (#671).
@@ -11,49 +11,10 @@
 
 use leptos::prelude::*;
 
-use common::ids::PostId;
-use common::seed::{TimelinePage, TimelinePostSummary};
-use common::time::UtcInstant;
+use common::seed::{PageCursor, RenderedPost, TimelinePage};
 
 use crate::error::{WebError, WebResult};
 use crate::taglist::TagCtx;
-
-/// A keyset pagination cursor: the `(created_at, post_id)` pair a timeline page
-/// hands back to fetch the next page. Bundling the two — which always move
-/// together — makes "one set, the other not" unrepresentable (they were two
-/// independent `Option` signals before #329).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TimelineCursor {
-    pub created_at: UtcInstant,
-    pub post_id: PostId,
-}
-
-impl TimelineCursor {
-    /// Build a cursor from a page's flat next-cursor fields: `Some` only when
-    /// **both** components are present. A partial pair (which the server never
-    /// emits) collapses to `None` rather than a half-cursor.
-    #[must_use]
-    pub fn from_page(page: &TimelinePage) -> Option<Self> {
-        match (page.next_cursor_created_at, page.next_cursor_post_id) {
-            (Some(created_at), Some(post_id)) => Some(Self {
-                created_at,
-                post_id,
-            }),
-            _ => None,
-        }
-    }
-
-    /// Split an optional cursor into the `(created_at, post_id)` optionals a
-    /// timeline list fn takes — `(None, None)` when there is no cursor. Keeps the
-    /// pairing logic host-tested and out of the wasm-only paginator.
-    #[must_use]
-    pub fn into_query(cursor: Option<Self>) -> (Option<UtcInstant>, Option<PostId>) {
-        match cursor {
-            Some(c) => (Some(c.created_at), Some(c.post_id)),
-            None => (None, None),
-        }
-    }
-}
 
 /// The load state of a timeline: idle, a load-more in flight, or a failed fetch
 /// carrying the error itself. Replaces the old `loading_more: bool` +
@@ -129,6 +90,21 @@ pub enum NoIdentity {
     Redirect(&'static str),
 }
 
+/// A claimed load-more slot: proof that [`TimelineState::begin_load_more`] found
+/// the timeline fetchable and marked it in flight, so the holder now owes the
+/// state an [`append`](TimelineState::append) to settle it.
+///
+/// The claim is a named type rather than the cursor alone because "was the slot
+/// claimed?" and "is there a cursor?" are unrelated questions with the same
+/// `Option` answer — the caller must not have to remember which nesting level
+/// means which.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LoadMoreClaim {
+    /// Where to fetch from; `None` on a timeline that has yet to hand a cursor
+    /// back, which the listing endpoints read as "from the beginning".
+    pub cursor: Option<PageCursor>,
+}
+
 /// The reactive state of a cursor-paginated timeline, shared by the public Local
 /// timeline (`home.rs`) and the authed `/app` cockpit (`cockpit.rs`).
 ///
@@ -137,8 +113,8 @@ pub enum NoIdentity {
 /// without per-signal capture.
 #[derive(Clone, Copy, Default)]
 pub struct TimelineState {
-    pub rows: RwSignal<Vec<TimelinePostSummary>>,
-    pub cursor: RwSignal<Option<TimelineCursor>>,
+    pub rows: RwSignal<Vec<RenderedPost>>,
+    pub cursor: RwSignal<Option<PageCursor>>,
     pub has_more: RwSignal<bool>,
     pub status: RwSignal<LoadStatus>,
 }
@@ -152,7 +128,7 @@ impl TimelineState {
     /// differed only by that line (#671). It also clears any prior failure, so a
     /// successful refetch after an error recovers.
     pub fn adopt(&self, page: TimelinePage) {
-        self.cursor.set(TimelineCursor::from_page(&page));
+        self.cursor.set(page.next_cursor);
         self.has_more.set(page.has_more);
         self.rows.set(page.posts);
         self.status.set(LoadStatus::Idle);
@@ -206,7 +182,7 @@ impl TimelineState {
     pub fn append(&self, result: WebResult<TimelinePage>) {
         match result {
             Ok(page) => {
-                self.cursor.set(TimelineCursor::from_page(&page));
+                self.cursor.set(page.next_cursor);
                 self.has_more.set(page.has_more);
                 self.rows.update(|rows| rows.extend(page.posts));
                 self.status.set(LoadStatus::Idle);
@@ -216,17 +192,19 @@ impl TimelineState {
     }
 
     /// Claim the load-more slot: `None` when there is nothing to fetch or a fetch
-    /// is already in flight, else the current cursor as the `(created_at, post_id)`
-    /// query pair, having marked the status `InFlight`.
+    /// is already in flight, else a [`LoadMoreClaim`] carrying the cursor, having
+    /// marked the status `InFlight`.
     ///
-    /// Returning the query pair rather than a bare `bool` keeps the cursor read
-    /// and its split host-tested, leaving the wasm caller a six-line shell.
-    pub fn begin_load_more(&self) -> Option<(Option<UtcInstant>, Option<PostId>)> {
+    /// Returning the claim rather than a bare `bool` keeps the guarded read
+    /// host-tested, leaving the wasm caller a six-line shell.
+    pub fn begin_load_more(&self) -> Option<LoadMoreClaim> {
         if self.status.get_untracked().is_in_flight() || !self.has_more.get_untracked() {
             return None;
         }
         self.status.set(LoadStatus::InFlight);
-        Some(TimelineCursor::into_query(self.cursor.get_untracked()))
+        Some(LoadMoreClaim {
+            cursor: self.cursor.get_untracked(),
+        })
     }
 
     /// Fold the status and the page's row context into the one thing the gate
@@ -261,7 +239,9 @@ impl TimelineState {
 mod tests {
     use super::*;
     use crate::posts::render::test_fixtures::sample_summary;
+    use common::ids::PostId;
     use common::test_support::parse_username;
+    use common::time::UtcInstant;
 
     fn instant() -> UtcInstant {
         "2026-07-19T10:30:00Z".parse().unwrap()
@@ -271,31 +251,23 @@ mod tests {
         TagCtx::ForUser(parse_username("bob"))
     }
 
+    fn cursor(created_at: UtcInstant, post_id: i64) -> PageCursor {
+        PageCursor {
+            created_at,
+            post_id: PostId::from(post_id),
+        }
+    }
+
     fn page_with(
-        posts: Vec<TimelinePostSummary>,
-        next_cursor_created_at: Option<UtcInstant>,
-        next_cursor_post_id: Option<PostId>,
+        posts: Vec<RenderedPost>,
+        next_cursor: Option<PageCursor>,
         has_more: bool,
     ) -> TimelinePage {
         TimelinePage {
             posts,
-            next_cursor_created_at,
-            next_cursor_post_id,
+            next_cursor,
             has_more,
         }
-    }
-
-    fn page(
-        next_cursor_created_at: Option<UtcInstant>,
-        next_cursor_post_id: Option<PostId>,
-        has_more: bool,
-    ) -> TimelinePage {
-        page_with(
-            Vec::new(),
-            next_cursor_created_at,
-            next_cursor_post_id,
-            has_more,
-        )
     }
 
     /// Run `body` under a fresh reactive `Owner` (the `web::reactive` /
@@ -306,39 +278,6 @@ mod tests {
         owner.set();
         body();
         drop(owner);
-    }
-
-    #[test]
-    fn cursor_from_page_needs_both_components() {
-        assert_eq!(
-            TimelineCursor::from_page(&page(Some(instant()), Some(PostId::from(7)), true)),
-            Some(TimelineCursor {
-                created_at: instant(),
-                post_id: PostId::from(7)
-            }),
-        );
-        assert_eq!(TimelineCursor::from_page(&page(None, None, false)), None);
-        assert_eq!(
-            TimelineCursor::from_page(&page(Some(instant()), None, true)),
-            None
-        );
-        assert_eq!(
-            TimelineCursor::from_page(&page(None, Some(PostId::from(7)), true)),
-            None
-        );
-    }
-
-    #[test]
-    fn cursor_into_query_splits_or_empties() {
-        let cursor = TimelineCursor {
-            created_at: instant(),
-            post_id: PostId::from(7),
-        };
-        assert_eq!(
-            TimelineCursor::into_query(Some(cursor)),
-            (Some(instant()), Some(PostId::from(7))),
-        );
-        assert_eq!(TimelineCursor::into_query(None), (None, None));
     }
 
     #[test]
@@ -358,18 +297,11 @@ mod tests {
             let state = TimelineState::default();
             state.adopt(page_with(
                 vec![sample_summary()],
-                Some(instant()),
-                Some(PostId::from(7)),
+                Some(cursor(instant(), 7)),
                 true,
             ));
             assert_eq!(state.rows.get().len(), 1);
-            assert_eq!(
-                state.cursor.get(),
-                Some(TimelineCursor {
-                    created_at: instant(),
-                    post_id: PostId::from(7)
-                })
-            );
+            assert_eq!(state.cursor.get(), Some(cursor(instant(), 7)));
             assert!(state.has_more.get());
         });
     }
@@ -379,7 +311,7 @@ mod tests {
         with_owner(|| {
             let state = TimelineState::default();
             state.fail(WebError::validation("boom"));
-            state.adopt(page_with(vec![sample_summary()], None, None, false));
+            state.adopt(page_with(vec![sample_summary()], None, false));
             assert_eq!(state.rows.get().len(), 1);
             assert_eq!(
                 state.status.get(),
@@ -401,7 +333,7 @@ mod tests {
                 "not seeded, not loaded"
             );
 
-            state.adopt_seed(Some(page_with(vec![sample_summary()], None, None, false)));
+            state.adopt_seed(Some(page_with(vec![sample_summary()], None, false)));
             assert_eq!(state.rows.get().len(), 1);
             assert_eq!(state.status.get(), LoadStatus::Idle);
         });
@@ -413,8 +345,7 @@ mod tests {
             let state = TimelineState::default();
             state.apply(Ok(page_with(
                 vec![sample_summary()],
-                Some(instant()),
-                Some(PostId::from(7)),
+                Some(cursor(instant(), 7)),
                 true,
             )));
             assert_eq!(state.rows.get().len(), 1);
@@ -438,7 +369,7 @@ mod tests {
     fn unidentified_empties_the_timeline_and_marks_the_status() {
         with_owner(|| {
             let state = TimelineState::default();
-            state.adopt(page_with(vec![sample_summary()], None, None, true));
+            state.adopt(page_with(vec![sample_summary()], None, true));
             state.unidentified();
             assert!(state.rows.get().is_empty());
             assert_eq!(state.cursor.get(), None);
@@ -455,8 +386,7 @@ mod tests {
             let state = TimelineState::default();
             state.adopt(page_with(
                 vec![sample_summary()],
-                Some(instant()),
-                Some(PostId::from(7)),
+                Some(cursor(instant(), 7)),
                 true,
             ));
             state.status.set(LoadStatus::InFlight);
@@ -464,18 +394,14 @@ mod tests {
             let later: UtcInstant = "2026-07-20T10:30:00Z".parse().unwrap();
             state.append(Ok(page_with(
                 vec![sample_summary(), sample_summary()],
-                Some(later),
-                Some(PostId::from(9)),
+                Some(cursor(later, 9)),
                 false,
             )));
 
             assert_eq!(state.rows.get().len(), 3, "extends, does not replace");
             assert_eq!(
                 state.cursor.get(),
-                Some(TimelineCursor {
-                    created_at: later,
-                    post_id: PostId::from(9)
-                }),
+                Some(cursor(later, 9)),
                 "cursor advances to the new page"
             );
             assert!(!state.has_more.get(), "has_more is overwritten");
@@ -491,8 +417,7 @@ mod tests {
             let state = TimelineState::default();
             state.adopt(page_with(
                 vec![sample_summary()],
-                Some(instant()),
-                Some(PostId::from(7)),
+                Some(cursor(instant(), 7)),
                 true,
             ));
             state.append(Err(WebError::validation("boom")));
@@ -504,10 +429,7 @@ mod tests {
             );
             assert_eq!(
                 state.cursor.get(),
-                Some(TimelineCursor {
-                    created_at: instant(),
-                    post_id: PostId::from(7)
-                }),
+                Some(cursor(instant(), 7)),
                 "cursor untouched"
             );
             assert!(state.has_more.get(), "has_more untouched");
@@ -531,14 +453,13 @@ mod tests {
             assert_eq!(state.begin_load_more(), None, "already in flight");
 
             state.status.set(LoadStatus::Idle);
-            state.cursor.set(Some(TimelineCursor {
-                created_at: instant(),
-                post_id: PostId::from(7),
-            }));
+            state.cursor.set(Some(cursor(instant(), 7)));
             assert_eq!(
                 state.begin_load_more(),
-                Some((Some(instant()), Some(PostId::from(7)))),
-                "hands back the cursor as a query pair"
+                Some(LoadMoreClaim {
+                    cursor: Some(cursor(instant(), 7))
+                }),
+                "hands the cursor straight back"
             );
             assert_eq!(
                 state.status.get(),
@@ -549,11 +470,14 @@ mod tests {
     }
 
     #[test]
-    fn begin_load_more_without_a_cursor_yields_an_empty_query() {
+    fn begin_load_more_without_a_cursor_claims_the_slot_anyway() {
         with_owner(|| {
             let state = TimelineState::default();
             state.has_more.set(true);
-            assert_eq!(state.begin_load_more(), Some((None, None)));
+            assert_eq!(
+                state.begin_load_more(),
+                Some(LoadMoreClaim { cursor: None })
+            );
         });
     }
 
@@ -563,8 +487,7 @@ mod tests {
             let state = TimelineState::default();
             state.adopt(page_with(
                 vec![sample_summary()],
-                Some(instant()),
-                Some(PostId::from(7)),
+                Some(cursor(instant(), 7)),
                 true,
             ));
             state.fail(WebError::validation("boom"));
@@ -629,7 +552,7 @@ mod tests {
     fn paint_reports_rows_once_loaded_with_a_context() {
         with_owner(|| {
             let state = TimelineState::default();
-            state.adopt(page_with(vec![sample_summary()], None, None, false));
+            state.adopt(page_with(vec![sample_summary()], None, false));
             assert_eq!(
                 state.paint(Some(TagCtx::SiteWide)),
                 Ok(TimelinePaint::Rows(TagCtx::SiteWide))
@@ -652,7 +575,7 @@ mod tests {
     fn paint_reports_unidentified_when_the_route_context_is_absent() {
         with_owner(|| {
             let state = TimelineState::default();
-            state.adopt(page_with(vec![sample_summary()], None, None, false));
+            state.adopt(page_with(vec![sample_summary()], None, false));
             assert_eq!(state.paint(None), Ok(TimelinePaint::Unidentified));
 
             state.status.set(LoadStatus::InFlight);
@@ -670,7 +593,7 @@ mod tests {
     fn a_seeded_timeline_paints_rows_immediately_never_loading() {
         with_owner(|| {
             let state = TimelineState::default();
-            state.adopt_seed(Some(page_with(vec![sample_summary()], None, None, false)));
+            state.adopt_seed(Some(page_with(vec![sample_summary()], None, false)));
             assert_eq!(
                 state.paint(Some(TagCtx::SiteWide)),
                 Ok(TimelinePaint::Rows(TagCtx::SiteWide)),

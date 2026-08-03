@@ -19,7 +19,7 @@ use crate::taglist::TagCtx;
 use crate::timeline::render::render_load_more;
 use crate::{avatar, taglist, topbar};
 use common::render::RenderedHtml;
-use common::seed::{PageSeed, PostResponse, TagSummary, TimelinePostSummary};
+use common::seed::{PageSeed, RenderedPost, TagSummary};
 use common::time::UtcInstant;
 use common::username::Username;
 use maud::html;
@@ -39,9 +39,9 @@ pub(crate) fn format_post_time(ts: UtcInstant) -> String {
 pub(crate) fn render_body(seed: &PageSeed) -> Markup {
     match seed {
         // Permalink: no Topbar; a single article inside `j-scroll`/`j-page`.
-        PageSeed::Permalink(post) => Markup::new(html! {
+        PageSeed::Permalink(authored) => Markup::new(html! {
             div class="j-scroll" {
-                div class="j-page" { (permalink_article(post)) }
+                div class="j-page" { (permalink_article(&authored.post)) }
             }
         }),
         // Home (anonymous "Local" mode): the shared masthead as the leading chrome,
@@ -94,9 +94,11 @@ pub(crate) fn render_body(seed: &PageSeed) -> Markup {
 }
 
 /// One permalink post as an `<article>`. Shared by the projector's permalink page
-/// and the reactive `PostPage`'s Suspense fallback so they coincide.
+/// and the reactive `PostPage`'s Suspense fallback so they coincide. Takes the
+/// rendered half of an `AuthoredPost` so it builds the very same `PostView` as
+/// [`render_posts`] — the coincidence is structural, not a copied body.
 #[must_use]
-pub(crate) fn permalink_article(post: &PostResponse) -> Markup {
+pub(crate) fn permalink_article(post: &RenderedPost) -> Markup {
     let ctx = TagCtx::ForUser(post.username.clone());
     render_post_article(&PostView {
         username: &post.username,
@@ -104,7 +106,7 @@ pub(crate) fn permalink_article(post: &PostResponse) -> Markup {
         banner: None,
         summary: post.summary.as_deref(),
         rendered_html: &post.rendered_html,
-        time: &format_post_time(post.published_at.unwrap_or(post.created_at)),
+        time: &format_post_time(post.display_time()),
         permalink: post.permalink.as_deref().unwrap_or_default(),
         tags: &post.tags,
         tag_ctx: &ctx,
@@ -114,10 +116,10 @@ pub(crate) fn permalink_article(post: &PostResponse) -> Markup {
 /// Concatenated `<article>`s for a list of timeline posts (anonymous, so no action
 /// column), each coincident with the reactive `PostCard`/`PostDisplay` output.
 #[must_use]
-fn render_posts(posts: &[TimelinePostSummary], tag_ctx: &TagCtx) -> Markup {
+fn render_posts(posts: &[RenderedPost], tag_ctx: &TagCtx) -> Markup {
     Markup::new(html! {
         @for post in posts {
-            @let time = format_post_time(post.published_at);
+            @let time = format_post_time(post.display_time());
             (render_post_article(&PostView {
                 username: &post.username,
                 title: post.title.as_deref(),
@@ -133,8 +135,8 @@ fn render_posts(posts: &[TimelinePostSummary], tag_ctx: &TagCtx) -> Markup {
     })
 }
 
-/// The fields needed to render one post, borrowed from a `PostResponse` or a
-/// `TimelinePostSummary`. `time` is already formatted (see [`format_post_time`]).
+/// The fields needed to render one post, borrowed from a `RenderedPost`. `time`
+/// is already formatted (see [`format_post_time`]).
 pub(crate) struct PostView<'a> {
     pub username: &'a Username,
     pub title: Option<&'a str>,
@@ -223,7 +225,7 @@ pub(crate) fn render_post_content(view: &PostView) -> Markup {
 #[must_use]
 fn render_timeline_page(
     chrome: &Markup,
-    posts: &[TimelinePostSummary],
+    posts: &[RenderedPost],
     has_more: bool,
     tag_ctx: &TagCtx,
     empty_text: &str,
@@ -250,35 +252,37 @@ pub(crate) mod test_fixtures {
     use super::*;
     use common::ids::PostId;
     use common::render::PostFormat;
-    use common::seed::TimelinePage;
+    use common::seed::{AuthoredPost, TimelinePage};
     use common::test_support::{
         parse_post_summary, parse_root_relative_url, parse_username, parse_utc_instant,
     };
 
-    pub(crate) fn sample_post() -> PostResponse {
-        PostResponse {
-            post_id: PostId::from(7),
-            username: parse_username("alice"),
-            title: Some("Hello & <World>".into()),
-            slug: "hello".parse().unwrap(),
+    pub(crate) fn sample_post() -> AuthoredPost {
+        AuthoredPost {
+            post: RenderedPost {
+                post_id: PostId::from(7),
+                username: parse_username("alice"),
+                title: Some("Hello & <World>".into()),
+                summary: None,
+                slug: "hello".parse().unwrap(),
+                rendered_html: RenderedHtml::from_trusted("<p>Hi <em>there</em></p>"),
+                created_at: parse_utc_instant("2026-01-02T03:04:05Z"),
+                published_at: Some(parse_utc_instant("2026-01-02T03:04:05Z")),
+                permalink: Some(parse_root_relative_url("/~alice/2026/01/02/hello")),
+                is_author: false,
+                is_draft: false,
+                tags: vec![TagSummary {
+                    slug: "rust".parse().unwrap(),
+                    display: "Rust".parse().unwrap(),
+                }],
+            },
             body: "raw".into(),
             format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Hi <em>there</em></p>"),
-            created_at: parse_utc_instant("2026-01-02T03:04:05Z"),
-            published_at: Some(parse_utc_instant("2026-01-02T03:04:05Z")),
-            is_draft: false,
-            is_author: false,
-            permalink: Some(parse_root_relative_url("/~alice/2026/01/02/hello")),
-            tags: vec![TagSummary {
-                slug: "rust".parse().unwrap(),
-                display: "Rust".parse().unwrap(),
-            }],
-            summary: None,
         }
     }
 
-    pub(crate) fn sample_summary() -> TimelinePostSummary {
-        TimelinePostSummary {
+    pub(crate) fn sample_summary() -> RenderedPost {
+        RenderedPost {
             post_id: PostId::from(1),
             username: parse_username("bob"),
             title: Some("First".into()),
@@ -286,7 +290,7 @@ pub(crate) mod test_fixtures {
             slug: "first".parse().unwrap(),
             rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
             created_at: parse_utc_instant("2026-01-01T00:00:00Z"),
-            published_at: parse_utc_instant("2026-01-01T00:00:00Z"),
+            published_at: Some(parse_utc_instant("2026-01-01T00:00:00Z")),
             permalink: Some(parse_root_relative_url("/~bob/2026/01/01/first")),
             is_author: false,
             is_draft: false,
@@ -297,8 +301,7 @@ pub(crate) mod test_fixtures {
     pub(crate) fn one_post_page() -> TimelinePage {
         TimelinePage {
             posts: vec![sample_summary()],
-            next_cursor_created_at: None,
-            next_cursor_post_id: None,
+            next_cursor: None,
             has_more: false,
         }
     }
@@ -392,8 +395,7 @@ mod tests {
     fn timeline_renders_each_post_and_heading() {
         let page = TimelinePage {
             posts: vec![sample_summary()],
-            next_cursor_created_at: None,
-            next_cursor_post_id: None,
+            next_cursor: None,
             has_more: false,
         };
         let html = render_body(&PageSeed::Profile {
@@ -410,8 +412,7 @@ mod tests {
     fn empty_timeline_renders_placeholder() {
         let page = TimelinePage {
             posts: vec![],
-            next_cursor_created_at: None,
-            next_cursor_post_id: None,
+            next_cursor: None,
             has_more: false,
         };
         let html = render_body(&PageSeed::SiteTimeline(page)).into_string();
@@ -482,8 +483,7 @@ mod tests {
     fn timeline_page_empty_states_differ_by_route() {
         let empty = TimelinePage {
             posts: vec![],
-            next_cursor_created_at: None,
-            next_cursor_post_id: None,
+            next_cursor: None,
             has_more: false,
         };
         let profile = render_body(&PageSeed::Profile {
@@ -518,8 +518,8 @@ mod tests {
     #[test]
     fn body_permalink_falls_back_to_created_at_when_unpublished() {
         let mut post = sample_post();
-        post.published_at = None;
-        post.permalink = None;
+        post.post.published_at = None;
+        post.post.permalink = None;
         let html = render_body(&PageSeed::Permalink(post)).into_string();
         // The time is formatted (mirroring the reactive `format_post_time`), not raw.
         assert!(html.contains("2026-01-02 03:04"), "{html}");

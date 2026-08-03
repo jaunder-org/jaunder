@@ -64,6 +64,10 @@ const RECORDABLE_TYPES: &[(&str, &str)] = &[
     ("RetentionCount", "bounded count, min 1"),
     ("InviteTtlHours", "bounded hour count"),
     ("UtcInstant", "pagination cursor timestamp"),
+    (
+        "PageCursor",
+        "keyset paging token: exactly the UtcInstant + PostId pair above",
+    ),
     ("PostFormat", "bounded enum"),
     ("MediaSource", "bounded enum"),
     ("BackupMode", "bounded enum"),

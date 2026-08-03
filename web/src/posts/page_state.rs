@@ -31,7 +31,7 @@ use common::tag::Tag;
 use common::username::Username;
 
 use crate::error::{WebError, WebResult};
-use crate::posts::UpdateResult;
+use crate::posts::SavedPost;
 
 /// Which listing page is rendering, carrying the route segments it has **already**
 /// parsed (`None` = the segment was absent or would not parse).
@@ -125,7 +125,7 @@ pub fn user_tag_query(username: Option<Username>, tag: Option<Tag>) -> WebResult
 /// `&str` by deref — unwrapping it here would trade the type for an allocation.
 #[must_use]
 pub fn publish_redirect<E>(
-    settled: Option<Result<UpdateResult, E>>,
+    settled: Option<Result<SavedPost, E>>,
 ) -> Option<Result<RootRelativeUrl, E>> {
     let updated = settled?.ok()?;
     let published = updated.published_at.is_some();
@@ -190,8 +190,7 @@ mod tests {
     fn page(has_more: bool) -> TimelinePage {
         TimelinePage {
             posts: Vec::new(),
-            next_cursor_created_at: None,
-            next_cursor_post_id: None,
+            next_cursor: None,
             has_more,
         }
     }
@@ -383,20 +382,19 @@ mod tests {
 
     // --- the editor's folds ---
 
-    fn update_result(published_at: Option<UtcInstant>) -> UpdateResult {
-        UpdateResult {
+    fn saved_post(published_at: Option<UtcInstant>) -> SavedPost {
+        SavedPost {
             post_id: PostId::from(7),
             slug: parse_slug("hello"),
             published_at,
             permalink: parse_root_relative_url("/~alice/2026/01/02/hello"),
-            summary: None,
         }
     }
 
     #[test]
     fn a_published_update_redirects_to_its_typed_permalink() {
         assert_eq!(
-            publish_redirect::<WebError>(Some(Ok(update_result(Some(
+            publish_redirect::<WebError>(Some(Ok(saved_post(Some(
                 "2026-01-02T00:00:00Z".parse().expect("a real instant")
             )))))
             .expect("a published update navigates"),
@@ -409,7 +407,7 @@ mod tests {
         // The editor must not navigate away when the author saved a draft — the whole
         // point of the inner `published_at.is_some()` branch this replaced.
         assert_eq!(
-            publish_redirect::<WebError>(Some(Ok(update_result(None)))),
+            publish_redirect::<WebError>(Some(Ok(saved_post(None)))),
             None
         );
     }

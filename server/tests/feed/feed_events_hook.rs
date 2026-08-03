@@ -25,7 +25,7 @@ async fn create_published_post_enqueues_expected_feeds(
     let session = create_user_and_session(&state).await;
 
     let body = json!({
-        "args": {
+        "post": {
             "body": "Test post",
             "format": "markdown",
             "slug_override": None::<String>,
@@ -66,7 +66,7 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
     let cookie = session.cookie();
 
     let create_body = json!({
-        "args": {
+        "post": {
             "body": "Test post",
             "format": "markdown",
             "slug_override": None::<String>,
@@ -101,8 +101,8 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
 
     // Union should be {leptos, rust, web} = 3 tags
     let update_body = json!({
-        "args": {
-            "post_id": post_id,
+        "post_id": post_id,
+        "post": {
             "body": "Updated post",
             "format": "markdown",
             "slug_override": None::<String>,
@@ -144,7 +144,7 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend
     let cookie = session.cookie();
 
     let create_body = json!({
-        "args": {
+        "post": {
             "body": "Test post",
             "format": "markdown",
             "slug_override": None::<String>,
@@ -211,7 +211,7 @@ async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
     let cookie = session.cookie();
 
     let create_body = json!({
-        "args": {
+        "post": {
             "body": "Test post",
             "format": "markdown",
             "slug_override": None::<String>,
@@ -278,7 +278,7 @@ async fn delete_draft_post_enqueues_nothing(#[case] backend: Backend) {
     let cookie = session.cookie();
 
     let create_body = json!({
-        "args": {
+        "post": {
             "body": "Test draft",
             "format": "markdown",
             "slug_override": None::<String>,

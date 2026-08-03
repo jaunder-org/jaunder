@@ -11,10 +11,8 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::components::Redirect;
 
-use common::ids::PostId;
 use common::pagination::PageSize;
-use common::seed::TimelinePage;
-use common::time::UtcInstant;
+use common::seed::{PageCursor, TimelinePage};
 
 use super::state::{NoIdentity, TimelinePaint, TimelineState};
 use crate::error::WebResult;
@@ -25,17 +23,17 @@ use crate::taglist::TagCtx as TagContext;
 /// it. `fetch` is the page's list fn (`list_local_timeline` / `list_home_feed`).
 pub fn spawn_load_more<F, Fut>(state: TimelineState, fetch: F)
 where
-    F: FnOnce(Option<UtcInstant>, Option<PostId>, Option<PageSize>) -> Fut + 'static,
+    F: FnOnce(Option<PageCursor>, Option<PageSize>) -> Fut + 'static,
     Fut: Future<Output = WebResult<TimelinePage>> + 'static,
 {
-    // The guard, the cursor split, and the result fold are all host-tested on
+    // The guard, the cursor read, and the result fold are all host-tested on
     // `TimelineState` (#671); what cannot run on the host — and so all that is left
     // here — is `spawn_local`.
-    let Some((created_at, post_id)) = state.begin_load_more() else {
+    let Some(claim) = state.begin_load_more() else {
         return;
     };
     spawn_local(async move {
-        state.append(fetch(created_at, post_id, Some(PageSize::default())).await);
+        state.append(fetch(claim.cursor, Some(PageSize::default())).await);
     });
 }
 

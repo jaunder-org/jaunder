@@ -3,14 +3,13 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use chrono::Datelike;
 use common::ids::{PostId, UserId};
-use common::seed::{PostResponse, TimelinePage};
+use common::seed::{AuthoredPost, PageCursor, TimelinePage};
 use common::tag::TagLabel;
 use common::test_support::{parse_audience_name, parse_row_limit};
-use common::time::UtcInstant;
 use common::visibility::{AudienceBase, AudienceSelection};
 use server_fn::ServerFn;
 use storage::PostFormat;
-use web::posts::{CreateResult, DraftSummary, PublishResult, UpdateResult};
+use web::posts::{SavedPost, UnpublishedPage};
 
 use rstest::*;
 use rstest_reuse::*;
@@ -43,7 +42,7 @@ async fn create_post_json(
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
     let payload = serde_json::json!({
-        "args": {
+        "post": {
             "body": body,
             "format": format,
             "slug_override": slug_override,
@@ -69,8 +68,8 @@ async fn update_post_json(
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
     let payload = serde_json::json!({
-        "args": {
-            "post_id": post_id,
+        "post_id": post_id,
+        "post": {
             "body": body,
             "format": format,
             "slug_override": slug_override,
@@ -137,7 +136,7 @@ async fn create_post_persists_rendered_published_post(#[case] backend: Backend) 
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
     assert_eq!(created.slug, "hello-world");
     assert!(created.published_at.is_some());
 
@@ -207,7 +206,7 @@ second",
     .await;
 
     assert_eq!(second_status, StatusCode::OK, "body: {second_body}");
-    let created: CreateResult = serde_json::from_str(&second_body).unwrap();
+    let created: SavedPost = serde_json::from_str(&second_body).unwrap();
     assert_eq!(created.slug, "repeated-title-2");
 }
 
@@ -243,9 +242,9 @@ async fn unauthenticated_request(
             )
             .await
         }
-        UnauthEndpoint::ListDrafts => list_drafts_form(state, None, None, 10, None).await,
+        UnauthEndpoint::ListDrafts => list_drafts(state, None, 10, None).await,
         UnauthEndpoint::PublishPost => publish_post_form(state, PostId::from(99), None).await,
-        UnauthEndpoint::ListHomeFeed => list_home_feed_form(state, None, None, 50, None).await,
+        UnauthEndpoint::ListHomeFeed => list_home_feed(state, None, 50, None).await,
     }
 }
 
@@ -286,7 +285,7 @@ async fn create_post_accepts_slug_override_and_saves_draft(#[case] backend: Back
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
     assert_eq!(created.slug, "custom-slug");
     assert!(created.published_at.is_none());
     // A draft now carries its canonical (created_at-based) permalink; the permalink
@@ -332,7 +331,7 @@ async fn create_post_accepts_titleless_body(#[case] backend: Backend) {
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
     assert_eq!(created.slug, "titleless-note");
     let record = state
         .posts
@@ -366,7 +365,7 @@ Body text",
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
     assert_eq!(created.slug, "extracted-title");
     let record = state
         .posts
@@ -441,7 +440,7 @@ async fn get_post_returns_published_post(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
 
     let record = state
         .posts
@@ -491,7 +490,7 @@ draft",
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
     let record = state
         .posts
         .get_post_by_id(
@@ -570,7 +569,7 @@ draft",
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
 
     let (status, body) = get_post_preview_form(&state, created.post_id, Some(&author_cookie)).await;
     assert_eq!(status, StatusCode::OK, "author preview failed: {body}");
@@ -603,7 +602,7 @@ async fn get_post_hides_drafts_from_guests(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
     let record = state
         .posts
         .get_post_by_id(
@@ -661,22 +660,19 @@ async fn get_post_returns_not_found_for_missing_post(#[case] backend: Backend) {
     assert!(body.contains("Post not found"), "body: {body}");
 }
 
-async fn list_drafts_form(
+// The six listing helpers below post JSON, not a form: their `cursor` is a nested
+// `PageCursor`, which the default form-urlencoded codec cannot carry, so the six
+// endpoints declare `input = Json`.
+async fn list_drafts(
     state: &Arc<storage::AppState>,
-    cursor_created_at: Option<UtcInstant>,
-    cursor_post_id: Option<PostId>,
+    cursor: Option<PageCursor>,
     limit: u32,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
-    let mut parts = vec![format!("limit={limit}")];
-    if let (Some(created_at), Some(post_id)) = (cursor_created_at, cursor_post_id) {
-        parts.push(format!("cursor_created_at={created_at}"));
-        parts.push(format!("cursor_post_id={post_id}"));
-    }
-    post_form(
+    post_json(
         state,
         <web::posts::ListDrafts as ServerFn>::PATH,
-        parts.join("&"),
+        serde_json::json!({ "cursor": cursor, "limit": limit }),
         cookie,
     )
     .await
@@ -696,96 +692,76 @@ async fn publish_post_form(
     .await
 }
 
-async fn list_user_posts_form(
+async fn list_user_posts(
     state: &Arc<storage::AppState>,
     username: &str,
-    cursor_created_at: Option<UtcInstant>,
-    cursor_post_id: Option<PostId>,
+    cursor: Option<PageCursor>,
     limit: u32,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
-    let mut parts = vec![format!("username={username}"), format!("limit={limit}")];
-    if let (Some(created_at), Some(post_id)) = (cursor_created_at, cursor_post_id) {
-        parts.push(format!("cursor_created_at={created_at}"));
-        parts.push(format!("cursor_post_id={post_id}"));
-    }
-    post_form(
+    post_json(
         state,
         <web::timeline::ListByUser as ServerFn>::PATH,
-        parts.join("&"),
+        serde_json::json!({ "username": username, "cursor": cursor, "limit": limit }),
         cookie,
     )
     .await
 }
 
-async fn list_posts_by_tag_form(
+async fn list_posts_by_tag(
     state: &Arc<storage::AppState>,
     tag: &str,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
-    let body = format!("tag={tag}&limit=50");
-    post_form(
+    post_json(
         state,
         <web::timeline::ListByTag as ServerFn>::PATH,
-        body,
+        serde_json::json!({ "tag": tag, "cursor": null, "limit": 50 }),
         cookie,
     )
     .await
 }
 
-async fn list_user_posts_by_tag_form(
+async fn list_user_posts_by_tag(
     state: &Arc<storage::AppState>,
     username: &str,
     tag: &str,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
-    let body = format!("username={username}&tag={tag}&limit=50");
-    post_form(
+    post_json(
         state,
         <web::timeline::ListByUserAndTag as ServerFn>::PATH,
-        body,
+        serde_json::json!({ "username": username, "tag": tag, "cursor": null, "limit": 50 }),
         cookie,
     )
     .await
 }
 
-async fn list_local_timeline_form(
+async fn list_local_timeline(
     state: &Arc<storage::AppState>,
-    cursor_created_at: Option<UtcInstant>,
-    cursor_post_id: Option<PostId>,
+    cursor: Option<PageCursor>,
     limit: u32,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
-    let mut parts = vec![format!("limit={limit}")];
-    if let (Some(created_at), Some(post_id)) = (cursor_created_at, cursor_post_id) {
-        parts.push(format!("cursor_created_at={created_at}"));
-        parts.push(format!("cursor_post_id={post_id}"));
-    }
-    post_form(
+    post_json(
         state,
         <web::timeline::ListLocalTimeline as ServerFn>::PATH,
-        parts.join("&"),
+        serde_json::json!({ "cursor": cursor, "limit": limit }),
         cookie,
     )
     .await
 }
 
-async fn list_home_feed_form(
+async fn list_home_feed(
     state: &Arc<storage::AppState>,
-    cursor_created_at: Option<UtcInstant>,
-    cursor_post_id: Option<PostId>,
+    cursor: Option<PageCursor>,
     limit: u32,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
-    let mut parts = vec![format!("limit={limit}")];
-    if let (Some(created_at), Some(post_id)) = (cursor_created_at, cursor_post_id) {
-        parts.push(format!("cursor_created_at={created_at}"));
-        parts.push(format!("cursor_post_id={post_id}"));
-    }
-    post_form(
+    post_json(
         state,
         <web::timeline::ListHomeFeed as ServerFn>::PATH,
-        parts.join("&"),
+        serde_json::json!({ "cursor": cursor, "limit": limit }),
         cookie,
     )
     .await
@@ -800,7 +776,7 @@ async fn update_post_updates_draft_content_and_slug(#[case] backend: Backend) {
     let (status, body) =
         create_post_json(&state, "original", "markdown", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
     let post_id = created.post_id;
 
     // Title embedded as # heading; slug_override takes precedence over the derived slug
@@ -818,7 +794,7 @@ async fn update_post_updates_draft_content_and_slug(#[case] backend: Backend) {
     .await;
 
     assert_eq!(status, StatusCode::OK, "update body: {body}");
-    let updated: UpdateResult = serde_json::from_str(&body).unwrap();
+    let updated: SavedPost = serde_json::from_str(&body).unwrap();
     assert_eq!(updated.slug, "updated-slug");
     assert!(updated.published_at.is_none());
 
@@ -845,7 +821,7 @@ async fn update_post_freezes_slug_when_published(#[case] backend: Backend) {
     let (status, body) =
         create_post_json(&state, "body", "markdown", None, true, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
     let post_id = created.post_id;
     let original_slug = created.slug.clone();
 
@@ -861,7 +837,7 @@ async fn update_post_freezes_slug_when_published(#[case] backend: Backend) {
     .await;
 
     assert_eq!(status, StatusCode::OK, "update body: {body}");
-    let updated: UpdateResult = serde_json::from_str(&body).unwrap();
+    let updated: SavedPost = serde_json::from_str(&body).unwrap();
     assert_eq!(
         updated.slug, original_slug,
         "slug must not change after publication"
@@ -878,7 +854,7 @@ async fn update_post_publishes_draft(#[case] backend: Backend) {
     let (status, body) =
         create_post_json(&state, "draft body", "markdown", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
     assert!(created.published_at.is_none());
     let post_id = created.post_id;
 
@@ -894,7 +870,7 @@ async fn update_post_publishes_draft(#[case] backend: Backend) {
     .await;
 
     assert_eq!(status, StatusCode::OK, "update body: {body}");
-    let updated: UpdateResult = serde_json::from_str(&body).unwrap();
+    let updated: SavedPost = serde_json::from_str(&body).unwrap();
     assert!(updated.published_at.is_some());
     assert!(!updated.permalink.as_ref().is_empty());
 }
@@ -916,7 +892,7 @@ async fn update_post_rejects_non_author(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
 
     let (status, body) = update_post_json(
         &state,
@@ -953,7 +929,7 @@ async fn update_post_rejects(
     let (status, body) =
         create_post_json(&state, "original", "markdown", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
 
     let (status, body) = update_post_json(
         &state,
@@ -1000,7 +976,7 @@ async fn update_post_returns_not_found_for_deleted_post(#[case] backend: Backend
     let (status, body) =
         create_post_json(&state, "body", "markdown", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
 
     state.posts.soft_delete_post(created.post_id).await.unwrap();
 
@@ -1036,7 +1012,7 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let first_draft: CreateResult = serde_json::from_str(&body).unwrap();
+    let first_draft: SavedPost = serde_json::from_str(&body).unwrap();
 
     let (status, body) = create_post_json(
         &state,
@@ -1048,7 +1024,7 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let second_draft: CreateResult = serde_json::from_str(&body).unwrap();
+    let second_draft: SavedPost = serde_json::from_str(&body).unwrap();
 
     let (status, body) = create_post_json(
         &state,
@@ -1072,31 +1048,33 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
 
-    let (status, body) = list_drafts_form(&state, None, None, 1, Some(&author_cookie)).await;
+    let (status, body) = list_drafts(&state, None, 1, Some(&author_cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let first_page: Vec<DraftSummary> = serde_json::from_str(&body).unwrap();
-    assert_eq!(first_page.len(), 1, "body: {body}");
-    let first_entry = &first_page[0];
+    let first_page: UnpublishedPage = serde_json::from_str(&body).unwrap();
+    assert_eq!(first_page.posts.len(), 1, "body: {body}");
+    let first_entry = &first_page.posts[0];
     assert!(
-        first_entry.post_id == first_draft.post_id || first_entry.post_id == second_draft.post_id,
+        first_entry.post.post_id == first_draft.post_id
+            || first_entry.post.post_id == second_draft.post_id,
         "unexpected post_id on first page: {body}"
     );
 
-    let (status, body) = list_drafts_form(
-        &state,
-        Some(first_entry.created_at),
-        Some(first_entry.post_id),
-        10,
-        Some(&author_cookie),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "body: {body}");
-    let second_page: Vec<DraftSummary> = serde_json::from_str(&body).unwrap();
-    assert_eq!(second_page.len(), 1, "body: {body}");
-    let second_entry = &second_page[0];
+    // The page itself carries where the next one starts, so the client never
+    // reassembles a cursor from row fields.
+    assert!(first_page.has_more, "two drafts, page of 1: {body}");
+    let cursor = first_page
+        .next_cursor
+        .expect("page 1 has more, so it carries a cursor");
 
-    assert_ne!(first_entry.post_id, second_entry.post_id);
-    let mut ids = vec![first_entry.post_id, second_entry.post_id];
+    let (status, body) = list_drafts(&state, Some(cursor), 10, Some(&author_cookie)).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let second_page: UnpublishedPage = serde_json::from_str(&body).unwrap();
+    assert_eq!(second_page.posts.len(), 1, "body: {body}");
+    assert!(!second_page.has_more, "the tail page ends here: {body}");
+    let second_entry = &second_page.posts[0];
+
+    assert_ne!(first_entry.post.post_id, second_entry.post.post_id);
+    let mut ids = vec![first_entry.post.post_id, second_entry.post.post_id];
     ids.sort_unstable_by_key(|id| i64::from(*id));
     let mut expected_ids = vec![first_draft.post_id, second_draft.post_id];
     expected_ids.sort_unstable_by_key(|id| i64::from(*id));
@@ -1104,7 +1082,7 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
 }
 
 // A future-scheduled post is surfaced through `list_drafts` with a populated
-// `scheduled_at`, while a live post stays off the drafts surface (issue #70).
+// `published_at`, while a live post stays off the drafts surface (issue #70).
 #[apply(backends)]
 #[tokio::test]
 async fn list_drafts_surfaces_scheduled_with_marker_excludes_live(#[case] backend: Backend) {
@@ -1125,20 +1103,21 @@ async fn list_drafts_surfaces_scheduled_with_marker_excludes_live(#[case] backen
         .await
         .post_id;
 
-    let (status, body) = list_drafts_form(&state, None, None, 50, Some(&author.cookie())).await;
+    let (status, body) = list_drafts(&state, None, 50, Some(&author.cookie())).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let drafts: Vec<DraftSummary> = serde_json::from_str(&body).unwrap();
+    let drafts: UnpublishedPage = serde_json::from_str(&body).unwrap();
 
     let sched = drafts
+        .posts
         .iter()
-        .find(|d| d.post_id == sched_id)
+        .find(|d| d.post.post_id == sched_id)
         .unwrap_or_else(|| panic!("scheduled post must appear in drafts: {body}"));
     assert!(
-        sched.scheduled_at.is_some(),
-        "scheduled post must carry scheduled_at: {body}"
+        sched.post.published_at.is_some(),
+        "scheduled post must carry published_at: {body}"
     );
     assert!(
-        !drafts.iter().any(|d| d.post_id == live_id),
+        !drafts.posts.iter().any(|d| d.post.post_id == live_id),
         "live post must not appear in drafts: {body}"
     );
 }
@@ -1154,7 +1133,7 @@ async fn create_post_with_future_publish_at_is_scheduled(#[case] backend: Backen
 
     let future = chrono::Utc.with_ymd_and_hms(2099, 1, 1, 0, 0, 0).unwrap();
     let payload = serde_json::json!({
-        "args": {
+        "post": {
             "body": "scheduled body",
             "format": "markdown",
             "publish": true,
@@ -1169,7 +1148,7 @@ async fn create_post_with_future_publish_at_is_scheduled(#[case] backend: Backen
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
 
     let record = state
         .posts
@@ -1217,7 +1196,7 @@ async fn create_post_publish_without_publish_at_is_live_now(#[case] backend: Bac
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
 
     let record = state
         .posts
@@ -1263,12 +1242,12 @@ async fn publish_post_publishes_draft_and_returns_permalink(#[case] backend: Bac
     let (status, body) =
         create_post_json(&state, "draft body", "markdown", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
     assert!(created.published_at.is_none());
 
     let (status, body) = publish_post_form(&state, created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "publish body: {body}");
-    let published: PublishResult = serde_json::from_str(&body).unwrap();
+    let published: SavedPost = serde_json::from_str(&body).unwrap();
     assert_eq!(published.post_id, created.post_id);
     assert!(published
         .permalink
@@ -1303,7 +1282,7 @@ async fn publish_post_rejects_non_author(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
 
     let (status, body) = publish_post_form(&state, created.post_id, Some(&stranger_cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
@@ -1311,55 +1290,66 @@ async fn publish_post_rejects_non_author(#[case] backend: Backend) {
 }
 
 // Shape B — invalid-cursor cluster across the four cursor-paginated endpoints.
-// Each fires two requests: a half-specified cursor (a valid instant with no
-// `cursor_post_id`, rejected by the handler's "must be provided together"
-// pairing check) and an unparseable timestamp. The latter is now a typed
-// `Option<UtcInstant>` wire arg (ADR-0065), so an unparseable value fails at
-// arg-decode — before the handler body — rather than reaching the handler's
-// "invalid cursor_created_at" check; we assert only that the request is
-// rejected. Only the endpoint URI and the (already username-encoded where
-// required) request bodies vary. An author session is always created and
-// passed — the public endpoints ignore it but still run the same cursor
-// validation, so a single setup serves every row without branching.
+// Each fires two requests: a half-specified cursor (a `cursor` object carrying a
+// valid instant but no `post_id`) and an unparseable timestamp inside an
+// otherwise complete cursor. Both are now rejected at arg-decode, before the
+// handler body: the cursor is one `PageCursor` field (ADR-0065 typing all the
+// way down), so a half cursor is a missing struct field rather than the
+// handler's old "must be provided together" pairing check — which survives as a
+// `parse_post_cursor` unit test, its only remaining reachable caller shape. We
+// assert the half cursor names the component it is missing, and otherwise only
+// that the request is rejected, rather than pinning the decode-layer wording.
+// Only the endpoint URI and the (username-carrying where required) request
+// bodies vary. An author session is always created and passed — the public
+// endpoints ignore it but still run the same cursor decode, so a single setup
+// serves every row without branching.
 #[apply(backends_matrix)]
 #[case::list_drafts(
     <web::posts::ListDrafts as ServerFn>::PATH,
-    "cursor_created_at=2026-04-16T10:11:12%2B00:00&limit=10",
-    "cursor_created_at=bad-time&cursor_post_id=10&limit=10"
+    serde_json::json!({ "cursor": { "created_at": "2026-04-16T10:11:12+00:00" }, "limit": 10 }),
+    serde_json::json!({ "cursor": { "created_at": "bad-time", "post_id": 10 }, "limit": 10 })
 )]
 #[case::list_user_posts(
     <web::timeline::ListByUser as ServerFn>::PATH,
-    "username=author&cursor_created_at=2026-04-16T10:11:12%2B00:00&limit=10",
-    "username=author&cursor_created_at=bad-time&cursor_post_id=12&limit=10"
+    serde_json::json!({
+        "username": "author",
+        "cursor": { "created_at": "2026-04-16T10:11:12+00:00" },
+        "limit": 10,
+    }),
+    serde_json::json!({
+        "username": "author",
+        "cursor": { "created_at": "bad-time", "post_id": 12 },
+        "limit": 10,
+    })
 )]
 #[case::list_local_timeline(
     <web::timeline::ListLocalTimeline as ServerFn>::PATH,
-    "cursor_created_at=2026-04-16T10:11:12%2B00:00&limit=10",
-    "cursor_created_at=bad-time&cursor_post_id=12&limit=10"
+    serde_json::json!({ "cursor": { "created_at": "2026-04-16T10:11:12+00:00" }, "limit": 10 }),
+    serde_json::json!({ "cursor": { "created_at": "bad-time", "post_id": 12 }, "limit": 10 })
 )]
 #[case::list_home_feed(
     <web::timeline::ListHomeFeed as ServerFn>::PATH,
-    "cursor_created_at=2026-04-16T10:11:12%2B00:00&limit=10",
-    "cursor_created_at=bad-time&cursor_post_id=12&limit=10"
+    serde_json::json!({ "cursor": { "created_at": "2026-04-16T10:11:12+00:00" }, "limit": 10 }),
+    serde_json::json!({ "cursor": { "created_at": "bad-time", "post_id": 12 }, "limit": 10 })
 )]
 #[tokio::test]
 async fn list_rejects_invalid_cursor_inputs(
     backend: Backend,
     #[case] uri: &str,
-    #[case] half_cursor_body: &str,
-    #[case] bad_time_body: &str,
+    #[case] half_cursor_body: serde_json::Value,
+    #[case] bad_time_body: serde_json::Value,
 ) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
 
-    let (status, body) = post_form(&state, uri, half_cursor_body.to_string(), Some(&cookie)).await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("must be provided together"), "body: {body}");
+    let (status, body) = post_json(&state, uri, half_cursor_body, Some(&cookie)).await;
+    assert_ne!(status, StatusCode::OK, "body: {body}");
+    assert!(
+        body.contains("post_id"),
+        "the rejection names the missing cursor component: {body}"
+    );
 
-    let (status, body) = post_form(&state, uri, bad_time_body.to_string(), Some(&cookie)).await;
-    // An unparseable instant is rejected at typed-arg decode (ADR-0065), before
-    // the handler runs — a hard decode error, not the handler's validation
-    // message. Assert the request fails rather than pinning the decode-layer text.
+    let (status, body) = post_json(&state, uri, bad_time_body, Some(&cookie)).await;
     assert_ne!(status, StatusCode::OK, "body: {body}");
 }
 
@@ -1376,7 +1366,7 @@ async fn publish_post_returns_not_found_for_missing_or_deleted_posts(#[case] bac
     let (status, body) =
         create_post_json(&state, "body", "markdown", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
     state.posts.soft_delete_post(created.post_id).await.unwrap();
 
     let (status, body) = publish_post_form(&state, created.post_id, Some(&cookie)).await;
@@ -1442,13 +1432,12 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination(#[case] 
         create_post_json(&state, "body", "markdown", None, true, Some(&other_cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
 
-    let (status, body) = list_user_posts_form(&state, &author.username, None, None, 50, None).await;
+    let (status, body) = list_user_posts(&state, &author.username, None, 50, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let first_page: TimelinePage = serde_json::from_str(&body).unwrap();
     assert_eq!(first_page.posts.len(), 50, "body: {body}");
     assert!(first_page.has_more, "body: {body}");
-    assert!(first_page.next_cursor_created_at.is_some(), "body: {body}");
-    assert!(first_page.next_cursor_post_id.is_some(), "body: {body}");
+    assert!(first_page.next_cursor.is_some(), "body: {body}");
     assert!(
         first_page.posts.iter().all(|post| post
             .permalink
@@ -1464,15 +1453,8 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination(#[case] 
         "body: {body}"
     );
 
-    let (status, body) = list_user_posts_form(
-        &state,
-        &author.username,
-        first_page.next_cursor_created_at,
-        first_page.next_cursor_post_id,
-        50,
-        None,
-    )
-    .await;
+    let (status, body) =
+        list_user_posts(&state, &author.username, first_page.next_cursor, 50, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let second_page: TimelinePage = serde_json::from_str(&body).unwrap();
     assert_eq!(second_page.posts.len(), 1, "body: {body}");
@@ -1484,9 +1466,83 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination(#[case] 
 async fn list_user_posts_rejects_invalid_username(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, body) = list_user_posts_form(&state, "Invalid Name", None, None, 50, None).await;
+    let (status, body) = list_user_posts(&state, "Invalid Name", None, 50, None).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("username"), "body: {body}");
+}
+
+// The cursor's shape ON THE WIRE, asserted as bytes rather than through a helper.
+// A behavioural test cannot see this: moving the signature to one `PageCursor`
+// while leaving the form-urlencoded codec in place would still round-trip through
+// `list_user_posts` and pass. So both halves are hand-built here — the nested
+// JSON object must decode, and the flat `cursor_created_at`/`cursor_post_id` pair
+// must not, which is what pins the codec change itself.
+#[apply(backends)]
+#[tokio::test]
+async fn list_by_user_takes_a_nested_json_cursor_and_no_longer_the_flat_pair(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let author = SeedUser::new().seed(&state).await;
+    storage::test_support::seed_posts(&state, author.user_id, 2, true).await;
+
+    let nested = serde_json::json!({
+        "username": author.username,
+        "cursor": { "created_at": "2026-01-01T00:00:00Z", "post_id": 7 },
+        "limit": 10,
+    });
+    let (status, body) = post_json(
+        &state,
+        <web::timeline::ListByUser as ServerFn>::PATH,
+        nested,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+
+    let flat = format!(
+        "username={}&cursor_created_at=2026-01-01T00:00:00%2B00:00&cursor_post_id=7&limit=10",
+        author.username
+    );
+    let (status, body) = post_form(
+        &state,
+        <web::timeline::ListByUser as ServerFn>::PATH,
+        flat,
+        None,
+    )
+    .await;
+    assert_ne!(
+        status,
+        StatusCode::OK,
+        "the flat urlencoded cursor pair must no longer decode: {body}"
+    );
+}
+
+// The behavioural half of the same change: the cursor a page hands back is fed
+// straight back in as one value and advances the listing.
+#[apply(backends)]
+#[tokio::test]
+async fn timeline_page_two_uses_the_cursor_the_first_page_returned(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let author = SeedUser::new().seed(&state).await;
+    storage::test_support::seed_posts(&state, author.user_id, 2, true).await;
+
+    let (status, body) = list_user_posts(&state, &author.username, None, 1, None).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let first_page: TimelinePage = serde_json::from_str(&body).unwrap();
+    assert_eq!(first_page.posts.len(), 1, "body: {body}");
+    let cursor = first_page
+        .next_cursor
+        .expect("page 1 has more, so it carries a cursor");
+
+    let (status, body) = list_user_posts(&state, &author.username, Some(cursor), 1, None).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let second_page: TimelinePage = serde_json::from_str(&body).unwrap();
+    assert_eq!(second_page.posts.len(), 1, "body: {body}");
+    assert_ne!(
+        second_page.posts[0].post_id, first_page.posts[0].post_id,
+        "the cursor advanced the listing: {body}"
+    );
 }
 
 #[apply(backends)]
@@ -1515,16 +1571,15 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
     let (status, body) =
         create_post_json(&state, "gone", "markdown", None, true, Some(&author_cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let deleted: CreateResult = serde_json::from_str(&body).unwrap();
+    let deleted: SavedPost = serde_json::from_str(&body).unwrap();
     state.posts.soft_delete_post(deleted.post_id).await.unwrap();
 
-    let (status, body) = list_local_timeline_form(&state, None, None, 50, None).await;
+    let (status, body) = list_local_timeline(&state, None, 50, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let first_page: TimelinePage = serde_json::from_str(&body).unwrap();
     assert_eq!(first_page.posts.len(), 50, "body: {body}");
     assert!(first_page.has_more, "body: {body}");
-    assert!(first_page.next_cursor_created_at.is_some(), "body: {body}");
-    assert!(first_page.next_cursor_post_id.is_some(), "body: {body}");
+    assert!(first_page.next_cursor.is_some(), "body: {body}");
     assert!(
         first_page
             .posts
@@ -1554,14 +1609,7 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
         "body: {body}"
     );
 
-    let (status, body) = list_local_timeline_form(
-        &state,
-        first_page.next_cursor_created_at,
-        first_page.next_cursor_post_id,
-        50,
-        None,
-    )
-    .await;
+    let (status, body) = list_local_timeline(&state, first_page.next_cursor, 50, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let second_page: TimelinePage = serde_json::from_str(&body).unwrap();
     assert_eq!(second_page.posts.len(), 2, "body: {body}");
@@ -1603,13 +1651,12 @@ async fn list_home_feed_returns_authenticated_users_published_posts_only(#[case]
         assert_eq!(status, StatusCode::OK, "create body: {body}");
     }
 
-    let (status, body) = list_home_feed_form(&state, None, None, 50, Some(&author_cookie)).await;
+    let (status, body) = list_home_feed(&state, None, 50, Some(&author_cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let first_page: TimelinePage = serde_json::from_str(&body).unwrap();
     assert_eq!(first_page.posts.len(), 50, "body: {body}");
     assert!(first_page.has_more, "body: {body}");
-    assert!(first_page.next_cursor_created_at.is_some(), "body: {body}");
-    assert!(first_page.next_cursor_post_id.is_some(), "body: {body}");
+    assert!(first_page.next_cursor.is_some(), "body: {body}");
     assert!(
         first_page
             .posts
@@ -1625,14 +1672,8 @@ async fn list_home_feed_returns_authenticated_users_published_posts_only(#[case]
         "body: {body}"
     );
 
-    let (status, body) = list_home_feed_form(
-        &state,
-        first_page.next_cursor_created_at,
-        first_page.next_cursor_post_id,
-        50,
-        Some(&author_cookie),
-    )
-    .await;
+    let (status, body) =
+        list_home_feed(&state, first_page.next_cursor, 50, Some(&author_cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let second_page: TimelinePage = serde_json::from_str(&body).unwrap();
     assert_eq!(second_page.posts.len(), 1, "body: {body}");
@@ -1662,7 +1703,7 @@ async fn delete_post_soft_deletes_post(#[case] backend: Backend) {
     let (status, body) =
         create_post_json(&state, "gone", "markdown", None, true, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
 
     let (status, body) = delete_post_form(&state, created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
@@ -1690,7 +1731,7 @@ async fn delete_post_rejects_non_author(#[case] backend: Backend) {
     let (status, body) =
         create_post_json(&state, "mine", "markdown", None, true, Some(&author_cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
 
     let (status, body) = delete_post_form(&state, created.post_id, Some(&stranger_cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
@@ -1706,7 +1747,7 @@ async fn delete_post_rejects_unauthenticated(#[case] backend: Backend) {
     let (status, body) =
         create_post_json(&state, "body", "markdown", None, true, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
 
     let (status, body) = delete_post_form(&state, created.post_id, None).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
@@ -1722,7 +1763,7 @@ async fn delete_post_returns_not_found_for_already_deleted_post(#[case] backend:
     let (status, body) =
         create_post_json(&state, "body", "markdown", None, true, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
 
     let (status, body) = delete_post_form(&state, created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "first delete body: {body}");
@@ -1753,12 +1794,11 @@ body",
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
     let permalink = String::from(created.permalink);
 
     // Verify post appears in user timeline before deletion
-    let (status, body) =
-        list_user_posts_form(&state, &session.username, None, None, 10, None).await;
+    let (status, body) = list_user_posts(&state, &session.username, None, 10, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(body.contains("Deletable Post"), "expected post in timeline");
 
@@ -1766,8 +1806,7 @@ body",
     assert_eq!(status, StatusCode::OK, "delete body: {body}");
 
     // Verify excluded from user timeline
-    let (status, body) =
-        list_user_posts_form(&state, &session.username, None, None, 10, None).await;
+    let (status, body) = list_user_posts(&state, &session.username, None, 10, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(
         !body.contains("Deletable Post"),
@@ -1775,7 +1814,7 @@ body",
     );
 
     // Verify excluded from local timeline
-    let (status, body) = list_local_timeline_form(&state, None, None, 10, None).await;
+    let (status, body) = list_local_timeline(&state, None, 10, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(
         !body.contains("Deletable Post"),
@@ -1816,15 +1855,14 @@ body",
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
     assert!(created.published_at.is_some(), "should be published");
 
     let (status, body) = unpublish_post_form(&state, created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "unpublish body: {body}");
 
     // Should no longer appear in the user timeline
-    let (status, body) =
-        list_user_posts_form(&state, &session.username, None, None, 10, None).await;
+    let (status, body) = list_user_posts(&state, &session.username, None, 10, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(
         !body.contains("Unpublish Me"),
@@ -1832,11 +1870,77 @@ body",
     );
 
     // Should appear in drafts
-    let (status, body) = list_drafts_form(&state, None, None, 50, Some(&cookie)).await;
+    let (status, body) = list_drafts(&state, None, 50, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(
         body.contains("unpublish-me"),
         "expected post in drafts: {body}"
+    );
+}
+
+// Unpublish reports where the post lives *after* reverting to draft. A permalink is
+// `published_at.unwrap_or(created_at)`-based, so reverting moves it back to the
+// created_at-based URL — and an implementation that reads the permalink off the
+// pre-unpublish record would hand back the published one it just left.
+//
+// The fixture deliberately forces the two dates apart: the post is created as a draft
+// (created_at = today) and then published with a backdated `publish_at` in another
+// year, so the published and draft permalinks cannot coincide. Publishing at "now"
+// would make them byte-identical and the test would pass either way.
+#[apply(backends)]
+#[tokio::test]
+async fn unpublish_post_returns_the_draft_permalink(#[case] backend: Backend) {
+    use chrono::TimeZone;
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = create_user_and_session(&state).await.cookie();
+
+    let body_text = "# Moved Permalink\n\nbody";
+    let (status, body) =
+        create_post_json(&state, body_text, "markdown", None, false, Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let draft: SavedPost = serde_json::from_str(&body).unwrap();
+    assert!(draft.published_at.is_none(), "should start as a draft");
+
+    // `publish` stamps `now`, so the backdate has to come through `update`'s
+    // explicit `publish_at`.
+    let backdated = chrono::Utc.with_ymd_and_hms(2020, 3, 5, 12, 0, 0).unwrap();
+    let payload = serde_json::json!({
+        "post_id": draft.post_id,
+        "post": {
+            "body": body_text,
+            "format": "markdown",
+            "publish": true,
+            "publish_at": backdated.to_rfc3339(),
+        }
+    });
+    let (status, body) = post_json(
+        &state,
+        <web::posts::Update as ServerFn>::PATH,
+        payload,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "update body: {body}");
+    let published: SavedPost = serde_json::from_str(&body).unwrap();
+    assert!(
+        published.permalink.contains("/2020/03/05/"),
+        "published permalink should carry the backdated date: {}",
+        published.permalink
+    );
+
+    let (status, body) = unpublish_post_form(&state, draft.post_id, Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "unpublish body: {body}");
+    let unpublished: SavedPost = serde_json::from_str(&body).unwrap();
+    assert!(unpublished.published_at.is_none(), "reverted to draft");
+    assert_eq!(
+        unpublished.permalink, draft.permalink,
+        "unpublish must report the created_at-based draft permalink"
+    );
+    // Fails loudly if the fixture ever stops making the two dates differ, which would
+    // make the assertion above vacuous.
+    assert_ne!(
+        unpublished.permalink, published.permalink,
+        "fixture must keep the draft and published permalinks distinct"
     );
 }
 
@@ -1859,7 +1963,7 @@ body",
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
 
     let (status, body) = unpublish_post_form(&state, created.post_id, Some(&other_cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
@@ -1883,7 +1987,7 @@ async fn list_user_posts_carries_tags_per_post(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
 
     // Apply two tags via the storage layer (the create_post tags param lands
     // in tags.5; here we just verify the timeline surface threads them
@@ -1902,8 +2006,7 @@ async fn list_user_posts_carries_tags_per_post(#[case] backend: Backend) {
         .await
         .unwrap();
 
-    let (status, body) =
-        list_user_posts_form(&state, &session.username, None, None, 50, Some(&cookie)).await;
+    let (status, body) = list_user_posts(&state, &session.username, None, 50, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "list body: {body}");
     let page: TimelinePage = serde_json::from_str(&body).unwrap();
     assert_eq!(page.posts.len(), 1);
@@ -1933,7 +2036,7 @@ async fn get_post_carries_tags(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
 
     state
         .posts
@@ -1967,10 +2070,10 @@ async fn get_post_carries_tags(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "get body: {body}");
-    let response: PostResponse = serde_json::from_str(&body).unwrap();
-    assert_eq!(response.tags.len(), 1);
-    assert_eq!(response.tags[0].slug, "performance");
-    assert_eq!(response.tags[0].display, "Performance");
+    let response: AuthoredPost = serde_json::from_str(&body).unwrap();
+    assert_eq!(response.post.tags.len(), 1);
+    assert_eq!(response.post.tags[0].slug, "performance");
+    assert_eq!(response.post.tags[0].display, "Performance");
 }
 
 async fn login_and_state(backend: Backend) -> (TestBase, Arc<storage::AppState>, String) {
@@ -1985,7 +2088,7 @@ async fn create_post_applies_tags_from_param(#[case] backend: Backend) {
     let (_base, state, cookie) = login_and_state(backend).await;
 
     let payload = serde_json::json!({
-        "args": {
+        "post": {
             "body": "# Tagged via API\n\nbody",
             "format": "markdown",
             "slug_override": null,
@@ -2001,7 +2104,7 @@ async fn create_post_applies_tags_from_param(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
 
     let stored_tags = state
         .posts
@@ -2024,7 +2127,7 @@ async fn create_post_rejects_invalid_tag_token(#[case] backend: Backend) {
     let (_base, state, cookie) = login_and_state(backend).await;
 
     let payload = serde_json::json!({
-        "args": {
+        "post": {
             "body": "# Bad Tag\n\nbody",
             "format": "markdown",
             "slug_override": null,
@@ -2053,7 +2156,7 @@ async fn create_post_rejects_more_than_25_tags(#[case] backend: Backend) {
     let many: Vec<String> = (0..26).map(|n| format!("tag{n}")).collect();
 
     let payload = serde_json::json!({
-        "args": {
+        "post": {
             "body": "# Too Many\n\nbody",
             "format": "markdown",
             "slug_override": null,
@@ -2079,7 +2182,7 @@ async fn update_post_applies_tag_set_diff(#[case] backend: Backend) {
 
     // Create with two tags.
     let create_payload = serde_json::json!({
-        "args": {
+        "post": {
             "body": "# Diff Me\n\nbody",
             "format": "markdown",
             "slug_override": null,
@@ -2095,12 +2198,12 @@ async fn update_post_applies_tag_set_diff(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
 
     // Update: replace old-tag with new-tag, keep rust.
     let update_payload = serde_json::json!({
-        "args": {
-            "post_id": created.post_id,
+        "post_id": created.post_id,
+        "post": {
             "body": "# Diff Me\n\nbody",
             "format": "markdown",
             "slug_override": null,
@@ -2146,7 +2249,7 @@ async fn list_posts_by_tag_returns_matching_posts_from_all_users(#[case] backend
         let state = Arc::clone(&state);
         async move {
             let payload = serde_json::json!({
-                "args": {
+                "post": {
                     "body": body,
                     "format": "markdown",
                     "slug_override": null,
@@ -2162,7 +2265,7 @@ async fn list_posts_by_tag_returns_matching_posts_from_all_users(#[case] backend
             )
             .await;
             assert_eq!(status, StatusCode::OK, "create body: {body}");
-            serde_json::from_str::<CreateResult>(&body).unwrap()
+            serde_json::from_str::<SavedPost>(&body).unwrap()
         }
     };
 
@@ -2191,7 +2294,7 @@ async fn list_posts_by_tag_returns_matching_posts_from_all_users(#[case] backend
     )
     .await;
 
-    let (status, body) = list_posts_by_tag_form(&state, "rust", None).await;
+    let (status, body) = list_posts_by_tag(&state, "rust", None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let page: TimelinePage = serde_json::from_str(&body).unwrap();
     // Three posts carry the "rust" tag, across both authors.
@@ -2207,7 +2310,7 @@ async fn list_posts_by_tag_returns_matching_posts_from_all_users(#[case] backend
 async fn list_posts_by_tag_returns_empty_for_unknown_tag(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, body) = list_posts_by_tag_form(&state, "rust", None).await;
+    let (status, body) = list_posts_by_tag(&state, "rust", None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let page: TimelinePage = serde_json::from_str(&body).unwrap();
     assert!(page.posts.is_empty());
@@ -2227,7 +2330,7 @@ async fn list_user_posts_by_tag_scopes_to_user(#[case] backend: Backend) {
         let state = Arc::clone(&state);
         async move {
             let payload = serde_json::json!({
-                "args": {
+                "post": {
                     "body": body,
                     "format": "markdown",
                     "slug_override": null,
@@ -2248,8 +2351,7 @@ async fn list_user_posts_by_tag_scopes_to_user(#[case] backend: Backend) {
     create(alice_cookie, "# Author Post\n\nbody").await;
     create(bob_cookie, "# Bob Post\n\nbody").await;
 
-    let (status, body) =
-        list_user_posts_by_tag_form(&state, &author.username, "shared", None).await;
+    let (status, body) = list_user_posts_by_tag(&state, &author.username, "shared", None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let page: TimelinePage = serde_json::from_str(&body).unwrap();
     assert_eq!(page.posts.len(), 1);
@@ -2261,7 +2363,7 @@ async fn list_user_posts_by_tag_scopes_to_user(#[case] backend: Backend) {
 async fn list_user_posts_by_tag_unknown_user_returns_not_found(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, body) = list_user_posts_by_tag_form(&state, "nobody", "rust", None).await;
+    let (status, body) = list_user_posts_by_tag(&state, "nobody", "rust", None).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("user"), "body: {body}");
 }
@@ -2273,7 +2375,7 @@ async fn update_post_with_tags_unset_leaves_existing_tags_alone(#[case] backend:
 
     // Create with one tag.
     let create_payload = serde_json::json!({
-        "args": {
+        "post": {
             "body": "# Untouched\n\nbody",
             "format": "markdown",
             "slug_override": null,
@@ -2289,12 +2391,12 @@ async fn update_post_with_tags_unset_leaves_existing_tags_alone(#[case] backend:
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
 
     // Update without including the tags key (None on the server side).
     let update_payload = serde_json::json!({
-        "args": {
-            "post_id": created.post_id,
+        "post_id": created.post_id,
+        "post": {
             "body": "# Untouched edited\n\nbody",
             "format": "markdown",
             "slug_override": null,
@@ -2438,7 +2540,7 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     let stranger_cookie = create_session_for(&state, stranger).await.cookie();
 
     // Anonymous viewer: only the Public post.
-    let (status, body) = list_local_timeline_form(&state, None, None, 50, None).await;
+    let (status, body) = list_local_timeline(&state, None, 50, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let anon: TimelinePage = serde_json::from_str(&body).unwrap();
     assert_eq!(
@@ -2448,8 +2550,7 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     );
 
     // Author: sees all of their own posts, including the private one.
-    let (status, body) =
-        list_local_timeline_form(&state, None, None, 50, Some(&author_cookie)).await;
+    let (status, body) = list_local_timeline(&state, None, 50, Some(&author_cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let authored: TimelinePage = serde_json::from_str(&body).unwrap();
     assert_eq!(
@@ -2466,8 +2567,7 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     );
 
     // Active subscriber + named member: Public + Subscribers + Named (not Private).
-    let (status, body) =
-        list_local_timeline_form(&state, None, None, 50, Some(&subscriber_cookie)).await;
+    let (status, body) = list_local_timeline(&state, None, 50, Some(&subscriber_cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let sub: TimelinePage = serde_json::from_str(&body).unwrap();
     assert_eq!(
@@ -2489,8 +2589,7 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     // Authed non-subscriber: only the Public post (same reach as anonymous,
     // proving viewer_identity yields a Channel viewer that is correctly *not*
     // admitted to subscriber/named content).
-    let (status, body) =
-        list_local_timeline_form(&state, None, None, 50, Some(&stranger_cookie)).await;
+    let (status, body) = list_local_timeline(&state, None, 50, Some(&stranger_cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let stranger_page: TimelinePage = serde_json::from_str(&body).unwrap();
     assert_eq!(
@@ -2624,7 +2723,7 @@ async fn post_audience_selection_returns_public_for_new_post(#[case] backend: Ba
     let (status, body) =
         create_post_json(&state, "Hello", "markdown", None, true, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
 
     let (status, body) = post_form(
         &state,
@@ -2676,7 +2775,7 @@ async fn post_audience_selection_rejects_non_owner(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: CreateResult = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
 
     // A different user must not learn another author's targeting.
     let (status, body) = post_form(

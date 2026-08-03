@@ -17,7 +17,8 @@ import { SEL } from "./selectors";
  *  contextful message, and returns the typed JSON. `publish` defaults to `true`;
  *  `slug` maps to the `slug_override` wire field; `tags` is sent only when
  *  provided (matching the current no-tag call sites). The fields are nested under
- *  an `args` wrapper (#299): the endpoint takes a single typed arg-struct. */
+ *  a `post` wrapper (#299): the endpoint takes a single typed input struct, and
+ *  the wire key is the parameter's name. */
 export async function createPostViaApi(
   page: Page,
   opts: {
@@ -30,7 +31,7 @@ export async function createPostViaApi(
   const res = await withTimedAction(page, "api.posts.create", () =>
     page.request.post(`${BASE_URL}/api/posts/create`, {
       data: {
-        args: {
+        post: {
           body: opts.body,
           format: "markdown",
           slug_override: opts.slug ?? null,

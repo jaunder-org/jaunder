@@ -294,9 +294,10 @@ declare `xmlns:j`.
 converge on one canonical stored body that is free of the header lines the
 server stores structurally. Concretely:
 
-- Extend the existing `extract_org_title`/`derive_post_metadata` seam to **keep
-  the stripped body it currently discards**, and store _that_ as the body.
-  (Today only the title is kept; the stripped body is thrown away at
+- Extend the existing `extract_org_title`/`derive_post_title` seam to **keep the
+  stripped body it currently discards**, and store _that_ as the body. (The
+  second fn was named `derive_post_metadata` when this was written; renamed in
+  #569.) (Today only the title is kept; the stripped body is thrown away at
   `render.rs:96`.)
 - **Only recognized headers are stripped** (today `#+TITLE:`; the value goes to
   the title column). **Unrecognized `#+FOO:` header lines remain in the body
