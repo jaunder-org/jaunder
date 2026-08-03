@@ -34,6 +34,7 @@ pub mod render;
 pub mod root_relative_url;
 pub mod seed;
 pub mod session_label;
+pub mod session_user;
 pub mod site;
 pub mod slug;
 pub mod smtp_password;

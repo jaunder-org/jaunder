@@ -111,8 +111,9 @@ runs. **Out:** the Playwright ≥ 1.59 bump (Task 1 files it); #792/#793/#801
 - Produces: issue URL recorded in the plan's checkbox note; milestone #6
   membership.
 
-- [ ] **Step 1: File the issue** (per jaunder-issues; type required, topic
-      label, project, milestone)
+- [x] **Step 1: File the issue** (per jaunder-issues; type required, topic
+      label, project, milestone) — filed as #815 (type Task, label test-infra,
+      milestone set, Jaunder Backlog #1)
 
 ```bash
 gh issue create --repo jaunder-org/jaunder --type Task --label test-infra \
@@ -156,7 +157,7 @@ Then add it to the backlog project and record the URL:
 gh project item-add 1 --owner jaunder-org --url <issue-url>
 ```
 
-- [ ] **Step 2: Commit the spec, plan, and cycle artifacts**
+- [x] **Step 2: Commit the spec, plan, and cycle artifacts**
 
 ```bash
 git add docs/superpowers/specs/2026-08-02-issue-791-seeded-e2e-auth.md \
