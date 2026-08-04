@@ -1024,8 +1024,9 @@ test("unseeded client-nav to / paints Loading with the masthead intact", async (
 }) => {
   // Enter on a NON-`/` URL. Home reads its projector seed from the INITIAL document
   // and that context persists for the SPA's life, so a document entered on `/` stays
-  // seeded and never reaches the Loading arm. `/login` is the SPA shell: no seed.
-  await goto(page, "/login");
+  // seeded and never reaches the Loading arm. `/forgot-password` is the SPA shell:
+  // no seed, and not a D6 holdout URL.
+  await goto(page, "/forgot-password");
 
   // A full document load would wipe this; a client-side nav preserves it — the same
   // probe auth.spec.ts uses to prove its login/logout navs are client-side.

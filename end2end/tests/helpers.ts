@@ -278,55 +278,6 @@ export async function registerViaUi(
 }
 
 /**
- * Transitional shim, deleted in this branch's cutover task once every call
- * site has converted to `signInAsNewUser` / `registerViaUi` (#791). Exists so
- * the per-task commits in between stay green; it does not survive the PR.
- */
-export async function register(
-  page: Page,
-  firstNavigationTimeoutMs: number,
-): Promise<string> {
-  return registerViaUi(page, firstNavigationTimeoutMs);
-}
-
-/**
- * Register a fresh user and return both the generated username and the fixed
- * password `register` sets, so the account can be re-driven across browser
- * contexts via `login`.
- */
-export async function registerKnown(
-  page: Page,
-  firstNavigationTimeoutMs: number,
-): Promise<{ username: string; password: string }> {
-  const username = await register(page, firstNavigationTimeoutMs);
-  return { username, password: "testpassword123" };
-}
-
-/**
- * Register a fresh account and log in as it on the same page, returning the
- * credentials.
- *
- * The register-then-login round trip specs use to drive one account across
- * contexts. Factored so the pair is delimited as a single flow in the trace
- * rather than reading as two unrelated ones (#794).
- */
-export async function registerAndLogin(
-  page: Page,
-  firstNavigationTimeoutMs: number,
-): Promise<{ username: string; password: string }> {
-  return withTimedAction(page, "flow.register_and_login", async () => {
-    const credentials = await registerKnown(page, firstNavigationTimeoutMs);
-    await login(
-      page,
-      credentials.username,
-      credentials.password,
-      firstNavigationTimeoutMs,
-    );
-    return credentials;
-  });
-}
-
-/**
  * The minimal recipient-scoped mail waiter this module needs.
  *
  * Structural rather than an import of `fixtures.ts`'s `Mailbox`: `fixtures.ts`

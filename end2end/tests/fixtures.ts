@@ -496,8 +496,8 @@ const test = base.extend<{
   },
 
   // The test's own `page`, already signed in with a fresh unique seeded
-  // account and mounted at `/` — collapsing the old
-  // `register(page, firstNav)` preamble. Seeds the DEFAULT page's context (not
+  // account and mounted at `/` — collapsing the old register preamble. Seeds
+  // the DEFAULT page's context (not
   // a new one) so it stays instrumented by `_autoPerfSpan`, and still yields a
   // mounted page because its consumers assume one (spec D8). For tests that
   // discard the username; tests that need the username/credentials use
