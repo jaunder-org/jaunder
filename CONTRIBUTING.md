@@ -768,6 +768,41 @@ All PostgreSQL integration binaries run in a **single** VM
 libtest's normal in-process parallelism rather than one VM per binary. This is
 much faster and far lighter on memory than the former per-binary matrix.
 
+#### Measurement scaffolding: `e2eSalt` and `e2eWarmup` (#792)
+
+Two literals near the top of `flake.nix`'s e2e section exist for **performance
+measurement runs**, not for normal development. Both are committed at defaults
+that reproduce the historical build byte-for-byte, and the `e2e-scaffold` static
+check fails the gate if either is left set.
+
+`e2eSalt = ""` — **a cache-buster.** Nix caches the e2e check derivations, so
+re-running `cargo xtask traces run` on an unchanged tree returns a **cached
+result and never runs the suite** — silently handing back traces from whenever
+that check was last built, quite possibly a CI runner under unknown load. Set it
+to a distinct value per measurement run to force a genuinely fresh build:
+
+```nix
+e2eSalt = "run3";   # any distinct string; the value itself is never read
+```
+
+The salt rides the combo's extra-env string into the VM test script, so it
+changes every e2e derivation hash — all four warm checks and all four cold
+packages. It does **not** change `packages.x86_64-linux.jaunder`: `flake.nix`
+sits outside the crane source filter, so a salted run re-runs the VM suite
+without rebuilding the Rust workspace.
+
+`e2eWarmup = true` — **the per-test warmup toggle**, used to build the no-warmup
+arm of an A/B at otherwise gate-identical settings. This is _not_ the same as
+the `-cold` packages above: those also pin `JAUNDER_E2E_WORKERS=1`, so comparing
+warm checks against cold packages conflates warmup with worker count.
+
+**Revert both before committing.** Neither fails anything on its own, which is
+precisely the problem: a committed salt costs every CI e2e job its cache
+(symptom: "CI got slow"), and a committed `e2eWarmup = false` silently stops the
+gate testing what it says it tests. Note this repo's worktrees may auto-stage
+edits, so revert with `git checkout HEAD -- flake.nix` **and**
+`git reset HEAD -- flake.nix`, then confirm with `git diff HEAD -- flake.nix`.
+
 If you only need one of the VM-backed checks, you can run it directly:
 
 ```bash

@@ -27,6 +27,7 @@ mod steps {
     pub mod doc_links;
     pub mod doctest_fences;
     pub mod e2e_local;
+    pub mod e2e_scaffold_check;
     pub mod flaky;
     pub mod host_tests;
     pub mod html_sink_check;
@@ -428,6 +429,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::rendered_html_from_trusted_check::run(&mut result);
             steps::raw_html_door_check::run(&mut result);
             steps::html_sink_check::run(&mut result);
+            steps::e2e_scaffold_check::run(&mut result);
             steps::host_tests::run(&sh, &mut result);
             if !no_test {
                 steps::nix::coverage(&mut result);
@@ -472,6 +474,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::rendered_html_from_trusted_check::run(&mut result);
             steps::raw_html_door_check::run(&mut result);
             steps::html_sink_check::run(&mut result);
+            steps::e2e_scaffold_check::run(&mut result);
             steps::host_tests::run(&sh, &mut result);
             steps::nix::coverage(&mut result);
             steps::nix::doctests(&mut result);

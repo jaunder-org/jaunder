@@ -888,6 +888,25 @@
             '';
           };
 
+        # Cache-busting salt for e2e measurement runs (#792). Nix caches the e2e
+        # check derivations, so a repeated `cargo xtask traces run` returns a
+        # CACHED result rather than re-running the suite — silently handing back
+        # traces from whenever it was last built, possibly on a CI runner under
+        # unknown load. Set this to a distinct value per measurement run to force
+        # a fresh build; REVERT TO "" BEFORE COMMITTING. Empty is a byte-exact
+        # no-op: it must not change any e2e derivation hash.
+        e2eSalt = "";
+
+        # A/B scaffolding for #792: flip to false to build the no-warmup arm.
+        # `true` reproduces the historical `warmupEnv` string byte-exactly.
+        e2eWarmup = true;
+
+        # Both literals above are enforced by xtask's `e2e-scaffold` static check:
+        # a committed non-empty salt costs every CI e2e job its cache (symptom:
+        # "CI got slow"), and a committed `e2eWarmup = false` silently disables
+        # warmup on all four gate checks. Neither fails anything on its own, which
+        # is exactly why the guard exists.
+
         # All e2e {backend}×{browser} combos. backend picks the VM builder;
         # browser picks the Playwright --project; traceDigit gives each combo a
         # distinct OTel trace id (the 1/2/3/4 mapping preserves the historical
@@ -918,11 +937,17 @@
           in
           mk {
             checkName = "jaunder-e2e-${backend}-${browser}${nameSuffix}";
+            # The salt rides the combo's generic extra-env string, which is
+            # interpolated into the VM testScript above — so it reaches the
+            # derivation hash. The variable itself is inert: nothing reads
+            # JAUNDER_E2E_SALT. Changing the hash is its whole job. Spliced here
+            # rather than per-family so warm checks and cold packages salt alike.
+            warmupEnv =
+              warmupEnv + pkgs.lib.optionalString (e2eSalt != "") " JAUNDER_E2E_SALT=${e2eSalt}";
             inherit
               browser
               traceId
               traceParent
-              warmupEnv
               vmMemory
               vmCores
               ;
@@ -946,7 +971,11 @@
                 # (Firefox 5s `expect` races) while results.json records it.
                 # (warmupEnv is the combo's generic extra-env string — cold reuses
                 # it for WORKERS=1 — so retries ride it rather than a new param.)
-                warmupEnv = " JAUNDER_E2E_WARMUP=1 JAUNDER_E2E_RETRIES=1";
+                # The warmup token is gated on `e2eWarmup` (#792's A/B arm B
+                # drops it); `true` yields the historical string byte-for-byte.
+                warmupEnv =
+                  pkgs.lib.optionalString e2eWarmup " JAUNDER_E2E_WARMUP=1"
+                  + " JAUNDER_E2E_RETRIES=1";
                 vmMemory = 3072;
                 vmCores = 2;
               }
