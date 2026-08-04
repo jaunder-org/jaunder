@@ -28,19 +28,24 @@
  *   deadline actually exceeds the ambient budget.  Do not combine with
  *   `test.slow()` — the scaled budget already covers Firefox.
  *
- * - Use `login(page, username, password)` for any test that needs an
- *   authenticated session; use `fillLoginForm(...)` (fill + submit, no wait)
- *   directly when exercising the login/error path.
- *
- * - Use `register(page, firstNavigationTimeoutMs)` whenever a test needs a
- *   fresh user account.  Pass `slowBrowserFirstNavigationTimeoutMs(...)` as
- *   the timeout so the cold WASM load gets enough budget across all browsers.
+ * - Use `signInAsNewUser(page)` whenever a test needs a fresh authenticated
+ *   account, and `signInAs(page, username)` for an existing one (e.g. the
+ *   harness-seeded `testoperator`). Both seed the account/session out-of-band
+ *   and inject it into the context — no UI flow, no navigation (the test's own
+ *   first `goto` is the cold navigation). `registerViaUi` / `login` /
+ *   `fillLoginForm` are reserved for the holdouts whose subject IS the real
+ *   flow (spec D6).
  */
 
 import { expect, type Page } from "@playwright/test";
 import { withTimedAction } from "./actions";
 import { extractLink, extractToken, type CapturedEmail } from "./mail";
 import { waitForMount } from "./mount";
+import {
+  applySeededSession,
+  createSessionViaTool,
+  seedUserViaTool,
+} from "./seed";
 import { SEL } from "./selectors";
 
 export { waitForMount } from "./mount";
@@ -183,22 +188,65 @@ export async function login(
   });
 }
 
+/** The fixed password every seeded account gets (spec D4). Kept as one
+ *  constant so the seeded helpers and the fixtures agree. */
+export const TEST_PASSWORD = "testpassword123";
+
+/** `user1754…`-style unique usernames; `prefix` distinguishes invitees etc.
+ *  Stays in TypeScript (spec D4): the caller needs the name before the call
+ *  returns, and the per-user-unique scheme is what `seedPostsViaTool`'s
+ *  per-user slug uniqueness relies on. */
+export function generateUsername(prefix = "user"): string {
+  return `${prefix}${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
+}
+
 /**
- * Register a new user with a unique generated username, wait for the login
- * redirect to settle, and return the username.
- *
- * Pass `slowBrowserFirstNavigationTimeoutMs(testInfo, ms)` as
- * `firstNavigationTimeoutMs` to give the cold WASM load enough budget on all
- * browsers.
+ * Seed a fresh account + session out-of-band and inject it into `page`'s
+ * context, returning the generated username. No UI flow and NO navigation
+ * (spec D5): the test's own first `goto` becomes the cold navigation, saving
+ * a whole page load on top of the form and submit.
+ */
+export async function signInAsNewUser(page: Page): Promise<string> {
+  const record = await seedUserViaTool(generateUsername(), TEST_PASSWORD);
+  await applySeededSession(page.context(), record);
+  return record.username;
+}
+
+/**
+ * Same as {@link signInAsNewUser}, returning the fixed password too — for
+ * tests that re-drive the account across contexts (`signInAs`) or through the
+ * login form.
+ */
+export async function signInAsNewUserKnown(
+  page: Page,
+): Promise<{ username: string; password: string }> {
+  const username = await signInAsNewUser(page);
+  return { username, password: TEST_PASSWORD };
+}
+
+/**
+ * Seed a session for an EXISTING account (e.g. the harness-seeded
+ * `testoperator` / `testlogin`) and inject it into `page`'s context. No UI
+ * flow and NO navigation (spec D5).
+ */
+export async function signInAs(page: Page, username: string): Promise<void> {
+  const record = await createSessionViaTool(username);
+  await applySeededSession(page.context(), record);
+}
+
+/**
+ * The real UI registration flow — reserved for the holdouts whose subject is
+ * that flow (spec D6). Emits the timed action under the unchanged name
+ * `flow.register` so trace counts stay comparable.
  *
  * After submission the helper races between `a[href='/logout']` (success) and
  * `.error` (failure) for fast failure detection.
  */
-export async function register(
+export async function registerViaUi(
   page: Page,
   firstNavigationTimeoutMs: number,
 ): Promise<string> {
-  const username = `user${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
+  const username = generateUsername();
 
   await withTimedAction(page, "flow.register", async () => {
     await goto(page, "/register", { timeout: firstNavigationTimeoutMs });
@@ -206,7 +254,7 @@ export async function register(
       page.fill(SEL.username, username),
     );
     await withTimedAction(page, "ui.fill.password", () =>
-      page.fill(SEL.password, "testpassword123"),
+      page.fill(SEL.password, TEST_PASSWORD),
     );
     await click(page, SEL.submit);
 
@@ -227,43 +275,6 @@ export async function register(
   });
 
   return username;
-}
-
-/**
- * Register a fresh user and return both the generated username and the fixed
- * password `register` sets, so the account can be re-driven across browser
- * contexts via `login`.
- */
-export async function registerKnown(
-  page: Page,
-  firstNavigationTimeoutMs: number,
-): Promise<{ username: string; password: string }> {
-  const username = await register(page, firstNavigationTimeoutMs);
-  return { username, password: "testpassword123" };
-}
-
-/**
- * Register a fresh account and log in as it on the same page, returning the
- * credentials.
- *
- * The register-then-login round trip specs use to drive one account across
- * contexts. Factored so the pair is delimited as a single flow in the trace
- * rather than reading as two unrelated ones (#794).
- */
-export async function registerAndLogin(
-  page: Page,
-  firstNavigationTimeoutMs: number,
-): Promise<{ username: string; password: string }> {
-  return withTimedAction(page, "flow.register_and_login", async () => {
-    const credentials = await registerKnown(page, firstNavigationTimeoutMs);
-    await login(
-      page,
-      credentials.username,
-      credentials.password,
-      firstNavigationTimeoutMs,
-    );
-    return credentials;
-  });
 }
 
 /**

@@ -8,7 +8,7 @@ import {
   goto,
   click,
   waitForSelector,
-  register,
+  signInAsNewUser,
   stallServerFn,
 } from "./helpers";
 import { createPerfProbe } from "./perf";
@@ -327,7 +327,7 @@ test("draft lifecycle: create, view, edit, and publish", async ({
     testInfo,
     12_000,
   );
-  await register(page, firstNavigationTimeoutMs);
+  await signInAsNewUser(page);
 
   await goto(page, "/posts/new");
   await page.fill(SEL.postBody, "# Lifecycle Draft\n\ninitial draft body");
@@ -421,15 +421,13 @@ test("per-user timeline lists published posts with pagination", async ({
 }, testInfo) => {
   const perf = createPerfProbe(testInfo, "user_timeline_pagination");
 
-  const username = await register(page, firstNav);
+  const username = await signInAsNewUser(page);
 
-  await perf.timed("seed_posts", async () => {
-    seedPostsViaTool(
-      username,
-      TIMELINE_PAGE_SIZE + TIMELINE_OVERFLOW_COUNT,
-      "Timeline Post",
-    );
-  });
+  await seedPostsViaTool(
+    username,
+    TIMELINE_PAGE_SIZE + TIMELINE_OVERFLOW_COUNT,
+    "Timeline Post",
+  );
 
   await goto(page, `/~${username}`, { timeout: firstNav });
 
@@ -460,17 +458,13 @@ test("home page shows local timeline for unauthenticated users", async ({
 }, testInfo) => {
   const perf = createPerfProbe(testInfo, "home_local_timeline");
 
-  await perf.timed("seed_author_one", async () => {
-    const u1 = await register(page, firstNav);
-    seedPostsViaTool(u1, LOCAL_TIMELINE_AUTHOR_COUNT, "Local Author One");
-  });
+  const u1 = await signInAsNewUser(page);
+  await seedPostsViaTool(u1, LOCAL_TIMELINE_AUTHOR_COUNT, "Local Author One");
 
   const secondContext = await tracedContext();
   const secondPage = await secondContext.newPage();
-  await perf.timed("seed_author_two", async () => {
-    const u2 = await register(secondPage, firstNav);
-    seedPostsViaTool(u2, LOCAL_TIMELINE_AUTHOR_COUNT, "Local Author Two");
-  });
+  const u2 = await signInAsNewUser(secondPage);
+  await seedPostsViaTool(u2, LOCAL_TIMELINE_AUTHOR_COUNT, "Local Author Two");
 
   const guestContext = await tracedContext();
   const guestPage = await guestContext.newPage();
@@ -511,17 +505,13 @@ test("cockpit /app shows the authenticated home feed with pagination", async ({
 }, testInfo) => {
   const perf = createPerfProbe(testInfo, "home_authenticated_feed");
 
-  await perf.timed("seed_self", async () => {
-    const me = await register(page, firstNav);
-    seedPostsViaTool(me, HOME_FEED_SELF_COUNT, "Home Feed Mine");
-  });
+  const me = await signInAsNewUser(page);
+  await seedPostsViaTool(me, HOME_FEED_SELF_COUNT, "Home Feed Mine");
 
   const secondContext = await tracedContext();
   const secondPage = await secondContext.newPage();
-  await perf.timed("seed_other", async () => {
-    const other = await register(secondPage, firstNav);
-    seedPostsViaTool(other, HOME_FEED_OTHER_COUNT, "Home Feed Other");
-  });
+  const other = await signInAsNewUser(secondPage);
+  await seedPostsViaTool(other, HOME_FEED_OTHER_COUNT, "Home Feed Other");
 
   await goto(page, "/app", { timeout: firstNav });
 
@@ -1034,8 +1024,9 @@ test("unseeded client-nav to / paints Loading with the masthead intact", async (
 }) => {
   // Enter on a NON-`/` URL. Home reads its projector seed from the INITIAL document
   // and that context persists for the SPA's life, so a document entered on `/` stays
-  // seeded and never reaches the Loading arm. `/login` is the SPA shell: no seed.
-  await goto(page, "/login");
+  // seeded and never reaches the Loading arm. `/forgot-password` is the SPA shell:
+  // no seed, and not a D6 holdout URL.
+  await goto(page, "/forgot-password");
 
   // A full document load would wipe this; a client-side nav preserves it — the same
   // probe auth.spec.ts uses to prove its login/logout navs are client-side.

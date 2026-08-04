@@ -34,6 +34,8 @@ test("password reset flow completes successfully", async ({
 
   // Login with the OLD password should fail
   await goto(page, "/login");
+  // Holdout (spec D6): a reset password logs in through the real form (and the
+  // old one fails) — the form IS the subject here.
   await fillLoginForm(page, verifiedUser.username, verifiedUser.password);
   await expect(page.locator(SEL.error)).toBeVisible();
 

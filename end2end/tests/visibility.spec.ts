@@ -10,8 +10,8 @@ import {
   goto,
   click,
   waitForSelector,
-  login,
-  registerKnown,
+  signInAs,
+  signInAsNewUserKnown,
   subscribeTo,
   unsubscribeFrom,
 } from "./helpers";
@@ -62,12 +62,7 @@ async function expectPostVisible(
   try {
     const page = await ctx.newPage();
     if (loginAs) {
-      await login(
-        page,
-        loginAs.username,
-        loginAs.password,
-        firstNavigationTimeoutMs,
-      );
+      await signInAs(page, loginAs.username);
     }
     await goto(page, permalink, { timeout: firstNavigationTimeoutMs });
     await expect(page.locator("article h1")).toHaveText(title);
@@ -88,12 +83,7 @@ async function expectPostHidden(
   try {
     const page = await ctx.newPage();
     if (loginAs) {
-      await login(
-        page,
-        loginAs.username,
-        loginAs.password,
-        firstNavigationTimeoutMs,
-      );
+      await signInAs(page, loginAs.username);
     }
     await goto(page, permalink, { timeout: firstNavigationTimeoutMs });
     await expect(page.locator(SEL.error)).toContainText("Post not found");
@@ -111,7 +101,7 @@ test("Private post: hidden from anonymous and non-subscriber, visible to author"
 }, testInfo) => {
   const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
 
-  const author = await registerKnown(page, firstNav);
+  const author = await signInAsNewUserKnown(page);
   const permalink = await publishWithBaseAudience(
     page,
     "Private Secret",
@@ -121,7 +111,7 @@ test("Private post: hidden from anonymous and non-subscriber, visible to author"
   // A second registered user who never subscribes.
   const otherCtx = await tracedContext();
   const otherPage = await otherCtx.newPage();
-  const other = await registerKnown(otherPage, firstNav);
+  const other = await signInAsNewUserKnown(otherPage);
   await otherCtx.close();
 
   // Anonymous visitor: hidden on permalink.
@@ -159,7 +149,7 @@ test("Subscribers post: visible after Subscribe, hidden again after Unsubscribe"
 }, testInfo) => {
   const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
 
-  const author = await registerKnown(page, firstNav);
+  const author = await signInAsNewUserKnown(page);
   const permalink = await publishWithBaseAudience(
     page,
     "Subscribers Only",
@@ -170,7 +160,7 @@ test("Subscribers post: visible after Subscribe, hidden again after Unsubscribe"
   const viewerCtx = await tracedContext();
   const viewerPage = await viewerCtx.newPage();
   try {
-    await registerKnown(viewerPage, firstNav);
+    await signInAsNewUserKnown(viewerPage);
 
     // Before subscribing: cannot see the post.
     await goto(viewerPage, permalink, { timeout: firstNav });
@@ -214,18 +204,18 @@ test("Named audience: assigned member sees a Friends post; an unassigned non-mem
 }, testInfo) => {
   const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
 
-  const author = await registerKnown(page, firstNav);
+  const author = await signInAsNewUserKnown(page);
 
   // X subscribes (so the author can add X to a named audience).
   const xCtx = await tracedContext();
   const xPage = await xCtx.newPage();
-  const userX = await registerKnown(xPage, firstNav);
+  const userX = await signInAsNewUserKnown(xPage);
   await subscribeTo(xPage, author.username);
 
   // Y registers but never subscribes — it is neither a subscriber nor a member.
   const yCtx = await tracedContext();
   const yPage = await yCtx.newPage();
-  const userY = await registerKnown(yPage, firstNav);
+  const userY = await signInAsNewUserKnown(yPage);
 
   // Author creates a "Friends" audience and adds only X.
   await goto(page, "/audiences");
@@ -286,7 +276,7 @@ test("Public post is visible to anonymous and appears in the feed; Subscribers p
 }, testInfo) => {
   const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
 
-  const author = await registerKnown(page, firstNav);
+  const author = await signInAsNewUserKnown(page);
 
   const publicPermalink = await publishWithBaseAudience(
     page,

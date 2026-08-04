@@ -47,10 +47,17 @@ import {
   otlpAttribute,
   traceContextFromEnvironment,
 } from "./otel";
-import { BASE_URL, login, register, setAndVerifyEmail } from "./helpers";
+import {
+  BASE_URL,
+  generateUsername,
+  goto,
+  setAndVerifyEmail,
+  TEST_PASSWORD,
+} from "./helpers";
 import { readEmailLines, type CapturedEmail } from "./mail";
 import { MOUNTED_ATTR, MOUNTED_SELECTOR } from "./mount";
 import { pollUntil } from "./polling";
+import { applySeededSession, seedUserViaTool } from "./seed";
 
 /** One extra context a spec opened via `tracedContext`, plus the client-side
  *  perf read from it just before it closed. `_autoPerfSpan` turns each into an
@@ -359,9 +366,20 @@ export type NewTracedContext = (
 ) => Promise<BrowserContext>;
 
 /** A uniquely-named account provisioned per test. `password` is the literal
- *  `register()` password; `email` is the deterministic unique address this
- *  account uses when it sets/verifies email. */
-export type TestUser = { username: string; password: string; email: string };
+ *  seeded-account password; `email` is the deterministic unique address this
+ *  account uses when it sets/verifies email. The remaining fields are the
+ *  seed record (#791): everything needed to apply this session to another
+ *  context via `applySeededSession`. */
+export type TestUser = {
+  username: string;
+  password: string;
+  email: string;
+  token: string;
+  setCookie: string;
+  marker: string;
+  markerKey: string;
+  isOperator: boolean;
+};
 
 /** A recipient-scoped mail waiter bound to one `TestUser.email`. Each call
  *  returns that recipient's next unseen message (FIFO), so parallel tests
@@ -477,31 +495,33 @@ const test = base.extend<{
     await use(slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
   },
 
-  // The test's own `page`, already registered with a fresh unique account using
-  // the scaled 10_000 first-nav budget — collapsing the
-  // `register(page, firstNav)` preamble. Registers the DEFAULT page (not a new
-  // context) so it stays instrumented by `_autoPerfSpan`. For tests that discard
-  // the register username; tests that need the username/credentials use
-  // `register(...)` directly or the `user`/`verifiedUser` fixtures.
+  // The test's own `page`, already signed in with a fresh unique seeded
+  // account and mounted at `/` — collapsing the old register preamble. Seeds
+  // the DEFAULT page's context (not
+  // a new one) so it stays instrumented by `_autoPerfSpan`, and still yields a
+  // mounted page because its consumers assume one (spec D8). For tests that
+  // discard the username; tests that need the username/credentials use
+  // `signInAsNewUser(...)` directly or the `user`/`verifiedUser` fixtures.
   registeredPage: async ({ page, firstNav }, use) => {
-    await register(page, firstNav);
+    const record = await seedUserViaTool(generateUsername(), TEST_PASSWORD);
+    await applySeededSession(page.context(), record);
+    await goto(page, "/", { timeout: firstNav });
     await use(page);
   },
-  // A uniquely-named account, registered in a throwaway context so the test's
-  // own `page` stays logged out. Lazy: only provisioned for tests that
-  // destructure `user`.
-  user: async ({ tracedContext }, use, testInfo) => {
-    const context = await tracedContext();
-    const page = await context.newPage();
-    const username = await register(
-      page,
-      slowBrowserFirstNavigationTimeoutMs(testInfo, 15_000),
-    );
-    await context.close();
+  // A uniquely-named account, seeded out-of-band with no browser involvement
+  // at all — no throwaway context, no page, no navigation. Lazy: only
+  // provisioned for tests that destructure `user`.
+  user: async ({}, use) => {
+    const record = await seedUserViaTool(generateUsername(), TEST_PASSWORD);
     await use({
-      username,
-      password: "testpassword123",
-      email: `${username}@example.com`,
+      username: record.username,
+      password: TEST_PASSWORD,
+      email: `${record.username}@example.com`,
+      token: record.token,
+      setCookie: record.setCookie,
+      marker: record.marker,
+      markerKey: record.markerKey,
+      isOperator: record.isOperator,
     });
   },
 
@@ -535,17 +555,19 @@ const test = base.extend<{
   },
 
   // `user` plus the email set-and-verify flow, driven through `mailbox`, all
-  // out-of-band so the test's `page` stays logged out. Yields the same
+  // out-of-band so the test's `page` stays logged out. The session is applied
+  // to the throwaway context from the seed record (no UI login, #791); the
+  // set-email/verify flow itself still goes through the UI — it is
+  // `email::request_verification` / `email::verify` coverage. Yields the same
   // credentials; the account now has a verified email.
-  verifiedUser: async ({ tracedContext, user, mailbox }, use, testInfo) => {
-    // The expensive out-of-band setup below (newContext + login + set-email +
+  verifiedUser: async ({ tracedContext, user, mailbox }, use) => {
+    // The out-of-band setup below (newContext + seeded session + set-email +
     // verify) runs before the test body; the ambient `_autoTestTimeout` auto
     // fixture (which runs before this one) has already scaled the whole-test
     // budget, so this setup is covered without a hand-rolled `setTimeout` here.
     const context = await tracedContext();
     const page = await context.newPage();
-    const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 15_000);
-    await login(page, user.username, user.password, firstNav);
+    await applySeededSession(context, user);
     await setAndVerifyEmail(page, user.email, mailbox);
     await context.close();
     await use(user);

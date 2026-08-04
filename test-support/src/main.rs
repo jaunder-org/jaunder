@@ -6,7 +6,9 @@ use common::display_name::DisplayName;
 use host::capture;
 use storage::DbConnectOptions;
 
-use test_support::{create_user, reset_mail, seed_posts_for_user};
+use test_support::{
+    create_session_for_user, create_user, reset_mail, seed_posts_for_user, seed_user,
+};
 
 #[derive(Parser)]
 #[command(
@@ -56,6 +58,35 @@ enum Commands {
         #[arg(long)]
         operator: bool,
     },
+    /// Create a fixture user AND a session in one DB open; prints the seed
+    /// record (cookie + marker) as one line of JSON on stdout.
+    SeedUser {
+        /// Database URL (`sqlite:...` or `postgres://...`) — the server's `--db`.
+        #[arg(long, env = "JAUNDER_DB")]
+        db: DbConnectOptions,
+        /// The username to create.
+        #[arg(long)]
+        username: String,
+        /// The account password.
+        #[arg(long)]
+        password: String,
+        /// Session label (default "E2E seed").
+        #[arg(long)]
+        label: Option<String>,
+    },
+    /// Create a session for an EXISTING user; prints the seed record as one
+    /// line of JSON on stdout.
+    CreateSession {
+        /// Database URL (`sqlite:...` or `postgres://...`) — the server's `--db`.
+        #[arg(long, env = "JAUNDER_DB")]
+        db: DbConnectOptions,
+        /// The existing user's username.
+        #[arg(long)]
+        username: String,
+        /// Session label (default "E2E seed").
+        #[arg(long)]
+        label: Option<String>,
+    },
     /// Reset the mail-capture file (delete it; missing is fine). Derives
     /// `<JAUNDER_CAPTURE_DIR>/mail.jsonl`; errors if the capture dir is unset.
     ResetMail,
@@ -92,6 +123,17 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             operator,
         } => cmd_create_user(&db, &username, &password, display_name.as_ref(), operator).await,
         Commands::ResetMail => cmd_reset_mail(),
+        Commands::SeedUser {
+            db,
+            username,
+            password,
+            label,
+        } => cmd_seed_user(&db, &username, &password, label.as_deref()).await,
+        Commands::CreateSession {
+            db,
+            username,
+            label,
+        } => cmd_create_session(&db, &username, label.as_deref()).await,
         Commands::CapturePath { stream } => cmd_capture_path(&stream),
     }
 }
@@ -121,6 +163,31 @@ async fn cmd_create_user(
     let state = storage::open_existing_database(db).await?;
     let id = create_user(&state, username, password, display_name, operator).await?;
     eprintln!("created user {username} with id {}", i64::from(id));
+    Ok(())
+}
+
+/// Create a fixture user and a session; print the seed record as JSON.
+async fn cmd_seed_user(
+    db: &DbConnectOptions,
+    username: &str,
+    password: &str,
+    label: Option<&str>,
+) -> anyhow::Result<()> {
+    let state = storage::open_existing_database(db).await?;
+    let record = seed_user(&state, username, password, label).await?;
+    println!("{}", serde_json::to_string(&record)?);
+    Ok(())
+}
+
+/// Create a session for an existing user; print the seed record as JSON.
+async fn cmd_create_session(
+    db: &DbConnectOptions,
+    username: &str,
+    label: Option<&str>,
+) -> anyhow::Result<()> {
+    let state = storage::open_existing_database(db).await?;
+    let record = create_session_for_user(&state, username, label).await?;
+    println!("{}", serde_json::to_string(&record)?);
     Ok(())
 }
 
@@ -187,6 +254,23 @@ mod tests {
         .await
         .expect("seed-posts should dispatch and succeed");
 
+        run(cli(Commands::SeedUser {
+            db: db.clone(),
+            username: "bob".to_owned(),
+            password: "password123".to_owned(),
+            label: None,
+        }))
+        .await
+        .expect("seed-user should dispatch and succeed");
+
+        run(cli(Commands::CreateSession {
+            db: db.clone(),
+            username: "bob".to_owned(),
+            label: Some("CI bot".to_owned()),
+        }))
+        .await
+        .expect("create-session should dispatch and succeed");
+
         // Read back through a fresh connection to prove the dispatch wired each
         // command's arguments through to storage (not merely returned Ok): the
         // seeded post is published and attributed to alice.
@@ -206,6 +290,30 @@ mod tests {
             published.len(),
             1,
             "seed-posts should publish 1 post for alice"
+        );
+
+        // Same read-back proof for the session commands: bob exists and holds
+        // two sessions (seed-user's plus create-session's explicitly-labelled
+        // one), so both commands' arguments reached storage.
+        let bob = state
+            .users
+            .get_user_by_username(&"bob".parse().unwrap())
+            .await
+            .expect("lookup ok")
+            .expect("bob created");
+        let sessions = state
+            .sessions
+            .list_sessions(bob.user_id)
+            .await
+            .expect("list sessions ok");
+        assert_eq!(
+            sessions.len(),
+            2,
+            "seed-user + create-session = two sessions"
+        );
+        assert!(
+            sessions.iter().any(|s| s.label == "CI bot"),
+            "the --label argument should reach the stored session"
         );
     }
 }

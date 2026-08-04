@@ -1,9 +1,9 @@
 import type { Page } from "@playwright/test";
-import { goto, register, click, BASE_URL } from "./helpers";
+import { goto, signInAsNewUser, click, BASE_URL } from "./helpers";
 // `test` comes from the shared fixtures, not @playwright/test, so this spec emits
 // an `e2e.test` span and its server-fn traffic (app-password minting, AtomPub
 // publishing over HTTP) is attributable to a named test (#681).
-import { test, expect, slowBrowserFirstNavigationTimeoutMs } from "./fixtures";
+import { test, expect } from "./fixtures";
 
 /// Mints an app password via the Sessions UI and returns the raw token.
 async function mintAppPassword(page: Page, label: string): Promise<string> {
@@ -39,11 +39,8 @@ function onServer(url: string): string {
 
 test("RSD autodiscovery link is present on the user page and resolves", async ({
   page,
-}, info) => {
-  const username = await register(
-    page,
-    slowBrowserFirstNavigationTimeoutMs(info, 30_000),
-  );
+}) => {
+  const username = await signInAsNewUser(page);
 
   // The canonical user URL is ~-prefixed.
   await goto(page, `/~${username}`);
@@ -72,8 +69,8 @@ test("RSD autodiscovery link is present on the user page and resolves", async ({
 
 test("an app password can be minted from the sessions page", async ({
   page,
-}, info) => {
-  await register(page, slowBrowserFirstNavigationTimeoutMs(info, 30_000));
+}) => {
+  await signInAsNewUser(page);
 
   await goto(page, "/sessions");
 
@@ -94,11 +91,8 @@ test("an app password can be minted from the sessions page", async ({
 test("full AtomPub publishing flow over HTTP with an app password", async ({
   page,
   request,
-}, info) => {
-  const username = await register(
-    page,
-    slowBrowserFirstNavigationTimeoutMs(info, 30_000),
-  );
+}) => {
+  const username = await signInAsNewUser(page);
 
   const token = await mintAppPassword(page, "AtomPub e2e");
   // The `request` fixture carries no browser cookies, so these calls exercise

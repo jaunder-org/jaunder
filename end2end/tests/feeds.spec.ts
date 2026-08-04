@@ -1,19 +1,19 @@
-import { goto, register, click, waitForMount, BASE_URL } from "./helpers";
+import {
+  goto,
+  signInAsNewUser,
+  click,
+  waitForMount,
+  BASE_URL,
+} from "./helpers";
 // `test` comes from the shared fixtures, not @playwright/test, so this spec emits
 // an `e2e.test` span and its traffic — including the direct `page.request.post`
 // to /api/posts/update below — is attributable to a named test (#681).
-import {
-  test,
-  expect,
-  setTestBudget,
-  slowBrowserFirstNavigationTimeoutMs,
-} from "./fixtures";
+import { test, expect, setTestBudget } from "./fixtures";
 import { readPingLines, waitForPingMatching } from "./websub";
 // `FEED_POLL_TIMEOUT_MS` is imported, not restated: this spec derives its
 // whole-test budget from it (#270), and `feeds.ts` owns the poll that consumes
 // it. Two copies would let the budget silently drift from the deadline again.
 import { fetchFeedContaining, FEED_POLL_TIMEOUT_MS } from "./feeds";
-import { SEL } from "./selectors";
 import { createPostViaApi } from "./posts";
 import { withTimedAction } from "./actions";
 
@@ -23,9 +23,9 @@ const FORMATS: { ext: string; mime: string }[] = [
   { ext: "json", mime: "application/feed+json" },
 ];
 
-/** Room for what the per-user-feeds test does *besides* polling: two `register()`
- *  cold-WASM navigations, three `createPostViaApi` writes, a logout and a
- *  `waitForURL`. Needed as an explicit term because at `workers=1` the whole-test
+/** Room for what the per-user-feeds test does *besides* polling: two seeded
+ *  sessions, three `createPostViaApi` writes, and the page loads around them.
+ *  Needed as an explicit term because at `workers=1` the whole-test
  *  scale is 1.0, so the budget gets no inflation from the scaler. */
 const FEED_SETUP_ALLOWANCE_MS = 30_000;
 
@@ -43,11 +43,8 @@ const PING_SETUP_ALLOWANCE_MS = 8_000;
 
 test("auto-discovery links are present on site home and user timeline, and resolve", async ({
   page,
-}, info) => {
-  const username = await register(
-    page,
-    slowBrowserFirstNavigationTimeoutMs(info, 30_000),
-  );
+}) => {
+  const username = await signInAsNewUser(page);
 
   // Test site home feed discovery
   await goto(page, "/");
@@ -105,8 +102,8 @@ test("auto-discovery links are present on site home and user timeline, and resol
 
 test("head discovery links update across a client-side nav, staying a single set", async ({
   page,
-}, info) => {
-  await register(page, slowBrowserFirstNavigationTimeoutMs(info, 30_000));
+}) => {
+  await signInAsNewUser(page);
   // Seed a public post carrying a tag so its footer renders a clickable tag chip.
   await createPostViaApi(page, {
     body: "# Tagged\n\nbody",
@@ -147,10 +144,10 @@ test("head discovery links update across a client-side nav, staying a single set
 
 test("crawler path keeps the projector discovery links (no wasm)", async ({
   page,
-}, info) => {
+}) => {
   // Public content so `/` renders the projector site-timeline head (an empty site falls
-  // back to the link-less SPA shell). register() establishes the session for the post.
-  await register(page, slowBrowserFirstNavigationTimeoutMs(info, 30_000));
+  // back to the link-less SPA shell). signInAsNewUser establishes the session.
+  await signInAsNewUser(page);
   await createPostViaApi(page, { body: "# Crawlable\n\nbody" });
   // A raw HTTP fetch never boots wasm — the projector head is served intact.
   const res = await page.request.get(`${BASE_URL}/`);
@@ -164,7 +161,7 @@ test("crawler path keeps the projector discovery links (no wasm)", async ({
 // other user's posts.
 test("per-user feeds contain only that user's posts, newest first, in all formats", async ({
   page,
-}, info) => {
+}) => {
   // Worst path: one `fetchFeedContaining` per format for each of two users, each
   // polling up to FEED_POLL_TIMEOUT_MS. Derived rather than restated so it cannot
   // drift from the deadlines it exists to cover — if the whole-test budget were
@@ -174,10 +171,7 @@ test("per-user feeds contain only that user's posts, newest first, in all format
     FORMATS.length * 2 * FEED_POLL_TIMEOUT_MS + FEED_SETUP_ALLOWANCE_MS,
   );
 
-  const alice = await register(
-    page,
-    slowBrowserFirstNavigationTimeoutMs(info, 30_000),
-  );
+  const alice = await signInAsNewUser(page);
   // Alice publishes two posts; the second is newer (higher post_id) and must
   // appear first in her feed.
   await createPostViaApi(page, {
@@ -187,18 +181,11 @@ test("per-user feeds contain only that user's posts, newest first, in all format
     body: "# Alice Newer\n\nBody for Alice Newer",
   });
 
-  // Log Alice out before registering Bob. Without this, register()'s
-  // success-wait (a[href='/logout']) resolves instantly against Alice's
-  // still-present link, so Bob's session may not be active when we publish —
-  // and Bob's post would be authored by Alice.
-  await click(page, SEL.logoutLink);
-  await page.waitForURL(`${BASE_URL}/`, { timeout: 10_000 });
-  await waitForMount(page);
-
-  const bob = await register(
-    page,
-    slowBrowserFirstNavigationTimeoutMs(info, 30_000),
-  );
+  // Bob's seed replaces Alice's cookie + companion cookie in place; the
+  // tombstoned init script swaps the marker (spec D9) — no logout dance, and
+  // the following createPostViaApi (page.request shares the context cookie
+  // jar) is authored by Bob.
+  const bob = await signInAsNewUser(page);
   await createPostViaApi(page, { body: "# Bob Solo\n\nBody for Bob Solo" });
 
   for (const fmt of FORMATS) {
@@ -237,15 +224,12 @@ test("per-user feeds contain only that user's posts, newest first, in all format
 // produces a second ping. Pings are observed via the file-capture client.
 test("publishing and editing a post each trigger a WebSub hub ping", async ({
   page,
-}, info) => {
+}) => {
   // Worst path: two ping waits plus the settle = 82s. The allowance covers
   // registration and the two API writes.
   setTestBudget(2 * PING_WAIT_MS + PING_SETTLE_MS + PING_SETUP_ALLOWANCE_MS);
 
-  const username = await register(
-    page,
-    slowBrowserFirstNavigationTimeoutMs(info, 30_000),
-  );
+  const username = await signInAsNewUser(page);
   const isUserFeed = (feedUrl: string) =>
     feedUrl.includes(`/~${username}/feed`);
 
@@ -298,11 +282,8 @@ test("publishing and editing a post each trigger a WebSub hub ping", async ({
 // refetch with If-None-Match returns 304 with an empty body.
 test("feed honors If-None-Match with a 304 and empty body", async ({
   page,
-}, info) => {
-  const username = await register(
-    page,
-    slowBrowserFirstNavigationTimeoutMs(info, 30_000),
-  );
+}) => {
+  const username = await signInAsNewUser(page);
   await createPostViaApi(page, {
     body: "# Conditional Get Post\n\nBody for Conditional Get Post",
   });
@@ -324,11 +305,8 @@ test("feed honors If-None-Match with a 304 and empty body", async ({
 // each format with a 200.
 test("user with no posts serves a valid empty feed in each format", async ({
   page,
-}, info) => {
-  const username = await register(
-    page,
-    slowBrowserFirstNavigationTimeoutMs(info, 30_000),
-  );
+}) => {
+  const username = await signInAsNewUser(page);
 
   const rootMarkers: Record<string, string> = {
     rss: "<rss",

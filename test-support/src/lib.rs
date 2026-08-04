@@ -139,6 +139,101 @@ pub fn reset_mail(path: &std::path::Path) -> anyhow::Result<()> {
     }
 }
 
+/// The JSON seed record printed by the `seed-user` / `create-session`
+/// subcommands: everything a browser context needs to boot authenticated
+/// pre-paint — the session cookie and the advisory marker, both built by the
+/// server's own primitives (`host::auth::session_cookie_header`,
+/// `common::session_user`) so TypeScript never restates them (#791).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SeedRecord {
+    pub username: String,
+    pub user_id: i64,
+    pub is_operator: bool,
+    pub token: String,
+    pub set_cookie: String,
+    pub marker_key: String,
+    pub marker: String,
+}
+
+/// The default session label for seeded sessions — distinct, so they are
+/// obvious on `/sessions` and in debugging.
+const DEFAULT_SEED_LABEL: &str = "E2E seed";
+
+/// Build the record for one fresh session: mint the token through the real
+/// `SessionStorage` path and derive both client-visible artifacts from the
+/// server's own primitives.
+async fn session_record(
+    state: &Arc<AppState>,
+    user_id: UserId,
+    username: &Username,
+    is_operator: bool,
+    label: Option<&str>,
+) -> anyhow::Result<SeedRecord> {
+    let label = label
+        .unwrap_or(DEFAULT_SEED_LABEL)
+        .parse::<common::session_label::SessionLabel>()
+        .map_err(|e| anyhow::anyhow!("invalid session label: {e}"))?;
+    let token = state.sessions.create_session(user_id, &label).await?;
+    Ok(SeedRecord {
+        username: username.to_string(),
+        user_id: i64::from(user_id),
+        is_operator,
+        set_cookie: host::auth::session_cookie_header(&token, false),
+        token: token.to_string(),
+        marker_key: common::session_user::MARKER_KEY.to_owned(),
+        marker: common::session_user::encode_marker(&common::session_user::SessionUser {
+            username: username.clone(),
+            is_operator,
+        }),
+    })
+}
+
+/// Create a fixture user (real `UserStorage::create_user` path — genuinely
+/// argon2-hashed, so the account stays loginable through the UI) and a session
+/// in one DB open. `label` defaults to `"E2E seed"`.
+///
+/// # Errors
+///
+/// Returns `Err` if the username or password is invalid, the label is invalid,
+/// or the user cannot be created (e.g. a duplicate username).
+pub async fn seed_user(
+    state: &Arc<AppState>,
+    username: &str,
+    password: &str,
+    label: Option<&str>,
+) -> anyhow::Result<SeedRecord> {
+    let user_id = create_user(state, username, password, None, false).await?;
+    let uname = username
+        .parse::<Username>()
+        .map_err(|_| anyhow::anyhow!("invalid username: {username}"))?;
+    session_record(state, user_id, &uname, false, label).await
+}
+
+/// Create a session for an EXISTING user (e.g. the harness-seeded
+/// `testoperator`); `is_operator` is read back from the user record so the
+/// marker matches what a real login would write. `label` defaults to
+/// `"E2E seed"`.
+///
+/// # Errors
+///
+/// Returns `Err` if the username is invalid or unknown, or the label is
+/// invalid.
+pub async fn create_session_for_user(
+    state: &Arc<AppState>,
+    username: &str,
+    label: Option<&str>,
+) -> anyhow::Result<SeedRecord> {
+    let uname = username
+        .parse::<Username>()
+        .map_err(|_| anyhow::anyhow!("invalid username: {username}"))?;
+    let user = state
+        .users
+        .get_user_by_username(&uname)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no such user: {username}"))?;
+    session_record(state, user.user_id, &uname, user.is_operator, label).await
+}
+
 #[cfg(test)]
 mod content_tests {
     use super::*;
@@ -244,6 +339,124 @@ mod create_user_tests {
         // A freshly-init'd DB has a per-user uniqueness constraint, so a second
         // create with the same username surfaces as an error (no upsert).
         create_user(&state, "testoperator", "testpassword123", None, false)
+            .await
+            .expect_err("duplicate username should error");
+    }
+}
+
+#[cfg(test)]
+mod seed_session_tests {
+    //! `SQLite`-only by design (same rationale as `seed_tests`): the seed
+    //! functions have no per-backend branching — they dispatch through
+    //! `UserStorage` / `SessionStorage`, implemented per backend — so the e2e
+    //! matrix proves the dual-backend path; here we smoke the logic on `SQLite`.
+    use super::*;
+    use common::session_user::{decode_marker, MARKER_KEY};
+    use common::token::RawToken;
+    use storage::test_support;
+
+    /// The token a browser would send back, recovered from the record's
+    /// `Set-Cookie` value exactly as a client would: the first `name=value`
+    /// pair, up to the first `;`.
+    fn cookie_token(record: &SeedRecord) -> RawToken {
+        record
+            .set_cookie
+            .split(';')
+            .next()
+            .expect("cookie pair")
+            .strip_prefix("session=")
+            .expect("session cookie")
+            .parse()
+            .expect("token parses")
+    }
+
+    #[tokio::test]
+    async fn seed_user_returns_a_session_that_authenticates() {
+        let test_support::TestEnv { state, base: _base } =
+            test_support::Backend::Sqlite.setup().await;
+
+        let record = seed_user(&state, "alice", "password123", None)
+            .await
+            .expect("seed ok");
+
+        // The cookie's token authenticates and resolves to the seeded user.
+        let session = state
+            .sessions
+            .authenticate(&cookie_token(&record))
+            .await
+            .expect("token authenticates");
+        assert_eq!(session.user_id, UserId::from(record.user_id));
+
+        // The marker round-trips to the seeded identity, keyed by the shared
+        // constant — never a restated literal.
+        assert_eq!(record.marker_key, MARKER_KEY);
+        let marker = decode_marker(&record.marker).expect("marker decodes");
+        assert_eq!(marker.username, "alice");
+        assert!(!marker.is_operator);
+
+        // The default label makes seeded sessions obvious on /sessions.
+        let sessions = state
+            .sessions
+            .list_sessions(session.user_id)
+            .await
+            .expect("list ok");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].label, "E2E seed");
+    }
+
+    #[tokio::test]
+    async fn seed_user_honours_an_explicit_label() {
+        let test_support::TestEnv { state, base: _base } =
+            test_support::Backend::Sqlite.setup().await;
+
+        let record = seed_user(&state, "alice", "password123", Some("CI bot"))
+            .await
+            .expect("seed ok");
+        let sessions = state
+            .sessions
+            .list_sessions(UserId::from(record.user_id))
+            .await
+            .expect("list ok");
+        assert_eq!(sessions[0].label, "CI bot");
+    }
+
+    #[tokio::test]
+    async fn create_session_for_user_reflects_the_operator_flag() {
+        let test_support::TestEnv { state, base: _base } =
+            test_support::Backend::Sqlite.setup().await;
+        create_user(&state, "testoperator", "testpassword123", None, true)
+            .await
+            .expect("create ok");
+
+        let record = create_session_for_user(&state, "testoperator", None)
+            .await
+            .expect("session ok");
+        let marker = decode_marker(&record.marker).expect("marker decodes");
+        assert!(marker.is_operator, "operator user's marker must say so");
+        state
+            .sessions
+            .authenticate(&cookie_token(&record))
+            .await
+            .expect("token authenticates");
+    }
+
+    #[tokio::test]
+    async fn create_session_for_user_unknown_username_errors() {
+        let test_support::TestEnv { state, base: _base } =
+            test_support::Backend::Sqlite.setup().await;
+        create_session_for_user(&state, "ghost", None)
+            .await
+            .expect_err("unknown user should error");
+    }
+
+    #[tokio::test]
+    async fn seed_user_duplicate_username_errors() {
+        let test_support::TestEnv { state, base: _base } =
+            test_support::Backend::Sqlite.setup().await;
+        seed_user(&state, "alice", "password123", None)
+            .await
+            .expect("first seed ok");
+        seed_user(&state, "alice", "password123", None)
             .await
             .expect_err("duplicate username should error");
     }

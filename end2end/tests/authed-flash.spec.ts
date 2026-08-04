@@ -10,7 +10,16 @@
  */
 
 import { test, expect, slowBrowserTimeoutMs } from "./fixtures";
-import { BASE_URL, goto, register, login, failServerFn } from "./helpers";
+import {
+  BASE_URL,
+  click,
+  goto,
+  login,
+  registerViaUi,
+  signInAs,
+  signInAsNewUser,
+  failServerFn,
+} from "./helpers";
 import { SEL } from "./selectors";
 import { createPostViaApi } from "./posts";
 
@@ -18,7 +27,8 @@ test("owner: pre-paint auth marks html.authed and / stays the enhanced public ti
   page,
   firstNav,
 }, testInfo) => {
-  const username = await register(page, firstNav);
+  // Holdout (spec D6): registering through the real UI leaves a correct marker.
+  const username = await registerViaUi(page, firstNav);
   await createPostViaApi(page, { body: "# Owner Post\n\nBody for Owner Post" });
 
   await goto(page, "/");
@@ -50,6 +60,58 @@ test("owner: pre-paint auth marks html.authed and / stays the enhanced public ti
   await expect(page.locator(".j-sidebar a[href='/drafts']")).toBeVisible();
 });
 
+// AC5 (#791): a seeded session — no UI flow — must satisfy the same pre-paint
+// contract as the registerViaUi holdout above. This is what proves D3's
+// tombstoned init script feeds the <head> script.
+test("seeded: pre-paint auth marks html.authed and data-user", async ({
+  page,
+  firstNav,
+}) => {
+  const username = await signInAsNewUser(page);
+  await goto(page, "/", { timeout: firstNav });
+
+  await expect(page.locator("html")).toHaveClass(/\bauthed\b/);
+  await expect(page.locator("html")).toHaveAttribute("data-user", username);
+});
+
+// D3 (#791): after a UI logout the init script must NOT re-apply the seeded
+// marker — the tombstone (applied == companion cookie) makes it a no-op. The
+// pushState logout tests never re-run an init script, so only a full
+// post-logout navigation pins this.
+test("seeded: logout survives a full navigation (tombstone respected)", async ({
+  page,
+  firstNav,
+}) => {
+  await signInAsNewUser(page);
+  await goto(page, "/", { timeout: firstNav });
+  await click(page, SEL.logoutLink);
+  await page.waitForURL(`${BASE_URL}/`, { timeout: 10_000 });
+
+  await goto(page, "/", { timeout: firstNav });
+
+  await expect(page.locator("html")).not.toHaveClass(/\bauthed\b/);
+  await expect(page.locator(SEL.logoutLink)).toHaveCount(0);
+});
+
+// D3 (#791): the nonce row — seed → logout → re-seed the SAME user. The new
+// seed's companion value differs (fresh nonce), so the init script re-applies
+// the marker and the page boots authed again pre-paint.
+test("seeded: re-seed as the same user after logout boots authed", async ({
+  page,
+  firstNav,
+}) => {
+  const username = await signInAsNewUser(page);
+  await goto(page, "/", { timeout: firstNav });
+  await click(page, SEL.logoutLink);
+  await page.waitForURL(`${BASE_URL}/`, { timeout: 10_000 });
+
+  await signInAs(page, username);
+  await goto(page, "/", { timeout: firstNav });
+
+  await expect(page.locator("html")).toHaveClass(/\bauthed\b/);
+  await expect(page.locator("html")).toHaveAttribute("data-user", username);
+});
+
 test("owner: /app cockpit boots straight into the personalized feed", async ({
   registeredPage: page,
 }) => {
@@ -69,7 +131,10 @@ test("owner: jaunder_home_redirect='app' makes the pre-paint script redirect / �
   // safe stay-default (nothing writes the key yet). Writing it exercises that path:
   // an authed owner (marker set) with the key = "app" is redirected off / to /app
   // before first paint. Requires BOTH the marker and the key.
-  await register(page, firstNav);
+  // Holdout (spec D6): the pre-paint redirect path, on a real UI-written marker
+  // (a seeded helper does not navigate, so the localStorage write below would
+  // land on about:blank).
+  await registerViaUi(page, firstNav);
   await page.evaluate(() =>
     localStorage.setItem("jaunder_home_redirect", "app"),
   );
@@ -105,6 +170,7 @@ test("operator: admin chrome is seeded flash-free from the marker", async ({
   page,
 }) => {
   // Log in as the seeded operator; this writes the marker with is_operator:true.
+  // Holdout (spec D6): logging in through the real UI leaves a correct marker.
   await login(page, "testoperator", "testpassword123");
 
   // With get_session() failing, the operator admin nav can only come from the marker.

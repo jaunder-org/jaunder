@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures";
-import { goto, login, waitForSelector } from "./helpers";
+import { goto, signInAs, waitForSelector } from "./helpers";
 import { SEL } from "./selectors";
 
 // M8.5: Site settings admin page allows operators to configure site identity.
@@ -7,7 +7,7 @@ test("admin site settings page loads and allows updating title and base_url", as
   page,
 }) => {
   // Log in as operator user
-  await login(page, "testoperator", "testpassword123");
+  await signInAs(page, "testoperator");
 
   // Navigate to site settings page
   await goto(page, "/admin/site");
@@ -47,7 +47,7 @@ test("admin site settings page loads and allows updating title and base_url", as
 test("site base URL round-trips, clears via omission, and validates inline", async ({
   page,
 }) => {
-  await login(page, "testoperator", "testpassword123");
+  await signInAs(page, "testoperator");
   await goto(page, "/admin/site");
   await waitForSelector(page, "input[name='base_url']");
 
@@ -89,7 +89,7 @@ test("site base URL round-trips, clears via omission, and validates inline", asy
 // M8.5: Non-operators cannot access the site settings page.
 test("non-operator user is denied access to /admin/site", async ({ page }) => {
   // Log in as non-operator user
-  await login(page, "testlogin", "testpassword123");
+  await signInAs(page, "testlogin");
 
   // Try to navigate to site settings page
   await goto(page, "/admin/site");
@@ -108,7 +108,7 @@ test("non-operator user is denied access to /admin/site", async ({ page }) => {
 test("site base URL warning banner shows when unset and hides once configured", async ({
   page,
 }) => {
-  await login(page, "testoperator", "testpassword123");
+  await signInAs(page, "testoperator");
   await goto(page, "/admin/site");
   await waitForSelector(page, "input[name='base_url']");
 
