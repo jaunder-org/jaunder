@@ -1179,7 +1179,7 @@ git commit -m "refactor(e2e): remove register/registerKnown/registerAndLogin (#7
 
 - Consumes: everything. Produces: the PR-body numbers.
 
-- [ ] **Step 1: AC6 — server-fn coverage unchanged.**
+- [x] **Step 1: AC6 — server-fn coverage unchanged.**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-791-seed-users-via-api -- cargo xtask e2e sqlite chromium
@@ -1191,7 +1191,7 @@ git diff --stat -- docs/coverage/server-fns-allowlist.json    # expect: no chang
 Expected: `server-fns.json` byte-identical to `wt-base-issue-791`; evidence-file
 title churn only.
 
-- [ ] **Step 2: AC7 — like-for-like traces, before.** Create a scratch worktree
+- [x] **Step 2: AC7 — like-for-like traces, before.** Create a scratch worktree
       at the fork tag and run the baseline there (the harness builds from the
       checkout, so it must be a separate tree):
 
@@ -1204,7 +1204,7 @@ Record: `flow.register` count + total, warmup/fixture overhead, suite wall.
 
 (May be started in the background as early as Task 3 to save wall-clock.)
 
-- [ ] **Step 3: AC7 — after.** Same command in the issue worktree at branch
+- [x] **Step 3: AC7 — after.** Same command in the issue worktree at branch
       head; record the same rows, with an explicit full action listing (not just
       `--top 25`) for the `tool.users.seed` / `tool.sessions.create` /
       `tool.posts.seed` / `tool.config.set` rows.
@@ -1214,7 +1214,7 @@ plus at most the auth.spec inline registrations, which record differently) — a
 `registerViaUi` still emits under `flow.register`. Both outputs go in the PR
 body.
 
-- [ ] **Step 4: AC8 — full local gate.**
+- [x] **Step 4: AC8 — full local gate.**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-791-seed-users-via-api -- cargo xtask validate
@@ -1223,7 +1223,7 @@ devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-791-seed-use
 Expected: PASS — static + coverage + all four
 `{sqlite,postgres}×{chromium,firefox}` e2e combos.
 
-- [ ] **Step 5: Clean up the scratch worktree and commit any evidence
+- [x] **Step 5: Clean up the scratch worktree and commit any evidence
       regeneration.**
 
 ```bash
