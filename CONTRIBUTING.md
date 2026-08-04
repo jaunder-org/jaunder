@@ -114,7 +114,12 @@ they run in CI, or locally via `cargo xtask validate`. Bypass with
   it lands; do not introduce one to make the gate pass on your own initiative
   (this is the actionable form of the "never suppress … linting without explicit
   approval" rule under Testing).
-- Unless explicitly instructed otherwise, request review before committing.
+- **Review gates the merge, not the commit.** Agents commit on their own
+  recognizance — history is meant to be built up in focused, atomic steps, and
+  the pre-commit hook already gates each one on the full `cargo xtask check`.
+  What requires explicit user approval is **landing** the work: merging a PR
+  (`cargo xtask pr land` — running it _is_ the merge approval). Ask for review
+  before you merge, not before every commit.
 
 ### Adding an ADR
 
