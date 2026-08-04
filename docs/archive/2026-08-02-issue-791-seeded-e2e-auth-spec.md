@@ -252,7 +252,7 @@ it is authored by Bob.
 
 ### D10 — ADR
 
-A new ADR is drafted at `docs/adr/drafts/e2e-seeded-auth.md` (numberless;
+A new ADR is drafted at `docs/adr/0098-e2e-seeded-auth.md` (numberless;
 promoted at ship by `cargo xtask adr promote`). ADR-0046 is about the binary;
 this is a distinct decision about which flows e2e may fake, and the holdout
 table in D6 is exactly the thing a future reader would delete without knowing

@@ -165,7 +165,7 @@ git add docs/superpowers/specs/2026-08-02-issue-791-seeded-e2e-auth.md \
 git commit -m "docs(spec): issue #791 seeded e2e auth — approved spec and plan"
 ```
 
-(The ADR draft at `docs/adr/drafts/e2e-seeded-auth.md` is gitignored by design;
+(The ADR draft at `docs/adr/0098-e2e-seeded-auth.md` is gitignored by design;
 `HANDOFF-issue-791.md` stays untracked.)
 
 ---
