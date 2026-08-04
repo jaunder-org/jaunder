@@ -1,5 +1,11 @@
 import { test, expect } from "./fixtures";
-import { goto, click, signInAsNewUser, subscribeTo, failServerFn } from "./helpers";
+import {
+  goto,
+  click,
+  signInAsNewUser,
+  subscribeTo,
+  failServerFn,
+} from "./helpers";
 
 // Audiences management UI (`/audiences`, converged into `web::audiences`).
 //
@@ -22,7 +28,6 @@ test("Audiences: CRUD + membership toggle re-fetch without list remount or flash
   page,
   tracedContext,
 }) => {
-
   const author = await signInAsNewUser(page);
 
   // A subscriber X so the author has someone to add to an audience.

@@ -193,7 +193,7 @@ _The move is verbatim: the file content below is the current
 `web/src/auth/marker.rs` (module docs adjusted for the new home), so `web`'s
 behavior cannot drift._
 
-- [ ] **Step 1: Create `common/src/session_user.rs`** with the full current
+- [x] **Step 1: Create `common/src/session_user.rs`** with the full current
       content of `web/src/auth/marker.rs`:
   - Doc comment: keep the `#181, ADR-0044` advisory-marker explanation; drop the
     "wasm-only binding lives in `super::marker_storage`" line in favor of "the
@@ -212,7 +212,7 @@ behavior cannot drift._
     `use common::test_support::parse_username;` adjusted to
     `crate::test_support::parse_username`.
 
-- [ ] **Step 2: Register the module** in `common/src/lib.rs`:
+- [x] **Step 2: Register the module** in `common/src/lib.rs`:
 
 ```rust
 pub mod seed;
@@ -220,11 +220,11 @@ pub mod session_user;
 pub mod session_label;
 ```
 
-- [ ] **Step 3: Run the moved tests, verify they pass at the new home**
+- [x] **Step 3: Run the moved tests, verify they pass at the new home**
 
 Run: `cargo nextest run -p common session_user` Expected: PASS — 5 tests.
 
-- [ ] **Step 4: Reduce `web/src/auth/marker.rs` to a re-export**
+- [x] **Step 4: Reduce `web/src/auth/marker.rs` to a re-export**
 
 ```rust
 //! The client-side **auth marker** (#181, ADR-0044): a JS-readable localStorage
@@ -243,7 +243,7 @@ pub use common::session_user::{decode_marker, encode_marker, SessionUser, MARKER
 Update `web/src/auth/mod.rs:17-19`'s doc comment: "pure `encode`/`decode` +
 `MARKER_KEY`" now "re-exported from `common::session_user` (#791)".
 
-- [ ] **Step 5: Verify no web call site changed**
+- [x] **Step 5: Verify no web call site changed**
 
 Run: `cargo nextest run -p web auth::marker` Expected: PASS — marker's tests are
 gone from `web` (they moved), so this runs 0 tests; the real check is
@@ -261,6 +261,10 @@ devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-791-seed-use
 git add common/src/session_user.rs common/src/lib.rs web/src/auth/marker.rs web/src/auth/mod.rs
 git commit -m "refactor(common): move auth marker codec to common::session_user (#791)"
 ```
+
+(Note: new Rust files must be `git add`ed _before_ `cargo xtask check` — the Nix
+source filter excludes untracked files, so the coverage build fails with "file
+not found for module" otherwise.)
 
 ---
 
@@ -317,7 +321,7 @@ pub async fn create_session_for_user(
 ) -> anyhow::Result<SeedRecord>
 ```
 
-- [ ] **Step 1: Write the failing tests** (new
+- [x] **Step 1: Write the failing tests** (new
       `#[cfg(test)] mod seed_session_tests` in `test-support/src/lib.rs`,
       temp-SQLite style per `main.rs`'s `temp_db`; open state via
       `storage::open_existing_database`)
@@ -346,12 +350,12 @@ async fn create_session_for_user_unknown_username_errors() // .is_err()
 async fn seed_user_duplicate_username_errors() // seed_user twice, same name → second .is_err()
 ```
 
-- [ ] **Step 2: Run, verify they fail**
+- [x] **Step 2: Run, verify they fail**
 
 Run: `cargo nextest run -p test-support seed_session` Expected: FAIL —
 `seed_user` / `create_session_for_user` / `SeedRecord` undefined.
 
-- [ ] **Step 3: Implement** in `test-support/src/lib.rs`
+- [x] **Step 3: Implement** in `test-support/src/lib.rs`
 
 Shared private core: look up/insert the user, then one session path — parse
 `label.unwrap_or("E2E seed")` as `SessionLabel` (`common::session_label`,
@@ -365,12 +369,12 @@ reads the `UserRecord` via `state.users.get_user_by_username` (error
 `unknown user {username}` when `None`) and takes `is_operator` from it. Every
 branch is pinned by a Step 1 test.
 
-- [ ] **Step 4: Run, verify they pass**
+- [x] **Step 4: Run, verify they pass**
 
 Run: `cargo nextest run -p test-support` Expected: PASS — new 5 plus the
 existing suites.
 
-- [ ] **Step 5: Gate + commit**
+- [x] **Step 5: Gate + commit**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-791-seed-users-via-api -- cargo xtask check
@@ -399,7 +403,7 @@ test-support create-session  --db $JAUNDER_DB --username U [--label L]
 Both print one line of JSON (the `SeedRecord`) on stdout; diagnostics stay on
 stderr like the existing subcommands.
 
-- [ ] **Step 1: Extend the failing dispatch test** (`main.rs`'s
+- [x] **Step 1: Extend the failing dispatch test** (`main.rs`'s
       `run_dispatches_db_commands_against_a_temp_db`): after the existing two
       dispatches,
 
@@ -433,12 +437,12 @@ let sessions = state.sessions.list_sessions(bob.user_id).await.unwrap();
 assert_eq!(sessions.len(), 2, "seed-user + create-session = two sessions");
 ```
 
-- [ ] **Step 2: Run, verify it fails**
+- [x] **Step 2: Run, verify it fails**
 
 Run: `cargo nextest run -p test-support run_dispatches` Expected: FAIL —
 `Commands::SeedUser` / `Commands::CreateSession` undefined.
 
-- [ ] **Step 3: Implement** — two `Commands` variants (same `--db`/`--username`
+- [x] **Step 3: Implement** — two `Commands` variants (same `--db`/`--username`
       arg shapes as `CreateUser`; `seed-user` adds `--password`; both add
       `#[arg(long)] label: Option<String>`), two match arms in `run`, and two
       thin handlers:
@@ -461,11 +465,11 @@ async fn cmd_seed_user(
 (serde_json is already a dependency from Task 3.) `main.rs` only serializes —
 the record-building stays in `lib.rs` (spec D1 "Structure").
 
-- [ ] **Step 4: Run, verify it passes**
+- [x] **Step 4: Run, verify it passes**
 
 Run: `cargo nextest run -p test-support` Expected: PASS.
 
-- [ ] **Step 5: Smoke the real binary**
+- [x] **Step 5: Smoke the real binary**
 
 Run:
 `cargo run -p test-support -- seed-user --db "sqlite:$(mktemp -d)/t.db" --username smoke --password password123`
@@ -473,7 +477,7 @@ Run:
 existing dispatch test's approach, or point at any already-migrated temp DB).
 Expected: one JSON line with all seven `SeedRecord` fields.
 
-- [ ] **Step 6: Gate + commit**
+- [x] **Step 6: Gate + commit**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-791-seed-users-via-api -- cargo xtask check
@@ -538,7 +542,7 @@ export async function applySeededSession(
 ): Promise<void>;
 ```
 
-- [ ] **Step 1: Add the pinned constants and the tool runner**
+- [x] **Step 1: Add the pinned constants and the tool runner**
 
 ```ts
 /** Companion cookie carrying the marker payload to the init script. Named to
@@ -567,7 +571,7 @@ function runSeedTool(args: string[]): SeedRecord {
 }
 ```
 
-- [ ] **Step 2: Add `seedUserViaTool` / `createSessionViaTool`**, self-timing
+- [x] **Step 2: Add `seedUserViaTool` / `createSessionViaTool`**, self-timing
       and page-less (D7):
 
 ```ts
@@ -592,7 +596,7 @@ export async function createSessionViaTool(
 (`--db` comes from `JAUNDER_DB` in the environment in both harnesses, like
 `seedPostsViaTool`.)
 
-- [ ] **Step 3: Add `applySeededSession`** — cookie parse, companion cookie,
+- [x] **Step 3: Add `applySeededSession`** — cookie parse, companion cookie,
       once-per-context tombstoned init script:
 
 ```ts
@@ -649,12 +653,12 @@ export async function applySeededSession(
 The tombstone table this implements is spec D3's: first nav applies, later navs
 no-op, UI logout respected, re-seed as another user applies.
 
-- [ ] **Step 4: Self-time the two existing tool helpers** — `seedPostsViaTool`
+- [x] **Step 4: Self-time the two existing tool helpers** — `seedPostsViaTool`
       and `seedConfigViaTool` become `async`, wrapping their `execFileSync` in
       `withTimedAction(null, "tool.posts.seed", …)` /
       `withTimedAction(null, "tool.config.set", …)`. Bodies otherwise unchanged.
 
-- [ ] **Step 5: Update existing call sites to await**
+- [x] **Step 5: Update existing call sites to await**
 
 - `posts.spec.ts:426-431` — drop the `perf.timed("seed_posts", …)` wrapper (the
   call self-times now); keep the arguments.
@@ -665,7 +669,7 @@ no-op, UI logout respected, re-seed as another user applies.
   `test.afterAll(async () => { await seedConfigViaTool(…); await seedConfigViaTool(…); })`;
   `:30-31`, `:89`, `:110` — add `await`.
 
-- [ ] **Step 6: Verify** — typecheck + the seed-heavy spec still passes end to
+- [x] **Step 6: Verify** — typecheck + the seed-heavy spec still passes end to
       end:
 
 Run:
@@ -673,7 +677,7 @@ Run:
 Expected: PASS (old `register` still present; only the tool-call timing
 changed).
 
-- [ ] **Step 7: Gate + commit**
+- [x] **Step 7: Gate + commit**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-791-seed-users-via-api -- cargo xtask check
@@ -726,7 +730,7 @@ export async function registerViaUi(
 ): Promise<string>;
 ```
 
-- [ ] **Step 1: Implement the five additions.** `registerViaUi` is today's
+- [x] **Step 1: Implement the five additions.** `registerViaUi` is today's
       `register` body verbatim (including the success/error race and the
       `flow.register` action name), with its username from `generateUsername()`.
       `signInAsNewUser` = `seedUserViaTool(generateUsername(), TEST_PASSWORD)` →
@@ -735,17 +739,17 @@ export async function registerViaUi(
       carries a doc comment stating the no-navigation postcondition (D5) and
       that the caller's first `goto` is the cold navigation.
 
-- [ ] **Step 2: Rewrite the module doc** (`helpers.ts:30-37`): seeded sign-in
+- [x] **Step 2: Rewrite the module doc** (`helpers.ts:30-37`): seeded sign-in
       helpers are the default for setup; `registerViaUi` / `login` /
       `fillLoginForm` are for the D6 holdouts that exercise the real flows.
 
-- [ ] **Step 3: Verify** — existing suite still green (additive change):
+- [x] **Step 3: Verify** — existing suite still green (additive change):
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-791-seed-users-via-api -- cargo xtask e2e-local tests/auth.spec.ts`
 Expected: PASS.
 
-- [ ] **Step 4: Gate + commit**
+- [x] **Step 4: Gate + commit**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-791-seed-users-via-api -- cargo xtask check
@@ -780,10 +784,10 @@ export type TestUser = {
 };
 ```
 
-- [ ] **Step 1: Extend `TestUser`** to the shape above (gains five fields, loses
+- [x] **Step 1: Extend `TestUser`** to the shape above (gains five fields, loses
       none — D8).
 
-- [ ] **Step 2: `user` becomes a pure seed** (no throwaway context, no page, no
+- [x] **Step 2: `user` becomes a pure seed** (no throwaway context, no page, no
       navigation):
 
 ```ts
@@ -802,7 +806,7 @@ user: async ({}, use) => {
 },
 ```
 
-- [ ] **Step 3: `verifiedUser` seeds instead of logging in**, then drives the
+- [x] **Step 3: `verifiedUser` seeds instead of logging in**, then drives the
       set-email/verify UI as today:
 
 ```ts
@@ -820,7 +824,7 @@ verifiedUser: async ({ tracedContext, user, mailbox }, use) => {
 `setAndVerifyEmail` navigates first, so the marker is planted before its `goto`.
 The `testInfo`/`firstNav` locals that only fed `login` go away.)
 
-- [ ] **Step 4: `registeredPage` seeds then mounts `/` once**:
+- [x] **Step 4: `registeredPage` seeds then mounts `/` once**:
 
 ```ts
 registeredPage: async ({ page, firstNav }, use) => {
@@ -835,11 +839,11 @@ It must still yield a mounted page — its consumers assume one (D8). Update its
 doc comment ("Registers the DEFAULT page…" → seeds the default page's context
 and mounts `/`).
 
-- [ ] **Step 5: Fix imports** — drop `register`/`login` from the `./helpers`
+- [x] **Step 5: Fix imports** — drop `register`/`login` from the `./helpers`
       import where now unused, add `generateUsername`, `TEST_PASSWORD`, `goto`;
       add `applySeededSession`, `seedUserViaTool` from `./seed`.
 
-- [ ] **Step 6: Verify** — the fixture-consuming specs pass unchanged (their
+- [x] **Step 6: Verify** — the fixture-consuming specs pass unchanged (their
       call sites are unaffected):
 
 Run:
@@ -847,7 +851,7 @@ Run:
 Expected: PASS — `user`/`mailbox`/`verifiedUser` consumers see the same
 contract.
 
-- [ ] **Step 7: Gate + commit**
+- [x] **Step 7: Gate + commit**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-791-seed-users-via-api -- cargo xtask check
@@ -868,7 +872,7 @@ git commit -m "feat(e2e): seed the user/verifiedUser/registeredPage fixtures (#7
 
 - Consumes: Task 6/7's helpers and fixtures.
 
-- [ ] **Step 1: Convert the three setup-logins** (`auth.spec.ts:115`, `:147`,
+- [x] **Step 1: Convert the three setup-logins** (`auth.spec.ts:115`, `:147`,
       `:164`): `await login(page, user.username, user.password);` →
       `await signInAs(page, user.username);` **plus an added
       `await goto(page, "/");`** immediately after (D5 — all three act on the
@@ -876,20 +880,20 @@ git commit -m "feat(e2e): seed the user/verifiedUser/registeredPage fixtures (#7
       test's comment: login-as-setup → seeded session; the logout subject is
       unchanged.
 
-- [ ] **Step 2: Holdout comments.** Every surviving UI-auth row of D6 carries a
+- [x] **Step 2: Holdout comments.** Every surviving UI-auth row of D6 carries a
       `// Holdout (spec D6): proves …` comment — `auth.spec.ts` :13, :21, :36,
       :48, :56, :87, :133 and the two `password_reset.spec.ts` fillLoginForm
       sites (no code change there, just the comment at the
       `goto(page, "/login")`).
 
-- [ ] **Step 3: `authed-flash.spec.ts` holdouts.** `:21` and `:72`
+- [x] **Step 3: `authed-flash.spec.ts` holdouts.** `:21` and `:72`
       `register(page, firstNav)` → `registerViaUi(page, firstNav)`, each with
       its D6 holdout comment ("registering leaves a correct marker" / "the
       pre-paint redirect path, on a real marker"). The `:108`
       `login(page, "testoperator", …)` stays, with its holdout comment ("logging
       in leaves a correct marker").
 
-- [ ] **Step 4: Add the AC5 test** as a sibling directly after the `:17` test:
+- [x] **Step 4: Add the AC5 test** as a sibling directly after the `:17` test:
 
 ```ts
 // AC5 (#791): a seeded session — no UI flow — must satisfy the same pre-paint
@@ -907,7 +911,7 @@ test("seeded: pre-paint auth marks html.authed and data-user", async ({
 });
 ```
 
-- [ ] **Step 5: Add the tombstone's logout-row test** (D3's subtlest branch —
+- [x] **Step 5: Add the tombstone's logout-row test** (D3's subtlest branch —
       the pushState logout tests never re-run an init script, so only a full
       post-logout navigation pins it):
 
@@ -930,10 +934,10 @@ test("seeded: logout survives a full navigation (tombstone respected)", async ({
 });
 ```
 
-- [ ] **Step 6: Fix imports** in both specs (`signInAs`, `registerViaUi`,
+- [x] **Step 6: Fix imports** in both specs (`signInAs`, `registerViaUi`,
       `click` as needed; drop unused).
 
-- [ ] **Step 7: Verify**
+- [x] **Step 7: Verify**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-791-seed-users-via-api -- cargo xtask e2e-local tests/auth.spec.ts`
@@ -941,7 +945,7 @@ Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-791-seed-users-via-api -- cargo xtask e2e-local tests/authed-flash.spec.ts`
 Expected: PASS both, including the two new tests.
 
-- [ ] **Step 8: Gate + commit**
+- [x] **Step 8: Gate + commit**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-791-seed-users-via-api -- cargo xtask check
@@ -966,7 +970,7 @@ git commit -m "test(e2e): convert auth specs to seeded sessions, pin seeded pre-
 
 - Consumes: Task 6's `signInAs`.
 
-- [ ] **Step 1: Apply the conversion rule at every listed site:**
+- [x] **Step 1: Apply the conversion rule at every listed site:**
   - `await login(page, "testoperator", "testpassword123");` →
     `await signInAs(page, "testoperator");`
   - `await login(page, "testlogin", "testpassword123");` →
@@ -981,19 +985,19 @@ git commit -m "test(e2e): convert auth specs to seeded sessions, pin seeded pre-
   `goto`) — verify per site while editing. Where a converted line's comment
   references "Log in as", reword to "Sign in as … (seeded session)".
 
-- [ ] **Step 2: invite.spec holdout comments** at Test A's invitee form flow and
+- [x] **Step 2: invite.spec holdout comments** at Test A's invitee form flow and
       Test B (D6 rows; code unchanged).
 
-- [ ] **Step 3: Fix imports** in all five files.
+- [x] **Step 3: Fix imports** in all five files.
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 Run (each):
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-791-seed-users-via-api -- cargo xtask e2e-local tests/<file>.spec.ts`
 Expected: PASS all five. (`invite.spec.ts` runs in the serial `chromium-admin`
 project — the host loop's filter still selects it.)
 
-- [ ] **Step 5: Gate + commit**
+- [x] **Step 5: Gate + commit**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-791-seed-users-via-api -- cargo xtask check
@@ -1017,7 +1021,7 @@ git commit -m "test(e2e): signInAs for operator/setup logins (#791)"
 
 - Consumes: Task 6's `signInAsNewUser`.
 
-- [ ] **Step 1: Apply the conversion rule at every listed site:**
+- [x] **Step 1: Apply the conversion rule at every listed site:**
   - `const username = await register(page, firstNav);` →
     `const username = await signInAsNewUser(page);`
   - `await register(page, slowBrowserFirstNavigationTimeoutMs(info, 30_000));`
@@ -1030,7 +1034,7 @@ git commit -m "test(e2e): signInAs for operator/setup logins (#791)"
   `await goto(page, "/");` and note it — the census says none of these four
   files need one.
 
-- [ ] **Step 2: Clean dead budget plumbing.** Where `firstNav` /
+- [x] **Step 2: Clean dead budget plumbing.** Where `firstNav` /
       `slowBrowserFirstNavigationTimeoutMs` locals or destructured fixtures are
       now unused, remove them; keep them where a surviving
       `goto(..., { timeout: firstNav })` still consumes them. Update stale
@@ -1038,15 +1042,15 @@ git commit -m "test(e2e): signInAs for operator/setup logins (#791)"
       registeredPage fixture)…" — reword to `signInAsNewUser`, keeping the
       owner-scoping rationale).
 
-- [ ] **Step 3: Fix imports** in all four files.
+- [x] **Step 3: Fix imports** in all four files.
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 Run (each):
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-791-seed-users-via-api -- cargo xtask e2e-local tests/<file>.spec.ts`
 Expected: PASS all four.
 
-- [ ] **Step 5: Gate + commit**
+- [x] **Step 5: Gate + commit**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-791-seed-users-via-api -- cargo xtask check
@@ -1072,7 +1076,7 @@ git commit -m "test(e2e): signInAsNewUser for atompub/audiences/cls specs (#791)
 
 - Consumes: Task 6's `signInAsNewUser` / `signInAsNewUserKnown`.
 
-- [ ] **Step 1: feeds.spec.ts.** Task 10's rule at the eight sites, plus **D9**:
+- [x] **Step 1: feeds.spec.ts.** Task 10's rule at the eight sites, plus **D9**:
       delete the Alice logout dance (:190-196 — the `goto` to `/logout` / logout
       click and its explanatory comment) so Bob's seed simply replaces Alice's
       session in place; the comment at :190-196 is superseded by one line:
@@ -1083,31 +1087,31 @@ git commit -m "test(e2e): signInAsNewUser for atompub/audiences/cls specs (#791)
       `const alice = await signInAsNewUser(page);`, Bob
       `const bob = await signInAsNewUser(page);`.
 
-- [ ] **Step 2: media.spec.ts.** Task 10's rule at the ten sites, **plus the two
+- [x] **Step 2: media.spec.ts.** Task 10's rule at the ten sites, **plus the two
       D5 `goto` additions**:
   - :138 — after `signInAsNewUser(page)`, add
     `await goto(page, "/", { timeout: slowBrowserFirstNavigationTimeoutMs(testInfo, 30_000) });`
     so `waitForSelector(page, "a[href='/media']")` has a mounted page.
   - :145 — same addition before `click(page, "a[href='/media']")`.
 
-- [ ] **Step 3: posts.spec.ts.** Task 10's rule at the six sites
+- [x] **Step 3: posts.spec.ts.** Task 10's rule at the six sites
       (:464/:471/:515/:522 are the `perf.timed`-unwrapped blocks from Task 5 —
       the register call inside each converts, and the block becomes two flat
       awaited statements).
 
-- [ ] **Step 4: visibility.spec.ts.** `registerKnown` sites →
+- [x] **Step 4: visibility.spec.ts.** `registerKnown` sites →
       `signInAsNewUserKnown` (the return shape is identical:
       `{ username, password }`).
 
-- [ ] **Step 5: Fix imports** in all four files.
+- [x] **Step 5: Fix imports** in all four files.
 
-- [ ] **Step 6: Verify**
+- [x] **Step 6: Verify**
 
 Run (each):
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-791-seed-users-via-api -- cargo xtask e2e-local tests/<file>.spec.ts`
 Expected: PASS all four.
 
-- [ ] **Step 7: Gate + commit**
+- [x] **Step 7: Gate + commit**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-791-seed-users-via-api -- cargo xtask check
@@ -1128,33 +1132,33 @@ git commit -m "test(e2e): signInAsNewUser for feeds/media/posts/visibility (#791
 
 - Consumes: every earlier task.
 
-- [ ] **Step 1: Delete** `register` (:197-234), `registerKnown` (:237-244), and
+- [x] **Step 1: Delete** `register` (:197-234), `registerKnown` (:237-244), and
       `registerAndLogin` (:253-266) from `helpers.ts`.
 
-- [ ] **Step 2: AC3** — the old surface is gone:
+- [x] **Step 2: AC3** — the old surface is gone:
 
 Run: `rg -n '\bregister(Known)?\s*\(' end2end/tests` Expected: **no matches**
 (scrub stray comment mentions too — they match the regex). Run:
 `rg -n 'registerViaUi\(' end2end/tests` Expected: exactly 3 — the `helpers.ts`
 definition + `authed-flash.spec.ts` ×2.
 
-- [ ] **Step 3: AC2** — no duplicated artifacts:
+- [x] **Step 3: AC2** — no duplicated artifacts:
 
 Run: `rg -n 'HttpOnly|SameSite|jaunder_auth' end2end/ test-support/` Expected:
 no hits outside comments.
 
-- [ ] **Step 4: AC4** — holdouts exactly D6's thirteen rows:
+- [x] **Step 4: AC4** — holdouts exactly D6's thirteen rows:
       `rg -n 'registerViaUi\(|fillLoginForm\(|await login\(|goto\(page, "/(register|login)"' end2end/tests`
       and eyeball that every hit is a D6 row (or a helper definition), each with
       its holdout comment.
 
-- [ ] **Step 5: Full host suite green**
+- [x] **Step 5: Full host suite green**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-791-seed-users-via-api -- cargo xtask e2e-local`
 Expected: PASS — the whole suite (chromium + chromium-admin) on seeded auth.
 
-- [ ] **Step 6: Gate + commit**
+- [x] **Step 6: Gate + commit**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-791-seed-users-via-api -- cargo xtask check

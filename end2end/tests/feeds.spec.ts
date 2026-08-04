@@ -1,13 +1,14 @@
-import { goto, signInAsNewUser, click, waitForMount, BASE_URL } from "./helpers";
+import {
+  goto,
+  signInAsNewUser,
+  click,
+  waitForMount,
+  BASE_URL,
+} from "./helpers";
 // `test` comes from the shared fixtures, not @playwright/test, so this spec emits
 // an `e2e.test` span and its traffic — including the direct `page.request.post`
 // to /api/posts/update below — is attributable to a named test (#681).
-import {
-  test,
-  expect,
-  setTestBudget,
-
-} from "./fixtures";
+import { test, expect, setTestBudget } from "./fixtures";
 import { readPingLines, waitForPingMatching } from "./websub";
 // `FEED_POLL_TIMEOUT_MS` is imported, not restated: this spec derives its
 // whole-test budget from it (#270), and `feeds.ts` owns the poll that consumes

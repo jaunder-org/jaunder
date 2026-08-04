@@ -6,7 +6,9 @@ use common::display_name::DisplayName;
 use host::capture;
 use storage::DbConnectOptions;
 
-use test_support::{create_session_for_user, create_user, reset_mail, seed_posts_for_user, seed_user};
+use test_support::{
+    create_session_for_user, create_user, reset_mail, seed_posts_for_user, seed_user,
+};
 
 #[derive(Parser)]
 #[command(
@@ -87,7 +89,8 @@ enum Commands {
     },
     /// Reset the mail-capture file (delete it; missing is fine). Derives
     /// `<JAUNDER_CAPTURE_DIR>/mail.jsonl`; errors if the capture dir is unset.
-    ResetMail,    /// Print the resolved capture-file path for a stream (`mail`/`websub`/`diag`),
+    ResetMail,
+    /// Print the resolved capture-file path for a stream (`mail`/`websub`/`diag`),
     /// derived from `JAUNDER_CAPTURE_DIR`. Errors on an unset dir or unknown stream.
     CapturePath {
         /// The capture stream key.
@@ -189,7 +192,8 @@ async fn cmd_create_session(
 }
 
 /// Reset the mail-capture file (delete it; missing is fine).
-fn cmd_reset_mail() -> anyhow::Result<()> {    let path = capture::file(capture::Stream::Mail)
+fn cmd_reset_mail() -> anyhow::Result<()> {
+    let path = capture::file(capture::Stream::Mail)
         .ok_or_else(|| anyhow::anyhow!("JAUNDER_CAPTURE_DIR is not set"))?;
     reset_mail(&path)?;
     eprintln!("reset mail-capture file {}", path.display());
@@ -302,7 +306,11 @@ mod tests {
             .list_sessions(bob.user_id)
             .await
             .expect("list sessions ok");
-        assert_eq!(sessions.len(), 2, "seed-user + create-session = two sessions");
+        assert_eq!(
+            sessions.len(),
+            2,
+            "seed-user + create-session = two sessions"
+        );
         assert!(
             sessions.iter().any(|s| s.label == "CI bot"),
             "the --label argument should reach the stored session"

@@ -27,7 +27,10 @@ export type SeedRecord = {
 
 /** The subset `applySeededSession` needs — `fixtures.ts`'s `TestUser` also
  *  satisfies it. */
-export type SeededSession = Pick<SeedRecord, "setCookie" | "marker" | "markerKey">;
+export type SeededSession = Pick<
+  SeedRecord,
+  "setCookie" | "marker" | "markerKey"
+>;
 
 /** Companion cookie carrying the marker payload to the init script. Named to
  *  stay clear of AC2's `jaunder_auth` rg check — the marker key itself is

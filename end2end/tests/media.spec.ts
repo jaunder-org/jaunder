@@ -1,12 +1,16 @@
 import { test, expect, slowBrowserFirstNavigationTimeoutMs } from "./fixtures";
-import { BASE_URL, goto, signInAsNewUser, click, waitForSelector } from "./helpers";
+import {
+  BASE_URL,
+  goto,
+  signInAsNewUser,
+  click,
+  waitForSelector,
+} from "./helpers";
 import { createPostViaApi } from "./posts";
 import type { Page } from "@playwright/test";
 
 test.describe("Media upload and serving", () => {
-  test("authenticated user can upload and access media", async ({
-    page,
-  }) => {
+  test("authenticated user can upload and access media", async ({ page }) => {
     await signInAsNewUser(page);
 
     // Drive the `media::upload` server fn directly — session cookie is in page's
