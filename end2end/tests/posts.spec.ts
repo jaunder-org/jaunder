@@ -8,7 +8,7 @@ import {
   goto,
   click,
   waitForSelector,
-  register,
+  signInAsNewUser,
   stallServerFn,
 } from "./helpers";
 import { createPerfProbe } from "./perf";
@@ -327,7 +327,7 @@ test("draft lifecycle: create, view, edit, and publish", async ({
     testInfo,
     12_000,
   );
-  await register(page, firstNavigationTimeoutMs);
+  await signInAsNewUser(page);
 
   await goto(page, "/posts/new");
   await page.fill(SEL.postBody, "# Lifecycle Draft\n\ninitial draft body");
@@ -421,7 +421,7 @@ test("per-user timeline lists published posts with pagination", async ({
 }, testInfo) => {
   const perf = createPerfProbe(testInfo, "user_timeline_pagination");
 
-  const username = await register(page, firstNav);
+  const username = await signInAsNewUser(page);
 
   await seedPostsViaTool(
     username,
@@ -458,12 +458,12 @@ test("home page shows local timeline for unauthenticated users", async ({
 }, testInfo) => {
   const perf = createPerfProbe(testInfo, "home_local_timeline");
 
-  const u1 = await register(page, firstNav);
+  const u1 = await signInAsNewUser(page);
   await seedPostsViaTool(u1, LOCAL_TIMELINE_AUTHOR_COUNT, "Local Author One");
 
   const secondContext = await tracedContext();
   const secondPage = await secondContext.newPage();
-  const u2 = await register(secondPage, firstNav);
+  const u2 = await signInAsNewUser(secondPage);
   await seedPostsViaTool(u2, LOCAL_TIMELINE_AUTHOR_COUNT, "Local Author Two");
 
   const guestContext = await tracedContext();
@@ -505,12 +505,12 @@ test("cockpit /app shows the authenticated home feed with pagination", async ({
 }, testInfo) => {
   const perf = createPerfProbe(testInfo, "home_authenticated_feed");
 
-  const me = await register(page, firstNav);
+  const me = await signInAsNewUser(page);
   await seedPostsViaTool(me, HOME_FEED_SELF_COUNT, "Home Feed Mine");
 
   const secondContext = await tracedContext();
   const secondPage = await secondContext.newPage();
-  const other = await register(secondPage, firstNav);
+  const other = await signInAsNewUser(secondPage);
   await seedPostsViaTool(other, HOME_FEED_OTHER_COUNT, "Home Feed Other");
 
   await goto(page, "/app", { timeout: firstNav });

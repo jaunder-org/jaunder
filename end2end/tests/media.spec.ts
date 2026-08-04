@@ -1,13 +1,13 @@
 import { test, expect, slowBrowserFirstNavigationTimeoutMs } from "./fixtures";
-import { BASE_URL, goto, register, click, waitForSelector } from "./helpers";
+import { BASE_URL, goto, signInAsNewUser, click, waitForSelector } from "./helpers";
 import { createPostViaApi } from "./posts";
 import type { Page } from "@playwright/test";
 
 test.describe("Media upload and serving", () => {
   test("authenticated user can upload and access media", async ({
     page,
-  }, testInfo) => {
-    await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 30000));
+  }) => {
+    await signInAsNewUser(page);
 
     // Drive the `media::upload` server fn directly — session cookie is in page's
     // cookie jar. The fn returns 200 with the bare `UploadResponse` JSON.
@@ -37,8 +37,8 @@ test.describe("Media upload and serving", () => {
 
   test("a filename needing percent-encoding uploads and serves", async ({
     page,
-  }, testInfo) => {
-    await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 30000));
+  }) => {
+    await signInAsNewUser(page);
 
     // A space is a legal filename, so this is an ordinary upload. Through a real browser
     // stack it is also the one place the whole chain is exercised: the URL the server
@@ -71,13 +71,14 @@ test.describe("Media upload and serving", () => {
 
   test("the media row decodes its label but not its delete key", async ({
     page,
-  }, testInfo) => {
+  }) => {
     // The media library is a CSR view, so this is the only surface that can observe both
     // spellings of one filename (#720). `component.rs` used to derive a single String for
     // the link text and the hidden delete field; they diverge now, and getting it wrong is
     // invisible to type checking — the label would show `my%20holiday%20photo.jpg`, or the
     // delete would fail at the wire door.
-    await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 30000));
+    await signInAsNewUser(page);
+    await goto(page, "/");
 
     const response = await page.request.post(BASE_URL + "/api/media/upload", {
       multipart: {
@@ -135,22 +136,30 @@ test.describe("Media upload and serving", () => {
   test("media nav link appears for authenticated users", async ({
     page,
   }, testInfo) => {
-    await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 30000));
+    await signInAsNewUser(page);
+    // Seeded helpers don't navigate (spec D5) — mount `/` so the sidebar exists.
+    await goto(page, "/", {
+      timeout: slowBrowserFirstNavigationTimeoutMs(testInfo, 30_000),
+    });
     await waitForSelector(page, "a[href='/media']");
   });
 
   test("media manage page is reachable via nav link", async ({
     page,
   }, testInfo) => {
-    await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 30000));
+    await signInAsNewUser(page);
+    // Seeded helpers don't navigate (spec D5) — mount `/` so the sidebar exists.
+    await goto(page, "/", {
+      timeout: slowBrowserFirstNavigationTimeoutMs(testInfo, 30_000),
+    });
     await click(page, "a[href='/media']");
     await waitForSelector(page, "button:has-text('Attach media')");
   });
 
   test("upload widget on create-post page uploads file and shows URL", async ({
     page,
-  }, testInfo) => {
-    await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 30000));
+  }) => {
+    await signInAsNewUser(page);
     await goto(page, "/posts/new");
 
     // Use setInputFiles on the hidden file input to bypass the OS dialog.
@@ -171,8 +180,8 @@ test.describe("Media upload and serving", () => {
 
   test("upload widget on the /app cockpit uploads file and shows URL", async ({
     page,
-  }, testInfo) => {
-    await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 30000));
+  }) => {
+    await signInAsNewUser(page);
     // The /app cockpit shows the InlineComposer (#181), which includes MediaUpload.
     await goto(page, "/app");
     await waitForSelector(page, ".j-composer");
@@ -218,6 +227,7 @@ test.describe("Media delete guard", () => {
    * exactly the state these tests are about.
    */
   async function attemptDelete(page: Page): Promise<void> {
+    await goto(page, "/");
     await click(page, "a[href='/media']");
     await waitForSelector(page, "button:has-text('Attach media')");
     page.on("dialog", (dialog) => dialog.accept());
@@ -226,10 +236,10 @@ test.describe("Media delete guard", () => {
 
   test("deleting media referenced by a post is refused, then forced", async ({
     page,
-  }, testInfo) => {
+  }) => {
     // The whole causal chain, which exists only end to end: rendering the post wrote
     // its post_media rows, and the guard reads them. No Rust test spans it.
-    await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 30000));
+    await signInAsNewUser(page);
     const { url } = await uploadMedia(page, "referenced.jpg");
     const { post_id } = await createPostViaApi(page, {
       body: `![pic](${url})`,
@@ -257,11 +267,11 @@ test.describe("Media delete guard", () => {
 
   test("a post embedding the raw filename spelling blocks deletion", async ({
     page,
-  }, testInfo) => {
+  }) => {
     // The #675 symptom, proved through the guard rather than the parser. The upload
     // returns the canonical percent-encoded URL; the post embeds the *raw* spelling,
     // which the old exact-substring scan could not see.
-    await register(page, slowBrowserFirstNavigationTimeoutMs(testInfo, 30000));
+    await signInAsNewUser(page);
     const { url } = await uploadMedia(page, "my holiday photo.jpg");
     const rawUrl = url.replace(/%20/g, " ");
     expect(rawUrl).not.toBe(url);
@@ -275,13 +285,10 @@ test.describe("Media delete guard", () => {
 
   test("a post embedding the AtomPub member URL blocks deletion", async ({
     page,
-  }, testInfo) => {
+  }) => {
     // The member URL shares no prefix with the serve URL, so the old exact-URL match
     // could never have matched it however the filename was spelled.
-    const username = await register(
-      page,
-      slowBrowserFirstNavigationTimeoutMs(testInfo, 30000),
-    );
+    const username = await signInAsNewUser(page);
     const { url } = await uploadMedia(page, "linked.jpg");
     // "/media/upload/<p1>/<p2>/<sha>/<name>" splits to 7 parts with a leading "".
     const parts = url.split("/");
