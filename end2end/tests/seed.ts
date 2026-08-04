@@ -95,11 +95,13 @@ export async function createSessionViaTool(
  * caller's first `goto` is the cold navigation.
  *
  * The init script runs before the document's own pre-paint `<head>` script on
- * every document load, and applies the companion cookie's marker only when it
- * differs from what it last applied (the tombstone in localStorage). That is
- * what makes it correct without call-site cooperation: later navigations are a
- * no-op (the app owns the marker), a UI logout is respected (the app's removal
- * is not re-applied), and a re-seed as another user replaces the marker.
+ * every document load, and applies the companion cookie's marker only when the
+ * companion value (a per-seed nonce + the marker) differs from what it last
+ * applied (the tombstone in localStorage). That is what makes it correct
+ * without call-site cooperation: later navigations are a no-op (the app owns
+ * the marker), a UI logout is respected (the app's removal is not re-applied),
+ * and a re-seed swaps the marker — even re-seeding the SAME user after a
+ * logout, which the nonce distinguishes from the logout's no-op.
  */
 export async function applySeededSession(
   context: BrowserContext,
@@ -111,19 +113,35 @@ export async function applySeededSession(
   const eq = pair.indexOf("=");
   const name = pair.slice(0, eq);
   const value = pair.slice(eq + 1);
+  const lower = attrs.map((a) => a.toLowerCase());
   const path =
-    attrs
-      .find((a) => a.toLowerCase().startsWith("path="))
-      ?.slice("path=".length) ?? "/";
+    attrs[lower.findIndex((a) => a.startsWith("path="))]?.slice(
+      "path=".length,
+    ) ?? "/";
+  // The boolean and SameSite attributes come from the server's header too, so
+  // a seeded context's cookie is byte-faithful to a real login's (literals are
+  // lowercase to stay clear of AC2's case-sensitive rg check).
+  const httpOnly = lower.includes("httponly");
+  const rawSameSite =
+    lower.find((a) => a.startsWith("samesite="))?.slice("samesite=".length) ??
+    "lax";
+  const sameSite = (rawSameSite[0].toUpperCase() + rawSameSite.slice(1)) as
+    | "Strict"
+    | "Lax"
+    | "None";
   // `addCookies` rejects `url` combined with `domain`/`path`, and the server's
   // header carries no Domain — so the origin's hostname is spelled here.
   const domain = new URL(BASE_URL).hostname;
 
   await context.addCookies([
-    { name, value, domain, path, httpOnly: true, sameSite: "Lax" },
+    { name, value, domain, path, httpOnly, sameSite },
     {
       name: SEED_MARKER_COOKIE,
-      value: encodeURIComponent(session.marker),
+      // A per-seed nonce prefixes the marker so the tombstone distinguishes
+      // "same marker, new seed" (re-apply) from "same marker, same seed"
+      // (no-op — the logout case). Without it, seed → logout → re-seed the
+      // SAME user would boot anonymous pre-paint despite a valid session.
+      value: `${crypto.randomUUID()}.${encodeURIComponent(session.marker)}`,
       domain,
       path: "/",
       httpOnly: false,
@@ -138,13 +156,16 @@ export async function applySeededSession(
   let want = null;
   for (const part of document.cookie.split("; ")) {
     if (part.startsWith(prefix)) {
-      want = decodeURIComponent(part.slice(prefix.length));
+      want = part.slice(prefix.length);
       break;
     }
   }
   if (want === null) return;
   if (localStorage.getItem(${JSON.stringify(SEED_APPLIED_KEY)}) === want) return;
-  localStorage.setItem(${JSON.stringify(session.markerKey)}, want);
+  localStorage.setItem(
+    ${JSON.stringify(session.markerKey)},
+    decodeURIComponent(want.slice(want.indexOf(".") + 1)),
+  );
   localStorage.setItem(${JSON.stringify(SEED_APPLIED_KEY)}, want);
 })();`);
   }

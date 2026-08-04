@@ -16,6 +16,7 @@ import {
   goto,
   login,
   registerViaUi,
+  signInAs,
   signInAsNewUser,
   failServerFn,
 } from "./helpers";
@@ -90,6 +91,25 @@ test("seeded: logout survives a full navigation (tombstone respected)", async ({
 
   await expect(page.locator("html")).not.toHaveClass(/\bauthed\b/);
   await expect(page.locator(SEL.logoutLink)).toHaveCount(0);
+});
+
+// D3 (#791): the nonce row — seed → logout → re-seed the SAME user. The new
+// seed's companion value differs (fresh nonce), so the init script re-applies
+// the marker and the page boots authed again pre-paint.
+test("seeded: re-seed as the same user after logout boots authed", async ({
+  page,
+  firstNav,
+}) => {
+  const username = await signInAsNewUser(page);
+  await goto(page, "/", { timeout: firstNav });
+  await click(page, SEL.logoutLink);
+  await page.waitForURL(`${BASE_URL}/`, { timeout: 10_000 });
+
+  await signInAs(page, username);
+  await goto(page, "/", { timeout: firstNav });
+
+  await expect(page.locator("html")).toHaveClass(/\bauthed\b/);
+  await expect(page.locator("html")).toHaveAttribute("data-user", username);
 });
 
 test("owner: /app cockpit boots straight into the personalized feed", async ({
