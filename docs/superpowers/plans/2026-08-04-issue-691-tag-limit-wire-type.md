@@ -87,7 +87,7 @@ already-typed `Option<PageSize>` sites in posts/timeline/media; any new
   Neither `DEFAULT_TAG_LIMIT` nor `MAX_TAG_LIMIT` is part of the module's public
   surface any more.
 
-- [ ] **Step 1: Rewrite the out-of-range test from clamp to reject**
+- [x] **Step 1: Rewrite the out-of-range test from clamp to reject**
 
 Replace `list_tags_clamps_limit_to_max` at
 `server/tests/web/web_tags.rs:102-124` entirely with:
@@ -125,7 +125,7 @@ message at `:146` from `"DEFAULT_TAG_LIMIT is 10"` to
 step 3. **Do not touch that test's asserted value, and do not touch the other
 three tests in the file at all** (spec A8, A9).
 
-- [ ] **Step 2: Run it, verify it fails**
+- [x] **Step 2: Run it, verify it fails**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-691-tag-limit -- devtool pg run -- cargo nextest run -p jaunder web::web_tags`
@@ -136,7 +136,7 @@ backends with
 because today `PageSize::clamped(1000)` coerces to 50 and the endpoint answers
 `200 OK`. The other four `web_tags` tests pass.
 
-- [ ] **Step 3: Type the argument**
+- [x] **Step 3: Type the argument**
 
 `web/src/tags/api.rs` — replace the two consts (`:14-28`) with one private,
 server-gated const, and rewrite `list`'s doc comment and signature (`:30-44`).
@@ -208,7 +208,7 @@ Then the three mechanical follow-ons the compiler forces:
 Leave `use common::pagination::PageSize;` at `api.rs:9` ungated — the signature
 names `PageSize` in both builds.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-691-tag-limit -- devtool pg run -- cargo nextest run -p jaunder web::web_tags`
@@ -222,7 +222,7 @@ Run:
 Expected: **PASS** — the span still records `limit` and still never carries
 `prefix` (spec A10).
 
-- [ ] **Step 5: Check the criteria that no test covers**
+- [x] **Step 5: Check the criteria that no test covers**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-691-tag-limit -- rg -n MAX_TAG_LIMIT --glob '!docs/archive/**' --glob '!docs/superpowers/**'`
@@ -237,7 +237,7 @@ Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-691-tag-limit -- rg -n 'Option<u32>' web/src/tags`
 Expected: **no matches** (spec A1).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 Run the gate first —
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-691-tag-limit -- cargo xtask check`
