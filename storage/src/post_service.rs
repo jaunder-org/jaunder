@@ -1043,6 +1043,87 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
+    async fn perform_post_creation_rejects_title_only_org_body(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let storage = &*env.state.posts;
+
+        // BEHAVIOUR CHANGE (#811 decision 2). ADR-0024 canonicalization treats a leading
+        // `* heading` as the title *source* and strips it, so this body leaves nothing to
+        // store. It used to succeed and store an empty body.
+        let creation = |body: &str, format: PostFormat| PostCreation {
+            user_id,
+            body: parse_post_body(body),
+            title: None,
+            format,
+            slug_override: None,
+            published_at: None,
+            max_attempts: 100,
+            summary: None,
+            audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
+        };
+
+        let err = perform_post_creation(storage, creation("* My Title\n", PostFormat::Org))
+            .await
+            .expect_err("a title-only Org post has nothing left to store");
+        assert!(matches!(err, PerformCreationError::EmptyPost), "{err:?}");
+
+        // The discriminator: the same bytes are ordinary content in Markdown, so the
+        // rejection is Org's title-stripping and not the `PostBody` parse.
+        perform_post_creation(storage, creation("* My Title\n", PostFormat::Markdown))
+            .await
+            .expect("the same bytes are content, not a title source, in Markdown");
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn perform_post_update_rejects_title_only_org_body(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let storage = &*env.state.posts;
+
+        // The update path rejects it too — editing a post down to nothing but its title
+        // is the same nonsense as creating one that way.
+        let created = perform_post_creation(
+            storage,
+            PostCreation {
+                user_id,
+                body: parse_post_body("* My Title\n\nreal content"),
+                title: None,
+                format: PostFormat::Org,
+                slug_override: None,
+                published_at: None,
+                max_attempts: 100,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let err = perform_post_update(
+            storage,
+            PostUpdate {
+                post_id: created.post_id,
+                editor_user_id: user_id,
+                body: parse_post_body("* My Title\n"),
+                title: None,
+                format: PostFormat::Org,
+                slug_override: None,
+                publish: PublishUpdate::Publish { at: None },
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+            },
+        )
+        .await
+        .expect_err("a title-only Org post has nothing left to store");
+        assert!(matches!(err, PerformUpdateError::EmptyPost), "{err:?}");
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn test_perform_post_creation_markdown_body_keeps_its_heading(#[case] backend: Backend) {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;

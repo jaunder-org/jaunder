@@ -568,7 +568,14 @@ cargo nextest run -p storage -p jaunder title_only
 
 Expected: FAIL before task 4/5, PASS after.
 
-- [ ] 6. Title-only Org body rejected, at the service and the AtomPub boundary
+- [x] 6. Title-only Org body rejected, at the service and the AtomPub boundary
+
+> The behaviour itself landed in the task 2+3 commit (forced by the type), so
+> this task was purely the tests it owed. Each of the three carries a
+> **discriminator**: the identical bytes submitted as Markdown must still
+> succeed, which proves the rejection is Org's title-stripping rather than the
+> `PostBody` parse or anything about the request. Without that, all three would
+> pass against a bug that rejected `* My Title` in every format.
 
 ---
 

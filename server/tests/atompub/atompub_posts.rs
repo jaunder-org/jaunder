@@ -716,6 +716,43 @@ async fn empty_entry_returns_400(backend: Backend, #[case] op: EmptyEntryOp) {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+// The boundary twin of `perform_post_creation_rejects_title_only_org_body`.
+//
+// BEHAVIOUR CHANGE (#811 decision 2): an Org entry whose whole content is a title
+// source canonicalizes to nothing (ADR-0024) and is now rejected. It used to be
+// accepted and stored with an empty body. Asserting 400 and not 500 is the point —
+// this is the client's input being wrong, not the server falling over.
+#[apply(backends)]
+#[tokio::test]
+async fn create_title_only_org_entry_returns_400(#[case] backend: Backend) {
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+
+    let response = make_app(&state, &base)
+        .oneshot(atompub_post_xml(
+            &session,
+            "posts",
+            &entry_xml("Some Title", "text/org", "* My Title"),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // The discriminator: identical bytes as Markdown are ordinary content, so the
+    // rejection is Org's title-stripping rather than anything about the request.
+    let ok = make_app(&state, &base)
+        .oneshot(atompub_post_xml(
+            &session,
+            "posts",
+            &entry_xml("Some Title", "text/markdown", "* My Title"),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(ok.status(), StatusCode::CREATED);
+}
+
 #[apply(backends)]
 #[tokio::test]
 async fn create_draft_entry_is_unpublished(#[case] backend: Backend) {
