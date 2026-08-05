@@ -1309,8 +1309,9 @@ where
     ) -> sqlx::Result<Vec<PostRecord>> {
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
-            // Binds: $1 username, $2/$3 cursor, $4 post_id, $5 now,
-            // $6..$10 resolution, $11 limit.
+            // Binds: $1 username, $2/$3 cursor, $4 post_id, $5 now, then the
+            // resolution fragment from $6 — 3 or 5 placeholders depending on the
+            // viewer variant — and the limit at the returned `limit_idx`.
             let (resolution, binds, limit_idx) = resolution_where(viewer, 6);
             // `published_at <= $5` hides scheduled (future-dated) posts.
             let sql = format!(
@@ -1340,7 +1341,8 @@ where
                 .fetch_all(&self.pool)
                 .await?
         } else {
-            // Binds: $1 username, $2 now, $3..$7 resolution, $8 limit.
+            // Binds: $1 username, $2 now, then the variant-sized resolution
+            // fragment from $3 and the limit at the returned `limit_idx`.
             let (resolution, binds, limit_idx) = resolution_where(viewer, 3);
             // `published_at <= $2` hides scheduled (future-dated) posts.
             let sql = format!(
@@ -1381,8 +1383,8 @@ where
     ) -> sqlx::Result<Vec<PostRecord>> {
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
-            // Binds: $1/$2 cursor, $3 post_id, $4 now, $5..$9 resolution,
-            // $10 limit.
+            // Binds: $1/$2 cursor, $3 post_id, $4 now, then the variant-sized
+            // resolution fragment from $5 and the limit at `limit_idx`.
             let (resolution, binds, limit_idx) = resolution_where(viewer, 5);
             // `published_at <= $4` hides scheduled (future-dated) posts.
             let sql = format!(
@@ -1410,7 +1412,8 @@ where
                 .fetch_all(&self.pool)
                 .await?
         } else {
-            // Binds: $1 now, $2..$6 resolution, $7 limit.
+            // Binds: $1 now, then the variant-sized resolution fragment from $2
+            // and the limit at the returned `limit_idx`.
             let (resolution, binds, limit_idx) = resolution_where(viewer, 2);
             // `published_at <= $1` hides scheduled (future-dated) posts.
             let sql = format!(
@@ -1590,8 +1593,9 @@ where
 
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
-            // Binds: $1 tag, $2/$3 cursor, $4 post_id, $5 now,
-            // $6..$10 resolution, $11 limit.
+            // Binds: $1 tag, $2/$3 cursor, $4 post_id, $5 now, then the
+            // variant-sized resolution fragment from $6 and the limit at
+            // the returned `limit_idx`.
             let (resolution, binds, limit_idx) = resolution_where(viewer, 6);
             // `published_at <= $5` hides scheduled (future-dated) posts.
             let sql = format!(
@@ -1623,7 +1627,8 @@ where
                 .fetch_all(&self.pool)
                 .await?
         } else {
-            // Binds: $1 tag, $2 now, $3..$7 resolution, $8 limit.
+            // Binds: $1 tag, $2 now, then the variant-sized resolution fragment
+            // from $3 and the limit at the returned `limit_idx`.
             let (resolution, binds, limit_idx) = resolution_where(viewer, 3);
             // `published_at <= $2` hides scheduled (future-dated) posts.
             let sql = format!(
@@ -1682,8 +1687,9 @@ where
 
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
-            // Binds: $1 user_id, $2 tag, $3/$4 cursor, $5 post_id, $6 now,
-            // $7..$11 resolution, $12 limit.
+            // Binds: $1 user_id, $2 tag, $3/$4 cursor, $5 post_id, $6 now, then
+            // the variant-sized resolution fragment from $7 and the limit at
+            // the returned `limit_idx`.
             let (resolution, binds, limit_idx) = resolution_where(viewer, 7);
             // `published_at <= $6` hides scheduled (future-dated) posts.
             let sql = format!(
@@ -1717,7 +1723,8 @@ where
                 .fetch_all(&self.pool)
                 .await?
         } else {
-            // Binds: $1 user_id, $2 tag, $3 now, $4..$8 resolution, $9 limit.
+            // Binds: $1 user_id, $2 tag, $3 now, then the variant-sized
+            // resolution fragment from $4 and the limit at `limit_idx`.
             let (resolution, binds, limit_idx) = resolution_where(viewer, 4);
             // `published_at <= $3` hides scheduled (future-dated) posts.
             let sql = format!(
@@ -2003,9 +2010,9 @@ fn resolution_where(viewer: &ViewerIdentity, start: usize) -> (String, Resolutio
     let binds = match viewer {
         ViewerIdentity::Anonymous => ResolutionBinds::Anonymous,
         // Only a local viewer can be the author. Its `subscriber_ref` is its
-        // user id in decimal — the form `subscribe_to` stores. The carried
-        // `channel_id` is deliberately ignored: for a local viewer it can only
-        // be the `local` row, which the SQL resolves for itself.
+        // user id in decimal — the form `subscribe_to` stores — and its channel
+        // is not carried at all, because it can only ever be the `local` row,
+        // which the SQL resolves for itself.
         ViewerIdentity::Local { user_id } => ResolutionBinds::Local {
             user_id: *user_id,
             subref: user_id.to_string(),
@@ -2364,7 +2371,9 @@ where
     let tags = DB::TAGS_SUBQUERY;
     match surface {
         FeedSurface::Site => {
-            // Binds: $1 now, $2 min_items, $3 cutoff, $4..$8 resolution.
+            // Binds: $1 now, $2 min_items, $3 cutoff, then the variant-sized
+            // resolution fragment from $4. `window_sql` places it last, so
+            // nothing binds after it and the returned `next` is discarded.
             let (resolution, binds, _) = resolution_where(viewer, 4);
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRow>(&sql)
@@ -2374,8 +2383,8 @@ where
             binds.bind_onto(query).fetch_all(pool).await
         }
         FeedSurface::User { username } => {
-            // Binds: $1 now, $2 username, $3 min_items, $4 cutoff,
-            // $5..$9 resolution.
+            // Binds: $1 now, $2 username, $3 min_items, $4 cutoff, then the
+            // variant-sized resolution fragment last, from $5.
             let (resolution, binds, _) = resolution_where(viewer, 5);
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRow>(&sql)
@@ -2386,7 +2395,8 @@ where
             binds.bind_onto(query).fetch_all(pool).await
         }
         FeedSurface::SiteTag { tag } => {
-            // Binds: $1 now, $2 tag, $3 min_items, $4 cutoff, $5..$9 resolution.
+            // Binds: $1 now, $2 tag, $3 min_items, $4 cutoff, then the
+            // variant-sized resolution fragment last, from $5.
             let (resolution, binds, _) = resolution_where(viewer, 5);
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRow>(&sql)
@@ -2397,8 +2407,8 @@ where
             binds.bind_onto(query).fetch_all(pool).await
         }
         FeedSurface::UserTag { username, tag } => {
-            // Binds: $1 now, $2 username, $3 tag, $4 min_items, $5 cutoff,
-            // $6..$10 resolution.
+            // Binds: $1 now, $2 username, $3 tag, $4 min_items, $5 cutoff, then
+            // the variant-sized resolution fragment last, from $6.
             let (resolution, binds, _) = resolution_where(viewer, 6);
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRow>(&sql)

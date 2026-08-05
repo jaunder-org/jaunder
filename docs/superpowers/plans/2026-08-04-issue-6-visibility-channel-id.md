@@ -442,17 +442,17 @@ survives task 4 harmlessly (`subscriptions_ext` stays used by `.layer`).
 
 **Steps**
 
-- [ ] **Step 1.** Amend ADR-0020's viewer clause in place with a dated note:
+- [x] **Step 1.** Amend ADR-0020's viewer clause in place with a dated note:
       locality is carried by the type; the `(channel, subscriber_ref)` pair is
       reconstructed in SQL for local viewers. The resolution rule itself is
       unchanged — do not restate or weaken it.
-- [ ] **Step 2.** Update ADR-0063's example, which cites the deleted
+- [x] **Step 2.** Update ADR-0063's example, which cites the deleted
       `ViewerIdentity::Channel`'s polymorphic `subscriber_ref`. The rule stands;
       point it at the `Local`/`Remote` split as the _applied_ form of that rule.
-- [ ] **Step 3.** Fix `resolution_where`'s doc block and every per-call-site
+- [x] **Step 3.** Fix `resolution_where`'s doc block and every per-call-site
       comment asserting a fixed `$n..$n+4` range — the range is now
       variant-dependent.
-- [ ] **Step 4.** `devtool run -- prettier -w` the touched markdown;
+- [x] **Step 4.** `devtool run -- prettier -w` the touched markdown;
       `cargo xtask check`; commit
       `docs(adr): viewer locality is type-level; local channel resolved in SQL (#6)`.
 

@@ -74,11 +74,18 @@ no invariant, no same-typed sibling to be confused with, and no trust semantics
 justification.** Bias toward a type for values that cross a module or crate
 boundary; toward a primitive for values that live and die in one function.
 
-A value that is genuinely **polymorphic** — `ViewerIdentity::Channel`'s
-`subscriber_ref`, which is a stringified `user_id` in one arm and an external
-reference in another (ADR-0020) — is modeled as an **enum**, not a string
-newtype. Wrapping a union in a single `String`-newtype hides the very
+A value that is genuinely **polymorphic** is modeled as an **enum**, not a
+string newtype. Wrapping a union in a single `String`-newtype hides the very
 distinction the type should expose.
+
+`ViewerIdentity` (ADR-0020) is this rule applied, and #6 is what it cost to
+apply it late. A viewer's `subscriber_ref` is a stringified `user_id` for a
+local account and an opaque external reference for a remote one; carried as one
+`String` field, the two were indistinguishable, and the SQL that decides "is
+this viewer the author" recovered the distinction by asking whether the string
+parsed as an integer. It now splits at the type: `Local { user_id: UserId }`
+versus `Remote { channel_id, subscriber_ref: String }`. The remaining `String`
+is genuinely free-form and genuinely remote — nothing left to disambiguate.
 
 ### 2. The standard trailer
 
