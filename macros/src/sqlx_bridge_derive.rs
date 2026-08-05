@@ -26,6 +26,31 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
     };
     let inner = &fields.unnamed[0].ty;
     let name = &input.ident;
+    let text = match wants_text(&input.attrs) {
+        Ok(text) => text,
+        Err(e) => return e.to_compile_error(),
+    };
+    if text {
+        // A value living in a TEXT column must report `String` as its `Type`, not the
+        // field's type — decoding alone would leave the column integer-shaped. So all
+        // three inners move together, and the decode borrows to parse and drops (the
+        // per-conversion rule in `sqlx_bridge`'s module doc).
+        return crate::sqlx_bridge::bridge(&crate::sqlx_bridge::BridgeSpec {
+            name,
+            type_inner: quote! { String },
+            encode_inner: quote! { String },
+            to_inner: quote! { &self.0.to_string() },
+            decode_inner: quote! { &'r str },
+            // `parse`, not a named `FromStr` path: this derive must not emit any token
+            // that reads as an inbound constructor (see the charter in the module doc
+            // and `emits_only_the_three_bridge_impls`).
+            convert: quote! {
+                v.parse::<#inner>()
+                    .map(Self)
+                    .map_err(::std::convert::Into::into)
+            },
+        });
+    }
     crate::sqlx_bridge::bridge(&crate::sqlx_bridge::BridgeSpec {
         name,
         type_inner: quote! { #inner },
@@ -36,6 +61,27 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
         decode_inner: quote! { #inner },
         convert: quote! { ::core::result::Result::Ok(Self(v)) },
     })
+}
+
+/// Whether `#[sqlx_bridge(text)]` is present.
+///
+/// The only option, and a bare flag rather than `decode_inner = <ty>`: what a caller
+/// needs to say is "this value is stored as text", which moves `Type`, `Encode` and
+/// `Decode` together. Naming one of the three would describe the mechanism and
+/// under-specify the intent.
+fn wants_text(attrs: &[syn::Attribute]) -> syn::Result<bool> {
+    let mut text = false;
+    for attr in attrs.iter().filter(|a| a.path().is_ident("sqlx_bridge")) {
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("text") {
+                text = true;
+                Ok(())
+            } else {
+                Err(meta.error("unknown `sqlx_bridge` option (expected `text`)"))
+            }
+        })?;
+    }
+    Ok(text)
 }
 
 #[cfg(test)]
@@ -74,6 +120,80 @@ mod tests {
         assert!(out.contains("letinner:&String=&self.0;"));
         assert!(out.contains("<Stringas::sqlx::Decode<'r,DB>>::decode(value)?"));
         assert!(out.contains("::core::result::Result::Ok(Self(v))"));
+    }
+
+    /// `#[sqlx_bridge(text)]` moves all three inners to the text forms, because a
+    /// value stored in a `TEXT` column must report `String` as its `Type` — decoding
+    /// alone is not enough (#687: `site_config.value` is `TEXT NOT NULL`).
+    #[test]
+    fn text_option_makes_the_column_text_and_parses_on_decode() {
+        let input: DeriveInput = syn::parse_quote! {
+            #[sqlx_bridge(text)]
+            pub struct SmtpPort(u16);
+        };
+        let out = norm(&expand(&input));
+        assert!(
+            out.contains("<Stringas::sqlx::Type<DB>>::type_info()"),
+            "the column must be TEXT, not the field's integer type: {out}"
+        );
+        assert!(
+            out.contains("letinner:&String=&self.0.to_string();"),
+            "encode must render the value as text: {out}"
+        );
+        assert!(
+            out.contains("<&'rstras::sqlx::Decode<'r,DB>>::decode(value)?"),
+            "decode borrows to parse and drops: {out}"
+        );
+        assert!(
+            out.contains("v.parse::<u16>()"),
+            "convert must parse the field type back out: {out}"
+        );
+    }
+
+    /// The charter (see `emits_only_the_three_bridge_impls`) holds under the option:
+    /// a bridge must not leak an inbound constructor, so `SmtpPort` still needs a
+    /// hand-written `FromStr`.
+    #[test]
+    fn text_option_still_emits_no_constructor() {
+        let input: DeriveInput = syn::parse_quote! {
+            #[sqlx_bridge(text)]
+            pub struct SmtpPort(u16);
+        };
+        let out = norm(&expand(&input));
+        for forbidden in ["FromStr", "TryFrom", "Deserialize", "Serialize", "Deref"] {
+            assert!(
+                !out.contains(forbidden),
+                "{forbidden} must not be emitted: {out}"
+            );
+        }
+    }
+
+    /// Opt-in: without the attribute the emitted tokens are exactly what they were.
+    #[test]
+    fn without_the_option_every_inner_is_still_the_field_type() {
+        let input: DeriveInput = syn::parse_quote! { pub struct IntPort(u16); };
+        let out = norm(&expand(&input));
+        assert!(out.contains("<u16as::sqlx::Type<DB>>::type_info()"));
+        assert!(out.contains("letinner:&u16=&self.0;"));
+        assert!(out.contains("::core::result::Result::Ok(Self(v))"));
+        assert!(
+            !out.contains("parse::<"),
+            "no parse step without the option: {out}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_option_is_a_spanned_error() {
+        let input: DeriveInput = syn::parse_quote! {
+            #[sqlx_bridge(nonsense)]
+            pub struct X(u16);
+        };
+        let out = expand(&input).to_string();
+        assert!(out.contains("compile_error"), "{out}");
+        assert!(
+            out.contains("sqlx_bridge"),
+            "the message must name the attribute: {out}"
+        );
     }
 
     #[test]
