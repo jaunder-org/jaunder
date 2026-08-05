@@ -415,13 +415,13 @@ visible.
 
 ## Task 9 — Post the verdict
 
-- [ ] **9a.** Compute, per browser, over sqlite only: median suite duration per
+- [x] **9a.** Compute, per browser, over sqlite only: median suite duration per
       arm (n=3), and the **sum** of `flaky + unexpected` across each arm's three
       runs.
-- [ ] **9b.** Apply spec D8 in order: flakiness veto first (arm B's sum > arm
+- [x] **9b.** Apply spec D8 in order: flakiness veto first (arm B's sum > arm
       A's ⇒ keep warmup for that browser regardless of speed), then faster
       median wins. A split verdict is a legitimate outcome.
-- [ ] **9c.** Comment on #792 with everything AC-7 requires — the medians, the
+- [x] **9c.** Comment on #792 with everything AC-7 requires — the medians, the
       flaky/unexpected sums, arm A's `e2e.warmup` cost, both arms' envelope
       decomposition, both arms' first-nav `navigation.request` p50 — plus, per
       AC-9, **the rule as stated in the spec and the numbers it was applied
