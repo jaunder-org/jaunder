@@ -1,5 +1,6 @@
 use axum::http::StatusCode;
 use chrono::Utc;
+use common::session_label::MAX_SESSION_LABEL_CHARS;
 use common::token::RawToken;
 use common::username::Username;
 use server_fn::ServerFn;
@@ -498,10 +499,11 @@ async fn login_rejects_overlong_label(#[case] backend: Backend) {
     assert!(!body.contains("\"token\""), "token minted: {body}");
 }
 
-// M2.9.12: `login` with long User-Agent truncates to 200 chars.
+// A long User-Agent is bounded by MAX_SESSION_LABEL_CHARS (255), the newtype's own
+// cap, rather than a second hand-rolled 200-char cap in `login` (#685).
 #[apply(backends)]
 #[tokio::test]
-async fn login_truncates_long_user_agent(#[case] backend: Backend) {
+async fn login_bounds_long_user_agent_at_session_label_cap(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
@@ -517,7 +519,7 @@ async fn login_truncates_long_user_agent(#[case] backend: Backend) {
     )
     .await;
 
-    // Build a long User-Agent string (>200 chars)
+    // 250 < 255, so this UA survives intact — under the old 200-char cap it did not.
     let long_ua = "a".repeat(250);
 
     let (status, _, body) = post_form_with_ua(
@@ -533,9 +535,45 @@ async fn login_truncates_long_user_agent(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::OK);
     let raw_token = extract_login(&body).0;
     let record = state.sessions.authenticate(&raw_token).await.unwrap();
-    // Label should be truncated to 200 chars
-    assert_eq!(record.label.len(), 200);
-    assert_eq!(record.label, "a".repeat(200).as_str());
+    assert_eq!(record.label, "a".repeat(250).as_str());
+}
+
+// Past the cap, the UA is truncated (not rejected): it is an internally derived
+// value, so it goes through the lossy door (ADR-0063 §2), unlike a submitted label.
+#[apply(backends)]
+#[tokio::test]
+async fn login_truncates_user_agent_past_session_label_cap(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    state
+        .site_config
+        .set("site.registration_policy", "open")
+        .await
+        .unwrap();
+    post_form_with_secure_flag(
+        &state,
+        <web::registration::Register as ServerFn>::PATH,
+        "username=alice&password=password123",
+        None,
+        true,
+    )
+    .await;
+
+    let long_ua = "a".repeat(300);
+
+    let (status, _, body) = post_form_with_ua(
+        &state,
+        <web::auth::Login as ServerFn>::PATH,
+        "username=alice&password=password123",
+        None,
+        &long_ua,
+        true,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let raw_token = extract_login(&body).0;
+    let record = state.sessions.authenticate(&raw_token).await.unwrap();
+    assert_eq!(record.label.chars().count(), MAX_SESSION_LABEL_CHARS);
 }
 
 // M2.9.13: `login` with wrong password returns error.

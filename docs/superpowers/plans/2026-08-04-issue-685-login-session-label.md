@@ -123,10 +123,11 @@ and tracing_, not about the arg's type.
       label `type-safety`, milestone "Code quality ratchet", priority P3, no
       blockers.
 
-There is no commit for this task — the tracker is the deliverable. The Step 2
-plan edit stays uncommitted through Tasks 2 and 3 (both stage explicit paths
-that exclude `docs/superpowers/`) and is archived at ship time. **Stage explicit
-paths; never `git add -A`** — what lands must be what the gate checked.
+There is no commit for this task — the tracker is the deliverable. **Stage
+explicit paths; never `git add -A`** — what lands must be what the gate checked.
+(Observed in practice: the repo's pre-commit hook auto-stages, so the spec and
+plan rode along into Task 2's commit `71cc8aef` rather than waiting for ship-time
+archiving. The gate ran on the full tree, so the invariant holds.)
 
 ---
 
@@ -146,7 +147,7 @@ paths; never `git add -A`** — what lands must be what the gate checked.
   `pub async fn login(username: Username, password: ProfferedPassword, label: Option<SessionLabel>) -> WebResult<LoginResponse>`
   — the signature Task 3 edits the body of.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add both to `server/tests/web/web_auth.rs`, after
 `login_with_empty_label_creates_session_without_label` (which is **not**
@@ -229,7 +230,7 @@ stronger "the user has zero sessions" check isn't worth diverging from the house
 pattern: a decode failure never reaches the handler body, so no session can be
 minted.
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run:
 `devtool run --cwd <worktree> -- cargo nextest run -p jaunder login_rejects_`
@@ -238,7 +239,7 @@ Expected: FAIL — both return `200 OK` today (whitespace trims to empty → UA
 branch; over-long is truncated by `from_lossy`), so the `INTERNAL_SERVER_ERROR`
 assertion fails.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 Three edits to `web/src/auth/api.rs`:
 
@@ -267,38 +268,42 @@ Three edits to `web/src/auth/api.rs`:
 ```
 
 3. **Label derivation** (`:68-91`). Replace the `derived_label`
-   if/else-plus-`from_lossy` block with a `match` that uses a `Some` directly
+   if/else-plus-`from_lossy` block with an `if let` that uses a `Some` directly
    and confines `from_lossy` to the UA branch. The User-Agent branch keeps its
    200-cap and literal **for now** — Task 3 removes them, so this task's diff
-   stays about the type:
+   stays about the type.
+
+   **Use `if let`, not `match`.** A `match` on one destructured pattern with a
+   block arm trips `clippy::single_match_else`, which is `-D warnings` here — the
+   gate rejects it, and suppressing a lint needs user approval:
 
 ```rust
-    // An explicit client-supplied label arrives already validated (typed wire
-    // arg); otherwise derive a device name from the User-Agent.
-    let session_label = match label {
-        Some(label) => label,
-        None => {
-            let ua = leptos_axum::extract::<axum::http::HeaderMap>()
-                .await
-                .ok()
-                .and_then(|headers| {
-                    headers
-                        .get("user-agent")
-                        .and_then(|v| v.to_str().ok())
-                        .map(str::to_string)
-                })
-                .unwrap_or_else(|| "Unknown device".to_string());
-            let ua = if ua.len() > 200 {
-                ua.chars().take(200).collect::<String>()
-            } else {
-                ua
-            };
-            SessionLabel::from_lossy(&ua)
-        }
+    // An explicit client-supplied label arrives already validated (typed wire arg),
+    // so it is used as-is; otherwise derive a device name from the User-Agent.
+    let session_label = if let Some(label) = label {
+        label
+    } else {
+        let ua = leptos_axum::extract::<axum::http::HeaderMap>()
+            .await
+            .ok()
+            .and_then(|headers| {
+                headers
+                    .get("user-agent")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| "Unknown device".to_string());
+        let ua = if ua.len() > 200 {
+            ua.chars().take(200).collect::<String>()
+        } else {
+            ua
+        };
+        SessionLabel::from_lossy(&ua)
     };
 ```
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass** — 26 sqlite `web_auth` tests
+      green (postgres cases need the Nix gate, run at Step 5).
 
 Run: `devtool run --cwd <worktree> -- cargo nextest run -p jaunder web_auth`
 
@@ -307,7 +312,9 @@ Expected: PASS — the two new tests now 500, and
 `login_with_empty_label_creates_session_without_label`, and
 `login_truncates_long_user_agent` all still pass unchanged.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit** — `71cc8aef`. The gate caught
+      `clippy::single_match_else` on the first run; fixed by switching the
+      `match` to `if let` (see Step 3.3), then green.
 
 Run `cargo xtask check` first (**`jaunder-commit`**) — it builds the wasm/CSR
 target too, which is what proves the ungated import (Step 3.1) is correct.
