@@ -92,7 +92,7 @@ Spec D9 deferred the ADR to the verdict; the verdict is in. Use
 **`jaunder-adr`** (numberless draft in `docs/adr/drafts/`, numbered by
 `cargo xtask adr promote` at ship).
 
-- [x] **1a.** Draft `docs/adr/drafts/e2e-does-not-pre-warm.md` recording: the
+- [x] **1a.** Draft `docs/adr/0099-e2e-does-not-pre-warm.md` recording: the
       decision (no per-test warmup), the measured basis (link the verdict
       comment and `docs/observability.md`'s findings section), and the
       consequence that every test's first navigation is now genuinely cold —

@@ -134,5 +134,5 @@ What that changes, and what it does not:
   decide, and the deciding number (`e2e.warmup` summed per combo) came from the
   span it added.
 
-See `docs/adr/…-e2e-does-not-pre-warm.md` for the removal decision, and
+See [ADR-0099](./0099-e2e-does-not-pre-warm.md) for the removal decision, and
 `docs/observability.md` §"#792 — the per-test warmup A/B" for the data.

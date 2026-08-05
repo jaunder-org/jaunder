@@ -767,7 +767,8 @@ timeouts unnecessarily.
 There is no per-test warmup: every test's first navigation is a genuine cold
 load, and the traces report it as one. A warmup existed from 2026-04 to 2026-08
 and was removed in #792 after measurement showed it cost 113–139 s per combo to
-save at most ~12 s — see the findings section above and the ADR it produced.
+save at most ~12 s — see the findings section above and
+[ADR-0099](adr/0099-e2e-does-not-pre-warm.md).
 
 ### Heavy timeline fixture seeding (#210)
 
