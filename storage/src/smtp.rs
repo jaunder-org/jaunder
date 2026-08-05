@@ -302,7 +302,16 @@ mod tests {
         ]);
 
         let err = load_smtp_config(&store).await.unwrap_err();
-        assert!(matches!(err, SmtpConfigError::InvalidSender(_)));
+        // Asserts the offending value reaches the *message*, deliberately not the error's
+        // variant (#687). The variant is about to stop existing: once parsing moves into
+        // the sqlx bridges, a bad value arrives as a `ColumnDecode` and
+        // `SmtpConfigError::InvalidSender` becomes unconstructible. The value echo is the
+        // property worth protecting — a `matches!` assertion here would instead pin the
+        // implementation and block that change.
+        assert!(
+            err.to_string().contains("not-a-valid-email"),
+            "the error must echo the offending value; got: {err}"
+        );
     }
 
     // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
@@ -314,7 +323,11 @@ mod tests {
         ]);
 
         let err = load_smtp_config(&store).await.unwrap_err();
-        assert!(matches!(err, SmtpConfigError::InvalidPort(_)));
+        // Message, not variant — see the note on `..._invalid_sender`.
+        assert!(
+            err.to_string().contains("not-a-port"),
+            "the error must echo the offending value; got: {err}"
+        );
     }
 
     // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
@@ -326,7 +339,11 @@ mod tests {
         ]);
 
         let err = load_smtp_config(&store).await.unwrap_err();
-        assert!(matches!(err, SmtpConfigError::InvalidTlsMode(_)));
+        // Message, not variant — see the note on `..._invalid_sender`.
+        assert!(
+            err.to_string().contains("ssl"),
+            "the error must echo the offending value; got: {err}"
+        );
     }
 
     // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
