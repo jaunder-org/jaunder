@@ -1,7 +1,7 @@
 # Plan — #803: collapse `ident_gate::Population` into a plain ident set
 
 Spec:
-[`docs/superpowers/specs/2026-08-04-issue-803-ident-gate-population.md`](../specs/2026-08-04-issue-803-ident-gate-population.md)
+[`docs/archive/2026-08-04-issue-803-ident-gate-population-spec.md`](2026-08-04-issue-803-ident-gate-population-spec.md)
 Issue: [#803](https://github.com/jaunder-org/jaunder/issues/803) Branch:
 `worktree-issue-803-ident-gate-population` Fork-point tag: `wt-base-issue-803`
 
