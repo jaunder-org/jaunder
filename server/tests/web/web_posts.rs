@@ -394,9 +394,15 @@ Body text",
 // `slug_override` is no longer an in-handler validation error: the typed
 // `Option<Slug>` wire arg rejects it at the serde boundary — client
 // pre-validation is the user-facing path, per ADR-0065; the serde-bridge
-// rejection is unit-tested in `common::slug`.)
+// rejection is unit-tested in `common::slug`.) A blank body joined that same
+// arg-decode family in #811: the message is now `PostBody`'s, not the handler's.
 #[apply(backends_matrix)]
-#[case::empty_post("", "markdown", None, "post body is required")]
+#[case::empty_post(
+    "",
+    "markdown",
+    None,
+    "post body must contain at least one non-blank line"
+)]
 #[case::invalid_format("body", "invalid_format", None, "post format must be")]
 #[tokio::test]
 async fn create_post_rejects(
@@ -916,9 +922,11 @@ async fn update_post_rejects_non_author(#[case] backend: Backend) {
 // Shape B — update_post rejection cluster. Identical setup (author + session +
 // a freshly created draft) and assertion structure (INTERNAL_SERVER_ERROR +
 // body substring); only the update body/format and expected message vary. The
-// initial draft body is immaterial to the assertion, so it is fixed.
+// initial draft body is immaterial to the assertion, so it is fixed. As on the
+// create side, a blank body is now an arg-decode rejection carrying `PostBody`'s
+// message rather than the handler's (#811).
 #[apply(backends_matrix)]
-#[case::empty_post("", "markdown", "post body or title is required")]
+#[case::empty_post("", "markdown", "post body must contain at least one non-blank line")]
 #[case::invalid_format("body", "invalid_format", "post format must be")]
 #[tokio::test]
 async fn update_post_rejects(

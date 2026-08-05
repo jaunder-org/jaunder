@@ -4,7 +4,7 @@ use axum::{
 };
 use common::ids::PostId;
 use common::tag::{MAX_TAGS_PER_POST, TagLabel};
-use common::test_support::permalink_date;
+use common::test_support::{parse_post_body, permalink_date};
 use tower::ServiceExt;
 
 use rstest::*;
@@ -91,7 +91,7 @@ async fn member_returns_native_source_with_etag(#[case] backend: Backend) {
 
     let post = session
         .seed_post()
-        .body("# Markdown body")
+        .body(parse_post_body("# Markdown body"))
         .seed(&state)
         .await;
 
@@ -1439,7 +1439,7 @@ async fn member_get_serves_owner_non_public_post(#[case] backend: Backend) {
     // be able to GET it via AtomPub (handler loads as the authenticated owner).
     let post = session
         .seed_post()
-        .body("Secret body")
+        .body(parse_post_body("Secret body"))
         .audiences(vec![common::visibility::AudienceTarget::Subscribers])
         .seed(&state)
         .await;

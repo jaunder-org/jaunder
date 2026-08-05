@@ -550,7 +550,7 @@ pub async fn unpublish(post_id: PostId) -> WebResult<SavedPost> {
 #[cfg(test)]
 mod tests {
     use common::slug::Slug;
-    use common::test_support::parse_username;
+    use common::test_support::{parse_post_body, parse_username};
     use storage::candidate_slug;
 
     // A wire DTO's `rendered_html` survives a serde round-trip: `Serialize` writes
@@ -670,7 +670,7 @@ mod tests {
         use super::PostInputs;
         use common::render::PostFormat;
         let post = PostInputs {
-            body: "hi".into(),
+            body: parse_post_body("hi"),
             format: PostFormat::Markdown,
             slug_override: None,
             publish: false,
@@ -706,7 +706,7 @@ mod tests {
                 author_username: parse_username("author"),
                 title: None,
                 slug,
-                body: "Titleless note".into(),
+                body: parse_post_body("Titleless note"),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>Titleless note</p>"),
                 created_at: base_time,
@@ -750,7 +750,7 @@ mod tests {
                 author_username: author_username.clone(),
                 title: Some(common::test_support::parse_post_title("Draft")),
                 slug: slug.clone(),
-                body: "body".into(),
+                body: parse_post_body("body"),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
                 created_at: base_time,
@@ -773,7 +773,7 @@ mod tests {
                 author_username,
                 title: Some(common::test_support::parse_post_title("Published")),
                 slug,
-                body: "body".into(),
+                body: parse_post_body("body"),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
                 created_at: base_time,
@@ -803,7 +803,7 @@ mod server_tests {
     use common::pagination::PageSize;
     use common::slug::Slug;
     use common::tag::TagLabel;
-    use common::test_support::{parse_tag_label, parse_username};
+    use common::test_support::{parse_post_body, parse_tag_label, parse_username};
     use leptos::prelude::provide_context;
     use leptos::reactive::owner::Owner;
     use std::sync::Arc;
@@ -820,7 +820,7 @@ mod server_tests {
             author_username: parse_username("alice"),
             title: Some(common::test_support::parse_post_title("t")),
             slug: "hello-world".parse::<Slug>().unwrap(),
-            body: "body".into(),
+            body: parse_post_body("body"),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
             created_at: now,
@@ -947,7 +947,7 @@ mod server_tests {
     /// `PostInputs`; `update` names the post it edits in a separate argument.
     fn post_inputs(tags: Option<Vec<TagLabel>>) -> PostInputs {
         PostInputs {
-            body: "body".into(),
+            body: parse_post_body("body"),
             format: PostFormat::Markdown,
             slug_override: None,
             publish: false,

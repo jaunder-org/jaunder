@@ -304,7 +304,14 @@ The existing in-file tests are exactly four:
 `post_body_serde_round_trips_as_plain_string` (**79**),
 `post_body_into_string_extracts_inner` (**89**).
 
-- [ ] 2. `PostBody::from_str` validates; `infallible` removed; tests green
+- [x] 2. `PostBody::from_str` validates; `infallible` removed; tests green
+
+> **Deviation — tasks 2 and 3 landed as ONE commit.** The plan wanted them split
+> "so tasks 4-8 review cleanly", but that is not achievable here: the pre-commit
+> gate is git-enforced and runs the full `cargo xtask check`, so a commit in
+> which `common` does not build cannot land — and removing `From<String>` breaks
+> ~18 sites the instant it happens. The split's _reason_ is served by
+> structuring the commit message instead.
 
 ---
 
@@ -355,7 +362,37 @@ cargo nextest run -p common -p storage -p jaunder
 
 Expected: PASS.
 
-- [ ] 3. Tree compiles; all construction sites go through the validating door
+- [x] 3. Tree compiles; all construction sites go through the validating door
+
+**What task 3 turned up that the plan did not predict** (all landed in the same
+commit, because the gate would not let them wait):
+
+- **`fallback_summary_label`'s ladder collapsed.** `storage/src/posts.rs` walked
+  body → title → slug; `PostBody`'s invariant is now _exactly_ the predicate its
+  body rung searches with, so the lower two rungs were unreachable. Removed,
+  with an `unreachable!` on the impossible arm. The coverage gate is what forced
+  the issue — it named those lines, correctly.
+- **Task 6's behaviour change is already live.** `canonicalize_org_body` on a
+  title-only Org post yields `""`, which is no longer a `PostBody` and has no
+  bypass door. There is no edit preserving "store an empty body", so it maps to
+  the existing `EmptyPost` variants for now. **Task 6 still owes the tests**,
+  and tasks 4/6 still own the signature work.
+- **`test_perform_post_creation_empty_body` deleted** — its fixture (`"   "`) is
+  unconstructible. Task 7 authorized the retarget; the coverage now lives in
+  `common::post_body::tests::post_body_rejects_whitespace_only`.
+- **A small UI change in `web/src/posts/component.rs`.** A blank-body guard
+  would have turned submit into a silent no-op on the long-form create and edit
+  pages (the compact composer was already gated on the identical predicate), so
+  those two gained `body.get().trim().is_empty()` in their `prop:disabled`.
+- **Doctests are invisible to `cargo check`.** Four `render.rs` fences used
+  `From<String>`; two were `compile_fail` and had silently started failing for
+  the wrong reason. The `doctests` gate then caught a _second-order_ version of
+  the same bug in the fix — a hidden prelude line no plain fence proved
+  compiles.
+- **web `PostInputs` rejects with 500, not 400** — `server_fn`'s
+  `error_response` hardcodes it for every `FromServerFnError`. Pre-existing,
+  identical for every typed wire arg, explicitly accepted by ADR-0065. Left
+  alone; it needs its own decision, not a `PostBody`-shaped patch.
 
 ---
 

@@ -170,12 +170,12 @@ mod tests {
 
     #[test]
     fn first_body_line_finds_the_first_non_blank_line_and_caps_it() {
-        let body = PostBody::from("\n\n   \n  hello  \nsecond\n".to_owned());
+        let body = crate::test_support::parse_post_body("\n\n   \n  hello  \nsecond\n");
         let seed = SummarySeed::first_body_line(&body).expect("a non-blank line");
         assert_eq!(PostSummary::truncated(&seed), "hello");
 
         // The body-line seed carries its own, tighter cap.
-        let long = PostBody::from("x".repeat(MAX_POST_SUMMARY_CHARS));
+        let long = crate::test_support::parse_post_body(&"x".repeat(MAX_POST_SUMMARY_CHARS));
         let seed = SummarySeed::first_body_line(&long).expect("a non-blank line");
         assert_eq!(
             PostSummary::truncated(&seed).chars().count(),
@@ -183,12 +183,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn first_body_line_declines_a_blank_body() {
-        // Absence, not a validation failure: an empty post has no line to seed from.
-        let blank = PostBody::from("  \n\t\n".to_owned());
-        assert!(SummarySeed::first_body_line(&blank).is_none());
-    }
+    // `first_body_line_declines_a_blank_body` is gone with #811, for the same reason
+    // #830 retired the blank-title case just above it: `PostBody` now rejects a body
+    // with no non-blank line, so the state it tested is unrepresentable and cannot be
+    // constructed. `first_body_line` keeps its `Option` — its own signature is not this
+    // issue's business — but through a real `PostBody` the `None` arm is unreachable,
+    // which is why `PostRecord::fallback_summary_label` now `unreachable!()`s on it.
 
     #[test]
     fn seed_from_slug_is_the_always_available_fallback() {

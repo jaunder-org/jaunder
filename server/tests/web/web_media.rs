@@ -18,7 +18,7 @@ use rstest_reuse::*;
 use crate::helpers::{MultipartFile, create_user_and_session, make_app, post_form, post_multipart};
 use common::media::{MaxFileSize, MediaSource, UploadResponse, UserQuota};
 use common::test_support::{
-    parse_byte_size, parse_content_hash, parse_content_type, parse_filename,
+    parse_byte_size, parse_content_hash, parse_content_type, parse_filename, parse_post_body,
 };
 use storage::test_support::{
     Backend, SeedRawPost, TestEnv, backends, backends_matrix, noop_mailer,
@@ -277,7 +277,7 @@ async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend:
     }
 
     let post = SeedRawPost::new(user_id)
-        .body(format!("![inline]({media_url})"))
+        .body(parse_post_body(&format!("![inline]({media_url})")))
         .seed(&state)
         .await;
 

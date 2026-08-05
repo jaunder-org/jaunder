@@ -313,8 +313,13 @@ pub async fn perform_post_update(
     // Derive the title from the *original* body above, then canonicalize the stored
     // Org body (ADR-0024): strip the title-source line, keep everything else. Web and
     // AtomPub thus converge on one stored body. Non-Org bodies are stored verbatim.
+    // A title-only Org post canonicalizes to nothing, which no longer names a body
+    // (#811): there is nothing left to store, so it is the same rejection an empty
+    // post has always earned.
     let body: PostBody = if matches!(format, PostFormat::Org) {
-        common::render::canonicalize_org_body(&body).into()
+        common::render::canonicalize_org_body(&body)
+            .parse()
+            .map_err(|_| PerformUpdateError::EmptyPost)?
     } else {
         body
     };
@@ -480,8 +485,13 @@ pub async fn perform_post_creation(
     // Derive the title from the *original* body above, then canonicalize the stored
     // Org body (ADR-0024): strip the title-source line, keep everything else. Web and
     // AtomPub thus converge on one stored body. Non-Org bodies are stored verbatim.
+    // A title-only Org post canonicalizes to nothing, which no longer names a body
+    // (#811): there is nothing left to store, so it is the same rejection an empty
+    // post has always earned.
     let body: PostBody = if matches!(format, PostFormat::Org) {
-        common::render::canonicalize_org_body(&body).into()
+        common::render::canonicalize_org_body(&body)
+            .parse()
+            .map_err(|_| PerformCreationError::EmptyPost)?
     } else {
         body
     };
@@ -553,7 +563,7 @@ pub async fn perform_post_creation(
 mod tests {
     use super::*;
     use crate::test_support::{Backend, SeedUser, backends};
-    use common::test_support::{parse_row_limit, parse_slug};
+    use common::test_support::{parse_post_body, parse_row_limit, parse_slug};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -569,7 +579,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".into(),
+                body: parse_post_body("Hello, world!"),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -604,7 +614,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Private note.".into(),
+                body: parse_post_body("Private note."),
                 title: Some("Private Note"),
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -647,7 +657,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Body without a heading.".into(),
+                body: parse_post_body("Body without a heading."),
                 title: Some("Explicit Title"),
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -679,7 +689,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".into(),
+                body: parse_post_body("Hello, world!"),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: Some(&slug),
@@ -696,32 +706,10 @@ mod tests {
         assert_eq!(record.slug, "my-custom-slug");
     }
 
-    #[apply(backends)]
-    #[tokio::test]
-    async fn test_perform_post_creation_empty_body(#[case] backend: Backend) {
-        let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let storage = &*env.state.posts;
-        let err = perform_post_creation(
-            storage,
-            PostCreation {
-                user_id,
-                body: "   ".into(),
-                title: None,
-                format: PostFormat::Markdown,
-                slug_override: None,
-                published_at: None,
-                max_attempts: 100,
-                summary: None,
-                audiences: vec![AudienceTarget::Public],
-                idempotency_key: None,
-            },
-        )
-        .await
-        .unwrap_err();
-
-        assert!(matches!(err, PerformCreationError::EmptyPost));
-    }
+    // `test_perform_post_creation_empty_body` retired here: a whitespace-only body is
+    // no longer a `PostCreation` the type system will build, so the rejection is
+    // asserted where it now happens — `common::post_body`'s
+    // `post_body_rejects_whitespace_only` (#811).
 
     // guard:no-backend — injects a MockPostStorage whose create_post returns an
     // Internal error; no live database backend
@@ -740,7 +728,7 @@ mod tests {
             &storage,
             PostCreation {
                 user_id: UserId::from(1),
-                body: "Hello, world!".into(),
+                body: parse_post_body("Hello, world!"),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -769,7 +757,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "!!!".into(),
+                body: parse_post_body("!!!"),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -798,7 +786,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "# 日本語\n\nbody".into(),
+                body: parse_post_body("# 日本語\n\nbody"),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -851,7 +839,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".into(),
+                body: parse_post_body("Hello, world!"),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -869,7 +857,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".into(),
+                body: parse_post_body("Hello, world!"),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -887,7 +875,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".into(),
+                body: parse_post_body("Hello, world!"),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -917,7 +905,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".into(),
+                body: parse_post_body("Hello, world!"),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -935,7 +923,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".into(),
+                body: parse_post_body("Hello, world!"),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -956,7 +944,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".into(),
+                body: parse_post_body("Hello, world!"),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -985,7 +973,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "#+TITLE: Hi\n#+FOO: x\n\nHello".into(),
+                body: parse_post_body("#+TITLE: Hi\n#+FOO: x\n\nHello"),
                 title: None,
                 format: PostFormat::Org,
                 slug_override: None,
@@ -1021,7 +1009,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "#+TITLE: First\n\noriginal".into(),
+                body: parse_post_body("#+TITLE: First\n\noriginal"),
                 title: None,
                 format: PostFormat::Org,
                 slug_override: None,
@@ -1040,7 +1028,7 @@ mod tests {
             PostUpdate {
                 post_id: created.post_id,
                 editor_user_id: user_id,
-                body: "#+TITLE: Second\n#+FOO: keep\n\nupdated".into(),
+                body: parse_post_body("#+TITLE: Second\n#+FOO: keep\n\nupdated"),
                 title: None,
                 format: PostFormat::Org,
                 slug_override: None,
@@ -1080,7 +1068,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "# H1\n\nBody text".into(),
+                body: parse_post_body("# H1\n\nBody text"),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -1110,7 +1098,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "#+TITLE: Distinct Headline\n\nParagraph body".into(),
+                body: parse_post_body("#+TITLE: Distinct Headline\n\nParagraph body"),
                 title: None,
                 format: PostFormat::Org,
                 slug_override: None,
@@ -1148,7 +1136,7 @@ mod tests {
     ) -> PostCreation<'a> {
         PostCreation {
             user_id,
-            body: body.into(),
+            body: parse_post_body(body),
             title: None,
             format: PostFormat::Markdown,
             slug_override: None,

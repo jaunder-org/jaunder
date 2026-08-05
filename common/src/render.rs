@@ -521,23 +521,32 @@ mod sanitized {
     /// two negatives below hide — including the free `render`, which they both call — so
     /// each fails for the private field rather than for an unresolved path:
     /// ```
+    /// # use common::post_body::PostBody;
     /// # use common::render::{render, PostFormat, RenderOutput};
-    /// let out = RenderOutput::render(&"hello".to_owned().into(), &PostFormat::Markdown);
+    /// # let body: PostBody = "hello".parse().unwrap();
+    /// let other: PostBody = "different".parse().unwrap();
+    /// let out = RenderOutput::render(&body, &PostFormat::Markdown);
     /// assert!(out.media().is_empty());
-    /// let _direct = render(&"hello".to_owned().into(), &PostFormat::Markdown); // `render` resolves
+    /// let _direct = render(&body, &PostFormat::Markdown); // `render` resolves
+    /// let _other = render(&other, &PostFormat::Markdown); // the last negative's fixture
     /// ```
     /// and a struct literal cannot smuggle one in:
     /// ```compile_fail
+    /// # use common::post_body::PostBody;
     /// # use common::render::{render, PostFormat, RenderOutput};
-    /// let html = render(&"hello".to_owned().into(), &PostFormat::Markdown);
+    /// # let body: PostBody = "hello".parse().unwrap();
+    /// let html = render(&body, &PostFormat::Markdown);
     /// let _ = RenderOutput { html, media: vec![] }; // private field
     /// ```
     /// nor can the HTML be swapped out from under the set that describes it — the same
     /// desynchronisation reached from the other side, which a `pub html` would have left open:
     /// ```compile_fail
+    /// # use common::post_body::PostBody;
     /// # use common::render::{render, PostFormat, RenderOutput};
-    /// let mut out = RenderOutput::render(&"hello".to_owned().into(), &PostFormat::Markdown);
-    /// out.html = render(&"different".to_owned().into(), &PostFormat::Markdown); // private field
+    /// # let body: PostBody = "hello".parse().unwrap();
+    /// # let other: PostBody = "different".parse().unwrap();
+    /// let mut out = RenderOutput::render(&body, &PostFormat::Markdown);
+    /// out.html = render(&other, &PostFormat::Markdown); // private field
     /// ```
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct RenderOutput {
@@ -1133,10 +1142,10 @@ mod tests {
     #[cfg(feature = "sanitize")]
     mod sanitized {
         use super::*;
-        use crate::post_body::PostBody;
         use crate::render::sanitized::{
             SANITIZER, extract_media_refs_with, render_markdown, render_org,
         };
+        use crate::test_support::parse_post_body;
 
         // `sanitize` is the establishing door (#445): it is what makes the type's
         // invariant — "contains no active markup" — true rather than asserted. These
@@ -1397,7 +1406,7 @@ mod tests {
         #[test]
         fn render_preserves_real_renderer_output() {
             let md = render(
-                &PostBody::from(
+                &parse_post_body(
                     "# Heading\n\n\
                      Some **bold** and *emphasis* and a [link](https://example.com).\n\n\
                      ```rust\nfn main() {}\n```\n\n\
@@ -1420,7 +1429,7 @@ mod tests {
             }
 
             let org = render(
-                &PostBody::from(
+                &parse_post_body(
                     "* Heading\n\nSome *bold* text and [[https://example.com][a link]].\n",
                 ),
                 &PostFormat::Org,
@@ -1451,13 +1460,13 @@ mod tests {
 
         #[test]
         fn render_dispatches_markdown() {
-            let result = render(&PostBody::from("**bold**"), &PostFormat::Markdown);
+            let result = render(&parse_post_body("**bold**"), &PostFormat::Markdown);
             assert!(result.contains("<strong>bold</strong>"));
         }
 
         #[test]
         fn render_dispatches_org() {
-            let result = render(&PostBody::from("*bold*"), &PostFormat::Org);
+            let result = render(&parse_post_body("*bold*"), &PostFormat::Org);
             assert!(result.contains("<b>bold</b>"));
         }
 
@@ -1489,7 +1498,7 @@ mod tests {
         #[test]
         fn render_markdown_strips_embedded_script() {
             let result = render(
-                &PostBody::from(format!("Hello\n\n{ACTIVE_MARKUP}").as_str()),
+                &parse_post_body(format!("Hello\n\n{ACTIVE_MARKUP}").as_str()),
                 &PostFormat::Markdown,
             );
             assert_no_active_markup(&result);
@@ -1504,7 +1513,7 @@ mod tests {
             // by orgize itself, so it never needed us.) Assert on the executable form:
             // the literal text `alert(1)` surviving *escaped* is harmless.
             let result = render(
-                &PostBody::from(format!("Hello\n\n@@html:{ACTIVE_MARKUP}@@").as_str()),
+                &parse_post_body(format!("Hello\n\n@@html:{ACTIVE_MARKUP}@@").as_str()),
                 &PostFormat::Org,
             );
             assert_no_active_markup(&result);
@@ -1514,7 +1523,7 @@ mod tests {
         #[test]
         fn render_html_strips_embedded_script() {
             let result = render(
-                &PostBody::from(format!("<p>hi</p>{ACTIVE_MARKUP}").as_str()),
+                &parse_post_body(format!("<p>hi</p>{ACTIVE_MARKUP}").as_str()),
                 &PostFormat::Html,
             );
             assert_no_active_markup(&result);
@@ -1529,7 +1538,7 @@ mod tests {
         fn render_html_format_preserves_safe_markup() {
             let body = "<p>hi <b>there</b></p>";
             assert_eq!(
-                render(&PostBody::from(body), &PostFormat::Html).as_ref(),
+                render(&parse_post_body(body), &PostFormat::Html).as_ref(),
                 body
             );
         }
@@ -1549,7 +1558,7 @@ mod tests {
         fn extract_finds_a_markdown_image() {
             // Rendered via the real renderer, so this pins end-to-end behaviour rather than a
             // hand-written fragment.
-            let body: PostBody = format!("![alt]({})", media_url_for("photo.jpg")).into();
+            let body = parse_post_body(&format!("![alt]({})", media_url_for("photo.jpg")));
             let refs = extract_media_refs(render(&body, &PostFormat::Markdown).as_ref());
             assert_eq!(refs.len(), 1);
             assert_eq!(refs[0].filename.as_ref(), "photo.jpg");
@@ -1558,7 +1567,7 @@ mod tests {
         #[test]
         fn extract_finds_a_raw_img_embedded_in_a_markdown_body() {
             // The rendered-HTML choice (spec D2): raw HTML passes through the Markdown parser.
-            let body: PostBody = format!("<img src=\"{}\">", media_url_for("photo.jpg")).into();
+            let body = parse_post_body(&format!("<img src=\"{}\">", media_url_for("photo.jpg")));
             let refs = extract_media_refs(render(&body, &PostFormat::Markdown).as_ref());
             assert_eq!(refs.len(), 1);
             assert_eq!(refs[0].filename.as_ref(), "photo.jpg");
@@ -1568,7 +1577,7 @@ mod tests {
         fn extract_finds_a_raw_filename_spelling() {
             // The #675 regression, at the extractor level: a post addressing the file by the
             // name a person types must resolve to the stored, encoded spelling.
-            let body: PostBody = format!("<img src=\"{}\">", media_url_for("my photo.jpg")).into();
+            let body = parse_post_body(&format!("<img src=\"{}\">", media_url_for("my photo.jpg")));
             let refs = extract_media_refs(render(&body, &PostFormat::Markdown).as_ref());
             assert_eq!(refs.len(), 1);
             assert_eq!(refs[0].filename.as_ref(), "my%20photo.jpg");
@@ -1576,9 +1585,9 @@ mod tests {
 
         #[test]
         fn extract_finds_an_atompub_member_url_in_a_link() {
-            let body: PostBody =
-                format!("<a href=\"/atompub/alice/media/{MEDIA_TEST_SHA256}/photo.jpg\">doc</a>")
-                    .into();
+            let body = parse_post_body(&format!(
+                "<a href=\"/atompub/alice/media/{MEDIA_TEST_SHA256}/photo.jpg\">doc</a>"
+            ));
             let refs = extract_media_refs(render(&body, &PostFormat::Markdown).as_ref());
             assert_eq!(refs.len(), 1);
             assert_eq!(refs[0].source, MediaSource::Upload);
@@ -1587,13 +1596,15 @@ mod tests {
         #[test]
         fn extract_ignores_media_in_stripped_elements_and_code_blocks() {
             // Sanitisation removes <video>, so it can never load and is not a reference.
-            let video: PostBody =
-                format!("<video src=\"{}\"></video>", media_url_for("clip.mp4")).into();
+            let video = parse_post_body(&format!(
+                "<video src=\"{}\"></video>",
+                media_url_for("clip.mp4")
+            ));
             assert!(extract_media_refs(render(&video, &PostFormat::Markdown).as_ref()).is_empty());
 
             // A URL displayed as literal text points nobody at anything (spec D2's deliberate
             // narrowing away from the old substring search over the source body).
-            let fenced: PostBody = format!("```\n{}\n```", media_url_for("photo.jpg")).into();
+            let fenced = parse_post_body(&format!("```\n{}\n```", media_url_for("photo.jpg")));
             assert!(extract_media_refs(render(&fenced, &PostFormat::Markdown).as_ref()).is_empty());
         }
 
@@ -1601,8 +1612,9 @@ mod tests {
         fn extract_deduplicates_and_sorts() {
             let one = media_url_for("a.jpg");
             let two = media_url_for("b.jpg");
-            let body: PostBody =
-                format!("<img src=\"{two}\"><img src=\"{one}\"><img src=\"{one}\">").into();
+            let body = parse_post_body(&format!(
+                "<img src=\"{two}\"><img src=\"{one}\"><img src=\"{one}\">"
+            ));
             let refs = extract_media_refs(render(&body, &PostFormat::Markdown).as_ref());
             assert_eq!(refs.len(), 2, "duplicate references collapse to one row");
             assert!(
@@ -1613,9 +1625,7 @@ mod tests {
 
         #[test]
         fn extract_ignores_non_media_links() {
-            let body: PostBody = "<a href=\"https://example.com/page\">x</a>"
-                .to_owned()
-                .into();
+            let body = parse_post_body("<a href=\"https://example.com/page\">x</a>");
             assert!(extract_media_refs(render(&body, &PostFormat::Markdown).as_ref()).is_empty());
         }
 
@@ -1652,7 +1662,7 @@ mod tests {
 
         #[test]
         fn render_output_derives_its_media_from_its_html() {
-            let body: PostBody = format!("<img src=\"{}\">", media_url_for("photo.jpg")).into();
+            let body = parse_post_body(&format!("<img src=\"{}\">", media_url_for("photo.jpg")));
             let out = RenderOutput::render(&body, &PostFormat::Markdown);
             assert_eq!(
                 out.media(),
@@ -1663,7 +1673,7 @@ mod tests {
 
         #[test]
         fn render_output_media_is_empty_for_a_body_referencing_nothing() {
-            let out = RenderOutput::render(&"plain text".to_owned().into(), &PostFormat::Markdown);
+            let out = RenderOutput::render(&parse_post_body("plain text"), &PostFormat::Markdown);
             assert!(out.media().is_empty());
         }
 

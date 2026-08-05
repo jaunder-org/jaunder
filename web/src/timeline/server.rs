@@ -173,7 +173,7 @@ mod tests {
     use common::ids::{PostId, UserId};
     use common::pagination::PageSize;
     use common::tag::Tag;
-    use common::test_support::{parse_slug, parse_username};
+    use common::test_support::{parse_post_body, parse_slug, parse_username};
     use common::visibility::ViewerIdentity;
     use storage::{
         ListByTagError, MockPostStorage, MockUserStorage, PostFormat, PostRecord, RenderedHtml,
@@ -188,7 +188,7 @@ mod tests {
             author_username: parse_username("alice"),
             title: None,
             slug: parse_slug("hello-world"),
-            body: "body".into(),
+            body: parse_post_body("body"),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
             created_at: now,

@@ -30,7 +30,7 @@ use common::slug::Slug;
 use common::tag::TagLabel;
 use common::test_support::{
     parse_byte_size, parse_content_hash, parse_display_name, parse_filename, parse_password,
-    parse_post_title, parse_slug, parse_tag_label, parse_username,
+    parse_post_body, parse_post_title, parse_slug, parse_tag_label, parse_username,
 };
 use common::username::Username;
 use common::visibility::AudienceTarget;
@@ -673,7 +673,7 @@ pub async fn seed_posts(
             crate::seed_post_input(
                 user_id,
                 parse_slug(&format!("seed-{i}")),
-                format!("# Post {i}\n\nbody").into(),
+                parse_post_body(&format!("# Post {i}\n\nbody")),
                 published,
             )
         })
@@ -831,7 +831,7 @@ impl<'a> SeedPost<'a> {
         Self {
             user_id,
             title: None,
-            body: PostBody::from("Seeded post body"),
+            body: parse_post_body("Seeded post body"),
             audiences: vec![AudienceTarget::Public],
         }
     }
@@ -845,8 +845,8 @@ impl<'a> SeedPost<'a> {
 
     /// Override the default body.
     #[must_use]
-    pub fn body(mut self, body: impl Into<PostBody>) -> Self {
-        self.body = body.into();
+    pub fn body(mut self, body: PostBody) -> Self {
+        self.body = body;
         self
     }
 
@@ -937,7 +937,7 @@ impl SeedRawPost {
         Self {
             user_id,
             slug: None,
-            body: "seed body".to_owned().into(),
+            body: parse_post_body("seed body"),
             format: PostFormat::Markdown,
             published_at: Some(Utc::now()),
             summary: None,
@@ -956,8 +956,8 @@ impl SeedRawPost {
 
     /// Override the body (e.g. embed a media URL). The rendered HTML re-derives from it.
     #[must_use]
-    pub fn body(mut self, body: impl Into<PostBody>) -> Self {
-        self.body = body.into();
+    pub fn body(mut self, body: PostBody) -> Self {
+        self.body = body;
         self
     }
 
@@ -1134,7 +1134,7 @@ impl UpdateRawPost {
         Self {
             title: Some(parse_post_title("Updated Title")),
             slug: parse_slug(slug.as_ref()),
-            body: "updated body".to_owned().into(),
+            body: parse_post_body("updated body"),
             format: PostFormat::Markdown,
             unpublish: false,
             explicit_published_at: None,
@@ -1152,8 +1152,8 @@ impl UpdateRawPost {
 
     /// Override the body (the rendered HTML and its media references re-derive from it).
     #[must_use]
-    pub fn body(mut self, body: impl Into<PostBody>) -> Self {
-        self.body = body.into();
+    pub fn body(mut self, body: PostBody) -> Self {
+        self.body = body;
         self
     }
 
@@ -1352,7 +1352,7 @@ async fn create_via_service(
         state.posts.as_ref(),
         crate::PostCreation {
             user_id,
-            body: PostBody::from(body),
+            body: parse_post_body(body),
             title: None,
             format: PostFormat::Markdown,
             slug_override: None,
@@ -1387,7 +1387,7 @@ pub async fn update_post_body_via_service(
         crate::PostUpdate {
             post_id,
             editor_user_id,
-            body: PostBody::from(body),
+            body: parse_post_body(body),
             title: None,
             format: PostFormat::Markdown,
             slug_override: None,
@@ -1412,7 +1412,7 @@ mod tests {
     // The free renderer, to pin that the builder's HTML is exactly `render(body)` — the
     // half of `RenderOutput` the seeded record carries.
     use common::render::render;
-    use common::test_support::parse_row_limit;
+    use common::test_support::{parse_post_body, parse_row_limit};
     use common::visibility::ViewerIdentity;
     use rstest::*;
     use rstest_reuse::*;
@@ -1517,7 +1517,7 @@ mod tests {
         // Exercise the three settable fields and assert each lands on the record.
         let post = SeedPost::new(user.user_id)
             .title("Custom Title")
-            .body("Custom body text")
+            .body(parse_post_body("Custom body text"))
             .audiences(vec![AudienceTarget::Public])
             .seed(state)
             .await;
@@ -1706,7 +1706,7 @@ mod tests {
         let state = &env.state;
         let author = SeedUser::new().seed(state).await.user_id;
         let post = SeedRawPost::new(author)
-            .body("custom body")
+            .body(parse_post_body("custom body"))
             .seed(state)
             .await;
         let record = state

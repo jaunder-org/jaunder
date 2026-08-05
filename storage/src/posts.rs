@@ -97,28 +97,19 @@ impl PostRecord {
         url
     }
 
-    /// Generates a fallback summary from the post's body, title, or slug.
+    /// Generates a fallback summary from the post's first non-blank body line, which
+    /// [`PostSummary::truncated`] length-caps into the newtype.
     ///
-    /// The chain is a **preference order**, not a search for something non-blank:
-    /// the first body line is the most excerpt-like label, the title is the next
-    /// best, and the slug is the guaranteed floor. Each fallthrough is triggered by
-    /// *absence*, and for a different reason — the body has no non-blank line at all
-    /// (still possible: `PostBody` is infallible until #811), or the post is
-    /// legitimately untitled (permanent domain state, not a blankness question).
-    ///
-    /// Every candidate that *is* present is non-blank by construction, so the chain
-    /// cannot yield an empty label and [`PostSummary::truncated`] needs no emptiness
-    /// check of its own (#830).
-    ///
-    /// When #811 lands, `first_body_line` can no longer return `None`, and the title
-    /// and slug arms become unreachable — collapse this to the body line then, and
-    /// expect the two `fallback_summary_label_prefers_body_then_title_then_slug`
-    /// cases that blank the body to become unconstructible.
+    /// This was a body → title → slug preference chain until #811. The lower two rungs
+    /// existed only to cover a blank body, and [`PostBody`]'s invariant is now *exactly*
+    /// the predicate [`SummarySeed::first_body_line`] searches with — at least one line
+    /// non-empty after trimming — so they became unreachable and were removed. #830's
+    /// doc anticipated precisely this collapse.
     #[must_use]
     pub fn fallback_summary_label(&self) -> PostSummary {
-        let seed = SummarySeed::first_body_line(&self.body)
-            .or_else(|| self.title.as_ref().map(SummarySeed::from_title))
-            .unwrap_or_else(|| SummarySeed::from_slug(&self.slug));
+        let Some(seed) = SummarySeed::first_body_line(&self.body) else {
+            unreachable!("PostBody guarantees at least one non-blank line");
+        };
         PostSummary::truncated(&seed)
     }
 }
@@ -2617,7 +2608,8 @@ mod tests {
         update_post_body_via_service,
     };
     use common::test_support::{
-        parse_content_type, parse_etag, parse_post_summary, parse_post_title, parse_row_limit,
+        parse_content_type, parse_etag, parse_post_body, parse_post_summary, parse_post_title,
+        parse_row_limit,
         parse_slug, parse_tag, parse_tag_label, parse_username, permalink_date,
     };
     use rstest::*;
@@ -3063,14 +3055,16 @@ mod tests {
     }
 
     #[test]
-    fn fallback_summary_label_prefers_body_then_title_then_slug() {
-        let mut post = PostRecord {
+    fn fallback_summary_label_uses_the_first_non_blank_body_line() {
+        let post = PostRecord {
             post_id: PostId::from(1),
             user_id: UserId::from(1),
             author_username: parse_username("author"),
             title: Some(parse_post_title("My Title")),
             slug: parse_slug("my-slug"),
-            body: "\n\n   The first non-empty line of the body is here. \n\n Another line.".into(),
+            body: parse_post_body(
+                "\n\n   The first non-empty line of the body is here. \n\n Another line.",
+            ),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted(
                 "<p>The first non-empty line of the body is here.</p>",
@@ -3083,23 +3077,16 @@ mod tests {
             tags: vec![],
         };
 
-        // Case 1: Body is populated. It should use the first non-empty line.
         assert_eq!(
             post.fallback_summary_label(),
             "The first non-empty line of the body is here."
         );
 
-        // Case 2: Body is empty but title is populated.
-        post.body = "".into();
-        assert_eq!(post.fallback_summary_label(), "My Title");
-
-        // (The former case 2b — an empty-after-trim title falling through to the slug —
-        // is gone with #830: `PostTitle` rejects blanks, so that state is
-        // unrepresentable and cannot be constructed to test.)
-
-        // Case 3: Body and title are empty. It should use the slug.
-        post.title = None;
-        assert_eq!(post.fallback_summary_label(), "my-slug");
+        // The title and slug rungs this test used to walk are gone (#811): a `PostBody`
+        // always has a non-blank line, so the body rung always answers, and the lower two
+        // were removed from `fallback_summary_label` rather than left as dead
+        // compensation. #830 had already retired the blank-title sub-case for the same
+        // reason, one type earlier — the two issues collapse this chain from both ends.
     }
 
     #[test]
@@ -3111,7 +3098,7 @@ mod tests {
             author_username: parse_username("author"),
             title: Some(parse_post_title("My Title")),
             slug: parse_slug("hello-world"),
-            body: "My body".into(),
+            body: parse_post_body("My body"),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>My body</p>"),
             created_at: Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap(),
@@ -3168,7 +3155,7 @@ mod tests {
         let update = |summary: Option<PostSummary>| {
             UpdateRawPost::new("summary-edit")
                 .title("Test Title")
-                .body("Test body")
+                .body(parse_post_body("Test body"))
                 .summary(summary)
                 .build()
         };
@@ -3498,13 +3485,13 @@ mod tests {
         // the assertions actually rest on.
         let env = backend.setup().await;
         let [user] = seed_users::<1>(&env.state).await;
-        let body = format!("<img src=\"{}\">", media_url_for("needle.jpg"));
+        let body = parse_post_body(&format!("<img src=\"{}\">", media_url_for("needle.jpg")));
 
         // One batched transaction, not 1201 round trips. `create_posts` shares
         // `write_post_in_tx` with `create_post`, so each row's `post_media` is written
         // too, and the ids come back in input order.
         let inputs: Vec<CreatePostInput> = (0..1201)
-            .map(|_| SeedRawPost::new(user).body(body.as_str()).build())
+            .map(|_| SeedRawPost::new(user).body(body.clone()).build())
             .collect();
         let ids = env
             .state
@@ -3813,9 +3800,9 @@ mod tests {
             author_username: parse_username("author"),
             title: None,
             slug: parse_slug("hello-world"),
-            body: "".into(),
+            body: parse_post_body("hello world"),
             format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted(""),
+            rendered_html: RenderedHtml::from_trusted("<p>hello world</p>"),
             created_at: Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap(),
             updated_at: Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap(),
             published_at: None,
@@ -3943,7 +3930,7 @@ mod tests {
         // `set_post_tags` binds a `TagLabel`. The read decodes the `slug`/`title`/`body`/
         // author-`username` columns and the JSON `tag_slug`/`tag_display` straight
         // back into their newtypes — exercising both bridge directions (#438).
-        let body: PostBody = "the round-trip body".into();
+        let body = parse_post_body("the round-trip body");
         let post = SeedRawPost::new(user_id)
             .draft()
             .body(body.clone())
@@ -3970,7 +3957,7 @@ mod tests {
 
         // A post with no title exercises the `None` decode path for
         // `Option<PostTitle>`.
-        let untitled_body: PostBody = "body".into();
+        let untitled_body = parse_post_body("body");
         let untitled_id = posts
             .create_post(&CreatePostInput {
                 user_id,
@@ -4165,9 +4152,9 @@ mod tests {
                         author_username: username.clone(),
                         title: None,
                         slug: slug.clone(),
-                        body: "".into(),
+                        body: parse_post_body("draft body"),
                         format: PostFormat::Markdown,
-                        rendered_html: RenderedHtml::from_trusted(""),
+                        rendered_html: RenderedHtml::from_trusted("<p>draft body</p>"),
                         created_at: base + chrono::Duration::seconds(i),
                         updated_at: base,
                         published_at: None,

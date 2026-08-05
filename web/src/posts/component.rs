@@ -43,6 +43,7 @@ use crate::topbar::Topbar;
 use common::feed::FeedSurface;
 use common::ids::PostId;
 use common::pagination::PageSize;
+use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::render::PostFormat;
 use common::root_relative_url::RootRelativeUrl;
@@ -529,35 +530,32 @@ pub fn PostCreateForm(
         },
     );
 
+    // The one submit path, shared by both layouts, which differ only in whether the
+    // author chose a slug and which button was pressed. It re-reads the body through
+    // `PostBody` rather than trusting the button's disabled state: the submit gate and
+    // the newtype apply the same rule (ADR-0065's one validation source), so a rejected
+    // parse means the button was reached without the gate and there is nothing to post.
+    let dispatch = move |publish: bool, slug_override: Option<Slug>| {
+        let Ok(body) = body.get().parse::<PostBody>() else {
+            return;
+        };
+        create_action.dispatch(Create {
+            post: PostInputs {
+                body,
+                format: format.get(),
+                slug_override,
+                publish,
+                publish_at: utc_instant_from_local(&publish_at.get()),
+                tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
+                summary: summary_field.parsed(),
+                audience: Some(audience.get()),
+            },
+        });
+    };
+
     if compact {
-        let dispatch_save = move |_| {
-            create_action.dispatch(Create {
-                post: PostInputs {
-                    body: body.get().into(),
-                    format: format.get(),
-                    slug_override: None,
-                    publish: false,
-                    publish_at: utc_instant_from_local(&publish_at.get()),
-                    tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
-                    summary: summary_field.parsed(),
-                    audience: Some(audience.get()),
-                },
-            });
-        };
-        let dispatch_publish = move |_| {
-            create_action.dispatch(Create {
-                post: PostInputs {
-                    body: body.get().into(),
-                    format: format.get(),
-                    slug_override: None,
-                    publish: true,
-                    publish_at: utc_instant_from_local(&publish_at.get()),
-                    tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
-                    summary: summary_field.parsed(),
-                    audience: Some(audience.get()),
-                },
-            });
-        };
+        let dispatch_save = move |_| dispatch(false, None);
+        let dispatch_publish = move |_| dispatch(true, None);
         view! {
             <div class="j-composer-row">
                 {username.map(|u| view! { <Avatar name=u size=36 /> })}
@@ -624,20 +622,7 @@ pub fn PostCreateForm(
         .into_any()
     } else {
         let slug_field = Field::<Slug>::optional();
-        let dispatch_create = move |publish: bool| {
-            create_action.dispatch(Create {
-                post: PostInputs {
-                    body: body.get().into(),
-                    format: format.get(),
-                    slug_override: slug_field.parsed(),
-                    publish,
-                    publish_at: utc_instant_from_local(&publish_at.get()),
-                    tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
-                    summary: summary_field.parsed(),
-                    audience: Some(audience.get()),
-                },
-            });
-        };
+        let dispatch_create = move |publish: bool| dispatch(publish, slug_field.parsed());
         view! {
             <div class="j-compose-grid">
                 <div class="j-compose-body">
@@ -725,7 +710,8 @@ pub fn PostCreateForm(
                             name="publish"
                             value="false"
                             prop:disabled=move || {
-                                !slug_field.is_valid() || !summary_field.is_valid()
+                                body.get().trim().is_empty() || !slug_field.is_valid()
+                                    || !summary_field.is_valid()
                             }
                             on:click=move |_| dispatch_create(false)
                         >
@@ -737,7 +723,8 @@ pub fn PostCreateForm(
                             name="publish"
                             value="true"
                             prop:disabled=move || {
-                                !slug_field.is_valid() || !summary_field.is_valid()
+                                body.get().trim().is_empty() || !slug_field.is_valid()
+                                    || !summary_field.is_valid()
                             }
                             on:click=move |_| dispatch_create(true)
                         >
@@ -1149,11 +1136,14 @@ pub fn EditPostPage() -> impl IntoView {
                         let post_id = fetched.post.post_id;
                         let is_published = fetched.post.published_at.is_some();
                         let dispatch_update = move |publish: bool| {
+                            let Ok(body) = body.get().parse::<PostBody>() else {
+                                return;
+                            };
                             update_post_action
                                 .dispatch(super::Update {
                                     post_id,
                                     post: PostInputs {
-                                        body: body.get().into(),
+                                        body,
                                         format: format.get(),
                                         slug_override: slug_field.parsed(),
                                         publish,
@@ -1258,7 +1248,8 @@ pub fn EditPostPage() -> impl IntoView {
                                         <EditSaveActions
                                             is_published=is_published
                                             disabled=Signal::derive(move || {
-                                                !slug_field.is_valid() || !summary_field.is_valid()
+                                                body.get().trim().is_empty() || !slug_field.is_valid()
+                                                    || !summary_field.is_valid()
                                             })
                                             on_save=Callback::new(dispatch_update)
                                         />

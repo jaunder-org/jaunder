@@ -56,8 +56,8 @@ pub fn seed_slug(prefix: &str, i: usize) -> String {
 ///
 /// # Errors
 ///
-/// Returns `Err` if `username` is invalid or unknown, a generated slug fails to
-/// parse, or a post fails to persist.
+/// Returns `Err` if `username` is invalid or unknown, a generated slug or body
+/// fails to parse, or a post fails to persist.
 pub async fn seed_posts_for_user(
     state: &Arc<AppState>,
     username: &str,
@@ -79,12 +79,12 @@ pub async fn seed_posts_for_user(
         let slug = seed_slug(prefix, i).parse().map_err(|_| {
             anyhow::anyhow!("generated slug invalid for prefix {prefix:?} index {i}")
         })?;
-        inputs.push(seed_post_input(
-            user.user_id,
-            slug,
-            seed_body(prefix, i).into(),
-            published,
-        ));
+        // Unlike the slug, whose validity depends on `prefix`, `seed_body` always emits a
+        // literal `Body for …` line, so the non-blank invariant holds by construction.
+        let Ok(body) = seed_body(prefix, i).parse() else {
+            unreachable!("seed_body always yields a non-blank body");
+        };
+        inputs.push(seed_post_input(user.user_id, slug, body, published));
     }
     state
         .posts
