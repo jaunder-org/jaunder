@@ -354,6 +354,19 @@ pub enum TracesCommand {
         #[arg(long, value_enum)]
         browser: Option<E2eBrowser>,
     },
+    /// Median boot-phase decomposition per `(trace file, project, cacheWarmth)`
+    /// (#818). Every segment is document-relative and the six of them close on
+    /// `mount_done.startTime` exactly; the Node-side `commitToMountMs` and the
+    /// skew between the two frames are reported but never decomposed. A manual
+    /// tool — not part of `check`/`validate`. Prints human tables only; `--json`
+    /// is rejected.
+    #[command(after_help = "EXAMPLES:\n  \
+        cargo xtask traces boot-phases sqlite-chromium.jsonl sqlite-firefox.jsonl")]
+    BootPhases {
+        /// One or more `otel-traces.jsonl` files.
+        #[arg(required = true)]
+        files: Vec<std::path::PathBuf>,
+    },
 }
 
 impl Cli {
@@ -370,6 +383,7 @@ impl Cli {
             Command::Adr(AdrCommand::Promote) => "adr-promote",
             Command::Traces(TracesCommand::Analyze { .. }) => "traces-analyze",
             Command::Traces(TracesCommand::Run { .. }) => "traces-run",
+            Command::Traces(TracesCommand::BootPhases { .. }) => "traces-boot-phases",
             Command::Coverage(CoverageCommand::ProbeSource) => "coverage-probe-source",
             Command::ServerFnCoverage(ServerFnCoverageCommand::Regenerate) => {
                 steps::server_fn_coverage_check::REGENERATE_STEP
@@ -388,11 +402,16 @@ impl Command {
     /// Whether `--json` yields a substantial structured payload for this command.
     /// Commands that answer `false` reject `--json` (there is nothing meaningful to
     /// serialize beyond the bare envelope). Defaults `true`; the `traces` reporting
-    /// commands (`analyze`/`run`) print human tables only, so they opt out.
+    /// commands (`analyze`/`run`/`boot-phases`) print human tables only, so they
+    /// opt out.
     pub fn produces_json_payload(&self) -> bool {
         !matches!(
             self,
-            Command::Traces(TracesCommand::Analyze { .. } | TracesCommand::Run { .. })
+            Command::Traces(
+                TracesCommand::Analyze { .. }
+                    | TracesCommand::Run { .. }
+                    | TracesCommand::BootPhases { .. }
+            )
         )
     }
 }
@@ -613,6 +632,18 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let analysis = traces::analyze::analyze(&files, filters, &reported)?;
             result.traces = Some(traces::render::render(&analysis, top as usize));
             result.push(StepResult::ok("traces-run").detail(format!("{n} trace file(s)")));
+            finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::Traces(TracesCommand::BootPhases { files }) => {
+            let start = std::time::Instant::now();
+            let mut result = CommandResult::new("traces-boot-phases");
+            // A read/parse failure propagates as Err → the exit-2 path, not a
+            // fail step, matching `traces analyze`.
+            let rows = traces::boot_phases::boot_phases(&files)?;
+            let n = rows.len();
+            result.traces = Some(traces::boot_phases::render(&rows));
+            result.push(StepResult::ok("traces-boot-phases").detail(format!("{n} population(s)")));
             finalize(&mut result, start);
             Ok(result)
         }

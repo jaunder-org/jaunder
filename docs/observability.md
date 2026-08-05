@@ -484,6 +484,173 @@ Optional filters:
 (`cargo xtask traces analyze` additionally accepts `--project NAME` to focus one
 browser/project when analyzing already-collected trace files directly.)
 
+## #818 — why firefox is slower: wasm compile (findings, 2026-08-05)
+
+**Verdict: actionable, and it is wasm compile+instantiate.** Firefox spends
+~430–475 ms compiling the 5.1 MiB wasm bundle where chromium spends ~22–35 ms —
+a 14–21× ratio that accounts for the whole boot gap. The Rust-side mount path is
+**1.7–12.7 ms** and is not where the time goes. Lever and follow-up: #836.
+
+### What had to be fixed first
+
+#818 assumed the question was answerable from #792's corpus. It was not: the
+boot marks were harvested at `load`, and **firefox recorded zero marks on
+210/210 navigations of every run in that corpus**. See §"What the boot marks do
+and do not cover" for the two defects and the fix. This section's data is a
+fresh corpus collected after it.
+
+### Method
+
+12 captures, `sqlite × {chromium, firefox}`, on a quiesced host, all six runs
+distinctly salted so nix could not replay a cached suite. Two settings sets,
+interleaved run-by-run:
+
+- **deciding** — the single-worker packages (`workers=1`), because #818 is a
+  per-navigation question and the suspect phases are exactly the CPU-bound ones
+  two workers on a 2-core VM inflate. **Fixed as the deciding set before
+  collection**, so it could not be chosen after seeing which read better.
+- **confirming** — the gate checks (`workers=2`), to show the phase ratios
+  survive the worker count and to connect the finding to the gate's wall-clock.
+
+Suite wall-clock (seconds), and note the two sets genuinely differ — which is
+why the choice was pre-registered:
+
+| set           | chromium              | firefox               | ff/chr             |
+| ------------- | --------------------- | --------------------- | ------------------ |
+| single-worker | 342.1 / 345.9 / 347.7 | 473.0 / 467.1 / 469.3 | 1.38 / 1.35 / 1.35 |
+| gate          | 181.0 / 179.1 / 180.0 | 270.9 / 276.5 / 269.0 | 1.50 / 1.54 / 1.49 |
+
+Within-arm spread <2%. Corpus certified before analysis: **100%** of mounted
+navigations carried a full mark set, `dropped = 0`, **0 closure violations in
+2496 navigations**.
+
+### The analysis target is the document-frame boot total
+
+`commit_to_mount` is Node-side `Date.now()`; every segment is document-relative
+(`performance.timeOrigin`). Mixing them would charge cross-process, plausibly
+engine-asymmetric harness latency to the app's boot phases — the rule is
+[ADR-0100](adr/0100-measurement-frames-are-not-mixed.md). The target is
+`bootTotalMs` = `jaunder.boot.mount_done`'s `startTime`, decomposed into six
+segments that sum to it **exactly**.
+
+### Where the gap lives (means, deciding set)
+
+Means, not medians, for the share arithmetic: means are linear, so the segments
+close to the total exactly. Medians are quoted alongside as robust cross-checks.
+
+**cold** — boot total chr 557.5 ms → ff 891.8 ms (1.60×), gap **334.3 ms**:
+
+| segment                      | chromium | firefox   | Δ          | share       |
+| ---------------------------- | -------- | --------- | ---------- | ----------- |
+| doc start → wasm fetch start | 272.3    | 318.5     | +46.3      | 13.8%       |
+| wasm fetch                   | 250.1    | 99.6      | −150.5     | **−45.0%**  |
+| **wasm compile+instantiate** | **24.0** | **467.1** | **+443.0** | **132.5%**  |
+| rust boot (3 marks)          | 11.1     | 6.6       | −4.5       | −1.3%       |
+| _residual_                   |          |           |            | **0.0000%** |
+
+**warm** — chr 363.5 → ff 724.4 (1.99×), gap **360.9 ms**: compile+instantiate
+22.2 → 475.4 ms = **125.6%** of the gap; wasm fetch −38.0%; rust boot +0.4%.
+
+Shares exceed 100% because **firefox's wasm fetch is a negative contributor** —
+2.5–4.7× faster than chromium's. A segment where firefox is faster is shown as
+negative, never dropped.
+
+### That split is suspect, so here is the robust version
+
+Chromium fetch 250 ms / instantiate 24 ms against firefox 100 ms / 467 ms is
+what **streaming compilation** looks like: if chromium compiles during download,
+its compile work lands inside `responseEnd` and is booked as "fetch". Combining
+the two neutralises the question of where each engine books that work:
+
+| set / warmth     | chr fetch+compile | firefox  | share of gap |
+| ---------------- | ----------------- | -------- | ------------ |
+| deciding, cold   | 274.1 ms          | 566.6 ms | **87.5%**    |
+| deciding, warm   | 196.5 ms          | 512.5 ms | **87.6%**    |
+| confirming, cold | 207.6 ms          | 523.1 ms | **82.2%**    |
+| confirming, warm | 145.4 ms          | 500.4 ms | **80.5%**    |
+
+The conclusion does not depend on the fetch/instantiate boundary.
+
+### The verdict, against rules fixed before collection
+
+**Diagnosis — `wasm compile+instantiate` dominates.** The pre-registered bar was
+≥40% of the gap **and** ≥1.5× the next largest segment. Observed: 132.5% /
+125.6% (deciding, cold/warm) and 102.8% / 94.2% (confirming), against a
+next-largest of 45.0% / 38.0% / 20.6% / 19.1% — dominance factors 2.9× to 5.0×,
+agreeing across cold and warm and across both settings sets.
+
+**Disposition — actionable, not intrinsic.** SpiderMonkey's compile _throughput_
+is not ours; the **volume** it must compile is: 5.1 MiB raw
+(`cargo xtask audit-wasm`), ~88 ms of firefox compile per MiB. Levers and the
+unverified streaming question are #836.
+
+**This redirects #801.** #801 attacks CSR mount cost generally; the Rust mount
+path is 1.7–12.7 ms. Sizing that work from `commit_to_mount` without the
+decomposition would have aimed at the wrong target.
+
+### Frame skew — reported, never decomposed
+
+Median `commitToMountMs − bootTotalMs`, deciding set:
+
+| engine   | cold     | warm     |
+| -------- | -------- | -------- |
+| chromium | 384.8 ms | 337.8 ms |
+| firefox  | 174.0 ms | 195.0 ms |
+
+Large, and **larger on chromium**, so it _shrinks_ the apparent gap when
+measured in `commitToMountMs` — the #792-era `commitToMountMs` ratios understate
+the document-frame gap. This is harness cost (event delivery + the mount→binding
+round trip), not app boot, which is why it is never folded into a segment.
+
+### Two pre-registered rules that were wrong, and what replaced them
+
+Both are recorded because a rule fixed in advance is only worth something if
+breaking it is visible.
+
+- **The loadavg discard rule (>3.0 at either sample) was confounded.** Samples
+  are taken between back-to-back runs, so they measure the _finishing run's own
+  VM_, not ambient contention — systematically: after gate runs 2.69/3.32/2.25,
+  after single-worker runs 1.40/1.52/1.42. One sample breached 3.0; re-taking
+  would have re-rolled the same self-load. Replaced by within-arm consistency
+  (<2% spread, the standard #792 used); the breaching run is not a duration
+  outlier.
+- **The 1% residual rule conflated per-navigation closure with median
+  additivity.** Closure holds per navigation _exactly_ (0/2496 violations), but
+  `median(a+b) ≠ median(a)+median(b)`, so median-based shares cannot close.
+  Replaced by mean-based shares, which are linear and close to 0.0000%.
+
+### Observer effect of the mount-ready harvest (AC16)
+
+The fix added a `page.evaluate` at mount-ready, with mount-path fetches still in
+flight. Against #792 arm B (also 2-worker), gate-settings subset:
+
+| population    | #792 arm B | #818     | delta     | n     |
+| ------------- | ---------- | -------- | --------- | ----- |
+| chromium warm | 283.0 ms   | 285.0 ms | **+0.7%** | 37→36 |
+| firefox warm  | 308.0 ms   | 309.0 ms | **+0.3%** | 39→40 |
+| chromium cold | 90.0 ms    | 110.0 ms | +22.2%    | 6→5   |
+| firefox cold  | 54.0 ms    | 70.0 ms  | +29.6%    | 12→15 |
+
+No material effect on the well-powered warm populations. The cold populations
+are **n=5–15** — too small to separate a real effect from noise, and the
+absolute shifts (+16–20 ms) are small against ~1000 ms boots. Stated as
+underpowered rather than passed or failed.
+
+### Reproducing
+
+```sh
+# per run: set a distinct e2eSalt in flake.nix, then per browser
+nix build --print-out-paths --no-link .#packages.x86_64-linux.e2e-sqlite-firefox-single-worker
+tar -xzf <out>/capture-sqlite.tar.gz capture/otel-traces.jsonl
+# then
+cargo xtask traces analyze <files…>      # certify coverage first
+cargo xtask traces boot-phases <files…>  # per-(source,project,warmth) medians
+```
+
+`traces boot-phases` reports medians; the mean-based signed shares above were
+aggregated over the same JSONL. Corpus:
+`~/measurements/jaunder/issue-818-firefox-boot-phases/`.
+
 ## #792 — the per-test warmup A/B (findings, 2026-08-04)
 
 **Verdict: delete the warmup, both browsers.** It costs 113 s/combo (chromium)
