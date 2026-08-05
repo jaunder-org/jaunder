@@ -9,7 +9,14 @@ import { test, expect } from "./fixtures";
 import { mergeDocumentTiming, type DocumentTiming } from "./capture-trace";
 import { goto } from "./helpers";
 
-const wasm = { startTime: 10, durationMs: 5, responseEndMs: 15 };
+const wasm = {
+  startTime: 10,
+  durationMs: 5,
+  responseEndMs: 15,
+  decodedBodySize: 5_350_591,
+  encodedBodySize: 862_755,
+  transferSize: 863_000,
+};
 const marks = (count: number) =>
   Array.from({ length: count }, (_, index) => ({
     name: `jaunder.boot.m${index}`,

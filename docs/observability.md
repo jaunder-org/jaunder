@@ -23,7 +23,7 @@ exact:
 
 - **Spans**: `e2e.test.lifecycle`, `e2e.test`, `e2e.context_mint`, `e2e.page`,
   `e2e.teardown`, `e2e.flow.*` (browser side); `request`, `storage.*`,
-  `crypto.*` (server side).
+  `crypto.*`, `site.serve` (server side).
 - **Per-test JSON attributes on `e2e.test`**: actions (`e2e.action_top_json`),
   navigations (`e2e.navigation_top_json`), resources
   (`e2e.resource_summary_json`), long tasks (`e2e.long_tasks_json`), slow
@@ -404,6 +404,42 @@ The analyzer reports:
   project alone would pool sqlite's navigations with postgres's. Certify this
   before drawing conclusions from a corpus (#818).
 
+### `site.serve` — what the server actually served (#818)
+
+Static assets are content-negotiated, so **what the client asked for and what
+the server sent are different facts**, and only the first was recorded: the
+`request` span carries `accept-encoding`, but the chosen representation had to
+be re-derived from `choose_encoding`'s logic plus which `.br`/`.gz` variants the
+bundle happens to embed. #818 had to do exactly that to rule out "the two
+browsers were fed different bytes" as a cause of a fetch-duration asymmetry — a
+question the traces should have answered directly.
+
+`site.serve` records it: `site.path`, `site.encoding` (`br`/`gzip`/`identity` —
+never absent, so a deliberately uncompressed response cannot read as a missing
+field), `site.bytes`, `site.embedded`, and `site.status`.
+
+Three things to know before using it:
+
+- **`site.bytes` is the selected representation, not bytes on the wire.** It is
+  recorded before the conditional check, so a `304` still reports the full size
+  while sending no body — ~44% of `pkg/jaunder.wasm` requests are conditional.
+- **`site.status` is the authoritative body-or-no-body signal.** `304` means
+  nothing was sent, whatever the client later reports.
+- **`site.embedded = false` is the SPA-shell fall-through**, which is how an
+  asset that silently stopped being embedded becomes visible instead of
+  surfacing as an unexplained shell response.
+
+The client side pairs with it: `wasmDecodedBytes` / `wasmEncodedBytes` /
+`wasmTransferBytes` on each navigation record. `decoded` is the wasm compiler's
+actual input — the number bundle-size work turns on (#836) — and `decoded` far
+exceeding `encoded` is how you confirm a precompressed variant was served.
+
+**Do not write a cache check against `transferSize`.** On a revalidated response
+firefox reports the full body size where chromium reports ~300 B, while both
+engines send `if-none-match` at the same rate — so the field reads as a browser
+behaviour difference that is not there. #818 briefly mistook it for one.
+`site.status` is the engine-independent answer; use that.
+
 ### `commit_to_mount` stops at `data-mounted` — read `mount_to_settled_ms` too
 
 **`commit_to_mount` does not include the mount-path fetches.** `csr/src/lib.rs`
@@ -557,10 +593,9 @@ negative, never dropped.
 
 ### That split is suspect, so here is the robust version
 
-Chromium fetch 250 ms / instantiate 24 ms against firefox 100 ms / 467 ms is
-what **streaming compilation** looks like: if chromium compiles during download,
-its compile work lands inside `responseEnd` and is booked as "fetch". Combining
-the two neutralises the question of where each engine books that work:
+Chromium fetch 250 ms / instantiate 24 ms against firefox 100 ms / 467 ms means
+the fetch/instantiate boundary sits in a different place on each engine.
+Combining the two neutralises the question of where each engine books that work:
 
 | set / warmth     | chr fetch+compile | firefox  | share of gap |
 | ---------------- | ----------------- | -------- | ------------ |
@@ -570,6 +605,28 @@ the two neutralises the question of where each engine books that work:
 | confirming, warm | 145.4 ms          | 500.4 ms | **80.5%**    |
 
 The conclusion does not depend on the fetch/instantiate boundary.
+
+#### Why the boundary moves is still unexplained — three hypotheses, all refuted
+
+This section originally said the split was "what streaming compilation looks
+like", with chromium compiling during download. **That explanation was wrong and
+is withdrawn.** Three candidate causes have now been tested and all three fail:
+
+| hypothesis                                    | verdict          | evidence                                                                                                                                                                                        |
+| --------------------------------------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| firefox falls back off `instantiateStreaming` | **contradicted** | The fallback triggers on a wrong MIME type and logs a `console.warn` naming it. `serve_site` sends `application/wasm`, asserted at two levels (`site.rs` unit + `serve_site` response test).    |
+| brotli decode explains it                     | **refuted**      | Both engines send an identical `accept-encoding` on 230/230 wasm requests, and both report `decodedBodySize = 5 350 591` / `encodedBodySize = 862 755` — the on-disk artifacts, byte for byte.  |
+| different caching behaviour                   | **refuted**      | Both engines send `if-none-match` on ~44% of wasm requests. Firefox's `transferSize` reads full-size on cached responses where chromium's reads ~300 B, but that is a **reporting** difference. |
+
+Server-side cost is identical too: `busy_ns` median 0.12–0.13 ms on both
+engines.
+
+So the two engines are demonstrably fed the same bytes, over the same wire, by a
+server doing the same work — and the remaining difference is internal to how
+each engine decodes, compiles, and attributes that work against `responseEnd`.
+**That is recorded as unexplained rather than given a fourth story.** Two
+plausible mechanisms have already died here; the combined figure above is what
+the finding rests on precisely so it does not need one.
 
 ### The verdict, against rules fixed before collection
 

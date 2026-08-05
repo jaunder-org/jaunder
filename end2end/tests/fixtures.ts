@@ -99,6 +99,14 @@ type NavigationSummary = {
   wasmFetchStartMs: number | null;
   wasmFetchMs: number | null;
   wasmInstantiateMs: number | null;
+  /** Wasm response sizes. `decoded` is the compiler's input; `encoded` is what
+   *  crossed the wire. A `decoded > encoded` pair means the engine received the
+   *  precompressed `jaunder.wasm.br`; equal sizes mean identity. Recorded because
+   *  a fetch-duration difference between engines is uninterpretable without
+   *  knowing they were fed the same bytes (#818). */
+  wasmDecodedBytes: number | null;
+  wasmEncodedBytes: number | null;
+  wasmTransferBytes: number | null;
   bootPhases: Record<string, number> | null;
   /** Mount-ready → the last mount-path request finishing. Covers what
    *  `commitToMountMs` does NOT: `data-mounted` is set the instant
@@ -649,6 +657,9 @@ const test = base.extend<{
             requestFailed: navigation.requestFailed,
             wasmFetchStartMs: wasm?.startTime ?? null,
             wasmFetchMs: wasm?.durationMs ?? null,
+            wasmDecodedBytes: wasm?.decodedBodySize ?? null,
+            wasmEncodedBytes: wasm?.encodedBodySize ?? null,
+            wasmTransferBytes: wasm?.transferSize ?? null,
             // Rust cannot see its own fetch or instantiation — it only starts
             // running at `boot.entry` — so this span is derived, not marked.
             wasmInstantiateMs:
