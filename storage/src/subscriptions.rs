@@ -118,6 +118,11 @@ pub trait SubscriptionDialect: Database {
     /// `EXISTS` of an `active` subscription for the triple. Bind order:
     /// `author_user_id, channel_id, subscriber_ref`.
     const IS_ACTIVE_SUBSCRIBER: &'static str;
+    /// `EXISTS` of an `active` subscription on the seeded `local` channel, whose
+    /// id is resolved by subquery rather than bound — a local viewer's channel is
+    /// never a free parameter (ADR-0020, #6). Bind order:
+    /// `author_user_id, subscriber_ref`.
+    const IS_ACTIVE_LOCAL_SUBSCRIBER: &'static str;
     /// Lists the author's `active` subscriptions. Bind order: `author_user_id`.
     const LIST_ACTIVE_SUBSCRIBERS: &'static str;
     /// Selects the `channel_id` of the seeded `local` channel. No binds.
@@ -205,25 +210,34 @@ where
         author_user_id: UserId,
         viewer: &ViewerIdentity,
     ) -> sqlx::Result<bool> {
-        let (channel_id, subscriber_ref) = match viewer {
+        // Bind arity is per-variant: a local viewer's channel is the seeded
+        // `local` row, resolved inside `IS_ACTIVE_LOCAL_SUBSCRIBER` rather than
+        // bound, so that arm has one fewer bind (#6).
+        let (exists,) = match viewer {
             ViewerIdentity::Anonymous => return Ok(false), // short-circuit; no query.
             // A local viewer's `subscriber_ref` is its user id in decimal — the
-            // form `subscribe_to` stores.
-            ViewerIdentity::Local {
-                user_id,
-                channel_id,
-            } => (*channel_id, user_id.to_string()),
+            // form `subscribe_to` stores. The carried `channel_id` is ignored:
+            // for a local viewer it can only be the `local` row.
+            ViewerIdentity::Local { user_id, .. } => {
+                let subscriber_ref = user_id.to_string();
+                sqlx::query_as::<_, (i64,)>(DB::IS_ACTIVE_LOCAL_SUBSCRIBER)
+                    .bind(author_user_id)
+                    .bind(subscriber_ref.as_str())
+                    .fetch_one(&self.pool)
+                    .await?
+            }
             ViewerIdentity::Remote {
                 channel_id,
                 subscriber_ref,
-            } => (*channel_id, subscriber_ref.clone()),
+            } => {
+                sqlx::query_as::<_, (i64,)>(DB::IS_ACTIVE_SUBSCRIBER)
+                    .bind(author_user_id)
+                    .bind(*channel_id)
+                    .bind(subscriber_ref.as_str())
+                    .fetch_one(&self.pool)
+                    .await?
+            }
         };
-        let (exists,) = sqlx::query_as::<_, (i64,)>(DB::IS_ACTIVE_SUBSCRIBER)
-            .bind(author_user_id)
-            .bind(channel_id)
-            .bind(subscriber_ref.as_str())
-            .fetch_one(&self.pool)
-            .await?;
         Ok(exists != 0)
     }
 
@@ -267,6 +281,31 @@ mod tests {
     use crate::test_support::{backends, Backend};
     use rstest::*;
     use rstest_reuse::*;
+
+    /// Guards the two dialect constants against drifting apart — the failure mode
+    /// where one backend gains the local-channel statement and the other is
+    /// forgotten, which passes `SQLite` and fails Postgres (ADR-0019, #6).
+    ///
+    /// A *sync* check, not a semantic one: the behaviour it guards is proven on
+    /// both backends by the `is_subscriber` tests in `server/tests/storage`.
+    #[test]
+    fn is_active_local_subscriber_resolves_the_channel_on_both_dialects() {
+        for (name, sql) in [
+            (
+                "sqlite",
+                <sqlx::Sqlite as SubscriptionDialect>::IS_ACTIVE_LOCAL_SUBSCRIBER,
+            ),
+            (
+                "postgres",
+                <sqlx::Postgres as SubscriptionDialect>::IS_ACTIVE_LOCAL_SUBSCRIBER,
+            ),
+        ] {
+            assert!(
+                sql.contains("(SELECT channel_id FROM channels WHERE name = 'local')"),
+                "{name} must resolve the local channel inline: {sql}"
+            );
+        }
+    }
 
     // Functional check only — memoization is deliberately not asserted here:
     // `LOCAL_CHANNEL_ID` is a process-global `OnceLock`, so under a

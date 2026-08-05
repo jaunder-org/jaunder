@@ -56,8 +56,8 @@ no issue-filing task.
   then `PostServices.subscriptions` — every one a hard gate failure. All of that
   is one commit. Tasks 1-3 exist to keep the _interesting_ work out of it.
 - **Variable bind arity.** Task 3 changes `resolution_where`'s emitted
-  placeholder count per variant. Verified safe at all 14 call sites (the 10 with
-  trailing binds thread the returned `next`; the 4 that discard it, and
+  placeholder count per variant. Verified safe at all 14 call sites (the 8 with
+  trailing binds thread the returned `next`; the 6 that discard it, and
   `window_sql`, place the fragment last). Any new call site must thread `next` —
   do not hard-code `$n+5`.
 - **`is_subscriber` is const-based, in two dialects** (ADR-0019). Task 3 adds
@@ -210,7 +210,7 @@ in this task and constructs `Local`. `account_viewer` is unchanged.
 
 **Steps**
 
-- [ ] **Step 1 (red).** Add a unit test:
+- [x] **Step 1 (red).** Add a unit test:
 
   ```rust
   #[test]
@@ -226,10 +226,10 @@ in this task and constructs `Local`. `account_viewer` is unchanged.
   `cargo nextest run -p common viewer_user_id` → **FAIL** (task 1 step 3 left
   the parse in place precisely so this is red).
 
-- [ ] **Step 2 (green).** Match on the variant instead of parsing:
+- [x] **Step 2 (green).** Match on the variant instead of parsing:
       `Local { user_id, .. } => Some(*user_id)`,
       `Remote { .. } | Anonymous =>     None`. Re-run → **PASS**.
-- [ ] **Step 3.** `cargo xtask check`; commit
+- [x] **Step 3.** `cargo xtask check`; commit
       `fix(visibility): is_author cannot be spoofed by a numeric remote ref (#6)`.
 
 ---
@@ -274,7 +274,7 @@ IS_ACTIVE_LOCAL_SUBSCRIBER = "SELECT EXISTS( \
 
 **Steps**
 
-- [ ] **Step 1.** In `resolution_where`, emit the channel predicate per variant.
+- [x] **Step 1.** In `resolution_where`, emit the channel predicate per variant.
       The `subscribers` and `named` branches take an interpolated
       **expression**, not a fixed placeholder:
 
@@ -291,12 +291,14 @@ IS_ACTIVE_LOCAL_SUBSCRIBER = "SELECT EXISTS( \
   hard-code any downstream placeholder number** — the 10 call sites with
   trailing binds already thread the returned `next`; verify each still does.
 
-- [ ] **Step 2.** Add `IS_ACTIVE_LOCAL_SUBSCRIBER` to **both** backend modules
+- [x] **Step 2.** Add `IS_ACTIVE_LOCAL_SUBSCRIBER` to **both** backend modules
       and route `is_subscriber`'s `Local` arm to it (2 binds: author, ref).
       `Remote` keeps `IS_ACTIVE_SUBSCRIBER`; `Anonymous` keeps short-circuiting.
-- [ ] **Step 3.** `cargo nextest run -p jaunder --test storage` → **PASS**, both
+- [x] **Step 3.** `cargo nextest run -p jaunder --test storage` → **PASS**, both
       backends — the full matrix including task 1's impostor column, plus the
-      `is_subscriber` tests at `:293-390`.
+      `is_subscriber` tests at `:293-390`. (The suite compiles as one
+      `integration` binary, so the filter is `-p jaunder storage::`; Postgres
+      cases run under `devtool pg run`.)
 - [ ] **Step 4.** `cargo xtask check`; commit
       `refactor(storage): resolve the local channel in SQL (#6)`.
 

@@ -26,6 +26,16 @@ impl SubscriptionDialect for Postgres {
            WHERE s.author_user_id = $1 AND s.channel_id = $2 AND s.subscriber_ref = $3 \
              AND st.name = 'active') THEN 1::bigint ELSE 0::bigint END";
 
+    // Same CASE-to-bigint shaping as `IS_ACTIVE_SUBSCRIBER` above, for the same
+    // reason; the channel is resolved by subquery instead of bound.
+    const IS_ACTIVE_LOCAL_SUBSCRIBER: &'static str = "SELECT CASE WHEN EXISTS( \
+           SELECT 1 FROM subscriptions s \
+           JOIN subscription_statuses st ON st.status_id = s.status_id \
+           WHERE s.author_user_id = $1 \
+             AND s.channel_id = (SELECT channel_id FROM channels WHERE name = 'local') \
+             AND s.subscriber_ref = $2 \
+             AND st.name = 'active') THEN 1::bigint ELSE 0::bigint END";
+
     const LIST_ACTIVE_SUBSCRIBERS: &'static str = "SELECT \
            s.subscription_id, s.channel_id, s.subscriber_ref, s.created_at \
          FROM subscriptions s \

@@ -87,10 +87,10 @@ channel id is irrelevant. `0` is not a real `channels` row.
    `Remote` and `Anonymous` bind 5 as today. `resolution_where` already returns
    the next free placeholder index, and this is safe at all **14** call sites
    (`storage/src/posts.rs:1077, 1161, 1314, 1344, 1386, 1414, 1595, 1627, 1687, 1721, 2313, 2324, 2335, 2347`):
-   the ten that have trailing binds thread `next` through their format strings,
-   and the four that discard it place the fragment last, as does `window_sql`
-   (`:2368`), which interpolates `{resolution}` as the final predicate before
-   `ORDER BY`.
+   the eight that have trailing binds thread `next` through their format
+   strings, and the six that discard it place the fragment last, as does
+   `window_sql` (`:2368`), which interpolates `{resolution}` as the final
+   predicate before `ORDER BY`.
 
    Rejected: `COALESCE($chan, (SELECT …))` for a uniform template — it would
    coalesce `Anonymous` onto the local channel too, leaving anonymous safety

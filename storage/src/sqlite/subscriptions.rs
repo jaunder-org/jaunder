@@ -23,6 +23,14 @@ impl SubscriptionDialect for Sqlite {
            WHERE s.author_user_id = ? AND s.channel_id = ? AND s.subscriber_ref = ? \
              AND st.name = 'active')";
 
+    const IS_ACTIVE_LOCAL_SUBSCRIBER: &'static str = "SELECT EXISTS( \
+           SELECT 1 FROM subscriptions s \
+           JOIN subscription_statuses st ON st.status_id = s.status_id \
+           WHERE s.author_user_id = ? \
+             AND s.channel_id = (SELECT channel_id FROM channels WHERE name = 'local') \
+             AND s.subscriber_ref = ? \
+             AND st.name = 'active')";
+
     const LIST_ACTIVE_SUBSCRIBERS: &'static str = "SELECT \
            s.subscription_id, s.channel_id, s.subscriber_ref, s.created_at \
          FROM subscriptions s \
