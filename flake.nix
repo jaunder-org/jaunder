@@ -605,14 +605,14 @@
             # process env so the `test-support` seed helper it spawns points at
             # that DB (it reads `JAUNDER_DB`). Backend-specific; see each check.
             jaunderDb,
-            warmupEnv ? "",
+            extraEnv ? "",
           }:
           ''
             pw_status, pw_out = machine.execute(
               "cd /tmp/e2e"
               + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
               + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
-              + "${warmupEnv}"
+              + "${extraEnv}"
               + " JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture"
               + " JAUNDER_DB=${jaunderDb}"
               + " JAUNDER_E2E_TRACE_ID=${traceId}"
@@ -669,7 +669,7 @@
             browser,
             traceId,
             traceParent,
-            warmupEnv ? "",
+            extraEnv ? "",
             vmMemory ? 2048,
             vmCores ? null,
           }:
@@ -758,7 +758,7 @@
               ${e2eRunAndCapture {
                 backend = "sqlite";
                 jaunderDb = "sqlite:/var/lib/jaunder/data/jaunder.db";
-                inherit browser traceId traceParent warmupEnv;
+                inherit browser traceId traceParent extraEnv;
               }}
             '';
           };
@@ -769,7 +769,7 @@
             browser,
             traceId,
             traceParent,
-            warmupEnv ? "",
+            extraEnv ? "",
             vmMemory ? 2048,
             vmCores ? null,
           }:
@@ -791,7 +791,7 @@
                 imports = [ self.nixosModules.jaunder ];
 
                 virtualisation.memorySize = vmMemory;
-                # Default (null) leaves the nixosTest core count alone; the warm
+                # Default (null) leaves the nixosTest core count alone; the
                 # gate sets 2, matching its worker count (workers>1 needs the
                 # cores; 1 vCPU timeshares and starves the client render).
                 virtualisation.cores = lib.mkIf (vmCores != null) vmCores;
@@ -883,16 +883,30 @@
               ${e2eRunAndCapture {
                 backend = "postgres";
                 jaunderDb = "postgres://jaunder:testpassword@127.0.0.1/jaunder";
-                inherit browser traceId traceParent warmupEnv;
+                inherit browser traceId traceParent extraEnv;
               }}
             '';
           };
 
+        # Cache-busting salt for e2e measurement runs (#792). Nix caches the e2e
+        # check derivations, so a repeated `cargo xtask traces run` returns a
+        # CACHED result rather than re-running the suite — silently handing back
+        # traces from whenever it was last built, possibly on a CI runner under
+        # unknown load. Set this to a distinct value per measurement run to force
+        # a fresh build; REVERT TO "" BEFORE COMMITTING. Empty is a byte-exact
+        # no-op: it must not change any e2e derivation hash.
+        e2eSalt = "";
+
+        # Enforced by xtask's `e2e-scaffold` static check: a committed non-empty
+        # salt costs every CI e2e job its cache, and the only symptom is "CI got
+        # slow" — nothing fails on its own, which is exactly why the guard exists.
+
         # All e2e {backend}×{browser} combos. backend picks the VM builder;
         # browser picks the Playwright --project; traceDigit gives each combo a
         # distinct OTel trace id (the 1/2/3/4 mapping preserves the historical
-        # per-combo ids). Add a row here and the warm checks, the cold diagnostic
-        # packages, and the `e2e-checks` aggregate all extend automatically.
+        # per-combo ids). Add a row here and the gate checks, the single-worker
+        # diagnostic packages, and the `e2e-checks` aggregate all extend
+        # automatically.
         e2eCombos = [
           { backend = "sqlite";   browser = "chromium"; traceDigit = "1"; }
           { backend = "sqlite";   browser = "firefox";  traceDigit = "2"; }
@@ -906,7 +920,7 @@
             browser,
             traceDigit,
             nameSuffix ? "",
-            warmupEnv ? "",
+            extraEnv ? "",
             vmMemory ? 2048,
             vmCores ? null,
           }:
@@ -918,24 +932,30 @@
           in
           mk {
             checkName = "jaunder-e2e-${backend}-${browser}${nameSuffix}";
+            # The salt rides the combo's generic extra-env string, which is
+            # interpolated into the VM testScript above — so it reaches the
+            # derivation hash. The variable itself is inert: nothing reads
+            # JAUNDER_E2E_SALT. Changing the hash is its whole job. Spliced here
+            # rather than per-family so every combo salts alike.
+            extraEnv =
+              extraEnv + pkgs.lib.optionalString (e2eSalt != "") " JAUNDER_E2E_SALT=${e2eSalt}";
             inherit
               browser
               traceId
               traceParent
-              warmupEnv
               vmMemory
               vmCores
               ;
           };
 
-        # attr name -> warm check, e.g. { "e2e-sqlite-chromium" = <drv>; ... }
-        # The warm gate runs at workers=2 (#155, see playwright.config.ts), so the
+        # attr name -> gate check, e.g. { "e2e-sqlite-chromium" = <drv>; ... }
+        # The gate runs at workers=2 (#155, see playwright.config.ts), so the
         # VMs are sized 3 GB / 2 vCPU: cores >= workers avoids in-guest CPU
         # starvation, and with the Firefox process-slimming prefs 3 GB clears the
         # OOM that heavier VMs hit (#61). At workers=2 the per-VM footprint is
         # small enough that a 16-core dev box (and CI's per-combo runners) run the
         # combos comfortably; see docs/observability.md #155 AC3/AC4.
-        e2eWarmChecks = pkgs.lib.listToAttrs (
+        e2eGateChecks = pkgs.lib.listToAttrs (
           map (c: {
             name = "e2e-${c.backend}-${c.browser}";
             value = mkE2eCombo (
@@ -944,9 +964,7 @@
                 # RETRIES=1: the gate reports a fail-then-pass as `flaky` (exit 0)
                 # rather than failing the combo check, containing timeout flakiness
                 # (Firefox 5s `expect` races) while results.json records it.
-                # (warmupEnv is the combo's generic extra-env string — cold reuses
-                # it for WORKERS=1 — so retries ride it rather than a new param.)
-                warmupEnv = " JAUNDER_E2E_WARMUP=1 JAUNDER_E2E_RETRIES=1";
+                extraEnv = " JAUNDER_E2E_RETRIES=1";
                 vmMemory = 3072;
                 vmCores = 2;
               }
@@ -954,26 +972,31 @@
           }) e2eCombos
         );
 
-        # Cold-cache variants (no warmup): same combos as the warm checks but the
-        # first navigation of each test pays the full cold WASM download + init.
+        # Single-worker variants: same combos as the gate checks but pinned to
+        # workers=1, so per-navigation timings are free of worker contention.
+        # That isolation is their whole purpose — use them when the question is
+        # "what does one navigation cost", not "what does the suite cost".
+        #
+        # These were the `-cold` family until #792. That name meant "no warmup",
+        # which distinguished them from a gate that warmed every test; now that the
+        # warmup is gone the gate's first navigation is cold too, so the only
+        # remaining difference is the worker count — and the name says so.
+        #
         # NOT part of the gate — built on demand by
-        # `cargo xtask traces run --cold` to capture cold-cache OTel
-        # navigation traces for performance diagnostics (see docs/observability.md).
-        # Pinned to workers=1 (the warm gate runs at 2, see above): these measure
-        # per-navigation cold cost, where worker contention would corrupt the
-        # attribution, and they keep the default 2 GB VM (more Firefox workers
-        # would OOM it, #61). Note workers=1 also drops chromium's whole-test
-        # scale to 1.0 from the gate's 1.5 (firefox takes max(2.2, contention),
-        # so it is unaffected) — see DEFAULT_TEST_BUDGET_MS in
-        # end2end/tests/fixtures.ts (#270).
-        e2eColdPackages = pkgs.lib.listToAttrs (
+        # `cargo xtask traces run --single-worker` (see docs/observability.md).
+        # They keep the default 2 GB VM, since one worker fits where two Firefox
+        # workers would OOM it (#61). Note workers=1 also drops chromium's
+        # whole-test scale to 1.0 from the gate's 1.5 (firefox takes
+        # max(2.2, contention), so it is unaffected) — see DEFAULT_TEST_BUDGET_MS
+        # in end2end/tests/fixtures.ts (#270).
+        e2eSingleWorkerPackages = pkgs.lib.listToAttrs (
           map (c: {
-            name = "e2e-${c.backend}-${c.browser}-cold";
+            name = "e2e-${c.backend}-${c.browser}-single-worker";
             value = mkE2eCombo (
               c
               // {
-                nameSuffix = "-cold";
-                warmupEnv = " JAUNDER_E2E_WORKERS=1";
+                nameSuffix = "-single-worker";
+                extraEnv = " JAUNDER_E2E_WORKERS=1";
               }
             );
           }) e2eCombos
@@ -1003,7 +1026,7 @@
               );
             };
           }
-          // e2eColdPackages
+          // e2eSingleWorkerPackages
         );
 
         apps =
@@ -1022,7 +1045,7 @@
 
         checks =
           pkgs.lib.optionalAttrs pkgs.stdenv.isLinux (
-            e2eWarmChecks
+            e2eGateChecks
             // {
               # The single e2e gate `cargo xtask validate` builds. `e2e-checks`
               # aggregates every `checks.e2e-*` combo (now 4); they are independent

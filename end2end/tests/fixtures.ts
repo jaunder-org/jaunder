@@ -55,7 +55,6 @@ import {
   TEST_PASSWORD,
 } from "./helpers";
 import { readEmailLines, type CapturedEmail } from "./mail";
-import { MOUNTED_ATTR, MOUNTED_SELECTOR } from "./mount";
 import { pollUntil } from "./polling";
 import { applySeededSession, seedUserViaTool } from "./seed";
 
@@ -202,71 +201,6 @@ function workerContentionScale(testInfo: TestInfo): number {
   if (workers === 3) return 2.0;
   return 2.5; // 4+ workers: heaviest oversubscription on a ~4-vCPU runner
 }
-// Default the warmup URL to BASE_URL (env-aware, #249) rather than a second
-// hardcoded :3000; the explicit JAUNDER_E2E_WARMUP_URL override still wins below.
-const defaultWarmupUrl = `${BASE_URL}/`;
-const defaultWarmupTimeoutMs = 10_000;
-
-function parseBooleanFlag(raw: string | undefined): boolean {
-  if (raw === undefined) {
-    return false;
-  }
-  const normalized = raw.trim().toLowerCase();
-  return (
-    normalized === "1" ||
-    normalized === "true" ||
-    normalized === "yes" ||
-    normalized === "on"
-  );
-}
-
-function parseWarmupTimeoutMs(raw: string | undefined): number {
-  if (raw === undefined) {
-    return defaultWarmupTimeoutMs;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return defaultWarmupTimeoutMs;
-  }
-  return parsed;
-}
-
-async function warmupPageContext(
-  page: Page,
-  testInfo: TestInfo,
-): Promise<void> {
-  if (!parseBooleanFlag(process.env.JAUNDER_E2E_WARMUP)) {
-    return;
-  }
-
-  const warmupUrl = process.env.JAUNDER_E2E_WARMUP_URL ?? defaultWarmupUrl;
-  const timeoutMs = parseWarmupTimeoutMs(
-    process.env.JAUNDER_E2E_WARMUP_TIMEOUT_MS,
-  );
-
-  try {
-    await page.goto(warmupUrl, {
-      waitUntil: "domcontentloaded",
-      timeout: timeoutMs,
-    });
-    await page.waitForSelector(MOUNTED_SELECTOR, {
-      timeout: timeoutMs,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn(
-      `[e2e-warmup] ${testInfo.project.name}: warmup failed for ${warmupUrl}: ${message}`,
-    );
-  }
-}
-
-export async function maybeWarmupPage(
-  page: Page,
-  testInfo: TestInfo,
-): Promise<void> {
-  await warmupPageContext(page, testInfo);
-}
-
 export function slowBrowserTimeoutMs(
   testInfo: TestInfo,
   chromiumBudgetMs: number,
@@ -581,26 +515,16 @@ const test = base.extend<{
       const lifecycleStartMs = _lifecycleStart;
       const perfSpanEntryMs = Date.now();
 
-      // Capture attaches BEFORE the warmup, so the warmup's own traffic is
-      // measured rather than invisible. Attribution is a separate concern and
-      // still waits (see below) — fusing the two is what left the warmup's
-      // duration measured nowhere (#794).
+      // Capture attaches before the phase switch below, so any pre-test traffic
+      // is measured rather than invisible (#794). Attribution is a separate
+      // concern and still waits — fusing the two is what once left the (since
+      // removed, #792) per-test warmup's duration measured nowhere.
       const capture = await attachTraceCapture(page.context());
-      const warmupStartMs = Date.now();
-      await warmupPageContext(page, testInfo);
-      // `null` when warmup is off, so no `e2e.warmup` span is emitted at all
-      // rather than a misleading zero-width one.
-      const warmupEndMs = parseBooleanFlag(process.env.JAUNDER_E2E_WARMUP)
-        ? Date.now()
-        : null;
 
       const traceContext = traceContextFromEnvironment();
-      // Records starting from here belong to the test, not the warmup. Switched
-      // at the same moment as the traceparent so the two stay in lockstep.
+      // Records starting from here belong to the test. Switched at the same
+      // moment as the traceparent so the two stay in lockstep.
       capture.setPhase("test");
-      // The test's own context, so its requests are attributable too. Applied
-      // after the warmup so warmup traffic (which is not part of the test) stays
-      // out of the attribution (#681).
       await applyTestTraceparent(
         page.context(),
         traceContext.traceId,
@@ -899,7 +823,6 @@ const test = base.extend<{
           attributes: [...identity(), ...extra],
         });
 
-      const warmupSink = capture.sinkFor("warmup");
       const spans = [
         buildSpan({
           traceContext,
@@ -935,29 +858,6 @@ const test = base.extend<{
         }),
         phaseSpan("e2e.teardown", endMs, exportStartMs),
       ];
-
-      if (warmupEndMs !== null) {
-        // Warmup TRAFFIC stays unattributed by design (#681's orphan bucket);
-        // what was missing was its DURATION, which is measured nowhere today.
-        // These counts are the warmup's own, kept out of `e2e.test`'s.
-        spans.push(
-          phaseSpan(
-            "e2e.warmup",
-            warmupStartMs,
-            warmupEndMs,
-            [
-              otlpAttribute("e2e.request_count", warmupSink.requests.length),
-              otlpAttribute(
-                "e2e.navigation_count",
-                warmupSink.navigations.length,
-              ),
-            ].filter(
-              (attribute): attribute is NonNullable<typeof attribute> =>
-                attribute !== null,
-            ),
-          ),
-        );
-      }
 
       // One span per extra context the spec opened via `tracedContext`. Without
       // these a multi-context test under-reports its own client cost — the

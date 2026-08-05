@@ -1,7 +1,7 @@
 //! `cargo xtask traces run` — build the e2e VM checks and analyze their traces.
 //!
 //! Host orchestrator (ADR-0028): nix-builds the `{sqlite,postgres}×{chromium,firefox}`
-//! e2e checks (or their `-cold` package variants), extracts each combo's
+//! e2e checks (or their `-single-worker` package variants), extracts each combo's
 //! `capture/otel-traces.jsonl` from its `capture-<backend>.tar.gz` bundle (#332 — the
 //! trace now rides the capture dir, not a standalone artifact), and hands the files to
 //! the in-process `traces::analyze` / `render` seam. Port of
@@ -26,12 +26,13 @@ const BACKENDS: [E2eBackend; 2] = [E2eBackend::Sqlite, E2eBackend::Postgres];
 /// capture dir's parent (`tar … -C /var/lib/jaunder capture`).
 const TRACE_MEMBER: &str = "capture/otel-traces.jsonl";
 
-/// The flake attr for one e2e combo. `cold` → the `packages…-cold` variant, warm →
+/// The flake attr for one e2e combo. `single_worker` → the `packages…-single-worker`
+/// variant, otherwise the gate check →
 /// the `checks…` variant (e.g. `checks.x86_64-linux.e2e-sqlite-chromium`,
-/// `packages.x86_64-linux.e2e-postgres-firefox-cold`).
-pub fn e2e_attr(backend: E2eBackend, browser: E2eBrowser, cold: bool) -> String {
-    let ns = if cold { "packages" } else { "checks" };
-    let suffix = if cold { "-cold" } else { "" };
+/// `packages.x86_64-linux.e2e-postgres-firefox-single-worker`).
+pub fn e2e_attr(backend: E2eBackend, browser: E2eBrowser, single_worker: bool) -> String {
+    let ns = if single_worker { "packages" } else { "checks" };
+    let suffix = if single_worker { "-single-worker" } else { "" };
     format!(
         "{ns}.x86_64-linux.e2e-{}-{}{suffix}",
         backend.as_str(),
@@ -62,7 +63,7 @@ pub fn browsers(browser: Option<E2eBrowser>) -> Vec<E2eBrowser> {
 /// member across combos. nix/filesystem I/O — not unit-tested; exercised by a manual
 /// run. Iteration is backends-outer, browsers-inner, matching the script's file order.
 pub fn collect_trace_files(
-    cold: bool,
+    single_worker: bool,
     browser: Option<E2eBrowser>,
 ) -> Result<(TempDir, Vec<PathBuf>, Vec<LabeledReport>)> {
     let tmp = TempDir::new()?;
@@ -71,7 +72,7 @@ pub fn collect_trace_files(
     let mut reports: Vec<LabeledReport> = Vec::new();
     for backend in BACKENDS {
         for &browser in &browsers {
-            let attr = e2e_attr(backend, browser, cold);
+            let attr = e2e_attr(backend, browser, single_worker);
             let out = build_out_path(&attr)?;
             let tarball = capture_tarball_path(&out, backend);
             ensure!(
@@ -154,14 +155,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn e2e_attr_warm_and_cold() {
+    fn e2e_attr_gate_and_single_worker() {
         assert_eq!(
             e2e_attr(E2eBackend::Sqlite, E2eBrowser::Chromium, false),
             "checks.x86_64-linux.e2e-sqlite-chromium"
         );
         assert_eq!(
             e2e_attr(E2eBackend::Postgres, E2eBrowser::Firefox, true),
-            "packages.x86_64-linux.e2e-postgres-firefox-cold"
+            "packages.x86_64-linux.e2e-postgres-firefox-single-worker"
         );
     }
 

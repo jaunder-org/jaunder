@@ -21,9 +21,9 @@ This distinction is easy to get wrong — #788's write-up said "`action.timed`
 ×1233 **spans**", but 1233 was the _entry count inside one attribute_. To be
 exact:
 
-- **Spans**: `e2e.test.lifecycle`, `e2e.test`, `e2e.warmup`, `e2e.context_mint`,
-  `e2e.page`, `e2e.teardown`, `e2e.flow.*` (browser side); `request`,
-  `storage.*`, `crypto.*` (server side).
+- **Spans**: `e2e.test.lifecycle`, `e2e.test`, `e2e.context_mint`, `e2e.page`,
+  `e2e.teardown`, `e2e.flow.*` (browser side); `request`, `storage.*`,
+  `crypto.*` (server side).
 - **Per-test JSON attributes on `e2e.test`**: actions (`e2e.action_top_json`),
   navigations (`e2e.navigation_top_json`), resources
   (`e2e.resource_summary_json`), long tasks (`e2e.long_tasks_json`), slow
@@ -38,7 +38,6 @@ inside the attribute blobs.
 ```
 e2e.test.lifecycle              first auto-fixture stamp → just before OTLP export
 ├── e2e.context_mint            browser context + page creation
-├── e2e.warmup                  only when JAUNDER_E2E_WARMUP is on
 ├── e2e.test                    the test body — unchanged span id, range, attributes
 │   └── request, storage.*, …   server spans, attributed by traceparent
 ├── e2e.page                    one per extra context opened via `tracedContext`
@@ -55,12 +54,13 @@ collide), and the coverage extractor walks `parent_span_id` _upward_ to an
 
 **Which `e2e.test` numbers remain comparable to #788.** Its span id and time
 range are unchanged, and so are `e2e.request_count` and `e2e.navigation_count` —
-that is exactly what the phase-tagged capture sink protects, since warmup now
-flows through the same instrumentation. But `e2e.action_count` and
-`e2e.action_top_json` **are not comparable**: #794 delimited the composite flows
-(`flow.login`, `flow.verify_email`, …) and wrapped the previously-invisible
-waits, so the action count legitimately rose. Diff the request and navigation
-counts across that boundary; do not diff the action counts.
+that is exactly what the phase-tagged capture sink protects: anything a fixture
+does before the test body is filed under the `pretest` phase, never in
+`e2e.test`'s arrays. But `e2e.action_count` and `e2e.action_top_json` **are not
+comparable**: #794 delimited the composite flows (`flow.login`,
+`flow.verify_email`, …) and wrapped the previously-invisible waits, so the
+action count legitimately rose. Diff the request and navigation counts across
+that boundary; do not diff the action counts.
 
 **Every `e2e.`-prefixed span must carry an `e2e.project` attribute.**
 `traces analyze --project <name>` drops any `e2e.`-named span whose
@@ -151,8 +151,11 @@ them, which is the structural join the flow-coverage gate below walks.
 
 The run-wide `JAUNDER_E2E_TRACEPARENT` value remains installed as
 `playwright.config.ts`'s static `use.extraHTTPHeaders`, so it is still what
-pre-attribution traffic (notably `warmupPageContext`) carries. That traffic is
-deliberately _not_ attributed to any test.
+pre-attribution traffic carries — anything issued between context creation and
+the per-test traceparent being applied. That traffic is deliberately _not_
+attributed to any test. Until #792 the per-test warmup was its main source; the
+bucket remains because the window it covers is structural, not because the
+warmup was.
 
 A context built with `browser.newContext()` does **not** inherit config-level
 `extraHTTPHeaders`, so specs must use the `tracedContext` fixture; the
@@ -288,13 +291,20 @@ Two properties, both deliberate:
   make this artifact a tax on unrelated work. A reason set is a function of the
   code.
 
-It is reported, not failed. Expect exactly the app-shell fns (`session`,
-`list_local_timeline`, and the two warning-visibility fns), each carrying the
-single reason `unknown-parent:` naming the run-wide traceparent's span id: that
-is the `_autoPerfSpan` warmup load, which applies the per-test traceparent only
-_after_ `warmupPageContext`, so warmup traffic stays out of attribution by
-design. A different reason, an unfamiliar parent id, or any other fn appearing
-means a context lost its traceparent or the capture is truncated.
+It is reported, not failed. **Since #792, expect it to be empty.** Until then it
+held exactly four app-shell fns (`get_session`, `list_local_timeline`, and the
+two warning-visibility fns), each carrying the single reason `unknown-parent:`
+naming the run-wide traceparent's span id — that was the per-test warmup's `/`
+load, issued before `applyTestTraceparent` stamped the context. Removing the
+warmup removed the traffic, and the regenerated snapshot's `orphans` is `{}`.
+
+**The mechanism stays even though its occupant is gone.** The pre-test window —
+after the browser context exists, before the traceparent is applied — is
+structural, and anything that ever lands in it must not be attributed to a test.
+An empty bucket is the correct steady state, not dead code. An fn appearing here
+again means something now issues traffic before the test proper starts; a
+different reason or an unfamiliar parent id means a context lost its traceparent
+or the capture is truncated.
 
 ## Server-side scoped diagnostic log — look here first (#144)
 
@@ -384,32 +394,186 @@ The CSR client emits `performance.mark`s at its boot boundaries via
   measured is not the binary being shipped, which quietly invalidates every
   number they produce.
 
+**Measure from `traces run`, never from `cargo xtask validate`.** `validate`
+builds the `e2e-checks` aggregate, so nix realizes the four combo derivations
+**concurrently** — four VMs at two workers each on one host. `traces run` builds
+them one at a time (`traces/run.rs`'s nested loop). Measured 2026-08-05 on the
+same tree: sqlite-chromium reported **436 s** under `validate` against **191 s**
+serial, and all four `validate` combos started within 8 seconds of each other. A
+suite duration read out of a `validate` log is a contention artefact, inflated
+enough (~2.5×) to look like a catastrophic regression.
+
+Host quiescence matters for the same reason: sample `/proc/loadavg` before and
+after each run and discard any taken while other work — including other agent
+sessions — was on the box.
+
 To build both e2e VM checks and immediately analyze the produced traces, use:
 
 ```bash
 cargo xtask traces run --top 25
 ```
 
-For cold-cache diagnostics (without `JAUNDER_E2E_WARMUP=1` in the VM checks),
-use:
+When the question is what a single navigation costs rather than what the suite
+costs, use the single-worker packages — one worker, so no contention distorts
+the per-navigation numbers:
 
 ```bash
-cargo xtask traces run --cold --top 25
+cargo xtask traces run --single-worker --top 25
 ```
 
 Optional filters:
 
 - `--top N` controls how many rows each section prints.
 - `--trace TRACE_ID` restricts analysis to one trace id.
-- `--cold` runs the per-browser cold packages
-  (`e2e-{sqlite,postgres}-{chromium,firefox}-cold`) instead of the default
-  warmup e2e checks.
+- `--single-worker` runs the per-browser single-worker packages
+  (`e2e-{sqlite,postgres}-{chromium,firefox}-single-worker`) instead of the gate
+  checks. These were the `-cold` family before #792, when "cold" meant "no
+  warmup"; the gate is cold now too, so the worker count is the only difference
+  left.
 - `--browser chromium|firefox` restricts the run to one browser (default: both).
   Use this (not `--project`) to focus one browser, e.g. when debugging Firefox
   timeout pressure: `cargo xtask traces run --browser firefox`.
 
 (`cargo xtask traces analyze` additionally accepts `--project NAME` to focus one
 browser/project when analyzing already-collected trace files directly.)
+
+## #792 — the per-test warmup A/B (findings, 2026-08-04)
+
+**Verdict: delete the warmup, both browsers.** It costs 113 s/combo (chromium)
+to 139 s/combo (firefox) and buys back at most ~12 s. No flakiness cost.
+
+### Method
+
+Six runs of `cargo xtask traces run`, interleaved `A1 B1 A2 B2 A3 B3`, on a
+quiescent host (session baseline `/proc/loadavg` 0.75, 2.10–2.60 during
+collection). Arms differ in exactly one token at otherwise gate-identical
+settings (`WORKERS=2`, `RETRIES=1`, `vmMemory = 3072`, `vmCores = 2`):
+
+- **Arm A** — the gate as it stands, `JAUNDER_E2E_WARMUP=1`.
+- **Arm B** — `e2eWarmup = false`; nothing else changes.
+
+Each run used a distinct `e2eSalt` (`a1`…`b3`). **This is load-bearing**:
+without it nix returns the cached derivation and never runs the suite, so runs 2
+and 3 would have been byte-identical replays of run 1. Sequential per-combo
+start times in the reports confirm all 24 combos genuinely executed.
+
+Deciding data is **sqlite only**, both browsers (per the spec: the backend axis
+is not what warmup touches). Postgres was collected at the same settings and is
+retained for #817.
+
+### The runs
+
+Every combo of every run, as measured. `expected = 130` throughout;
+`unexpected = 0` throughout. No run was discarded.
+
+| run | salt | warmup | started (sq-chr) | loadavg after  | sq-chr | sq-ff | pg-chr | pg-ff           |
+| --- | ---- | ------ | ---------------- | -------------- | ------ | ----- | ------ | --------------- |
+| A1  | `a1` | on     | 22:27:40Z        | 2.18 2.34 1.96 | 229.9  | 329.6 | 228.0  | 336.2 (1 flaky) |
+| B1  | `b1` | off    | 22:49:11Z        | 2.22 2.24 2.08 | 174.0  | 254.4 | 171.2  | 257.7           |
+| A2  | `a2` | on     | 23:06:28Z        | 2.27 2.41 2.30 | 224.9  | 323.6 | 227.8  | 327.8           |
+| B2  | `b2` | off    | 23:27:16Z        | 2.47 2.43 2.36 | 174.5  | 256.6 | 171.7  | 258.0           |
+| A3  | `a3` | on     | 23:44:03Z        | 2.10 2.33 2.35 | 226.8  | 323.7 | 226.2  | 323.9           |
+| B3  | `b3` | off    | 00:04:40Z        | 2.60 2.38 2.29 | 172.0  | 256.0 | 171.5  | 257.8           |
+
+Durations in seconds. Session baseline `/proc/loadavg` before the first run:
+**0.75 0.94 0.82**. Load was sampled **after** each run rather than both before
+and after; since the runs were back-to-back, each row's figure is also
+effectively the next run's starting load, and the band (2.10–2.60) never
+approached a level that would have triggered the discard rule.
+
+### Suite wall-clock (sqlite, `.stats.duration`, seconds)
+
+| arm           | chromium            | median                | firefox             | median                |
+| ------------- | ------------------- | --------------------- | ------------------- | --------------------- |
+| A (warmup)    | 229.9, 224.9, 226.8 | **226.8**             | 329.6, 323.6, 323.7 | **323.7**             |
+| B (no warmup) | 174.0, 174.5, 172.0 | **174.0**             | 254.4, 256.6, 256.0 | **256.0**             |
+| **Δ**         |                     | **−52.8 s (−23.3 %)** |                     | **−67.7 s (−20.9 %)** |
+
+Within-arm spread is ≤2.2 %; the between-arm gap is ~21–23 %. Both arms ran 130
+tests, `unexpected = 0` throughout.
+
+**Flakiness guardrail (spec D8): not triggered.** Summed `flaky + unexpected`
+across each browser's three sqlite runs is **0 for both arms**. The session's
+only flake was one postgres-firefox test in A1 — in arm **A**, and outside the
+deciding set. Arm B is not buying speed with retries.
+
+### Where the time goes (span sums per combo, sqlite)
+
+| phase                | A chromium  | B chromium | A firefox   | B firefox |
+| -------------------- | ----------- | ---------- | ----------- | --------- |
+| `e2e.test.lifecycle` | 428.3 s     | 321.3 s    | 623.1 s     | 475.1 s   |
+| `e2e.test`           | 285.4 s     | 297.1 s    | 374.5 s     | 372.3 s   |
+| `e2e.warmup`         | **113.3 s** | —          | **139.5 s** | —         |
+| `e2e.context_mint`   | 19.1 s      | 15.3 s     | 87.3 s      | 81.7 s    |
+| `e2e.teardown`       | 4.4 s       | 3.7 s      | 4.5 s       | 4.4 s     |
+
+The arithmetic closes, and it is worth doing explicitly because it explains the
+wall-clock number:
+
+- chromium: −113.3 s of warmup, **+11.7 s** of test time → −107 s of lifecycle →
+  ÷2 workers → **−53.5 s wall**, against −52.8 s observed.
+- firefox: −139.5 s of warmup, −2.2 s of test time → −148 s → **−74 s wall**,
+  against −67.7 s observed.
+
+So the warmup's cache benefit is real but tiny: it buys **~12 s per chromium
+combo and nothing measurable on firefox**, for 113–139 s spent. It is a bad
+trade by an order of magnitude, and the two-worker divisor is why the
+suite-level saving (~53–68 s) looks smaller than the warmup's raw cost.
+
+**The invisible envelope collapses.** `lifecycle − test` — #788's "28–31 %
+outside the test span" — goes from **142.9 s (33 %) to 24.2 s (7.5 %)** on
+chromium. Most of that envelope _was_ the warmup.
+
+### Correcting #788 on the mechanism
+
+#788 concluded warm ≈ cold (chromium 993 ms warm vs 876 ms cold), reading the
+warmup as protecting nothing. **That comparison was confounded** — it set the
+warm checks (2 workers) against the cold packages (1 worker). Within a single
+arm here:
+
+| arm        | navs | cold | warm | `requestMs` p50 | `commitToMountMs` p50 cold / warm |
+| ---------- | ---- | ---- | ---- | --------------- | --------------------------------- |
+| A chromium | 210  | 0    | 210  | 31–34 ms        | — / 635–672 ms                    |
+| B chromium | 210  | 113  | 97   | 37–41 ms        | 819–880 / 602–630 ms              |
+| A firefox  | 210  | 0    | 210  | 98–104 ms       | — / 890–902 ms                    |
+| B firefox  | 210  | 113  | 97   | 107–119 ms      | 950–976 / 851–877 ms              |
+
+Warm **is** faster than cold — ~200 ms of `commitToMountMs` on chromium plus
+~6–15 ms of `requestMs`. #788 had this backwards. The conclusion survives
+anyway, for a different reason than #788 gave: the warmup pays a **full mount
+per test** to make ~1.6 navigations per test slightly cheaper. Note also that
+arm A shows **zero cold navigations** — the warmup was hiding cold-start cost
+from the traces entirely, which is its own argument for removing it.
+
+### Incidental, for follow-ups
+
+- **Firefox `e2e.context_mint` is ~5× chromium's** (p50 511–596 ms vs 96–115 ms;
+  81–87 s vs 15–19 s per combo). After the warmup goes, this is the largest
+  remaining envelope cost — see #819.
+- **sqlite ≈ postgres**, holding across all six runs (e.g. B3 chromium 172.0 vs
+  171.5 s). Evidence for #817.
+- **Firefox is ~1.47× chromium in both arms**, so the warmup is not what makes
+  it slow — see #818.
+- The suite is **roughly twice as fast as #788 measured** (chromium 226.8 s vs
+  420 s; firefox 323.7 s vs 658 s) — post-#791 seeding. Every percentage in
+  #788's write-up describes a suite that no longer exists.
+
+### Reproducing
+
+```sh
+# per run: set e2eSalt (distinct) and e2eWarmup in flake.nix, then
+cargo xtask traces run
+# locate each combo's outputs afterwards (paths differ per salt):
+nix build --print-out-paths --no-link .#checks.x86_64-linux.e2e-sqlite-chromium
+jq '.stats' <out>/playwright-report-sqlite.json
+# traces for the span sums (traces run deletes its own TempDir):
+tar -xzf <out>/capture-sqlite.tar.gz capture/otel-traces.jsonl
+```
+
+Span sums are `endTimeUnixNano − startTimeUnixNano` grouped by span name;
+navigation figures come from each `e2e.test` span's `e2e.navigation_top_json`
+attribute. `cargo xtask traces analyze` computes neither medians nor
+percentiles, so these were aggregated directly over the JSONL.
 
 ## #155 — post-CSR Firefox e2e tax (findings, 2026-07-02)
 
@@ -598,21 +762,11 @@ This applies a project-aware multiplier derived from observed p90 CSR-mount
 latency so Firefox/WebKit runs get realistic budgets without increasing Chromium
 timeouts unnecessarily.
 
-For diagnostics, you can optionally warm each Playwright test page context
-before instrumentation starts:
-
-```bash
-JAUNDER_E2E_WARMUP=1 playwright test
-```
-
-Optional controls:
-
-- `JAUNDER_E2E_WARMUP_URL` (default `http://localhost:3000/`)
-- `JAUNDER_E2E_WARMUP_TIMEOUT_MS` (default `10000`)
-
-This warmup runs on the same test page/context and waits for
-`body[data-mounted]`, so subsequent navigations within that test are measured as
-warm-cache behavior.
+There is no per-test warmup: every test's first navigation is a genuine cold
+load, and the traces report it as one. A warmup existed from 2026-04 to 2026-08
+and was removed in #792 after measurement showed it cost 113–139 s per combo to
+save at most ~12 s — see the findings section above and
+[ADR-0099](adr/0099-e2e-does-not-pre-warm.md).
 
 ### Heavy timeline fixture seeding (#210)
 
