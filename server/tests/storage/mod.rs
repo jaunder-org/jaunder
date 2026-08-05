@@ -22,10 +22,10 @@ use storage::{
     AppState, AudienceError, ConfirmPasswordResetError, CreatePostError, CreateUserError,
     DbConnectOptions, FeedCacheRow, GoLivePost, ListByTagError, PostCursor, PostFormat, PostRecord,
     PostTag, PostUpdate, PostgresSubscriptionStorage, ProfileUpdate, PublishUpdate,
-    RegisterWithInviteError, RenderedPostContent, RenderedPostUpdate, SessionAuthError,
-    SqliteSubscriptionStorage, SubscriptionStorage, UpdatePostError, UseEmailVerificationError,
-    UseInviteError, UsePasswordResetError, UserAuthError, UserConfigKey, create_rendered_post,
-    open_database, perform_post_update, update_rendered_post,
+    RegisterWithInviteError, RenderedPostContent, SessionAuthError, SqliteSubscriptionStorage,
+    SubscriptionStorage, UpdatePostError, UseEmailVerificationError, UseInviteError,
+    UsePasswordResetError, UserAuthError, UserConfigKey, create_rendered_post, open_database,
+    perform_post_update,
 };
 use tempfile::TempDir;
 
@@ -4766,7 +4766,7 @@ async fn invite_list_operations(#[case] backend: Backend) {
 }
 
 // =============================================================================
-// create_rendered_post / update_rendered_post integration tests
+// create_rendered_post / perform_post_update integration tests
 // =============================================================================
 
 #[apply(backends)]
@@ -4987,20 +4987,20 @@ async fn create_posts_conflict_rolls_back_whole_batch(#[case] backend: Backend) 
 
 #[apply(backends)]
 #[tokio::test]
-async fn update_rendered_post_markdown_renders_and_updates(#[case] backend: Backend) {
+async fn perform_post_update_markdown_renders_and_updates(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user_id = SeedUser::new().seed(state).await.user_id;
 
     let post = SeedRawPost::new(user_id).draft().seed(state).await;
 
-    let record = update_rendered_post(
+    let record = perform_post_update(
         state.posts.as_ref(),
-        RenderedPostUpdate {
+        PostUpdate {
             post_id: post.post_id,
             editor_user_id: user_id,
-            title: Some(parse_post_title("Updated Title")),
-            slug: post.slug.clone(),
+            title: Some("Updated Title"),
+            slug_override: Some(&post.slug),
             body: parse_post_body("**updated**"),
             format: PostFormat::Markdown,
             publish: PublishUpdate::Unpublish,
@@ -5024,20 +5024,22 @@ async fn update_rendered_post_markdown_renders_and_updates(#[case] backend: Back
 
 #[apply(backends)]
 #[tokio::test]
-async fn update_rendered_post_org_renders_and_updates(#[case] backend: Backend) {
+async fn perform_post_update_org_renders_and_updates(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user_id = SeedUser::new().seed(state).await.user_id;
 
     let post = SeedRawPost::new(user_id).draft().seed(state).await;
 
-    let record = update_rendered_post(
+    // `*bold org*` is emphasis, not a heading — `* ` (with the space) is what marks a
+    // title source — so canonicalization leaves it alone and it must still render.
+    let record = perform_post_update(
         state.posts.as_ref(),
-        RenderedPostUpdate {
+        PostUpdate {
             post_id: post.post_id,
             editor_user_id: user_id,
-            title: Some(parse_post_title("Updated Org Title")),
-            slug: post.slug.clone(),
+            title: Some("Updated Org Title"),
+            slug_override: Some(&post.slug),
             body: parse_post_body("*bold org*"),
             format: PostFormat::Org,
             publish: PublishUpdate::Unpublish,
@@ -5056,40 +5058,11 @@ async fn update_rendered_post_org_renders_and_updates(#[case] backend: Backend) 
     );
 }
 
-#[apply(backends)]
-#[tokio::test]
-async fn update_rendered_post_not_found_returns_storage_error(#[case] backend: Backend) {
-    use storage::UpdatePostError;
-
-    let env = backend.setup().await;
-    let state = &env.state;
-
-    let err = update_rendered_post(
-        state.posts.as_ref(),
-        RenderedPostUpdate {
-            post_id: PostId::from(99999),
-            editor_user_id: UserId::from(1),
-            title: Some(parse_post_title("No Post")),
-            slug: "no-post".parse().unwrap(),
-            body: parse_post_body("body"),
-            format: PostFormat::Markdown,
-            publish: PublishUpdate::Unpublish,
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-        },
-    )
-    .await
-    .unwrap_err();
-
-    assert!(
-        matches!(err, UpdatePostError::NotFound),
-        "expected Storage error, got {err:?}"
-    );
-    assert!(
-        err.to_string().contains("not found"),
-        "expected 'not found' message, got: {err}"
-    );
-}
+// `update_rendered_post_not_found_returns_storage_error` was deleted with
+// `update_rendered_post` itself (#811). Its assertion is reproduced exactly by
+// `post_update_not_found_returns_error` above, which calls the same
+// `PostStorage::update_post` with a nonexistent id and matches the same
+// `UpdatePostError::NotFound`.
 
 // ── MediaStorage tests ────────────────────────────────────────────────────────
 

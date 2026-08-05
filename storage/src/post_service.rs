@@ -122,66 +122,6 @@ pub fn seed_post_input(
     })
 }
 
-/// The raw, unrendered fields of a post edit. Bundles the update inputs so
-/// [`update_rendered_post`] stays under the argument limit and names its shape
-/// at every call site.
-pub struct RenderedPostUpdate {
-    /// Post being edited.
-    pub post_id: PostId,
-    /// User performing the edit (ownership is checked in storage).
-    pub editor_user_id: UserId,
-    /// Explicit title, or `None`.
-    pub title: Option<PostTitle>,
-    /// New slug for the post.
-    pub slug: Slug,
-    /// Raw post body in `format`.
-    pub body: PostBody,
-    /// Markup format of `body`.
-    pub format: PostFormat,
-    /// What this update does to the post's publication state.
-    pub publish: PublishUpdate,
-    /// Optional summary/excerpt.
-    pub summary: Option<PostSummary>,
-    /// Audience targeting for the post (replaces its existing rows).
-    pub audiences: Vec<AudienceTarget>,
-}
-
-/// Renders `body` according to `format` and updates the post via storage.
-///
-/// # Errors
-///
-/// Returns `Err(UpdatePostError)` if the storage layer returns an error.
-pub async fn update_rendered_post(
-    storage: &dyn PostStorage,
-    update: RenderedPostUpdate,
-) -> Result<PostRecord, UpdatePostError> {
-    let RenderedPostUpdate {
-        post_id,
-        editor_user_id,
-        title,
-        slug,
-        body,
-        format,
-        publish,
-        summary,
-        audiences,
-    } = update;
-    let rendered = RenderOutput::render(&body, &format);
-    let (unpublish, explicit_published_at) = publish.into_inputs();
-    let input = UpdatePostInput {
-        title,
-        slug,
-        body,
-        format,
-        rendered,
-        unpublish,
-        explicit_published_at,
-        summary,
-        audiences,
-    };
-    storage.update_post(post_id, editor_user_id, &input).await
-}
-
 // ---------------------------------------------------------------------------
 // High-level post-update orchestration
 // ---------------------------------------------------------------------------

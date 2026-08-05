@@ -677,7 +677,22 @@ cargo nextest run -p storage -p jaunder
 
 Expected: no hits; PASS.
 
-- [ ] 8. `update_rendered_post` and `RenderedPostUpdate` deleted; tests resolved
+- [x] 8. `update_rendered_post` and `RenderedPostUpdate` deleted; tests resolved
+
+> **The three tests split two ways, and the plan's "check before deleting"
+> earned its keep.** No `perform_post_update` test asserts `rendered_html`
+> anywhere — `test_perform_post_update_canonicalizes_org_body` checks title and
+> body only — so deleting the two render-on-update tests would have silently
+> dropped that coverage. They were **retargeted** at `perform_post_update`
+> instead (and now exercise more: derive → canonicalize → render → write).
+>
+> Only the not-found test was deleted, and only because
+> `post_update_not_found_returns_error` reproduces it exactly — same
+> `PostStorage::update_post` call with a nonexistent id, same
+> `UpdatePostError::NotFound` match. A comment at the deletion site says so.
+>
+> `storage/src/lib.rs` needed no edit, as re-verified earlier: line 60 is a
+> blanket `pub use post_service::*;`, not a named re-export.
 
 ---
 
