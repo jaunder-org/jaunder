@@ -47,7 +47,7 @@
 //! a false pass).
 
 use crate::result::CommandResult;
-use crate::steps::ident_gate::{self, AnyOf, Gate, Report};
+use crate::steps::ident_gate::{self, Gate, Report};
 
 /// Source roots scanned recursively for `.rs` files — the production `src` trees,
 /// not the `tests/` integration crates (whose fixtures inject freely). The sinks all
@@ -82,10 +82,10 @@ const SINKS: &[&str] = &["inner_html", "set_inner_html"];
 /// and authored layouts of the same article, indistinguishable to any key a human
 /// would keep correct. Each now carries its own marker and its own reason, which is
 /// what the count was standing in for.)
-const GATE: Gate<AnyOf> = Gate {
+const GATE: Gate = Gate {
     step: "html-sink",
     roots: POLICED_ROOTS,
-    population: AnyOf(SINKS),
+    population: SINKS,
     report: Report {
         subject: "an unescaped-HTML sink",
         verdict: "is not marked — whatever string reaches it is parsed as markup (XSS) (#333)",

@@ -41,7 +41,7 @@
 //! **hard error** (a file we cannot walk could hide a door — a false pass).
 
 use crate::result::CommandResult;
-use crate::steps::ident_gate::{self, AnyOf, Gate, Report};
+use crate::steps::ident_gate::{self, Gate, Report};
 
 /// Source roots scanned recursively for `.rs` files — the same production `src`
 /// trees [`crate::steps::rendered_html_from_trusted_check`] polices, not the
@@ -71,10 +71,10 @@ const DOORS: &[&str] = &["PreEscaped"];
 /// *established* elsewhere does — a `RenderedHtml` that `RenderedHtml::sanitize`
 /// scrubbed (ADR-0079). `web/src/html.rs`'s `Markup::from_rendered_html` is that
 /// door, and its marker sits beside the `// XSS SAFETY:` prose that explains it.
-const GATE: Gate<AnyOf> = Gate {
+const GATE: Gate = Gate {
     step: "raw-html-door",
     roots: POLICED_ROOTS,
-    population: AnyOf(DOORS),
+    population: DOORS,
     report: Report {
         subject: "`PreEscaped`",
         verdict: "is not a marked raw-HTML door — markup minted here reaches the DOM \
