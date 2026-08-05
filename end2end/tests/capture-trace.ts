@@ -99,11 +99,46 @@ export type WasmTiming = {
   responseEndMs: number;
 };
 
-/** Everything harvested from a single document, at its `load`. */
+/**
+ * Everything harvested from a single document, at mount-ready and again at `load`.
+ *
+ * Harvested at BOTH points (#818). Mount-ready is the complete one by construction —
+ * `csr` emits every `jaunder.*` mark synchronously before setting `data-mounted` — but
+ * a navigation that never mounts still reaches `load`, and its wasm resource timing is
+ * worth keeping. The two are reconciled by [`mergeDocumentTiming`].
+ */
 export type DocumentTiming = {
   marks: BootMark[];
   wasm: WasmTiming | null;
 };
+
+/**
+ * Pick the more complete of two harvests of the same document.
+ *
+ * Marks persist for a document's lifetime, so a later harvest is a superset of an
+ * earlier one — but `documentTimings.set` is last-*resolution*-wins, which coincides
+ * with issue order only because two `page.evaluate`s on one page serialize over a
+ * single connection. That is undocumented transport behavior, and firefox is exactly
+ * the case that depends on it: `load` fires BEFORE mount there, so its empty snapshot
+ * would win under any rule that trusts arrival order. Comparing mark counts makes the
+ * invariant local (#818).
+ *
+ * Picks a snapshot, never blends one — a caller may rely on identity.
+ */
+export function mergeDocumentTiming(
+  existing: DocumentTiming | undefined,
+  incoming: DocumentTiming,
+): DocumentTiming {
+  if (existing === undefined) return incoming;
+  if (incoming.marks.length !== existing.marks.length) {
+    return incoming.marks.length > existing.marks.length ? incoming : existing;
+  }
+  // Equal mark counts: prefer whichever actually saw the `.wasm` resource entry.
+  // `load` can fire before the fetch completes (that is defect 2 of #818), so a tie
+  // on marks does not mean a tie on completeness.
+  if (existing.wasm === null && incoming.wasm !== null) return incoming;
+  return existing;
+}
 
 export type TraceCapture = {
   /** Route records that START after this call to `phase`. */
