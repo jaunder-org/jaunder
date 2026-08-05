@@ -1,4 +1,8 @@
 [workspace]
+# Pinned explicitly rather than inferred from the package's edition, so the
+# resolver is visible here and matches the root and `tools/` workspaces. Those two
+# are virtual manifests, which default to resolver 1, so all three must say it.
+resolver = "3"
 
 [package]
 name = "xtask"

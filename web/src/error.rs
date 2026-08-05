@@ -136,28 +136,37 @@ mod tests {
     use std::error::Error;
     use std::fmt;
 
+    // Gated to match their only users, the `server`-feature tests below: without
+    // the gate the definitions are ungated while every use is not, which reads as
+    // `dead_code` in a no-`server` build (#826).
+    #[cfg(feature = "server")]
     #[derive(Debug)]
     struct SourceError;
 
+    #[cfg(feature = "server")]
     impl fmt::Display for SourceError {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.write_str("source context")
         }
     }
 
+    #[cfg(feature = "server")]
     impl Error for SourceError {}
 
+    #[cfg(feature = "server")]
     #[derive(Debug)]
     struct OuterError {
         source: SourceError,
     }
 
+    #[cfg(feature = "server")]
     impl fmt::Display for OuterError {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.write_str("outer failure")
         }
     }
 
+    #[cfg(feature = "server")]
     impl Error for OuterError {
         fn source(&self) -> Option<&(dyn Error + 'static)> {
             Some(&self.source)
