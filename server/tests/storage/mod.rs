@@ -6,8 +6,8 @@ use common::tag::{Tag, TagLabel};
 use common::test_support::{
     parse_absolute_url, parse_audience_name, parse_bio, parse_byte_size, parse_content_hash,
     parse_content_type, parse_display_name, parse_email, parse_etag, parse_filename,
-    parse_page_offset, parse_raw_token, parse_row_limit, parse_session_label, parse_slug,
-    permalink_date,
+    parse_page_offset, parse_post_title, parse_raw_token, parse_row_limit, parse_session_label,
+    parse_slug, permalink_date,
 };
 use common::username::Username;
 use common::visibility::{
@@ -4687,7 +4687,7 @@ async fn create_rendered_post_markdown_renders_and_stores(#[case] backend: Backe
         state.posts.as_ref(),
         RenderedPostContent {
             user_id,
-            title: Some("Rendered Markdown".into()),
+            title: Some(parse_post_title("Rendered Markdown")),
             slug: "rendered-markdown".parse().unwrap(),
             body: "**bold**".into(),
             format: PostFormat::Markdown,
@@ -4728,7 +4728,7 @@ async fn create_rendered_post_org_renders_and_stores(#[case] backend: Backend) {
         state.posts.as_ref(),
         RenderedPostContent {
             user_id,
-            title: Some("Rendered Org".into()),
+            title: Some(parse_post_title("Rendered Org")),
             slug: "rendered-org".parse().unwrap(),
             body: "*bold*".into(),
             format: PostFormat::Org,
@@ -4777,7 +4777,7 @@ async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backen
         state.posts.as_ref(),
         RenderedPostContent {
             user_id,
-            title: Some("Second Post".into()),
+            title: Some(parse_post_title("Second Post")),
             slug: occ.slug.clone(),
             body: "body".into(),
             format: PostFormat::Markdown,
@@ -4906,7 +4906,7 @@ async fn update_rendered_post_markdown_renders_and_updates(#[case] backend: Back
         RenderedPostUpdate {
             post_id: post.post_id,
             editor_user_id: user_id,
-            title: Some("Updated Title".into()),
+            title: Some(parse_post_title("Updated Title")),
             slug: post.slug.clone(),
             body: "**updated**".into(),
             format: PostFormat::Markdown,
@@ -4943,7 +4943,7 @@ async fn update_rendered_post_org_renders_and_updates(#[case] backend: Backend) 
         RenderedPostUpdate {
             post_id: post.post_id,
             editor_user_id: user_id,
-            title: Some("Updated Org Title".into()),
+            title: Some(parse_post_title("Updated Org Title")),
             slug: post.slug.clone(),
             body: "*bold org*".into(),
             format: PostFormat::Org,
@@ -4976,7 +4976,7 @@ async fn update_rendered_post_not_found_returns_storage_error(#[case] backend: B
         RenderedPostUpdate {
             post_id: PostId::from(99999),
             editor_user_id: UserId::from(1),
-            title: Some("No Post".into()),
+            title: Some(parse_post_title("No Post")),
             slug: "no-post".parse().unwrap(),
             body: "body".into(),
             format: PostFormat::Markdown,

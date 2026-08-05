@@ -522,7 +522,7 @@ mod etag_tests {
             post_id: PostId::from(1),
             user_id: UserId::from(1),
             author_username: "alice".parse().expect("parse username"),
-            title: Some("Title".into()),
+            title: Some(common::test_support::parse_post_title("Title")),
             slug: "my-post".parse().expect("parse slug"),
             body: "Body text.".into(),
             format: PostFormat::Org,
@@ -586,7 +586,10 @@ mod etag_tests {
             f(&mut p);
             etag_for(&p)
         };
-        assert_ne!(flip(&|p| p.title = Some("Other".into())), e); // title value
+        assert_ne!(
+            flip(&|p| p.title = Some(common::test_support::parse_post_title("Other"))),
+            e
+        ); // title value
         assert_ne!(flip(&|p| p.title = None), e); // title present->absent
         assert_ne!(flip(&|p| p.body = "Different body.".into()), e); // body
         assert_ne!(flip(&|p| p.summary = Some(parse_post_summary("Other"))), e); // summary value

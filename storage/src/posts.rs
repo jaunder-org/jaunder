@@ -2616,8 +2616,8 @@ mod tests {
         UpdateRawPost, MEDIA_TEST_SHA256,
     };
     use common::test_support::{
-        parse_content_type, parse_etag, parse_post_summary, parse_row_limit, parse_slug, parse_tag,
-        parse_tag_label, parse_username, permalink_date,
+        parse_content_type, parse_etag, parse_post_summary, parse_post_title, parse_row_limit,
+        parse_slug, parse_tag, parse_tag_label, parse_username, permalink_date,
     };
     use rstest::*;
     use rstest_reuse::*;
@@ -3067,7 +3067,7 @@ mod tests {
             post_id: PostId::from(1),
             user_id: UserId::from(1),
             author_username: parse_username("author"),
-            title: Some("My Title".into()),
+            title: Some(parse_post_title("My Title")),
             slug: parse_slug("my-slug"),
             body: "\n\n   The first non-empty line of the body is here. \n\n Another line.".into(),
             format: PostFormat::Markdown,
@@ -3092,10 +3092,9 @@ mod tests {
         post.body = "".into();
         assert_eq!(post.fallback_summary_label(), "My Title");
 
-        // Case 2b: An empty-after-trim title (PostTitle is infallible) must not mint an
-        // empty PostSummary — it falls through to the always-non-empty slug.
-        post.title = Some("   ".into());
-        assert_eq!(post.fallback_summary_label(), "my-slug");
+        // (The former case 2b — an empty-after-trim title falling through to the slug —
+        // is gone with #830: `PostTitle` rejects blanks, so that state is
+        // unrepresentable and cannot be constructed to test.)
 
         // Case 3: Body and title are empty. It should use the slug.
         post.title = None;
@@ -3109,7 +3108,7 @@ mod tests {
             post_id: PostId::from(1),
             user_id: UserId::from(1),
             author_username: parse_username("author"),
-            title: Some("My Title".into()),
+            title: Some(parse_post_title("My Title")),
             slug: parse_slug("hello-world"),
             body: "My body".into(),
             format: PostFormat::Markdown,
@@ -3571,6 +3570,35 @@ mod tests {
         let overlong = "a".repeat(common::post_summary::MAX_POST_SUMMARY_CHARS + 1);
         let sql = format!(
             "UPDATE posts SET summary='{overlong}' WHERE post_id={}",
+            i64::from(post_id)
+        );
+        env.base.pool().execute(sql.as_str()).await.unwrap();
+
+        let result = posts
+            .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn reading_post_with_blank_title_in_db_errors(#[case] backend: Backend) {
+        // The title column is nullable TEXT with no CHECK, so a blank row is
+        // representable in the database even though `PostTitle` can no longer
+        // construct one (#830). It must fail closed at the strict read boundary
+        // through the validating `Decode`, never decode to an empty title. Forced in
+        // with raw SQL for the same reason as the overlong-summary test above.
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let posts = &*env.state.posts;
+        let post_id = SeedRawPost::new(user_id)
+            .draft()
+            .seed(&env.state)
+            .await
+            .post_id;
+
+        let sql = format!(
+            "UPDATE posts SET title='' WHERE post_id={}",
             i64::from(post_id)
         );
         env.base.pool().execute(sql.as_str()).await.unwrap();
