@@ -83,6 +83,50 @@ the same edits, matching every value above.
 After 3f the tree was restored (`e2eSalt = ""`, `e2eWarmup = true`) and
 `e2e-sqlite-chromium` re-evaluated to `b4m5d17…` — back at baseline.
 
+## Task 7 — collection run log (2026-08-04/05)
+
+Six runs, no discards. Session baseline `/proc/loadavg` **0.75 0.94 0.82**; load
+during collection stayed in a narrow band (2.10–2.60), so no run met D6's
+load-excursion discard criterion. Every run took ~21 min for its four serial
+combos; each carried a distinct salt, so all 24 combo store paths remain
+independently readable.
+
+| run | salt | `e2eWarmup` | started (sq-chr) | loadavg after  |
+| --- | ---- | ----------- | ---------------- | -------------- |
+| A1  | `a1` | `true`      | 22:27:40Z        | 2.18 2.34 1.96 |
+| B1  | `b1` | `false`     | 22:49:11Z        | 2.22 2.24 2.08 |
+| A2  | `a2` | `true`      | 23:06:28Z        | 2.27 2.41 2.30 |
+| B2  | `b2` | `false`     | 23:27:16Z        | 2.47 2.43 2.36 |
+| A3  | `a3` | `true`      | 23:44:03Z        | 2.10 2.33 2.35 |
+| B3  | `b3` | `false`     | 00:04:40Z        | 2.60 2.38 2.29 |
+
+Per-combo `.stats.duration` (s) / `flaky` / `unexpected`, all runs `expected`
+130 except A1 postgres-firefox (129 + 1 flaky):
+
+| run | sq-chr | sq-ff | pg-chr | pg-ff           |
+| --- | ------ | ----- | ------ | --------------- |
+| A1  | 229.9  | 329.6 | 228.0  | 336.2 (1 flaky) |
+| A2  | 224.9  | 323.6 | 227.8  | 327.8           |
+| A3  | 226.8  | 323.7 | 226.2  | 323.9           |
+| B1  | 174.0  | 254.4 | 171.2  | 257.7           |
+| B2  | 174.5  | 256.6 | 171.7  | 258.0           |
+| B3  | 172.0  | 256.0 | 171.5  | 257.8           |
+
+**Identifying each run's outputs afterwards.** `traces run` does not print store
+paths, and re-deriving them would mean re-setting each salt. Simpler and
+salt-independent: enumerate `/nix/store/*-vm-test-run-jaunder-e2e-*` (excluding
+`-cold`) and read `.stats.startTime` from each combo's Playwright report — the
+24 session runs sort cleanly after every older build, and their sequential start
+times also prove nothing was served from cache.
+
+Trace extraction (spec AC-6's re-derivability): `capture/otel-traces.jsonl` out
+of each `capture-<backend>.tar.gz`, 342 MB across 24 files. Aggregation was
+hand-rolled over the JSONL — `traces analyze` reports maxima and averages, not
+medians or percentiles, so it cannot produce the spec's p50 metrics.
+
+Full results, including the span-sum decomposition and the navigation warm/cold
+table, are in `docs/observability.md` §"#792 — the per-test warmup A/B".
+
 ## Task 4 — guard evidence (2026-08-04)
 
 Unit tests: 6/6 pass —

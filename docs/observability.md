@@ -411,6 +411,124 @@ Optional filters:
 (`cargo xtask traces analyze` additionally accepts `--project NAME` to focus one
 browser/project when analyzing already-collected trace files directly.)
 
+## #792 — the per-test warmup A/B (findings, 2026-08-04)
+
+**Verdict: delete the warmup, both browsers.** It costs 113 s/combo (chromium)
+to 139 s/combo (firefox) and buys back at most ~12 s. No flakiness cost.
+
+### Method
+
+Six runs of `cargo xtask traces run`, interleaved `A1 B1 A2 B2 A3 B3`, on a
+quiescent host (session baseline `/proc/loadavg` 0.75, 2.10–2.60 during
+collection). Arms differ in exactly one token at otherwise gate-identical
+settings (`WORKERS=2`, `RETRIES=1`, `vmMemory = 3072`, `vmCores = 2`):
+
+- **Arm A** — the gate as it stands, `JAUNDER_E2E_WARMUP=1`.
+- **Arm B** — `e2eWarmup = false`; nothing else changes.
+
+Each run used a distinct `e2eSalt` (`a1`…`b3`). **This is load-bearing**:
+without it nix returns the cached derivation and never runs the suite, so runs 2
+and 3 would have been byte-identical replays of run 1. Sequential per-combo
+start times in the reports confirm all 24 combos genuinely executed.
+
+Deciding data is **sqlite only**, both browsers (per the spec: the backend axis
+is not what warmup touches). Postgres was collected at the same settings and is
+retained for #817.
+
+### Suite wall-clock (sqlite, `.stats.duration`, seconds)
+
+| arm           | chromium            | median                | firefox             | median                |
+| ------------- | ------------------- | --------------------- | ------------------- | --------------------- |
+| A (warmup)    | 229.9, 224.9, 226.8 | **226.8**             | 329.6, 323.6, 323.7 | **323.7**             |
+| B (no warmup) | 174.0, 174.5, 172.0 | **174.0**             | 254.4, 256.6, 256.0 | **256.0**             |
+| **Δ**         |                     | **−52.8 s (−23.3 %)** |                     | **−67.7 s (−20.9 %)** |
+
+Within-arm spread is ≤2.2 %; the between-arm gap is ~21–23 %. Both arms ran 130
+tests, `unexpected = 0` throughout.
+
+**Flakiness guardrail (spec D8): not triggered.** Summed `flaky + unexpected`
+across each browser's three sqlite runs is **0 for both arms**. The session's
+only flake was one postgres-firefox test in A1 — in arm **A**, and outside the
+deciding set. Arm B is not buying speed with retries.
+
+### Where the time goes (span sums per combo, sqlite)
+
+| phase                | A chromium  | B chromium | A firefox   | B firefox |
+| -------------------- | ----------- | ---------- | ----------- | --------- |
+| `e2e.test.lifecycle` | 428.3 s     | 321.3 s    | 623.1 s     | 475.1 s   |
+| `e2e.test`           | 285.4 s     | 297.1 s    | 374.5 s     | 372.3 s   |
+| `e2e.warmup`         | **113.3 s** | —          | **139.5 s** | —         |
+| `e2e.context_mint`   | 19.1 s      | 15.3 s     | 87.3 s      | 81.7 s    |
+| `e2e.teardown`       | 4.4 s       | 3.7 s      | 4.5 s       | 4.4 s     |
+
+The arithmetic closes, and it is worth doing explicitly because it explains the
+wall-clock number:
+
+- chromium: −113.3 s of warmup, **+11.7 s** of test time → −107 s of lifecycle →
+  ÷2 workers → **−53.5 s wall**, against −52.8 s observed.
+- firefox: −139.5 s of warmup, −2.2 s of test time → −148 s → **−74 s wall**,
+  against −67.7 s observed.
+
+So the warmup's cache benefit is real but tiny: it buys **~12 s per chromium
+combo and nothing measurable on firefox**, for 113–139 s spent. It is a bad
+trade by an order of magnitude, and the two-worker divisor is why the
+suite-level saving (~53–68 s) looks smaller than the warmup's raw cost.
+
+**The invisible envelope collapses.** `lifecycle − test` — #788's "28–31 %
+outside the test span" — goes from **142.9 s (33 %) to 24.2 s (7.5 %)** on
+chromium. Most of that envelope _was_ the warmup.
+
+### Correcting #788 on the mechanism
+
+#788 concluded warm ≈ cold (chromium 993 ms warm vs 876 ms cold), reading the
+warmup as protecting nothing. **That comparison was confounded** — it set the
+warm checks (2 workers) against the cold packages (1 worker). Within a single
+arm here:
+
+| arm        | navs | cold | warm | `requestMs` p50 | `commitToMountMs` p50 cold / warm |
+| ---------- | ---- | ---- | ---- | --------------- | --------------------------------- |
+| A chromium | 210  | 0    | 210  | 31–34 ms        | — / 635–672 ms                    |
+| B chromium | 210  | 113  | 97   | 37–41 ms        | 819–880 / 602–630 ms              |
+| A firefox  | 210  | 0    | 210  | 98–104 ms       | — / 890–902 ms                    |
+| B firefox  | 210  | 113  | 97   | 107–119 ms      | 950–976 / 851–877 ms              |
+
+Warm **is** faster than cold — ~200 ms of `commitToMountMs` on chromium plus
+~6–15 ms of `requestMs`. #788 had this backwards. The conclusion survives
+anyway, for a different reason than #788 gave: the warmup pays a **full mount
+per test** to make ~1.6 navigations per test slightly cheaper. Note also that
+arm A shows **zero cold navigations** — the warmup was hiding cold-start cost
+from the traces entirely, which is its own argument for removing it.
+
+### Incidental, for follow-ups
+
+- **Firefox `e2e.context_mint` is ~5× chromium's** (p50 511–596 ms vs 96–115 ms;
+  81–87 s vs 15–19 s per combo). After the warmup goes, this is the largest
+  remaining envelope cost — see #819.
+- **sqlite ≈ postgres**, holding across all six runs (e.g. B3 chromium 172.0 vs
+  171.5 s). Evidence for #817.
+- **Firefox is ~1.47× chromium in both arms**, so the warmup is not what makes
+  it slow — see #818.
+- The suite is **roughly twice as fast as #788 measured** (chromium 226.8 s vs
+  420 s; firefox 323.7 s vs 658 s) — post-#791 seeding. Every percentage in
+  #788's write-up describes a suite that no longer exists.
+
+### Reproducing
+
+```sh
+# per run: set e2eSalt (distinct) and e2eWarmup in flake.nix, then
+cargo xtask traces run
+# locate each combo's outputs afterwards (paths differ per salt):
+nix build --print-out-paths --no-link .#checks.x86_64-linux.e2e-sqlite-chromium
+jq '.stats' <out>/playwright-report-sqlite.json
+# traces for the span sums (traces run deletes its own TempDir):
+tar -xzf <out>/capture-sqlite.tar.gz capture/otel-traces.jsonl
+```
+
+Span sums are `endTimeUnixNano − startTimeUnixNano` grouped by span name;
+navigation figures come from each `e2e.test` span's `e2e.navigation_top_json`
+attribute. `cargo xtask traces analyze` computes neither medians nor
+percentiles, so these were aggregated directly over the JSONL.
+
 ## #155 — post-CSR Firefox e2e tax (findings, 2026-07-02)
 
 Re-measurement of the #152 Firefox-vs-Chromium tax on the **leptos-CSR** build

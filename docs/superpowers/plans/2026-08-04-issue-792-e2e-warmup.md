@@ -325,10 +325,10 @@ Follows the repo's pure-`problems()` + `run()` + in-file `#[cfg(test)]` pattern
 
 ## Task 6 — Gate and commit the scaffolding
 
-- [ ] **6a.** `devtool run --cwd <worktree> -- cargo xtask check` — green.
-- [ ] **6b.** Confirm both literals are at their defaults (the guard now
+- [x] **6a.** `devtool run --cwd <worktree> -- cargo xtask check` — green.
+- [x] **6b.** Confirm both literals are at their defaults (the guard now
       enforces this, which is itself the proof).
-- [ ] **6c.** Stage, then commit, subject line exactly:
+- [x] **6c.** Stage, then commit, subject line exactly:
       `test-infra(e2e): salt/warmup scaffolding and its guard (#792)`
 
 **Verify:** clean gate, one commit, no `Co-Authored-By`.
@@ -343,16 +343,16 @@ on the human.** Confirm the host can stay quiescent before starting.
 Per spec D6: six runs in order `A1, B1, A2, B2, A3, B3`, each with a distinct
 salt, arm B being `e2eWarmup = false`.
 
-- [ ] **7a.** Record the session baseline `/proc/loadavg`.
-- [ ] **7b.** For each run: set the two literals; record their values, the salt,
+- [x] **7a.** Record the session baseline `/proc/loadavg`.
+- [x] **7b.** For each run: set the two literals; record their values, the salt,
       and `/proc/loadavg`; execute
       `devtool run --cwd <worktree> -- cargo xtask traces run` in **Bash
       background mode**; on completion record `/proc/loadavg` again and the
       `nix build --print-out-paths` store path for each of the four combos.
-- [ ] **7c.** Apply D6's discard rule: a run that aborts, or whose load
+- [x] **7c.** Apply D6's discard rule: a run that aborts, or whose load
       materially exceeds baseline, is discarded with its reason recorded and
       re-run with a fresh salt. Do **not** silently renumber.
-- [ ] **7d.** Restore both literals to their defaults when collection ends,
+- [x] **7d.** Restore both literals to their defaults when collection ends,
       using the Global-constraints revert mechanism (`git checkout HEAD`
       **plus** `git reset HEAD`), verified with `git diff HEAD -- flake.nix`.
 
@@ -368,17 +368,17 @@ extracts traces into (`xtask/src/traces/run.rs:64-112`) and nothing in xtask
 reads a suite-level duration. Each run's distinct salt means its store path is
 distinct, so all six runs' reports remain readable after the fact.
 
-- [ ] **8a.** For each of the 24 combo store paths, `jq '.stats'` on
+- [x] **8a.** For each of the 24 combo store paths, `jq '.stats'` on
       `<out>/playwright-report-<backend>.json` → `duration`, `flaky`,
       `unexpected`.
-- [ ] **8b. Re-obtain the trace files first.** `traces run` extracts into a
+- [x] **8b. Re-obtain the trace files first.** `traces run` extracts into a
       `TempDir` it then deletes, so after a run there is nothing to hand to
       `traces analyze`. For each of the 24 combo store paths, extract
       `capture/otel-traces.jsonl` from `<out>/capture-<backend>.tar.gz` (the
       same member `run.rs:76` / `extract_trace` at `:136` pull), naming each
       file by run/arm/combo so the populations stay distinguishable.
 
-- [ ] **8c. Aggregate the secondary metrics — hand-rolled, not
+- [x] **8c. Aggregate the secondary metrics — hand-rolled, not
       `traces analyze`.** The spec's secondary set is `e2e.warmup` **p50** and
       per-combo total (arm A only); the envelope decomposition
       (`e2e.context_mint`, warmup, fixture setup, teardown/export) for both
@@ -398,14 +398,14 @@ distinct, so all six runs' reports remain readable after the fact.
       Run `traces analyze` as well for the coverage/hotspot context it *does*
       give, but do not source the spec's p50s from it.
 
-- [ ] **8d.** Write the findings section in `docs/observability.md` following
+- [x] **8d.** Write the findings section in `docs/observability.md` following
       the existing convention (`:414` "#155 — post-CSR Firefox e2e tax
       (findings, 2026-07-02)", `:461`, `:506`): per-run table with run label,
       arm, salt, literal values, loadavg before/after, per-combo `.stats`, **and
       the exact extraction commands and aggregation code**, so a reviewer can
       re-derive both the medians and the secondary p50s. Discarded runs appear
       with their reason.
-- [ ] **8e.** `prettier -w docs/observability.md`; gate; commit
+- [x] **8e.** `prettier -w docs/observability.md`; gate; commit
       (`docs(observability): #792 warmup A/B findings (#792)`).
 
 **Verify:** AC-6 satisfied — table complete, commands recorded, discards
