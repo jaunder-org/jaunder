@@ -377,10 +377,17 @@ pub enum Commands {
     },
 }
 
-/// `site-config` leaf actions. `site_config` is a free-form key/value store;
-/// values are not validated. Known keys include `site.registration_policy`,
-/// `site.title`, `site.base_url`, `feeds.websub_hub_url`, `feeds.min_items`,
-/// `feeds.min_days`, `posts.default_audience`, and the `backup.*` keys.
+/// `site-config` leaf actions. The key space is closed: `SiteConfigKey` is the
+/// registry of every recognised key, so an unknown key is rejected at argument
+/// parsing (which also lists the accepted keys). Values are validated too — each
+/// key carries its value type's parser, and `set` refuses a value that key cannot
+/// hold, before any row is written. Keys that treat the empty string as "unset"
+/// accept `""`.
+///
+/// `list` is the exception, and deliberately so: it dumps every row physically
+/// stored, annotating a key outside the registry as `UNKNOWN KEY` and a
+/// recognised key holding an unparseable value as `INVALID`, so a legacy or
+/// hand-written row stays visible rather than silently disappearing.
 #[derive(Subcommand, Clone)]
 pub enum SiteConfigAction {
     /// Set (upsert) a key to a value.
