@@ -5,7 +5,7 @@
 > useful). Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Spec:**
-[`../specs/2026-08-05-issue-687-site-config-key.md`](../specs/2026-08-05-issue-687-site-config-key.md)
+[`docs/archive/2026-08-05-issue-687-site-config-key-spec.md`](2026-08-05-issue-687-site-config-key-spec.md)
 **Issue:** [#687](https://github.com/jaunder-org/jaunder/issues/687) · absorbs
 #777 · **Milestone** #13
 
