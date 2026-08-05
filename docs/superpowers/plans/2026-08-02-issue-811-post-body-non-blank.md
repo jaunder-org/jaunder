@@ -431,7 +431,7 @@ cargo nextest run -p common canon
 
 Expected: PASS.
 
-- [ ] 4. `canonicalize_org_body` takes and returns `PostBody`, fallible
+- [x] 4. `canonicalize_org_body` takes and returns `PostBody`, fallible
 
 ---
 

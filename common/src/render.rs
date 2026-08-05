@@ -5,6 +5,7 @@
 
 use std::fmt;
 
+use crate::post_body::{InvalidPostBody, PostBody};
 use crate::post_title::PostTitle;
 
 /// The format/markup language used to author a post body.
@@ -735,8 +736,12 @@ fn extract_org_title(body: &str) -> Option<(String, String)> {
 /// later `* heading` left behind sits after kept header lines and so is content, not
 /// a new title source on the next pass. (This is a deliberate, test-pinned refinement
 /// of `extract_org_title`'s precedence; see the `canon_*` unit tests.)
-#[must_use]
-pub fn canonicalize_org_body(body: &str) -> String {
+///
+/// # Errors
+///
+/// Returns [`InvalidPostBody`] when canonicalization consumes the whole body — a
+/// title-only post, whose sole content was the title source. See #811 decision 2.
+pub fn canonicalize_org_body(body: &PostBody) -> Result<PostBody, InvalidPostBody> {
     let mut kept: Vec<&str> = Vec::new();
     let mut in_header = true; // still scanning the leading blank/#+/title region
     let mut saw_title = false;
@@ -779,7 +784,7 @@ pub fn canonicalize_org_body(body: &str) -> String {
         kept.push(line);
     }
 
-    kept.join("\n").trim_end().to_string()
+    kept.join("\n").trim_end().parse()
 }
 
 #[cfg(test)]
@@ -1079,42 +1084,49 @@ mod tests {
 
     // -- canonicalize_org_body tests (ADR-0024; load-bearing, user-flagged) --
 
+    /// Canonicalize a fixture that is expected to survive — the inputs below all keep
+    /// some content, so a failure here is a bug rather than the title-only rejection.
+    fn canon(body: &str) -> PostBody {
+        canonicalize_org_body(&crate::test_support::parse_post_body(body))
+            .expect("fixture retains content after canonicalization")
+    }
+
     #[test]
     fn canon_strips_title_header_keeps_unknown_and_later_heading() {
         // #+TITLE: present → strip it; keep #+FOO:; a LATER * heading is content → keep.
-        let out = canonicalize_org_body("#+TITLE: My Post\n#+FOO: keepme\n\n* Section\nBody\n");
+        let out = canon("#+TITLE: My Post\n#+FOO: keepme\n\n* Section\nBody\n");
         assert_eq!(out, "#+FOO: keepme\n\n* Section\nBody");
     }
 
     #[test]
     fn canon_strips_leading_heading_when_no_title_header() {
         // No #+TITLE: → the leading * heading IS the title source → strip it.
-        let out = canonicalize_org_body("* My Title\n\nBody line\n");
+        let out = canon("* My Title\n\nBody line\n");
         assert_eq!(out, "Body line");
     }
 
     #[test]
     fn canon_strips_title_amidst_other_headers_and_leading_blanks() {
-        let out = canonicalize_org_body("\n\n#+FOO: x\n#+title: T\n#+BAR: y\n\nbody\n");
+        let out = canon("\n\n#+FOO: x\n#+title: T\n#+BAR: y\n\nbody\n");
         assert_eq!(out, "#+FOO: x\n#+BAR: y\n\nbody");
     }
 
     #[test]
     fn canon_no_title_source_preserves_headers_and_content() {
-        let out = canonicalize_org_body("#+FOO: x\n\njust content\n");
+        let out = canon("#+FOO: x\n\njust content\n");
         assert_eq!(out, "#+FOO: x\n\njust content");
     }
 
     #[test]
     fn canon_non_top_level_heading_is_not_a_title_source() {
         // "** Sub" is not a top-level heading → not the title → keep.
-        let out = canonicalize_org_body("** Sub\n\nBody\n");
+        let out = canon("** Sub\n\nBody\n");
         assert_eq!(out, "** Sub\n\nBody");
     }
 
     #[test]
     fn canon_heading_after_body_text_is_content_not_title() {
-        let out = canonicalize_org_body("intro\n* Later\nmore\n");
+        let out = canon("intro\n* Later\nmore\n");
         assert_eq!(out, "intro\n* Later\nmore");
     }
 
@@ -1125,13 +1137,18 @@ mod tests {
             "* My Title\n\nBody\n",
             "#+FOO: x\n\ncontent\n",
         ] {
-            let once = canonicalize_org_body(body);
-            assert_eq!(
-                canonicalize_org_body(&once),
-                once,
-                "idempotent for {body:?}"
-            );
+            let once = canon(body);
+            // Now also proves the second pass is `Ok` — a canonical body is still a body.
+            let twice = canonicalize_org_body(&once).expect("canonical body stays a body");
+            assert_eq!(twice, once, "idempotent for {body:?}");
         }
+    }
+
+    #[test]
+    fn canon_rejects_title_only_body() {
+        // The whole body was the title source, so nothing is left to store (#811).
+        let body = crate::test_support::parse_post_body("* My Title\n");
+        assert!(canonicalize_org_body(&body).is_err());
     }
 
     /// Tests for the `sanitize`-gated half — grouped so the gate is written once here

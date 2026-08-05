@@ -317,9 +317,7 @@ pub async fn perform_post_update(
     // (#811): there is nothing left to store, so it is the same rejection an empty
     // post has always earned.
     let body: PostBody = if matches!(format, PostFormat::Org) {
-        common::render::canonicalize_org_body(&body)
-            .parse()
-            .map_err(|_| PerformUpdateError::EmptyPost)?
+        common::render::canonicalize_org_body(&body).map_err(|_| PerformUpdateError::EmptyPost)?
     } else {
         body
     };
@@ -489,9 +487,7 @@ pub async fn perform_post_creation(
     // (#811): there is nothing left to store, so it is the same rejection an empty
     // post has always earned.
     let body: PostBody = if matches!(format, PostFormat::Org) {
-        common::render::canonicalize_org_body(&body)
-            .parse()
-            .map_err(|_| PerformCreationError::EmptyPost)?
+        common::render::canonicalize_org_body(&body).map_err(|_| PerformCreationError::EmptyPost)?
     } else {
         body
     };
