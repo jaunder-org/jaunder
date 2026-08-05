@@ -95,11 +95,11 @@ guard.
 rather than assumed. There is **no post-title input**; a title is never a field
 the user fills in as a title. Three routes:
 
-| # | Route                             | Outermost type carrying the title                       | Blank possible?                          |
-| - | --------------------------------- | ------------------------------------------------------- | ---------------------------------------- |
-| 1 | Web composer / editor             | **none** — `PostInputs` has no title field; `api.rs:181`/`:321` pass `title: None` | N/A — no title can be supplied |
-| 2 | Derived from the body             | `PostBody`, via `extract_markdown_title` / `extract_org_title` | No — both reject empty-after-trim   |
-| 3 | AtomPub `<title>`                 | atom `Text` → `&str` → `Option<PostTitle>` at `mapping.rs:89` | **Yes** — a blank element can be sent |
+| #   | Route                 | Outermost type carrying the title                                                  | Blank possible?                       |
+| --- | --------------------- | ---------------------------------------------------------------------------------- | ------------------------------------- |
+| 1   | Web composer / editor | **none** — `PostInputs` has no title field; `api.rs:181`/`:321` pass `title: None` | N/A — no title can be supplied        |
+| 2   | Derived from the body | `PostBody`, via `extract_markdown_title` / `extract_org_title`                     | No — both reject empty-after-trim     |
+| 3   | AtomPub `<title>`     | atom `Text` → `&str` → `Option<PostTitle>` at `mapping.rs:89`                      | **Yes** — a blank element can be sent |
 
 The web form collects body, format, summary, publish-at, tags, audience, and an
 optional slug override — no `Field::<PostTitle>` exists anywhere in `web/`,
@@ -110,11 +110,11 @@ optional slug override — no `Field::<PostTitle>` exists anywhere in `web/`,
 Consequences for this spec:
 
 - `PostTitle` is not an inbound wire-arg type, so AC2's strictness bites on
-  response/seed _decode_, and AC4's "not a 400" is true because there is no title
-  arg to reject — not because a rejection path was chosen.
-- **A blank title is submittable only through raw AtomPub XML.** The Emacs client
-  already filters blanks (`elisp/jaunder-org.el:136`) and omits the element
-  (`elisp/jaunder-atom.el:48`), so this is a hand-rolled-client case.
+  response/seed _decode_, and AC4's "not a 400" is true because there is no
+  title arg to reject — not because a rejection path was chosen.
+- **A blank title is submittable only through raw AtomPub XML.** The Emacs
+  client already filters blanks (`elisp/jaunder-org.el:136`) and omits the
+  element (`elisp/jaunder-atom.el:48`), so this is a hand-rolled-client case.
 - That single reachable route is why D2's presence policy belongs in the type:
   today it is enforced by two independent convention-based checks
   (`mapping.rs:89` and `render.rs:607-609`), and `render.rs`'s is already
@@ -260,9 +260,9 @@ assumed.
 - **AC4** A blank _submitted_ title still yields an untitled post, not a 400.
   Pinned on the one route that can submit one — **AtomPub**: `POST`ing an entry
   whose `<title>` is whitespace-only creates a post with `title: None` and a
-  body-derived slug. Plus a `derive_post_title` unit test passing
-  `Some("   ")` as `explicit_title` and asserting the untitled outcome. (There is
-  no web-form equivalent to test: the composer has no title input — see D2.)
+  body-derived slug. Plus a `derive_post_title` unit test passing `Some("   ")`
+  as `explicit_title` and asserting the untitled outcome. (There is no web-form
+  equivalent to test: the composer has no title input — see D2.)
 - **AC5** `SummarySeed` exists in `common/` with exactly the three constructors
   of D4; `from_slug` and `from_title` are infallible, `first_body_line` returns
   `Option`. `PostSummary::truncated` takes `&SummarySeed` and contains **no
