@@ -284,12 +284,13 @@ where
 
 fn slow_span_values(elapsed: Duration, threshold: Duration) -> Option<(u64, u64)> {
     if elapsed >= threshold {
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "latency/threshold durations; their millisecond counts fit u64 for \
-                      any realistic elapsed time"
-        )]
-        Some((elapsed.as_millis() as u64, threshold.as_millis() as u64))
+        // `Duration::as_millis` is `u128`. Saturating rather than truncating: a
+        // duration past `u64::MAX` milliseconds (~584 million years) cannot occur,
+        // but if the arithmetic ever produced one, reporting the maximum is honest
+        // where a wrapped value would read as a fast span and hide the very thing
+        // this layer exists to surface.
+        let ms = |d: Duration| u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
+        Some((ms(elapsed), ms(threshold)))
     } else {
         None
     }

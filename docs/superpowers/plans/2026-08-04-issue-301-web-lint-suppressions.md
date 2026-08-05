@@ -120,8 +120,10 @@ measured 5-error cost). Nothing else surfaced, so there is no issue-filing task.
   task that verifies a lint set — notably task 5's `needless_pass_by_value` —
   must sweep all three.
 
-- `xtask` is not a workspace member: use
-  `cargo nextest run --manifest-path xtask/Cargo.toml`, not `-p xtask`.
+- **Two crate-name gotchas.** `xtask` is not a workspace member — use
+  `cargo nextest run --manifest-path xtask/Cargo.toml`, not `-p xtask`. And the
+  crate in `server/` is named **`jaunder`**, so it is `-p jaunder`; `-p server`
+  fails with "did not match any packages".
 - No new suppression without listing it for approval (criterion 9).
 
 ---
@@ -227,14 +229,19 @@ expected clean.
 
 **Steps**
 
-- [ ] Replace both `as u64` casts (`:285-296`) with saturating conversions
+- [x] Replace both `as u64` casts (`:285-296`) with saturating conversions
       (`u64::try_from(...).unwrap_or(u64::MAX)`), per D7. Delete the
-      `#[expect]`.
-- [ ] A saturated maximum is the intended behaviour for an overflowing
+      `#[expect]`. — Done via a local `ms` closure applied to both durations, so
+      the conversion is written once rather than twice.
+- [x] A saturated maximum is the intended behaviour for an overflowing
       threshold; a wrapped value is not. If a test pins the old behaviour,
-      update it deliberately and say so in the commit.
+      update it deliberately and say so in the commit. — **No test needed
+      changing**; all six `slow_span*` tests pass unmodified. The comment
+      records why saturation is the honest choice: a wrapped value would read as
+      a _fast_ span and hide exactly what the layer exists to surface.
 
-**Run:** `cargo nextest run -p server`. Expected **PASS**.
+**Run:** `cargo nextest run -p jaunder slow_span` (the crate in `server/` is
+named `jaunder`). Expected **PASS** — 6/6 passed.
 
 **Commit:**
 `refactor(server): saturating millis conversions in observability (#301)`
