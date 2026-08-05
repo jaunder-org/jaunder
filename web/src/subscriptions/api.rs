@@ -8,6 +8,7 @@ use super::server::resolve_author;
 #[cfg(feature = "server")]
 use {
     crate::auth::require_auth,
+    common::visibility::local_subscriber_ref,
     leptos::prelude::*,
     std::sync::Arc,
     storage::{SubscriptionStorage, UserStorage},
@@ -26,7 +27,7 @@ pub async fn subscribe(author_username: Username) -> WebResult<()> {
     let author_id = resolve_author(users.as_ref(), &author_username, auth.user_id).await?;
     let channel_id = subscriptions.local_channel_id().await?;
     subscriptions
-        .subscribe(author_id, channel_id, &i64::from(auth.user_id).to_string())
+        .subscribe(author_id, channel_id, &local_subscriber_ref(auth.user_id))
         .await?;
     Ok(())
 }
@@ -42,7 +43,7 @@ pub async fn unsubscribe(author_username: Username) -> WebResult<()> {
     let author_id = resolve_author(users.as_ref(), &author_username, auth.user_id).await?;
     let channel_id = subscriptions.local_channel_id().await?;
     subscriptions
-        .unsubscribe(author_id, channel_id, &i64::from(auth.user_id).to_string())
+        .unsubscribe(author_id, channel_id, &local_subscriber_ref(auth.user_id))
         .await?;
     Ok(())
 }
@@ -62,9 +63,7 @@ pub async fn is_subscribed(author_username: Username) -> WebResult<bool> {
     let Ok(author_id) = resolve_author(users.as_ref(), &author_username, auth.user_id).await else {
         return Ok(false);
     };
-    let viewer = common::visibility::ViewerIdentity::Local {
-        user_id: auth.user_id,
-    };
+    let viewer = common::visibility::ViewerIdentity::local(auth.user_id);
     let subscribed = subscriptions.is_subscriber(author_id, &viewer).await?;
     Ok(subscribed)
 }

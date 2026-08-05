@@ -104,6 +104,20 @@ impl ViewerIdentity {
     }
 }
 
+/// How a local account appears in `subscriptions.subscriber_ref`: its user id
+/// in decimal.
+///
+/// `subscriber_ref` is a `TEXT` column shared by every channel, so a local
+/// account has to be spelled into it somehow. That spelling is a *storage
+/// encoding*, not a property of [`UserId`] — the write path (`subscribe` /
+/// `unsubscribe`) and the read paths (the resolution filter, `is_subscriber`)
+/// must agree on it exactly, or a subscription silently stops matching. This
+/// is the one place it is defined; call it rather than spelling it again (#6).
+#[must_use]
+pub fn local_subscriber_ref(user_id: UserId) -> String {
+    user_id.to_string()
+}
+
 /// The local user id of an account viewer, for *display* of owner controls.
 ///
 /// This is the same identity the web `viewer_identity()` extractor resolves,
@@ -396,6 +410,13 @@ mod tests {
     #[test]
     fn viewer_user_id_is_none_for_anonymous() {
         assert_eq!(viewer_user_id(&ViewerIdentity::Anonymous), None);
+    }
+
+    #[test]
+    fn local_subscriber_ref_is_the_user_id_in_decimal() {
+        // Locks the storage encoding the subscription write path and both read
+        // paths must agree on; a change here silently unmatches existing rows.
+        assert_eq!(local_subscriber_ref(UserId::from(42)), "42");
     }
 
     #[test]

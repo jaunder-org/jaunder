@@ -208,9 +208,7 @@ pub async fn collection_get(
 /// filter would hide the user's own non-Public posts (a `404` before the owner
 /// check ever runs).
 fn owner_viewer(auth_user: &AuthUser) -> ViewerIdentity {
-    ViewerIdentity::Local {
-        user_id: auth_user.user_id,
-    }
+    ViewerIdentity::local(auth_user.user_id)
 }
 
 /// Loads a post that the authenticated user owns and that is not soft-deleted.

@@ -18,7 +18,7 @@ use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::time::UtcInstant;
 use common::username::Username;
-use common::visibility::{AudienceTarget, TargetKind, ViewerIdentity};
+use common::visibility::{local_subscriber_ref, AudienceTarget, TargetKind, ViewerIdentity};
 use host::error::{InternalError, InternalResult};
 
 use crate::backend::Backend;
@@ -2009,13 +2009,12 @@ fn resolution_where(viewer: &ViewerIdentity, start: usize) -> (String, Resolutio
 
     let binds = match viewer {
         ViewerIdentity::Anonymous => ResolutionBinds::Anonymous,
-        // Only a local viewer can be the author. Its `subscriber_ref` is its
-        // user id in decimal — the form `subscribe_to` stores — and its channel
-        // is not carried at all, because it can only ever be the `local` row,
-        // which the SQL resolves for itself.
+        // Only a local viewer can be the author. Its channel is not carried at
+        // all, because it can only ever be the `local` row, which the SQL
+        // resolves for itself.
         ViewerIdentity::Local { user_id } => ResolutionBinds::Local {
             user_id: *user_id,
-            subref: user_id.to_string(),
+            subref: local_subscriber_ref(*user_id),
         },
         // A remote viewer is never the author, whatever its ref parses as: the
         // author bind stays NULL, so `p.user_id = NULL` is unknown and admits

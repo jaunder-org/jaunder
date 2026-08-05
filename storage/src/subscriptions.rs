@@ -14,7 +14,9 @@ use chrono::{DateTime, Utc};
 use sqlx::{Database, Pool};
 
 use common::ids::{ChannelId, SubscriptionId, UserId};
-use common::visibility::{SubscriptionPolicy, SubscriptionStatus, ViewerIdentity};
+use common::visibility::{
+    local_subscriber_ref, SubscriptionPolicy, SubscriptionStatus, ViewerIdentity,
+};
 
 /// A subscription row returned by [`SubscriptionStorage::list_subscribers`].
 #[derive(Clone, Debug)]
@@ -192,11 +194,10 @@ where
         // bound, so that arm has one fewer bind (#6).
         let (exists,) = match viewer {
             ViewerIdentity::Anonymous => return Ok(false), // short-circuit; no query.
-            // A local viewer's `subscriber_ref` is its user id in decimal — the
-            // form `subscribe_to` stores. The carried `channel_id` is ignored:
-            // for a local viewer it can only be the `local` row.
+            // A local viewer carries no channel: it can only ever be the
+            // `local` row, which `IS_ACTIVE_LOCAL_SUBSCRIBER` resolves itself.
             ViewerIdentity::Local { user_id } => {
-                let subscriber_ref = user_id.to_string();
+                let subscriber_ref = local_subscriber_ref(*user_id);
                 sqlx::query_as::<_, (i64,)>(DB::IS_ACTIVE_LOCAL_SUBSCRIBER)
                     .bind(author_user_id)
                     .bind(subscriber_ref.as_str())

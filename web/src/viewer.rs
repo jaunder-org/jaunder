@@ -37,7 +37,5 @@ pub async fn viewer_identity() -> ViewerIdentity {
         return ViewerIdentity::Anonymous;
     };
 
-    ViewerIdentity::Local {
-        user_id: auth.user_id,
-    }
+    ViewerIdentity::local(auth.user_id)
 }

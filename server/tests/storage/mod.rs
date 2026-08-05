@@ -252,8 +252,9 @@ async fn statuses_seed_maps_to_enum(#[case] backend: Backend) {
 // Sibling of `lookup_names`: a raw SELECT of the seeded `local` channel id.
 // The `local` channel is a lookup row present in every clone, so reading it via
 // the per-test recorded URL (Postgres) or the same DB file (SQLite) both work;
-// we use the established same-DB helpers for consistency. The trait method
-// `local_channel_id()` is introduced in a later task — do not use it here.
+// we use the established same-DB helpers for consistency — deliberately not the
+// trait method `local_channel_id()`, which is what the test below asserts
+// against, so it cannot also be the source of the expectation.
 async fn local_channel_id(backend: Backend, env: &TestEnv) -> ChannelId {
     channel_id_by_name(backend, env, "local").await
 }

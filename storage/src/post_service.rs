@@ -521,7 +521,7 @@ pub async fn perform_post_creation(
                 // Re-read as the author so the fetch succeeds regardless of the
                 // post's targeting (a private/subscribers/named post is invisible
                 // to an Anonymous viewer).
-                let viewer = common::visibility::ViewerIdentity::Local { user_id };
+                let viewer = common::visibility::ViewerIdentity::local(user_id);
                 let record = storage
                     .get_post_by_id(post_id, &viewer)
                     .await
