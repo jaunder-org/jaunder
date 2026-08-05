@@ -11,37 +11,42 @@ use common::seed::TagSummary;
 
 use crate::error::WebResult;
 
-/// Default number of suggestions returned to the autocomplete dropdown when
-/// the caller doesn't specify a limit.
+/// Suggestions returned to the autocomplete dropdown when the caller doesn't
+/// specify a limit — deliberately fewer than a listing page's 50.
 ///
-/// Expressed as a [`PageSize`] because that type already carries this bound: its
-/// range is `1..=50`, exactly the clamp this endpoint used to apply by hand, and
-/// `PageSize::clamped` is the coerce-rather-than-reject policy a public `limit=`
-/// param wants (#696; the `AtomPub` default of 25 is recorded the same way).
-pub const DEFAULT_TAG_LIMIT: u32 = 10;
-
-/// Hard upper bound on the autocomplete result set; protects the database
-/// against pathological requests.
-///
-/// Equal to `PageSize::MAX` — the hand-rolled `.clamp(1, MAX_TAG_LIMIT)` this
-/// replaced was a re-implementation of [`PageSize::clamped`].
-pub const MAX_TAG_LIMIT: u32 = PageSize::MAX;
+/// Private, and gated to the server build: `list`'s `None` branch is its only
+/// consumer now that the dropdown relies on the default rather than restating
+/// the number at the call site, and `#[macros::server]` strips that body from
+/// the client build (which would leave this dead there).
+#[cfg(feature = "server")]
+const DEFAULT_TAG_LIMIT: PageSize = PageSize::clamped(10);
 
 /// Returns tag suggestions for the autocomplete dropdown.
 ///
 /// `prefix` is a case-insensitive prefix match against the canonical slug;
 /// `None` or whitespace-only returns the alphabetically-first tags. `limit`
-/// defaults to [`DEFAULT_TAG_LIMIT`] and is clamped at [`MAX_TAG_LIMIT`].
+/// defaults to 10 suggestions and is bounded `1..=50` by [`PageSize`]; an
+/// out-of-range value is **rejected on the wire** by the serde bridge, not
+/// coerced down to the cap.
+///
+/// `limit` is a [`PageSize`] rather than a tags-specific `TagLimit` newtype
+/// (#691), for two reasons. The `1..=50` bound is `PageSize`'s own and belongs
+/// in one place — the tags-local max constant this change deleted was literally
+/// defined *as* `PageSize::MAX`, so a `TagLimit` would restate two numbers that
+/// can then drift. And a `TagLimit` carrying `clamp` would carry a door nothing
+/// calls: the `NumNewtype` serde bridge re-runs the bound and rejects, it never
+/// coerces, so `clamped` is reachable only from Rust. That coercing door is for
+/// public params like `AtomPub`'s `?limit=`, not for a `#[server]` wire arg.
 ///
 /// `prefix` stays `String` (not `Tag`): it is a partial search fragment matched
 /// with SQL `LIKE prefix%`, not a complete tag value — typing it `Tag` would
 /// reject valid partials (ADR-0063 §4 boundary policy; #409 Decision 7).
 #[macros::server(input = Json, skip(prefix))]
-pub async fn list(prefix: Option<String>, limit: Option<u32>) -> WebResult<Vec<TagSummary>> {
+pub async fn list(prefix: Option<String>, limit: Option<PageSize>) -> WebResult<Vec<TagSummary>> {
     let posts = expect_context::<Arc<dyn PostStorage>>();
     // `exact_limit`, not `fetch_limit`: the dropdown shows what it gets and has no
     // "load more", so an extra probing row would just be fetched and discarded.
-    let resolved_limit = PageSize::clamped(limit.unwrap_or(DEFAULT_TAG_LIMIT)).exact_limit();
+    let resolved_limit = limit.unwrap_or(DEFAULT_TAG_LIMIT).exact_limit();
     let records = posts.list_tags(prefix.as_deref(), resolved_limit).await?;
     Ok(records
         .into_iter()
@@ -87,6 +92,7 @@ mod tests {
     #[cfg(feature = "server")]
     mod server {
         use super::super::list;
+        use common::pagination::PageSize;
         use leptos::prelude::provide_context;
         use leptos::reactive::owner::Owner;
         use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -173,7 +179,7 @@ mod tests {
                 .returning(|_prefix, _limit| Ok(Vec::new()));
             provide_context(Arc::new(posts) as Arc<dyn PostStorage>);
 
-            let result = list(Some(SECRET_PREFIX.to_string()), Some(5)).await;
+            let result = list(Some(SECRET_PREFIX.to_string()), Some(PageSize::clamped(5))).await;
             drop(owner);
             assert!(result.is_ok(), "list failed: {result:?}");
 
