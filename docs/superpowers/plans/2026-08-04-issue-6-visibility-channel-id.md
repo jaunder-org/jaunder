@@ -121,7 +121,7 @@ in this task and constructs `Local`. `account_viewer` is unchanged.
 
 **Steps**
 
-- [ ] **Step 1 (red).** In `server/tests/storage/mod.rs`, seed a second channel
+- [x] **Step 1 (red).** In `server/tests/storage/mod.rs`, seed a second channel
       in `resolution_matrix` and add the adversarial viewer. Note this is
       **not** a drop-in addition: the expectation rows are typed
       `&[(&str, PostId, [bool; 5])]` (`:5768`) and the viewer array
@@ -144,7 +144,7 @@ in this task and constructs `Local`. `account_viewer` is unchanged.
   **Subscribers**, **Named(G)**, **Named(G2)** not — asserted through both
   `get_post_by_id` and presence in `list_published`.
 
-- [ ] **Step 2 (still red, by construction).** Add the `Local`/`Remote` variants
+- [x] **Step 2 (still red, by construction).** Add the `Local`/`Remote` variants
       and update every destructuring/construction site so the tree compiles, but
       keep `resolution_where` deriving `author_id` **by the parse**, on both
       arms. `Local` has no `subscriber_ref` field, so its arm synthesizes one —
@@ -167,7 +167,7 @@ in this task and constructs `Local`. `account_viewer` is unchanged.
   Run `cargo nextest run -p jaunder --test storage resolution_matrix` → **FAIL**
   on the impostor's Private/Subscribers/Named cells.
 
-- [ ] **Step 3 (keep task 2's red).** `viewer_user_id`
+- [x] **Step 3 (keep task 2's red).** `viewer_user_id`
       (`common/src/visibility.rs:118-123`) also destructures the deleted variant
       and must be rewritten now — but rewrite it to the **parse form**, not the
       variant match:
@@ -179,7 +179,7 @@ in this task and constructs `Local`. `account_viewer` is unchanged.
   ViewerIdentity::Remote { subscriber_ref, .. } => subscriber_ref.parse().ok(),
   ```
 
-- [ ] **Step 4 (green).** Change `resolution_where`'s match so `author_id` is
+- [x] **Step 4 (green).** Change `resolution_where`'s match so `author_id` is
       `Some(*user_id)` for `Local` and `None` for `Remote` and `Anonymous`:
 
   ```rust
@@ -199,7 +199,7 @@ in this task and constructs `Local`. `account_viewer` is unchanged.
   untouched: every existing viewer is `Anonymous` or `local(x, local)`
   (`:5761-5790`), for which `Some(*user_id)` is exactly what the parse yielded.
 
-- [ ] **Step 5.** `cargo xtask check`; commit
+- [x] **Step 5.** `cargo xtask check`; commit
       `fix(visibility): author branch fires only for a local viewer (#6)`.
 
 ---

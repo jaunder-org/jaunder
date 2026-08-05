@@ -127,13 +127,11 @@ pub fn account_viewer(user_id: UserId, local_channel_id: Option<ChannelId>) -> V
 #[must_use]
 pub fn viewer_user_id(viewer: &ViewerIdentity) -> Option<UserId> {
     match viewer {
-        // Deliberately still ref-parsing rather than matching the variant: this
-        // is the second instance of the #6 hole, and a follow-up task closes it
-        // with its own regression test. Rewriting it here would make that test
-        // green before it was ever red.
-        ViewerIdentity::Local { user_id, .. } => user_id.to_string().parse().ok(),
-        ViewerIdentity::Remote { subscriber_ref, .. } => subscriber_ref.parse().ok(),
-        ViewerIdentity::Anonymous => None,
+        // Only a local account has a local user id. A remote `subscriber_ref`
+        // is opaque — that it parses as an integer says nothing about who it
+        // is, so it never projects to a user id (#6).
+        ViewerIdentity::Local { user_id, .. } => Some(*user_id),
+        ViewerIdentity::Remote { .. } | ViewerIdentity::Anonymous => None,
     }
 }
 
@@ -431,6 +429,18 @@ mod tests {
     #[test]
     fn viewer_user_id_is_none_for_anonymous() {
         assert_eq!(viewer_user_id(&ViewerIdentity::Anonymous), None);
+    }
+
+    #[test]
+    fn viewer_user_id_is_none_for_a_remote_viewer_with_a_numeric_ref() {
+        // The #6 hole in its second form: a remote ref that happens to be the
+        // decimal form of a local user id must not project to that user, or the
+        // owner-only controls render for a viewer who is not the owner.
+        let impostor = ViewerIdentity::Remote {
+            channel_id: ChannelId::from(2),
+            subscriber_ref: "42".to_owned(),
+        };
+        assert_eq!(viewer_user_id(&impostor), None);
     }
 
     #[test]
