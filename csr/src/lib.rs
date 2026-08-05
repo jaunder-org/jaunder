@@ -3,7 +3,7 @@
 // to monomorphize it (mirrors web/src/lib.rs).
 #![recursion_limit = "512"]
 
-use client::perf::{mark, BOOT_ENTRY, BOOT_MOUNT_DONE, BOOT_RENDER_START, BOOT_SEED_PARSED};
+use client::perf::{BOOT_ENTRY, BOOT_MOUNT_DONE, BOOT_RENDER_START, BOOT_SEED_PARSED, mark};
 use common::seed::PageSeed;
 use leptos::prelude::*;
 use web::app::App;

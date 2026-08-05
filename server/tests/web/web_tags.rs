@@ -10,7 +10,7 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::post_json;
-use storage::test_support::{backends, Backend, SeedRawPost, SeedUser, TestEnv};
+use storage::test_support::{Backend, SeedRawPost, SeedUser, TestEnv, backends};
 
 async fn seed_user_and_tagged_post(
     state: &Arc<storage::AppState>,

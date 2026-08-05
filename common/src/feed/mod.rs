@@ -1,6 +1,6 @@
 pub mod feed_path;
 pub use feed_path::{
-    affected_feed_urls, canonicalize, parse, FeedFormat, FeedPath, FeedSurface, InvalidFeedPath,
+    FeedFormat, FeedPath, FeedSurface, InvalidFeedPath, affected_feed_urls, canonicalize, parse,
 };
 
 pub mod event_status;
@@ -13,7 +13,7 @@ pub mod window;
 pub use window::{HasPublishedAt, HybridWindow};
 
 pub mod metadata;
-pub use metadata::{feed_etag, FeedItem, FeedMetadata};
+pub use metadata::{FeedItem, FeedMetadata, feed_etag};
 
 pub mod rss;
 pub use rss::render_rss;

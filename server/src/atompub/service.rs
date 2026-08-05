@@ -2,17 +2,17 @@
 
 use std::sync::Arc;
 
+use axum::Extension;
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
-use axum::Extension;
 
 use common::absolute_url::compose;
-use common::atompub::{render_service_document, CollectionDecl, ServiceDocument};
+use common::atompub::{CollectionDecl, ServiceDocument, render_service_document};
 use common::pagination::RowLimit;
 use storage::{PostStorage, SiteConfigStorage};
 use web::auth::AuthUser;
 
-use super::{required_base_url, HandlerError};
+use super::{HandlerError, required_base_url};
 
 /// Media types the media collection accepts.
 const MEDIA_ACCEPT: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];

@@ -15,7 +15,7 @@ use sqlx::{Database, Pool};
 
 use common::ids::{ChannelId, SubscriptionId, UserId};
 use common::visibility::{
-    local_subscriber_ref, SubscriptionPolicy, SubscriptionStatus, ViewerIdentity,
+    SubscriptionPolicy, SubscriptionStatus, ViewerIdentity, local_subscriber_ref,
 };
 
 /// A subscription row returned by [`SubscriptionStorage::list_subscribers`].

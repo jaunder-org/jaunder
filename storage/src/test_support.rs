@@ -21,7 +21,7 @@ use chrono::{DateTime, Utc};
 use common::feed::FeedPath;
 use common::ids::{PostId, UserId};
 use common::mailer::{MailSender, NoopMailSender};
-use common::media::{detect_content_type, media_url, Filename, MediaRef, MediaSource};
+use common::media::{Filename, MediaRef, MediaSource, detect_content_type, media_url};
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
@@ -37,8 +37,8 @@ use common::visibility::AudienceTarget;
 use host::invite::InviteCode;
 use sqlx::{Connection, PgPool, SqlitePool};
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
     Arc,
+    atomic::{AtomicU64, Ordering},
 };
 use tempfile::TempDir;
 
@@ -1403,9 +1403,9 @@ pub async fn update_post_body_via_service(
 #[cfg(test)]
 mod tests {
     use super::{
-        backends, bootstrap_url, parse_password, parse_post_title, report_drop_outcome,
-        splice_db_name, AudienceTarget, Backend, CreatePostError, PostFormat, PostSummary,
-        SeedPost, SeedRawPost, SeedUser,
+        AudienceTarget, Backend, CreatePostError, PostFormat, PostSummary, SeedPost, SeedRawPost,
+        SeedUser, backends, bootstrap_url, parse_password, parse_post_title, report_drop_outcome,
+        splice_db_name,
     };
     use chrono::Utc;
     use common::post_summary::SummarySeed;

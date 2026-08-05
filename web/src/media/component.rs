@@ -10,8 +10,8 @@ use common::pagination::{PageOffset, PageSize};
 use common::root_relative_url::RootRelativeUrl;
 
 use super::{
-    format_bytes, get_usage, list_mine, upload, Delete, DeleteResult, Item, UploadCallbacks,
-    UploadState, UsageData,
+    Delete, DeleteResult, Item, UploadCallbacks, UploadState, UsageData, format_bytes, get_usage,
+    list_mine, upload,
 };
 use crate::error::{WebError, WebResult};
 use crate::topbar::Topbar;

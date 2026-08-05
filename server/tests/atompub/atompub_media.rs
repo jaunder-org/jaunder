@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    http::{header, StatusCode},
+    http::{StatusCode, header},
 };
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -8,7 +8,7 @@ use tower::ServiceExt;
 use rstest::*;
 use rstest_reuse::*;
 
-use storage::test_support::{backends, backends_matrix, Backend, TestEnv};
+use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
 
 use crate::helpers::{
     atompub, atompub_at, atompub_get, atompub_upload, body_string, create_user_and_session,

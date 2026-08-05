@@ -139,9 +139,11 @@ mod tests {
         };
         let result = sender.send_email(&msg).await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("failed to send email"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("failed to send email")
+        );
     }
 }

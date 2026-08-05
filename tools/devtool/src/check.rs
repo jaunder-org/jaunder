@@ -7,7 +7,7 @@
 
 use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 /// The 8 non-compiling static checks devtool owns, in the host gate's order.
 ///
@@ -207,9 +207,10 @@ mod tests {
     #[test]
     fn tools_fmt_targets_tools_workspace() {
         let (_p, args) = spec("tools-fmt", false).unwrap();
-        assert!(args
-            .windows(2)
-            .any(|w| w == ["--manifest-path", "tools/Cargo.toml"]));
+        assert!(
+            args.windows(2)
+                .any(|w| w == ["--manifest-path", "tools/Cargo.toml"])
+        );
         assert!(args.contains(&"--all".to_string()) && args.contains(&"--check".to_string()));
     }
 

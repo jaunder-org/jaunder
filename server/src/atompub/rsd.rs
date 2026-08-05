@@ -5,17 +5,17 @@
 
 use std::sync::Arc;
 
+use axum::Extension;
 use axum::extract::Path;
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
-use axum::Extension;
 
 use common::absolute_url::compose;
 use common::atompub::render_rsd_document;
 use common::username::Username;
 use storage::SiteConfigStorage;
 
-use super::{required_base_url, HandlerError};
+use super::{HandlerError, required_base_url};
 
 /// `GET /~{username}/rsd.xml` — the public `RSD` discovery document.
 ///

@@ -63,7 +63,7 @@ pub fn run_bin_fixture(name: &str, source: &str) -> (tempfile::TempDir, String) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::check::{problems, Kind, ScannedFile};
+    use crate::check::{Kind, ScannedFile, problems};
     use crate::libtest::run_entries;
 
     // `.rs.txt`, not `.rs`: these are test DATA, not any crate's source. Under a

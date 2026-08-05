@@ -3,8 +3,8 @@
 use async_trait::async_trait;
 use common::mailer::{EmailMessage, MailError, MailSender};
 use lettre::{
-    message::Mailbox, transport::smtp::authentication::Credentials, AsyncSmtpTransport,
-    AsyncTransport, Message, Tokio1Executor,
+    AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor, message::Mailbox,
+    transport::smtp::authentication::Credentials,
 };
 use storage::{SmtpConfig, SmtpTlsMode};
 use thiserror::Error;

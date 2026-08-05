@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use crate::helpers::{setup_with_base_url, CapturingWebSubClient};
+use crate::helpers::{CapturingWebSubClient, setup_with_base_url};
 use chrono::Utc;
 use common::feed::FeedPath;
 use common::ids::FeedEventId;
 use common::test_support::{parse_content_type, parse_etag};
 use jaunder::feed::worker::FeedWorker;
-use storage::test_support::{backends, fp, Backend, SeedRawPost, SeedUser, TestEnv};
 use storage::FeedCacheRow;
+use storage::test_support::{Backend, SeedRawPost, SeedUser, TestEnv, backends, fp};
 
 use rstest::*;
 use rstest_reuse::*;
@@ -156,9 +156,11 @@ async fn worker_groups_duplicate_events_into_single_regen(#[case] backend: Backe
         "should have exactly one ping (duplicates grouped)"
     );
     assert_eq!(pings[0].hub_url, "https://hub.example.com/");
-    assert!(pings[0]
-        .feed_url
-        .ends_with(&format!("/~{}/feed.rss", user.username)));
+    assert!(
+        pings[0]
+            .feed_url
+            .ends_with(&format!("/~{}/feed.rss", user.username))
+    );
 }
 
 // The regen-failure backoff behavior moved to a mock-based worker unit test

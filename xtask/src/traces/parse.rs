@@ -426,12 +426,16 @@ mod tests {
 
     #[test]
     fn parse_spans_empty_content_is_empty_vec() {
-        assert!(parse_spans("", &Filters::default(), "t")
-            .unwrap()
-            .is_empty());
-        assert!(parse_spans("\n  \n", &Filters::default(), "t")
-            .unwrap()
-            .is_empty());
+        assert!(
+            parse_spans("", &Filters::default(), "t")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            parse_spans("\n  \n", &Filters::default(), "t")
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

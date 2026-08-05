@@ -359,12 +359,16 @@ mod tests {
     /// D8: the per-user registry is closed and validating in the same two ways.
     #[test]
     fn user_config_key_validates_its_value() {
-        assert!(UserConfigKey::DefaultPostFormat
-            .validate("markdown")
-            .is_ok());
-        assert!(UserConfigKey::DefaultPostFormat
-            .validate("hieroglyphs")
-            .is_err());
+        assert!(
+            UserConfigKey::DefaultPostFormat
+                .validate("markdown")
+                .is_ok()
+        );
+        assert!(
+            UserConfigKey::DefaultPostFormat
+                .validate("hieroglyphs")
+                .is_err()
+        );
         for key in UserConfigKey::VARIANTS {
             let dotted = key.as_ref();
             let bad = key.known_bad_example();

@@ -10,7 +10,7 @@
 
 mod env;
 
-pub use env::{with_env, Env};
+pub use env::{Env, with_env};
 
 use crate::absolute_url::AbsoluteUrl;
 use crate::audience::AudienceName;

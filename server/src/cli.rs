@@ -481,9 +481,10 @@ mod tests {
     #[test]
     fn app_target_rejects_a_non_postgres_url() {
         let err = "sqlite:/tmp/jaunder.db".parse::<AppTarget>().unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("--app-db must be a PostgreSQL URL"));
+        assert!(
+            err.to_string()
+                .contains("--app-db must be a PostgreSQL URL")
+        );
     }
 
     #[test]
@@ -494,18 +495,20 @@ mod tests {
             .parse::<BootstrapDb>()
             .err()
             .expect("a sqlite URL is not a bootstrap URL");
-        assert!(err
-            .to_string()
-            .contains("--bootstrap-db must be a PostgreSQL URL"));
+        assert!(
+            err.to_string()
+                .contains("--bootstrap-db must be a PostgreSQL URL")
+        );
     }
 
     // Replaces `cmd_create_pg_db_requires_database_name`, for the same reason.
     #[test]
     fn app_target_rejects_a_url_with_no_database() {
         let err = "postgres://app@localhost".parse::<AppTarget>().unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("--app-db must include a PostgreSQL database name"));
+        assert!(
+            err.to_string()
+                .contains("--app-db must include a PostgreSQL database name")
+        );
     }
 
     // Replaces `run_create_pg_db_rejects_non_postgres_urls` in main.rs: `bootstrap_db` is

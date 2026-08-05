@@ -141,8 +141,7 @@ pub fn render<T: Serialize>(value: &T) -> Result<String> {
 /// The remedy for either artifact being out of step, as the two steps it really
 /// is: [`REGENERATE_CMD`] fails immediately without a capture, so naming it alone
 /// sends an author into an error instead of a fix.
-const REGENERATE_BOTH: &str =
-    "regenerate both: run `cargo xtask e2e sqlite chromium` to produce a \
+const REGENERATE_BOTH: &str = "regenerate both: run `cargo xtask e2e sqlite chromium` to produce a \
                                capture, then `cargo xtask server-fn-coverage regenerate`";
 
 /// Every way the evidence file disagrees with the snapshot's `covered` names, one

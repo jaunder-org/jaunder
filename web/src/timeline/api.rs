@@ -31,7 +31,7 @@ use {
     crate::viewer::viewer_identity,
     leptos::prelude::*,
     std::sync::Arc,
-    storage::{keyset_cursor, PostStorage, UserStorage},
+    storage::{PostStorage, UserStorage, keyset_cursor},
 };
 
 /// Lists published, non-deleted posts for a user using cursor pagination.

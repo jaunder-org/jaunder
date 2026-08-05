@@ -59,7 +59,7 @@ impl Default for Invalidator {
 
 #[cfg(test)]
 mod tests {
-    use super::{invalidator_scope, Invalidator};
+    use super::{Invalidator, invalidator_scope};
     use leptos::reactive::owner::Owner;
 
     invalidator_scope! {

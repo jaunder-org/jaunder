@@ -2,10 +2,10 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::{Pool, Sqlite};
 
-use crate::helpers::{post_record_from_row, PostRow};
+use crate::helpers::{PostRow, post_record_from_row};
 use crate::posts::{
-    post_tag_diff, post_tags_from_rows, DELETE_POST_TAG_BY_SLUG, SELECT_POST_TAGS,
-    SELECT_TAG_ID_BY_SLUG,
+    DELETE_POST_TAG_BY_SLUG, SELECT_POST_TAGS, SELECT_TAG_ID_BY_SLUG, post_tag_diff,
+    post_tags_from_rows,
 };
 use crate::{PostDialect, PostRecord, PostStore, TaggingError, UpdatePostError, UpdatePostInput};
 use common::ids::{PostId, TagId, UserId};

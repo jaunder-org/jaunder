@@ -12,8 +12,8 @@ use common::username::Username;
 use common::visibility::{AudienceTarget, ViewerIdentity};
 use jaunder::cli::StorageArgs;
 use std::sync::Arc;
-use storage::test_support::{fp, SeedRawPost};
-use storage::{open_existing_database, AppState, MediaRecord, UserConfigKey};
+use storage::test_support::{SeedRawPost, fp};
+use storage::{AppState, MediaRecord, UserConfigKey, open_existing_database};
 
 /// SHA-256 the media-table fixture row is keyed by; any stable value works, since
 /// the media *files* are mirrored separately from the media *table*.

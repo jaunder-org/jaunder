@@ -4,9 +4,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use log::LevelFilter;
-use sqlx::postgres::PgConnectOptions;
 use sqlx::ConnectOptions;
 use sqlx::PgPool;
+use sqlx::postgres::PgConnectOptions;
 
 mod site_config;
 pub use site_config::PostgresSiteConfigStorage;
@@ -48,7 +48,7 @@ mod audiences;
 pub use audiences::PostgresAudienceStorage;
 
 mod bootstrap;
-pub use bootstrap::{create_postgres_database_and_role, PgBootstrapError};
+pub use bootstrap::{PgBootstrapError, create_postgres_database_and_role};
 
 pub(crate) mod backup;
 

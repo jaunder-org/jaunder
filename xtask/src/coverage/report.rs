@@ -1,6 +1,6 @@
 use crate::coverage::{FileCoverage, LineCov};
 use crate::markers::{comment_marker_is, line_comment};
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 /// Parse `cargo llvm-cov report --text` output. A line is executable iff its
 /// second pipe-delimited column is non-blank; covered iff that column is a

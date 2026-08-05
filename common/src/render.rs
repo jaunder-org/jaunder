@@ -239,7 +239,7 @@ impl PartialEq<&str> for RenderedHtml {
 #[cfg(feature = "sanitize")]
 mod sanitized {
     use super::{PostFormat, RenderedHtml};
-    use crate::media::{parse_media_url, MediaRef};
+    use crate::media::{MediaRef, parse_media_url};
     use crate::post_body::PostBody;
 
     /// The single allowlist every [`RenderedHtml::sanitize`] call scrubs against —
@@ -333,7 +333,7 @@ mod sanitized {
 
     /// Renders Markdown to HTML using pulldown-cmark with common extensions.
     pub(super) fn render_markdown(body: &str) -> String {
-        use pulldown_cmark::{html, Options, Parser};
+        use pulldown_cmark::{Options, Parser, html};
 
         let mut options = Options::empty();
         options.insert(Options::ENABLE_STRIKETHROUGH);
@@ -592,7 +592,7 @@ mod sanitized {
 /// Its test-only internals (`SANITIZER`, `extract_media_refs_with`, the two renderers)
 /// stay `pub(super)`, reachable from the test module by path but not from other crates.
 #[cfg(feature = "sanitize")]
-pub use sanitized::{extract_media_refs, render, RenderOutput, INERT_ATTRS, MEDIA_URL_ATTRS};
+pub use sanitized::{INERT_ATTRS, MEDIA_URL_ATTRS, RenderOutput, extract_media_refs, render};
 
 /// Derives a post's public title and the seed its slug is seeded from.
 ///
@@ -1135,7 +1135,7 @@ mod tests {
         use super::*;
         use crate::post_body::PostBody;
         use crate::render::sanitized::{
-            extract_media_refs_with, render_markdown, render_org, SANITIZER,
+            SANITIZER, extract_media_refs_with, render_markdown, render_org,
         };
 
         // `sanitize` is the establishing door (#445): it is what makes the type's

@@ -16,7 +16,7 @@ use std::sync::Arc;
 use common::display_name::DisplayName;
 use common::ids::{PostId, UserId};
 use common::username::Username;
-use storage::{seed_post_input, AppState};
+use storage::{AppState, seed_post_input};
 
 /// The rendered-body source for seeded post `i` under `prefix`. Its Markdown H1
 /// renders the text `"{prefix} {i}"`, which the heavy e2e timeline tests assert
@@ -351,7 +351,7 @@ mod seed_session_tests {
     //! `UserStorage` / `SessionStorage`, implemented per backend — so the e2e
     //! matrix proves the dual-backend path; here we smoke the logic on `SQLite`.
     use super::*;
-    use common::session_user::{decode_marker, MARKER_KEY};
+    use common::session_user::{MARKER_KEY, decode_marker};
     use common::token::RawToken;
     use storage::test_support;
 

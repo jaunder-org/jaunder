@@ -11,7 +11,7 @@ use crate::ids::PostId;
 use crate::post_body::PostBody;
 use crate::post_summary::PostSummary;
 use crate::post_title::PostTitle;
-use crate::render::{deserialize_rendered_html, PostFormat, RenderedHtml};
+use crate::render::{PostFormat, RenderedHtml, deserialize_rendered_html};
 use crate::root_relative_url::RootRelativeUrl;
 use crate::slug::Slug;
 use crate::tag::{Tag, TagLabel};

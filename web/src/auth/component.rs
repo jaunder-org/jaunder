@@ -3,7 +3,7 @@
 //! [`marker_storage`](super::marker_storage) binding) directly, no `cfg` gates
 //! inside this file.
 
-use super::{clear_session, set_session, Login, LoginResponse, Logout, SessionUser};
+use super::{Login, LoginResponse, Logout, SessionUser, clear_session, set_session};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::topbar::Topbar;

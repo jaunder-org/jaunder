@@ -20,7 +20,7 @@ use common::smtp_port::SmtpPort;
 use common::smtp_sender::SmtpSender;
 use common::smtp_tls_mode::SmtpTlsMode;
 use common::smtp_username::SmtpUsername;
-use common::visibility::{default_audience_str, parse_default_audience, AudienceTarget};
+use common::visibility::{AudienceTarget, default_audience_str, parse_default_audience};
 use sqlx::{Database, Pool};
 
 /// Async operations on the `site_config` key-value table.
@@ -458,7 +458,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::{SiteConfigKey, SmtpTlsMode};
-    use crate::test_support::{backends, Backend};
+    use crate::test_support::{Backend, backends};
     use common::backup::{BackupConfig, BackupMode, RetentionCount};
     use common::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
     use common::media::{MaxFileSize, UserQuota};

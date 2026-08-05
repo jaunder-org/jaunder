@@ -320,7 +320,7 @@ fn parse_opts(attr: TokenStream) -> syn::Result<Opts> {
                     other,
                     "unknown `text_enum` option (expected `sqlx`, `error = <Ident>`, or \
                      `message = \"…\"`)",
-                ))
+                ));
             }
         }
     }
@@ -561,8 +561,11 @@ mod tests {
             r#"error = InvalidX, message = "b""#,
             "pub enum X { A }",
         ));
-        assert!(out
-            .contains("<::std::string::Stringas::serde::Deserialize>::deserialize(deserializer)?"));
+        assert!(
+            out.contains(
+                "<::std::string::Stringas::serde::Deserialize>::deserialize(deserializer)?"
+            )
+        );
         assert!(out.contains("::from_str(&s).map_err(::serde::de::Error::custom)"));
     }
 

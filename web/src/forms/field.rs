@@ -151,7 +151,7 @@ mod tests {
     use common::display_name::DisplayName;
     use common::email::Email;
     use common::password::Password;
-    use common::post_summary::{PostSummary, MAX_POST_SUMMARY_CHARS};
+    use common::post_summary::{MAX_POST_SUMMARY_CHARS, PostSummary};
     use common::slug::Slug;
     use common::tag::Tag;
     use common::test_support::parse_username;
@@ -180,8 +180,10 @@ mod tests {
         assert!(field_error::<Tag>("Bad Tag").is_some());
         // `Email`'s message carries the underlying `email_address` reason after our
         // label, so assert the prefix rather than couple to the crate's wording.
-        assert!(field_error::<Email>("not-an-email")
-            .is_some_and(|m| m.starts_with("invalid email address")));
+        assert!(
+            field_error::<Email>("not-an-email")
+                .is_some_and(|m| m.starts_with("invalid email address"))
+        );
         // An empty / whitespace-only audience name yields the newtype's own message.
         assert_eq!(
             field_error::<AudienceName>("   ").as_deref(),
@@ -189,8 +191,10 @@ mod tests {
         );
         // `BackupSchedule`'s message carries croner's reason after our label, so assert the
         // prefix rather than couple to the crate's wording.
-        assert!(field_error::<BackupSchedule>("not a cron")
-            .is_some_and(|m| m.starts_with("invalid backup schedule")));
+        assert!(
+            field_error::<BackupSchedule>("not a cron")
+                .is_some_and(|m| m.starts_with("invalid backup schedule"))
+        );
         assert!(field_error::<DisplayName>("").is_some()); // empty
         assert!(field_error::<DisplayName>(&"a".repeat(256)).is_some()); // over 255
     }

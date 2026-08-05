@@ -153,10 +153,11 @@ mod tests {
             assert!(bad.parse::<PageSize>().is_err(), "{bad} should reject");
         }
         // ...with the domain message
-        assert!("0"
-            .parse::<PageSize>()
-            .err()
-            .is_some_and(|e| e.to_string().starts_with("page size")));
+        assert!(
+            "0".parse::<PageSize>()
+                .err()
+                .is_some_and(|e| e.to_string().starts_with("page size"))
+        );
         // Default is the web default (50), and Display round-trips
         let d = PageSize::default();
         assert_eq!(d.value(), 50);
@@ -205,10 +206,12 @@ mod tests {
             assert!(bad.parse::<PageOffset>().is_err(), "{bad} should reject");
         }
         // ...with the domain message.
-        assert!("abc"
-            .parse::<PageOffset>()
-            .err()
-            .is_some_and(|e| e.to_string().starts_with("page offset")));
+        assert!(
+            "abc"
+                .parse::<PageOffset>()
+                .err()
+                .is_some_and(|e| e.to_string().starts_with("page offset"))
+        );
         // Default is 0 and Display round-trips.
         let d = PageOffset::default();
         assert_eq!(d.value(), 0);
@@ -268,10 +271,11 @@ mod tests {
         for bad in ["0", "-1", "abc", "1.5"] {
             assert!(bad.parse::<RowLimit>().is_err(), "{bad} should reject");
         }
-        assert!("0"
-            .parse::<RowLimit>()
-            .err()
-            .is_some_and(|e| e.to_string().starts_with("fetch limit")));
+        assert!(
+            "0".parse::<RowLimit>()
+                .err()
+                .is_some_and(|e| e.to_string().starts_with("fetch limit"))
+        );
         // No `default` is declared — there is no sensible default row count — so no
         // `Default` impl exists to assert on. Display round-trips via the fixture.
         let r = crate::test_support::parse_row_limit("7");

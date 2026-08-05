@@ -23,11 +23,11 @@ use anyhow::Result;
 
 use crate::result::{CommandResult, StepResult};
 use crate::server_fn_coverage::io::{
-    coverage_from_capture, inventory, read_allowlist, read_artifact, write_artifact,
-    ALLOWLIST_PATH, CAPTURE_PATH, EVIDENCE_PATH, SNAPSHOT_PATH, WEB_SRC,
+    ALLOWLIST_PATH, CAPTURE_PATH, EVIDENCE_PATH, SNAPSHOT_PATH, WEB_SRC, coverage_from_capture,
+    inventory, read_allowlist, read_artifact, write_artifact,
 };
 use crate::server_fn_coverage::{
-    evidence_verdict, render, verdict, Evidence, Snapshot, REGENERATE_CMD,
+    Evidence, REGENERATE_CMD, Snapshot, evidence_verdict, render, verdict,
 };
 
 /// The static lane's step name.

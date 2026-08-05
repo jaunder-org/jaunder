@@ -8,9 +8,9 @@
 use common::pagination::PageSize;
 use leptos::prelude::*;
 
-use super::{resolve_initial_page, CockpitState};
+use super::{CockpitState, resolve_initial_page};
 use crate::posts::InlineComposer;
-use crate::timeline::{list_home_feed, NoIdentity, TimelineGate};
+use crate::timeline::{NoIdentity, TimelineGate, list_home_feed};
 use crate::topbar::Topbar;
 
 #[component]

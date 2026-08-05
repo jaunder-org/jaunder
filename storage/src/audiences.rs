@@ -344,7 +344,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::AudienceError;
-    use crate::test_support::{backends, Backend, SeedUser};
+    use crate::test_support::{Backend, SeedUser, backends};
     use common::test_support::parse_audience_name;
     use host::error::{ErrorKind, InternalError};
     use rstest::*;

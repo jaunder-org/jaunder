@@ -1,7 +1,7 @@
 use chrono::Utc;
-use common::absolute_url::{compose, AbsoluteUrl};
+use common::absolute_url::{AbsoluteUrl, compose};
 use common::feed::{
-    feed_etag, parse, FeedFormat, FeedItem, FeedMetadata, FeedPath, FeedSurface, HybridWindow,
+    FeedFormat, FeedItem, FeedMetadata, FeedPath, FeedSurface, HybridWindow, feed_etag, parse,
 };
 use storage::{FeedCacheRow, FeedCacheStorage, PostRecord, PostStorage, SiteConfigStorage};
 use thiserror::Error;

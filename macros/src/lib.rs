@@ -3,7 +3,7 @@
 //! trio.
 
 use proc_macro::TokenStream;
-use syn::{parse_macro_input, Data, DeriveInput, Fields};
+use syn::{Data, DeriveInput, Fields, parse_macro_input};
 
 mod id_newtype;
 mod num_newtype;
@@ -628,9 +628,11 @@ mod tests {
     #[test]
     fn str_newtype_wrong_shape_emits_compile_error() {
         let input: DeriveInput = parse_quote! { struct X { a: String } };
-        assert!(str_newtype::expand(&input)
-            .to_string()
-            .contains("compile_error"));
+        assert!(
+            str_newtype::expand(&input)
+                .to_string()
+                .contains("compile_error")
+        );
     }
 
     #[test]
@@ -639,9 +641,11 @@ mod tests {
             #[str_newtype(bogus)]
             struct X(String);
         };
-        assert!(str_newtype::expand(&input)
-            .to_string()
-            .contains("compile_error"));
+        assert!(
+            str_newtype::expand(&input)
+                .to_string()
+                .contains("compile_error")
+        );
     }
 
     #[test]
@@ -678,9 +682,11 @@ mod tests {
             #[str_newtype(serde)]
             struct X(String);
         };
-        assert!(str_newtype::expand(&input)
-            .to_string()
-            .contains("compile_error"));
+        assert!(
+            str_newtype::expand(&input)
+                .to_string()
+                .contains("compile_error")
+        );
     }
 
     #[test]
@@ -710,9 +716,11 @@ mod tests {
             #[str_newtype(infallible, secret)]
             struct X(String);
         };
-        assert!(str_newtype::expand(&input)
-            .to_string()
-            .contains("compile_error"));
+        assert!(
+            str_newtype::expand(&input)
+                .to_string()
+                .contains("compile_error")
+        );
     }
 
     #[test]
@@ -721,17 +729,21 @@ mod tests {
             #[str_newtype(infallible, serde)]
             struct X(String);
         };
-        assert!(str_newtype::expand(&input)
-            .to_string()
-            .contains("compile_error"));
+        assert!(
+            str_newtype::expand(&input)
+                .to_string()
+                .contains("compile_error")
+        );
     }
 
     #[test]
     fn id_newtype_wrong_shape_emits_compile_error() {
         let input: DeriveInput = parse_quote! { struct X { a: i64 } };
-        assert!(id_newtype::expand(&input)
-            .to_string()
-            .contains("compile_error"));
+        assert!(
+            id_newtype::expand(&input)
+                .to_string()
+                .contains("compile_error")
+        );
     }
 
     #[test]
@@ -740,9 +752,11 @@ mod tests {
             #[num_newtype(inner = u32)]
             struct X { a: u32 }
         };
-        assert!(num_newtype::expand(&input)
-            .to_string()
-            .contains("compile_error"));
+        assert!(
+            num_newtype::expand(&input)
+                .to_string()
+                .contains("compile_error")
+        );
     }
 
     #[test]
@@ -751,9 +765,11 @@ mod tests {
             #[num_newtype(min = 1)]
             struct X(u32);
         };
-        assert!(num_newtype::expand(&input)
-            .to_string()
-            .contains("compile_error"));
+        assert!(
+            num_newtype::expand(&input)
+                .to_string()
+                .contains("compile_error")
+        );
     }
 
     #[test]
@@ -763,9 +779,11 @@ mod tests {
             #[num_newtype(inner = i64, min = 1)]
             struct X(u32);
         };
-        assert!(num_newtype::expand(&input)
-            .to_string()
-            .contains("compile_error"));
+        assert!(
+            num_newtype::expand(&input)
+                .to_string()
+                .contains("compile_error")
+        );
     }
 
     #[test]
@@ -774,9 +792,11 @@ mod tests {
             #[num_newtype(inner = u32, bogus = 1)]
             struct X(u32);
         };
-        assert!(num_newtype::expand(&input)
-            .to_string()
-            .contains("compile_error"));
+        assert!(
+            num_newtype::expand(&input)
+                .to_string()
+                .contains("compile_error")
+        );
     }
 
     #[test]
@@ -938,9 +958,11 @@ mod tests {
             #[str_newtype(secret, no_sqlx)]
             struct X(String);
         };
-        assert!(str_newtype::expand(&input)
-            .to_string()
-            .contains("compile_error"));
+        assert!(
+            str_newtype::expand(&input)
+                .to_string()
+                .contains("compile_error")
+        );
     }
 
     #[test]
@@ -951,9 +973,11 @@ mod tests {
             #[str_newtype(sqlx, no_sqlx)]
             struct X(String);
         };
-        assert!(str_newtype::expand(&input)
-            .to_string()
-            .contains("compile_error"));
+        assert!(
+            str_newtype::expand(&input)
+                .to_string()
+                .contains("compile_error")
+        );
     }
 
     // --- ordering (#761) ---------------------------------------------------------------
@@ -974,9 +998,11 @@ mod tests {
             #[str_newtype(infallible)]
             struct X(String);
         };
-        assert!(str_newtype::expand(&input)
-            .to_string()
-            .contains("fn partial_cmp"));
+        assert!(
+            str_newtype::expand(&input)
+                .to_string()
+                .contains("fn partial_cmp")
+        );
     }
 
     #[test]
@@ -1004,9 +1030,11 @@ mod tests {
             #[str_newtype(secret)]
             struct X(String);
         };
-        assert!(!str_newtype::expand(&input)
-            .to_string()
-            .contains("fn partial_cmp"));
+        assert!(
+            !str_newtype::expand(&input)
+                .to_string()
+                .contains("fn partial_cmp")
+        );
     }
 
     #[test]
@@ -1044,9 +1072,11 @@ mod tests {
             #[str_newtype(sqlx)]
             struct X(String);
         };
-        assert!(str_newtype::expand(&input)
-            .to_string()
-            .contains("compile_error"));
+        assert!(
+            str_newtype::expand(&input)
+                .to_string()
+                .contains("compile_error")
+        );
     }
 
     #[test]
@@ -1149,9 +1179,11 @@ mod tests {
             #[num_newtype(inner = u32, min = 1, clamp)]
             struct X(u32);
         };
-        assert!(num_newtype::expand(&input)
-            .to_string()
-            .contains("compile_error"));
+        assert!(
+            num_newtype::expand(&input)
+                .to_string()
+                .contains("compile_error")
+        );
     }
 
     #[test]
@@ -1160,9 +1192,11 @@ mod tests {
             #[num_newtype(inner = u32, min = 50, max = 1)]
             struct X(u32);
         };
-        assert!(num_newtype::expand(&input)
-            .to_string()
-            .contains("compile_error"));
+        assert!(
+            num_newtype::expand(&input)
+                .to_string()
+                .contains("compile_error")
+        );
     }
 
     #[test]

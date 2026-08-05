@@ -10,7 +10,7 @@
 // panics explicitly (this is test scaffolding).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use axum::http::{header, request::Parts, Request};
+use axum::http::{Request, header, request::Parts};
 use common::ids::UserId;
 use common::username::Username;
 use std::sync::Arc;

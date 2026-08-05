@@ -5,8 +5,8 @@ mod api;
 mod component;
 
 pub use api::{
-    get_identity, is_base_url_warning_visible, update_identity, GetIdentity,
-    IsBaseUrlWarningVisible, UpdateIdentity,
+    GetIdentity, IsBaseUrlWarningVisible, UpdateIdentity, get_identity,
+    is_base_url_warning_visible, update_identity,
 };
 #[cfg(target_arch = "wasm32")]
 pub use component::{SiteBaseUrlBanner, SiteSettingsPage};

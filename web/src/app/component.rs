@@ -30,10 +30,10 @@ use crate::sessions::SessionsPage;
 use crate::sidebar::Sidebar;
 use crate::site::{SiteBaseUrlBanner, SiteSettingsPage};
 use leptos::prelude::*;
-use leptos_meta::{provide_meta_context, Title};
+use leptos_meta::{Title, provide_meta_context};
 use leptos_router::{
-    components::{Outlet, ParentRoute, Route, Router, Routes},
     ParamSegment, StaticSegment,
+    components::{Outlet, ParentRoute, Route, Router, Routes},
 };
 
 #[component]

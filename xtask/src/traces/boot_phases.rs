@@ -20,7 +20,7 @@ use serde_json::Value;
 use tabled::settings::Style;
 use tabled::{Table, Tabled};
 
-use super::parse::{parse_json_attr, read_spans, Filters, Span};
+use super::parse::{Filters, Span, parse_json_attr, read_spans};
 
 /// Spec D8's first three segments, all read straight off the navigation summary.
 /// Segments 4-6 are the `bootPhases` intervals, discovered rather than listed.

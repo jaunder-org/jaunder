@@ -37,22 +37,22 @@ mod page_state;
 // Re-exported at the (public) `crate::posts::…` path so the pure `parse` fns are
 // reachable exported items on the host build too — consumed only by the wasm-only
 // `component`, an unexported `parse` fn would fail the host build as `dead_code`.
-pub use parse::{draft_row_display, parse_permalink_route, DraftRowDisplay, PermalinkRoute};
+pub use parse::{DraftRowDisplay, PermalinkRoute, draft_row_display, parse_permalink_route};
 
 // Same reason as `parse` above: `page_state`'s only caller is the wasm-only
 // `component`, so without these the host build sees every one of them as `dead_code`.
 pub use page_state::{
-    notify, notify_with_fallback, publish_redirect, seeded_page, tag_query, user_query,
-    user_tag_query, with_post_id, ListingRoute,
+    ListingRoute, notify, notify_with_fallback, publish_redirect, seeded_page, tag_query,
+    user_query, user_tag_query, with_post_id,
 };
 
 // The API surface — re-exported so external call sites and the server-fn
 // registrar keep the stable `crate::posts::…` paths despite living in `api.rs`.
 pub use api::{
-    create, delete, get, get_audience_selection, get_default_audience_selection, get_preview,
-    list_drafts, publish, unpublish, update, Create, Delete, Get, GetAudienceSelection,
-    GetDefaultAudienceSelection, GetPreview, ListDrafts, PostInputs, Publish, SavedPost, Unpublish,
-    UnpublishedPage, UnpublishedPost, Update,
+    Create, Delete, Get, GetAudienceSelection, GetDefaultAudienceSelection, GetPreview, ListDrafts,
+    PostInputs, Publish, SavedPost, Unpublish, UnpublishedPage, UnpublishedPost, Update, create,
+    delete, get, get_audience_selection, get_default_audience_selection, get_preview, list_drafts,
+    publish, unpublish, update,
 };
 
 // Re-exported for the `server` crate's public projector, which maps the fetched

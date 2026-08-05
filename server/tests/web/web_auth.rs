@@ -12,7 +12,7 @@ use rstest_reuse::*;
 use crate::helpers::{
     create_user_and_session, post_form_with_bearer, post_form_with_secure_flag, post_form_with_ua,
 };
-use storage::test_support::{backends, backends_matrix, Backend, TestEnv};
+use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
 
 /// Extracts a raw token from a server-function JSON response body.
 /// Successful server functions return a JSON string: `"<token>"`.

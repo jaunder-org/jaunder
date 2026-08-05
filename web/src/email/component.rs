@@ -1,7 +1,7 @@
 //! Email vertical — wasm-only UI (ADR-0070): the email-settings page and the
 //! verify-email landing.
 
-use super::{email_status_line, parse_verification_token, verify, RequestVerification};
+use super::{RequestVerification, email_status_line, parse_verification_token, verify};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::profile;

@@ -11,7 +11,7 @@
 use std::str::FromStr;
 
 use common::invite::ProfferedInviteCode;
-use common::token::{validate_shape, InvalidTokenShape};
+use common::token::{InvalidTokenShape, validate_shape};
 use macros::StrNewtype;
 
 /// A validated invite code held server-side.

@@ -409,8 +409,7 @@ const DUMMY_PASSWORD: &str = "jaunder-timing-equalization-dummy";
 /// [`DUMMY_PASSWORD`] ever fails, so initialization stays infallible (no
 /// `unwrap`/`expect` in production). Regenerate with the same parameters as
 /// `common::password::Password::hash` if the Argon2 defaults change.
-const DUMMY_PASSWORD_HASH_FALLBACK: &str =
-    "$argon2id$v=19$m=19456,t=2,p=1$MlXSqqFgPKBHXn92Klja9Q$FCo2fJCKGcEhWHiq+R7lVdfcP/TpFgrVKfK6bMoB3CM";
+const DUMMY_PASSWORD_HASH_FALLBACK: &str = "$argon2id$v=19$m=19456,t=2,p=1$MlXSqqFgPKBHXn92Klja9Q$FCo2fJCKGcEhWHiq+R7lVdfcP/TpFgrVKfK6bMoB3CM";
 
 /// Returns a fixed, valid Argon2id hash used to equalize authentication timing
 /// on the absent-user path, mitigating username enumeration via timing (see
@@ -588,12 +587,16 @@ mod tests {
         // re-derive at the assignment is exactly what that section forbids.
         let hash = hash_password(password.clone()).await.unwrap();
 
-        assert!(verify_password(password.clone(), hash.clone())
-            .await
-            .unwrap());
-        assert!(!verify_password(parse_password("other-pass"), hash)
-            .await
-            .unwrap());
+        assert!(
+            verify_password(password.clone(), hash.clone())
+                .await
+                .unwrap()
+        );
+        assert!(
+            !verify_password(parse_password("other-pass"), hash)
+                .await
+                .unwrap()
+        );
     }
 
     // guard:no-backend — password hashing/verification; no database

@@ -6,8 +6,8 @@
 //! (collection member) operations.
 
 use chrono::{DateTime, Utc};
-use common::absolute_url::{compose, AbsoluteUrl};
-use common::atompub::{is_draft, set_draft, set_j_slug, Category, Content, Entry, Link, Text};
+use common::absolute_url::{AbsoluteUrl, compose};
+use common::atompub::{Category, Content, Entry, Link, Text, is_draft, set_draft, set_j_slug};
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
@@ -706,9 +706,11 @@ mod tests {
             .collect();
         assert_eq!(alternate_links.len(), 1);
         // Permalink is date-based, so we check it contains the base URL and starts with /~
-        assert!(alternate_links[0]
-            .href()
-            .starts_with("https://example.com/~alice"));
+        assert!(
+            alternate_links[0]
+                .href()
+                .starts_with("https://example.com/~alice")
+        );
     }
 
     #[test]

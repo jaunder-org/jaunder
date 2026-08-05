@@ -1,7 +1,7 @@
 use crate::error::{ErrorKind, InternalError, InternalResult};
 use axum::{
     extract::FromRequestParts,
-    http::{request::Parts, StatusCode},
+    http::{StatusCode, request::Parts},
     response::{IntoResponse, Response},
 };
 use common::ids::UserId;
@@ -245,7 +245,7 @@ pub fn clear_session_cookie() {
 mod tests {
     use super::*;
     use common::test_support::{parse_raw_token, parse_username};
-    use leptos::prelude::{provide_context, Owner};
+    use leptos::prelude::{Owner, provide_context};
     // `require_operator`, `Arc`, `UserStorage`, `UserId` arrive via `super::*`; only the
     // operator test's fixtures are new here.
     use crate::test_support::auth_parts;
@@ -392,7 +392,7 @@ mod tests {
     #[tokio::test]
     async fn auth_user_extraction_fails_without_session_storage_extension() {
         use axum::body::Body;
-        use axum::http::{header, Request};
+        use axum::http::{Request, header};
 
         let request = Request::builder()
             .header(header::COOKIE, "session=some-token")

@@ -13,7 +13,7 @@
 //! check|validate` self-heals in a worktree where the shellHook never fired for that
 //! cwd. Was `end2end/provision-node-modules.sh` until #229.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::fs;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -250,9 +250,11 @@ mod tests {
             fs::read_link(dest.join("typescript")).unwrap(),
             types.join("typescript")
         );
-        assert!(fs::symlink_metadata(dest.join("@playwright"))
-            .unwrap()
-            .is_dir());
+        assert!(
+            fs::symlink_metadata(dest.join("@playwright"))
+                .unwrap()
+                .is_dir()
+        );
         assert_eq!(fs::read_link(dest.join("@playwright/test")).unwrap(), pw);
     }
 
@@ -268,9 +270,11 @@ mod tests {
 
         run(t.path(), &paths(&types, &pw)).unwrap();
 
-        assert!(fs::symlink_metadata(dest.join("@playwright"))
-            .unwrap()
-            .is_dir());
+        assert!(
+            fs::symlink_metadata(dest.join("@playwright"))
+                .unwrap()
+                .is_dir()
+        );
         assert_eq!(fs::read_link(dest.join("@playwright/test")).unwrap(), pw);
     }
 

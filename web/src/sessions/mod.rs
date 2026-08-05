@@ -16,7 +16,7 @@ mod api;
 mod component;
 
 pub use api::{
-    create_app_password, list, revoke, AppPassword, CreateAppPassword, Info, List, Revoke,
+    AppPassword, CreateAppPassword, Info, List, Revoke, create_app_password, list, revoke,
 };
 #[cfg(target_arch = "wasm32")]
 pub use component::SessionsPage;

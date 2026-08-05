@@ -3,8 +3,8 @@
 //! [`marker_storage`](crate::auth::marker_storage) binding) directly, no `cfg`
 //! gates inside this file.
 
-use super::{get_policy, Register};
-use crate::auth::{set_session, SessionUser};
+use super::{Register, get_policy};
+use crate::auth::{SessionUser, set_session};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::topbar::Topbar;

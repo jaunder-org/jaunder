@@ -13,7 +13,7 @@
 
 use axum::{
     body::Body,
-    http::{header::CONTENT_TYPE, Request, StatusCode},
+    http::{Request, StatusCode, header::CONTENT_TYPE},
 };
 use server_fn::ServerFn;
 use tower::ServiceExt;
@@ -22,7 +22,7 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{ensure_server_fns_registered, tmp_storage_path};
-use storage::test_support::{backends, noop_mailer, Backend, TestEnv};
+use storage::test_support::{Backend, TestEnv, backends, noop_mailer};
 
 #[apply(backends)]
 #[tokio::test]

@@ -181,7 +181,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
-    use std::future::{ready, Ready};
+    use std::future::{Ready, ready};
 
     use super::*;
     use common::test_support::{parse_root_relative_url, parse_slug, parse_tag, parse_username};
@@ -226,11 +226,13 @@ mod tests {
             username: alice(),
             page: page(true),
         };
-        assert!(seeded_page(
-            Some(seed),
-            &ListingRoute::Profile(Some(parse_username("bob")))
-        )
-        .is_none());
+        assert!(
+            seeded_page(
+                Some(seed),
+                &ListingRoute::Profile(Some(parse_username("bob")))
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -259,11 +261,13 @@ mod tests {
             tag: rust(),
             page: page(true),
         };
-        assert!(seeded_page(
-            Some(seed),
-            &ListingRoute::SiteTag(Some(parse_tag("leptos")))
-        )
-        .is_none());
+        assert!(
+            seeded_page(
+                Some(seed),
+                &ListingRoute::SiteTag(Some(parse_tag("leptos")))
+            )
+            .is_none()
+        );
         let seed = PageSeed::SiteTag {
             tag: rust(),
             page: page(true),
@@ -286,52 +290,62 @@ mod tests {
 
         // Half a match is no match — one `&&`, both directions asserted, so dropping
         // either conjunct fails.
-        assert!(seeded_page(
-            Some(PageSeed::UserTag {
-                username: alice(),
-                tag: rust(),
-                page: page(true),
-            }),
-            &ListingRoute::UserTag(Some(parse_username("bob")), Some(rust())),
-        )
-        .is_none());
-        assert!(seeded_page(
-            Some(PageSeed::UserTag {
-                username: alice(),
-                tag: rust(),
-                page: page(true),
-            }),
-            &ListingRoute::UserTag(Some(alice()), Some(parse_tag("leptos"))),
-        )
-        .is_none());
+        assert!(
+            seeded_page(
+                Some(PageSeed::UserTag {
+                    username: alice(),
+                    tag: rust(),
+                    page: page(true),
+                }),
+                &ListingRoute::UserTag(Some(parse_username("bob")), Some(rust())),
+            )
+            .is_none()
+        );
+        assert!(
+            seeded_page(
+                Some(PageSeed::UserTag {
+                    username: alice(),
+                    tag: rust(),
+                    page: page(true),
+                }),
+                &ListingRoute::UserTag(Some(alice()), Some(parse_tag("leptos"))),
+            )
+            .is_none()
+        );
     }
 
     #[test]
     fn a_seed_of_the_wrong_variant_is_ignored() {
         // The projector painted a *different kind* of page — e.g. the site timeline or
         // a permalink — so this route has nothing to adopt even though a seed exists.
-        assert!(seeded_page(
-            Some(PageSeed::SiteTimeline(page(true))),
-            &ListingRoute::Profile(Some(alice())),
-        )
-        .is_none());
-        assert!(seeded_page(
-            Some(PageSeed::SiteTag {
-                tag: rust(),
-                page: page(true),
-            }),
-            &ListingRoute::UserTag(Some(alice()), Some(rust())),
-        )
-        .is_none());
-        assert!(seeded_page(
-            Some(PageSeed::UserTag {
-                username: alice(),
-                tag: rust(),
-                page: page(true),
-            }),
-            &ListingRoute::SiteTag(Some(rust())),
-        )
-        .is_none());
+        assert!(
+            seeded_page(
+                Some(PageSeed::SiteTimeline(page(true))),
+                &ListingRoute::Profile(Some(alice())),
+            )
+            .is_none()
+        );
+        assert!(
+            seeded_page(
+                Some(PageSeed::SiteTag {
+                    tag: rust(),
+                    page: page(true),
+                }),
+                &ListingRoute::UserTag(Some(alice()), Some(rust())),
+            )
+            .is_none()
+        );
+        assert!(
+            seeded_page(
+                Some(PageSeed::UserTag {
+                    username: alice(),
+                    tag: rust(),
+                    page: page(true),
+                }),
+                &ListingRoute::SiteTag(Some(rust())),
+            )
+            .is_none()
+        );
     }
 
     #[test]

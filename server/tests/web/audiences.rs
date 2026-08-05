@@ -7,7 +7,7 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{create_user_and_session, post_form};
-use storage::test_support::{backends, Backend, SeedUser, TestEnv};
+use storage::test_support::{Backend, SeedUser, TestEnv, backends};
 
 /// Parses the JSON-encoded `i64` that `create_audience` returns.
 fn parse_id(body: &str) -> i64 {
@@ -284,12 +284,14 @@ async fn audience_membership_round_trips(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "remove_member failed: {body}");
-    assert!(state
-        .audiences
-        .list_members(author.user_id, aud_id)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        state
+            .audiences
+            .list_members(author.user_id, aud_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     // Removing a subscriber who is no longer a member is a no-op, not an error.
     let (status, body) = post_form(
@@ -304,12 +306,14 @@ async fn audience_membership_round_trips(#[case] backend: Backend) {
         StatusCode::OK,
         "redundant remove should be a no-op: {body}"
     );
-    assert!(state
-        .audiences
-        .list_members(author.user_id, aud_id)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        state
+            .audiences
+            .list_members(author.user_id, aud_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 // AUTHORIZATION: every store method is author-scoped, so a client-supplied

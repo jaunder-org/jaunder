@@ -21,7 +21,7 @@ use common::token::RawToken;
 use common::username::Username;
 use host::capture;
 use storage::load_smtp_config;
-use storage::{export_backup, restore_backup, BackupExportOptions, BackupRestoreOptions};
+use storage::{BackupExportOptions, BackupRestoreOptions, export_backup, restore_backup};
 use storage::{init_storage, open_database, open_existing_database};
 
 /// Parse an optional CLI password string into `Option<Password>` (`None` stays
@@ -608,7 +608,7 @@ async fn serve_with_shutdown(
 fn spawn_shutdown_supervisor(
     runtime_path: Option<std::path::PathBuf>,
 ) -> std::io::Result<tokio::sync::oneshot::Receiver<()>> {
-    use tokio::signal::unix::{signal, SignalKind};
+    use tokio::signal::unix::{SignalKind, signal};
     let mut sigint = signal(SignalKind::interrupt())?;
     let mut sigterm = signal(SignalKind::terminate())?;
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -782,10 +782,10 @@ mod tests {
     use common::test_support::parse_invite_ttl_hours;
     use rstest::*;
     use rstest_reuse::*;
-    use storage::test_support::{
-        backends, sqlite_url, unique_postgres_url, Backend, PostgresDbGuard, TestEnv,
-    };
     use storage::DbConnectOptions;
+    use storage::test_support::{
+        Backend, PostgresDbGuard, TestEnv, backends, sqlite_url, unique_postgres_url,
+    };
     use tempfile::TempDir;
 
     /// A `StorageArgs` for `backend` whose database already exists, since the
@@ -818,9 +818,11 @@ mod tests {
 
     #[test]
     fn parse_password_validates_some() {
-        assert!(parse_password(Some("password123".to_owned()))
-            .unwrap()
-            .is_some());
+        assert!(
+            parse_password(Some("password123".to_owned()))
+                .unwrap()
+                .is_some()
+        );
         let err = parse_password(Some("short".to_owned()))
             .unwrap_err()
             .to_string();

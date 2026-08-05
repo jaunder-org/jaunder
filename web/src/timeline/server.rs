@@ -15,9 +15,9 @@ use common::pagination::PageSize;
 use common::seed::TimelinePage;
 use common::tag::Tag;
 use common::username::Username;
-use common::visibility::{viewer_user_id, ViewerIdentity};
+use common::visibility::{ViewerIdentity, viewer_user_id};
 use storage::{
-    list_by_tag_rows, to_post_cursor, wire_cursor, PostCursor, PostRecord, PostStorage, UserStorage,
+    PostCursor, PostRecord, PostStorage, UserStorage, list_by_tag_rows, to_post_cursor, wire_cursor,
 };
 
 use crate::error::{InternalError, InternalResult};

@@ -7,7 +7,7 @@
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
 
-use super::{get_session, marker_storage, SessionUser};
+use super::{SessionUser, get_session, marker_storage};
 use crate::error::WebResult;
 
 /// The viewer/session identity shared across the app tree.

@@ -40,7 +40,7 @@ use proc_macro2::{TokenStream, TokenTree};
 use syn::Meta;
 
 use crate::result::{CommandResult, StepResult};
-use crate::web_server_fns::{self, vertical_of, WebServerFn, WEB_SRC};
+use crate::web_server_fns::{self, WEB_SRC, WebServerFn, vertical_of};
 
 /// Argument types whose values may be recorded on a span, each with the ground
 /// that admits it (ADR-0011's addendum for #511).
@@ -201,7 +201,7 @@ fn span_args(attr: &syn::Attribute) -> Result<SpanArgs, String> {
                     "unrecognized #[macros::server] argument `{other}` — the macro forwards only \
                      `skip(...)`/`skip_all` to the span and `input = …` to #[server], and an \
                      unmodelled argument could record a value the allowlist never inspected"
-                ))
+                ));
             }
         }
     }
@@ -375,9 +375,11 @@ mod tests {
             "media",
             "#[macros::server]\npub async fn delete_media(filename: Filename) -> R {}\n",
         );
-        assert!(problems(&s)
-            .expect("Filename must be skipped")
-            .contains("Filename"));
+        assert!(
+            problems(&s)
+                .expect("Filename must be skipped")
+                .contains("Filename")
+        );
     }
 
     #[test]
@@ -394,9 +396,11 @@ mod tests {
             "web/src/loose.rs".to_string(),
             "#[macros::server]\npub async fn x() -> R {}\n".to_string(),
         )];
-        assert!(problems(&s)
-            .expect("no vertical directory is an error")
-            .contains("web/src/loose.rs"));
+        assert!(
+            problems(&s)
+                .expect("no vertical directory is an error")
+                .contains("web/src/loose.rs")
+        );
     }
 
     // --- the nameless-parameter rule ---
@@ -438,9 +442,11 @@ mod tests {
             "posts",
             "#[macros::server]\npub async fn x(Wrapper(id): Wrapper<PostId>) -> R {}\n",
         );
-        assert!(problems(&s)
-            .expect("a nameless parameter is a problem whatever its type")
-            .contains("skip_all"));
+        assert!(
+            problems(&s)
+                .expect("a nameless parameter is a problem whatever its type")
+                .contains("skip_all")
+        );
     }
 
     // --- default-deny on the attribute's own arguments ---
@@ -453,9 +459,11 @@ mod tests {
             "posts",
             "#[macros::server(fields(who = %token))]\npub async fn x(token: RawToken) -> R {}\n",
         );
-        assert!(problems(&s)
-            .expect("an unmodelled arg is rejected")
-            .contains("fields"));
+        assert!(
+            problems(&s)
+                .expect("an unmodelled arg is rejected")
+                .contains("fields")
+        );
     }
 
     #[test]
@@ -481,9 +489,11 @@ mod tests {
             "posts",
             "#[macros::server(some::path)]\npub async fn x() -> R {}\n",
         );
-        assert!(problems(&s)
-            .expect("a path argument is unmodelled")
-            .contains("some::path"));
+        assert!(
+            problems(&s)
+                .expect("a path argument is unmodelled")
+                .contains("some::path")
+        );
     }
 
     // --- the retired spelling (#714) ---
@@ -519,8 +529,10 @@ mod tests {
     #[test]
     fn an_unparseable_file_is_reported_not_skipped() {
         let s = src("posts", "fn broken( {{{ not valid");
-        assert!(problems(&s)
-            .expect("a parse failure is reported")
-            .contains("web/src/posts/api.rs"));
+        assert!(
+            problems(&s)
+                .expect("a parse failure is reported")
+                .contains("web/src/posts/api.rs")
+        );
     }
 }

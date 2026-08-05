@@ -18,11 +18,11 @@ use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::time::UtcInstant;
 use common::username::Username;
-use common::visibility::{local_subscriber_ref, AudienceTarget, TargetKind, ViewerIdentity};
+use common::visibility::{AudienceTarget, TargetKind, ViewerIdentity, local_subscriber_ref};
 use host::error::{InternalError, InternalResult};
 
 use crate::backend::Backend;
-use crate::helpers::{post_record_from_row, PostRow};
+use crate::helpers::{PostRow, post_record_from_row};
 
 pub use common::render::{InvalidPostFormat, PostFormat, RenderOutput, RenderedHtml};
 
@@ -2611,10 +2611,10 @@ mod tests {
     use super::*;
     use crate::feed_cache::FeedCacheRow;
     use crate::test_support::{
+        Backend, CloseablePool, MEDIA_TEST_SHA256, SeedRawPost, SeedUser, TestEnv, UpdateRawPost,
         backends, create_draft_via_service, create_post_via_service, fetch_post_media, fp,
         media_ref_for, media_row_exists, media_url_for, seed_media, seed_users,
-        update_post_body_via_service, Backend, CloseablePool, SeedRawPost, SeedUser, TestEnv,
-        UpdateRawPost, MEDIA_TEST_SHA256,
+        update_post_body_via_service,
     };
     use common::test_support::{
         parse_content_type, parse_etag, parse_post_summary, parse_post_title, parse_row_limit,
@@ -3285,13 +3285,15 @@ mod tests {
             Err(UpdatePostError::Unauthorized)
         ));
         // The rejected publish wrote nothing: the post is still a draft.
-        assert!(posts
-            .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
-            .await
-            .unwrap()
-            .unwrap()
-            .published_at
-            .is_none());
+        assert!(
+            posts
+                .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
+                .await
+                .unwrap()
+                .unwrap()
+                .published_at
+                .is_none()
+        );
 
         posts.soft_delete_post(post_id).await.unwrap();
         assert!(matches!(
@@ -3749,14 +3751,18 @@ mod tests {
         assert_eq!(results[1].post_id, post1_id);
 
         // Verify draft is included
-        assert!(results
-            .iter()
-            .any(|p| p.post_id == post1_id && p.published_at.is_none()));
+        assert!(
+            results
+                .iter()
+                .any(|p| p.post_id == post1_id && p.published_at.is_none())
+        );
 
         // Verify published is included
-        assert!(results
-            .iter()
-            .any(|p| p.post_id == post2_id && p.published_at.is_some()));
+        assert!(
+            results
+                .iter()
+                .any(|p| p.post_id == post2_id && p.published_at.is_some())
+        );
 
         // Verify deleted is not included
         assert!(!results.iter().any(|p| p.post_id == post3_id));
@@ -3834,11 +3840,13 @@ mod tests {
     #[test]
     fn parse_post_cursor_rejects_half_a_cursor() {
         use chrono::TimeZone;
-        assert!(parse_post_cursor(
-            Some(Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap()),
-            None
-        )
-        .is_err());
+        assert!(
+            parse_post_cursor(
+                Some(Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap()),
+                None
+            )
+            .is_err()
+        );
     }
 
     #[test]

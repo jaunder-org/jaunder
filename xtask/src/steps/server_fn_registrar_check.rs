@@ -93,7 +93,7 @@ fn server_fns_in(src: &str) -> Result<Vec<ServerFn>, String> {
                      rename?) — the registrar gate assumes the generated type is \
                      PascalCase(fn), which the macro never renames; extend the gate",
                     f.line
-                ))
+                ));
             }
             Err(e) => return Err(format!("line {}: {e}", f.line)),
         }

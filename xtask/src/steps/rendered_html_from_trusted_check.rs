@@ -98,8 +98,7 @@ const GATE: Gate = Gate {
         verdict: "is not marked — this gate pins every `from_trusted` in production code, \
                   because `RenderedHtml`'s is the door that lets HTML reach the DOM unescaped \
                   (XSS) (#398)",
-        recovery:
-            "  recovery: `from_trusted` only *inherits* safety — it may reconstruct a value we \
+        recovery: "  recovery: `from_trusted` only *inherits* safety — it may reconstruct a value we \
                    already sanitized and round-tripped through our own store or wire. If the HTML \
                    comes from OUTSIDE jaunder (an ingested feed entry, a remote channel, any \
                    inbound producer), it must go through `RenderedHtml::sanitize`, which \

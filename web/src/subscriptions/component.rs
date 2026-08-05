@@ -1,4 +1,4 @@
-use super::{is_subscribed, Subscribe, Unsubscribe};
+use super::{Subscribe, Unsubscribe, is_subscribed};
 use common::username::Username;
 use leptos::prelude::*;
 

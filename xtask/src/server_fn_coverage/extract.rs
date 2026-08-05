@@ -274,7 +274,7 @@ pub fn extract(spans: &[Span], inventory: &[ServerFn]) -> Coverage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::traces::parse::{parse_spans, Filters};
+    use crate::traces::parse::{Filters, parse_spans};
 
     // The hand-authored fixture mirrors the span shapes a real capture contains —
     // notably `__server_<ident>` instrument spans, not bare idents. It once carried

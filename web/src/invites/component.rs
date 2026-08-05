@@ -1,6 +1,6 @@
 //! Invites vertical — wasm-only UI (ADR-0070): the invite management page.
 
-use super::{list, Create, Info};
+use super::{Create, Info, list};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::registration::get_policy;

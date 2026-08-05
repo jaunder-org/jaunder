@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
-use axum::http::HeaderName;
 use axum::Router;
+use axum::http::HeaderName;
 use host::capture;
 use opentelemetry::propagation::Extractor;
 use opentelemetry::trace::TracerProvider as _;
@@ -13,7 +13,7 @@ use tracing::Level;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::registry::LookupSpan;
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 fn default_filter(verbose: bool) -> EnvFilter {
     if verbose {
@@ -650,10 +650,12 @@ mod tests {
         assert_eq!(parsed["level"], "ERROR");
         assert_eq!(parsed["target"], "panic");
         assert_eq!(parsed["location"], "server/src/foo.rs:42:5");
-        assert!(parsed["message"]
-            .as_str()
-            .expect("message string")
-            .contains("panicked at"));
+        assert!(
+            parsed["message"]
+                .as_str()
+                .expect("message string")
+                .contains("panicked at")
+        );
     }
 
     #[test]
@@ -683,9 +685,11 @@ mod tests {
                 .iter()
                 .map(|record| record["message"].as_str().expect("message string"))
                 .collect();
-            assert!(messages
-                .iter()
-                .all(|message| message.contains("panicked at")));
+            assert!(
+                messages
+                    .iter()
+                    .all(|message| message.contains("panicked at"))
+            );
             assert!(messages[0].contains("boom-under-test"));
             assert!(messages[1].contains("formatted-payload"));
             assert!(messages[2].contains("<non-string panic payload>"));

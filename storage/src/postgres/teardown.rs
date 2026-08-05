@@ -5,7 +5,7 @@
 #[cfg(test)]
 mod tests {
     use crate::test_support::{
-        postgres_bootstrap_url, postgres_only, recorded_postgres_url, unique_postgres_url, Backend,
+        Backend, postgres_bootstrap_url, postgres_only, recorded_postgres_url, unique_postgres_url,
     };
     use sqlx::Connection;
 

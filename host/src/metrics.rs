@@ -12,7 +12,7 @@
 use std::sync::LazyLock;
 
 use opentelemetry::metrics::{Counter, Histogram};
-use opentelemetry::{global, KeyValue};
+use opentelemetry::{KeyValue, global};
 
 macro_rules! enum_attr {
     ($name:ident { $($variant:ident => $s:literal),+ $(,)? }) => {

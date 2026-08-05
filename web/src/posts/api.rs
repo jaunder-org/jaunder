@@ -49,9 +49,9 @@ use {
     leptos::prelude::*,
     std::{collections::BTreeSet, sync::Arc},
     storage::{
+        FeedEventStorage, PostCreation, PostStorage, PostUpdate, PublishUpdate, SiteConfigStorage,
         fetch_post_record, find_draft_by_permalink_for_user, keyset_cursor, perform_post_creation,
-        perform_post_update, to_post_cursor, wire_cursor, FeedEventStorage, PostCreation,
-        PostStorage, PostUpdate, PublishUpdate, SiteConfigStorage,
+        perform_post_update, to_post_cursor, wire_cursor,
     },
 };
 
@@ -795,7 +795,7 @@ mod server_tests {
     // Helper fns in this feature-gated test module aren't covered by clippy's
     // allow-{unwrap,expect}-in-tests, so allow the test-scaffolding panics.
     #![allow(clippy::unwrap_used, clippy::expect_used)]
-    use super::{create, list_drafts, publish, update, PostInputs};
+    use super::{PostInputs, create, list_drafts, publish, update};
     use crate::error::WebError;
     use crate::test_support::auth_parts;
     use chrono::Utc;

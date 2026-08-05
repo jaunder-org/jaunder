@@ -39,19 +39,19 @@ mod session;
 
 // The API surface — re-exported so external call sites and the server-fn
 // registrar keep the stable `crate::auth::…` paths despite living in `api.rs`.
-pub use api::{get_session, login, logout, GetSession, Login, LoginResponse, Logout};
+pub use api::{GetSession, Login, LoginResponse, Logout, get_session, login, logout};
 #[cfg(target_arch = "wasm32")]
 pub use component::{LoginPage, LogoutPage};
 pub use marker::SessionUser;
 #[cfg(target_arch = "wasm32")]
 pub use session::{
-    clear_session, provide_session_context, set_session, use_session, SessionContext,
+    SessionContext, clear_session, provide_session_context, set_session, use_session,
 };
 
 // Public re-exports — must remain accessible as crate::auth::* for other modules.
 #[cfg(feature = "server")]
 pub use server::{
-    is_operator_soft, require_auth, require_operator, AuthRejection, AuthUser, CookieSettings,
+    AuthRejection, AuthUser, CookieSettings, is_operator_soft, require_auth, require_operator,
 };
 // Exposed for the sibling `registration` vertical, which logs a new user in after
 // creating their account.

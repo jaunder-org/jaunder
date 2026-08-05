@@ -42,11 +42,12 @@ mod tests {
         for bad in ["0", "", "-1", "abc", "1.5"] {
             assert!(bad.parse::<FeedMinItems>().is_err(), "{bad} should reject");
         }
-        assert!("0"
-            .parse::<FeedMinItems>()
-            .unwrap_err()
-            .to_string()
-            .starts_with("feeds.min_items"));
+        assert!(
+            "0".parse::<FeedMinItems>()
+                .unwrap_err()
+                .to_string()
+                .starts_with("feeds.min_items")
+        );
         assert_eq!(FeedMinItems::default().value(), 20);
         let d = FeedMinItems::default();
         assert_eq!(u32::from(d), 20); // From<Self> for the inner
@@ -65,11 +66,12 @@ mod tests {
     fn min_days_full_surface() {
         assert_eq!("7".parse::<FeedMinDays>().unwrap().value(), 7);
         assert!("0".parse::<FeedMinDays>().is_err());
-        assert!("0"
-            .parse::<FeedMinDays>()
-            .unwrap_err()
-            .to_string()
-            .starts_with("feeds.min_days"));
+        assert!(
+            "0".parse::<FeedMinDays>()
+                .unwrap_err()
+                .to_string()
+                .starts_with("feeds.min_days")
+        );
         assert_eq!(FeedMinDays::default().value(), 30);
         let d = FeedMinDays::default();
         assert_eq!(u32::from(d), 30); // From<Self> for the inner

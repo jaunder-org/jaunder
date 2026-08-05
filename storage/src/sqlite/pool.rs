@@ -4,8 +4,8 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::test_support::{sqlite_only, sqlite_url, Backend};
     use crate::DbConnectOptions;
+    use crate::test_support::{Backend, sqlite_only, sqlite_url};
     use sqlx::SqlitePool;
     use tempfile::TempDir;
 

@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    http::{header, Request, StatusCode},
+    http::{Request, StatusCode, header},
 };
 use chrono::{Timelike, Utc};
 use common::test_support::{parse_content_type, parse_etag};
@@ -11,7 +11,7 @@ use rstest_reuse::*;
 
 use crate::helpers::{make_app, setup_with_base_url};
 use storage::test_support::{
-    backends, backends_matrix, fp, Backend, SeedRawPost, SeedUser, TestEnv,
+    Backend, SeedRawPost, SeedUser, TestEnv, backends, backends_matrix, fp,
 };
 
 #[apply(backends)]

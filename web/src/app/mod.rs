@@ -4,7 +4,7 @@
 
 mod render;
 pub use render::{
-    render_head, render_shell, DEFAULT_THEME, DISCOVERY_MARKER_ATTR, PREPAINT_SCRIPT, SPA_SHELL,
+    DEFAULT_THEME, DISCOVERY_MARKER_ATTR, PREPAINT_SCRIPT, SPA_SHELL, render_head, render_shell,
 };
 
 #[cfg(target_arch = "wasm32")]

@@ -178,11 +178,12 @@ mod tests {
             );
         }
         // The domain message, not std's generic parse error.
-        assert!("0"
-            .parse::<RetentionCount>()
-            .unwrap_err()
-            .to_string()
-            .starts_with("backup retention count"));
+        assert!(
+            "0".parse::<RetentionCount>()
+                .unwrap_err()
+                .to_string()
+                .starts_with("backup retention count")
+        );
     }
 
     #[test]

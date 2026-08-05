@@ -5,7 +5,7 @@
 
 use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 /// Pull the built store path out of `nix build --print-out-paths` output. Nix may
 /// print warnings interleaved, so we take the *last* `/nix/store/` line (the

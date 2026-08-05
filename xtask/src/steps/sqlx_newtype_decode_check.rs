@@ -265,7 +265,7 @@ fn macro_enumeration_problems(source: &str) -> Vec<String> {
             return vec![format!(
                 "{MACROS_LIB}: {e} — this gate's approved-type set is derived from the macros \
                  declared here, so a file it cannot parse silently shrinks what it approves."
-            )]
+            )];
         }
     };
     let mut lines = Vec::new();

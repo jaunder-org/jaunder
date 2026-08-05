@@ -18,13 +18,13 @@ use host::invite::InviteCode;
 use sqlx::{PgPool, SqlitePool};
 use std::sync::Arc;
 use storage::{
-    create_rendered_post, open_database, perform_post_update, update_rendered_post, AppState,
-    AudienceError, ConfirmPasswordResetError, CreatePostError, CreateUserError, DbConnectOptions,
-    FeedCacheRow, GoLivePost, ListByTagError, PostCursor, PostFormat, PostRecord, PostTag,
-    PostUpdate, PostgresSubscriptionStorage, ProfileUpdate, PublishUpdate, RegisterWithInviteError,
-    RenderedPostContent, RenderedPostUpdate, SessionAuthError, SqliteSubscriptionStorage,
-    SubscriptionStorage, UpdatePostError, UseEmailVerificationError, UseInviteError,
-    UsePasswordResetError, UserAuthError, UserConfigKey,
+    AppState, AudienceError, ConfirmPasswordResetError, CreatePostError, CreateUserError,
+    DbConnectOptions, FeedCacheRow, GoLivePost, ListByTagError, PostCursor, PostFormat, PostRecord,
+    PostTag, PostUpdate, PostgresSubscriptionStorage, ProfileUpdate, PublishUpdate,
+    RegisterWithInviteError, RenderedPostContent, RenderedPostUpdate, SessionAuthError,
+    SqliteSubscriptionStorage, SubscriptionStorage, UpdatePostError, UseEmailVerificationError,
+    UseInviteError, UsePasswordResetError, UserAuthError, UserConfigKey, create_rendered_post,
+    open_database, perform_post_update, update_rendered_post,
 };
 use tempfile::TempDir;
 
@@ -38,8 +38,8 @@ use rstest_reuse::*;
 
 use crate::helpers::create_session_for;
 use storage::test_support::{
-    backends, fp, recorded_postgres_url, seed_users, sqlite_url, template_postgres_url, Backend,
-    PostgresDbGuard, SeedRawPost, SeedUser, TestEnv, UpdateRawPost,
+    Backend, PostgresDbGuard, SeedRawPost, SeedUser, TestEnv, UpdateRawPost, backends, fp,
+    recorded_postgres_url, seed_users, sqlite_url, template_postgres_url,
 };
 
 // The Postgres-backed cases below (the `::postgres` expansion of each
@@ -314,16 +314,20 @@ async fn subscribe_is_idempotent_and_active(#[case] backend: Backend) {
         .await
         .unwrap();
     assert_eq!(id1, id2, "subscribe is idempotent");
-    assert!(state
-        .subscriptions
-        .is_subscriber(author, &ViewerIdentity::local(bob))
-        .await
-        .unwrap());
-    assert!(!state
-        .subscriptions
-        .is_subscriber(author, &ViewerIdentity::Anonymous)
-        .await
-        .unwrap());
+    assert!(
+        state
+            .subscriptions
+            .is_subscriber(author, &ViewerIdentity::local(bob))
+            .await
+            .unwrap()
+    );
+    assert!(
+        !state
+            .subscriptions
+            .is_subscriber(author, &ViewerIdentity::Anonymous)
+            .await
+            .unwrap()
+    );
     // Active subscriber appears in the listing.
     let subs = state.subscriptions.list_subscribers(author).await.unwrap();
     assert_eq!(subs.len(), 1);
@@ -337,17 +341,21 @@ async fn subscribe_is_idempotent_and_active(#[case] backend: Backend) {
         .unsubscribe(author, local, &bob.to_string())
         .await
         .unwrap();
-    assert!(!state
-        .subscriptions
-        .is_subscriber(author, &ViewerIdentity::local(bob))
-        .await
-        .unwrap());
-    assert!(state
-        .subscriptions
-        .list_subscribers(author)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        !state
+            .subscriptions
+            .is_subscriber(author, &ViewerIdentity::local(bob))
+            .await
+            .unwrap()
+    );
+    assert!(
+        state
+            .subscriptions
+            .list_subscribers(author)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 // `is_subscriber` resolves a `Remote` viewer against its own channel: admission
@@ -454,10 +462,12 @@ async fn pending_subscription_is_not_admitted(#[case] backend: Backend) {
         .await
         .unwrap();
     // Resolution admits only `active` → a pending subscriber is excluded.
-    assert!(!store
-        .is_subscriber(author, &ViewerIdentity::local(bob))
-        .await
-        .unwrap());
+    assert!(
+        !store
+            .is_subscriber(author, &ViewerIdentity::local(bob))
+            .await
+            .unwrap()
+    );
     // ...and it is not listed (list_subscribers is active-only).
     assert!(store.list_subscribers(author).await.unwrap().is_empty());
 }
@@ -587,12 +597,14 @@ async fn audience_membership_round_trip(#[case] backend: Backend) {
         .await
         .unwrap();
 
-    assert!(state
-        .audiences
-        .list_members(author, audience)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        state
+            .audiences
+            .list_members(author, audience)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     state
         .audiences
@@ -619,12 +631,14 @@ async fn audience_membership_round_trip(#[case] backend: Backend) {
         .remove_member(author, audience, sub)
         .await
         .unwrap();
-    assert!(state
-        .audiences
-        .list_members(author, audience)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        state
+            .audiences
+            .list_members(author, audience)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 // The same-owner invariant is enforced by the composite FKs: pairing an audience
@@ -660,12 +674,14 @@ async fn audience_add_member_cross_author_rejected(#[case] backend: Backend) {
             .await,
         Err(AudienceError::Storage(_))
     ));
-    assert!(state
-        .audiences
-        .list_members(alice, alice_audience)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        state
+            .audiences
+            .list_members(alice, alice_audience)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 // `list_members` / `remove_member` are author-scoped: a different author can
@@ -697,12 +713,14 @@ async fn audience_members_are_author_scoped(#[case] backend: Backend) {
         .unwrap();
 
     // Bob cannot list Alice's members...
-    assert!(state
-        .audiences
-        .list_members(bob, alice_audience)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        state
+            .audiences
+            .list_members(bob, alice_audience)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     // ...and a Bob-scoped remove leaves Alice's membership untouched (no-op).
     state
         .audiences
@@ -802,12 +820,14 @@ async fn get_missing_key_returns_none(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
 
-    assert!(state
-        .site_config
-        .get(SiteConfigKey::SiteTitle)
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        state
+            .site_config
+            .get(SiteConfigKey::SiteTitle)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[apply(backends)]
@@ -1519,12 +1539,14 @@ async fn create_user_with_invite_second_call_returns_already_used(#[case] backen
     assert!(matches!(err, RegisterWithInviteError::InviteAlreadyUsed));
 
     // bob was not inserted
-    assert!(state
-        .users
-        .get_user_by_username(&username("bob"))
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        state
+            .users
+            .get_user_by_username(&username("bob"))
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[apply(backends)]
@@ -1550,12 +1572,14 @@ async fn create_user_with_invite_expired_returns_invite_expired(#[case] backend:
 
     assert!(matches!(err, RegisterWithInviteError::InviteExpired));
 
-    assert!(state
-        .users
-        .get_user_by_username(&username("alice"))
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        state
+            .users
+            .get_user_by_username(&username("alice"))
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[apply(backends)]
@@ -1578,12 +1602,14 @@ async fn create_user_with_invite_unknown_code_returns_not_found(#[case] backend:
 
     assert!(matches!(err, RegisterWithInviteError::InviteNotFound));
 
-    assert!(state
-        .users
-        .get_user_by_username(&username("alice"))
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        state
+            .users
+            .get_user_by_username(&username("alice"))
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[apply(backends)]
@@ -2820,9 +2846,10 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
         .await
         .unwrap();
     assert_eq!(site.len(), 3, "site feed in {{3 items, 30 days}}");
-    assert!(site
-        .iter()
-        .all(|p| p.published_at.unwrap() >= now - Duration::days(30)));
+    assert!(
+        site.iter()
+            .all(|p| p.published_at.unwrap() >= now - Duration::days(30))
+    );
 
     // Site feed with min_items=5: top 5 includes all four real posts plus
     // Bob's, regardless of age — total 5 (alice-old-2 included by count).
@@ -4599,11 +4626,13 @@ async fn site_config_round_trips_through_typed_keys(#[case] backend: Backend) {
             .unwrap(),
         None
     );
-    assert!(state
-        .site_config
-        .delete(SiteConfigKey::SiteTitle)
-        .await
-        .unwrap());
+    assert!(
+        state
+            .site_config
+            .delete(SiteConfigKey::SiteTitle)
+            .await
+            .unwrap()
+    );
     assert_eq!(
         state
             .site_config

@@ -25,7 +25,7 @@ use std::process::{Child, Command};
 use std::thread::sleep;
 use std::time::Duration;
 
-use xshell::{cmd, Shell};
+use xshell::{Shell, cmd};
 
 use crate::git;
 use crate::result::{CommandResult, StepResult};
@@ -241,8 +241,8 @@ mod tests {
         let guard = ServerChild(child);
         assert!(proc.exists(), "child should be alive before drop");
         drop(guard); // Drop kills AND waits (reaps the zombie so /proc/<pid> clears)
-                     // Linux-only (xtask is host-only Linux): once killed + reaped, /proc/<pid>
-                     // is gone. Zero-dependency liveness check — no external `kill` binary.
+        // Linux-only (xtask is host-only Linux): once killed + reaped, /proc/<pid>
+        // is gone. Zero-dependency liveness check — no external `kill` binary.
         assert!(!proc.exists(), "child must be reaped after drop");
     }
 }

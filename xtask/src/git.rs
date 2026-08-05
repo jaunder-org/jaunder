@@ -288,8 +288,8 @@ mod tests {
             vec!["hay.txt".to_string()]
         );
         assert!(grep_files(&dir, "absent-token").unwrap().is_empty()); // exit 1
-                                                                       // A nonexistent dir → git can't chdir → exit 128 → Err (NOT an empty
-                                                                       // match). Deterministic regardless of whether $TMPDIR sits under a repo.
+        // A nonexistent dir → git can't chdir → exit 128 → Err (NOT an empty
+        // match). Deterministic regardless of whether $TMPDIR sits under a repo.
         let missing =
             std::env::temp_dir().join(format!("jaunder-git-missing-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&missing);
@@ -302,11 +302,13 @@ mod tests {
         let dir = temp_repo("diff");
         commit(&dir, "base.txt", "b\n");
         let base = output(&dir, &["rev-parse", "HEAD"]).unwrap();
-        assert!(at(&dir)
-            .args(["checkout", "-q", "-b", "feature"])
-            .status()
-            .unwrap()
-            .success());
+        assert!(
+            at(&dir)
+                .args(["checkout", "-q", "-b", "feature"])
+                .status()
+                .unwrap()
+                .success()
+        );
         commit(&dir, "docs/new.md", "n\n");
         let range = format!("{base}..HEAD");
         assert_eq!(merge_base(&dir, "main", "HEAD").unwrap(), base);

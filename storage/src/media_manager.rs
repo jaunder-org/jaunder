@@ -16,8 +16,8 @@ use tokio::io::AsyncWriteExt;
 
 use common::ids::UserId;
 use common::media::{
-    detect_content_type, media_path, media_url, ByteSize, ContentHash, ContentType, Filename,
-    MaxFileSize, MediaSource, UploadResponse, UserQuota,
+    ByteSize, ContentHash, ContentType, Filename, MaxFileSize, MediaSource, UploadResponse,
+    UserQuota, detect_content_type, media_path, media_url,
 };
 
 use crate::{CreateMediaError, MediaRecord, MediaStorage, SiteConfigStorage};
@@ -431,8 +431,8 @@ impl MediaManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, Backend, SeedUser};
     use crate::SiteConfigKey;
+    use crate::test_support::{Backend, SeedUser, backends};
     use common::test_support::{parse_content_hash, parse_content_type, parse_filename};
     use rstest::*;
     use rstest_reuse::*;

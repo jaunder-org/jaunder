@@ -11,7 +11,7 @@
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use flate2::read::GzDecoder;
 use tempfile::TempDir;
 

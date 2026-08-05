@@ -10,9 +10,9 @@ use std::{fmt, str::FromStr, sync::Arc};
 use sqlx::postgres::PgConnectOptions;
 use sqlx::sqlite::SqliteConnectOptions;
 
+use crate::AppState;
 use crate::postgres::open_postgres_database;
 use crate::sqlite::open_sqlite_database;
-use crate::AppState;
 
 // ---------------------------------------------------------------------------
 // DbConnectOptions

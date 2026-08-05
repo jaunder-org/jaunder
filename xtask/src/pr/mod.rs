@@ -13,7 +13,7 @@ pub mod snapshot;
 pub(crate) mod test_support;
 pub mod watch;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use serde::{Serialize, Serializer};
 
 use crate::git;
@@ -304,7 +304,7 @@ pub fn execute_with<S: PrSource, A: land::PrArmer, C: watch::Clock>(
                     )),
                     pointer: None,
                     events: Vec::new(),
-                })
+                });
             }
         };
         if let land::GuardVerdict::Diverged { local, remote } = land::divergence_guard(

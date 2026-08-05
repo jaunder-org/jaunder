@@ -302,7 +302,7 @@ mod tests {
         assert!(parse_stat_start_time("").is_err());
         assert!(parse_stat_start_time("no parens here").is_err());
         assert!(parse_stat_start_time("1 (x) S 1").is_err()); // too few fields
-                                                              // Non-numeric value AT field 22 (index 19: state + 18 fillers + token).
+        // Non-numeric value AT field 22 (index 19: state + 18 fillers + token).
         assert!(
             parse_stat_start_time("1 (x) S 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 notnum").is_err()
         );

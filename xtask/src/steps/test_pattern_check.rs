@@ -144,7 +144,9 @@ fn homing_violations(path: &str, source: &str) -> Vec<(usize, &'static str)> {
         let t = line.trim();
         let rule = if in_sqlite {
             if is_apply_dual(t) {
-                Some("dual-backend template in a sqlite/ dialect dir — proves the generic contract, so move it to a generic module (ADR-0053 §1)")
+                Some(
+                    "dual-backend template in a sqlite/ dialect dir — proves the generic contract, so move it to a generic module (ADR-0053 §1)",
+                )
             } else if is_apply_postgres_only(t) {
                 Some("postgres_only in a sqlite/ dialect dir — mismatched backend (ADR-0053 §1)")
             } else {
@@ -152,14 +154,18 @@ fn homing_violations(path: &str, source: &str) -> Vec<(usize, &'static str)> {
             }
         } else if in_postgres {
             if is_apply_dual(t) {
-                Some("dual-backend template in a postgres/ dialect dir — proves the generic contract, so move it to a generic module (ADR-0053 §1)")
+                Some(
+                    "dual-backend template in a postgres/ dialect dir — proves the generic contract, so move it to a generic module (ADR-0053 §1)",
+                )
             } else if is_apply_sqlite_only(t) {
                 Some("sqlite_only in a postgres/ dialect dir — mismatched backend (ADR-0053 §1)")
             } else {
                 None
             }
         } else if is_apply_single(t) {
-            Some("single-backend template in a generic file — a *_only test must live in its sqlite/ or postgres/ dialect dir (ADR-0053 §1/§2)")
+            Some(
+                "single-backend template in a generic file — a *_only test must live in its sqlite/ or postgres/ dialect dir (ADR-0053 §1/§2)",
+            )
         } else {
             None
         };
@@ -551,10 +557,12 @@ async fn discards(#[case] backend: Backend) {
     #[test]
     fn using_the_injected_backend_is_clean() {
         assert!(param_honesty_violations(ANNOTATED).is_empty());
-        assert!(param_honesty_violations(
-            "async fn f(#[case] backend: Backend) { let _e = backend.setup(); }\n"
-        )
-        .is_empty());
+        assert!(
+            param_honesty_violations(
+                "async fn f(#[case] backend: Backend) { let _e = backend.setup(); }\n"
+            )
+            .is_empty()
+        );
     }
 
     // ── Reason requirement (#419) ───────────────────────────────────────────

@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::Path,
-    http::{header, HeaderMap, HeaderValue, StatusCode},
-    response::{IntoResponse, Response},
     Extension,
+    extract::Path,
+    http::{HeaderMap, HeaderValue, StatusCode, header},
+    response::{IntoResponse, Response},
 };
 use common::feed::{FeedFormat, FeedPath, FeedSurface};
 use common::{tag::Tag, username::Username};

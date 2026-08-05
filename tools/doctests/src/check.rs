@@ -63,7 +63,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::fence::{fences, Scan};
+use crate::fence::{Scan, fences};
 use crate::libtest::run_entries;
 
 /// A passing example. Also the companion form the companion rule looks for.

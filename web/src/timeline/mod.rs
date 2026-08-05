@@ -30,8 +30,8 @@ mod state;
 pub use state::{LoadStatus, NoIdentity, TimelinePaint, TimelineState};
 
 pub use api::{
-    list_by_tag, list_by_user, list_by_user_and_tag, list_home_feed, list_local_timeline,
-    ListByTag, ListByUser, ListByUserAndTag, ListHomeFeed, ListLocalTimeline,
+    ListByTag, ListByUser, ListByUserAndTag, ListHomeFeed, ListLocalTimeline, list_by_tag,
+    list_by_user, list_by_user_and_tag, list_home_feed, list_local_timeline,
 };
 
 // Server-only shared fetch helpers, consumed by the `server` crate's public
@@ -44,4 +44,4 @@ pub use server::{
 #[cfg(target_arch = "wasm32")]
 mod component;
 #[cfg(target_arch = "wasm32")]
-pub use component::{spawn_load_more, wire_timeline_resolve, TimelineGate, TimelineRows};
+pub use component::{TimelineGate, TimelineRows, spawn_load_more, wire_timeline_resolve};

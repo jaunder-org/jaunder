@@ -18,8 +18,8 @@
 //! formats a fixed template and escapes its two URLs directly, rather than
 //! driving a `quick-xml` writer.
 
-use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
+use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 
 /// Writes a `<name>text</name>` element. The text is XML-escaped by `quick-xml`.
 pub(super) fn write_text_element(writer: &mut Writer<Vec<u8>>, name: &str, text: &str) {

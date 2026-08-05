@@ -651,9 +651,11 @@ mod tests {
         assert_eq!(error.kind(), ErrorKind::Internal);
         assert_eq!(error.class(), ErrorClass::Bug);
         assert_eq!(error.public_message(), "server operation failed");
-        assert!(error
-            .operator_message()
-            .contains("mail sender is not configured"));
+        assert!(
+            error
+                .operator_message()
+                .contains("mail sender is not configured")
+        );
     }
 
     #[test]

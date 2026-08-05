@@ -443,7 +443,7 @@ mod tests {
     #[test]
     fn render_emits_sections_in_canonical_order() {
         use crate::traces::analyze::analyze_spans;
-        use crate::traces::parse::{parse_spans, Filters};
+        use crate::traces::parse::{Filters, parse_spans};
         const FIXTURE: &str = include_str!("testdata/otel-traces-sample.jsonl");
         let spans = parse_spans(FIXTURE, &Filters::default(), "sample").unwrap();
         let out = render(

@@ -726,13 +726,15 @@ mod tests {
                 .any(|p| p.contains("missing a `- Status:"))
         );
         // Trailing prose after the token.
-        assert!(file_format_problems(
-            "0007-a.md",
-            7,
-            "# ADR-0007: Auth\n\n- Status: accepted (superseded)\n"
-        )
-        .iter()
-        .any(|p| p.contains("single token")));
+        assert!(
+            file_format_problems(
+                "0007-a.md",
+                7,
+                "# ADR-0007: Auth\n\n- Status: accepted (superseded)\n"
+            )
+            .iter()
+            .any(|p| p.contains("single token"))
+        );
         // Out-of-vocabulary token.
         assert!(
             file_format_problems("0007-a.md", 7, "# ADR-0007: Auth\n\n- Status: accpeted\n")

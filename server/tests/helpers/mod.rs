@@ -3,11 +3,11 @@
 // some subsystem module and no dead-code/unused suppression is needed.
 use axum::{
     body::Body,
-    http::{header, Request, StatusCode},
+    http::{Request, StatusCode, header},
 };
 use common::ids::UserId;
-use common::mailer::test_utils::CapturingMailSender;
 use common::mailer::MailSender;
+use common::mailer::test_utils::CapturingMailSender;
 use common::test_support::parse_session_label;
 use common::token::RawToken;
 use common::username::Username;
@@ -22,7 +22,7 @@ use tower::ServiceExt;
 // what they need directly from `storage::test_support`; `helpers`' own bodies pull
 // in `noop_mailer` (throughout) plus `Backend`/`TestEnv` (for `get_asset`, which
 // provisions its own Sqlite backend).
-use storage::test_support::{noop_mailer, Backend, TestEnv};
+use storage::test_support::{Backend, TestEnv, noop_mailer};
 
 mod websub_capturing;
 // The capturing WebSub client used by `feed_worker.rs`.

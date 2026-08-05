@@ -68,7 +68,7 @@ pub trait SessionStorage: Send + Sync {
     ///
     /// Returns the raw (un-hashed) token to be delivered to the client.
     async fn create_session(&self, user_id: UserId, label: &SessionLabel)
-        -> sqlx::Result<RawToken>;
+    -> sqlx::Result<RawToken>;
 
     /// Validates a raw session token and returns the associated record.
     ///
@@ -92,7 +92,7 @@ pub trait SessionStorage: Send + Sync {
 // ---------------------------------------------------------------------------
 
 use crate::backend::Backend;
-use crate::helpers::{session_record_from_row, SessionRow};
+use crate::helpers::{SessionRow, session_record_from_row};
 use sqlx::{Database, Pool};
 
 /// Per-backend divergences of [`SessionStorage`]. The only operation that differs
@@ -227,7 +227,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, Backend, CloseablePool, SeedUser, TestEnv};
+    use crate::test_support::{Backend, CloseablePool, SeedUser, TestEnv, backends};
     use common::test_support::{parse_raw_token, parse_session_label};
     use rstest::*;
     use rstest_reuse::*;

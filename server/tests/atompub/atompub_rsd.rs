@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    http::{header, Request, StatusCode},
+    http::{Request, StatusCode, header},
 };
 use tower::ServiceExt;
 
@@ -8,7 +8,7 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{body_string, create_user_and_session, make_app};
-use storage::test_support::{backends_matrix, Backend, TestEnv};
+use storage::test_support::{Backend, TestEnv, backends_matrix};
 
 // SPIKE (jaunder Task 1):
 // - Shape A below (`rsd_document_advertises_service_url`) confirms cross-module

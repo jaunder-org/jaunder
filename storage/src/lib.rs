@@ -46,8 +46,8 @@ pub use atomic::*;
 pub use audiences::*;
 pub use backend::*;
 pub use backup::{
-    export_backup, restore_backup, BackupError, BackupExportOptions, BackupManifest, BackupMode,
-    BackupRestoreOptions,
+    BackupError, BackupExportOptions, BackupManifest, BackupMode, BackupRestoreOptions,
+    export_backup, restore_backup,
 };
 pub use db::*;
 pub use email::*;
@@ -59,12 +59,12 @@ pub use media_manager::{MediaError, MediaManager};
 pub use password::*;
 pub use post_service::*;
 pub use postgres::{
-    create_postgres_database_and_role, resolved_postgres_options, PgBootstrapError,
-    PostgresAtomicOps, PostgresAudienceStorage, PostgresEmailVerificationStorage,
+    PgBootstrapError, PostgresAtomicOps, PostgresAudienceStorage, PostgresEmailVerificationStorage,
     PostgresFeedCacheStorage, PostgresFeedEventStorage, PostgresInviteStorage,
     PostgresMediaStorage, PostgresPasswordResetStorage, PostgresPostStorage,
     PostgresSessionStorage, PostgresSiteConfigStorage, PostgresSubscriptionStorage,
-    PostgresUserConfigStorage, PostgresUserStorage,
+    PostgresUserConfigStorage, PostgresUserStorage, create_postgres_database_and_role,
+    resolved_postgres_options,
 };
 pub use posts::*;
 pub use sessions::*;

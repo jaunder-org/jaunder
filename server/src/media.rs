@@ -13,8 +13,8 @@ use tokio_util::io::ReaderStream;
 use common::etag::ETag;
 use common::ids::UserId;
 use common::media::{
-    detect_content_type, media_path, should_inline, ContentHash, Filename, MediaSource,
-    ProfferedFilename,
+    ContentHash, Filename, MediaSource, ProfferedFilename, detect_content_type, media_path,
+    should_inline,
 };
 use storage::{MediaError, MediaStorage};
 use web::auth::AuthUser;
@@ -292,7 +292,7 @@ fn resolve_media_path(
 /// `filename*=UTF-8''…` carrying the full percent-encoded name for modern
 /// clients. `inline` vs `attachment` follows [`should_inline`].
 fn content_disposition(content_type: &str, filename: &str) -> String {
-    use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+    use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 
     let disposition = if should_inline(content_type) {
         "inline"

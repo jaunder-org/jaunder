@@ -130,9 +130,9 @@ pub async fn server_boundary<T>(
 mod tests {
     use super::WebError;
     #[cfg(feature = "server")]
-    use super::{project, server_boundary, ErrorClass, ErrorKind, InternalError, WebResult};
+    use super::{ErrorClass, ErrorKind, InternalError, WebResult, project, server_boundary};
     use leptos::prelude::FromServerFnError;
-    use leptos::server_fn::{codec::JsonEncoding, error::ServerFnErrorErr, Decodes, Encodes};
+    use leptos::server_fn::{Decodes, Encodes, codec::JsonEncoding, error::ServerFnErrorErr};
     use std::error::Error;
     use std::fmt;
 

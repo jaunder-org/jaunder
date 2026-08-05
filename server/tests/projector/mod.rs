@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use axum::{
+    Router,
     body::Body,
     extract::Extension,
-    http::{header, Request, StatusCode},
-    Router,
+    http::{Request, StatusCode, header},
 };
 use chrono::Datelike;
 use common::post_title::PostTitle;
@@ -14,7 +14,7 @@ use tower::ServiceExt;
 use rstest::*;
 use rstest_reuse::*;
 
-use storage::test_support::{backends, Backend, SeedRawPost, SeedUser, TestEnv};
+use storage::test_support::{Backend, SeedRawPost, SeedUser, TestEnv, backends};
 
 /// A recognizable stand-in for the real `index.html`, so tests can tell a
 /// shell-fallback response apart from a projected one.

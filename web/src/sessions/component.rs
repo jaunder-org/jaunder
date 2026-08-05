@@ -3,7 +3,7 @@ use crate::topbar::Topbar;
 use common::session_label::SessionLabel;
 use leptos::prelude::*;
 
-use super::api::{list, CreateAppPassword, Revoke};
+use super::api::{CreateAppPassword, Revoke, list};
 
 /// Sessions page — lists all sessions, mints app passwords, and revokes sessions.
 #[component]

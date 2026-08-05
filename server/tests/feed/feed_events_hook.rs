@@ -6,7 +6,7 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{create_user_and_session, post_form, post_json};
-use storage::test_support::{backends, backends_matrix, Backend, TestEnv};
+use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
 
 // Creating a published post enqueues the Site and User feeds (3 formats each =
 // 6 rows), plus 2 rows per tag (SiteTag + UserTag) × 3 formats. With no tags

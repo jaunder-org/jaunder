@@ -150,7 +150,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, Backend, SeedUser, TestEnv};
+    use crate::test_support::{Backend, SeedUser, TestEnv, backends};
     use common::test_support::parse_raw_token;
     use rstest::*;
     use rstest_reuse::*;

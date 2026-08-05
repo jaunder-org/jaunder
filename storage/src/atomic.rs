@@ -134,7 +134,7 @@ pub trait AtomicOps: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, parse_invite_code, Backend};
+    use crate::test_support::{Backend, backends, parse_invite_code};
     use common::test_support::{
         parse_display_name, parse_password, parse_raw_token, parse_username,
     };
@@ -214,30 +214,33 @@ mod tests {
         let password: Password = parse_password("password123");
         let display_name = parse_display_name("Alice");
 
-        assert!(env
-            .state
-            .site_config
-            .get(crate::SiteConfigKey::SiteRegistrationPolicy)
-            .await
-            .is_err());
-        assert!(env
-            .state
-            .site_config
-            .set(crate::SiteConfigKey::SiteRegistrationPolicy, "open")
-            .await
-            .is_err());
-        assert!(env
-            .state
-            .atomic
-            .create_user_with_invite(
-                &username,
-                &password,
-                Some(&display_name),
-                false,
-                &parse_invite_code("code"),
-            )
-            .await
-            .is_err());
+        assert!(
+            env.state
+                .site_config
+                .get(crate::SiteConfigKey::SiteRegistrationPolicy)
+                .await
+                .is_err()
+        );
+        assert!(
+            env.state
+                .site_config
+                .set(crate::SiteConfigKey::SiteRegistrationPolicy, "open")
+                .await
+                .is_err()
+        );
+        assert!(
+            env.state
+                .atomic
+                .create_user_with_invite(
+                    &username,
+                    &password,
+                    Some(&display_name),
+                    false,
+                    &parse_invite_code("code"),
+                )
+                .await
+                .is_err()
+        );
         // `not-base64` fails token hashing before touching the pool, so the
         // classification is `NotFound` on both backends regardless of pool state.
         assert!(matches!(

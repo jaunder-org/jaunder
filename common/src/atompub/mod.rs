@@ -20,12 +20,12 @@ mod xml;
 
 pub mod entry;
 pub use entry::{
-    entry_to_xml, is_draft, j_slug, render_feed, render_media_link_entry, set_draft, set_j_slug,
-    FeedMeta, MediaLinkEntry,
+    FeedMeta, MediaLinkEntry, entry_to_xml, is_draft, j_slug, render_feed, render_media_link_entry,
+    set_draft, set_j_slug,
 };
 
 pub mod service;
-pub use service::{render_service_document, CollectionDecl, ServiceDocument};
+pub use service::{CollectionDecl, ServiceDocument, render_service_document};
 
 pub mod categories;
 pub use categories::render_categories_document;

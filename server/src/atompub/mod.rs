@@ -1,10 +1,10 @@
 //! Server-side `AtomPub` surface: the boundary mapping Jaunder posts/media to
 //! `AtomPub` wire types, plus the HTTP handlers.
 
+use axum::Router;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::Router;
 use common::absolute_url::AbsoluteUrl;
 use common::username::Username;
 use storage::SiteConfigStorage;
@@ -296,7 +296,7 @@ impl From<anyhow::Error> for HandlerError {
 
 #[cfg(test)]
 mod tests {
-    use super::{atompub_op, atompub_result, HandlerError};
+    use super::{HandlerError, atompub_op, atompub_result};
     use axum::http::{Method, StatusCode};
     use axum::response::IntoResponse;
     use storage::{DeleteMediaError, PerformCreationError, PerformUpdateError, TaggingError};
