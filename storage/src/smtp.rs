@@ -155,8 +155,10 @@ pub async fn load_smtp_config(
 mod tests {
     use super::*;
 
-    use crate::test_support::InMemorySiteConfig;
+    use crate::test_support::{backends, Backend};
     use common::test_support::{parse_smtp_password, parse_smtp_username};
+    use rstest::*;
+    use rstest_reuse::*;
 
     // -- SmtpTlsMode parsing tests --
 
@@ -194,26 +196,31 @@ mod tests {
 
     // -- load_smtp_config tests --
 
-    // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
+    #[apply(backends)]
     #[tokio::test]
-    async fn load_smtp_config_returns_none_when_host_absent() {
-        let store = InMemorySiteConfig::new();
-        assert!(load_smtp_config(&store).await.unwrap().is_none());
+    async fn load_smtp_config_returns_none_when_host_absent(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let store = &*env.state.site_config;
+        assert!(load_smtp_config(store).await.unwrap().is_none());
     }
 
-    // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
+    #[apply(backends)]
     #[tokio::test]
-    async fn load_smtp_config_returns_some_with_all_keys_present() {
-        let store = InMemorySiteConfig::from_pairs([
-            ("smtp.host", "mail.example.com"),
-            ("smtp.port", "465"),
-            ("smtp.tls_mode", "tls"),
-            ("smtp.username", "user@example.com"),
-            ("smtp.password", "s3cr3t"),
-            ("smtp.sender", "Jaunder <noreply@example.com>"),
-        ]);
+    async fn load_smtp_config_returns_some_with_all_keys_present(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let store = &*env.state.site_config;
+        for (key, value) in [
+            (SiteConfigKey::SmtpHost, "mail.example.com"),
+            (SiteConfigKey::SmtpPort, "465"),
+            (SiteConfigKey::SmtpTlsMode, "tls"),
+            (SiteConfigKey::SmtpUsername, "user@example.com"),
+            (SiteConfigKey::SmtpPassword, "s3cr3t"),
+            (SiteConfigKey::SmtpSender, "Jaunder <noreply@example.com>"),
+        ] {
+            store.set(key, value).await.unwrap();
+        }
 
-        let config = load_smtp_config(&store)
+        let config = load_smtp_config(store)
             .await
             .unwrap()
             .expect("expected Some");
@@ -235,12 +242,17 @@ mod tests {
         );
     }
 
-    // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
+    #[apply(backends)]
     #[tokio::test]
-    async fn load_smtp_config_uses_defaults_for_missing_optional_fields() {
-        let store = InMemorySiteConfig::from_pairs([("smtp.host", "relay.example.com")]);
+    async fn load_smtp_config_uses_defaults_for_missing_optional_fields(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let store = &*env.state.site_config;
+        store
+            .set(SiteConfigKey::SmtpHost, "relay.example.com")
+            .await
+            .unwrap();
 
-        let config = load_smtp_config(&store)
+        let config = load_smtp_config(store)
             .await
             .unwrap()
             .expect("expected Some");
@@ -256,15 +268,21 @@ mod tests {
         );
     }
 
-    // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
+    #[apply(backends)]
     #[tokio::test]
-    async fn load_smtp_config_returns_err_for_invalid_sender() {
-        let store = InMemorySiteConfig::from_pairs([
-            ("smtp.host", "mail.example.com"),
-            ("smtp.sender", "not-a-valid-email"),
-        ]);
+    async fn load_smtp_config_returns_err_for_invalid_sender(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let store = &*env.state.site_config;
+        store
+            .set(SiteConfigKey::SmtpHost, "mail.example.com")
+            .await
+            .unwrap();
+        store
+            .set(SiteConfigKey::SmtpSender, "not-a-valid-email")
+            .await
+            .unwrap();
 
-        let err = load_smtp_config(&store).await.unwrap_err();
+        let err = load_smtp_config(store).await.unwrap_err();
         // Asserts the offending value reaches the *message*, deliberately not the error's
         // variant (#687). The variant is about to stop existing: once parsing moves into
         // the sqlx bridges, a bad value arrives as a `ColumnDecode` and
@@ -277,15 +295,21 @@ mod tests {
         );
     }
 
-    // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
+    #[apply(backends)]
     #[tokio::test]
-    async fn load_smtp_config_returns_err_for_invalid_port() {
-        let store = InMemorySiteConfig::from_pairs([
-            ("smtp.host", "mail.example.com"),
-            ("smtp.port", "not-a-port"),
-        ]);
+    async fn load_smtp_config_returns_err_for_invalid_port(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let store = &*env.state.site_config;
+        store
+            .set(SiteConfigKey::SmtpHost, "mail.example.com")
+            .await
+            .unwrap();
+        store
+            .set(SiteConfigKey::SmtpPort, "not-a-port")
+            .await
+            .unwrap();
 
-        let err = load_smtp_config(&store).await.unwrap_err();
+        let err = load_smtp_config(store).await.unwrap_err();
         // Message, not variant — see the note on `..._invalid_sender`.
         assert!(
             err.to_string().contains("not-a-port"),
@@ -293,15 +317,18 @@ mod tests {
         );
     }
 
-    // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
+    #[apply(backends)]
     #[tokio::test]
-    async fn load_smtp_config_returns_err_for_invalid_tls_mode() {
-        let store = InMemorySiteConfig::from_pairs([
-            ("smtp.host", "mail.example.com"),
-            ("smtp.tls_mode", "ssl"),
-        ]);
+    async fn load_smtp_config_returns_err_for_invalid_tls_mode(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let store = &*env.state.site_config;
+        store
+            .set(SiteConfigKey::SmtpHost, "mail.example.com")
+            .await
+            .unwrap();
+        store.set(SiteConfigKey::SmtpTlsMode, "ssl").await.unwrap();
 
-        let err = load_smtp_config(&store).await.unwrap_err();
+        let err = load_smtp_config(store).await.unwrap_err();
         // Message, not variant — see the note on `..._invalid_sender`.
         assert!(
             err.to_string().contains("ssl"),
@@ -309,27 +336,33 @@ mod tests {
         );
     }
 
-    // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
+    #[apply(backends)]
     #[tokio::test]
-    async fn load_smtp_config_returns_err_for_empty_password() {
-        let store = InMemorySiteConfig::from_pairs([
-            ("smtp.host", "mail.example.com"),
-            ("smtp.password", ""),
-        ]);
+    async fn load_smtp_config_returns_err_for_empty_password(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let store = &*env.state.site_config;
+        store
+            .set(SiteConfigKey::SmtpHost, "mail.example.com")
+            .await
+            .unwrap();
+        store.set(SiteConfigKey::SmtpPassword, "").await.unwrap();
 
-        let err = load_smtp_config(&store).await.unwrap_err();
+        let err = load_smtp_config(store).await.unwrap_err();
         assert!(matches!(err, SmtpConfigError::InvalidCredential));
     }
 
-    // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
+    #[apply(backends)]
     #[tokio::test]
-    async fn load_smtp_config_returns_err_for_empty_username() {
-        let store = InMemorySiteConfig::from_pairs([
-            ("smtp.host", "mail.example.com"),
-            ("smtp.username", ""),
-        ]);
+    async fn load_smtp_config_returns_err_for_empty_username(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let store = &*env.state.site_config;
+        store
+            .set(SiteConfigKey::SmtpHost, "mail.example.com")
+            .await
+            .unwrap();
+        store.set(SiteConfigKey::SmtpUsername, "").await.unwrap();
 
-        let err = load_smtp_config(&store).await.unwrap_err();
+        let err = load_smtp_config(store).await.unwrap_err();
         assert!(matches!(err, SmtpConfigError::InvalidCredential));
     }
 

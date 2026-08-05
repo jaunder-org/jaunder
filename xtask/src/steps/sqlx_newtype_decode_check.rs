@@ -118,7 +118,7 @@
 //! unascribed `.get(…)` on something that is *not* a row — a `HashMap`, a
 //! `SiteConfigStorage` — inside a function whose return type is unapproved is recorded,
 //! because rule 3 supplies the target. Widening the population under #728 made this live:
-//! `smtp.rs`'s four `load_smtp_config` reads and three in `test_support.rs` are config-store
+//! `smtp.rs`'s four `load_smtp_config` reads are config-store
 //! lookups, not row reads, and they carry `not-a-decode-target` entries. Telling them apart
 //! by receiver name would be exactly the pattern search this gate forbids.
 //!
@@ -870,34 +870,6 @@ const ALLOWLIST: &[Allowed] = &[
         count: 1,
         category: Category::CountOrExists,
         reason: "database-exists probe in the Postgres test harness",
-    },
-    Allowed {
-        file: "test_support.rs",
-        function: "get",
-        target: "sqlx::Result<Option<String>>",
-        what: "key.as_ref()",
-        count: 1,
-        category: Category::NotADecodeTarget,
-        reason: "a HashMap::get in the in-memory SiteConfigStorage fake — not a row read; the \
-                 gate takes the target from the fn return and cannot tell the receiver apart",
-    },
-    Allowed {
-        file: "test_support.rs",
-        function: "get_smtp_credentials",
-        target: "sqlx::Result<crate::smtp::SmtpCredentials>",
-        what: "crate::SiteConfigKey::SmtpUsername",
-        count: 1,
-        category: Category::NotADecodeTarget,
-        reason: "SiteConfigStorage::get in the test harness, not a row read",
-    },
-    Allowed {
-        file: "test_support.rs",
-        function: "get_smtp_credentials",
-        target: "sqlx::Result<crate::smtp::SmtpCredentials>",
-        what: "crate::SiteConfigKey::SmtpPassword",
-        count: 1,
-        category: Category::NotADecodeTarget,
-        reason: "SiteConfigStorage::get in the test harness, not a row read",
     },
     // ---- surviving i64-family entries from #715 ----
     Allowed {
