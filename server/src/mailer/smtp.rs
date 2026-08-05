@@ -126,9 +126,62 @@ mod tests {
     use common::email::Email;
     use common::smtp_port::SmtpPort;
     use common::test_support::{parse_smtp_password, parse_smtp_username};
+    use std::str::FromStr;
     use storage::{SmtpConfig, SmtpTlsMode};
 
     use super::*;
+
+    /// Addresses spanning both grammars: ordinary forms, the two families the
+    /// RFC 5322 *display-form* parser chokes on (domain-literals and quoted
+    /// local parts), and an internationalized address.
+    const ADDRESS_CORPUS: &[&str] = &[
+        "user@example.com",
+        "USER@Example.COM",
+        "user+tag@example.com",
+        "first.last@sub.example.co.uk",
+        "!#$%&'*+-/=?^_`{|}~@example.com",
+        // Domain-literals — RFC 5321 `address-literal`.
+        "user@[127.0.0.1]",
+        "user@[192.0.2.1]",
+        "user@[IPv6:2001:db8::1]",
+        // Quoted local parts — RFC 5321 `Quoted-string`.
+        "\"quoted\"@example.com",
+        "\"has space\"@example.com",
+        "\"has@at\"@example.com",
+        "\"a<b\"@example.com",
+        "\"a,b\"@example.com",
+        // Internationalized (EAI). Sending one additionally needs the server to
+        // advertise SMTPUTF8, which is a capability question, not a parsing one.
+        "user@İ.com",
+        "user@münchen.de",
+    ];
+
+    /// The invariant the `unreachable!`s in this module rest on: `Email`'s
+    /// grammar is a subset of lettre's `Address`.
+    ///
+    /// It holds structurally — both delegate to the same `email_address` crate
+    /// (`lettre::Address::check_user` calls `EmailAddress::is_valid_local_part`),
+    /// `Email` parses with the strictly *narrower* `without_display_text()`
+    /// option, and `Cargo.lock` unifies both on one `email_address` version. But
+    /// a structural argument is not a checked one, and this test is what makes
+    /// the difference: if either crate's grammar drifts, this fails loudly
+    /// instead of a user's mail failing silently (#297).
+    #[test]
+    fn every_email_is_a_lettre_address() {
+        for raw in ADDRESS_CORPUS {
+            // Every corpus entry is a valid `Email` by construction — the point
+            // of the corpus is what lettre then makes of it.
+            let email = raw
+                .parse::<Email>()
+                .expect("every ADDRESS_CORPUS entry must be a valid Email");
+            assert!(
+                lettre::Address::from_str(email.as_ref()).is_ok(),
+                "Email accepted {raw:?} but lettre::Address rejected it — the \
+                 subset invariant has broken, and the unreachable!s in this \
+                 module are no longer sound",
+            );
+        }
+    }
 
     fn base_config(tls_mode: SmtpTlsMode) -> SmtpConfig {
         SmtpConfig {
