@@ -8,6 +8,10 @@
 // self-flags if the scaffolding ever stops using `expect`.
 #![expect(clippy::expect_used)]
 
+mod env;
+
+pub use env::{with_env, Env};
+
 use crate::absolute_url::AbsoluteUrl;
 use crate::audience::AudienceName;
 use crate::backup::{DestinationPath, RetentionCount};

@@ -68,7 +68,10 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 [dev-dependencies]
 axum = { workspace = true }
 base64 = { workspace = true }
-common = { workspace = true, features = ["test-utils"] }
+# `test-support` is declared explicitly rather than inherited: it reached this
+# crate's tests only by feature unification through `storage`'s own `test-support`,
+# and `server` is the largest consumer of `common::test_support::with_env` (#826).
+common = { workspace = true, features = ["test-utils", "test-support"] }
 storage = { workspace = true, features = ["test-utils", "test-support"] }
 maik = "0.2.0"
 nix = { version = "0.29", features = ["signal"] }
