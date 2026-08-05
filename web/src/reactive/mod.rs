@@ -46,6 +46,7 @@ impl Invalidator {
 
     /// Subscribe the current reactive scope to this invalidator. Used as a [`Resource`]
     /// source; the returned value is an opaque revision, not meaningful on its own.
+    #[must_use]
     pub fn track(&self) -> u32 {
         self.0.get()
     }

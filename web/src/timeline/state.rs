@@ -197,6 +197,7 @@ impl TimelineState {
     ///
     /// Returning the claim rather than a bare `bool` keeps the guarded read
     /// host-tested, leaving the wasm caller a six-line shell.
+    #[must_use]
     pub fn begin_load_more(&self) -> Option<LoadMoreClaim> {
         if self.status.get_untracked().is_in_flight() || !self.has_more.get_untracked() {
             return None;

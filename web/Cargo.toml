@@ -71,6 +71,3 @@ server = [
 pedantic = { level = "warn", priority = -1 }
 unwrap_used = "deny"
 expect_used = "deny"
-# Leptos view fns return `impl IntoView` consumed by the framework; a caller can't
-# ignore the return, so must_use_candidate is noise crate-wide here. (#94)
-must_use_candidate = "allow"
