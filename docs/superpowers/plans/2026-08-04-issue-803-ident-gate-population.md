@@ -311,6 +311,37 @@ criterion 9 by the two named tests passing.
 
 Criterion 10's "after" half and the comparison.
 
+### Recorded evidence (the harness is deleted; this is what it measured)
+
+Both runs produced **byte-identical** output — `diff` exited 0 with no output.
+Transcribed here because the `/tmp` artifacts do not survive, and criterion 10's
+whole point is that the comparison be measured rather than inferred from a green
+gate.
+
+```
+== html-sink ==
+web/src/home/component.rs:70
+web/src/posts/component.rs:190
+web/src/posts/component.rs:206
+web/src/posts/component.rs:896
+web/src/sidebar/component.rs:70
+marked=5 unexempt=0 orphans=0
+== raw-html-door ==
+web/src/html.rs:69
+marked=1 unexempt=0 orphans=0
+== rendered-html-from-trusted ==
+common/src/feed/feed_path.rs:98
+common/src/media.rs:873
+common/src/media.rs:969
+common/src/media.rs:973
+common/src/render.rs:110
+common/src/render.rs:155
+marked=6 unexempt=0 orphans=0
+```
+
+Totals: **12 marked, 0 unexempt, 0 orphans**, before and after, at identical
+`path:line` sites.
+
 **Steps**
 
 - [x] Re-run the harness; save the output to `/tmp/census-after.txt`.
@@ -343,15 +374,18 @@ Expected: **PASS** before deletion; after deletion
 
 ## Task 4 — the full local gate
 
-- [ ] `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-803-ident-gate-population -- cargo xtask validate --no-e2e`
+- [x] `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-803-ident-gate-population -- cargo xtask validate --no-e2e`
+      — **green**
 
 Expected: **green** (criterion 11). This runs the three gates against the real
 tree, so it independently re-confirms 0 unexempt / 0 orphans. Long/cold run —
 use the Bash tool's background mode.
 
-- [ ] Review the whole branch against the spec:
+- [x] Review the whole branch against the spec:
       `git diff wt-base-issue-803..HEAD`. Walk the spec's eleven acceptance
-      criteria and check each off explicitly.
+      criteria and check each off explicitly. — **Done via two parallel
+      cold-read reviews (Standards + Spec). Standards: no hard violations, every
+      ADR-0085 principle preserved. Spec: 11/11 criteria met.**
 
 ## Self-review
 
