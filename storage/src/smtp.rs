@@ -1,3 +1,4 @@
+use common::config_key::SiteConfigKey;
 use common::mailbox::Mailbox;
 use common::smtp_password::SmtpPassword;
 use common::smtp_username::SmtpUsername;
@@ -96,18 +97,18 @@ pub enum SmtpConfigError {
 pub async fn load_smtp_config(
     store: &dyn SiteConfigStorage,
 ) -> Result<Option<SmtpConfig>, SmtpConfigError> {
-    let Some(host) = store.get("smtp.host").await.ok().flatten() else {
+    let Some(host) = store.get(SiteConfigKey::SmtpHost).await.ok().flatten() else {
         return Ok(None);
     };
 
-    let port = match store.get("smtp.port").await.ok().flatten() {
+    let port = match store.get(SiteConfigKey::SmtpPort).await.ok().flatten() {
         None => 587,
         Some(v) => v
             .parse::<u16>()
             .map_err(|_| SmtpConfigError::InvalidPort(v))?,
     };
 
-    let tls_mode = match store.get("smtp.tls_mode").await.ok().flatten() {
+    let tls_mode = match store.get(SiteConfigKey::SmtpTlsMode).await.ok().flatten() {
         None => SmtpTlsMode::StartTls,
         Some(v) => v
             .parse::<SmtpTlsMode>()
@@ -126,7 +127,7 @@ pub async fn load_smtp_config(
         .map_err(|_| SmtpConfigError::InvalidCredential)?;
 
     let sender_str = store
-        .get("smtp.sender")
+        .get(SiteConfigKey::SmtpSender)
         .await
         .ok()
         .flatten()

@@ -162,7 +162,7 @@ mod tests {
     use super::*;
     use crate::test_support::{migrated_sqlite_db, site_config};
     use common::test_support::{parse_destination_path, parse_retention_count};
-    use storage::{BACKUP_DESTINATION_PATH_KEY, BACKUP_SCHEDULE_KEY};
+    use storage::SiteConfigKey;
     use tempfile::TempDir;
 
     #[test]
@@ -200,12 +200,12 @@ mod tests {
         let (db, pool) = migrated_sqlite_db(storage.path()).await;
         let cfg = site_config(&pool);
         cfg.set(
-            BACKUP_DESTINATION_PATH_KEY,
+            SiteConfigKey::BackupDestinationPath,
             storage.path().join("backups").to_str().expect("utf-8 path"),
         )
         .await
         .expect("set destination");
-        cfg.set(BACKUP_SCHEDULE_KEY, "0 0 0 1 1 *")
+        cfg.set(SiteConfigKey::BackupSchedule, "0 0 0 1 1 *")
             .await
             .expect("set schedule");
 
@@ -227,12 +227,12 @@ mod tests {
         std::fs::write(media_path.join("file.txt"), "media").expect("media file");
         let destination_path = temp.path().join("scheduled-backups");
         cfg.set(
-            BACKUP_DESTINATION_PATH_KEY,
+            SiteConfigKey::BackupDestinationPath,
             destination_path.to_str().expect("utf-8 path"),
         )
         .await
         .expect("set destination");
-        cfg.set(BACKUP_SCHEDULE_KEY, "*/1 * * * * *")
+        cfg.set(SiteConfigKey::BackupSchedule, "*/1 * * * * *")
             .await
             .expect("set schedule");
 

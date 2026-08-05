@@ -503,7 +503,13 @@ async fn site_config_round_trips_through_typed_keys(#[case] backend: Backend) {
 `devtool run --cwd <worktree> -- devtool pg run -- cargo nextest run -p jaunder site_config_round_trips_through_typed_keys`
 Expected: **FAIL** — compile error; `set` takes `&str`.
 
-- [ ] **Step 3: Flip the signatures and follow the compiler**
+- [x] **Step 3: Flip the signatures and follow the compiler** — plus three sites
+      the plan did not list, all compiler- or gate-forced:
+      `server/src/{main,backup}.rs` test call sites, and the 7 allowlist `what:`
+      fields in `xtask/src/steps/sqlx_newtype_decode_check.rs` (retargeted to
+      the new argument spellings; the entries themselves survive until Task 11).
+      The generic impl also needed a `String: sqlx::Type<DB>` where-bound, since
+      `SiteConfigKey`'s bridge reports `String` as its type.
 
 Four rules for the mechanical pass:
 
@@ -531,7 +537,14 @@ Four rules for the mechanical pass:
 Expected: **PASS** on both backends. Breadth is the verification here; the
 change is mechanical.
 
-- [ ] **Step 5: Count the remaining consts**
+- [x] **Step 5: Count the remaining consts** — exactly 3, as predicted.
+
+**Correction to rule 4 above, found during execution:** `cli.rs:917/934/986` do
+**not** assert unknown-key errors — they assert hyphen-values, flag ordering,
+and a missing value. They moved onto real keys, and one genuine parse-rejection
+test was added instead (`site_config_rejects_an_unknown_key`, asserting the
+error names `site.nope` across set/get/unset). `commands.rs`'s `does.not.exist`
+`get` became an unwritten-real-key error.
 
 `devtool run --cwd <worktree> -- rg -n 'const [A-Z_]+_KEY' storage/src`
 Expected: exactly **3** hits — `TEMPLATE_LOCK_KEY` (`test_support.rs:539`, an

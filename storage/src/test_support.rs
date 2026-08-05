@@ -1433,15 +1433,15 @@ impl InMemorySiteConfig {
 
 #[async_trait]
 impl SiteConfigStorage for InMemorySiteConfig {
-    async fn get(&self, key: &str) -> sqlx::Result<Option<String>> {
-        Ok(self.0.lock().unwrap().get(key).cloned())
+    async fn get(&self, key: crate::SiteConfigKey) -> sqlx::Result<Option<String>> {
+        Ok(self.0.lock().unwrap().get(key.as_ref()).cloned())
     }
 
-    async fn set(&self, key: &str, value: &str) -> sqlx::Result<()> {
+    async fn set(&self, key: crate::SiteConfigKey, value: &str) -> sqlx::Result<()> {
         self.0
             .lock()
             .unwrap()
-            .insert(key.to_owned(), value.to_owned());
+            .insert(key.as_ref().to_owned(), value.to_owned());
         Ok(())
     }
 
@@ -1455,21 +1455,21 @@ impl SiteConfigStorage for InMemorySiteConfig {
             .collect())
     }
 
-    async fn delete(&self, key: &str) -> sqlx::Result<bool> {
-        Ok(self.0.lock().unwrap().remove(key).is_some())
+    async fn delete(&self, key: crate::SiteConfigKey) -> sqlx::Result<bool> {
+        Ok(self.0.lock().unwrap().remove(key.as_ref()).is_some())
     }
 
     async fn get_smtp_credentials(&self) -> sqlx::Result<crate::smtp::SmtpCredentials> {
         // Mirror the real backend's bridge decode: parse each stored value and
         // surface a reject (empty) as a decode error.
         let username = self
-            .get("smtp.username")
+            .get(crate::SiteConfigKey::SmtpUsername)
             .await?
             .map(|v| v.parse::<common::smtp_username::SmtpUsername>())
             .transpose()
             .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
         let password = self
-            .get("smtp.password")
+            .get(crate::SiteConfigKey::SmtpPassword)
             .await?
             .map(|v| v.parse::<common::smtp_password::SmtpPassword>())
             .transpose()

@@ -1,4 +1,5 @@
 use chrono::{Datelike, Utc};
+use common::config_key::SiteConfigKey;
 use common::ids::{AudienceId, ChannelId, FeedEventId, PostId, UserId};
 use common::password::Password;
 use common::slug::Slug;
@@ -781,11 +782,16 @@ async fn site_config_set_then_get_roundtrips(#[case] backend: Backend) {
     let state = &env.state;
     state
         .site_config
-        .set("site.name", "Parity Site")
+        .set(SiteConfigKey::SiteTitle, "Parity Site")
         .await
         .unwrap();
     assert_eq!(
-        state.site_config.get("site.name").await.unwrap().as_deref(),
+        state
+            .site_config
+            .get(SiteConfigKey::SiteTitle)
+            .await
+            .unwrap()
+            .as_deref(),
         Some("Parity Site")
     );
 }
@@ -798,7 +804,7 @@ async fn get_missing_key_returns_none(#[case] backend: Backend) {
 
     assert!(state
         .site_config
-        .get("nonexistent")
+        .get(SiteConfigKey::SiteTitle)
         .await
         .unwrap()
         .is_none());
@@ -810,11 +816,24 @@ async fn set_overwrites_existing_value(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
 
-    state.site_config.set("site.name", "First").await.unwrap();
-    state.site_config.set("site.name", "Second").await.unwrap();
+    state
+        .site_config
+        .set(SiteConfigKey::SiteTitle, "First")
+        .await
+        .unwrap();
+    state
+        .site_config
+        .set(SiteConfigKey::SiteTitle, "Second")
+        .await
+        .unwrap();
 
     assert_eq!(
-        state.site_config.get("site.name").await.unwrap().as_deref(),
+        state
+            .site_config
+            .get(SiteConfigKey::SiteTitle)
+            .await
+            .unwrap()
+            .as_deref(),
         Some("Second")
     );
 }
@@ -4551,12 +4570,56 @@ async fn reconciling_to_a_smaller_set_preserves_the_surviving_tags(#[case] backe
 
 // ====== Site config tests ======
 
+/// The primitives are reached only through the closed [`SiteConfigKey`] registry
+/// (#687): a key that is not in the registry cannot be named at all, so the
+/// round-trip is stated over real keys.
+#[apply(backends)]
+#[tokio::test]
+async fn site_config_round_trips_through_typed_keys(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    state
+        .site_config
+        .set(SiteConfigKey::SiteTitle, "My Site")
+        .await
+        .unwrap();
+    assert_eq!(
+        state
+            .site_config
+            .get(SiteConfigKey::SiteTitle)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("My Site")
+    );
+    assert_eq!(
+        state
+            .site_config
+            .get(SiteConfigKey::FeedsMinDays)
+            .await
+            .unwrap(),
+        None
+    );
+    assert!(state
+        .site_config
+        .delete(SiteConfigKey::SiteTitle)
+        .await
+        .unwrap());
+    assert_eq!(
+        state
+            .site_config
+            .get(SiteConfigKey::SiteTitle)
+            .await
+            .unwrap(),
+        None
+    );
+}
+
 #[apply(backends)]
 #[tokio::test]
 async fn site_config_operations(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let value = state.site_config.get("nonexistent.key").await;
+    let value = state.site_config.get(SiteConfigKey::SiteBaseUrl).await;
     match value {
         Ok(None) => {
             // Expected
@@ -4566,11 +4629,11 @@ async fn site_config_operations(#[case] backend: Backend) {
 
     state
         .site_config
-        .set("test.key", "test.value")
+        .set(SiteConfigKey::SiteTitle, "test.value")
         .await
         .expect("set failed");
 
-    let value = state.site_config.get("test.key").await;
+    let value = state.site_config.get(SiteConfigKey::SiteTitle).await;
     match value {
         Ok(Some(v)) => {
             assert_eq!(v, "test.value");
@@ -4580,11 +4643,11 @@ async fn site_config_operations(#[case] backend: Backend) {
 
     state
         .site_config
-        .set("test.key", "updated.value")
+        .set(SiteConfigKey::SiteTitle, "updated.value")
         .await
         .expect("set update failed");
 
-    let value = state.site_config.get("test.key").await;
+    let value = state.site_config.get(SiteConfigKey::SiteTitle).await;
     match value {
         Ok(Some(v)) => {
             assert_eq!(v, "updated.value");

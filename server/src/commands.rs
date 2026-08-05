@@ -9,6 +9,7 @@ use crate::mailer::LettreMailSender;
 use crate::runtime_file;
 use common::absolute_url::compose;
 use common::backup::BackupMode;
+use common::config_key::SiteConfigKey;
 use common::display_name::DisplayName;
 use common::email::Email;
 use common::invite::InviteTtlHours;
@@ -108,10 +109,10 @@ impl SiteConfigAction {
                 storage,
                 key,
                 value,
-            } => cmd_site_config_set(&storage, &key, &value).await,
-            SiteConfigAction::Get { storage, key } => cmd_site_config_get(&storage, &key).await,
+            } => cmd_site_config_set(&storage, key, &value).await,
+            SiteConfigAction::Get { storage, key } => cmd_site_config_get(&storage, key).await,
             SiteConfigAction::List { storage } => cmd_site_config_list(&storage).await,
-            SiteConfigAction::Unset { storage, key } => cmd_site_config_unset(&storage, &key).await,
+            SiteConfigAction::Unset { storage, key } => cmd_site_config_unset(&storage, key).await,
         }
     }
 }
@@ -700,7 +701,11 @@ pub async fn cmd_serve(
 }
 
 /// Upsert a `site_config` key/value through the real storage path.
-async fn cmd_site_config_set(storage: &StorageArgs, key: &str, value: &str) -> anyhow::Result<()> {
+async fn cmd_site_config_set(
+    storage: &StorageArgs,
+    key: SiteConfigKey,
+    value: &str,
+) -> anyhow::Result<()> {
     let state = open_existing_database(&storage.db).await?;
     state.site_config.set(key, value).await?;
     eprintln!("set site_config {key} = {value}");
@@ -709,7 +714,7 @@ async fn cmd_site_config_set(storage: &StorageArgs, key: &str, value: &str) -> a
 
 /// Print the value for `key` to stdout; error (→ non-zero exit) if it is unset,
 /// so a caller can distinguish an unset key from an empty value.
-async fn cmd_site_config_get(storage: &StorageArgs, key: &str) -> anyhow::Result<()> {
+async fn cmd_site_config_get(storage: &StorageArgs, key: SiteConfigKey) -> anyhow::Result<()> {
     let state = open_existing_database(&storage.db).await?;
     match state.site_config.get(key).await? {
         Some(value) => {
@@ -730,7 +735,7 @@ async fn cmd_site_config_list(storage: &StorageArgs) -> anyhow::Result<()> {
 
 /// Delete a `site_config` key. Idempotent (exit 0 whether or not a row existed);
 /// stderr notes which happened.
-async fn cmd_site_config_unset(storage: &StorageArgs, key: &str) -> anyhow::Result<()> {
+async fn cmd_site_config_unset(storage: &StorageArgs, key: SiteConfigKey) -> anyhow::Result<()> {
     let state = open_existing_database(&storage.db).await?;
     if state.site_config.delete(key).await? {
         eprintln!("unset site_config {key}");
@@ -871,30 +876,44 @@ mod tests {
             db: opts,
         };
 
-        cmd_site_config_set(&storage_args, "feeds.websub_hub_url", "https://x/")
-            .await
-            .expect("set ok");
+        cmd_site_config_set(
+            &storage_args,
+            SiteConfigKey::FeedsWebsubHubUrl,
+            "https://x/",
+        )
+        .await
+        .expect("set ok");
         // set() is an upsert: a second write on the same key overwrites.
-        cmd_site_config_set(&storage_args, "feeds.websub_hub_url", "https://y/")
-            .await
-            .expect("upsert ok");
+        cmd_site_config_set(
+            &storage_args,
+            SiteConfigKey::FeedsWebsubHubUrl,
+            "https://y/",
+        )
+        .await
+        .expect("upsert ok");
 
         let state = open_existing_database(&storage_args.db)
             .await
             .expect("reopen");
         assert_eq!(
-            state.site_config.get("feeds.websub_hub_url").await.unwrap(),
+            state
+                .site_config
+                .get(SiteConfigKey::FeedsWebsubHubUrl)
+                .await
+                .unwrap(),
             Some("https://y/".to_string()),
             "second set overwrites",
         );
 
-        // get: present key returns Ok (exercises the println! path); absent key errors.
-        cmd_site_config_get(&storage_args, "feeds.websub_hub_url")
+        // get: present key returns Ok (exercises the println! path); an unwritten key
+        // errors. A key outside the registry can no longer be named here at all — clap
+        // rejects it at parse time (see `cli`'s `site_config_rejects_an_unknown_key`).
+        cmd_site_config_get(&storage_args, SiteConfigKey::FeedsWebsubHubUrl)
             .await
             .expect("get present key ok");
-        cmd_site_config_get(&storage_args, "does.not.exist")
+        cmd_site_config_get(&storage_args, SiteConfigKey::SiteTitle)
             .await
-            .expect_err("get absent key errors (→ non-zero exit)");
+            .expect_err("get unwritten key errors (→ non-zero exit)");
 
         // list runs against a populated store (exercises the print path).
         cmd_site_config_list(&storage_args).await.expect("list ok");
@@ -940,7 +959,7 @@ mod tests {
         let state = storage::open_database(&opts).await.expect("open db");
         state
             .site_config
-            .set("site.base_url", "https://example.com")
+            .set(SiteConfigKey::SiteBaseUrl, "https://example.com")
             .await
             .expect("set base_url");
 

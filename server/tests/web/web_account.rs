@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
+use common::config_key::SiteConfigKey;
 use common::mailer::test_utils::CapturingMailSender;
 use common::test_support::{parse_bio, parse_display_name, parse_session_label};
 use server_fn::ServerFn;
@@ -201,12 +202,12 @@ async fn create_invite_emails_link_and_appears_in_list(#[case] backend: Backend)
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
-        .set("site.registration_policy", "invite_only")
+        .set(SiteConfigKey::SiteRegistrationPolicy, "invite_only")
         .await
         .unwrap();
     state
         .site_config
-        .set("site.base_url", "https://example.com")
+        .set(SiteConfigKey::SiteBaseUrl, "https://example.com")
         .await
         .unwrap();
     let cookie = create_operator_and_session(&state).await.cookie();
@@ -301,7 +302,7 @@ async fn create_invite_invalid_recipient_returns_error(#[case] backend: Backend)
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
-        .set("site.base_url", "https://example.com")
+        .set(SiteConfigKey::SiteBaseUrl, "https://example.com")
         .await
         .unwrap();
     let cookie = create_operator_and_session(&state).await.cookie();
@@ -330,7 +331,7 @@ async fn create_invite_send_failure_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
-        .set("site.base_url", "https://example.com")
+        .set(SiteConfigKey::SiteBaseUrl, "https://example.com")
         .await
         .unwrap();
     let cookie = create_operator_and_session(&state).await.cookie();
@@ -354,7 +355,7 @@ async fn create_invite_large_hours_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
-        .set("site.base_url", "https://example.com")
+        .set(SiteConfigKey::SiteBaseUrl, "https://example.com")
         .await
         .unwrap();
     let cookie = create_operator_and_session(&state).await.cookie();
@@ -387,7 +388,7 @@ async fn create_invite_omits_hours_uses_default(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
-        .set("site.base_url", "https://example.com")
+        .set(SiteConfigKey::SiteBaseUrl, "https://example.com")
         .await
         .unwrap();
     let cookie = create_operator_and_session(&state).await.cookie();
@@ -419,7 +420,7 @@ async fn create_invite_empty_hours_uses_default(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
-        .set("site.base_url", "https://example.com")
+        .set(SiteConfigKey::SiteBaseUrl, "https://example.com")
         .await
         .unwrap();
     let cookie = create_operator_and_session(&state).await.cookie();

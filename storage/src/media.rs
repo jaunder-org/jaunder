@@ -428,12 +428,8 @@ where
     }
 }
 
-/// Key for the site configuration setting for maximum file upload size.
-pub const MEDIA_MAX_FILE_SIZE_BYTES_KEY: &str = "media.max_file_size_bytes";
-/// Key for the site configuration setting for per-user upload quota.
-pub const MEDIA_USER_QUOTA_BYTES_KEY: &str = "media.user_quota_bytes";
-/// Key for the site-wide default media cache policy.
-pub const MEDIA_CACHE_POLICY_DEFAULT_KEY: &str = "media.cache_policy_default";
+// The media site-config keys live in the closed registry
+// (`common::config_key::SiteConfigKey::{MediaMaxFileSizeBytes, MediaUserQuotaBytes}`, #687).
 // The defaults (50 MiB / 1 GiB) now live on the `common::media::MaxFileSize` /
 // `UserQuota` newtypes' `#[num_newtype(default = …)]`, applied by the
 // `SiteConfigStorage::get_media_*` getters.
