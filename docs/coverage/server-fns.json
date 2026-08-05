@@ -55,18 +55,5 @@
     "timeline::list_home_feed",
     "timeline::list_local_timeline"
   ],
-  "orphans": {
-    "auth::get_session": [
-      "unknown-parent:1111111111111111"
-    ],
-    "backup::is_warning_visible": [
-      "unknown-parent:1111111111111111"
-    ],
-    "site::is_base_url_warning_visible": [
-      "unknown-parent:1111111111111111"
-    ],
-    "timeline::list_local_timeline": [
-      "unknown-parent:1111111111111111"
-    ]
-  }
+  "orphans": {}
 }

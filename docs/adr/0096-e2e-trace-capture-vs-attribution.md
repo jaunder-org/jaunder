@@ -123,11 +123,12 @@ What that changes, and what it does not:
   The guarantee it provides (nothing a fixture does before the test body lands
   in `e2e.test`'s arrays) is structural and does not depend on what occupies
   that window.
-- **#681's orphan bucket survives too, and this was tested rather than
-  assumed.** The warmup's `/` load was believed to be its source, so removing
-  the warmup was expected to empty it. It did not: the `server-fn-coverage`
-  snapshot byte-compare passed unchanged post-removal, with the same four
-  app-shell orphans. The bucket's source is the pre-test window itself.
+- **#681's orphan bucket is now empty, and the mechanism stays anyway.** The
+  warmup's `/` load was its only source, so removing the warmup emptied it: the
+  regenerated `server-fn-coverage` snapshot has `orphans: {}` where it had four
+  app-shell fns. The bucket is not thereby dead — the pre-test window it guards
+  (context created, traceparent not yet applied) is structural, and an empty
+  bucket is the correct steady state rather than an unused branch.
 - **This ADR's own premise was vindicated.** "The warmup's own duration is
   measured nowhere, which is what blocks #792 from deciding whether the warmup
   buys anything" — the envelope this ADR introduced is exactly what let #792

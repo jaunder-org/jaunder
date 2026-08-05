@@ -153,12 +153,27 @@ The A/B verdict stands on the six interleaved quiescent runs, not on these.
 Anyone wanting a clean post-removal number should re-run `traces run` with a
 fresh salt on an idle host.
 
-**Task 6e answered — and the prediction was wrong.** The plan expected the
-`server-fn-coverage` snapshot to drift, on the theory that the warmup's `/` load
-was the orphan bucket's source. It did not drift: the byte-compare passed
-unchanged, and the four app-shell orphans are still there. The bucket's source
-is the pre-test window itself, so the mechanism keeps its justification and only
-the explanation naming warmup needed fixing.
+**Task 6e answered — by CI, after a local false negative.** The plan predicted
+the `server-fn-coverage` snapshot would drift, on the theory that the warmup's
+`/` load was the orphan bucket's source. That prediction was **correct**:
+regenerating from the CI capture yields `orphans: {}` where four app-shell fns
+used to sit, with `covered` unchanged at 54.
+
+The instructive part is the detour. A local `cargo xtask validate` passed, which
+I read as "no drift, prediction wrong", and I wrote that conclusion into
+`docs/observability.md` and ADR-0096 before CI contradicted it. The local run
+never checked: **the coverage verify runs in the per-combo path**
+(`cargo xtask e2e sqlite chromium`, which CI's matrix uses), **not in the
+aggregate `checks.e2e` that `validate` builds** — the `regenerate` help text says
+so explicitly ("running it per-combo avoids the aggregate `checks.e2e` join,
+where both sqlite combos' captures collide under the same file name"). So
+`validate` passing was not evidence of anything here, and treating a silent pass
+as a positive result is what produced two wrong paragraphs in the docs.
+
+Both were corrected from the regenerated snapshot rather than from a second
+guess. The general lesson, worth more than the specific finding: `cargo xtask
+validate` does **not** run every check CI runs, so "validate is green" is not
+interchangeable with "CI will be green".
 
 ## Task 4 — guard evidence (2026-08-04)
 

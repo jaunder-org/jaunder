@@ -291,22 +291,20 @@ Two properties, both deliberate:
   make this artifact a tax on unrelated work. A reason set is a function of the
   code.
 
-It is reported, not failed. Expect exactly the app-shell fns (`session`,
-`list_local_timeline`, and the two warning-visibility fns), each carrying the
-single reason `unknown-parent:` naming the run-wide traceparent's span id. That
-is app-shell traffic issued in the **pre-test window** — after the browser
-context exists but before `applyTestTraceparent` stamps it — which is
-deliberately unattributed per #681. A different reason, an unfamiliar parent id,
-or any other fn appearing means a context lost its traceparent or the capture is
-truncated.
+It is reported, not failed. **Since #792, expect it to be empty.** Until then it
+held exactly four app-shell fns (`get_session`, `list_local_timeline`, and the
+two warning-visibility fns), each carrying the single reason `unknown-parent:`
+naming the run-wide traceparent's span id — that was the per-test warmup's `/`
+load, issued before `applyTestTraceparent` stamped the context. Removing the
+warmup removed the traffic, and the regenerated snapshot's `orphans` is `{}`.
 
-**These four survived #792**, which is worth recording because it was predicted
-they would not. The per-test warmup's `/` load was assumed to be the bucket's
-source, so removing the warmup should have emptied it and drifted this snapshot.
-It did neither: the byte-compare passed unchanged against a post-removal run.
-The orphan bucket's source is the pre-test window itself, not any particular
-thing that used to occupy it — which is exactly why the mechanism is structural
-and stays.
+**The mechanism stays even though its occupant is gone.** The pre-test window —
+after the browser context exists, before the traceparent is applied — is
+structural, and anything that ever lands in it must not be attributed to a test.
+An empty bucket is the correct steady state, not dead code. An fn appearing here
+again means something now issues traffic before the test proper starts; a
+different reason or an unfamiliar parent id means a context lost its traceparent
+or the capture is truncated.
 
 ## Server-side scoped diagnostic log — look here first (#144)
 
