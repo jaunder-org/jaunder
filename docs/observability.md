@@ -463,6 +463,26 @@ Deciding data is **sqlite only**, both browsers (per the spec: the backend axis
 is not what warmup touches). Postgres was collected at the same settings and is
 retained for #817.
 
+### The runs
+
+Every combo of every run, as measured. `expected = 130` throughout;
+`unexpected = 0` throughout. No run was discarded.
+
+| run | salt | warmup | started (sq-chr) | loadavg after  | sq-chr | sq-ff | pg-chr | pg-ff           |
+| --- | ---- | ------ | ---------------- | -------------- | ------ | ----- | ------ | --------------- |
+| A1  | `a1` | on     | 22:27:40Z        | 2.18 2.34 1.96 | 229.9  | 329.6 | 228.0  | 336.2 (1 flaky) |
+| B1  | `b1` | off    | 22:49:11Z        | 2.22 2.24 2.08 | 174.0  | 254.4 | 171.2  | 257.7           |
+| A2  | `a2` | on     | 23:06:28Z        | 2.27 2.41 2.30 | 224.9  | 323.6 | 227.8  | 327.8           |
+| B2  | `b2` | off    | 23:27:16Z        | 2.47 2.43 2.36 | 174.5  | 256.6 | 171.7  | 258.0           |
+| A3  | `a3` | on     | 23:44:03Z        | 2.10 2.33 2.35 | 226.8  | 323.7 | 226.2  | 323.9           |
+| B3  | `b3` | off    | 00:04:40Z        | 2.60 2.38 2.29 | 172.0  | 256.0 | 171.5  | 257.8           |
+
+Durations in seconds. Session baseline `/proc/loadavg` before the first run:
+**0.75 0.94 0.82**. Load was sampled **after** each run rather than both before
+and after; since the runs were back-to-back, each row's figure is also
+effectively the next run's starting load, and the band (2.10–2.60) never
+approached a level that would have triggered the discard rule.
+
 ### Suite wall-clock (sqlite, `.stats.duration`, seconds)
 
 | arm           | chromium            | median                | firefox             | median                |

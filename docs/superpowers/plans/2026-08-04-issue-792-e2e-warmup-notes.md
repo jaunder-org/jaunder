@@ -204,6 +204,13 @@ it for the other filters. The step lives entirely under `xtask/src/**` and no
 salted attrs still **evaluate** to derivations (task 3e's table), so the salted
 build path is intact.
 
-No real `nix build` was spent on this clause: it would purchase no information
-over the source-filter argument and would compete with task 7's quiescence
-budget.
+No dedicated `nix build` was spent on this clause at the time: it would purchase
+no information over the source-filter argument and would compete with task 7's
+quiescence budget.
+
+**It was established anyway, by task 7.** Each of the six collection runs set a
+non-empty `e2eSalt` and then built and ran all four e2e combos to completion —
+that is 24 successful salted `nix build`s of e2e attrs, which is exactly what
+AC-4 clause 2 asks for and rather more than the single build it specified. The
+guard demonstrably does not reach inside the derivations, because a guard that
+did would have made the entire measurement impossible.

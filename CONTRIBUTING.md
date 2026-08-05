@@ -744,13 +744,13 @@ request; it is deliberately **not** part of per-commit `check`/`validate`
   sibling to drift (#188)
 - `checks.x86_64-linux.deny` — cargo-deny
 - `checks.x86_64-linux.e2e-sqlite-chromium` — Playwright end-to-end flow against
-  SQLite on Chromium with
+  SQLite on Chromium
 - `checks.x86_64-linux.e2e-sqlite-firefox` — Playwright end-to-end flow against
-  SQLite on Firefox with
+  SQLite on Firefox
 - `checks.x86_64-linux.e2e-postgres-chromium` — Playwright end-to-end flow
-  against PostgreSQL on Chromium with
+  against PostgreSQL on Chromium
 - `checks.x86_64-linux.e2e-postgres-firefox` — Playwright end-to-end flow
-  against PostgreSQL on Firefox with
+  against PostgreSQL on Firefox
 - `checks.x86_64-linux.postgres-integration` — every `server/tests/*.rs`
   integration binary against PostgreSQL (including the ignored PostgreSQL-only
   cases), all in one VM

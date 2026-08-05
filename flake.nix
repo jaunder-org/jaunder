@@ -791,7 +791,7 @@
                 imports = [ self.nixosModules.jaunder ];
 
                 virtualisation.memorySize = vmMemory;
-                # Default (null) leaves the nixosTest core count alone; the gate
+                # Default (null) leaves the nixosTest core count alone; the
                 # gate sets 2, matching its worker count (workers>1 needs the
                 # cores; 1 vCPU timeshares and starves the client render).
                 virtualisation.cores = lib.mkIf (vmCores != null) vmCores;

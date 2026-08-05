@@ -103,3 +103,36 @@ as the known floor rather than absorbing it into a rounded number.
 - Anything added to the capture path must go through `attachTraceCapture`.
   Adding page-level instrumentation directly to `_autoPerfSpan` would silently
   recreate the gap this ADR closes for `tracedContext` pages.
+
+## Addendum (#792, 2026-08-05): the warmup this ADR measured is gone
+
+This ADR's decision — capture is separate from attribution, under a lifecycle
+envelope — is unchanged and still in force. But the per-test warmup it uses
+throughout as its motivating example **no longer exists**: #792 measured it,
+found it cost 113–139 s per combo to buy back at most ~12 s, and removed it.
+Read the warmup references above (the Context's "attach after the warmup", the
+`e2e.warmup` node in the span tree, and the `flake.nix:947` citation) as the
+historical state this ADR was written against.
+
+What that changes, and what it does not:
+
+- **`e2e.warmup` is no longer emitted.** The envelope is now
+  `lifecycle → {context_mint, test, page…, teardown}`.
+- **The phase-tagged sink survives, renamed.** Its `warmup` phase is now
+  `pretest` — the window between context creation and the traceparent switch.
+  The guarantee it provides (nothing a fixture does before the test body lands
+  in `e2e.test`'s arrays) is structural and does not depend on what occupies
+  that window.
+- **#681's orphan bucket survives too, and this was tested rather than
+  assumed.** The warmup's `/` load was believed to be its source, so removing
+  the warmup was expected to empty it. It did not: the `server-fn-coverage`
+  snapshot byte-compare passed unchanged post-removal, with the same four
+  app-shell orphans. The bucket's source is the pre-test window itself.
+- **This ADR's own premise was vindicated.** "The warmup's own duration is
+  measured nowhere, which is what blocks #792 from deciding whether the warmup
+  buys anything" — the envelope this ADR introduced is exactly what let #792
+  decide, and the deciding number (`e2e.warmup` summed per combo) came from the
+  span it added.
+
+See `docs/adr/…-e2e-does-not-pre-warm.md` for the removal decision, and
+`docs/observability.md` §"#792 — the per-test warmup A/B" for the data.
