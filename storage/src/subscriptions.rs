@@ -205,16 +205,22 @@ where
         author_user_id: UserId,
         viewer: &ViewerIdentity,
     ) -> sqlx::Result<bool> {
-        let ViewerIdentity::Channel {
-            channel_id,
-            subscriber_ref,
-        } = viewer
-        else {
-            return Ok(false); // Anonymous short-circuit; no query.
+        let (channel_id, subscriber_ref) = match viewer {
+            ViewerIdentity::Anonymous => return Ok(false), // short-circuit; no query.
+            // A local viewer's `subscriber_ref` is its user id in decimal — the
+            // form `subscribe_to` stores.
+            ViewerIdentity::Local {
+                user_id,
+                channel_id,
+            } => (*channel_id, user_id.to_string()),
+            ViewerIdentity::Remote {
+                channel_id,
+                subscriber_ref,
+            } => (*channel_id, subscriber_ref.clone()),
         };
         let (exists,) = sqlx::query_as::<_, (i64,)>(DB::IS_ACTIVE_SUBSCRIBER)
             .bind(author_user_id)
-            .bind(*channel_id)
+            .bind(channel_id)
             .bind(subscriber_ref.as_str())
             .fetch_one(&self.pool)
             .await?;

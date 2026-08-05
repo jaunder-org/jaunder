@@ -70,13 +70,23 @@ pub enum AudienceBase {
     Subscribers,
 }
 
-/// Who is reading. Wider than Layer A needs (only `Anonymous` and the local
-/// channel are constructed today) so non-local channels need no signature change
-/// in Layers B/C. `subscriber_ref` makes this non-`Copy`. See ADR-0020.
+/// Who is reading. Wider than Layer A needs (only `Anonymous` and `Local` are
+/// constructed today) so non-local channels need no signature change in Layers
+/// B/C. `Remote`'s `subscriber_ref` makes this non-`Copy`. See ADR-0020.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ViewerIdentity {
     Anonymous,
-    Channel {
+    /// A logged-in local account. Locality is carried by the *variant*, not by
+    /// the shape of a string: the author branch of the resolution filter fires
+    /// on this and nothing else (#6).
+    Local {
+        user_id: UserId,
+        channel_id: ChannelId,
+    },
+    /// A non-local channel identity (an `ActivityPub` actor, an email address).
+    /// Its `subscriber_ref` is opaque — never a local user id, whatever it
+    /// happens to parse as.
+    Remote {
         channel_id: ChannelId,
         subscriber_ref: String,
     },
@@ -84,12 +94,12 @@ pub enum ViewerIdentity {
 
 impl ViewerIdentity {
     /// Local viewer constructor used by Layer A: a logged-in account on the
-    /// `local` channel, keyed by its user id as the `subscriber_ref`.
+    /// `local` channel.
     #[must_use]
     pub fn local(user_id: UserId, local_channel_id: ChannelId) -> Self {
-        Self::Channel {
+        Self::Local {
+            user_id,
             channel_id: local_channel_id,
-            subscriber_ref: user_id.to_string(),
         }
     }
 }
@@ -117,7 +127,12 @@ pub fn account_viewer(user_id: UserId, local_channel_id: Option<ChannelId>) -> V
 #[must_use]
 pub fn viewer_user_id(viewer: &ViewerIdentity) -> Option<UserId> {
     match viewer {
-        ViewerIdentity::Channel { subscriber_ref, .. } => subscriber_ref.parse::<UserId>().ok(),
+        // Deliberately still ref-parsing rather than matching the variant: this
+        // is the second instance of the #6 hole, and a follow-up task closes it
+        // with its own regression test. Rewriting it here would make that test
+        // green before it was ever red.
+        ViewerIdentity::Local { user_id, .. } => user_id.to_string().parse().ok(),
+        ViewerIdentity::Remote { subscriber_ref, .. } => subscriber_ref.parse().ok(),
         ViewerIdentity::Anonymous => None,
     }
 }
@@ -376,13 +391,13 @@ mod tests {
     }
 
     #[test]
-    fn viewer_local_constructor_uses_user_id_as_subscriber_ref() {
+    fn viewer_local_constructor_builds_a_local_viewer() {
         let viewer = ViewerIdentity::local(UserId::from(42), ChannelId::from(7));
         assert_eq!(
             viewer,
-            ViewerIdentity::Channel {
+            ViewerIdentity::Local {
+                user_id: UserId::from(42),
                 channel_id: ChannelId::from(7),
-                subscriber_ref: "42".to_string(),
             }
         );
     }
@@ -416,6 +431,19 @@ mod tests {
     #[test]
     fn viewer_user_id_is_none_for_anonymous() {
         assert_eq!(viewer_user_id(&ViewerIdentity::Anonymous), None);
+    }
+
+    #[test]
+    fn viewer_user_id_is_none_for_a_remote_actor_uri() {
+        // A remote identity is not a local account, so it has no local user id
+        // to project to and renders no owner-only affordances.
+        assert_eq!(
+            viewer_user_id(&ViewerIdentity::Remote {
+                channel_id: ChannelId::from(2),
+                subscriber_ref: "https://remote.example/users/alice".to_owned(),
+            }),
+            None
+        );
     }
 
     fn selection(base: AudienceBase, named: &[AudienceId]) -> AudienceSelection {

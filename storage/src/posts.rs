@@ -1932,8 +1932,8 @@ where
 /// "this branch cannot match" means here.
 struct ResolutionBinds {
     /// `p.user_id = $author_id` — the viewer's local user id for the author
-    /// branch. `None` for `Anonymous`, and for a `Channel` viewer whose
-    /// `subscriber_ref` is not a local user id.
+    /// branch. `Some` only for [`ViewerIdentity::Local`]; `None` for
+    /// `Anonymous` and `Remote`.
     author_id: Option<UserId>,
     /// `s.channel_id` for the subscribers/named `EXISTS` branches. `None` for
     /// `Anonymous`.
@@ -1974,17 +1974,19 @@ struct ResolutionBinds {
 fn resolution_where(viewer: &ViewerIdentity, start: usize) -> (String, ResolutionBinds, usize) {
     let (author_id, channel, subref) = match viewer {
         ViewerIdentity::Anonymous => (None, None, None),
-        ViewerIdentity::Channel {
+        // Only a local viewer can be the author. Its `subscriber_ref` is its
+        // user id in decimal — the form `subscribe_to` stores.
+        ViewerIdentity::Local {
+            user_id,
+            channel_id,
+        } => (Some(*user_id), Some(*channel_id), Some(user_id.to_string())),
+        // A remote viewer is never the author, whatever its ref parses as: the
+        // author bind stays NULL, so `p.user_id = NULL` is unknown and admits
+        // nothing (#6). It can still be admitted by a subscription branch.
+        ViewerIdentity::Remote {
             channel_id,
             subscriber_ref,
-        } => {
-            // The author branch fires only for a local viewer whose
-            // `subscriber_ref` parses to a real user id (the post's `user_id`).
-            // A non-numeric ref (no local user) yields `None` → NULL, so it never
-            // matches `p.user_id`.
-            let author_id = subscriber_ref.parse::<UserId>().ok();
-            (author_id, Some(*channel_id), Some(subscriber_ref.clone()))
-        }
+        } => (None, Some(*channel_id), Some(subscriber_ref.clone())),
     };
     let author = start;
     let sub_channel = start + 1;

@@ -5,8 +5,7 @@
 //! only two viewer shapes:
 //!
 //! - [`ViewerIdentity::Anonymous`] — no account session is present.
-//! - [`ViewerIdentity::Channel`] on the `local` channel — a logged-in local
-//!   account.
+//! - [`ViewerIdentity::Local`] — a logged-in local account.
 //!
 //! This module is the thin leptos adapter: it extracts the account session and
 //! the storage handle, then delegates to the pushed-down cores —
@@ -25,7 +24,7 @@ use {
 
 /// Resolves the viewer for a `#[server]` read path.
 ///
-/// Returns [`ViewerIdentity::Channel`] on the `local` channel when a valid
+/// Returns [`ViewerIdentity::Local`] on the `local` channel when a valid
 /// account session is present (keyed by the account's `user_id`), otherwise
 /// [`ViewerIdentity::Anonymous`].
 ///
