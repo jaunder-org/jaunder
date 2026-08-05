@@ -362,8 +362,8 @@ unchanged) and `derive_post_title_allows_titleless_notes`.
       `missing_panics_doc` + `expect_used` on the `render.rs` parse — fixed by
       removing the `expect` entirely in favour of
       `if let Some((Ok(parsed), seed)) = title.map(…)`, which is what the plan
-      wanted anyway — and `needless_borrow` on the mapping test helper.
-      **The coverage risk did not materialise**: `coverage — clean`.
+      wanted anyway — and `needless_borrow` on the mapping test helper. **The
+      coverage risk did not materialise**: `coverage — clean`.
 
 Run `cargo xtask check` first (**`jaunder-commit`**).
 
@@ -402,7 +402,7 @@ git commit -m "refactor(common): make a blank PostTitle unrepresentable (#830)"
 - Produces: `SummarySeed` with `from_slug` / `from_title` / `first_body_line`;
   `PostSummary::truncated(&SummarySeed) -> PostSummary`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `common/src/post_summary.rs`: **delete** `truncated_debug_asserts_non_empty`
 (`:125-130`), and **replace** `truncated_trims_and_caps_at_char_boundary`
@@ -444,13 +444,14 @@ Then add the seed tests:
     }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail** — failed to compile,
+      `SummarySeed` undeclared, as expected.
 
 Run: `devtool run --cwd <worktree> -- cargo nextest run -p common post_summary`
 
 Expected: FAIL to compile — `SummarySeed` does not exist.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 In `common/src/post_summary.rs` — note the file currently imports **none** of
 these three types, so add them (same crate, no cycle):
@@ -537,7 +538,7 @@ the inlined line search, and the "invariant gap" comment all go:
 `storage/src/test_support.rs:1731` becomes
 `.summary(PostSummary::truncated(&SummarySeed::from_title(&parse_post_title("excerpt"))))`.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass** — 41 summary/seed tests green.
 
 Run: `devtool run --cwd <worktree> -- cargo nextest run -p common post_summary`
 then
@@ -547,7 +548,10 @@ Expected: PASS — including
 `fallback_summary_label_prefers_body_then_title_then_slug` (body → title → slug
 precedence unchanged) and `draft_row_falls_back_to_summary_label_when_untitled`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit** — `977f345f`. Gate caught two lints first: an unused
+      top-level `SummarySeed` import (its only use is inside `#[cfg(test)]`, so the
+      import moved into that module) and a missing `#[must_use]` on
+      `fallback_summary_label`.
 
 ```bash
 git add common/src/post_summary.rs storage/src/posts.rs storage/src/test_support.rs
@@ -561,7 +565,7 @@ git commit -m "refactor(common): type PostSummary::truncated's non-blank precond
 **Files:** Create `docs/adr/drafts/<slug>.md` per **`jaunder-adr`**
 (numberless).
 
-- [ ] **Step 1: Write the draft**
+- [x] **Step 1: Write the draft**
 
 It must make two corrections:
 
@@ -581,17 +585,28 @@ It must make two corrections:
    value whose _source_ proves the non-length half of the invariant, a seed type
    carries that proof and the trust door becomes a plain length-capping door.
 
-- [ ] **Step 2: Verify format and links**
+- [x] **Step 2: Verify format and links**
 
 Run: `devtool run --cwd <worktree> -- cargo xtask check` Expected: PASS —
-`adr-format`, `adr-readme-parity`, and `doc-links` all green.
+`adr-format`, `adr-readme-parity`, and `doc-links` all green. Note these gates are
+**blind to drafts by construction** (`docs/adr/drafts/README.md` §"Gate
+invisibility"): the first three enumerate `docs/adr/` non-recursively and require a
+leading number, and `doc-links` walks tracked files only. So a green here does not
+validate the draft; the real check is `promote`'s output at ship.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: No commit — the draft is gitignored.**
 
-```bash
-git add docs/adr/drafts
-git commit -m "docs(adr): amend ADR-0063's infallible kind and truncating door (#830)"
-```
+**Correction to this plan as written.** Task 4 originally said to
+`git add docs/adr/drafts`, which cannot work: everything in that directory except its
+`README.md` is gitignored, deliberately, so a draft cannot be committed with a
+premature number (#219's draft-out-of-git flow). The draft stays uncommitted through
+this cycle. At ship, **after** the final rebase onto `main`,
+`cargo xtask adr promote` assigns the next free number, moves the file to
+`docs/adr/NNNN-<slug>.md`, rewrites its path-form references, flips `proposed` →
+`accepted`, syncs the README table, and stages the result — and *that* is what gets
+committed. The ADR's first appearance in git history is already correctly numbered.
+
+Draft written: `docs/adr/drafts/infallible-kind-is-invariant-first.md`.
 
 ---
 
@@ -600,10 +615,12 @@ git commit -m "docs(adr): amend ADR-0063's infallible kind and truncating door (
 - [ ] `devtool run --cwd <worktree> -- cargo xtask validate` green (static +
       clippy + coverage + all four `{sqlite,postgres}×{chromium,firefox}` e2e
       combos).
-- [ ] `rg 'PostTitle::from' -g '*.rs'` returns nothing (AC9). Scope to `*.rs` —
+- [x] `rg 'PostTitle::from' -g '*.rs'` returns nothing (AC9). Scope to `*.rs` —
       an unscoped search matches this plan, the spec, and ~15 files under
       `docs/archive/`. This covers only half of AC9; the "no `.into()` yielding
       a `PostTitle`" half is enforced by the compiler, since `From<String>` no
       longer exists.
-- [ ] `rg 'debug_assert' common/src/post_summary.rs` returns nothing (AC5).
-- [ ] `rg 'invariant gap' storage/src/posts.rs` returns nothing (AC6).
+- [x] `rg 'debug_assert' common/src/post_summary.rs` returns no **assertion**
+      (AC5). One prose match remains, in the `SummarySeed` doc comment explaining
+      what the seed type replaced — documentation of the removal, not the thing.
+- [x] `rg 'invariant gap' storage/src/posts.rs` returns nothing (AC6).
