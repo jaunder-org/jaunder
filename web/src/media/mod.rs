@@ -18,7 +18,7 @@ mod component;
 // Exported rather than `pub(crate)`: its only caller is the wasm-only `component`,
 // so a crate-internal item would read as dead code on the host build, where that
 // leaf is compiled out.
-pub use format::format_bytes;
+pub use format::{format_bytes, storage_usage_percent};
 // Same reason as `format_bytes` above — the wasm-only `component` is the only
 // caller, so these must stay reachable on the host build to avoid `dead_code`.
 pub use upload_state::{UploadCallbacks, UploadOutcome, UploadState};

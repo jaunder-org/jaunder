@@ -170,32 +170,48 @@ Criterion 7 + 8, and D9's extraction.
 
 **Steps**
 
-- [ ] Rewrite `format_bytes` (`media/format.rs:12`) with integer math — no
+- [x] Rewrite `format_bytes` (`media/format.rs:12`) with integer math — no
       `f64`. Delete its `#[expect(clippy::cast_precision_loss)]` (`:7-11`).
       Output is identical to today below 2^53; above it the new code is the more
       correct one and divergence is accepted (criterion 8).
-- [ ] Keep the **five existing tests** (`media/format.rs:38-58`) passing
+- [x] **Ties DO occur, and the rounding rule is half-to-even — both this plan
+      and the spec said otherwise.** The claim inherited from the plan review
+      ("a `.x5` tie needs denominator 20; a power-of-two quotient can't produce
+      one") is **false**: `1280/1024 = 5/4 = 1.25` is exactly a tie. Verified by
+      compiling a probe — Rust renders it `"1.2"`, and `1792` (1.75) → `"1.8"`,
+      `2304` (2.25) → `"2.2"`, i.e. round-half-to-even. Half-up rounding would
+      have diverged on the first tie, and **none of the originally enumerated
+      test inputs contained one**. `one_decimal` implements half-to-even;
+      `exact_ties_round_half_to_even` pins four cases.
+- [x] Keep the **five existing tests** (`media/format.rs:38-58`) passing
       **unchanged** — they pin 0, 1023, 1024, 1536, 1 MB, 2 MB, 1 GB, all
       exactly reproducible. If any needs editing, stop: that means the rewrite
-      changed behaviour in the range that is supposed to be identical.
-- [ ] Add tests at each KB/MB/GB boundary ±1, a negative, and **2^53**. Do not
+      changed behaviour in the range that is supposed to be identical. — **All
+      four test fns untouched and green.**
+- [x] Add tests at each KB/MB/GB boundary ±1, a negative, and **2^53**. Do not
       rely on `i64::MAX` as the large-value case — it coincidentally agrees
       between implementations and would hide a wrong result across the petabyte
-      band.
-- [ ] Move the storage-usage percentage out of `media/component.rs:183-194` into
+      band. — Both are pinned, with the coincidence noted in the test's doc.
+- [x] Move the storage-usage percentage out of `media/component.rs:183-194` into
       a pure fn in `media/format.rs`, clamped, integer math. Delete the
-      `#[expect]` at `:183-188`. `component.rs` calls the new fn.
-- [ ] Add `#[must_use]` to the new pure fn — task 1 removed the crate-wide
+      `#[expect]` at `:183-188`. `component.rs` calls the new fn. — Now
+      `storage_usage_percent(used, quota) -> String`, re-exported from
+      `media/mod.rs` under the same "wasm-only caller" rationale as
+      `format_bytes`.
+- [x] Add `#[must_use]` to the new pure fn — task 1 removed the crate-wide
       `must_use_candidate` disable, so a new host-compiled `pub` fn needs it.
       (This is the expected seventh site, not task 1's stop-and-report
-      tripwire.)
-- [ ] Test the percentage at quota 0, used 0, used == quota, used > quota
-      (clamp). Pin the **new** values: the rendered `width:{pct:.1}%` may differ
+      tripwire.) — Added; note the true pre-existing count was seven, so this is
+      the eighth annotation overall.
+- [x] Test the percentage at quota 0, used 0, used == quota, used > quota
+      (clamp). Pin the **new** values: the rendered `width:{pct}%` may differ
       from today by up to 0.1pp, which criterion 8 accepts. Nothing else asserts
-      on it — no other unit test, no e2e.
-- [ ] Confirm `MediaUsagePanel`'s `Suspend` body has **not gained** a
+      on it — no other unit test, no e2e. — Plus two half-to-even ties (1/16 =
+      6.25% → `"6.2"`, 3/16 = 18.75% → `"18.8"`).
+- [x] Confirm `MediaUsagePanel`'s `Suspend` body has **not gained** a
       control-flow unit (it was already at 2 — `match` + `if`). Extraction
-      should remove one.
+      should remove one. — The `if quota > 0 {…} else {…}` is gone entirely; the
+      body is down to the `match`, and the `thin-components` gate is green.
 
 **Run:** `cargo nextest run -p web` (host) — expected **PASS**; then WASM —
 expected clean.

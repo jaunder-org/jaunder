@@ -11,7 +11,7 @@ use common::root_relative_url::RootRelativeUrl;
 
 use super::{
     Delete, DeleteResult, Item, UploadCallbacks, UploadState, UsageData, format_bytes, get_usage,
-    list_mine, upload,
+    list_mine, storage_usage_percent, upload,
 };
 use crate::error::{WebError, WebResult};
 use crate::topbar::Topbar;
@@ -180,18 +180,13 @@ fn MediaUsagePanel(usage: Resource<WebResult<UsageData>>) -> impl IntoView {
             {move || Suspend::new(async move {
                 match usage.await {
                     Ok(u) => {
-                        #[expect(
-                            clippy::cast_precision_loss,
-                            reason = "display-only storage-usage percentage; byte \
-                                      counts < 2^52 are exact in f64 and the result \
-                                      is clamped to 100"
-                        )]
-                        let pct = if u.quota_bytes.value() > 0 {
-                            (u.used_bytes.value() as f64 / u.quota_bytes.value() as f64 * 100.0)
-                                .min(100.0)
-                        } else {
-                            0.0
-                        };
+                        let pct = storage_usage_percent(
+                            u.used_bytes.value(),
+                            u.quota_bytes.value(),
+                        );
+                        // Clamping, the zero-quota case and the rounding all live in
+                        // the host-tested pure leaf; this is a wasm-only file, so
+                        // logic kept here could not be unit tested at all.
                         view! {
                             <div class="j-sb-head" style="margin-bottom:8px">
                                 "Storage"
@@ -206,7 +201,7 @@ fn MediaUsagePanel(usage: Resource<WebResult<UsageData>>) -> impl IntoView {
                             </p>
                             <div style="background:#eee;border-radius:4px;height:8px;width:300px;margin:8px 0 16px">
                                 <div style=format!(
-                                    "background:#4a9eff;border-radius:4px;height:8px;width:{pct:.1}%",
+                                    "background:#4a9eff;border-radius:4px;height:8px;width:{pct}%",
                                 ) />
                             </div>
                         }
