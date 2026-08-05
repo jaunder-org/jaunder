@@ -21,11 +21,24 @@ use thiserror::Error;
 #[sqlx_bridge(text)]
 pub struct SmtpPort(u16);
 
-/// Error returned when a string does not name a valid TCP port. Carries the parser's
-/// reason rather than the offending value; the caller already has the value.
+/// Error returned when a string does not name a valid TCP port.
+///
+/// Carries **both** the offending value and the parser's reason (#687 A13). The value is
+/// load-bearing at the decode seam: a bad `smtp.port` row reaches the operator as a
+/// `ColumnDecode` whose message is this one, and "invalid digit found in string" without
+/// the digits is not an actionable report. A port is a configuration value, never a
+/// secret — unlike [`crate::smtp_password::SmtpPassword`], whose error stays valueless.
 #[derive(Debug, Error)]
-#[error("SMTP port must be a number in 1..=65535: {0}")]
-pub struct InvalidSmtpPort(String);
+#[error("SMTP port {value:?} must be a number in 1..=65535: {reason}")]
+pub struct InvalidSmtpPort {
+    /// The offending value.
+    value: String,
+    /// The parser's own rejection reason.
+    reason: String,
+}
+
+/// The IANA submission port — the default when `smtp.port` is unset.
+pub const DEFAULT_SMTP_PORT: u16 = 587;
 
 impl SmtpPort {
     /// The port number, for the mailer's connection builder.
@@ -35,15 +48,26 @@ impl SmtpPort {
     }
 }
 
+impl Default for SmtpPort {
+    /// [`DEFAULT_SMTP_PORT`] — the infallible construction door the SMTP read uses when
+    /// no port is configured. 587 is non-zero, so it satisfies the invariant by
+    /// inspection.
+    fn default() -> Self {
+        Self(DEFAULT_SMTP_PORT)
+    }
+}
+
 impl FromStr for SmtpPort {
     type Err = InvalidSmtpPort;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let port = s
-            .parse::<u16>()
-            .map_err(|e| InvalidSmtpPort(e.to_string()))?;
+        let reject = |reason: String| InvalidSmtpPort {
+            value: s.to_owned(),
+            reason,
+        };
+        let port = s.parse::<u16>().map_err(|e| reject(e.to_string()))?;
         if port == 0 {
-            return Err(InvalidSmtpPort("port must not be zero".to_owned()));
+            return Err(reject("a port must not be zero".to_owned()));
         }
         Ok(SmtpPort(port))
     }
@@ -72,7 +96,17 @@ mod tests {
             err.to_string().contains("port"),
             "the error must name the invariant: {err}"
         );
+        assert!(
+            err.to_string().contains("not-a-port"),
+            "the error must echo the offending value: {err}"
+        );
         assert!("".parse::<SmtpPort>().is_err());
+    }
+
+    #[test]
+    fn defaults_to_the_submission_port() {
+        assert_eq!(SmtpPort::default().value(), DEFAULT_SMTP_PORT);
+        assert_eq!(SmtpPort::default().to_string(), "587");
     }
 
     #[test]

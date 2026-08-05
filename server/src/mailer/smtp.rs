@@ -48,17 +48,17 @@ impl LettreMailSender {
                 // `builder_dangerous` is lettre's explicit opt-in to an
                 // unencrypted connection; Plain mode carries no TLS and is
                 // intended only for a trusted local relay.
-                AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&config.host)
-                    .port(config.port)
+                AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(config.host.as_ref())
+                    .port(config.port.value())
             }
             SmtpTlsMode::StartTls => {
-                AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&config.host)
+                AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(config.host.as_ref())
                     .map_err(|e| BuildMailerError::Transport(e.to_string()))?
-                    .port(config.port)
+                    .port(config.port.value())
             }
-            SmtpTlsMode::Tls => AsyncSmtpTransport::<Tokio1Executor>::relay(&config.host)
+            SmtpTlsMode::Tls => AsyncSmtpTransport::<Tokio1Executor>::relay(config.host.as_ref())
                 .map_err(|e| BuildMailerError::Transport(e.to_string()))?
-                .port(config.port),
+                .port(config.port.value()),
         };
 
         let builder = match (&config.username, &config.password) {
@@ -124,6 +124,7 @@ impl MailSender for LettreMailSender {
 #[cfg(test)]
 mod tests {
     use common::email::Email;
+    use common::smtp_port::SmtpPort;
     use common::test_support::{parse_smtp_password, parse_smtp_username};
     use storage::{SmtpConfig, SmtpTlsMode};
 
@@ -131,8 +132,8 @@ mod tests {
 
     fn base_config(tls_mode: SmtpTlsMode) -> SmtpConfig {
         SmtpConfig {
-            host: "mail.example.com".to_owned(),
-            port: 587,
+            host: "mail.example.com".parse().expect("valid host"),
+            port: SmtpPort::default(),
             tls_mode,
             username: None,
             password: None,
@@ -183,10 +184,11 @@ mod tests {
         // guard:no-backend — no DB
         // Point the mailer at a dead endpoint: nothing listens on 127.0.0.1:0, so
         // the underlying TCP connect fails immediately and `send()` returns an
-        // error, exercising the transport-error `map_err` arm.
+        // error, exercising the transport-error `map_err` arm. Port 1 rather than 0:
+        // `SmtpPort`'s invariant rules out zero, and nothing listens on either.
         let config = SmtpConfig {
-            host: "127.0.0.1".to_owned(),
-            port: 0,
+            host: "127.0.0.1".parse().expect("valid host"),
+            port: "1".parse().expect("valid port"),
             tls_mode: SmtpTlsMode::Plain,
             username: None,
             password: None,
@@ -222,7 +224,8 @@ mod tests {
     #[tokio::test]
     async fn from_config_rejects_sender_lettre_cannot_parse() {
         // guard:no-backend — no DB
-        // `SmtpConfig::sender` (a `common::mailbox::Mailbox`) accepts the
+        // `SmtpConfig::sender` (an `SmtpSender`, validated against
+        // `common::mailbox::Mailbox`) accepts the
         // domain-literal, but lettre's Mailbox parser rejects it, so `from_config`
         // maps it to InvalidSender.
         let config = SmtpConfig {

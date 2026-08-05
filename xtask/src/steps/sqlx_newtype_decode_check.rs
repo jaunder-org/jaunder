@@ -780,44 +780,6 @@ const ALLOWLIST: &[Allowed] = &[
         category: Category::OpaquePayload,
         reason: "a per-user config value, polymorphic text like its site-config sibling",
     },
-    Allowed {
-        file: "smtp.rs",
-        function: "load_smtp_config",
-        target: "Result<Option<SmtpConfig>,SmtpConfigError>",
-        what: "SiteConfigKey::SmtpHost",
-        count: 1,
-        category: Category::NotADecodeTarget,
-        reason: "SiteConfigStorage::get, not a row read — the gate takes the target from the \
-                 enclosing fn return because the call writes no type, and cannot tell this \
-                 receiver from an sqlx row",
-    },
-    Allowed {
-        file: "smtp.rs",
-        function: "load_smtp_config",
-        target: "Result<Option<SmtpConfig>,SmtpConfigError>",
-        what: "SiteConfigKey::SmtpPort",
-        count: 1,
-        category: Category::NotADecodeTarget,
-        reason: "SiteConfigStorage::get, not a row read",
-    },
-    Allowed {
-        file: "smtp.rs",
-        function: "load_smtp_config",
-        target: "Result<Option<SmtpConfig>,SmtpConfigError>",
-        what: "SiteConfigKey::SmtpTlsMode",
-        count: 1,
-        category: Category::NotADecodeTarget,
-        reason: "SiteConfigStorage::get, not a row read",
-    },
-    Allowed {
-        file: "smtp.rs",
-        function: "load_smtp_config",
-        target: "Result<Option<SmtpConfig>,SmtpConfigError>",
-        what: "SiteConfigKey::SmtpSender",
-        count: 1,
-        category: Category::NotADecodeTarget,
-        reason: "SiteConfigStorage::get, not a row read",
-    },
     // ---- subscriptions ----
     Allowed {
         file: "subscriptions.rs",

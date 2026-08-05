@@ -1,7 +1,7 @@
 //! Site-wide configuration storage.
 
 use crate::backend::Backend;
-use crate::smtp::SmtpCredentials;
+use crate::smtp::SmtpConfig;
 use async_trait::async_trait;
 use common::absolute_url::AbsoluteUrl;
 use common::backup::{BackupConfig, BackupMode, BackupSchedule, DestinationPath, RetentionCount};
@@ -14,7 +14,11 @@ use common::media::{MaxFileSize, UserQuota};
 // used by `get_registration_policy` below (the typed config accessor, #607).
 pub use common::registration::RegistrationPolicy;
 use common::site::{SiteIdentity, SiteTitle};
+use common::smtp_host::SmtpHost;
 use common::smtp_password::SmtpPassword;
+use common::smtp_port::SmtpPort;
+use common::smtp_sender::SmtpSender;
+use common::smtp_tls_mode::SmtpTlsMode;
 use common::smtp_username::SmtpUsername;
 use common::visibility::{default_audience_str, parse_default_audience, AudienceTarget};
 use sqlx::{Database, Pool};
@@ -45,15 +49,19 @@ pub trait SiteConfigStorage: Send + Sync {
     /// `jaunder site-config unset`.
     async fn delete(&self, key: SiteConfigKey) -> sqlx::Result<bool>;
 
-    /// Reads the SMTP auth credentials (`smtp.username` + `smtp.password`) as a
-    /// typed [`SmtpCredentials`] pair.
+    /// Reads the whole SMTP block as one typed [`SmtpConfig`], or `None` when
+    /// `smtp.host` is unset (which is how an instance says "no outbound mail").
     ///
-    /// A **required** method rather than a `get`-based default: both values decode
-    /// through their validating sqlx bridges ([`SmtpUsername`]/[`SmtpPassword`]), so
-    /// an empty/garbage stored value is rejected as a `ColumnDecode` error at the
-    /// query boundary (the non-empty invariant), never reaching a caller as a bad
-    /// credential.
-    async fn get_smtp_credentials(&self) -> sqlx::Result<SmtpCredentials>;
+    /// A **required** method rather than a `get`-based default, for two reasons. Every
+    /// value decodes through its own validating sqlx bridge, so a garbage stored value is
+    /// rejected as a `ColumnDecode` at the query boundary rather than re-parsed (badly) by
+    /// each caller — and the gate's decode scanner does not read trait *default* bodies
+    /// (#787), so a decode written there would be invisible to it rather than approved.
+    ///
+    /// The optional fields fall back to their types' own defaults
+    /// ([`SmtpPort`] 587, [`SmtpTlsMode::StartTls`], [`SmtpSender`]
+    /// `Jaunder <noreply@localhost>`).
+    async fn get_smtp_config(&self) -> sqlx::Result<Option<SmtpConfig>>;
 
     /// Returns the configured media max upload size, falling back to the
     /// [`MaxFileSize`] default (50 MiB) if unset or unparseable (including a stored
@@ -296,15 +304,45 @@ impl<DB: Database> SiteConfigStore<DB> {
     }
 }
 
+/// The one-row read behind every typed site-config value.
+///
+/// Named once, then written out per value type in [`SiteConfigStorage::get_smtp_config`]:
+/// neither a generic helper (`query_as::<_, (T,)>`) nor a macro can carry the decode
+/// target in a form the `sqlx-newtype-decode` gate can resolve, and six repetitions the
+/// gate reads are worth more than one abstraction it cannot.
+const SELECT_VALUE_BY_KEY: &str = "SELECT value FROM site_config WHERE key = $1";
+
+/// Re-labels a decode failure with the **key** it came from.
+///
+/// sqlx names the column by its position (`0`), which for six single-column reads of the
+/// same table says nothing. The key is what makes a corrupt row actionable, and it is what
+/// [`crate::load_smtp_config`] reads back to tell a credential failure (whose value is
+/// never echoed) from a plain value one.
+fn label_decode_error(key: SiteConfigKey, error: sqlx::Error) -> sqlx::Error {
+    let sqlx::Error::ColumnDecode { source, .. } = error else {
+        // A non-decode failure (pool closed, connection lost) has no key to add and passes
+        // through unchanged; reaching it needs fault injection.
+        return error; // cov:ignore
+    };
+    sqlx::Error::ColumnDecode {
+        index: key.as_ref().to_owned(),
+        source,
+    }
+}
+
 #[async_trait]
 impl<DB> SiteConfigStorage for SiteConfigStore<DB>
 where
     DB: Backend,
     (String,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (String, String): for<'r> sqlx::FromRow<'r, DB::Row>,
-    // `SmtpUsername`/`SmtpPassword` decode from the `value` column via their
-    // validating sqlx bridges (#438); these bounds make the bridges available on
-    // the generic backend.
+    // The SMTP value types decode from the `value` column via their validating sqlx
+    // bridges (#438, #687); these bounds make the bridges available on the generic
+    // backend.
+    (SmtpHost,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (SmtpPort,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (SmtpTlsMode,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (SmtpSender,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (SmtpUsername,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (SmtpPassword,): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -334,23 +372,65 @@ where
         Ok(())
     }
 
-    async fn get_smtp_credentials(&self) -> sqlx::Result<SmtpCredentials> {
-        // Decode each value column straight into its newtype via the sqlx bridge;
-        // an empty/garbage value fails `FromStr` and surfaces as a `ColumnDecode`
-        // error (rejected). Symmetric for username and password.
-        let username =
-            sqlx::query_as::<_, (SmtpUsername,)>("SELECT value FROM site_config WHERE key = $1")
-                .bind("smtp.username")
-                .fetch_optional(&self.pool)
-                .await?
-                .map(|(username,)| username);
-        let password =
-            sqlx::query_as::<_, (SmtpPassword,)>("SELECT value FROM site_config WHERE key = $1")
-                .bind("smtp.password")
-                .fetch_optional(&self.pool)
-                .await?
-                .map(|(password,)| password);
-        Ok(SmtpCredentials { username, password })
+    async fn get_smtp_config(&self) -> sqlx::Result<Option<SmtpConfig>> {
+        // Six direct reads, each decoding the `value` column straight into its newtype via
+        // that type's sqlx bridge: a garbage stored value fails `FromStr` and surfaces as a
+        // `ColumnDecode` labelled with the key (see `read_value`), never as a silently
+        // coerced default.
+        let host = sqlx::query_as::<_, (SmtpHost,)>(SELECT_VALUE_BY_KEY)
+            .bind(SiteConfigKey::SmtpHost)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| label_decode_error(SiteConfigKey::SmtpHost, e))?
+            .map(|(host,)| host);
+        let Some(host) = host else {
+            // No host is not a misconfiguration: it is how an instance says "no SMTP".
+            return Ok(None);
+        };
+
+        let port = sqlx::query_as::<_, (SmtpPort,)>(SELECT_VALUE_BY_KEY)
+            .bind(SiteConfigKey::SmtpPort)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| label_decode_error(SiteConfigKey::SmtpPort, e))?
+            .map_or_else(SmtpPort::default, |(port,)| port);
+
+        let tls_mode = sqlx::query_as::<_, (SmtpTlsMode,)>(SELECT_VALUE_BY_KEY)
+            .bind(SiteConfigKey::SmtpTlsMode)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| label_decode_error(SiteConfigKey::SmtpTlsMode, e))?
+            .map_or_else(SmtpTlsMode::default, |(tls_mode,)| tls_mode);
+
+        let sender = sqlx::query_as::<_, (SmtpSender,)>(SELECT_VALUE_BY_KEY)
+            .bind(SiteConfigKey::SmtpSender)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| label_decode_error(SiteConfigKey::SmtpSender, e))?
+            .map_or_else(SmtpSender::default, |(sender,)| sender);
+
+        let username = sqlx::query_as::<_, (SmtpUsername,)>(SELECT_VALUE_BY_KEY)
+            .bind(SiteConfigKey::SmtpUsername)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| label_decode_error(SiteConfigKey::SmtpUsername, e))?
+            .map(|(username,)| username);
+
+        let password = sqlx::query_as::<_, (SmtpPassword,)>(SELECT_VALUE_BY_KEY)
+            .bind(SiteConfigKey::SmtpPassword)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| label_decode_error(SiteConfigKey::SmtpPassword, e))?
+            .map(|(password,)| password);
+
+        Ok(Some(SmtpConfig {
+            host,
+            port,
+            tls_mode,
+            username,
+            password,
+            sender,
+        }))
     }
 
     async fn list(&self) -> sqlx::Result<Vec<(String, String)>> {
@@ -377,7 +457,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::SiteConfigKey;
+    use super::{SiteConfigKey, SmtpTlsMode};
     use crate::test_support::{backends, Backend};
     use common::backup::{BackupConfig, BackupMode, RetentionCount};
     use common::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
@@ -472,70 +552,142 @@ mod tests {
         assert!(!format!("{config:?}").is_empty());
     }
 
+    /// An unset `smtp.host` is how an instance says "no outbound mail" — not an error,
+    /// and not a half-populated config.
     #[apply(backends)]
     #[tokio::test]
-    async fn get_smtp_credentials_reads_typed_pair(#[case] backend: Backend) {
+    async fn get_smtp_config_returns_none_when_host_unset(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        storage
-            .set(SiteConfigKey::SmtpUsername, "user@example.com")
-            .await
-            .unwrap();
-        storage
-            .set(SiteConfigKey::SmtpPassword, "s3cr3t")
-            .await
-            .unwrap();
+        assert!(storage.get_smtp_config().await.unwrap().is_none());
+    }
 
-        let creds = storage.get_smtp_credentials().await.unwrap();
+    #[apply(backends)]
+    #[tokio::test]
+    async fn get_smtp_config_reads_every_value_typed(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
+        for (key, value) in [
+            (SiteConfigKey::SmtpHost, "mail.example.com"),
+            (SiteConfigKey::SmtpPort, "2525"),
+            (SiteConfigKey::SmtpTlsMode, "tls"),
+            (SiteConfigKey::SmtpSender, "Jaunder <noreply@example.com>"),
+            (SiteConfigKey::SmtpUsername, "user@example.com"),
+            (SiteConfigKey::SmtpPassword, "s3cr3t"),
+        ] {
+            storage.set(key, value).await.unwrap();
+        }
+
+        let got = storage
+            .get_smtp_config()
+            .await
+            .unwrap()
+            .expect("host is set");
+        assert_eq!(got.host.as_ref(), "mail.example.com");
+        assert_eq!(got.port.value(), 2525);
+        assert_eq!(got.tls_mode, SmtpTlsMode::Tls);
+        assert_eq!(got.sender.as_ref(), "Jaunder <noreply@example.com>");
+        assert_eq!(got.username, Some(parse_smtp_username("user@example.com")));
+        // Exercise the aggregate's derived Clone/Debug (which redacts the secret) before
+        // reading the password out of it.
+        assert!(format!("{got:?}").contains("[redacted]"));
         assert_eq!(
-            creds.username,
-            Some(parse_smtp_username("user@example.com"))
-        );
-        // Exercise the aggregate's derived Clone/Debug (redacts the password)
-        // before moving the password out below.
-        assert!(format!("{creds:?}").contains("[redacted]"));
-        // The `smtp.password` column decoded into `SmtpPassword` via the bridge.
-        assert_eq!(
-            creds.clone().password.expect("password present").as_ref(),
+            got.clone().password.expect("password present").as_ref(),
             "s3cr3t"
         );
-
-        // Absent keys read as None.
-        storage.delete(SiteConfigKey::SmtpUsername).await.unwrap();
-        storage.delete(SiteConfigKey::SmtpPassword).await.unwrap();
-        let empty = storage.get_smtp_credentials().await.unwrap();
-        assert!(empty.username.is_none());
-        assert!(empty.password.is_none());
     }
 
+    /// A bad stored value fails at the query boundary rather than silently defaulting —
+    /// and the error names the key and echoes the offending value, which is what
+    /// `load_smtp_config`'s error tests read back.
+    ///
+    /// Only reachable to set up because `set` takes a raw `&str`: the CLI validator would
+    /// refuse it. Deliberate — the read path stays defensive about rows the CLI did not
+    /// write.
     #[apply(backends)]
     #[tokio::test]
-    async fn get_smtp_credentials_rejects_empty_password(#[case] backend: Backend) {
+    async fn get_smtp_config_rejects_a_bad_stored_port(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        // An empty stored password bypasses the non-empty invariant only via
-        // tampering; the bridge decode rejects it as a `ColumnDecode` error.
-        storage.set(SiteConfigKey::SmtpPassword, "").await.unwrap();
-        let err = storage.get_smtp_credentials().await.unwrap_err();
+        storage
+            .set(SiteConfigKey::SmtpHost, "mail.example.com")
+            .await
+            .unwrap();
+        storage
+            .set(SiteConfigKey::SmtpPort, "not-a-port")
+            .await
+            .unwrap();
+        let err = storage.get_smtp_config().await.unwrap_err();
         assert!(
-            matches!(err, sqlx::Error::ColumnDecode { .. }),
-            "expected a column-decode error, got: {err:?}"
+            matches!(&err, sqlx::Error::ColumnDecode { index, .. } if index == "smtp.port"),
+            "the decode error must name the offending key; got {err:?}"
+        );
+        assert!(
+            err.to_string().contains("not-a-port"),
+            "the decode error must echo the offending value; got {err}"
+        );
+    }
+
+    /// A row that is *syntactically* a `u16` but violates the newtype's own rule must still
+    /// be rejected. This is the regression lock on the bridge decoding through
+    /// `SmtpPort::from_str` rather than parsing a bare `u16` and wrapping it: the wrapping
+    /// form accepts `"0"` here and hands back a `SmtpPort(0)` that the type's constructor
+    /// would refuse, so the invariant would hold everywhere except coming out of the
+    /// database — the one direction that matters for a corrupt row.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn get_smtp_config_rejects_a_stored_port_the_newtype_forbids(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
+        storage
+            .set(SiteConfigKey::SmtpHost, "mail.example.com")
+            .await
+            .unwrap();
+        storage.set(SiteConfigKey::SmtpPort, "0").await.unwrap();
+        let err = storage.get_smtp_config().await.unwrap_err();
+        assert!(
+            matches!(&err, sqlx::Error::ColumnDecode { index, .. } if index == "smtp.port"),
+            "port 0 must be refused at the query boundary; got {err:?}"
+        );
+    }
+
+    /// An empty `smtp.host` row is a misconfiguration, not a way to say "unset" — unset is
+    /// the absent row. So it is rejected rather than read as `None`.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn get_smtp_config_rejects_an_empty_stored_host(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
+        storage.set(SiteConfigKey::SmtpHost, "").await.unwrap();
+        let err = storage.get_smtp_config().await.unwrap_err();
+        assert!(
+            matches!(&err, sqlx::Error::ColumnDecode { index, .. } if index == "smtp.host"),
+            "the decode error must name the offending key; got {err:?}"
         );
     }
 
     #[apply(backends)]
     #[tokio::test]
-    async fn get_smtp_credentials_rejects_empty_username(#[case] backend: Backend) {
+    async fn get_smtp_config_rejects_an_empty_credential(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        // An empty stored username is rejected by the bridge decode, symmetric with
-        // the password.
-        storage.set(SiteConfigKey::SmtpUsername, "").await.unwrap();
-        let err = storage.get_smtp_credentials().await.unwrap_err();
-        assert!(
-            matches!(err, sqlx::Error::ColumnDecode { .. }),
-            "expected a column-decode error, got: {err:?}"
-        );
+        storage
+            .set(SiteConfigKey::SmtpHost, "mail.example.com")
+            .await
+            .unwrap();
+        // An empty stored credential bypasses the non-empty invariant only via tampering;
+        // the bridge decode rejects it. Symmetric for username and password — and neither
+        // error echoes the value, unlike the sibling keys above.
+        for key in [SiteConfigKey::SmtpUsername, SiteConfigKey::SmtpPassword] {
+            let dotted = key.as_ref();
+            storage.set(key, "").await.unwrap();
+            let err = storage.get_smtp_config().await.unwrap_err();
+            assert!(
+                matches!(&err, sqlx::Error::ColumnDecode { index, .. } if index == dotted),
+                "expected a column-decode error for {dotted}, got: {err:?}"
+            );
+            storage.delete(key).await.unwrap();
+        }
     }
 
     #[apply(backends)]

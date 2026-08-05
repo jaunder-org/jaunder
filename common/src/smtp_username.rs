@@ -9,9 +9,9 @@ use thiserror::Error;
 /// trailer (`Display`, `AsRef<str>`, `Deref<str>`, serde, the validating #438 sqlx
 /// bridge, `PartialEq`, owned-`String` conversions). Its sole invariant is
 /// non-emptiness — an empty username paired with a set password is a
-/// misconfiguration. The paired secret is `SmtpPassword`; making both typed keeps
-/// `SmtpCredentials` a fully-typed pair (no same-typed transposition at the lettre
-/// `Credentials` boundary). No trim — the stored value is used verbatim, matching
+/// misconfiguration. The paired secret is `SmtpPassword`; making both typed keeps the
+/// credential half of `SmtpConfig` a fully-typed pair (no same-typed transposition at the
+/// lettre `Credentials` boundary). No trim — the stored value is used verbatim, matching
 /// `SmtpPassword`. Web-settable wiring (a typed wire arg, non-secret) is #638.
 #[derive(Clone, Debug, PartialEq, Eq, StrNewtype)]
 pub struct SmtpUsername(String);

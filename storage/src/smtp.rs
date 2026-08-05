@@ -1,6 +1,8 @@
 use common::config_key::SiteConfigKey;
-use common::mailbox::Mailbox;
+use common::smtp_host::SmtpHost;
 use common::smtp_password::SmtpPassword;
+use common::smtp_port::SmtpPort;
+use common::smtp_sender::SmtpSender;
 use common::smtp_username::SmtpUsername;
 use thiserror::Error;
 
@@ -18,12 +20,17 @@ pub use common::smtp_tls_mode::{InvalidSmtpTlsMode, SmtpTlsMode};
 // ---------------------------------------------------------------------------
 
 /// Configuration for the outbound SMTP relay.
+///
+/// Every field is the value's own type, and every one of them arrives decoded through that
+/// type's sqlx bridge by
+/// [`SiteConfigStorage::get_smtp_config`](crate::SiteConfigStorage::get_smtp_config) — so an
+/// `SmtpConfig` in hand is a configuration that parsed, not one that still might not.
 #[derive(Clone, Debug)]
 pub struct SmtpConfig {
     /// Relay hostname.
-    pub host: String,
+    pub host: SmtpHost,
     /// Port number (default: 587).
-    pub port: u16,
+    pub port: SmtpPort,
     /// TLS mode (default: [`SmtpTlsMode::StartTls`]).
     pub tls_mode: SmtpTlsMode,
     /// Optional SMTP auth username (a validated non-empty identifier).
@@ -32,23 +39,7 @@ pub struct SmtpConfig {
     /// or logged; read once at the mailer `Credentials` boundary).
     pub password: Option<SmtpPassword>,
     /// Sender address (e.g. `"Jaunder <noreply@example.com>"`).
-    pub sender: Mailbox,
-}
-
-/// The optional SMTP auth credentials, read together as a typed pair by
-/// [`SiteConfigStorage::get_smtp_credentials`](crate::SiteConfigStorage::get_smtp_credentials).
-///
-/// Both fields decode from the `site_config` value column through their validating
-/// sqlx bridges, so an empty/garbage stored value is rejected at the query boundary
-/// rather than reaching here. `username` is a validated identifier ([`SmtpUsername`],
-/// non-secret); `password` is the secret [`SmtpPassword`], whose redacting `Debug`
-/// the derived `Debug` inherits.
-#[derive(Clone, Debug)]
-pub struct SmtpCredentials {
-    /// Optional SMTP auth username.
-    pub username: Option<SmtpUsername>,
-    /// Optional SMTP auth password.
-    pub password: Option<SmtpPassword>,
+    pub sender: SmtpSender,
 }
 
 // ---------------------------------------------------------------------------
@@ -56,22 +47,23 @@ pub struct SmtpCredentials {
 // ---------------------------------------------------------------------------
 
 /// Errors returned when SMTP configuration is present but invalid.
+///
+/// The per-field `InvalidPort`/`InvalidTlsMode`/`InvalidSender` variants are gone with the
+/// hand-rolled parsing that constructed them (#687 D5): the values now decode inside the
+/// query, so a bad one arrives as one kind of thing — a `ColumnDecode` naming its key and
+/// echoing the stored text. What the variants carried is carried by the message.
 #[derive(Debug, Error)]
 pub enum SmtpConfigError {
-    /// `smtp.port` is set to a value that is not a valid port number.
-    #[error("smtp.port {0:?} is not a valid port number")]
-    InvalidPort(String),
-    /// `smtp.tls_mode` is set to an unrecognised value.
-    #[error("smtp.tls_mode {0:?} is not valid; expected \"plain\", \"starttls\", or \"tls\"")]
-    InvalidTlsMode(String),
-    /// `smtp.sender` is set to a value that cannot be parsed as an email address.
-    #[error("smtp.sender {0:?} is not a valid email address")]
-    InvalidSender(String),
     /// `smtp.username` or `smtp.password` holds an invalid (e.g. empty) value.
-    /// Deliberately **valueless** — a credential is never embedded in an error
-    /// (unlike the sibling variants, which echo the offending string).
+    /// Deliberately **valueless**, and kept distinct for exactly that reason: a credential
+    /// is never embedded in an error, so it cannot ride out inside [`Self::Read`].
     #[error("smtp.username or smtp.password holds an invalid value")]
     InvalidCredential,
+    /// The SMTP block could not be read: a stored value does not parse as its type, or the
+    /// read itself failed. The source's message names the key and echoes the offending
+    /// value — the property `load_smtp_config_returns_err_for_*` pins.
+    #[error("SMTP configuration could not be read: {0}")]
+    Read(#[source] sqlx::Error),
 }
 
 // ---------------------------------------------------------------------------
@@ -91,60 +83,37 @@ pub enum SmtpConfigError {
 /// - `smtp.tls_mode` defaults to `"starttls"`.
 /// - `smtp.sender` defaults to `"Jaunder <noreply@localhost>"`.
 ///
+/// The whole read is one call to
+/// [`SiteConfigStorage::get_smtp_config`](crate::SiteConfigStorage::get_smtp_config): the
+/// parsing lives in the value types' sqlx bridges, so this function has no grammar of its
+/// own to drift from theirs. All it adds is the classification below.
+///
 /// # Errors
 ///
 /// Returns `Err(SmtpConfigError)` if the site config cannot be retrieved from storage.
 pub async fn load_smtp_config(
     store: &dyn SiteConfigStorage,
 ) -> Result<Option<SmtpConfig>, SmtpConfigError> {
-    let Some(host) = store.get(SiteConfigKey::SmtpHost).await.ok().flatten() else {
-        return Ok(None);
-    };
+    store.get_smtp_config().await.map_err(classify)
+}
 
-    let port = match store.get(SiteConfigKey::SmtpPort).await.ok().flatten() {
-        None => 587,
-        Some(v) => v
-            .parse::<u16>()
-            .map_err(|_| SmtpConfigError::InvalidPort(v))?,
-    };
-
-    let tls_mode = match store.get(SiteConfigKey::SmtpTlsMode).await.ok().flatten() {
-        None => SmtpTlsMode::StartTls,
-        Some(v) => v
-            .parse::<SmtpTlsMode>()
-            .map_err(|_| SmtpConfigError::InvalidTlsMode(v))?,
-    };
-
-    // Username + password are read together as a typed pair; both decode through
-    // their sqlx bridges, so an empty/garbage stored value surfaces as a decode
-    // error here (rejected, per the non-empty invariant). `smtp.host` was already
-    // read above, so a non-decode storage error can't realistically reach this
-    // point; either way the caller (`build_mailer`) maps an `Err` to the safe no-op
-    // mailer, so folding both into `InvalidCredential` is sound.
-    let SmtpCredentials { username, password } = store
-        .get_smtp_credentials()
-        .await
-        .map_err(|_| SmtpConfigError::InvalidCredential)?;
-
-    let sender_str = store
-        .get(SiteConfigKey::SmtpSender)
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "Jaunder <noreply@localhost>".to_owned());
-
-    let sender = sender_str
-        .parse::<Mailbox>()
-        .map_err(|_| SmtpConfigError::InvalidSender(sender_str))?;
-
-    Ok(Some(SmtpConfig {
-        host,
-        port,
-        tls_mode,
-        username,
-        password,
-        sender,
-    }))
+/// Sorts a failed SMTP read into "a credential is bad" (say so, say nothing more) and
+/// everything else (report it in full).
+///
+/// The split is a disclosure boundary, not a taxonomy: [`SmtpConfigError::Read`] renders
+/// its source, and the source of a credential decode failure is the one message in this
+/// family that could be built from a secret. `read_value` labels the `ColumnDecode` with
+/// the key, which is what makes the two separable here.
+fn classify(error: sqlx::Error) -> SmtpConfigError {
+    match &error {
+        sqlx::Error::ColumnDecode { index, .. }
+            if index == SiteConfigKey::SmtpUsername.as_ref()
+                || index == SiteConfigKey::SmtpPassword.as_ref() =>
+        {
+            SmtpConfigError::InvalidCredential
+        }
+        _ => SmtpConfigError::Read(error),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -226,7 +195,7 @@ mod tests {
             .expect("expected Some");
 
         assert_eq!(config.host, "mail.example.com");
-        assert_eq!(config.port, 465);
+        assert_eq!(config.port.value(), 465);
         assert_eq!(config.tls_mode, SmtpTlsMode::Tls);
         assert_eq!(
             config.username,
@@ -236,10 +205,7 @@ mod tests {
             config.password.expect("password present").as_ref(),
             "s3cr3t"
         );
-        assert_eq!(
-            config.sender,
-            "Jaunder <noreply@example.com>".parse::<Mailbox>().unwrap()
-        );
+        assert_eq!(config.sender, "Jaunder <noreply@example.com>");
     }
 
     #[apply(backends)]
@@ -258,14 +224,11 @@ mod tests {
             .expect("expected Some");
 
         assert_eq!(config.host, "relay.example.com");
-        assert_eq!(config.port, 587);
+        assert_eq!(config.port, SmtpPort::default());
         assert_eq!(config.tls_mode, SmtpTlsMode::StartTls);
         assert_eq!(config.username, None);
         assert!(config.password.is_none());
-        assert_eq!(
-            config.sender,
-            "Jaunder <noreply@localhost>".parse::<Mailbox>().unwrap()
-        );
+        assert_eq!(config.sender, "Jaunder <noreply@localhost>");
     }
 
     #[apply(backends)]
@@ -284,11 +247,11 @@ mod tests {
 
         let err = load_smtp_config(store).await.unwrap_err();
         // Asserts the offending value reaches the *message*, deliberately not the error's
-        // variant (#687). The variant is about to stop existing: once parsing moves into
-        // the sqlx bridges, a bad value arrives as a `ColumnDecode` and
-        // `SmtpConfigError::InvalidSender` becomes unconstructible. The value echo is the
-        // property worth protecting — a `matches!` assertion here would instead pin the
-        // implementation and block that change.
+        // variant (#687). There is no longer a variant to name: parsing moved into the
+        // sqlx bridges, so a bad value arrives as a `ColumnDecode` and
+        // `SmtpConfigError::InvalidSender` is gone. The value echo is the property worth
+        // protecting — a `matches!` assertion here would have pinned the implementation
+        // and blocked that change.
         assert!(
             err.to_string().contains("not-a-valid-email"),
             "the error must echo the offending value; got: {err}"
@@ -369,12 +332,12 @@ mod tests {
     #[test]
     fn smtp_config_debug_redacts_password() {
         let config = SmtpConfig {
-            host: "mail.example.com".to_owned(),
-            port: 587,
+            host: "mail.example.com".parse::<SmtpHost>().unwrap(),
+            port: SmtpPort::default(),
             tls_mode: SmtpTlsMode::StartTls,
             username: Some(parse_smtp_username("user@example.com")),
             password: Some(parse_smtp_password("s3cr3t")),
-            sender: "Jaunder <noreply@example.com>".parse::<Mailbox>().unwrap(),
+            sender: SmtpSender::default(),
         };
 
         let out = format!("{config:?}");

@@ -33,10 +33,28 @@ pub enum SmtpTlsMode {
     Tls,
 }
 
+impl Default for SmtpTlsMode {
+    /// STARTTLS — the mode a relay is most likely to speak, and the one that is encrypted.
+    /// The default is here rather than at the read site so "unset means STARTTLS" is
+    /// stated once, beside the tokens it is one of.
+    ///
+    /// Written out rather than `#[derive(Default)]`: the derive would have to sit among
+    /// the attribute macro's injected `strum` derives, and `#[default]` on a variant reads
+    /// as a token marker beside `#[strum(serialize = …)]` when it is not one.
+    fn default() -> Self {
+        Self::StartTls
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::str::FromStr;
+
+    #[test]
+    fn defaults_to_starttls() {
+        assert_eq!(SmtpTlsMode::default(), SmtpTlsMode::StartTls);
+    }
 
     #[test]
     fn every_token_round_trips() {

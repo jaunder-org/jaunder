@@ -41,13 +41,28 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
             encode_inner: quote! { String },
             to_inner: quote! { &self.0.to_string() },
             decode_inner: quote! { &'r str },
-            // `parse`, not a named `FromStr` path: this derive must not emit any token
-            // that reads as an inbound constructor (see the charter in the module doc
-            // and `emits_only_the_three_bridge_impls`).
+            // Parses into `Self`, **not** into the inner type: `parse::<#inner>().map(Self)`
+            // would wrap the raw scalar directly and so bypass the newtype's own validating
+            // `FromStr`, letting a corrupt row reconstitute a value the type forbids (a
+            // stored `"0"` decoding to a `SmtpPort(0)` whose `FromStr` rejects zero). The
+            // charter forbids this derive from *emitting* a constructor; calling the one the
+            // author wrote is what the `StrNewtype` and `text_enum` bridges already do. Spelt
+            // `parse::<#name>` rather than a `FromStr` path so no token here reads as an
+            // emitted impl — see `text_option_still_emits_no_constructor`.
+            //
+            // The error echoes the offending text. The inner type's own parse error
+            // describes a grammar ("invalid digit found in string") and names nothing —
+            // and a `ColumnDecode` labels the column, not the value — so without this a
+            // corrupt row is reported in terms an operator cannot act on. A value stored
+            // as text in a config column is operator-facing by construction, never a
+            // secret (secrets are `StrNewtype`s, whose bridge does not do this).
             convert: quote! {
-                v.parse::<#inner>()
-                    .map(Self)
-                    .map_err(::std::convert::Into::into)
+                v.parse::<#name>()
+                    .map_err(|e| -> ::sqlx::error::BoxDynError {
+                        ::std::convert::From::from(
+                            ::std::format!("{e}; stored value: {v:?}")
+                        )
+                    })
             },
         });
     }
@@ -145,8 +160,22 @@ mod tests {
             "decode borrows to parse and drops: {out}"
         );
         assert!(
-            out.contains("v.parse::<u16>()"),
-            "convert must parse the field type back out: {out}"
+            out.contains("v.parse::<SmtpPort>()"),
+            "convert must route through the newtype's validating FromStr, not the raw \
+             inner type — parsing into `u16` and wrapping would let a corrupt row \
+             reconstitute a value the type forbids: {out}"
+        );
+        assert!(
+            !out.contains("map(Self)"),
+            "a bare `map(Self)` is the bypass this guards against: {out}"
+        );
+        // `norm` strips spaces inside literals too, so match the stripped form.
+        assert!(
+            out.contains(
+                crate::sqlx_bridge::tests::norm_s(r#"::std::format!("{e}; stored value: {v:?}")"#)
+                    .as_str()
+            ),
+            "a corrupt row must report what it holds, not just the parser's grammar: {out}"
         );
     }
 

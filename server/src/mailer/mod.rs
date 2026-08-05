@@ -69,7 +69,7 @@ mod tests {
     async fn build_mailer_returns_sender_when_no_smtp_config() {
         // No smtp.host → load_smtp_config returns Ok(None) → NoopMailSender arm
         let mut store = storage::MockSiteConfigStorage::new();
-        store.expect_get().returning(|_| Ok(None));
+        store.expect_get_smtp_config().returning(|| Ok(None));
         let sender = build_mailer(&store, None).await;
         // NoopMailSender always returns NotConfigured; verify send_email is callable
         let msg = common::mailer::EmailMessage {
