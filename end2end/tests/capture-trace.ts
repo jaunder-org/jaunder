@@ -92,11 +92,25 @@ export type CaptureSink = {
 /** One `performance.mark` the CSR client emitted, document-relative. */
 export type BootMark = { name: string; startTime: number };
 
-/** The `.wasm` resource's timing within one document, document-relative. */
+/** The `.wasm` resource's timing within one document, document-relative.
+ *
+ *  The three sizes are what distinguishes "this engine received brotli" from
+ *  "this engine received identity" — a confound worth ruling out before reading
+ *  anything into a fetch-duration difference between browsers, since the bundle
+ *  is served precompressed (`jaunder.wasm.br`, ~863 KiB against 5.35 MB raw) and
+ *  only when the client asks for it. They are also the honest input to any
+ *  bundle-size work: `decodedBodySize` is what the wasm compiler must chew
+ *  through, `encodedBodySize` is what crosses the wire (#818/#836). */
 export type WasmTiming = {
   startTime: number;
   durationMs: number;
   responseEndMs: number;
+  /** Bytes after content decoding — the compiler's actual input. */
+  decodedBodySize: number;
+  /** Bytes of the response body as sent, i.e. post-brotli. */
+  encodedBodySize: number;
+  /** Bytes on the wire including headers; 0 for a cache hit. */
+  transferSize: number;
 };
 
 /**
@@ -244,6 +258,9 @@ export async function attachTraceCapture(
                 startTime: wasmEntry.startTime,
                 durationMs: wasmEntry.duration,
                 responseEndMs: wasmEntry.responseEnd,
+                decodedBodySize: wasmEntry.decodedBodySize,
+                encodedBodySize: wasmEntry.encodedBodySize,
+                transferSize: wasmEntry.transferSize,
               }
             : null,
         };

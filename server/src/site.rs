@@ -173,6 +173,34 @@ fn build_response(
 /// header/status logic lives in the unit-tested pure fns above; the live `Site`
 /// lookup is exercised end-to-end by [`serve_site`]'s integration tests (the
 /// coverage build stages the real bundle — see the module docs).
+///
+/// **The negotiated encoding is recorded, not inferrable (#818).** The `request`
+/// span already carries the client's `accept-encoding`, but what the server
+/// actually *served* was only derivable by re-deriving [`choose_encoding`]'s logic
+/// and checking which `.br`/`.gz` variants the bundle happens to embed. #818 had to
+/// do exactly that to rule out "the two browsers were fed different bytes" as the
+/// cause of a fetch-duration asymmetry — a question the traces should have answered
+/// directly. `site.encoding` and `site.bytes` are the served representation, so a
+/// future comparison can check that premise instead of reconstructing it.
+///
+/// **`site.bytes` is the size of the selected representation, not bytes put on the
+/// wire.** It is recorded before the conditional check, so a request answered with
+/// `304 Not Modified` still reports the full representation size while sending no
+/// body at all — in a measured run ~44% of `pkg/jaunder.wasm` requests were
+/// conditional. **Pair it with `site.status`**, which is the authoritative
+/// body-or-no-body signal and, unlike the client's `transferSize`, does not vary by
+/// browser.
+#[tracing::instrument(
+    name = "site.serve",
+    skip_all,
+    fields(
+        site.path = tracing::field::Empty,
+        site.encoding = tracing::field::Empty,
+        site.bytes = tracing::field::Empty,
+        site.embedded = tracing::field::Empty,
+        site.status = tracing::field::Empty,
+    )
+)]
 pub async fn serve_site(req: Request) -> Response {
     // An empty logical path (`/`, `//`) has no embedded key, so it falls through
     // to the SPA shell via the `None` arm below — no separate guard needed.
@@ -190,22 +218,47 @@ pub async fn serve_site(req: Request) -> Response {
     let has_gz = Site::get(&variant_path(&logical, Encoding::Gzip)).is_some();
     let encoding = choose_encoding(accept_encoding, has_br, has_gz);
 
-    match Site::get(&variant_path(&logical, encoding)) {
-        Some(file) => {
-            let hash = file.metadata.sha256_hash();
-            // Zero-copy for the embedded (`'static`-borrowed) case; only a
-            // runtime disk-read (debug) yields an owned buffer. The coverage
-            // build is debug (disk → `Owned`), so the release-only `Borrowed`
-            // arm is unreachable under instrumentation.
-            let body = match file.data {
-                // cov:ignore-start -- release-embed-only (debug coverage disk-reads → Owned).
-                Cow::Borrowed(bytes) => Bytes::from_static(bytes),
-                // cov:ignore-stop
-                Cow::Owned(bytes) => Bytes::from(bytes),
-            };
-            build_response(&logical, body, hash, encoding, if_none_match)
-        }
-        None => spa_shell(),
+    let span = tracing::Span::current();
+    span.record("site.path", logical.as_str());
+    // `identity` rather than absent: a missing field and a deliberately
+    // uncompressed response must not read the same way.
+    span.record(
+        "site.encoding",
+        encoding.content_encoding().unwrap_or("identity"),
+    );
+
+    if let Some(file) = Site::get(&variant_path(&logical, encoding)) {
+        let hash = file.metadata.sha256_hash();
+        // Zero-copy for the embedded (`'static`-borrowed) case; only a
+        // runtime disk-read (debug) yields an owned buffer. The coverage
+        // build is debug (disk → `Owned`), so the release-only `Borrowed`
+        // arm is unreachable under instrumentation.
+        let body = match file.data {
+            // cov:ignore-start -- release-embed-only (debug coverage disk-reads → Owned).
+            Cow::Borrowed(bytes) => Bytes::from_static(bytes),
+            // cov:ignore-stop
+            Cow::Owned(bytes) => Bytes::from(bytes),
+        };
+        span.record("site.bytes", body.len());
+        span.record("site.embedded", true);
+        let response = build_response(&logical, body, hash, encoding, if_none_match);
+        // The authoritative "did a body go over the wire" signal: `304` means none
+        // did, whatever the client later reports. The browsers disagree about
+        // `PerformanceResourceTiming.transferSize` on a revalidated response —
+        // firefox reports the full body size where chromium reports ~300 B, while
+        // both send `if-none-match` at the same rate — so a cache check written
+        // against `transferSize` would read as a browser difference that isn't
+        // there. This field is engine-independent because the server sets it (#818).
+        span.record("site.status", response.status().as_u16());
+        response
+    } else {
+        // The SPA-shell fall-through. Recorded so an asset that silently stopped
+        // being embedded is visible as `embedded=false` on a path that used to
+        // serve bytes, rather than as an unexplained shell response.
+        span.record("site.embedded", false);
+        let response = spa_shell();
+        span.record("site.status", response.status().as_u16());
+        response
     }
 }
 
