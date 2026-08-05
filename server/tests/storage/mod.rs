@@ -252,10 +252,21 @@ async fn statuses_seed_maps_to_enum(#[case] backend: Backend) {
 // Sibling of `lookup_names`: a raw SELECT of the seeded `local` channel id.
 // The `local` channel is a lookup row present in every clone, so reading it via
 // the per-test recorded URL (Postgres) or the same DB file (SQLite) both work;
-// we use the established same-DB helpers for consistency. The trait method
-// `local_channel_id()` is introduced in a later task — do not use it here.
+// we use the established same-DB helpers for consistency — deliberately not the
+// trait method `local_channel_id()`, which is what the test below asserts
+// against, so it cannot also be the source of the expectation.
 async fn local_channel_id(backend: Backend, env: &TestEnv) -> ChannelId {
-    let sql = "SELECT channel_id FROM channels WHERE name = 'local'";
+    channel_id_by_name(backend, env, "local").await
+}
+
+// Reads a `channels` row's id by name, on the FK-enabled pool for `backend`.
+// Generalizes `local_channel_id` so a test can also reach a channel it seeded
+// itself (e.g. the non-local `activitypub` row the impostor viewer sits on).
+async fn channel_id_by_name(backend: Backend, env: &TestEnv, name: &str) -> ChannelId {
+    // Test-only, no untrusted input: inlining the name sidesteps the
+    // SQLite/Postgres placeholder divergence, as `raw_exec` does.
+    let sql = format!("SELECT channel_id FROM channels WHERE name = '{name}'");
+    let sql = sql.as_str();
     match backend {
         Backend::Sqlite => sqlx::query_scalar::<_, ChannelId>(sql)
             .fetch_one(&open_pool(&env.base).await)
@@ -304,7 +315,7 @@ async fn subscribe_is_idempotent_and_active(#[case] backend: Backend) {
     assert_eq!(id1, id2, "subscribe is idempotent");
     assert!(state
         .subscriptions
-        .is_subscriber(author, &ViewerIdentity::local(bob, local))
+        .is_subscriber(author, &ViewerIdentity::local(bob))
         .await
         .unwrap());
     assert!(!state
@@ -327,7 +338,7 @@ async fn subscribe_is_idempotent_and_active(#[case] backend: Backend) {
         .unwrap();
     assert!(!state
         .subscriptions
-        .is_subscriber(author, &ViewerIdentity::local(bob, local))
+        .is_subscriber(author, &ViewerIdentity::local(bob))
         .await
         .unwrap());
     assert!(state
@@ -336,6 +347,62 @@ async fn subscribe_is_idempotent_and_active(#[case] backend: Backend) {
         .await
         .unwrap()
         .is_empty());
+}
+
+// `is_subscriber` resolves a `Remote` viewer against its own channel: admission
+// is the (channel, ref) pair on the subscription row, so the same opaque ref on
+// a different channel is a different subscriber. This is the non-local half of
+// the variant split (#6) — the `Local` arm is covered by the test above.
+#[apply(backends)]
+#[tokio::test]
+async fn is_subscriber_resolves_a_remote_viewer_by_its_own_channel(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let [author] = seed_users(state).await;
+    let local = local_channel_id(backend, &env).await;
+    raw_exec(
+        backend,
+        &env,
+        "INSERT INTO channels (name) VALUES ('activitypub')",
+    )
+    .await;
+    let remote = channel_id_by_name(backend, &env, "activitypub").await;
+
+    let actor = "https://remote.example/users/alice";
+    state
+        .subscriptions
+        .subscribe(author, remote, actor)
+        .await
+        .unwrap();
+
+    assert!(
+        state
+            .subscriptions
+            .is_subscriber(
+                author,
+                &ViewerIdentity::Remote {
+                    channel_id: remote,
+                    subscriber_ref: actor.to_owned(),
+                }
+            )
+            .await
+            .unwrap(),
+        "a remote viewer matching its own subscription row is admitted"
+    );
+    assert!(
+        !state
+            .subscriptions
+            .is_subscriber(
+                author,
+                &ViewerIdentity::Remote {
+                    channel_id: local,
+                    subscriber_ref: actor.to_owned(),
+                }
+            )
+            .await
+            .unwrap(),
+        "the same ref on another channel is a different subscriber"
+    );
 }
 
 // Fail-closed admission: `is_subscriber` admits only `active` rows, so a
@@ -387,7 +454,7 @@ async fn pending_subscription_is_not_admitted(#[case] backend: Backend) {
         .unwrap();
     // Resolution admits only `active` → a pending subscriber is excluded.
     assert!(!store
-        .is_subscriber(author, &ViewerIdentity::local(bob, local))
+        .is_subscriber(author, &ViewerIdentity::local(bob))
         .await
         .unwrap());
     // ...and it is not listed (list_subscribers is active-only).
@@ -5759,34 +5826,64 @@ async fn resolution_matrix(#[case] backend: Backend) {
         .post_id;
 
     let anon = ViewerIdentity::Anonymous;
-    let viewer_a = ViewerIdentity::local(a, local);
-    let viewer_s = ViewerIdentity::local(s, local);
-    let viewer_m = ViewerIdentity::local(m, local);
-    let viewer_n = ViewerIdentity::local(n, local);
+    let viewer_a = ViewerIdentity::local(a);
+    let viewer_s = ViewerIdentity::local(s);
+    let viewer_m = ViewerIdentity::local(m);
+    let viewer_n = ViewerIdentity::local(n);
 
-    // (label, post_id, [anon, A, S, M, N] expected visibility)
-    let matrix: &[(&str, PostId, [bool; 5])] = &[
-        ("Public", p_public, [true, true, true, true, true]),
-        ("Private", p_private, [false, true, false, false, false]),
+    // A non-local channel: the shape Layer B will produce. Forced in with raw
+    // SQL because no store API seeds a channel row.
+    raw_exec(
+        backend,
+        &env,
+        "INSERT INTO channels (name) VALUES ('activitypub')",
+    )
+    .await;
+    let remote_channel = channel_id_by_name(backend, &env, "activitypub").await;
+    // The adversarial case (#6): a remote ref that is the decimal form of the
+    // author's local user id. It must NOT be treated as the author — locality is
+    // a property of the variant, not of what the ref happens to look like.
+    let impostor = ViewerIdentity::Remote {
+        channel_id: remote_channel,
+        subscriber_ref: a.to_string(),
+    };
+
+    // (label, post_id, [anon, A, S, M, N, impostor] expected visibility)
+    let matrix: &[(&str, PostId, [bool; 6])] = &[
+        ("Public", p_public, [true, true, true, true, true, true]),
+        (
+            "Private",
+            p_private,
+            [false, true, false, false, false, false],
+        ),
         (
             "Subscribers",
             p_subscribers,
-            [false, true, true, true, false],
+            [false, true, true, true, false, false],
         ),
-        ("Named(G)", p_named_g, [false, true, false, true, false]),
-        ("Named(G2)", p_named_g2, [false, true, false, false, false]),
+        (
+            "Named(G)",
+            p_named_g,
+            [false, true, false, true, false, false],
+        ),
+        (
+            "Named(G2)",
+            p_named_g2,
+            [false, true, false, false, false, false],
+        ),
         (
             "Public+Named(G)",
             p_public_named_g,
-            [true, true, true, true, true],
+            [true, true, true, true, true, true],
         ),
     ];
-    let viewers: [(&str, &ViewerIdentity); 5] = [
+    let viewers: [(&str, &ViewerIdentity); 6] = [
         ("anon", &anon),
         ("A", &viewer_a),
         ("S", &viewer_s),
         ("M", &viewer_m),
         ("N", &viewer_n),
+        ("impostor", &impostor),
     ];
 
     // `get_post_by_id`: each cell of the matrix.

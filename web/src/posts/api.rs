@@ -799,7 +799,7 @@ mod server_tests {
     use crate::error::WebError;
     use crate::test_support::auth_parts;
     use chrono::Utc;
-    use common::ids::{ChannelId, PostId, UserId};
+    use common::ids::{PostId, UserId};
     use common::pagination::PageSize;
     use common::slug::Slug;
     use common::tag::TagLabel;
@@ -808,8 +808,8 @@ mod server_tests {
     use leptos::reactive::owner::Owner;
     use std::sync::Arc;
     use storage::{
-        FeedEventStorage, MockFeedEventStorage, MockPostStorage, MockSubscriptionStorage,
-        PostFormat, PostRecord, PostStorage, RenderedHtml, SubscriptionStorage, UpdatePostError,
+        FeedEventStorage, MockFeedEventStorage, MockPostStorage, PostFormat, PostRecord,
+        PostStorage, RenderedHtml, UpdatePostError,
     };
 
     fn owned_post(user_id: UserId) -> PostRecord {
@@ -940,13 +940,6 @@ mod server_tests {
         let mut events = MockFeedEventStorage::new();
         events.expect_enqueue_many().returning(|_| Ok(()));
         provide_context(Arc::new(events) as Arc<dyn FeedEventStorage>);
-        // `update` resolves a viewer before reading the post, and the account
-        // branch of that ladder looks the `local` channel up through storage.
-        let mut subscriptions = MockSubscriptionStorage::new();
-        subscriptions
-            .expect_local_channel_id()
-            .returning(|| Ok(ChannelId::from(1)));
-        provide_context(Arc::new(subscriptions) as Arc<dyn SubscriptionStorage>);
         owner
     }
 

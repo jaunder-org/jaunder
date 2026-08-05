@@ -981,6 +981,15 @@ const ALLOWLIST: &[Allowed] = &[
         category: Category::CountOrExists,
         reason: "Existence flag, not an id — subscriptions.rs's own bound comment says so",
     },
+    Allowed {
+        file: "subscriptions.rs",
+        function: "is_subscriber",
+        target: "(i64,)",
+        what: "DB::IS_ACTIVE_LOCAL_SUBSCRIBER",
+        count: 1,
+        category: Category::CountOrExists,
+        reason: "Existence flag, not an id — the local-channel twin of IS_ACTIVE_SUBSCRIBER",
+    },
 ];
 
 /// One decode site: where it is, and what it decodes into.

@@ -70,13 +70,26 @@ pub enum AudienceBase {
     Subscribers,
 }
 
-/// Who is reading. Wider than Layer A needs (only `Anonymous` and the local
-/// channel are constructed today) so non-local channels need no signature change
-/// in Layers B/C. `subscriber_ref` makes this non-`Copy`. See ADR-0020.
+/// Who is reading. Wider than Layer A needs (only `Anonymous` and `Local` are
+/// constructed today) so non-local channels need no signature change in Layers
+/// B/C. `Remote`'s `subscriber_ref` makes this non-`Copy`. See ADR-0020.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ViewerIdentity {
     Anonymous,
-    Channel {
+    /// A logged-in local account. Locality is carried by the *variant*, not by
+    /// the shape of a string: the author branch of the resolution filter fires
+    /// on this and nothing else (#6).
+    ///
+    /// It carries no `channel_id` because a local viewer's channel is not a
+    /// free parameter — it is always the `local` row, which the queries that
+    /// need it resolve inline in SQL (#6).
+    Local {
+        user_id: UserId,
+    },
+    /// A non-local channel identity (an `ActivityPub` actor, an email address).
+    /// Its `subscriber_ref` is opaque — never a local user id, whatever it
+    /// happens to parse as.
+    Remote {
         channel_id: ChannelId,
         subscriber_ref: String,
     },
@@ -84,28 +97,25 @@ pub enum ViewerIdentity {
 
 impl ViewerIdentity {
     /// Local viewer constructor used by Layer A: a logged-in account on the
-    /// `local` channel, keyed by its user id as the `subscriber_ref`.
+    /// `local` channel.
     #[must_use]
-    pub fn local(user_id: UserId, local_channel_id: ChannelId) -> Self {
-        Self::Channel {
-            channel_id: local_channel_id,
-            subscriber_ref: user_id.to_string(),
-        }
+    pub fn local(user_id: UserId) -> Self {
+        Self::Local { user_id }
     }
 }
 
-/// Projects an authenticated account plus the resolved `local` channel id into a
-/// [`ViewerIdentity`].
+/// How a local account appears in `subscriptions.subscriber_ref`: its user id
+/// in decimal.
 ///
-/// `Some(channel_id)` → a `local` channel viewer; `None` (the `local` channel id
-/// could not be resolved) → [`ViewerIdentity::Anonymous`], fail-closed: a viewer
-/// we cannot positively place on a channel gets no non-public reach.
+/// `subscriber_ref` is a `TEXT` column shared by every channel, so a local
+/// account has to be spelled into it somehow. That spelling is a *storage
+/// encoding*, not a property of [`UserId`] — the write path (`subscribe` /
+/// `unsubscribe`) and the read paths (the resolution filter, `is_subscriber`)
+/// must agree on it exactly, or a subscription silently stops matching. This
+/// is the one place it is defined; call it rather than spelling it again (#6).
 #[must_use]
-pub fn account_viewer(user_id: UserId, local_channel_id: Option<ChannelId>) -> ViewerIdentity {
-    match local_channel_id {
-        Some(channel_id) => ViewerIdentity::local(user_id, channel_id),
-        None => ViewerIdentity::Anonymous,
-    }
+pub fn local_subscriber_ref(user_id: UserId) -> String {
+    user_id.to_string()
 }
 
 /// The local user id of an account viewer, for *display* of owner controls.
@@ -117,8 +127,11 @@ pub fn account_viewer(user_id: UserId, local_channel_id: Option<ChannelId>) -> V
 #[must_use]
 pub fn viewer_user_id(viewer: &ViewerIdentity) -> Option<UserId> {
     match viewer {
-        ViewerIdentity::Channel { subscriber_ref, .. } => subscriber_ref.parse::<UserId>().ok(),
-        ViewerIdentity::Anonymous => None,
+        // Only a local account has a local user id. A remote `subscriber_ref`
+        // is opaque — that it parses as an integer says nothing about who it
+        // is, so it never projects to a user id (#6).
+        ViewerIdentity::Local { user_id } => Some(*user_id),
+        ViewerIdentity::Remote { .. } | ViewerIdentity::Anonymous => None,
     }
 }
 
@@ -376,39 +389,20 @@ mod tests {
     }
 
     #[test]
-    fn viewer_local_constructor_uses_user_id_as_subscriber_ref() {
-        let viewer = ViewerIdentity::local(UserId::from(42), ChannelId::from(7));
+    fn viewer_local_constructor_builds_a_local_viewer() {
+        let viewer = ViewerIdentity::local(UserId::from(42));
         assert_eq!(
             viewer,
-            ViewerIdentity::Channel {
-                channel_id: ChannelId::from(7),
-                subscriber_ref: "42".to_string(),
+            ViewerIdentity::Local {
+                user_id: UserId::from(42),
             }
-        );
-    }
-
-    #[test]
-    fn account_viewer_with_channel_is_local() {
-        assert_eq!(
-            account_viewer(UserId::from(7), Some(ChannelId::from(3))),
-            ViewerIdentity::local(UserId::from(7), ChannelId::from(3)),
-            "a resolved local channel yields a Channel viewer keyed by the user id",
-        );
-    }
-
-    #[test]
-    fn account_viewer_without_channel_fails_closed_to_anonymous() {
-        assert_eq!(
-            account_viewer(UserId::from(7), None),
-            ViewerIdentity::Anonymous,
-            "an unresolved local channel must fail closed to Anonymous",
         );
     }
 
     #[test]
     fn viewer_user_id_projects_local_channel_to_user_id() {
         assert_eq!(
-            viewer_user_id(&ViewerIdentity::local(UserId::from(42), ChannelId::from(1))),
+            viewer_user_id(&ViewerIdentity::local(UserId::from(42))),
             Some(UserId::from(42))
         );
     }
@@ -416,6 +410,38 @@ mod tests {
     #[test]
     fn viewer_user_id_is_none_for_anonymous() {
         assert_eq!(viewer_user_id(&ViewerIdentity::Anonymous), None);
+    }
+
+    #[test]
+    fn local_subscriber_ref_is_the_user_id_in_decimal() {
+        // Locks the storage encoding the subscription write path and both read
+        // paths must agree on; a change here silently unmatches existing rows.
+        assert_eq!(local_subscriber_ref(UserId::from(42)), "42");
+    }
+
+    #[test]
+    fn viewer_user_id_is_none_for_a_remote_viewer_with_a_numeric_ref() {
+        // The #6 hole in its second form: a remote ref that happens to be the
+        // decimal form of a local user id must not project to that user, or the
+        // owner-only controls render for a viewer who is not the owner.
+        let impostor = ViewerIdentity::Remote {
+            channel_id: ChannelId::from(2),
+            subscriber_ref: "42".to_owned(),
+        };
+        assert_eq!(viewer_user_id(&impostor), None);
+    }
+
+    #[test]
+    fn viewer_user_id_is_none_for_a_remote_actor_uri() {
+        // A remote identity is not a local account, so it has no local user id
+        // to project to and renders no owner-only affordances.
+        assert_eq!(
+            viewer_user_id(&ViewerIdentity::Remote {
+                channel_id: ChannelId::from(2),
+                subscriber_ref: "https://remote.example/users/alice".to_owned(),
+            }),
+            None
+        );
     }
 
     fn selection(base: AudienceBase, named: &[AudienceId]) -> AudienceSelection {

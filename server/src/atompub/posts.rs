@@ -19,10 +19,7 @@ use common::tag::TagLabel;
 use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::ViewerIdentity;
-use storage::{
-    CollectionCursor, PostRecord, PostStorage, SiteConfigStorage, SubscriptionStorage,
-    UserConfigStorage,
-};
+use storage::{CollectionCursor, PostRecord, PostStorage, SiteConfigStorage, UserConfigStorage};
 use web::auth::AuthUser;
 
 use super::mapping::{entry_to_post_fields, post_to_entry};
@@ -40,7 +37,6 @@ const DEFAULT_PAGE_SIZE: PageSize = PageSize::clamped(25);
 /// Each field is pulled from the request `Extension`s the app router layers.
 pub struct PostServices {
     posts: Arc<dyn PostStorage>,
-    subscriptions: Arc<dyn SubscriptionStorage>,
     user_config: Arc<dyn UserConfigStorage>,
     site_config: Arc<dyn SiteConfigStorage>,
 }
@@ -53,11 +49,6 @@ impl<S: Send + Sync> FromRequestParts<S> for PostServices {
             posts: Extension::<Arc<dyn PostStorage>>::from_request_parts(parts, state)
                 .await?
                 .0,
-            subscriptions: Extension::<Arc<dyn SubscriptionStorage>>::from_request_parts(
-                parts, state,
-            )
-            .await?
-            .0,
             user_config: Extension::<Arc<dyn UserConfigStorage>>::from_request_parts(parts, state)
                 .await?
                 .0,
@@ -216,12 +207,8 @@ pub async fn collection_get(
 /// resolve the post as the local viewer for that user — otherwise the resolution
 /// filter would hide the user's own non-Public posts (a `404` before the owner
 /// check ever runs).
-async fn owner_viewer(
-    subscriptions: &dyn SubscriptionStorage,
-    auth_user: &AuthUser,
-) -> Result<ViewerIdentity, HandlerError> {
-    let local_channel_id = subscriptions.local_channel_id().await?;
-    Ok(ViewerIdentity::local(auth_user.user_id, local_channel_id))
+fn owner_viewer(auth_user: &AuthUser) -> ViewerIdentity {
+    ViewerIdentity::local(auth_user.user_id)
 }
 
 /// Loads a post that the authenticated user owns and that is not soft-deleted.
@@ -231,13 +218,12 @@ async fn owner_viewer(
 /// resolution filter does not hide the owner's own non-Public posts.
 async fn owned_post(
     posts: &dyn PostStorage,
-    subscriptions: &dyn SubscriptionStorage,
     auth_user: &AuthUser,
     username: &Username,
     post_id: PostId,
 ) -> Result<PostRecord, HandlerError> {
     super::require_user_match(auth_user, username)?;
-    let viewer = owner_viewer(subscriptions, auth_user).await?;
+    let viewer = owner_viewer(auth_user);
     let post = posts
         .get_post_by_id(post_id, &viewer)
         .await?
@@ -258,19 +244,11 @@ async fn owned_post(
 #[tracing::instrument(name = "atompub.posts.member_get", skip_all)]
 pub async fn member_get(
     Extension(posts): Extension<Arc<dyn PostStorage>>,
-    Extension(subscriptions): Extension<Arc<dyn SubscriptionStorage>>,
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     auth_user: AuthUser,
     Path((username, post_id)): Path<(Username, PostId)>,
 ) -> Result<Response, HandlerError> {
-    let post = owned_post(
-        posts.as_ref(),
-        subscriptions.as_ref(),
-        &auth_user,
-        &username,
-        post_id,
-    )
-    .await?;
+    let post = owned_post(posts.as_ref(), &auth_user, &username, post_id).await?;
     let base = required_base_url(site_config.as_ref()).await?;
     let entry = post_to_entry(&post, &base);
     let xml = entry_to_xml(&entry)?;
@@ -295,19 +273,11 @@ pub async fn member_get(
 #[tracing::instrument(name = "atompub.posts.member_delete", skip_all)]
 pub async fn member_delete(
     Extension(posts): Extension<Arc<dyn PostStorage>>,
-    Extension(subscriptions): Extension<Arc<dyn SubscriptionStorage>>,
     auth_user: AuthUser,
     Path((username, post_id)): Path<(Username, PostId)>,
     headers: HeaderMap,
 ) -> Result<Response, HandlerError> {
-    let post = owned_post(
-        posts.as_ref(),
-        subscriptions.as_ref(),
-        &auth_user,
-        &username,
-        post_id,
-    )
-    .await?;
+    let post = owned_post(posts.as_ref(), &auth_user, &username, post_id).await?;
 
     // Conditional delete: honour `If-Match` against the content ETag, as `member_put` does.
     if !if_match_satisfied(&headers, &etag_for(&post)) {
@@ -335,7 +305,6 @@ pub async fn collection_post(
 ) -> Result<Response, HandlerError> {
     let PostServices {
         posts,
-        subscriptions,
         user_config,
         site_config,
     } = services;
@@ -385,7 +354,7 @@ pub async fn collection_post(
     let base = required_base_url(site_config.as_ref()).await?;
     // Re-fetch as the authenticated owner so a non-Public default audience is not
     // hidden, and so the response entry carries the post's tags.
-    let viewer = owner_viewer(subscriptions.as_ref(), &auth_user).await?;
+    let viewer = owner_viewer(&auth_user);
 
     // A reused idempotency key returns the original post as `200` — skipping category
     // re-application (the original already carries its tags).
@@ -458,18 +427,10 @@ pub async fn member_put(
 ) -> Result<Response, HandlerError> {
     let PostServices {
         posts,
-        subscriptions,
         user_config,
         site_config,
     } = services;
-    let current = owned_post(
-        posts.as_ref(),
-        subscriptions.as_ref(),
-        &auth_user,
-        &username,
-        post_id,
-    )
-    .await?;
+    let current = owned_post(posts.as_ref(), &auth_user, &username, post_id).await?;
 
     if !if_match_satisfied(&headers, &etag_for(&current)) {
         return Err(HandlerError::PreconditionFailed);
@@ -514,7 +475,7 @@ pub async fn member_put(
     posts.set_post_tags(post_id, &categories).await?;
 
     // Load as the authenticated owner so a non-Public post is not hidden.
-    let viewer = owner_viewer(subscriptions.as_ref(), &auth_user).await?;
+    let viewer = owner_viewer(&auth_user);
     let post = posts
         .get_post_by_id(post_id, &viewer)
         .await?

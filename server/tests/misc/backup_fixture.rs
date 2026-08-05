@@ -178,16 +178,10 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
     assert!(user.is_operator);
     assert_eq!(user.display_name.as_deref(), Some("Backup User"));
 
-    let local = state
-        .subscriptions
-        .local_channel_id()
-        .await
-        .expect("local channel id");
-
     // The public post resolves for its author.
     let post = state
         .posts
-        .get_post_by_id(ids.public_post, &ViewerIdentity::local(ids.author, local))
+        .get_post_by_id(ids.public_post, &ViewerIdentity::local(ids.author))
         .await
         .expect("get post")
         .expect("restored post");
@@ -208,7 +202,7 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
     assert!(
         state
             .posts
-            .get_post_by_id(ids.named_post, &ViewerIdentity::local(ids.viewer, local))
+            .get_post_by_id(ids.named_post, &ViewerIdentity::local(ids.viewer))
             .await
             .expect("get named post")
             .is_some(),

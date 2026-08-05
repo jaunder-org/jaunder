@@ -81,6 +81,21 @@ id. Modelling the viewer this way is what lets non-local channels (a remote
 ActivityPub actor, an email subscriber) flow through the _same_ rule as a local
 account. See the Layer C design for how each channel proves its identity.
 
+> **Amended 2026-08-05 (#6): where the pair lives, not what it is.** The rule
+> above is unchanged — the viewer is still a channel identity, and every
+> audience is still resolved over `(channel, subscriber_ref)`. What changed is
+> that a local viewer no longer _carries_ the pair in Rust: `ViewerIdentity` is
+> `Anonymous | Local { user_id } | Remote { channel_id, subscriber_ref }`, and
+> the `(local, user_id)` pair is reconstructed in SQL — `subscriber_ref` from
+> the user id, `channel_id` from
+> `(SELECT channel_id FROM channels WHERE name = 'local')`. Locality thus
+> becomes a property of the **variant**, which is what makes "the author always
+> sees their own post" checkable: it fires on `Local` and cannot fire for a
+> remote identity whose `subscriber_ref` happens to read as a local user id.
+> Carrying an opaque `channel_id` alongside an opaque `subscriber_ref` had left
+> that distinction unrepresented, and the author branch was matching on the ref
+> alone.
+
 Given a viewer (a channel identity, or anonymous) and a post:
 
 - The author always sees their own post.

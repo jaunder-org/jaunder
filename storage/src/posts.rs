@@ -18,7 +18,7 @@ use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::time::UtcInstant;
 use common::username::Username;
-use common::visibility::{AudienceTarget, TargetKind, ViewerIdentity};
+use common::visibility::{local_subscriber_ref, AudienceTarget, TargetKind, ViewerIdentity};
 use host::error::{InternalError, InternalResult};
 
 use crate::backend::Backend;
@@ -1309,8 +1309,9 @@ where
     ) -> sqlx::Result<Vec<PostRecord>> {
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
-            // Binds: $1 username, $2/$3 cursor, $4 post_id, $5 now,
-            // $6..$10 resolution, $11 limit.
+            // Binds: $1 username, $2/$3 cursor, $4 post_id, $5 now, then the
+            // resolution fragment from $6 — 3 or 5 placeholders depending on the
+            // viewer variant — and the limit at the returned `limit_idx`.
             let (resolution, binds, limit_idx) = resolution_where(viewer, 6);
             // `published_at <= $5` hides scheduled (future-dated) posts.
             let sql = format!(
@@ -1340,7 +1341,8 @@ where
                 .fetch_all(&self.pool)
                 .await?
         } else {
-            // Binds: $1 username, $2 now, $3..$7 resolution, $8 limit.
+            // Binds: $1 username, $2 now, then the variant-sized resolution
+            // fragment from $3 and the limit at the returned `limit_idx`.
             let (resolution, binds, limit_idx) = resolution_where(viewer, 3);
             // `published_at <= $2` hides scheduled (future-dated) posts.
             let sql = format!(
@@ -1381,8 +1383,8 @@ where
     ) -> sqlx::Result<Vec<PostRecord>> {
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
-            // Binds: $1/$2 cursor, $3 post_id, $4 now, $5..$9 resolution,
-            // $10 limit.
+            // Binds: $1/$2 cursor, $3 post_id, $4 now, then the variant-sized
+            // resolution fragment from $5 and the limit at `limit_idx`.
             let (resolution, binds, limit_idx) = resolution_where(viewer, 5);
             // `published_at <= $4` hides scheduled (future-dated) posts.
             let sql = format!(
@@ -1410,7 +1412,8 @@ where
                 .fetch_all(&self.pool)
                 .await?
         } else {
-            // Binds: $1 now, $2..$6 resolution, $7 limit.
+            // Binds: $1 now, then the variant-sized resolution fragment from $2
+            // and the limit at the returned `limit_idx`.
             let (resolution, binds, limit_idx) = resolution_where(viewer, 2);
             // `published_at <= $1` hides scheduled (future-dated) posts.
             let sql = format!(
@@ -1590,8 +1593,9 @@ where
 
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
-            // Binds: $1 tag, $2/$3 cursor, $4 post_id, $5 now,
-            // $6..$10 resolution, $11 limit.
+            // Binds: $1 tag, $2/$3 cursor, $4 post_id, $5 now, then the
+            // variant-sized resolution fragment from $6 and the limit at
+            // the returned `limit_idx`.
             let (resolution, binds, limit_idx) = resolution_where(viewer, 6);
             // `published_at <= $5` hides scheduled (future-dated) posts.
             let sql = format!(
@@ -1623,7 +1627,8 @@ where
                 .fetch_all(&self.pool)
                 .await?
         } else {
-            // Binds: $1 tag, $2 now, $3..$7 resolution, $8 limit.
+            // Binds: $1 tag, $2 now, then the variant-sized resolution fragment
+            // from $3 and the limit at the returned `limit_idx`.
             let (resolution, binds, limit_idx) = resolution_where(viewer, 3);
             // `published_at <= $2` hides scheduled (future-dated) posts.
             let sql = format!(
@@ -1682,8 +1687,9 @@ where
 
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
-            // Binds: $1 user_id, $2 tag, $3/$4 cursor, $5 post_id, $6 now,
-            // $7..$11 resolution, $12 limit.
+            // Binds: $1 user_id, $2 tag, $3/$4 cursor, $5 post_id, $6 now, then
+            // the variant-sized resolution fragment from $7 and the limit at
+            // the returned `limit_idx`.
             let (resolution, binds, limit_idx) = resolution_where(viewer, 7);
             // `published_at <= $6` hides scheduled (future-dated) posts.
             let sql = format!(
@@ -1717,7 +1723,8 @@ where
                 .fetch_all(&self.pool)
                 .await?
         } else {
-            // Binds: $1 user_id, $2 tag, $3 now, $4..$8 resolution, $9 limit.
+            // Binds: $1 user_id, $2 tag, $3 now, then the variant-sized
+            // resolution fragment from $4 and the limit at `limit_idx`.
             let (resolution, binds, limit_idx) = resolution_where(viewer, 4);
             // `published_at <= $3` hides scheduled (future-dated) posts.
             let sql = format!(
@@ -1924,23 +1931,38 @@ where
 
 /// The viewer-resolution binds folded into a read query's `WHERE`, in the exact
 /// left-to-right order their placeholders appear in [`resolution_where`]'s
-/// fragment. `channel`/`subref` repeat (subscribers branch, then named branch)
-/// because each occurrence gets its own placeholder — see [`resolution_where`].
+/// fragment. `subref` (and, where it is bound at all, `channel`) repeats —
+/// subscribers branch, then named branch — because each occurrence gets its own
+/// placeholder; see [`resolution_where`].
 ///
-/// Every field is optional and `None` binds SQL NULL, which makes its comparison
-/// unknown rather than true — see [`resolution_where`] for why that is what
-/// "this branch cannot match" means here.
-struct ResolutionBinds {
-    /// `p.user_id = $author_id` — the viewer's local user id for the author
-    /// branch. `None` for `Anonymous`, and for a `Channel` viewer whose
-    /// `subscriber_ref` is not a local user id.
-    author_id: Option<UserId>,
-    /// `s.channel_id` for the subscribers/named `EXISTS` branches. `None` for
-    /// `Anonymous`.
-    channel: Option<ChannelId>,
-    /// `s.subscriber_ref` for the subscribers/named branches. `None` for
-    /// `Anonymous`.
-    subref: Option<String>,
+/// The enum mirrors [`ViewerIdentity`] rather than carrying three independent
+/// `Option`s, because **bind arity is per-variant**: a `Local` viewer's channel
+/// is resolved in SQL and so is not bound at all. Recovering that from three
+/// `Option`s would mean reading `(Some, None, Some)` as "local" — an implicit
+/// encoding of exactly the fact the variant already states.
+enum ResolutionBinds {
+    /// No viewer: all five placeholders bind SQL NULL, which makes every
+    /// comparison *unknown* rather than true — see [`resolution_where`] for why
+    /// that is what "this branch cannot match" means here.
+    Anonymous,
+    /// A local viewer: three binds — `author_id, subref, subref`. The channel is
+    /// the seeded `local` row, resolved by subquery instead of bound.
+    Local {
+        /// `p.user_id = $author_id` — the author branch fires for this and only
+        /// this variant.
+        user_id: UserId,
+        /// `s.subscriber_ref` for the subscribers/named branches: the viewer's
+        /// user id in decimal, the form `subscribe_to` stores.
+        subref: String,
+    },
+    /// A non-local viewer: five binds — `NULL, channel, subref, channel, subref`.
+    /// The author placeholder binds NULL, so the author branch cannot fire (#6).
+    Remote {
+        /// `s.channel_id` for the subscribers/named `EXISTS` branches.
+        channel: ChannelId,
+        /// `s.subscriber_ref` for the subscribers/named branches.
+        subref: String,
+    },
 }
 
 /// The viewer-resolution predicate and its binds, for folding into a read
@@ -1962,35 +1984,68 @@ struct ResolutionBinds {
 /// non-empty CHECK) — it was unreachable only because the sole writer binds an
 /// authenticated user id. NULL needs neither argument.
 ///
-/// `start` is the next free `$n` index. The fragment uses FIVE distinct
-/// placeholders (`$start`..`$start+4`) — the `channel`/`subref` pair appears once
-/// in the subscribers branch and again in the named branch, and each occurrence
-/// gets its own number so the binds are positional on both backends (`SQLite`
-/// accepts `$n` and binds by position; see ADR-0019). The returned
-/// [`ResolutionBinds`] therefore carries `channel`/`subref` once each but the
-/// caller binds them **twice**, in fragment order:
-/// `author_id, channel, subref, channel, subref`. Returns `(sql, binds, next)`
-/// where `next` is the first free index after the fragment.
+/// `start` is the next free `$n` index, and **the placeholder count is
+/// per-variant**, so callers must thread the returned `next` rather than assume
+/// `start + 5`:
+///
+/// - `Local` uses THREE (`$start`..`$start+2`): `author, subref, subref`. Its
+///   channel is not a bind — a local viewer's channel is always the seeded
+///   `local` row, so both subscription branches resolve it inline with an
+///   uncorrelated subquery (`channels.name` is `NOT NULL UNIQUE`, so it yields at
+///   most one row).
+/// - `Anonymous` and `Remote` use FIVE (`$start`..`$start+4`):
+///   `author, channel, subref, channel, subref`.
+///
+/// Either way the `channel`/`subref` pair appears once in the subscribers branch
+/// and again in the named branch, and each bound occurrence gets its own number
+/// so the binds are positional on both backends (`SQLite` accepts `$n` and binds
+/// by position; see ADR-0019) — which is why the returned [`ResolutionBinds`]
+/// carries `subref` once but the caller binds it **twice**. Returns
+/// `(sql, binds, next)` where `next` is the first free index after the fragment.
 fn resolution_where(viewer: &ViewerIdentity, start: usize) -> (String, ResolutionBinds, usize) {
-    let (author_id, channel, subref) = match viewer {
-        ViewerIdentity::Anonymous => (None, None, None),
-        ViewerIdentity::Channel {
+    /// The seeded `local` channel, resolved in SQL rather than bound — see the
+    /// doc above and ADR-0020.
+    const LOCAL_CHANNEL: &str = "(SELECT channel_id FROM channels WHERE name = 'local')";
+
+    let binds = match viewer {
+        ViewerIdentity::Anonymous => ResolutionBinds::Anonymous,
+        // Only a local viewer can be the author. Its channel is not carried at
+        // all, because it can only ever be the `local` row, which the SQL
+        // resolves for itself.
+        ViewerIdentity::Local { user_id } => ResolutionBinds::Local {
+            user_id: *user_id,
+            subref: local_subscriber_ref(*user_id),
+        },
+        // A remote viewer is never the author, whatever its ref parses as: the
+        // author bind stays NULL, so `p.user_id = NULL` is unknown and admits
+        // nothing (#6). It can still be admitted by a subscription branch.
+        ViewerIdentity::Remote {
             channel_id,
             subscriber_ref,
-        } => {
-            // The author branch fires only for a local viewer whose
-            // `subscriber_ref` parses to a real user id (the post's `user_id`).
-            // A non-numeric ref (no local user) yields `None` → NULL, so it never
-            // matches `p.user_id`.
-            let author_id = subscriber_ref.parse::<UserId>().ok();
-            (author_id, Some(*channel_id), Some(subscriber_ref.clone()))
-        }
+        } => ResolutionBinds::Remote {
+            channel: *channel_id,
+            subref: subscriber_ref.clone(),
+        },
     };
     let author = start;
-    let sub_channel = start + 1;
-    let sub_refnum = start + 2;
-    let named_channel = start + 3;
-    let named_refnum = start + 4;
+    // The channel slots are *expressions*, not necessarily placeholders, and the
+    // ref slots renumber accordingly — hence the per-variant `next`.
+    let (sub_channel, sub_refnum, named_channel, named_refnum, next) = match binds {
+        ResolutionBinds::Local { .. } => (
+            LOCAL_CHANNEL.to_owned(),
+            format!("${}", start + 1),
+            LOCAL_CHANNEL.to_owned(),
+            format!("${}", start + 2),
+            start + 3,
+        ),
+        ResolutionBinds::Anonymous | ResolutionBinds::Remote { .. } => (
+            format!("${}", start + 1),
+            format!("${}", start + 2),
+            format!("${}", start + 3),
+            format!("${}", start + 4),
+            start + 5,
+        ),
+    };
     let sql = format!(
         "( p.user_id = ${author}
   OR EXISTS (
@@ -2000,33 +2055,27 @@ fn resolution_where(viewer: &ViewerIdentity, start: usize) -> (String, Resolutio
          tk.name = 'public'
       OR (tk.name = 'subscribers' AND EXISTS (
             SELECT 1 FROM subscriptions s JOIN subscription_statuses st ON st.status_id = s.status_id
-            WHERE s.author_user_id = p.user_id AND s.channel_id = ${sub_channel}
-              AND s.subscriber_ref = ${sub_refnum} AND st.name = 'active'))
+            WHERE s.author_user_id = p.user_id AND s.channel_id = {sub_channel}
+              AND s.subscriber_ref = {sub_refnum} AND st.name = 'active'))
       OR (tk.name = 'named' AND EXISTS (
             SELECT 1 FROM audience_members am
             JOIN subscriptions s ON s.subscription_id = am.subscription_id
             JOIN subscription_statuses st ON st.status_id = s.status_id
-            WHERE am.audience_id = pa.audience_id AND s.channel_id = ${named_channel}
-              AND s.subscriber_ref = ${named_refnum} AND st.name = 'active'))
+            WHERE am.audience_id = pa.audience_id AND s.channel_id = {named_channel}
+              AND s.subscriber_ref = {named_refnum} AND st.name = 'active'))
   ))
 )"
     );
-    (
-        sql,
-        ResolutionBinds {
-            author_id,
-            channel,
-            subref,
-        },
-        start + 5,
-    )
+    (sql, binds, next)
 }
 
 impl ResolutionBinds {
-    /// Binds the five resolution placeholders onto `query` in the exact
-    /// fragment order: `author_id, channel, subref, channel, subref`. The caller
-    /// must have already bound everything to the left of the fragment, and must
-    /// bind the query's trailing binds (e.g. `LIMIT`) afterward.
+    /// Binds this variant's resolution placeholders onto `query` in the exact
+    /// fragment order — `author_id, channel, subref, channel, subref`, minus the
+    /// two channel binds for [`ResolutionBinds::Local`], whose channel is
+    /// resolved in SQL. The caller must have already bound everything to the left
+    /// of the fragment, and must bind the query's trailing binds (e.g. `LIMIT`)
+    /// afterward, at the index [`resolution_where`] returned.
     fn bind_onto<'q, DB>(
         &'q self,
         query: sqlx::query::QueryAs<'q, DB, PostRow, DB::Arguments<'q>>,
@@ -2043,12 +2092,24 @@ impl ResolutionBinds {
         Option<ChannelId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
         Option<&'q str>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     {
-        query
-            .bind(self.author_id)
-            .bind(self.channel)
-            .bind(self.subref.as_deref())
-            .bind(self.channel)
-            .bind(self.subref.as_deref())
+        match self {
+            Self::Anonymous => query
+                .bind(None::<UserId>)
+                .bind(None::<ChannelId>)
+                .bind(None::<&str>)
+                .bind(None::<ChannelId>)
+                .bind(None::<&str>),
+            Self::Local { user_id, subref } => query
+                .bind(Some(*user_id))
+                .bind(Some(subref.as_str()))
+                .bind(Some(subref.as_str())),
+            Self::Remote { channel, subref } => query
+                .bind(None::<UserId>)
+                .bind(Some(*channel))
+                .bind(Some(subref.as_str()))
+                .bind(Some(*channel))
+                .bind(Some(subref.as_str())),
+        }
     }
 }
 
@@ -2309,7 +2370,9 @@ where
     let tags = DB::TAGS_SUBQUERY;
     match surface {
         FeedSurface::Site => {
-            // Binds: $1 now, $2 min_items, $3 cutoff, $4..$8 resolution.
+            // Binds: $1 now, $2 min_items, $3 cutoff, then the variant-sized
+            // resolution fragment from $4. `window_sql` places it last, so
+            // nothing binds after it and the returned `next` is discarded.
             let (resolution, binds, _) = resolution_where(viewer, 4);
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRow>(&sql)
@@ -2319,8 +2382,8 @@ where
             binds.bind_onto(query).fetch_all(pool).await
         }
         FeedSurface::User { username } => {
-            // Binds: $1 now, $2 username, $3 min_items, $4 cutoff,
-            // $5..$9 resolution.
+            // Binds: $1 now, $2 username, $3 min_items, $4 cutoff, then the
+            // variant-sized resolution fragment last, from $5.
             let (resolution, binds, _) = resolution_where(viewer, 5);
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRow>(&sql)
@@ -2331,7 +2394,8 @@ where
             binds.bind_onto(query).fetch_all(pool).await
         }
         FeedSurface::SiteTag { tag } => {
-            // Binds: $1 now, $2 tag, $3 min_items, $4 cutoff, $5..$9 resolution.
+            // Binds: $1 now, $2 tag, $3 min_items, $4 cutoff, then the
+            // variant-sized resolution fragment last, from $5.
             let (resolution, binds, _) = resolution_where(viewer, 5);
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRow>(&sql)
@@ -2342,8 +2406,8 @@ where
             binds.bind_onto(query).fetch_all(pool).await
         }
         FeedSurface::UserTag { username, tag } => {
-            // Binds: $1 now, $2 username, $3 tag, $4 min_items, $5 cutoff,
-            // $6..$10 resolution.
+            // Binds: $1 now, $2 username, $3 tag, $4 min_items, $5 cutoff, then
+            // the variant-sized resolution fragment last, from $6.
             let (resolution, binds, _) = resolution_where(viewer, 6);
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRow>(&sql)
@@ -2579,6 +2643,58 @@ mod tests {
             postgres.contains("ORDER BY t.tag_slug COLLATE \"C\""),
             "postgres TAGS_SUBQUERY must order by slug under C collation: {postgres}"
         );
+    }
+
+    /// A local viewer's channel is not a bind: both subscription branches resolve
+    /// the seeded `local` row inline, so the fragment spends three placeholders
+    /// (author, ref, ref) and `next` is `start + 3` — the property every call site
+    /// depends on by threading the returned index rather than assuming `+5` (#6).
+    #[test]
+    fn resolution_where_resolves_the_local_channel_in_sql_for_a_local_viewer() {
+        let viewer = ViewerIdentity::Local {
+            user_id: UserId::from(7),
+        };
+        let (sql, binds, next) = resolution_where(&viewer, 2);
+        assert!(matches!(binds, ResolutionBinds::Local { .. }));
+        assert_eq!(next, 5, "three placeholders consumed from $2: {sql}");
+        assert_eq!(
+            sql.matches("(SELECT channel_id FROM channels WHERE name = 'local')")
+                .count(),
+            2,
+            "both the subscribers and named branches resolve the channel: {sql}"
+        );
+        assert!(sql.contains("p.user_id = $2"), "{sql}");
+        assert!(sql.contains("s.subscriber_ref = $3"), "{sql}");
+        assert!(sql.contains("s.subscriber_ref = $4"), "{sql}");
+        assert!(
+            !sql.contains("$5"),
+            "no fourth placeholder is emitted: {sql}"
+        );
+        assert!(
+            !sql.contains("99"),
+            "the carried channel id is ignored: {sql}"
+        );
+    }
+
+    /// The counterpart: `Anonymous` and `Remote` keep the five-placeholder shape,
+    /// binding the channel rather than resolving it.
+    #[rstest]
+    #[case::anonymous(ViewerIdentity::Anonymous)]
+    #[case::remote(ViewerIdentity::Remote {
+        channel_id: ChannelId::from(2),
+        subscriber_ref: "7".to_owned(),
+    })]
+    fn resolution_where_binds_the_channel_for_a_non_local_viewer(#[case] viewer: ViewerIdentity) {
+        let (sql, _binds, next) = resolution_where(&viewer, 2);
+        assert_eq!(next, 7, "five placeholders consumed from $2: {sql}");
+        assert!(
+            !sql.contains("name = 'local'"),
+            "a non-local viewer never resolves the local channel: {sql}"
+        );
+        assert!(sql.contains("s.channel_id = $3"), "{sql}");
+        assert!(sql.contains("s.subscriber_ref = $4"), "{sql}");
+        assert!(sql.contains("s.channel_id = $5"), "{sql}");
+        assert!(sql.contains("s.subscriber_ref = $6"), "{sql}");
     }
 
     /// Physical row identity for the post's `post_tags` rows: `ctid` on Postgres,

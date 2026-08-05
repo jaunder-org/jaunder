@@ -2621,7 +2621,7 @@ async fn single_post_permalink_hides_subscribers_post_from_anonymous(#[case] bac
         .posts
         .get_post_by_id(
             seeded.post_id,
-            &common::visibility::ViewerIdentity::local(author.user_id, local),
+            &common::visibility::ViewerIdentity::local(author.user_id),
         )
         .await
         .unwrap()
