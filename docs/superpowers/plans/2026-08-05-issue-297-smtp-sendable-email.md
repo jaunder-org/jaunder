@@ -95,7 +95,7 @@ currently encode the bug; one stale doc comment.
 
 **Steps**
 
-- [ ] **Step 1.** Via **`jaunder-issues`**, open an issue: _`common::Mailbox`
+- [x] **Step 1.** Via **`jaunder-issues`**, open an issue: _`common::Mailbox`
       stores the display name in its wire-encoded form_. Body must state: (a)
       `email_address::display_part()` returns the name with quotes intact, so
       `DisplayName` may hold `"Smith, John"`; (b) #297 copes with this by
@@ -105,7 +105,7 @@ currently encode the bug; one stale doc comment.
       `end2end/tests/profile.spec.ts`), so a character rule on it is a
       user-facing validation change; (d) scope the issue to `Mailbox`'s use of
       `display_part`, not to `DisplayName` globally. Link it from #297.
-- [ ] **Step 2.** No commit (tracker-only).
+- [x] **Step 2.** No commit (tracker-only).
 
 ---
 
@@ -117,7 +117,7 @@ Lands first: tasks 4 and 5 depend on it holding.
 
 **Steps**
 
-- [ ] **Step 1.** Add a corpus test including every address in the spec's table
+- [x] **Step 1.** Add a corpus test including every address in the spec's table
       (three domain-literals, three quoted local parts), ordinary addresses, and
       the EAI case `user@İ.com`:
 
@@ -141,12 +141,12 @@ Lands first: tasks 4 and 5 depend on it holding.
   }
   ```
 
-- [ ] **Step 2.** `cargo nextest run -p jaunder --lib mailer::smtp` → **PASS**
+- [x] **Step 2.** `cargo nextest run -p jaunder --lib mailer::smtp` → **PASS**
       (a lock-in guard, not a red/green — say so rather than manufacturing a
       red). **If `user@İ.com` fails**, stop and report: lettre's IDNA fallback
       (`address/types.rs:160-166`) was expected to accept it, and a failure here
       blocks tasks 4-5.
-- [ ] **Step 3.** `cargo xtask check`; commit
+- [x] **Step 3.** `cargo xtask check`; commit
       `test(mailer): assert Email's grammar is a subset of lettre's Address (#297)`.
 
 ---
@@ -175,14 +175,14 @@ becomes `self.build_message(message)?` then the existing
 
 **Steps**
 
-- [ ] **Step 1.** Move `smtp.rs:86-113` verbatim into `build_message` — the
+- [x] **Step 1.** Move `smtp.rs:86-113` verbatim into `build_message` — the
       `from`/recipient conversion, the subject/body build, and the existing
       `unreachable!` (`:104-113`). Leave the conversion logic **unchanged**;
       this task must not alter behaviour.
-- [ ] **Step 2.** `cargo nextest run -p jaunder --lib mailer::smtp` → **PASS**,
+- [x] **Step 2.** `cargo nextest run -p jaunder --lib mailer::smtp` → **PASS**,
       all existing tests unmodified, including `send_email_maps_transport_error`
       (AC9).
-- [ ] **Step 3.** `cargo xtask check`; commit
+- [x] **Step 3.** `cargo xtask check`; commit
       `refactor(mailer): extract build_message from send_email (#297)`.
 
 ---

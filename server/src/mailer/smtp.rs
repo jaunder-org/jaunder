@@ -78,11 +78,14 @@ impl LettreMailSender {
             sender,
         })
     }
-}
 
-#[async_trait]
-impl MailSender for LettreMailSender {
-    async fn send_email(&self, message: &EmailMessage) -> Result<(), MailError> {
+    /// Build the lettre [`Message`] for an [`EmailMessage`].
+    ///
+    /// Split out of `send_email` so the address conversion can be asserted
+    /// without a live SMTP server — the Nix check derivations are
+    /// network-sandboxed, so a test that goes through `send_email` can only
+    /// ever observe a transport failure (#297).
+    fn build_message(&self, message: &EmailMessage) -> Result<Message, MailError> {
         let from: Mailbox = message
             .from
             .as_ref()
@@ -111,6 +114,15 @@ impl MailSender for LettreMailSender {
             // our `String` body — no valid input can drive it.
             unreachable!("a String body always encodes; lettre picks a CTE")
         };
+
+        Ok(email)
+    }
+}
+
+#[async_trait]
+impl MailSender for LettreMailSender {
+    async fn send_email(&self, message: &EmailMessage) -> Result<(), MailError> {
+        let email = self.build_message(message)?;
 
         self.mailer
             .send(email)
