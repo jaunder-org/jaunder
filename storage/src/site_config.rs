@@ -310,7 +310,7 @@ impl<DB: Database> SiteConfigStore<DB> {
 /// neither a generic helper (`query_as::<_, (T,)>`) nor a macro can carry the decode
 /// target in a form the `sqlx-newtype-decode` gate can resolve, and six repetitions the
 /// gate reads are worth more than one abstraction it cannot.
-const SELECT_VALUE_BY_KEY: &str = "SELECT value FROM site_config WHERE key = $1";
+const SELECT_VALUE_SQL: &str = "SELECT value FROM site_config WHERE key = $1";
 
 /// Re-labels a decode failure with the **key** it came from.
 ///
@@ -377,7 +377,7 @@ where
         // that type's sqlx bridge: a garbage stored value fails `FromStr` and surfaces as a
         // `ColumnDecode` labelled with the key (see `read_value`), never as a silently
         // coerced default.
-        let host = sqlx::query_as::<_, (SmtpHost,)>(SELECT_VALUE_BY_KEY)
+        let host = sqlx::query_as::<_, (SmtpHost,)>(SELECT_VALUE_SQL)
             .bind(SiteConfigKey::SmtpHost)
             .fetch_optional(&self.pool)
             .await
@@ -388,35 +388,35 @@ where
             return Ok(None);
         };
 
-        let port = sqlx::query_as::<_, (SmtpPort,)>(SELECT_VALUE_BY_KEY)
+        let port = sqlx::query_as::<_, (SmtpPort,)>(SELECT_VALUE_SQL)
             .bind(SiteConfigKey::SmtpPort)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| label_decode_error(SiteConfigKey::SmtpPort, e))?
             .map_or_else(SmtpPort::default, |(port,)| port);
 
-        let tls_mode = sqlx::query_as::<_, (SmtpTlsMode,)>(SELECT_VALUE_BY_KEY)
+        let tls_mode = sqlx::query_as::<_, (SmtpTlsMode,)>(SELECT_VALUE_SQL)
             .bind(SiteConfigKey::SmtpTlsMode)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| label_decode_error(SiteConfigKey::SmtpTlsMode, e))?
             .map_or_else(SmtpTlsMode::default, |(tls_mode,)| tls_mode);
 
-        let sender = sqlx::query_as::<_, (SmtpSender,)>(SELECT_VALUE_BY_KEY)
+        let sender = sqlx::query_as::<_, (SmtpSender,)>(SELECT_VALUE_SQL)
             .bind(SiteConfigKey::SmtpSender)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| label_decode_error(SiteConfigKey::SmtpSender, e))?
             .map_or_else(SmtpSender::default, |(sender,)| sender);
 
-        let username = sqlx::query_as::<_, (SmtpUsername,)>(SELECT_VALUE_BY_KEY)
+        let username = sqlx::query_as::<_, (SmtpUsername,)>(SELECT_VALUE_SQL)
             .bind(SiteConfigKey::SmtpUsername)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| label_decode_error(SiteConfigKey::SmtpUsername, e))?
             .map(|(username,)| username);
 
-        let password = sqlx::query_as::<_, (SmtpPassword,)>(SELECT_VALUE_BY_KEY)
+        let password = sqlx::query_as::<_, (SmtpPassword,)>(SELECT_VALUE_SQL)
             .bind(SiteConfigKey::SmtpPassword)
             .fetch_optional(&self.pool)
             .await

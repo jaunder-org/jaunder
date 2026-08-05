@@ -1,4 +1,4 @@
-//! The closed registry of site-wide configuration keys (#687).
+//! The closed registries of site-wide and per-user configuration keys (#687).
 //!
 //! A key cannot exist here without a validator: both are columns of one table, so the
 //! two lists that used to drift — the `*_KEY` consts and whatever parsed their values —
@@ -13,6 +13,7 @@ use crate::backup::{BackupMode, BackupSchedule, DestinationPath, RetentionCount}
 use crate::feed::{FeedMinDays, FeedMinItems};
 use crate::media::{MaxFileSize, UserQuota};
 use crate::registration::RegistrationPolicy;
+use crate::render::PostFormat;
 use crate::site::SiteTitle;
 use crate::smtp_host::SmtpHost;
 use crate::smtp_password::SmtpPassword;
@@ -176,6 +177,87 @@ site_config_keys! {
     SmtpPassword           => "smtp.password"             : SmtpPassword,                 bad: "";
 }
 
+/// Error returned when a stored or offered per-user value does not parse as its key's
+/// type.
+///
+/// Separate from [`InvalidSiteConfigValue`] because the two registries are separate
+/// closed sets: a `user_config` failure can never name a site key, and the type says so.
+#[derive(Debug, Error)]
+#[error("{key}: {reason}")]
+pub struct InvalidUserConfigValue {
+    /// The dotted key whose value failed.
+    key: &'static str,
+    /// The value type's own rejection message.
+    reason: String,
+}
+
+/// Runs a per-user key's value type as a validator: parse, then discard the value.
+fn check_user<T>(key: &'static str, raw: &str) -> Result<(), InvalidUserConfigValue>
+where
+    T: FromStr,
+    <T as FromStr>::Err: std::fmt::Display,
+{
+    T::from_str(raw).map_err(|e| InvalidUserConfigValue {
+        key,
+        reason: e.to_string(),
+    })?;
+    Ok(())
+}
+
+/// Emits [`UserConfigKey`] and its per-key validator from one table.
+///
+/// The same shape as [`site_config_keys!`], minus the `{ optional }` marker: no per-user
+/// key uses the empty-means-unset contract, and a marker no row spells is a branch no
+/// test could reach. Each row is `Variant => "dotted.key" : <value>, bad: "<example>";`.
+macro_rules! user_config_keys {
+    ($(
+        $variant:ident => $lit:literal : $value:ident , bad: $bad:literal ;
+    )+) => {
+        /// A per-user configuration key — the only way to name one.
+        ///
+        /// Closed by construction, exactly as [`SiteConfigKey`] is: `user_config` has no
+        /// CLI door, but the typed seam is what keeps a typo from writing a row nothing
+        /// will ever read back.
+        #[macros::text_enum(
+            sqlx,
+            error = UnknownUserConfigKey,
+            message = "unknown user-config key"
+        )]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, strum::VariantArray)]
+        pub enum UserConfigKey {
+            $(
+                #[strum(serialize = $lit)]
+                $variant,
+            )+
+        }
+
+        impl UserConfigKey {
+            /// Checks `raw` against this key's value type, discarding the parsed value.
+            ///
+            /// # Errors
+            ///
+            /// Returns [`InvalidUserConfigValue`] when `raw` does not parse.
+            pub fn validate(self, raw: &str) -> Result<(), InvalidUserConfigValue> {
+                match self {
+                    $( Self::$variant => check_user::<$value>($lit, raw), )+
+                }
+            }
+
+            /// A value this key must reject — the table's `bad:` column.
+            #[cfg(test)]
+            fn known_bad_example(self) -> &'static str {
+                match self {
+                    $( Self::$variant => $bad, )+
+                }
+            }
+        }
+    };
+}
+
+user_config_keys! {
+    DefaultPostFormat => "posts.default_format" : PostFormat, bad: "hieroglyphs";
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,5 +354,25 @@ mod tests {
             let got = key.validate(good);
             assert!(got.is_ok(), "{dotted} must accept {good:?}: {got:?}");
         }
+    }
+
+    /// D8: the per-user registry is closed and validating in the same two ways.
+    #[test]
+    fn user_config_key_validates_its_value() {
+        assert!(UserConfigKey::DefaultPostFormat
+            .validate("markdown")
+            .is_ok());
+        assert!(UserConfigKey::DefaultPostFormat
+            .validate("hieroglyphs")
+            .is_err());
+        for key in UserConfigKey::VARIANTS {
+            let dotted = key.as_ref();
+            let bad = key.known_bad_example();
+            assert!(key.validate(bad).is_err(), "{dotted} must reject {bad:?}");
+            assert_eq!(UserConfigKey::from_str(dotted).ok().as_ref(), Some(key));
+            assert!(dotted.contains('.'), "{dotted} must be namespace.name");
+        }
+        let err = UserConfigKey::from_str("posts.nope").unwrap_err();
+        assert_eq!(err.to_string(), "unknown user-config key");
     }
 }
