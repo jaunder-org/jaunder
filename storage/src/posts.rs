@@ -3576,6 +3576,12 @@ mod tests {
         // construct one (#830). It must fail closed at the strict read boundary
         // through the validating `Decode`, never decode to an empty title. Forced in
         // with raw SQL for the same reason as the overlong-summary test above.
+        //
+        // This also pins that `PostTitle` is on the *validating* sqlx bridge at all:
+        // a blank row can only fail here if `Decode` routes through `FromStr`. That
+        // bridge decodes a borrowed `&'r str` (`macros`'
+        // `validating_bridge_decodes_a_borrowed_str_without_allocating`), so the
+        // double allocation #758 reported is gone as a side effect of the retyping.
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let posts = &*env.state.posts;

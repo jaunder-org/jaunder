@@ -21,10 +21,9 @@ use thiserror::Error;
 /// only unbounded source for [`crate::post_summary::SummarySeed`], and therefore the
 /// one that keeps `MAX_POST_SUMMARY_CHARS` reachable.
 ///
-/// `Hash` predates this change; nothing currently hashes a `PostTitle`, so ADR-0063
-/// §2's "justify `Hash` per type" is unmet — auditing it is orthogonal to the
-/// invariant and deliberately not bundled here.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, StrNewtype)]
+/// No `Hash` — nothing hashes a `PostTitle`; ordering is emitted by the trailer
+/// (ADR-0063 §2), matching `SessionLabel` and `PostSummary`.
+#[derive(Clone, Debug, PartialEq, Eq, StrNewtype)]
 pub struct PostTitle(String);
 
 /// Error returned when a string cannot be parsed as a [`PostTitle`].

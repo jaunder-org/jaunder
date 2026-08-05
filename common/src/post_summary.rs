@@ -45,7 +45,7 @@ impl FromStr for PostSummary {
 }
 
 /// How much of a body line may seed a summary, in Unicode scalar values.
-const MAX_BODY_LINE_SEED_CHARS: usize = 100;
+pub const MAX_BODY_LINE_SEED_CHARS: usize = 100;
 
 /// A summary label already known to be non-blank.
 ///
