@@ -592,6 +592,49 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
+    async fn test_perform_post_creation_returns_a_private_post(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let storage = &*env.state.posts;
+        // No audience target at all: the post is visible to its author and to
+        // nobody else. Every other create test targets Public, so this is the
+        // only one that can observe that the post-create re-read resolves *as
+        // the author* rather than incidentally as an anonymous reader.
+        let record = perform_post_creation(
+            storage,
+            PostCreation {
+                user_id,
+                body: "Private note.".into(),
+                title: Some("Private Note"),
+                format: PostFormat::Markdown,
+                slug_override: None,
+                published_at: None,
+                max_attempts: 100,
+                summary: None,
+                audiences: vec![],
+                idempotency_key: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(record.user_id, user_id);
+        assert_eq!(record.slug, "private-note");
+
+        // Guards the premise: if targeting ever started defaulting to public,
+        // the assertion above would keep passing while proving nothing.
+        assert!(storage
+            .get_post_by_id(
+                record.post_id,
+                &common::visibility::ViewerIdentity::Anonymous
+            )
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn test_perform_post_creation_uses_explicit_title(#[case] backend: Backend) {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;

@@ -299,7 +299,7 @@ IS_ACTIVE_LOCAL_SUBSCRIBER = "SELECT EXISTS( \
       `is_subscriber` tests at `:293-390`. (The suite compiles as one
       `integration` binary, so the filter is `-p jaunder storage::`; Postgres
       cases run under `devtool pg run`.)
-- [ ] **Step 4.** `cargo xtask check`; commit
+- [x] **Step 4.** `cargo xtask check`; commit
       `refactor(storage): resolve the local channel in SQL (#6)`.
 
 ---
@@ -344,21 +344,21 @@ pub enum ViewerIdentity {
 
 **Steps**
 
-- [ ] **Step 1.** Drop the field; `local(user_id)` takes one argument; delete
+- [x] **Step 1.** Drop the field; `local(user_id)` takes one argument; delete
       `account_viewer`. `post_service.rs:526` becomes
       `ViewerIdentity::Local { user_id }` — delete the now-false comment about
       `0` being a harmless placeholder.
-- [ ] **Step 2.** Work the compile errors outward through the file list above.
+- [x] **Step 2.** Work the compile errors outward through the file list above.
       Expect a second wave from `-D warnings` (unused params, bindings, imports)
       after the first wave of type errors clears — `cargo clippy --all-targets`
       is the check that matters, not `cargo build`.
-- [ ] **Step 3.** Update `common/src/visibility.rs`'s unit tests: the two
+- [x] **Step 3.** Update `common/src/visibility.rs`'s unit tests: the two
       `account_viewer_*` tests lose their subject and are removed; keep coverage
       of the `local` constructor and `viewer_user_id`'s three arms so the
       coverage gate does not regress.
-- [ ] **Step 4.** `cargo nextest run -p jaunder --test storage`, `--test web`,
+- [x] **Step 4.** `cargo nextest run -p jaunder --test storage`, `--test web`,
       and the atompub suite → **PASS**, both backends.
-- [ ] **Step 5.** `cargo xtask check`; commit
+- [x] **Step 5.** `cargo xtask check`; commit
       `refactor(visibility): a local viewer is just a user id (#6)`.
 
 ---
@@ -377,14 +377,14 @@ an absent target — so `vec![]` is genuinely the Private case, as
 
 **Steps**
 
-- [ ] **Step 1.** Add a dual-backend test creating a post with
+- [x] **Step 1.** Add a dual-backend test creating a post with
       `audiences: vec![]` via `perform_post_creation`, asserting the returned
       record's `post_id`/`slug` match what was created — i.e. the author re-read
       still resolves. Model it on the nearest existing create test.
-- [ ] **Step 2.** `cargo nextest run -p storage perform_post_creation` →
+- [x] **Step 2.** `cargo nextest run -p storage perform_post_creation` →
       **PASS**. This is a lock-in test, not a red/green: task 4 already made the
       behavior correct; this stops a future change from silently breaking it.
-- [ ] **Step 3.** `cargo xtask check`; commit
+- [x] **Step 3.** `cargo xtask check`; commit
       `test(storage): post-create re-read resolves for a private post (#6)`.
 
 ---
