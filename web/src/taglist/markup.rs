@@ -7,8 +7,8 @@ use crate::taglist::TagCtx;
 
 /// The footer tag chips: a `<span class="j-tag-list">` of `<span class="j-tag-cell">`
 /// chips, each a `#display` link to `/tags/:slug`, plus the "· here" link under
-/// [`TagCtx::ForUser`]. Mirrors the reactive [`TagList`]; keep their markup
-/// coincident.
+/// [`TagCtx::ForUser`]. The single renderer for these chips — the server projector
+/// and the CSR client both inject it, so there is no twin to keep coincident (#301).
 #[must_use]
 pub(crate) fn render(tags: &[TagSummary], ctx: &TagCtx) -> Markup {
     if tags.is_empty() {

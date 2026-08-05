@@ -1,14 +1,16 @@
-//! `TagList` — a post's footer tag chips. The pure [`render`] (server projector,
-//! injected via `inner_html`) and the reactive [`TagList`] (CSR client, the
-//! authored post view the projector never renders) are twins: the same
-//! `<span class="j-tag-list">` markup produced two ways. Co-located per ADR-0056.
+//! A post's footer tag chips: the pure [`render`], injected via `inner_html` by both
+//! the server projector and the CSR client. Co-located per ADR-0056.
+//!
+//! This leaf once held a reactive component twin alongside `render`, so the same
+//! `<span class="j-tag-list">` markup was produced two ways. #181 moved the CSR
+//! authored-post view onto the shared pure path (`posts::render`'s `PostView` carries
+//! `tags` and `tag_ctx`), which is the ADR-0041 seam — from then on both sides painted
+//! these chips through `render`, and the component had no callers. It was carried
+//! along by two later relocations before being deleted in #301. There is one renderer
+//! now, so there is nothing left to keep coincident.
 
-#[cfg(target_arch = "wasm32")]
-mod component;
 mod context;
 mod markup;
 
-#[cfg(target_arch = "wasm32")]
-pub use component::TagList;
 pub use context::TagCtx;
 pub(crate) use markup::render;

@@ -121,8 +121,8 @@ button).
 
 Always reach for an existing shared helper before writing a new layout primitive
 — leaf primitives live in their own **top-level modules**
-(`web/src/{avatar,icon,taglist,topbar}/`, exposing `Avatar`, `Icon`, `TagList`,
-`Topbar`); the rest are co-located in their owning verticals (ADR-0070):
+(`web/src/{avatar,icon,topbar}/`, exposing `Avatar`, `Icon`, `Topbar`); the rest
+are co-located in their owning verticals (ADR-0070):
 
 | Helper                            | Purpose                                           |
 | --------------------------------- | ------------------------------------------------- |
@@ -146,9 +146,13 @@ For list views, the available CSS primitives are:
 
 If you find yourself copying a layout block (e.g. a draft row, a toolbar) into a
 second place, lift it into a shared leaf module — a top-level
-`web/src/<widget>/` directory following the `avatar`/`icon`/`taglist`/`topbar`
-shape: `markup.rs` for any pure (host-tested) `render()` twin, wasm-only
-`component.rs` for the `#[component]`.
+`web/src/<widget>/` directory following the `avatar`/`icon`/`topbar` shape:
+`markup.rs` for any pure (host-tested) `render()` twin, wasm-only `component.rs`
+for the `#[component]`.
+
+A leaf need not have both halves. `taglist/` is pure `markup.rs` only — its
+chips are injected via `inner_html` by the projector and the CSR client alike,
+so there is one renderer and no twin to keep coincident.
 
 ## 7. CSS conventions
 
@@ -376,9 +380,12 @@ let state = list.patched(fetch_rows, move |rows| store.rows().patch(rows)); // S
   rows are matched _by_ that key, so its comparison never fires. It is there to
   compile.) See `docs/adr/0078-reactive-store-domain-newtype-fields.md`; the
   audiences vertical is the worked example. A newtype is not `IntoRender`, so
-  read it out at view sites — `.to_string()` when the row is borrowed,
-  `String::from(…)` to move it out of an owned row — as
-  `web/src/taglist/component.rs` already does for `TagLabel`.
+  read it out at view sites — `.to_string()` when the row is borrowed (as
+  `web/src/subscriptions/component.rs` does for `Username`), `String::from(…)`
+  to move it out of an owned row (as `uploaded_url_view` in
+  `web/src/media/component.rs` does for `RootRelativeUrl`, whose comment spells
+  out why the unwrap happens at the view site rather than the value being
+  carried around stringly).
 
 **Do not** reach for `Store` for a flat, read-only, or stateless list — one with
 no per-row identity that mutates and no nested state to keep (the audiences
