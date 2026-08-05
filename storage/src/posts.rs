@@ -2006,7 +2006,7 @@ fn resolution_where(viewer: &ViewerIdentity, start: usize) -> (String, Resolutio
         // user id in decimal — the form `subscribe_to` stores. The carried
         // `channel_id` is deliberately ignored: for a local viewer it can only
         // be the `local` row, which the SQL resolves for itself.
-        ViewerIdentity::Local { user_id, .. } => ResolutionBinds::Local {
+        ViewerIdentity::Local { user_id } => ResolutionBinds::Local {
             user_id: *user_id,
             subref: user_id.to_string(),
         },
@@ -2644,9 +2644,6 @@ mod tests {
     fn resolution_where_resolves_the_local_channel_in_sql_for_a_local_viewer() {
         let viewer = ViewerIdentity::Local {
             user_id: UserId::from(7),
-            // Deliberately not the `local` row's id: it is ignored, because a
-            // local viewer's channel can only ever be `local`.
-            channel_id: ChannelId::from(99),
         };
         let (sql, binds, next) = resolution_where(&viewer, 2);
         assert!(matches!(binds, ResolutionBinds::Local { .. }));

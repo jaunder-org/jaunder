@@ -62,8 +62,9 @@ pub async fn is_subscribed(author_username: Username) -> WebResult<bool> {
     let Ok(author_id) = resolve_author(users.as_ref(), &author_username, auth.user_id).await else {
         return Ok(false);
     };
-    let channel_id = subscriptions.local_channel_id().await?;
-    let viewer = common::visibility::ViewerIdentity::local(auth.user_id, channel_id);
+    let viewer = common::visibility::ViewerIdentity::Local {
+        user_id: auth.user_id,
+    };
     let subscribed = subscriptions.is_subscriber(author_id, &viewer).await?;
     Ok(subscribed)
 }

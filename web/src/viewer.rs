@@ -8,25 +8,18 @@
 //! - [`ViewerIdentity::Local`] — a logged-in local account.
 //!
 //! This module is the thin leptos adapter: it extracts the account session and
-//! the storage handle, then delegates to the pushed-down cores —
-//! [`account_viewer`](common::visibility::account_viewer) (the pure projection)
-//! and [`local_channel_id`](storage::local_channel_id) (the memoized,
-//! fail-closed `local` channel lookup).
+//! projects it straight into a viewer. A local viewer carries nothing but its
+//! `user_id` (#6) — its channel is always the `local` row, resolved inline in
+//! SQL by the queries that need it — so there is no channel lookup here and
+//! nothing that can fail.
 
 #[cfg(feature = "server")]
-use {
-    crate::auth::AuthUser,
-    common::visibility::{account_viewer, ViewerIdentity},
-    leptos_axum,
-    std::sync::Arc,
-    storage::{local_channel_id, SubscriptionStorage},
-};
+use {crate::auth::AuthUser, common::visibility::ViewerIdentity, leptos_axum};
 
 /// Resolves the viewer for a `#[server]` read path.
 ///
-/// Returns [`ViewerIdentity::Local`] on the `local` channel when a valid
-/// account session is present (keyed by the account's `user_id`), otherwise
-/// [`ViewerIdentity::Anonymous`].
+/// Returns [`ViewerIdentity::Local`] keyed by the account's `user_id` when a
+/// valid account session is present, otherwise [`ViewerIdentity::Anonymous`].
 ///
 /// **Layer A** only ever resolves an account session or anonymous. **Layer C**
 /// inserts a precedence ladder *here* — account session → viewer session →
@@ -34,14 +27,8 @@ use {
 /// session" cookie can still be admitted to subscriber/named content. The
 /// account-session branch below stays first in that ladder; the viewer-session
 /// branch slots in between it and the anonymous fallback.
-///
-/// A failure to look up the `local` channel id (storage error) falls back to
-/// [`ViewerIdentity::Anonymous`] — fail closed: a viewer we cannot positively
-/// identify is treated as anonymous and sees only public content.
 #[cfg(feature = "server")]
 pub async fn viewer_identity() -> ViewerIdentity {
-    use leptos::prelude::expect_context;
-
     // ---- Layer C insertion point: precedence ladder begins here. ----
     // 1. Account session (the only positively-authenticated branch in Layer A).
     let Ok(auth) = leptos_axum::extract::<AuthUser>().await else {
@@ -50,7 +37,7 @@ pub async fn viewer_identity() -> ViewerIdentity {
         return ViewerIdentity::Anonymous;
     };
 
-    let subscriptions = expect_context::<Arc<dyn SubscriptionStorage>>();
-    let channel_id = local_channel_id(subscriptions.as_ref()).await;
-    account_viewer(auth.user_id, channel_id)
+    ViewerIdentity::Local {
+        user_id: auth.user_id,
+    }
 }

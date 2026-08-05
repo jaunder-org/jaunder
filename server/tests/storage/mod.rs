@@ -314,7 +314,7 @@ async fn subscribe_is_idempotent_and_active(#[case] backend: Backend) {
     assert_eq!(id1, id2, "subscribe is idempotent");
     assert!(state
         .subscriptions
-        .is_subscriber(author, &ViewerIdentity::local(bob, local))
+        .is_subscriber(author, &ViewerIdentity::local(bob))
         .await
         .unwrap());
     assert!(!state
@@ -337,7 +337,7 @@ async fn subscribe_is_idempotent_and_active(#[case] backend: Backend) {
         .unwrap();
     assert!(!state
         .subscriptions
-        .is_subscriber(author, &ViewerIdentity::local(bob, local))
+        .is_subscriber(author, &ViewerIdentity::local(bob))
         .await
         .unwrap());
     assert!(state
@@ -453,7 +453,7 @@ async fn pending_subscription_is_not_admitted(#[case] backend: Backend) {
         .unwrap();
     // Resolution admits only `active` → a pending subscriber is excluded.
     assert!(!store
-        .is_subscriber(author, &ViewerIdentity::local(bob, local))
+        .is_subscriber(author, &ViewerIdentity::local(bob))
         .await
         .unwrap());
     // ...and it is not listed (list_subscribers is active-only).
@@ -5825,10 +5825,10 @@ async fn resolution_matrix(#[case] backend: Backend) {
         .post_id;
 
     let anon = ViewerIdentity::Anonymous;
-    let viewer_a = ViewerIdentity::local(a, local);
-    let viewer_s = ViewerIdentity::local(s, local);
-    let viewer_m = ViewerIdentity::local(m, local);
-    let viewer_n = ViewerIdentity::local(n, local);
+    let viewer_a = ViewerIdentity::local(a);
+    let viewer_s = ViewerIdentity::local(s);
+    let viewer_m = ViewerIdentity::local(m);
+    let viewer_n = ViewerIdentity::local(n);
 
     // A non-local channel: the shape Layer B will produce. Forced in with raw
     // SQL because no store API seeds a channel row.

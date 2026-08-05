@@ -218,7 +218,7 @@ where
             // A local viewer's `subscriber_ref` is its user id in decimal — the
             // form `subscribe_to` stores. The carried `channel_id` is ignored:
             // for a local viewer it can only be the `local` row.
-            ViewerIdentity::Local { user_id, .. } => {
+            ViewerIdentity::Local { user_id } => {
                 let subscriber_ref = user_id.to_string();
                 sqlx::query_as::<_, (i64,)>(DB::IS_ACTIVE_LOCAL_SUBSCRIBER)
                     .bind(author_user_id)
@@ -307,11 +307,13 @@ mod tests {
         }
     }
 
-    // Functional check only — memoization is deliberately not asserted here:
-    // `LOCAL_CHANNEL_ID` is a process-global `OnceLock`, so under a
-    // two-backends-one-process run the first backend's value would leak into the
-    // second. We compare the fail-closed helper against the same backend's direct
-    // trait lookup, which stays correct regardless of memoization.
+    // Cross-*case* memoization is deliberately not asserted: `LOCAL_CHANNEL_ID`
+    // is a process-global `OnceLock`, so under a two-backends-one-process run the
+    // first backend's value would leak into the second. We compare the
+    // fail-closed helper against the same backend's direct trait lookup, which
+    // stays correct regardless of memoization — then call it a second time, which
+    // is guaranteed to take the already-populated cache branch whichever backend
+    // this case is.
     #[apply(backends)]
     #[tokio::test]
     async fn local_channel_id_returns_the_seeded_local_channel(#[case] backend: Backend) {
@@ -326,6 +328,11 @@ mod tests {
             local_channel_id(env.state.subscriptions.as_ref()).await,
             Some(expected),
             "the fail-closed helper resolves the seeded local channel id",
+        );
+        assert_eq!(
+            local_channel_id(env.state.subscriptions.as_ref()).await,
+            Some(expected),
+            "the memoized second call yields the same id without re-querying",
         );
     }
 }

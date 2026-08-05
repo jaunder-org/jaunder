@@ -16,8 +16,7 @@ async fn subscribe_then_unsubscribe_round_trips(#[case] backend: Backend) {
     let author = SeedUser::new().seed(&state).await;
     let subscriber = create_user_and_session(&state).await;
     let cookie = subscriber.cookie();
-    let channel = state.subscriptions.local_channel_id().await.unwrap();
-    let viewer = ViewerIdentity::local(subscriber.user_id, channel);
+    let viewer = ViewerIdentity::local(subscriber.user_id);
 
     let (status, body) = post_form(
         &state,
@@ -61,7 +60,6 @@ async fn self_subscribe_is_rejected(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let me = create_user_and_session(&state).await;
     let cookie = me.cookie();
-    let channel = state.subscriptions.local_channel_id().await.unwrap();
 
     let (status, _body) = post_form(
         &state,
@@ -74,7 +72,7 @@ async fn self_subscribe_is_rejected(#[case] backend: Backend) {
     assert!(
         !state
             .subscriptions
-            .is_subscriber(me.user_id, &ViewerIdentity::local(me.user_id, channel))
+            .is_subscriber(me.user_id, &ViewerIdentity::local(me.user_id))
             .await
             .unwrap(),
         "no self-subscription row may be created"

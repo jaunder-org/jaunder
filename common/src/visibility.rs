@@ -79,9 +79,12 @@ pub enum ViewerIdentity {
     /// A logged-in local account. Locality is carried by the *variant*, not by
     /// the shape of a string: the author branch of the resolution filter fires
     /// on this and nothing else (#6).
+    ///
+    /// It carries no `channel_id` because a local viewer's channel is not a
+    /// free parameter — it is always the `local` row, which the queries that
+    /// need it resolve inline in SQL (#6).
     Local {
         user_id: UserId,
-        channel_id: ChannelId,
     },
     /// A non-local channel identity (an `ActivityPub` actor, an email address).
     /// Its `subscriber_ref` is opaque — never a local user id, whatever it
@@ -96,25 +99,8 @@ impl ViewerIdentity {
     /// Local viewer constructor used by Layer A: a logged-in account on the
     /// `local` channel.
     #[must_use]
-    pub fn local(user_id: UserId, local_channel_id: ChannelId) -> Self {
-        Self::Local {
-            user_id,
-            channel_id: local_channel_id,
-        }
-    }
-}
-
-/// Projects an authenticated account plus the resolved `local` channel id into a
-/// [`ViewerIdentity`].
-///
-/// `Some(channel_id)` → a `local` channel viewer; `None` (the `local` channel id
-/// could not be resolved) → [`ViewerIdentity::Anonymous`], fail-closed: a viewer
-/// we cannot positively place on a channel gets no non-public reach.
-#[must_use]
-pub fn account_viewer(user_id: UserId, local_channel_id: Option<ChannelId>) -> ViewerIdentity {
-    match local_channel_id {
-        Some(channel_id) => ViewerIdentity::local(user_id, channel_id),
-        None => ViewerIdentity::Anonymous,
+    pub fn local(user_id: UserId) -> Self {
+        Self::Local { user_id }
     }
 }
 
@@ -130,7 +116,7 @@ pub fn viewer_user_id(viewer: &ViewerIdentity) -> Option<UserId> {
         // Only a local account has a local user id. A remote `subscriber_ref`
         // is opaque — that it parses as an integer says nothing about who it
         // is, so it never projects to a user id (#6).
-        ViewerIdentity::Local { user_id, .. } => Some(*user_id),
+        ViewerIdentity::Local { user_id } => Some(*user_id),
         ViewerIdentity::Remote { .. } | ViewerIdentity::Anonymous => None,
     }
 }
@@ -390,38 +376,19 @@ mod tests {
 
     #[test]
     fn viewer_local_constructor_builds_a_local_viewer() {
-        let viewer = ViewerIdentity::local(UserId::from(42), ChannelId::from(7));
+        let viewer = ViewerIdentity::local(UserId::from(42));
         assert_eq!(
             viewer,
             ViewerIdentity::Local {
                 user_id: UserId::from(42),
-                channel_id: ChannelId::from(7),
             }
-        );
-    }
-
-    #[test]
-    fn account_viewer_with_channel_is_local() {
-        assert_eq!(
-            account_viewer(UserId::from(7), Some(ChannelId::from(3))),
-            ViewerIdentity::local(UserId::from(7), ChannelId::from(3)),
-            "a resolved local channel yields a Channel viewer keyed by the user id",
-        );
-    }
-
-    #[test]
-    fn account_viewer_without_channel_fails_closed_to_anonymous() {
-        assert_eq!(
-            account_viewer(UserId::from(7), None),
-            ViewerIdentity::Anonymous,
-            "an unresolved local channel must fail closed to Anonymous",
         );
     }
 
     #[test]
     fn viewer_user_id_projects_local_channel_to_user_id() {
         assert_eq!(
-            viewer_user_id(&ViewerIdentity::local(UserId::from(42), ChannelId::from(1))),
+            viewer_user_id(&ViewerIdentity::local(UserId::from(42))),
             Some(UserId::from(42))
         );
     }
