@@ -127,6 +127,7 @@ convention). See the Status column below for each ADR's current status.
 | [0097](adr/0097-post-dto-content-weight-axis.md)                   | Post DTOs are named for the content weight they carry                                                        | accepted   |
 | [0098](adr/0098-e2e-seeded-auth.md)                                | e2e provisions auth by seeding, not by driving the UI                                                        | accepted   |
 | [0099](adr/0099-e2e-does-not-pre-warm.md)                          | The e2e suite does not pre-warm                                                                              | accepted   |
+| [0100](adr/0100-measurement-frames-are-not-mixed.md)               | Browser measurements are decomposed only in the document frame                                               | accepted   |
 
 <!-- adr-table:end -->
 

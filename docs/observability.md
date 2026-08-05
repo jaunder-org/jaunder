@@ -529,9 +529,9 @@ navigations carried a full mark set, `dropped = 0`, **0 closure violations in
 `commit_to_mount` is Node-side `Date.now()`; every segment is document-relative
 (`performance.timeOrigin`). Mixing them would charge cross-process, plausibly
 engine-asymmetric harness latency to the app's boot phases — the rule is
-recorded in `docs/adr/drafts/measurement-frames-are-not-mixed.md` (numbered at
-ship). The target is `bootTotalMs` = `jaunder.boot.mount_done`'s `startTime`,
-decomposed into six segments that sum to it **exactly**.
+[ADR-0100](adr/0100-measurement-frames-are-not-mixed.md). The target is
+`bootTotalMs` = `jaunder.boot.mount_done`'s `startTime`, decomposed into six
+segments that sum to it **exactly**.
 
 ### Where the gap lives (means, deciding set)
 

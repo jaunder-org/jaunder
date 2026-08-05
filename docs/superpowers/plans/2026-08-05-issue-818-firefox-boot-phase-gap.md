@@ -613,7 +613,7 @@ Spec AC8, plus the ADR flagged as my judgment call.
 **Files:**
 
 - Modify: `docs/observability.md` (§"What the boot marks do and do not cover")
-- Create: `docs/adr/drafts/measurement-frames-are-not-mixed.md`
+- Create: `docs/adr/0100-measurement-frames-are-not-mixed.md`
 - Modify: `~/measurements/jaunder/issue-792-warmup-ab/README.md` ("Known
   limits")
 
@@ -634,9 +634,9 @@ Note that coverage is _reported_ (Task 5) but not yet gated, pointing at
 **#831**.
 
 - [x] **Step 3: Draft the ADR** →
-      `docs/adr/drafts/measurement-frames-are-not-mixed.md`
+      `docs/adr/0100-measurement-frames-are-not-mixed.md`
 
-`docs/adr/drafts/measurement-frames-are-not-mixed.md`, numberless (promoted at
+`docs/adr/0100-measurement-frames-are-not-mixed.md`, numberless (promoted at
 ship by `cargo xtask adr promote`) — see **jaunder-adr**.
 
 Decision: browser-side measurements are decomposed only in the document frame
@@ -672,7 +672,7 @@ premature number.
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-818-firefox-boot-phase-gap -- \
-  prettier -w docs/observability.md docs/adr/drafts/measurement-frames-are-not-mixed.md
+  prettier -w docs/observability.md docs/adr/0100-measurement-frames-are-not-mixed.md
 git add docs/observability.md
 git commit -F /tmp/msg.txt
 ```
