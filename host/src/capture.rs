@@ -74,14 +74,7 @@ pub fn file(stream: Stream) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    // `dir`/`file` read a process-global env var. Under `cargo nextest` each test is its
-    // own process, but a plain threaded `cargo test` shares one — so the two env-mutating
-    // tests below serialize on this lock. This is the ONLY place in the codebase that
-    // mutates `JAUNDER_CAPTURE_DIR` in-process (server seams inject the path instead), so
-    // the lock is local to this crate's test binary.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    use common::test_support::with_env;
 
     #[test]
     fn stream_filenames_are_the_convention() {
@@ -101,27 +94,26 @@ mod tests {
 
     #[test]
     fn file_joins_and_creates_dir_when_set() {
-        let _g = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = tempfile::tempdir().unwrap();
         let d = tmp.path().join("capture"); // does not exist yet
-        std::env::set_var(DIR_ENV, &d);
-        let p = file(Stream::Mail).expect("Some when set");
-        assert_eq!(p, d.join("mail.jsonl"));
-        assert!(d.is_dir(), "file() must create the capture dir");
-        std::env::remove_var(DIR_ENV);
+        with_env(|env| {
+            env.set(DIR_ENV, &d);
+            let p = file(Stream::Mail).expect("Some when set");
+            assert_eq!(p, d.join("mail.jsonl"));
+            assert!(d.is_dir(), "file() must create the capture dir");
+        });
     }
 
     #[test]
     fn file_is_none_when_unset_or_blank() {
-        let _g = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        std::env::remove_var(DIR_ENV);
-        assert_eq!(file(Stream::Diag), None);
-        std::env::set_var(DIR_ENV, "   ");
-        assert_eq!(file(Stream::Diag), None, "blank ⇒ None");
-        std::env::remove_var(DIR_ENV);
+        // Two env states with an assertion between them, in one critical section:
+        // splitting this into two `with_env` calls would reopen the window the single
+        // lock closes.
+        with_env(|env| {
+            env.remove(DIR_ENV);
+            assert_eq!(file(Stream::Diag), None);
+            env.set(DIR_ENV, "   ");
+            assert_eq!(file(Stream::Diag), None, "blank ⇒ None");
+        });
     }
 }
