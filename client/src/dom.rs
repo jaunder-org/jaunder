@@ -41,15 +41,15 @@ pub fn select_event_target_text(ev: &web_sys::Event) {
 /// selector that matches nothing, or on an invalid selector (`query_selector_all` errs,
 /// swallowed). Used to drop the projector-painted `<link>`s at CSR boot (#198).
 pub fn remove_elements_by_selector(selector: &str) {
-    if let Some(document) = document() {
-        if let Ok(nodes) = document.query_selector_all(selector) {
-            for i in 0..nodes.length() {
-                if let Some(el) = nodes
-                    .item(i)
-                    .and_then(|n| n.dyn_into::<web_sys::Element>().ok())
-                {
-                    el.remove();
-                }
+    if let Some(document) = document()
+        && let Ok(nodes) = document.query_selector_all(selector)
+    {
+        for i in 0..nodes.length() {
+            if let Some(el) = nodes
+                .item(i)
+                .and_then(|n| n.dyn_into::<web_sys::Element>().ok())
+            {
+                el.remove();
             }
         }
     }

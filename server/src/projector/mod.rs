@@ -107,10 +107,10 @@ fn cacheable(headers: &HeaderMap, seed: &PageSeed) -> Response {
     let body = document(seed);
     let etag = ETag::sha256_of(body.as_bytes());
 
-    if let Some(inm) = headers.get(header::IF_NONE_MATCH) {
-        if inm.to_str().ok() == Some(etag.as_ref()) {
-            return StatusCode::NOT_MODIFIED.into_response();
-        }
+    if let Some(inm) = headers.get(header::IF_NONE_MATCH)
+        && inm.to_str().ok() == Some(etag.as_ref())
+    {
+        return StatusCode::NOT_MODIFIED.into_response();
     }
 
     let mut resp_headers = HeaderMap::new();

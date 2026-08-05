@@ -32,7 +32,7 @@ fn run_crate(name: &str, entry: &str, source: &str) -> (tempfile::TempDir, Strin
              [package]\n\
              name = \"{name}\"\n\
              version = \"0.0.0\"\n\
-             edition = \"2021\"\n\n\
+             edition = \"2024\"\n\n\
              [features]\n\
              off = []\n"
         ),

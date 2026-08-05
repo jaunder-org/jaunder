@@ -81,10 +81,10 @@ pub fn App() -> impl IntoView {
 
     // On WASM: restore theme from localStorage on startup. A read failure (storage
     // unavailable) falls back to the default theme — cosmetic, nothing to recover.
-    if let Ok(Some(val)) = client::storage::get(THEME_KEY) {
-        if !val.is_empty() {
-            theme.set(val);
-        }
+    if let Ok(Some(val)) = client::storage::get(THEME_KEY)
+        && !val.is_empty()
+    {
+        theme.set(val);
     }
 
     provide_context(theme);

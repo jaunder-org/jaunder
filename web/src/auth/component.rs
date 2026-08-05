@@ -25,13 +25,13 @@ pub fn LoginPage() -> impl IntoView {
     // which the user could have edited between submit and response. `is_operator`
     // comes from the login response, so operator chrome is flash-free on first login.
     Effect::new(move |_| {
-        if let Some(Ok(resp)) = login_action.value().get() {
-            if let Some(input) = login_action.input().get() {
-                set_session(SessionUser {
-                    username: input.username,
-                    is_operator: resp.is_operator,
-                });
-            }
+        if let Some(Ok(resp)) = login_action.value().get()
+            && let Some(input) = login_action.input().get()
+        {
+            set_session(SessionUser {
+                username: input.username,
+                is_operator: resp.is_operator,
+            });
         }
     });
 

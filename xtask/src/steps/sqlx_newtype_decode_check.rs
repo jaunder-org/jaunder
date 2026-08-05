@@ -228,13 +228,13 @@ fn declared_macros(source: &str) -> Result<Vec<String>, String> {
             } else if attr.path().is_ident("proc_macro_derive") {
                 // `#[proc_macro_derive(Name)]` or `#[proc_macro_derive(Name, attributes(..))]`
                 // — the derive's name is the first ident in the list either way.
-                if let Ok(list) = attr.meta.require_list() {
-                    if let Some(name) = list.tokens.clone().into_iter().find_map(|t| match t {
+                if let Ok(list) = attr.meta.require_list()
+                    && let Some(name) = list.tokens.clone().into_iter().find_map(|t| match t {
                         proc_macro2::TokenTree::Ident(i) => Some(i.to_string()),
                         _ => None,
-                    }) {
-                        out.push(name);
-                    }
+                    })
+                {
+                    out.push(name);
                 }
             }
         }
@@ -1286,11 +1286,12 @@ fn unreadable_field_positions(file: &syn::File) -> std::collections::HashSet<(us
     impl<'ast> syn::visit::Visit<'ast> for Finder {
         fn visit_expr_struct(&mut self, i: &'ast syn::ExprStruct) {
             for f in &i.fields {
-                if let syn::Expr::MethodCall(m) = peel_to_call(&f.expr) {
-                    if target_index(&m.method.to_string()).is_some() && m.turbofish.is_none() {
-                        let s = m.method.span().start();
-                        self.0.insert((s.line, s.column));
-                    }
+                if let syn::Expr::MethodCall(m) = peel_to_call(&f.expr)
+                    && target_index(&m.method.to_string()).is_some()
+                    && m.turbofish.is_none()
+                {
+                    let s = m.method.span().start();
+                    self.0.insert((s.line, s.column));
                 }
             }
             syn::visit::visit_expr_struct(self, i);
@@ -1325,14 +1326,14 @@ impl<'ast> syn::visit::Visit<'ast> for Scanner<'_> {
     }
 
     fn visit_expr_call(&mut self, i: &'ast syn::ExprCall) {
-        if let syn::Expr::Path(p) = &*i.func {
-            if let Some(last) = p.path.segments.last() {
-                let name = last.ident.to_string();
-                if let Some(idx) = target_index(&name) {
-                    let turbofish = nth_type_arg(&last.arguments, idx);
-                    let what = i.args.first().map(render).unwrap_or_default();
-                    self.record(turbofish, what, last.ident.span());
-                }
+        if let syn::Expr::Path(p) = &*i.func
+            && let Some(last) = p.path.segments.last()
+        {
+            let name = last.ident.to_string();
+            if let Some(idx) = target_index(&name) {
+                let turbofish = nth_type_arg(&last.arguments, idx);
+                let what = i.args.first().map(render).unwrap_or_default();
+                self.record(turbofish, what, last.ident.span());
             }
         }
         syn::visit::visit_expr_call(self, i);

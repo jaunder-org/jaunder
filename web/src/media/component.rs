@@ -325,7 +325,7 @@ fn MediaDeleteOutcome(
 /// posts that embed it keep serving the file (which stays on disk).
 ///
 /// The button's accessible name contains "Force delete" — the e2e selects on it.
-fn force_delete_form(item: &Item, delete_action: ServerAction<Delete>) -> impl IntoView {
+fn force_delete_form(item: &Item, delete_action: ServerAction<Delete>) -> impl IntoView + use<> {
     // The label decodes to the name the user typed; the key the form submits is
     // `media_key_fields`'s canonical spelling (#720).
     let display_name = item.filename.decoded().into_owned();
@@ -359,7 +359,7 @@ fn force_delete_form(item: &Item, delete_action: ServerAction<Delete>) -> impl I
 /// whose cosmetic half is each caller's `display_name` (#720). Decoding the key would
 /// make every delete of an encoding-needing name fail at the wire door — loudly, since
 /// `Filename`'s `FromStr` rejects a raw value, but fail all the same.
-fn media_key_fields(item: &Item) -> impl IntoView {
+fn media_key_fields(item: &Item) -> impl IntoView + use<> {
     let sha256 = item.sha256.to_string();
     let filename_key = item.filename.to_string();
     let source = item.source.to_string();
@@ -375,7 +375,7 @@ fn render_media_row(
     item: &Item,
     delete_action: ServerAction<Delete>,
     delete_target: RwSignal<Option<Item>>,
-) -> impl IntoView {
+) -> impl IntoView + use<> {
     // Same reason as `display_name` below: `RootRelativeUrl` is not an
     // `IntoAttributeValue`, so the `href` gets its `str` view here.
     let url = item.url.to_string();

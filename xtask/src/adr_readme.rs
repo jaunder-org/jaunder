@@ -98,13 +98,12 @@ fn heading_title(content: &str) -> String {
     let line = content.lines().find(|l| l.starts_with("# ")).unwrap_or("");
     let after = line.trim_start_matches("# ").trim();
     for (prefix, sep) in [("ADR-", ": "), ("", ". ")] {
-        if let Some((lhs, title)) = after.split_once(sep) {
-            if lhs.starts_with(prefix)
-                && !lhs.is_empty()
-                && lhs[prefix.len()..].chars().all(|c| c.is_ascii_digit())
-            {
-                return title.trim().to_string();
-            }
+        if let Some((lhs, title)) = after.split_once(sep)
+            && lhs.starts_with(prefix)
+            && !lhs.is_empty()
+            && lhs[prefix.len()..].chars().all(|c| c.is_ascii_digit())
+        {
+            return title.trim().to_string();
         }
     }
     after.to_string()

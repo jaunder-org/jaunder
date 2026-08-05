@@ -93,11 +93,11 @@ impl TagInputState {
         match key {
             "Enter" | "Tab" => {
                 // A keyboard-selected suggestion commits directly.
-                if let Some(i) = self.selected_idx.get() {
-                    if let Some(tag) = self.suggestions.get().get(i).cloned() {
-                        self.commit(tag);
-                        return true;
-                    }
+                if let Some(i) = self.selected_idx.get()
+                    && let Some(tag) = self.suggestions.get().get(i).cloned()
+                {
+                    self.commit(tag);
+                    return true;
                 }
                 // Otherwise commit the typed text; Tab passes through if empty.
                 if self.input_text.get().trim().is_empty() {

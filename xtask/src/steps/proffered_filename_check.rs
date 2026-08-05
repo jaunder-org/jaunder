@@ -133,10 +133,12 @@ fn violations(source: &str) -> Vec<usize> {
         }
         let inside_import = in_use || opens_use;
 
-        if let Some(at) = type_index(raw) {
-            if !inside_import && !t.starts_with("//") && !is_wrapped(raw, at) {
-                out.push(i + 1);
-            }
+        if let Some(at) = type_index(raw)
+            && !inside_import
+            && !t.starts_with("//")
+            && !is_wrapped(raw, at)
+        {
+            out.push(i + 1);
         }
 
         if in_use && t.ends_with(';') {

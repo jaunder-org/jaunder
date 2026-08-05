@@ -270,18 +270,18 @@ pub fn execute_with<S: PrSource, A: land::PrArmer, C: watch::Clock>(
         clock.sleep_secs(wait.max(1));
         established = source.snapshot(&subject);
     }
-    if let Err(e) = &established {
-        if matches!(
+    if let Err(e) = &established
+        && matches!(
             snapshot::resolution_failure(e),
             snapshot::ResolutionFailure::Bail(_)
-        ) {
-            return Err(anyhow!(
-                "no such pull request: #{} in {}/{}",
-                subject.number,
-                subject.owner,
-                subject.repo
-            ));
-        }
+        )
+    {
+        return Err(anyhow!(
+            "no such pull request: #{} in {}/{}",
+            subject.number,
+            subject.owner,
+            subject.repo
+        ));
     }
 
     if landing {

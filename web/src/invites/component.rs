@@ -117,7 +117,7 @@ fn InviteCreateOutcome(action: ServerAction<Create>) -> impl IntoView {
 }
 
 /// Renders a single invite row: its expiry and, if used, when.
-fn render_invite_row(i: &Info) -> impl IntoView {
+fn render_invite_row(i: &Info) -> impl IntoView + use<> {
     view! {
         <li>
             "Expires: " {i.expires_at.to_string()}

@@ -123,13 +123,12 @@ pub fn run(sh: &Shell, result: &mut CommandResult, test_filter: Option<&str>) {
     // server to answer (~15s: 30 × 0.5s).
     let mut discovered = None;
     for _ in 0..30 {
-        if let Ok(contents) = std::fs::read_to_string(&runtime) {
-            if let Some(url) = base_url_from_runtime(&contents) {
-                if cmd!(sh, "curl -sf {url}/").quiet().run().is_ok() {
-                    discovered = Some(url);
-                    break;
-                }
-            }
+        if let Ok(contents) = std::fs::read_to_string(&runtime)
+            && let Some(url) = base_url_from_runtime(&contents)
+            && cmd!(sh, "curl -sf {url}/").quiet().run().is_ok()
+        {
+            discovered = Some(url);
+            break;
         }
         sleep(Duration::from_millis(500));
     }

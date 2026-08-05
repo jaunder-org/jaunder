@@ -376,10 +376,10 @@ pub fn watch<S: PrSource, C: Clock>(
                 }
             }
         }
-        if let Some(text) = current.warn.as_ref().filter(|_| !terminal) {
-            if prev.as_ref().and_then(|p| p.warn.as_ref()) != Some(text) {
-                em.emit(at.clone(), now, EventKind::Warning, text.clone());
-            }
+        if let Some(text) = current.warn.as_ref().filter(|_| !terminal)
+            && prev.as_ref().and_then(|p| p.warn.as_ref()) != Some(text)
+        {
+            em.emit(at.clone(), now, EventKind::Warning, text.clone());
         }
         prev = Some(current);
 

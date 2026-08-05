@@ -443,15 +443,15 @@ impl Drop for TelemetryGuard {
         // never change the command's outcome, so errors are logged, not
         // propagated — mirroring the non-fatal exporter-setup handling in
         // `init_tracing_impl`.
-        if let Some(meter) = self.meter.take() {
-            if let Err(error) = meter.shutdown() {
-                eprintln!("OTel meter provider shutdown failed during flush: {error}");
-            }
+        if let Some(meter) = self.meter.take()
+            && let Err(error) = meter.shutdown()
+        {
+            eprintln!("OTel meter provider shutdown failed during flush: {error}");
         }
-        if let Some(tracer) = self.tracer.take() {
-            if let Err(error) = tracer.shutdown() {
-                eprintln!("OTel tracer provider shutdown failed during flush: {error}");
-            }
+        if let Some(tracer) = self.tracer.take()
+            && let Err(error) = tracer.shutdown()
+        {
+            eprintln!("OTel tracer provider shutdown failed during flush: {error}");
         }
     }
 }

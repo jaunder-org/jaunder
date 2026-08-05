@@ -320,20 +320,20 @@ fn navigation_sections(spans: &[Span]) -> (Vec<HotspotRow>, Vec<TargetRow>) {
         };
         for nav in arr {
             for (label, field) in NAV_PHASES {
-                if let Some(v) = field_f64(nav, field) {
-                    if v >= 0.0 {
-                        entry(&mut phase_groups, label, Agg::default).add(v);
-                    }
+                if let Some(v) = field_f64(nav, field)
+                    && v >= 0.0
+                {
+                    entry(&mut phase_groups, label, Agg::default).add(v);
                 }
             }
             let path = to_url_path(nav.get("url").and_then(Value::as_str).unwrap_or(""));
             if path.is_empty() {
                 continue;
             }
-            if let Some(total) = field_f64(nav, "totalMs") {
-                if total >= 0.0 {
-                    entry(&mut url_groups, &path, Agg::default).add(total);
-                }
+            if let Some(total) = field_f64(nav, "totalMs")
+                && total >= 0.0
+            {
+                entry(&mut url_groups, &path, Agg::default).add(total);
             }
         }
     }

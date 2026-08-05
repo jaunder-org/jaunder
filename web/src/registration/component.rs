@@ -54,13 +54,13 @@ pub fn RegisterPage() -> impl IntoView {
     // live `username` field, which the user could have edited between submit and
     // response. The server still owns the real cookie.
     Effect::new(move |_| {
-        if let Some(Ok(_)) = register_action.value().get() {
-            if let Some(input) = register_action.input().get() {
-                set_session(SessionUser {
-                    username: input.username,
-                    is_operator: false,
-                });
-            }
+        if let Some(Ok(_)) = register_action.value().get()
+            && let Some(input) = register_action.input().get()
+        {
+            set_session(SessionUser {
+                username: input.username,
+                is_operator: false,
+            });
         }
     });
 

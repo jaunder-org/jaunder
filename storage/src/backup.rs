@@ -534,12 +534,10 @@ fn copy_or_link_media_file(
     if let Some(previous_file) = previous_backup
         .map(|backup| backup.join("media").join(relative_path))
         .filter(|path| path.is_file())
+        && files_have_same_content(source_path, &previous_file)?
+        && fs::hard_link(&previous_file, destination_path).is_ok()
     {
-        if files_have_same_content(source_path, &previous_file)?
-            && fs::hard_link(&previous_file, destination_path).is_ok()
-        {
-            return Ok(());
-        }
+        return Ok(());
     }
 
     fs::copy(source_path, destination_path)?;

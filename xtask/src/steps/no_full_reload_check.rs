@@ -32,10 +32,10 @@ fn violations(source: &str) -> Vec<usize> {
         if raw.trim_start().starts_with("//") {
             continue;
         }
-        if let Some(loc) = raw.find(".location()") {
-            if NAV_METHODS.iter().any(|m| raw[loc..].contains(m)) {
-                out.push(i + 1);
-            }
+        if let Some(loc) = raw.find(".location()")
+            && NAV_METHODS.iter().any(|m| raw[loc..].contains(m))
+        {
+            out.push(i + 1);
         }
     }
     out
