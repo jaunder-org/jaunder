@@ -229,7 +229,7 @@ fn sqlx_bridge(name: &syn::Ident) -> TokenStream {
         convert: quote! {
             <#name as ::core::str::FromStr>::from_str(v).map_err(
                 |e| -> ::sqlx::error::BoxDynError {
-                    ::std::convert::From::from(::std::format!("{e}; stored value: {v:?}"))
+                    ::std::format!("{e}; stored value: {v:?}").into()
                 },
             )
         },

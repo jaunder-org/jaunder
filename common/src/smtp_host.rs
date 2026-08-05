@@ -20,6 +20,12 @@ use thiserror::Error;
 pub struct SmtpHost(String);
 
 /// Error returned when an SMTP host fails its shape invariant (empty).
+///
+/// **Deliberately valueless**, unlike its `SmtpPort`/`SmtpSender` siblings, which carry the
+/// offending text (#687). Those types reject many different inputs, so an operator needs to
+/// be told *which* one was stored. This type rejects exactly one — the empty string — so a
+/// carried value would always be `""` and the message already names it. Value-carrying is
+/// there to make a bad row identifiable, not as a uniform shape to satisfy.
 #[derive(Debug, Error)]
 #[error("SMTP host must not be empty")]
 pub struct InvalidSmtpHost;

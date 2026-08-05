@@ -59,9 +59,10 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
             convert: quote! {
                 v.parse::<#name>()
                     .map_err(|e| -> ::sqlx::error::BoxDynError {
-                        ::std::convert::From::from(
-                            ::std::format!("{e}; stored value: {v:?}")
-                        )
+                        // `.into()`, not `From::from` — the charter test forbids the bare
+                        // token `From` anywhere in this derive's output, and an error
+                        // conversion must not be the thing that erodes that guard.
+                        ::std::format!("{e}; stored value: {v:?}").into()
                     })
             },
         });
@@ -189,7 +190,18 @@ mod tests {
             pub struct SmtpPort(u16);
         };
         let out = norm(&expand(&input));
-        for forbidden in ["FromStr", "TryFrom", "Deserialize", "Serialize", "Deref"] {
+        // Same list as `emits_only_the_three_bridge_impls`, bare `From` included. Dropping
+        // `From` here to accommodate an error conversion would quietly retire the strongest
+        // anti-constructor assertion for the one mode that most needs it.
+        for forbidden in [
+            "From",
+            "FromStr",
+            "TryFrom",
+            "Deserialize",
+            "Serialize",
+            "Display",
+            "Deref",
+        ] {
             assert!(
                 !out.contains(forbidden),
                 "{forbidden} must not be emitted: {out}"
