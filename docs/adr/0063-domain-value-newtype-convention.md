@@ -349,13 +349,28 @@ the wire). No inherent `as_str()` is generated — the `str` traits replace it. 
 new domain newtype is then a struct, a derive, and a `FromStr` — not 40 lines of
 boilerplate that drift apart over time.
 
-For a value whose invariant never rejects (only normalizes, or wraps verbatim),
-`#[str_newtype(infallible)]` supplies the trailer's
+For a value that has no rejecting invariant — one that only normalizes, or wraps
+verbatim — `#[str_newtype(infallible)]` supplies the trailer's
 `From<String>`-when-infallible half (§2): the author hand-writes `From<String>`
 instead of `FromStr`, the derive omits `TryFrom<String>` (which would collide
 with it via the std blanket `impl<T, U: Into<T>> TryFrom<U>`) and routes
-`Deserialize` through that `From<String>`. First users: `PostBody`/`PostTitle`
-(#402).
+`Deserialize` through that `From<String>`.
+
+**Choose it on the invariant, not on the signature.** The test is §2's — _does
+this value have an invariant?_ — and the constructor's fallibility is the
+consequence, not the criterion. Phrasing it the other way round ("its invariant
+never rejects") invites reading the current signature as evidence about the
+value, and that inversion has misclassified real types twice. `PostBody` was
+declared infallible on the claim that any body is valid, until a body of nothing
+but blank lines proved to be nonsense that the rest of the system was routing
+around rather than rejecting (#811, which moves it to a validating `FromStr`).
+`PostTitle` is the same shape and is still open (#830).
+
+The diagnostic: **if a type declared `infallible` needs a downstream gate to
+reject some of its values, it was mis-declared.** The gate is the invariant,
+displaced. First users: `PostBody`/`PostTitle` (#402) — both since found to have
+invariants, which is why this paragraph now leads with the value rather than the
+constructor.
 
 ### 4. Boundary rule
 

@@ -222,7 +222,8 @@ that blank _titles_ demonstrably did accumulate (migration
 **Verify:** `cargo xtask check` — `adr-format` passes. Do **not** run
 `adr promote` yet.
 
-- [ ] 1. ADR draft written
+- [x] 1. ADR draft written (`docs/adr/drafts/post-body-non-blank-invariant.md`,
+     gitignored until `promote` at ship) and ADR-0063 §3 amended
 
 ---
 
