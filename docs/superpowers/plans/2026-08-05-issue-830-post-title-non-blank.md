@@ -94,8 +94,8 @@ permalink, summary label, or a literal like "(untitled)". Surfaced by #830's
 spec review, which fixed only the `Some(PostTitle(""))` half.
 
 - [x] **Step 2: Record the number.** Filed as
-      [#832](https://github.com/jaunder-org/jaunder/issues/832) — type `Bug`, label
-      `visibility`, milestone "Correctness & data integrity", P1 (protocol
+      [#832](https://github.com/jaunder-org/jaunder/issues/832) — type `Bug`,
+      label `visibility`, milestone "Correctness & data integrity", P1 (protocol
       correctness: RFC 4287 §4.1.2 requires `atom:title`).
 
 No commit — the tracker is the deliverable.
@@ -128,7 +128,7 @@ No commit — the tracker is the deliverable.
   validating.
 - Consumes: nothing from Task 1.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Replace `common/src/post_title.rs`'s test module with (keeping the existing
 trimming and `Display` tests, adding rejection and wire tests):
@@ -239,14 +239,17 @@ unrepresentable, no titled entry can render an empty title.
 `common/src/feed/atom.rs` and `rss.rs` are deliberately **untouched** — the
 residual empty `<title>` for an _untitled_ entry is Task 1's follow-up.
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail** — failed to compile at
+      `render.rs:621` (`PostTitle::from` gone), the expected red.
 
 Run: `devtool run --cwd <worktree> -- cargo nextest run -p common post_title`
 
 Expected: FAIL — `PostTitle` has no `FromStr`, so the `.parse()` calls don't
 compile. A compile failure is the expected red here, not an assertion failure.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests** — 21 fixture sites converted, all
+      enumerated by `cargo check --workspace --all-targets`; matched the plan's
+      inventory exactly, no site missed.
 
 **3.1 — `common/src/post_title.rs`.** Replace the derive attribute and the door:
 
@@ -343,7 +346,8 @@ AC9's grep-checkable form: no `PostTitle::from` and no `.into()` yielding a
 `PostTitle` survives. Delete `storage/src/posts.rs:2979-2982` (case 2b) — the
 state it builds is no longer representable.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass** — 14 targeted tests green,
+      including both new blank-title tests.
 
 Run: `devtool run --cwd <worktree> -- cargo nextest run -p common post_title`
 then
@@ -353,7 +357,13 @@ Expected: PASS, including
 `fallback_summary_label_prefers_body_then_title_then_slug` (cases 1/2/3
 unchanged) and `derive_post_title_allows_titleless_notes`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit** — `086ed3e4`. The gate caught three lints on the first
+      run: `clippy::doc_markdown` (`AtomPub` needing backticks),
+      `missing_panics_doc` + `expect_used` on the `render.rs` parse — fixed by
+      removing the `expect` entirely in favour of
+      `if let Some((Ok(parsed), seed)) = title.map(…)`, which is what the plan
+      wanted anyway — and `needless_borrow` on the mapping test helper.
+      **The coverage risk did not materialise**: `coverage — clean`.
 
 Run `cargo xtask check` first (**`jaunder-commit`**).
 

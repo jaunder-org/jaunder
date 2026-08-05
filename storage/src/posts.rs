@@ -10,7 +10,7 @@ use common::ids::{AudienceId, ChannelId, PostId, RevisionId, TagId, UserId};
 use common::media::MediaRef;
 use common::pagination::RowLimit;
 use common::post_body::PostBody;
-use common::post_summary::PostSummary;
+use common::post_summary::{PostSummary, SummarySeed};
 use common::post_title::PostTitle;
 use common::root_relative_url::RootRelativeUrl;
 use common::seed::PageCursor;
@@ -97,28 +97,16 @@ impl PostRecord {
         url
     }
 
-    /// Generates a fallback summary from the post's body, title, or slug. The
-    /// fallback chain always yields a non-empty label (first non-empty body line →
-    /// title → slug), which [`PostSummary::truncated`] length-caps into the newtype.
+    /// Generates a fallback summary from the post's body, title, or slug. Every
+    /// candidate is non-blank by construction — a selected body line, a `PostTitle`,
+    /// or a `Slug` — so the chain cannot yield an empty label and
+    /// [`PostSummary::truncated`] needs no emptiness check of its own (#830).
+    #[must_use]
     pub fn fallback_summary_label(&self) -> PostSummary {
-        let label = self
-            .body
-            .lines()
-            .map(str::trim)
-            .find(|line| !line.is_empty())
-            .map(|line| line.chars().take(100).collect::<String>())
-            .filter(|line| !line.is_empty())
-            // Guard the title branch too: `PostTitle` is infallible and may be
-            // empty-after-trim, so fall through to the always-non-empty slug rather
-            // than feed `truncated` an empty label (its one invariant gap).
-            .or_else(|| {
-                self.title
-                    .clone()
-                    .map(String::from)
-                    .filter(|t| !t.trim().is_empty())
-            })
-            .unwrap_or_else(|| self.slug.to_string());
-        PostSummary::truncated(&label)
+        let seed = SummarySeed::first_body_line(&self.body)
+            .or_else(|| self.title.as_ref().map(SummarySeed::from_title))
+            .unwrap_or_else(|| SummarySeed::from_slug(&self.slug));
+        PostSummary::truncated(&seed)
     }
 }
 

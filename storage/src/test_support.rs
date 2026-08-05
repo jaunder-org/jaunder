@@ -1481,11 +1481,12 @@ impl SiteConfigStorage for InMemorySiteConfig {
 #[cfg(test)]
 mod tests {
     use super::{
-        backends, bootstrap_url, parse_password, report_drop_outcome, splice_db_name,
-        AudienceTarget, Backend, CreatePostError, PostFormat, PostSummary, SeedPost, SeedRawPost,
-        SeedUser,
+        backends, bootstrap_url, parse_password, parse_post_title, report_drop_outcome,
+        splice_db_name, AudienceTarget, Backend, CreatePostError, PostFormat, PostSummary,
+        SeedPost, SeedRawPost, SeedUser,
     };
     use chrono::Utc;
+    use common::post_summary::SummarySeed;
     // The free renderer, to pin that the builder's HTML is exactly `render(body)` — the
     // half of `RenderOutput` the seeded record carries.
     use common::render::render;
@@ -1728,7 +1729,9 @@ mod tests {
         let post = SeedRawPost::new(author)
             .draft()
             .format(PostFormat::Org)
-            .summary(PostSummary::truncated("excerpt"))
+            .summary(PostSummary::truncated(&SummarySeed::from_title(
+                &parse_post_title("excerpt"),
+            )))
             .tags(["rust"])
             .seed(state)
             .await;
