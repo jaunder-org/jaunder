@@ -134,8 +134,6 @@ pub enum PerformUpdateError {
     /// *becomes* blank — an Org post whose title source is its entire content.
     #[error("post body is only its title, leaving nothing to store")]
     EmptyPost,
-    #[error("invalid slug")]
-    InvalidSlug,
     #[error("post not found")]
     NotFound,
     #[error("not authorized")]
@@ -156,14 +154,14 @@ impl From<UpdatePostError> for PerformUpdateError {
 
 impl From<PerformUpdateError> for host::error::InternalError {
     /// Reproduces the former `web::posts::server::perform_update_error`
-    /// `(kind, class, public_message)`: empty/invalid-slug are client validation
-    /// errors, not-found/unauthorized mask as a 404, storage is a masked storage
-    /// failure. The validation arms carry the typed `PerformUpdateError` as the
+    /// `(kind, class, public_message)`: the empty-post arm is a client validation
+    /// error, not-found/unauthorized mask as a 404, storage is a masked storage
+    /// failure. The validation arm carries the typed `PerformUpdateError` as the
     /// operator-side source instead of flattening it (A19).
     fn from(error: PerformUpdateError) -> Self {
         use host::error::InternalError;
         match error {
-            PerformUpdateError::EmptyPost | PerformUpdateError::InvalidSlug => {
+            PerformUpdateError::EmptyPost => {
                 InternalError::validation_source(error.to_string(), error)
             }
             PerformUpdateError::NotFound | PerformUpdateError::Unauthorized => {
@@ -1344,12 +1342,6 @@ mod tests {
     }
 
     #[test]
-    fn perform_update_error_invalid_slug_display() {
-        let err = PerformUpdateError::InvalidSlug;
-        assert_eq!(err.to_string(), "invalid slug");
-    }
-
-    #[test]
     fn perform_update_error_not_found_display() {
         let err = PerformUpdateError::NotFound;
         assert_eq!(err.to_string(), "post not found");
@@ -1401,10 +1393,6 @@ mod tests {
             empty.public_message(),
             "post body is only its title, leaving nothing to store"
         );
-
-        let invalid_slug: InternalError = PerformUpdateError::InvalidSlug.into();
-        assert_eq!(invalid_slug.kind(), ErrorKind::Validation);
-        assert_eq!(invalid_slug.public_message(), "invalid slug");
 
         let not_found: InternalError = PerformUpdateError::NotFound.into();
         assert_eq!(not_found.kind(), ErrorKind::NotFound);

@@ -269,7 +269,7 @@ impl From<storage::PerformUpdateError> for HandlerError {
     fn from(err: storage::PerformUpdateError) -> Self {
         use storage::PerformUpdateError as E;
         match &err {
-            E::EmptyPost | E::InvalidSlug => HandlerError::BadRequest,
+            E::EmptyPost => HandlerError::BadRequest,
             E::NotFound | E::Unauthorized => HandlerError::NotFound,
             E::Storage(_) => {
                 log_internal(&err);
@@ -468,10 +468,6 @@ mod tests {
     fn update_error_maps_each_class() {
         assert_eq!(
             status(PerformUpdateError::EmptyPost.into()),
-            StatusCode::BAD_REQUEST
-        );
-        assert_eq!(
-            status(PerformUpdateError::InvalidSlug.into()),
             StatusCode::BAD_REQUEST
         );
         assert_eq!(

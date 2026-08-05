@@ -719,8 +719,27 @@ cargo nextest run -p storage -p jaunder
 cargo xtask check
 ```
 
-- [ ] 9. `InvalidSlug` proven reachable (kept, documented) or proven dead
-     (removed)
+- [x] 9. `InvalidSlug` — **the answer is asymmetric**, which is why the plan
+     said prove it rather than assume
+
+> - **`PerformCreationError::InvalidSlug` is KEPT.** It is constructed live at
+>   `post_service.rs:437` from `candidate_slug`'s `Result`, and the plan is
+>   explicit that `candidate_slug` keeps its fallibility — the suffixed
+>   candidate is a different question from the seed. Removing the variant would
+>   force `candidate_slug` infallible, a separate design change this issue rules
+>   out.
+> - **`PerformUpdateError::InvalidSlug` is REMOVED.** Task 7 folded
+>   `slugify_title` into `derive_post_naming`, which took away its only
+>   production construction site.
+>
+> **The proof is stronger than the plan's procedure.** The plan proposed
+> `unreachable!()`-ing the arm and running the suite, which tests _runtime_
+> reachability — a suite gap reads as "dead". Deleting the variant outright and
+> finding the tree still compiles proves it was **statically** unconstructible.
+> The compiler is the better oracle here, so that is what was used.
+>
+> Its `From<PerformUpdateError> for InternalError` arm, the AtomPub `BadRequest`
+> mapping, and three tests asserting it went with it.
 
 ---
 
