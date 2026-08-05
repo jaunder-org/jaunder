@@ -99,11 +99,46 @@ export type WasmTiming = {
   responseEndMs: number;
 };
 
-/** Everything harvested from a single document, at its `load`. */
+/**
+ * Everything harvested from a single document, at mount-ready and again at `load`.
+ *
+ * Harvested at BOTH points (#818). Mount-ready is the complete one by construction —
+ * `csr` emits every `jaunder.*` mark synchronously before setting `data-mounted` — but
+ * a navigation that never mounts still reaches `load`, and its wasm resource timing is
+ * worth keeping. The two are reconciled by [`mergeDocumentTiming`].
+ */
 export type DocumentTiming = {
   marks: BootMark[];
   wasm: WasmTiming | null;
 };
+
+/**
+ * Pick the more complete of two harvests of the same document.
+ *
+ * Marks persist for a document's lifetime, so a later harvest is a superset of an
+ * earlier one — but `documentTimings.set` is last-*resolution*-wins, which coincides
+ * with issue order only because two `page.evaluate`s on one page serialize over a
+ * single connection. That is undocumented transport behavior, and firefox is exactly
+ * the case that depends on it: `load` fires BEFORE mount there, so its empty snapshot
+ * would win under any rule that trusts arrival order. Comparing mark counts makes the
+ * invariant local (#818).
+ *
+ * Picks a snapshot, never blends one — a caller may rely on identity.
+ */
+export function mergeDocumentTiming(
+  existing: DocumentTiming | undefined,
+  incoming: DocumentTiming,
+): DocumentTiming {
+  if (existing === undefined) return incoming;
+  if (incoming.marks.length !== existing.marks.length) {
+    return incoming.marks.length > existing.marks.length ? incoming : existing;
+  }
+  // Equal mark counts: prefer whichever actually saw the `.wasm` resource entry.
+  // `load` can fire before the fetch completes (that is defect 2 of #818), so a tie
+  // on marks does not mean a tie on completeness.
+  if (existing.wasm === null && incoming.wasm !== null) return incoming;
+  return existing;
+}
 
 export type TraceCapture = {
   /** Route records that START after this call to `phase`. */
@@ -112,12 +147,21 @@ export type TraceCapture = {
   /** Read the client-side perf summary. Must be called while `page` is alive. */
   readPagePerf(page: Page): Promise<PagePerfSummary>;
   /**
-   * Per-document timing for `navigationId`, harvested at that document's `load`.
+   * Per-document timing for `navigationId`, harvested at mount-ready and again at
+   * that document's `load`.
    *
    * Harvested per navigation, NOT at teardown, because `performance` marks and
    * resource entries are per-document — a full navigation wipes them. A single
    * read at teardown could only ever see the last document, while the whole point
-   * is to decompose EVERY navigation's `commit_to_mount` (#794).
+   * is to decompose EVERY navigation's boot (#794).
+   *
+   * **What this decomposes is the DOCUMENT-relative boot total** — the interval
+   * from `performance.timeOrigin` to the last boot mark — not `commit_to_mount`.
+   * The two are different clocks: `commitToMountMs` is built from Node-side
+   * `Date.now()` stamps, so the difference between them is event-delivery latency
+   * plus the mount→binding round trip, both cross-process and plausibly
+   * engine-asymmetric. #794 framed the goal as decomposing `commit_to_mount`;
+   * doing that would charge harness overhead to app boot phases (#818).
    */
   timingFor(navigationId: number): DocumentTiming | undefined;
   /** Await the in-flight per-document harvests. Call before reading. */
@@ -162,6 +206,17 @@ export async function attachTraceCapture(
    * Snapshot this document's marks and `.wasm` resource timing before the next
    * navigation wipes them.
    *
+   * **Called at two points, and the mount-ready one is what makes this complete.**
+   * `csr` emits every `jaunder.*` mark synchronously before setting `data-mounted`,
+   * so a harvest driven by that attribute catches the whole set by construction on
+   * any engine. The `load` harvest is kept because a navigation that never mounts
+   * still reaches it and still has wasm timing worth recording — but `load` alone
+   * is not enough twice over: it frequently never fires at all (`goto` waits only
+   * for `domcontentloaded`), and on firefox it lands before boot has even reached
+   * `boot.entry`, because `csr/index.html` starts the wasm from a module script
+   * that never awaits `init(...)`, so the fetch does not block `load`. Firefox lost
+   * that race on 210/210 navigations of every run in the #792 corpus (#818).
+   *
    * Everything returned is document-relative (`performance.timeOrigin`-based), so
    * the values are comparable to each other but NOT to the Node-side `Date.now()`
    * fields on `NavigationRecord`. The boot decomposition is computed entirely
@@ -193,7 +248,12 @@ export async function attachTraceCapture(
             : null,
         };
       }, MARK_PREFIX);
-      documentTimings.set(navigationId, timing);
+      // Merge, never overwrite: this runs twice per navigation (mount-ready and
+      // `load`) and the two can resolve in either order. See `mergeDocumentTiming`.
+      documentTimings.set(
+        navigationId,
+        mergeDocumentTiming(documentTimings.get(navigationId), timing),
+      );
     } catch {
       // Page closed, or navigated again before the evaluate landed. A missing
       // entry is reported as absent rather than as zeros.
@@ -219,7 +279,7 @@ export async function attachTraceCapture(
     return undefined;
   };
 
-  await context.exposeBinding("__jaunderRecordMount", (_source, value) => {
+  await context.exposeBinding("__jaunderRecordMount", (source, value) => {
     if (!value || typeof value !== "object") return;
     const payload = value as { href?: unknown };
     const href = typeof payload.href === "string" ? payload.href : null;
@@ -238,6 +298,14 @@ export async function attachTraceCapture(
       if (navigation.mountedMs !== null) continue;
       if (href !== null && navigation.url !== href) continue;
       navigation.mountedMs = nowMs;
+      // Harvest HERE, not only at `load`. This instant is complete by
+      // construction — `csr` marks `boot.mount_done` immediately before setting
+      // `data-mounted`, and this callback runs off the MutationObserver watching
+      // that attribute. Safe to issue an `evaluate` from a binding callback: this
+      // callback is not `async`, so Playwright resolves the binding at once and
+      // the evaluate proceeds independently over the duplex connection — it never
+      // re-enters the page's JS thread (#818).
+      pendingHarvests.push(harvestDocument(source.page, navigation.id));
       return;
     }
   });
@@ -430,7 +498,19 @@ export async function attachTraceCapture(
       return documentTimings.get(navigationId);
     },
     async settle() {
-      await Promise.all(pendingHarvests);
+      // Drain until the queue stops growing, rather than awaiting one snapshot of
+      // it. `Promise.all` captures the array's contents synchronously, so anything
+      // pushed WHILE we await is never awaited. That was harmless while every
+      // harvest came from a `load` handler that had already fired; the mount-ready
+      // harvest arrives via async binding dispatch and can land after settling has
+      // begun, and a harvest missed here reads as a navigation with no boot
+      // decomposition — indistinguishable from the bug this all fixes (#818).
+      let drained = 0;
+      while (drained < pendingHarvests.length) {
+        const batch = pendingHarvests.slice(drained);
+        drained = pendingHarvests.length;
+        await Promise.all(batch);
+      }
     },
     async readPagePerf(page: Page): Promise<PagePerfSummary> {
       const empty: PagePerfSummary = {

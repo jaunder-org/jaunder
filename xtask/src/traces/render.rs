@@ -9,8 +9,8 @@ use tabled::settings::Style;
 use tabled::{Table, Tabled};
 
 use super::analyze::{
-    Analysis, AssetRow, ByProjectRow, E2eTestRow, HotspotRow, LongTaskProjectRow, SlowSpanRow,
-    SpanCoverageRow, TargetRow, TraceTotalRow,
+    Analysis, AssetRow, BootCoverageRow, ByProjectRow, E2eTestRow, HotspotRow, LongTaskProjectRow,
+    SlowSpanRow, SpanCoverageRow, TargetRow, TraceTotalRow,
 };
 
 /// Format a millisecond value the way the Node reports did — three decimals.
@@ -119,6 +119,30 @@ impl From<&SpanCoverageRow> for SpanCoverageDisplay {
             uncovered_ms: ms(r.uncovered_ms),
             uncovered_pct: format!("{:.1}", r.uncovered_pct),
             test: r.test.clone(),
+        }
+    }
+}
+
+#[derive(Tabled)]
+struct BootCoverageDisplay {
+    source: String,
+    project: String,
+    navigations: u64,
+    mounted: u64,
+    #[tabled(rename = "full marks")]
+    full_marks: u64,
+    dropped: u64,
+}
+
+impl From<&BootCoverageRow> for BootCoverageDisplay {
+    fn from(r: &BootCoverageRow) -> Self {
+        Self {
+            source: r.source.clone(),
+            project: r.project.clone(),
+            navigations: r.navigations,
+            mounted: r.mounted,
+            full_marks: r.full_marks,
+            dropped: r.dropped,
         }
     }
 }
@@ -274,6 +298,15 @@ pub fn render(analysis: &Analysis, top: usize) -> String {
         );
     }
 
+    // Second, for the same reason: whether the boot decomposition was captured at
+    // all, per backend and browser. Every phase figure downstream is only as good
+    // as this table (#818).
+    section::<BootCoverageDisplay>(
+        &mut out,
+        "Boot decomposition coverage (from e2e.navigation_top_json)",
+        &all_display(&analysis.boot_coverage),
+    );
+
     section::<SlowSpanDisplay>(
         &mut out,
         &format!("Top {top} slowest spans"),
@@ -380,6 +413,31 @@ mod tests {
         // formatted ms cells (each row renders one "N.000" duration).
         let data_rows = out.matches(".000").count();
         assert_eq!(data_rows, 5, "ranked table must be sliced to top");
+    }
+
+    #[test]
+    fn render_shows_every_boot_coverage_row_with_its_source() {
+        use crate::traces::analyze::BootCoverageRow;
+        let row = |source: &str| BootCoverageRow {
+            source: source.into(),
+            project: "firefox".into(),
+            navigations: 10,
+            mounted: 9,
+            full_marks: 9,
+            dropped: 0,
+        };
+        let a = Analysis {
+            span_count: 1,
+            boot_coverage: vec![row("sqlite"), row("postgres")],
+            ..Default::default()
+        };
+        let out = render(&a, 25);
+        assert!(out.contains("Boot decomposition coverage"));
+        assert!(out.contains("full marks"));
+        // Not a ranked table: both backends render even at `top` far above the row
+        // count, and each is named — pooling them would hide one entirely.
+        assert!(out.contains("sqlite"));
+        assert!(out.contains("postgres"));
     }
 
     #[test]

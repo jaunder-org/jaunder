@@ -96,11 +96,52 @@ guessed beforehand.
 
 ### What the boot marks do and do not cover
 
-Marks are harvested per navigation at that document's `load` event. `goto` waits
-only for `domcontentloaded`, so **a navigation whose test finishes before `load`
-fires records no marks** — in the measured run, 73 navigations across 59 of 127
-tests carried them. Those navigations report the marks as _absent_, never as
-zeros, so a missing decomposition cannot be mistaken for an instant one.
+Marks are harvested per navigation **when `data-mounted` is observed**, and
+again at that document's `load`. The mount-ready harvest is the complete one, by
+construction: `csr/src/lib.rs` emits every `jaunder.*` mark synchronously before
+`mark_ready()` sets the attribute, so the observer that fires on it cannot see a
+partial set — on any engine. The `load` harvest is kept because a navigation
+that never mounts still reaches it and its `.wasm` resource timing is still
+worth recording. The two are reconciled by `mergeDocumentTiming`, which keeps
+whichever snapshot has more marks rather than whichever resolved last (#818).
+
+Navigations that record nothing report the marks as _absent_, never as zeros, so
+a missing decomposition cannot be mistaken for an instant one.
+
+**Harvesting at `load` alone — the pre-#818 design — was dark on firefox
+entirely.** Two compounding defects:
+
+1. `load` frequently never fires. `goto` waits only for `domcontentloaded`, so
+   the test navigates away or ends first. This capped chromium at ~34% of
+   navigations.
+2. When `load` _does_ fire on firefox, it lands before boot has reached
+   `jaunder.boot.entry`. `csr/index.html` starts the wasm from a module script
+   that never awaits `init(...)`, so the fetch does not block `load` — and Gecko
+   lost that race every single time.
+
+Measured over the whole preserved #792 corpus (`e2e.boot_marks_json`, all 210
+navigations per combo, `e2e.navigation_top_dropped = 0` throughout):
+
+| combo (sqlite)           | marks-per-nav histogram                                   |
+| ------------------------ | --------------------------------------------------------- |
+| b1 / b2 / b3 chromium    | `{0: 138, 4: 72}` / `{0: 135, 4: 75}` / `{0: 139, 4: 71}` |
+| b1 / b2 / b3 firefox     | `{0: 210}` — all three                                    |
+| a1 chromium (warmup arm) | `{0: 151, 4: 59}`                                         |
+| a1 firefox (warmup arm)  | `{0: 210}`                                                |
+
+Chromium was strictly all-or-nothing, last mark always `mount_done`. Firefox was
+**0 on 210/210, in both arms, across every run** — a systematic blackout, not a
+sampling shortfall. **That corpus therefore contains no firefox boot
+decomposition at all**, which is why #818 could not be answered from it and had
+to re-measure. Nothing noticed for two issues' worth of work because
+`bootPhases` is written by the harness and read by nothing.
+
+Coverage is now _reported_ per `(source, project)` by
+`cargo xtask traces analyze` — navigations, mounted, full mark sets, dropped —
+and an unthresholded e2e assertion (`end2end/tests/boot-marks.spec.ts`) reddens
+the gate if the mechanism breaks outright. It is **not yet gated on a
+threshold**, so gradual erosion would still pass; that is
+[#831](https://github.com/jaunder-org/jaunder/issues/831).
 
 ### Truncation is reported, never silent
 
@@ -356,6 +397,12 @@ The analyzer reports:
 - per-trace duration totals
 - per-test span coverage: Playwright-reported duration vs the time covered by
   the lifecycle span tree, and the uncovered remainder
+- **boot-decomposition coverage**, per `(source, project)`: navigations, how
+  many mounted, how many carried a full mark set, and how many were dropped by
+  `e2e.navigation_top_json`'s cap. Keyed on the trace **file** as well as the
+  project because `projectName` is the browser and names no backend — keying on
+  project alone would pool sqlite's navigations with postgres's. Certify this
+  before drawing conclusions from a corpus (#818).
 
 ### `commit_to_mount` stops at `data-mounted` — read `mount_to_settled_ms` too
 
