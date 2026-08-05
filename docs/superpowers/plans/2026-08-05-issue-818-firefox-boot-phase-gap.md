@@ -748,7 +748,7 @@ one against the other's baseline would misstate the improvement.
 If `full marks < mounted` on either engine, **stop and diagnose** — most likely
 Task 3 Step 2's `pendingHarvests` registration or Step 3's drain loop.
 
-- [ ] **Step 4: Full gate** (background mode)
+- [x] **Step 4: Full gate** (background mode)
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-818-firefox-boot-phase-gap -- \
@@ -757,13 +757,13 @@ devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-818-firefox-
 
 Expected: green (AC10).
 
-- [ ] **Step 5: Push and open PR 1**
+- [x] **Step 5: Push and open PR 1**
 
 Per **jaunder-ship**. The body states Step 3's figures on both denominators,
 references #818, and says explicitly that it does **not** close the issue — PR 2
 does.
 
-- [ ] **Step 6: Watch it home**
+- [x] **Step 6: Watch it home**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-818-firefox-boot-phase-gap -- \
@@ -802,7 +802,7 @@ the repo moved this exact class of tool into xtask deliberately. A committed
   `(source, project, cacheWarmth)`: n, median of each of spec D8's six segments,
   median `bootTotalMs`, median `commitToMountMs`, median frame skew.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```rust
 #[test]
@@ -839,7 +839,7 @@ fn medians_are_the_lower_of_the_two_middle_values_on_even_counts() {
 }
 ```
 
-- [ ] **Step 2: Run them, verify they fail**
+- [x] **Step 2: Run them, verify they fail**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-818-firefox-boot-phase-gap -- \
@@ -848,14 +848,14 @@ devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-818-firefox-
 
 Expected: FAIL — module not defined.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Segments per spec D8's table, all document-relative, in `startTime` order;
 select the three intervals by `boot.` prefix rather than by position, so a new
 mark in `client::perf` extends the table instead of breaking closure.
 `commitToMountMs` and the skew are **reported, never decomposed** (spec D8).
 
-- [ ] **Step 4: Self-check against the #792 corpus**
+- [x] **Step 4: Self-check against the #792 corpus**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-818-firefox-boot-phase-gap -- \
@@ -869,7 +869,7 @@ closure violations, and an explicit "no decomposed navigations" line for
 firefox. (If `read_spans` cannot read `.gz`, gunzip to a temp file first — do
 not add decompression to this task.)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add xtask/src/traces/boot_phases.rs xtask/src/traces/mod.rs xtask/src/lib.rs
@@ -888,10 +888,10 @@ axis the spec lists as a non-goal and double the window. Drive the two sqlite
 combos directly instead — the same shape as #792's own documented reproduction
 recipe.
 
-- [ ] **Step 1: Confirm quiescence with the user** before starting; record the
+- [x] **Step 1: Confirm quiescence with the user** before starting; record the
       baseline (`cat /proc/loadavg`).
 
-- [ ] **Step 2: Collect six runs**, interleaving the settings sets run-by-run
+- [x] **Step 2: Collect six runs**, interleaving the settings sets run-by-run
       (single-worker, gate, single-worker, gate, …), each with a distinct
       `e2eSalt` in `flake.nix` — without it nix replays a cached derivation and
       runs 2–3 are byte-identical to run 1.
@@ -918,7 +918,7 @@ renaming to `<set>-<run>-sqlite-<browser>.jsonl`.
 Sample `/proc/loadavg` **before and after every run** and record it. **Discard
 and re-take any run whose 1-minute figure exceeds 3.0 at either sample.**
 
-- [ ] **Step 3: Certify** with Task 5's coverage section, per browser, pooled
+- [x] **Step 3: Certify** with Task 5's coverage section, per browser, pooled
       over each settings set's three runs:
   - `full_marks / mounted ≥ 99%`
   - `mounted / navigations ≥ 95%`
@@ -939,10 +939,10 @@ and re-take any run whose 1-minute figure exceeds 3.0 at either sample.**
 
 Spec AC13–AC17, AC20.
 
-- [ ] **Step 1: Produce the tables** with `cargo xtask traces boot-phases`, for
+- [x] **Step 1: Produce the tables** with `cargo xtask traces boot-phases`, for
       each of cold and warm and each settings set (spec D6).
 
-- [ ] **Step 2: Compute signed shares** (AC13): per segment,
+- [x] **Step 2: Compute signed shares** (AC13): per segment,
       `ff_median(segment) − chr_median(segment)`, over the firefox−chromium
       `bootTotalMs` gap. Shares sum to 100% by construction. A segment where
       firefox is _faster_ contributes negatively and is shown as such, never
@@ -951,11 +951,28 @@ Spec AC13–AC17, AC20.
       **A residual above 1% of the gap halts the analysis** — the segments close
       exactly, so a residual is a data defect to investigate, not a finding to report.
 
-- [ ] **Step 3: Report the frame skew** (AC14): median
+- [x] **Step 3: Report the frame skew** (AC14): median
       `commitToMountMs − bootTotalMs` per engine, cold and warm. Stated
       separately; never folded into a segment share.
 
-- [ ] **Step 4: Apply the pre-registered rules** (AC15) — **write the diagnosis
+**TWO PRE-REGISTERED RULES WERE WRONG AND WERE REPLACED. Both are recorded in
+the write-up, because a rule fixed in advance is only worth something if
+breaking it is visible.**
+
+1. **AC11's loadavg discard rule (>3.0) is confounded.** Samples are taken
+   between back-to-back runs, so they measure the _finishing run's own VM_, not
+   ambient contention — systematically: after gate runs 2.69/3.32/2.25, after
+   single-worker runs 1.40/1.52/1.42. One sample hit 3.32; re-taking would have
+   re-rolled the same self-load. Replaced by within-arm consistency (<2% spread,
+   #792's standard). The breaching run is not a duration outlier.
+2. **AC13's 1%-residual rule conflates per-navigation closure with median
+   additivity.** Closure holds per navigation exactly (0/2496 violations), but
+   `median(a+b) ≠ median(a)+median(b)`, so median-based shares cannot close —
+   observed 2–7% apparent residual, entirely an artifact. **Shares are computed
+   on means**, which are linear and close to 0.0000%. Medians are kept as robust
+   cross-checks.
+
+- [x] **Step 4: Apply the pre-registered rules** (AC15) — **write the diagnosis
       before composing any narrative**, so the rules decide rather than the
       prose:
 
@@ -969,14 +986,14 @@ Spec AC13–AC17, AC20.
       corpus** — not #792's suite-level 1.47×) · **unresolved** (anything else, named
       explicitly with a proposed next step).
 
-- [ ] **Step 5: Quantify the observer effect** (AC16): post-fix chromium
+- [x] **Step 5: Quantify the observer effect** (AC16): post-fix chromium
       `mountToSettledMs` from the **gate-settings** subset vs #792 arm B (also
       2-worker — this is why the subset matters). Call out >10% of the baseline
       median as affected, and state which mount-path changes, if any, landed
       between 2026-08-04 and collection. If affected: a follow-up issue, not a
       blocker.
 
-- [ ] **Step 6: Write it up** (AC17) as a `#818` section in
+- [x] **Step 6: Write it up** (AC17) as a `#818` section in
       `docs/observability.md`, following the `#792`/`#155` shape: conditions,
       the runs table, the phase table, the verdict, the reproduction recipe, and
       the `traces boot-phases` invocation. If the disposition is **intrinsic**,
@@ -984,7 +1001,7 @@ Spec AC13–AC17, AC20.
       (AC20) — an intrinsic answer's whole value is that it stops the question
       being reopened.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-818-firefox-boot-phase-gap -- \
@@ -999,14 +1016,14 @@ git commit -m "docs(e2e): attribute the firefox/chromium boot gap by phase (#818
 
 Spec AC19.
 
-- [ ] **Step 1: Preserve** to
+- [x] **Step 1: Preserve** to
       `~/measurements/jaunder/issue-818-firefox-boot-phases/` with a README
       matching the #792 convention: runs, salts, settings set, conditions
       (`/proc/loadavg` before/after each run), `store-paths.tsv`, known limits,
       consumers. Outside the repo — 380 MB-scale, and anything inside the
       worktree risks perturbing flake evaluation.
 
-- [ ] **Step 2: Reset `e2eSalt`** in `flake.nix` to `""` and confirm no commit
+- [x] **Step 2: Reset `e2eSalt`** in `flake.nix` to `""` and confirm no commit
       carries a salt.
 
 - [ ] **Step 3: Push and open PR 2**, referencing #818 and stating that it
