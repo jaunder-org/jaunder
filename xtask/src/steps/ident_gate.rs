@@ -7,17 +7,30 @@
 //! walk that lands in two copies out of three leaves a gate that still reports
 //! green, for the wrong reason — the exact failure ADR-0085 was written about. So
 //! the traversal lives here once, and a gate supplies only what is genuinely its
-//! own: the roots it scans, the [`Population`] it recognises, and the words it
+//! own: the roots it scans, the [`population`] it recognises, and the words it
 //! fails in.
 //!
 //! Two layers:
 //!
 //! - [`scan`] is the **traversal**: parse, track test-code depth and the enclosing
-//!   fn stack, walk macro invocation tokens by hand, and ask the gate's
-//!   [`Population`] whether each occurrence is a member.
+//!   fn stack, walk macro invocation tokens by hand, and ask whether each occurrence
+//!   is in the gate's [`population`].
 //! - [`Gate`] is the whole **enumerating gate** on top of it: deny by default,
 //!   [`classify`] against the in-source markers, and a [`Report`] supplying the
 //!   prose.
+//!
+//! **A gate reads idents everywhere, by construction.** A population is a set of
+//! names, and membership is the same question in ordinary code and inside macro
+//! tokens — there is no per-gate hook, so there is no hook a gate can silently fail
+//! to implement. (Until #803 this was a `Population` trait with two required methods,
+//! defended on exactly that "say what you do not look at" ground. The argument is
+//! sound and is why the property is stated here rather than dropped; what did not
+//! survive was paying a type parameter across four files for a trait with one
+//! implementor and no variation.) A future gate whose membership genuinely depends on
+//! positional context — `TrustedDoor`, removed in #778, read the path qualifier three
+//! tokens to the left — re-introduces a seam in `walk_macro_tokens`, which already
+//! materialises the flat sibling stream (the index is one `.enumerate()` away); it
+//! does not resurrect the trait blind.
 //!
 //! **Exemptions are markers, not a list** (#778). A site is exempt when the line
 //! *immediately above* it carries `// <gate-step>:allow <reason>`. The key is one
@@ -64,6 +77,7 @@
 //! file we cannot walk could hide a member, and a gate that quietly shrinks its own
 //! population reports green for the one reason it must never report green.
 //!
+//! [`population`]: Gate::population
 //! [`raw-html-door`]: crate::steps::raw_html_door_check
 //! [`html-sink`]: crate::steps::html_sink_check
 //! [`rendered-html-from-trusted`]: crate::steps::rendered_html_from_trusted_check
@@ -146,58 +160,10 @@ pub struct Mention {
     pub function: String,
 }
 
-/// What a gate counts as a member of its population — the one question the scan
-/// cannot answer for itself (ADR-0085 principle 1: the population is read
-/// structurally, from what the AST says, never from a pattern believed to
-/// characterise violations).
-///
-/// Both hooks are required rather than defaulted: a gate must say what it does
-/// *not* look at, because "I never implemented that hook" and "that construct is
-/// outside my population" are the same silence otherwise.
-pub trait Population {
-    /// A bare ident in ordinary (non-macro) code, at any position — a call, a field,
-    /// a path segment, a bare reference.
-    fn ident(&self, id: &proc_macro2::Ident) -> bool;
-
-    /// An ident inside a macro invocation's tokens. `trees[idx]` is `id`; the flat
-    /// sibling stream is passed so a gate can read positional context (tokens carry
-    /// no path structure, so `Type::assoc` reads as `Ident : : Ident`).
-    fn macro_ident(
-        &self,
-        id: &proc_macro2::Ident,
-        trees: &[proc_macro2::TokenTree],
-        idx: usize,
-    ) -> bool;
-}
-
-/// The population of a gate keyed purely by ident: an occurrence of any of these
-/// names, in ordinary code or inside macro tokens, wherever it appears.
-///
-/// Matching the ident rather than a call shape is what keeps such a gate an
-/// enumeration instead of a search for the spelling someone anticipated — a builder
-/// call, a struct field and a bare reference are all inside the population rather
-/// than silently outside it (ADR-0085 principle 3).
-pub struct AnyOf(pub &'static [&'static str]);
-
-impl Population for AnyOf {
-    fn ident(&self, id: &proc_macro2::Ident) -> bool {
-        self.0.iter().any(|name| id == *name)
-    }
-
-    fn macro_ident(
-        &self,
-        id: &proc_macro2::Ident,
-        _trees: &[proc_macro2::TokenTree],
-        _idx: usize,
-    ) -> bool {
-        self.ident(id)
-    }
-}
-
 /// Every **non-test** mention of `population` in the source, in line order, plus
 /// the line ranges of the test code that was skipped. `Err` on a `syn` parse
 /// failure (fail-loud). Pure given the source, so gates unit-test through it.
-pub fn scan<P: Population>(source: &str, population: &P) -> Result<Scan, String> {
+pub fn scan(source: &str, population: &[&str]) -> Result<Scan, String> {
     let file = syn::parse_file(source).map_err(|e| format!("cannot parse as Rust: {e}"))?;
     let mut scanner = Scanner {
         population,
@@ -273,8 +239,8 @@ pub fn classify(source: &str, found: &Scan, token: &str) -> Classified {
     out
 }
 
-struct Scanner<'p, P: Population> {
-    population: &'p P,
+struct Scanner<'p> {
+    population: &'p [&'p str],
     /// >0 while inside a `#[cfg(test)]`/`#[test]` item — members there are exempt.
     test_depth: usize,
     /// Names of the enclosing functions; the last is the nearest.
@@ -312,7 +278,12 @@ fn has_test_attr(attrs: &[syn::Attribute]) -> bool {
     })
 }
 
-impl<P: Population> Scanner<'_, P> {
+impl Scanner<'_> {
+    /// Whether `id` is one of the names this gate polices.
+    fn is_member(&self, id: &proc_macro2::Ident) -> bool {
+        self.population.iter().any(|name| id == *name)
+    }
+
     /// Note that `item` is test code, so a marker inside it is never an orphan.
     fn record_test_range<T: syn::spanned::Spanned>(&mut self, item: &T) {
         let span = syn::spanned::Spanned::span(item);
@@ -338,12 +309,14 @@ impl<P: Population> Scanner<'_, P> {
     /// can duplicate a hit already found in the AST — and comments are not tokens,
     /// so prose mentioning a guarded name cannot false-positive.
     fn walk_macro_tokens(&mut self, tokens: &proc_macro2::TokenStream) {
-        let population = self.population;
+        // Materialised rather than iterated lazily: membership needs only the ident
+        // today, but the flat sibling stream is the seam a positional-context gate
+        // would read (see the module doc), and that stays one `.enumerate()` away.
         let trees: Vec<proc_macro2::TokenTree> = tokens.clone().into_iter().collect();
-        for (idx, tt) in trees.iter().enumerate() {
+        for tt in &trees {
             match tt {
                 proc_macro2::TokenTree::Group(g) => self.walk_macro_tokens(&g.stream()),
-                proc_macro2::TokenTree::Ident(id) if population.macro_ident(id, &trees, idx) => {
+                proc_macro2::TokenTree::Ident(id) if self.is_member(id) => {
                     self.record(id.span().start().line);
                 }
                 _ => {}
@@ -352,7 +325,7 @@ impl<P: Population> Scanner<'_, P> {
     }
 }
 
-impl<'ast, P: Population> syn::visit::Visit<'ast> for Scanner<'_, P> {
+impl<'ast> syn::visit::Visit<'ast> for Scanner<'_> {
     fn visit_item_mod(&mut self, i: &'ast syn::ItemMod) {
         let test = is_test_cfg(&i.attrs);
         if test {
@@ -407,7 +380,7 @@ impl<'ast, P: Population> syn::visit::Visit<'ast> for Scanner<'_, P> {
     fn visit_item_use(&mut self, _i: &'ast syn::ItemUse) {}
 
     fn visit_ident(&mut self, i: &'ast proc_macro2::Ident) {
-        if self.population.ident(i) {
+        if self.is_member(i) {
             self.record(i.span().start().line);
         }
     }
@@ -439,18 +412,27 @@ pub struct Report {
 /// A complete enumerating gate: the population it reads structurally, the roots it
 /// scans, and the words it fails in. The only way out is an in-source marker on the
 /// line above the site (#778) — there is no list here to edit.
-pub struct Gate<P: Population> {
+pub struct Gate {
     /// Step name in the xtask result (`"html-sink"`). Also the marker's token
     /// stem, so the two can never drift apart.
     pub step: &'static str,
     /// Source roots scanned recursively for `.rs` files. A missing root is a hard
     /// failure, so a moved or renamed tree can never quietly disable the guard.
     pub roots: &'static [&'static str],
-    pub population: P,
+    /// The names this gate polices — its population, read structurally from what the
+    /// AST says, never from a pattern believed to characterise violations (ADR-0085
+    /// principle 1). An occurrence of any of these idents is a member, in ordinary
+    /// code or inside macro tokens, wherever it appears.
+    ///
+    /// Matching the ident rather than a call shape is what keeps such a gate an
+    /// enumeration instead of a search for the spelling someone anticipated — a
+    /// builder call, a struct field and a bare reference are all inside the
+    /// population rather than silently outside it (ADR-0085 principle 3).
+    pub population: &'static [&'static str],
     pub report: Report,
 }
 
-impl<P: Population> Gate<P> {
+impl Gate {
     /// 1-based `(line, enclosing-fn)` of every mention in one source that this
     /// gate's markers do not cover, plus every orphan marker (empty fn name).
     ///
@@ -462,7 +444,7 @@ impl<P: Population> Gate<P> {
     pub fn violations(&self, source: &str) -> Result<Vec<(usize, String)>, String> {
         let c = classify(
             source,
-            &scan(source, &self.population)?,
+            &scan(source, self.population)?,
             &self.marker_token(),
         );
         let mut out: Vec<(usize, String)> = c
@@ -496,7 +478,7 @@ impl<P: Population> Gate<P> {
         let mut lines = Vec::new();
         let mut census = Vec::new();
         for (path, source) in scanned {
-            match scan(source, &self.population) {
+            match scan(source, self.population) {
                 Err(msg) => lines.push(format!(
                     "{path}: {msg} — an unparsed file is invisible to this gate, which is exactly \
                      the blind spot it exists to close. Fix the file or the parser; do not skip it."
@@ -594,7 +576,7 @@ pub fn run_scan(
 
 #[cfg(test)]
 mod tests {
-    use super::{scan, AnyOf};
+    use super::scan;
 
     /// The scan reports mentions in line order regardless of traversal order, which
     /// is what lets the marker rule be a statement about the source rather than
@@ -602,7 +584,7 @@ mod tests {
     #[test]
     fn mentions_come_back_in_line_order() {
         let src = "fn a() { GUARDED; }\nfn b() { let _ = m! { GUARDED }; }\nfn c() { GUARDED; }\n";
-        let found = scan(src, &AnyOf(&["GUARDED"])).unwrap().mentions;
+        let found = scan(src, &["GUARDED"]).unwrap().mentions;
         assert_eq!(
             found.iter().map(|m| m.line).collect::<Vec<_>>(),
             vec![1, 2, 3]
@@ -614,12 +596,12 @@ mod tests {
 /// the line ABOVE a site exempts it, and nothing else does.
 #[cfg(test)]
 mod marker_tests {
-    use super::{classify, scan, AnyOf, Classified, Why};
+    use super::{classify, scan, Classified, Why};
 
     const TOKEN: &str = "guard:allow";
 
     fn classified(src: &str) -> Classified {
-        let s = scan(src, &AnyOf(&["GUARDED"])).unwrap();
+        let s = scan(src, &["GUARDED"]).unwrap();
         classify(src, &s, TOKEN)
     }
 

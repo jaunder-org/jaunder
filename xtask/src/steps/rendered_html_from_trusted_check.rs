@@ -64,7 +64,7 @@
 //! [`crate::steps::server_fn_registrar_check`].
 
 use crate::result::CommandResult;
-use crate::steps::ident_gate::{self, AnyOf, Gate, Report};
+use crate::steps::ident_gate::{self, Gate, Report};
 
 /// Source roots scanned recursively for `.rs` files — production `src` trees, not
 /// the `tests/` integration crates (whose fixtures mint freely).
@@ -89,10 +89,10 @@ const DOORS: &[&str] = &["from_trusted"];
 /// "a raw string minted here is emitted unescaped" would be false at every one of
 /// them — a gate that fails with an inaccurate reason teaches the wrong lesson at
 /// the exact moment someone is reading it.
-const GATE: Gate<AnyOf> = Gate {
+const GATE: Gate = Gate {
     step: "rendered-html-from-trusted",
     roots: POLICED_ROOTS,
-    population: AnyOf(DOORS),
+    population: DOORS,
     report: Report {
         subject: "a `from_trusted` door",
         verdict: "is not marked — this gate pins every `from_trusted` in production code, \
@@ -213,10 +213,11 @@ fn sneaky(raw: String) -> Widget {
         assert_eq!(violations(src).unwrap(), vec![(2, "sneaky".to_string())]);
     }
 
-    /// Replaces `the_definition_site_has_no_path_mention`. Under `AnyOf` the door's
-    /// own declaration is in the population — a deliberate behavior change, failing
-    /// closed. `visit_impl_item_fn` pushes the fn name before the signature's ident
-    /// is visited, so the mention's enclosing fn is the door itself.
+    /// Replaces `the_definition_site_has_no_path_mention`. Now that membership is the
+    /// bare ident wherever it occurs, the door's own declaration is in the population —
+    /// a deliberate behavior change (#778), failing closed. `visit_impl_item_fn` pushes
+    /// the fn name before the signature's ident is visited, so the mention's enclosing
+    /// fn is the door itself.
     #[test]
     fn the_definition_site_is_in_the_population() {
         let src = "\
