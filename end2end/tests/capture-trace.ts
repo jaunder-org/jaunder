@@ -11,30 +11,31 @@
  *
  * ## Capture is not attribution
  *
- * `_autoPerfSpan` used to attach this instrumentation *after* `warmupPageContext`.
- * The reason recorded in the comment there was about the **traceparent**: warmup
- * traffic must stay unattributed, per #681's orphan-bucket design. Capture had no
- * such constraint — it simply inherited the ordering, and that incidental fusion
- * is why the warmup's duration was measured nowhere.
+ * `_autoPerfSpan` used to attach this instrumentation *after* the per-test warmup
+ * (removed in #792). The reason recorded in the comment there was about the
+ * **traceparent**: pre-test traffic must stay unattributed, per #681's
+ * orphan-bucket design. Capture had no such constraint — it simply inherited the
+ * ordering, and that incidental fusion is why the warmup's duration was measured
+ * nowhere, which is what #794 separated.
  *
- * The two are now separate: capture attaches at context creation, the traceparent
- * is still applied only after warmup. #681's contract is untouched.
+ * The two remain separate: capture attaches at context creation, the traceparent
+ * is applied only once the test proper begins. #681's contract is untouched.
  *
  * ## Why records are phase-tagged at `request`, not at completion
  *
- * Warmup is on in the gate (`flake.nix`, `JAUNDER_E2E_WARMUP=1`), so capturing
- * from context creation means warmup's navigation and its ~10 requests now flow
- * through here too. They must NOT land in `e2e.test`'s arrays, or
- * `e2e.request_count` / `e2e.navigation_count` and the top-N blobs all shift by
- * about one navigation and ten requests per test — silently breaking
- * comparability with every number the #788 investigation published.
+ * The `pretest` phase covers everything between context creation and the
+ * traceparent switch. Since #792 removed the warmup that phase is normally empty,
+ * but it is not vestigial: it is what guarantees that anything a fixture does
+ * before the test body cannot silently land in `e2e.test`'s arrays, where it
+ * would shift `e2e.request_count` / `e2e.navigation_count` and the top-N blobs
+ * and break comparability with published numbers.
  *
- * Routing on the `requestfinished` event would not be enough: warmup kicks off
- * wasm/JS fetches it does not await, so a request *started* during warmup can
- * *finish* after the phase switch and would be misfiled. The phase is therefore
- * captured when the request STARTS and the completion handler files by that tag.
- * Navigations were always safe here — they are recorded on `request` — but they
- * go through the same tagging for consistency.
+ * Routing on the `requestfinished` event would not be enough: a page can kick off
+ * wasm/JS fetches it does not await, so a request *started* before the switch can
+ * *finish* after it and would be misfiled. The phase is therefore captured when
+ * the request STARTS and the completion handler files by that tag. Navigations
+ * were always safe here — they are recorded on `request` — but they go through
+ * the same tagging for consistency.
  */
 
 import type { BrowserContext, Page, Request } from "@playwright/test";
@@ -81,7 +82,7 @@ export type PagePerfSummary = {
 };
 
 /** Which lifecycle phase a record belongs to. */
-export type Phase = "warmup" | "test";
+export type Phase = "pretest" | "test";
 
 export type CaptureSink = {
   requests: RequestRecord[];
@@ -143,10 +144,10 @@ export async function attachTraceCapture(
   context: BrowserContext,
 ): Promise<TraceCapture> {
   const sinks: Record<Phase, CaptureSink> = {
-    warmup: { requests: [], navigations: [] },
+    pretest: { requests: [], navigations: [] },
     test: { requests: [], navigations: [] },
   };
-  let phase: Phase = "warmup";
+  let phase: Phase = "pretest";
 
   const requestStarts = new Map<Request, number>();
   const requestPhase = new Map<Request, Phase>();
@@ -208,8 +209,8 @@ export async function attachTraceCapture(
     return state;
   };
 
-  /** Look a navigation up across both phases — a navigation started during
-   *  warmup can still be committing when the phase switches. */
+  /** Look a navigation up across both phases — a navigation started before the
+   *  switch can still be committing when the phase changes. */
   const findNavigation = (id: number): NavigationRecord | undefined => {
     const known = navigationPhase.get(id);
     if (known !== undefined) {
@@ -228,7 +229,10 @@ export async function attachTraceCapture(
     // (`data-mounted` is set once per document). Search newest-first across both
     // phases, so a mount that lands just after the phase switch still attaches to
     // the navigation that caused it.
-    const candidates = [...sinks.warmup.navigations, ...sinks.test.navigations];
+    const candidates = [
+      ...sinks.pretest.navigations,
+      ...sinks.test.navigations,
+    ];
     for (let index = candidates.length - 1; index >= 0; index -= 1) {
       const navigation = candidates[index];
       if (navigation.mountedMs !== null) continue;
@@ -309,8 +313,8 @@ export async function attachTraceCapture(
 
   context.on("request", (request) => {
     requestStarts.set(request, Date.now());
-    // Tag at START — see the module header. A warmup request that finishes after
-    // the phase switch must still be filed under warmup.
+    // Tag at START — see the module header. A pre-test request that finishes
+    // after the phase switch must still be filed under `pretest`.
     requestPhase.set(request, phase);
 
     const frame = request.frame();

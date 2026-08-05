@@ -336,7 +336,7 @@ pub enum TracesCommand {
     #[command(after_help = "EXAMPLES:\n  \
         cargo xtask traces run\n  \
         cargo xtask traces run --top 40\n  \
-        cargo xtask traces run --cold\n  \
+        cargo xtask traces run --single-worker\n  \
         cargo xtask traces run --browser firefox")]
     Run {
         /// Rows per ranked table (default 25), forwarded to the analysis.
@@ -345,9 +345,11 @@ pub enum TracesCommand {
         /// Restrict the analysis to one trace id.
         #[arg(long)]
         trace: Option<String>,
-        /// Build the cold-cache package variants instead of the warm check variants.
+        /// Build the single-worker package variants instead of the gate checks.
+        /// Use when the question is per-navigation cost, where worker contention
+        /// would corrupt the attribution.
         #[arg(long)]
-        cold: bool,
+        single_worker: bool,
         /// Restrict to one browser (default: both). Both backends are always built.
         #[arg(long, value_enum)]
         browser: Option<E2eBrowser>,
@@ -590,7 +592,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         Command::Traces(TracesCommand::Run {
             top,
             trace,
-            cold,
+            single_worker,
             browser,
         }) => {
             let start = std::time::Instant::now();
@@ -598,7 +600,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             // A nix-build failure or a missing trace file propagates as Err → the
             // exit-2 path in main.rs (spec §5), not a fail step. `_tmp` guards the
             // extracted traces (untarred from each capture bundle) until analysis ends.
-            let (_tmp, files, reports) = traces::run::collect_trace_files(cold, browser)?;
+            let (_tmp, files, reports) = traces::run::collect_trace_files(single_worker, browser)?;
             let n = files.len();
             let filters = traces::parse::Filters {
                 trace,
@@ -995,7 +997,7 @@ mod cli_tests {
             "run",
             "--top",
             "40",
-            "--cold",
+            "--single-worker",
             "--browser",
             "firefox",
             "--trace",
@@ -1007,12 +1009,12 @@ mod cli_tests {
             Command::Traces(TracesCommand::Run {
                 top,
                 trace,
-                cold,
+                single_worker,
                 browser,
             }) => {
                 assert_eq!(top, 40);
                 assert_eq!(trace.as_deref(), Some("aa"));
-                assert!(cold);
+                assert!(single_worker);
                 assert_eq!(browser, Some(E2eBrowser::Firefox));
             }
             _ => panic!("expected traces run"),
@@ -1050,12 +1052,12 @@ mod cli_tests {
             Command::Traces(TracesCommand::Run {
                 top,
                 trace,
-                cold,
+                single_worker,
                 browser,
             }) => {
                 assert_eq!(top, 25);
                 assert_eq!(trace, None);
-                assert!(!cold);
+                assert!(!single_worker);
                 assert_eq!(browser, None);
             }
             _ => panic!("expected traces run"),
@@ -1069,7 +1071,7 @@ mod cli_tests {
             command: Command::Traces(TracesCommand::Run {
                 top: 25,
                 trace: None,
-                cold: false,
+                single_worker: false,
                 browser: None,
             }),
         };

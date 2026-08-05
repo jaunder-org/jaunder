@@ -21,9 +21,9 @@ This distinction is easy to get wrong — #788's write-up said "`action.timed`
 ×1233 **spans**", but 1233 was the _entry count inside one attribute_. To be
 exact:
 
-- **Spans**: `e2e.test.lifecycle`, `e2e.test`, `e2e.warmup`, `e2e.context_mint`,
-  `e2e.page`, `e2e.teardown`, `e2e.flow.*` (browser side); `request`,
-  `storage.*`, `crypto.*` (server side).
+- **Spans**: `e2e.test.lifecycle`, `e2e.test`, `e2e.context_mint`, `e2e.page`,
+  `e2e.teardown`, `e2e.flow.*` (browser side); `request`, `storage.*`,
+  `crypto.*` (server side).
 - **Per-test JSON attributes on `e2e.test`**: actions (`e2e.action_top_json`),
   navigations (`e2e.navigation_top_json`), resources
   (`e2e.resource_summary_json`), long tasks (`e2e.long_tasks_json`), slow
@@ -38,7 +38,6 @@ inside the attribute blobs.
 ```
 e2e.test.lifecycle              first auto-fixture stamp → just before OTLP export
 ├── e2e.context_mint            browser context + page creation
-├── e2e.warmup                  only when JAUNDER_E2E_WARMUP is on
 ├── e2e.test                    the test body — unchanged span id, range, attributes
 │   └── request, storage.*, …   server spans, attributed by traceparent
 ├── e2e.page                    one per extra context opened via `tracedContext`
@@ -55,12 +54,13 @@ collide), and the coverage extractor walks `parent_span_id` _upward_ to an
 
 **Which `e2e.test` numbers remain comparable to #788.** Its span id and time
 range are unchanged, and so are `e2e.request_count` and `e2e.navigation_count` —
-that is exactly what the phase-tagged capture sink protects, since warmup now
-flows through the same instrumentation. But `e2e.action_count` and
-`e2e.action_top_json` **are not comparable**: #794 delimited the composite flows
-(`flow.login`, `flow.verify_email`, …) and wrapped the previously-invisible
-waits, so the action count legitimately rose. Diff the request and navigation
-counts across that boundary; do not diff the action counts.
+that is exactly what the phase-tagged capture sink protects: anything a fixture
+does before the test body is filed under the `pretest` phase, never in
+`e2e.test`'s arrays. But `e2e.action_count` and `e2e.action_top_json` **are not
+comparable**: #794 delimited the composite flows (`flow.login`,
+`flow.verify_email`, …) and wrapped the previously-invisible waits, so the
+action count legitimately rose. Diff the request and navigation counts across
+that boundary; do not diff the action counts.
 
 **Every `e2e.`-prefixed span must carry an `e2e.project` attribute.**
 `traces analyze --project <name>` drops any `e2e.`-named span whose
@@ -151,8 +151,11 @@ them, which is the structural join the flow-coverage gate below walks.
 
 The run-wide `JAUNDER_E2E_TRACEPARENT` value remains installed as
 `playwright.config.ts`'s static `use.extraHTTPHeaders`, so it is still what
-pre-attribution traffic (notably `warmupPageContext`) carries. That traffic is
-deliberately _not_ attributed to any test.
+pre-attribution traffic carries — anything issued between context creation and
+the per-test traceparent being applied. That traffic is deliberately _not_
+attributed to any test. Until #792 the per-test warmup was its main source; the
+bucket remains because the window it covers is structural, not because the
+warmup was.
 
 A context built with `browser.newContext()` does **not** inherit config-level
 `extraHTTPHeaders`, so specs must use the `tracedContext` fixture; the
@@ -390,20 +393,23 @@ To build both e2e VM checks and immediately analyze the produced traces, use:
 cargo xtask traces run --top 25
 ```
 
-For cold-cache diagnostics (without `JAUNDER_E2E_WARMUP=1` in the VM checks),
-use:
+When the question is what a single navigation costs rather than what the suite
+costs, use the single-worker packages — one worker, so no contention distorts
+the per-navigation numbers:
 
 ```bash
-cargo xtask traces run --cold --top 25
+cargo xtask traces run --single-worker --top 25
 ```
 
 Optional filters:
 
 - `--top N` controls how many rows each section prints.
 - `--trace TRACE_ID` restricts analysis to one trace id.
-- `--cold` runs the per-browser cold packages
-  (`e2e-{sqlite,postgres}-{chromium,firefox}-cold`) instead of the default
-  warmup e2e checks.
+- `--single-worker` runs the per-browser single-worker packages
+  (`e2e-{sqlite,postgres}-{chromium,firefox}-single-worker`) instead of the gate
+  checks. These were the `-cold` family before #792, when "cold" meant "no
+  warmup"; the gate is cold now too, so the worker count is the only difference
+  left.
 - `--browser chromium|firefox` restricts the run to one browser (default: both).
   Use this (not `--project`) to focus one browser, e.g. when debugging Firefox
   timeout pressure: `cargo xtask traces run --browser firefox`.
@@ -716,21 +722,10 @@ This applies a project-aware multiplier derived from observed p90 CSR-mount
 latency so Firefox/WebKit runs get realistic budgets without increasing Chromium
 timeouts unnecessarily.
 
-For diagnostics, you can optionally warm each Playwright test page context
-before instrumentation starts:
-
-```bash
-JAUNDER_E2E_WARMUP=1 playwright test
-```
-
-Optional controls:
-
-- `JAUNDER_E2E_WARMUP_URL` (default `http://localhost:3000/`)
-- `JAUNDER_E2E_WARMUP_TIMEOUT_MS` (default `10000`)
-
-This warmup runs on the same test page/context and waits for
-`body[data-mounted]`, so subsequent navigations within that test are measured as
-warm-cache behavior.
+There is no per-test warmup: every test's first navigation is a genuine cold
+load, and the traces report it as one. A warmup existed from 2026-04 to 2026-08
+and was removed in #792 after measurement showed it cost 113–139 s per combo to
+save at most ~12 s — see the findings section above and the ADR it produced.
 
 ### Heavy timeline fixture seeding (#210)
 

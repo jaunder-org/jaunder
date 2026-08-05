@@ -284,9 +284,6 @@ job. Running every combo in parallel across runners cuts e2e wall-clock;
 - `cargo clippy --all-targets -- -D warnings` checks the whole workspace,
   including test, bench, and example targets, for lint errors.
 - `cargo nextest run` runs the default Rust unit and integration test suite.
-- For e2e perf diagnostics, set `JAUNDER_E2E_WARMUP=1` before `playwright test`
-  to warm each test page context before test instrumentation; tune with
-  `JAUNDER_E2E_WARMUP_URL` and `JAUNDER_E2E_WARMUP_TIMEOUT_MS`.
 - Whole-test budgets are **ambient** — an auto fixture gives every test a scaled
   `DEFAULT_TEST_BUDGET_MS`, which covers the entire suite (#270). Don't set one
   per test; a test that genuinely needs more is a signal to measure it first.
@@ -376,8 +373,9 @@ Jaunder uses OpenTelemetry for deep performance analysis (see
 
 - **Run & Analyze**: Use `cargo xtask traces run` to build the full VM e2e suite
   and immediately analyze the results.
-  - Use `--cold` to run against cold caches instead of the default warmup
-    checks.
+  - Use `--single-worker` to build the workers=1 diagnostic packages instead of
+    the gate checks, when the question is per-navigation cost rather than suite
+    cost.
   - Use `--browser chromium|firefox` to restrict the run to one browser
     (default: both).
 
@@ -746,75 +744,69 @@ request; it is deliberately **not** part of per-commit `check`/`validate`
   sibling to drift (#188)
 - `checks.x86_64-linux.deny` — cargo-deny
 - `checks.x86_64-linux.e2e-sqlite-chromium` — Playwright end-to-end flow against
-  SQLite on Chromium with `JAUNDER_E2E_WARMUP=1` (default)
+  SQLite on Chromium with
 - `checks.x86_64-linux.e2e-sqlite-firefox` — Playwright end-to-end flow against
-  SQLite on Firefox with `JAUNDER_E2E_WARMUP=1` (default)
+  SQLite on Firefox with
 - `checks.x86_64-linux.e2e-postgres-chromium` — Playwright end-to-end flow
-  against PostgreSQL on Chromium with `JAUNDER_E2E_WARMUP=1` (default)
+  against PostgreSQL on Chromium with
 - `checks.x86_64-linux.e2e-postgres-firefox` — Playwright end-to-end flow
-  against PostgreSQL on Firefox with `JAUNDER_E2E_WARMUP=1` (default)
+  against PostgreSQL on Firefox with
 - `checks.x86_64-linux.postgres-integration` — every `server/tests/*.rs`
   integration binary against PostgreSQL (including the ignored PostgreSQL-only
   cases), all in one VM
 
 Additional Nix-backed checks available as packages (not run by default):
 
-- `packages.x86_64-linux.e2e-sqlite-chromium-cold` — Playwright end-to-end flow
-  against SQLite on Chromium without warmup
-- `packages.x86_64-linux.e2e-sqlite-firefox-cold` — Playwright end-to-end flow
-  against SQLite on Firefox without warmup
-- `packages.x86_64-linux.e2e-postgres-chromium-cold` — Playwright end-to-end
-  flow against PostgreSQL on Chromium without warmup
-- `packages.x86_64-linux.e2e-postgres-firefox-cold` — Playwright end-to-end flow
-  against PostgreSQL on Firefox without warmup
+- `packages.x86_64-linux.e2e-{sqlite,postgres}-{chromium,firefox}-single-worker`
+  — the same four e2e flows pinned to `JAUNDER_E2E_WORKERS=1`, so per-navigation
+  timings carry no worker contention. Built on demand by
+  `cargo xtask traces run --single-worker`; not part of the gate.
 
 All PostgreSQL integration binaries run in a **single** VM
 (`postgres-integration`): per-test databases isolate the tests, so they run with
 libtest's normal in-process parallelism rather than one VM per binary. This is
 much faster and far lighter on memory than the former per-binary matrix.
 
-#### Measurement scaffolding: `e2eSalt` and `e2eWarmup` (#792)
+#### `e2eSalt` — the measurement cache-buster (#792)
 
-Two literals near the top of `flake.nix`'s e2e section exist for **performance
-measurement runs**, not for normal development. Both are committed at defaults
-that reproduce the historical build byte-for-byte, and the `e2e-scaffold` static
-check fails the gate if either is left set.
+A literal near the top of `flake.nix`'s e2e section, for **performance
+measurement runs**, not for normal development. It is committed empty, which is
+a byte-exact no-op, and the `e2e-scaffold` static check fails the gate if it is
+left set.
 
-`e2eSalt = ""` — **a cache-buster.** Nix caches the e2e check derivations, so
-re-running `cargo xtask traces run` on an unchanged tree returns a **cached
-result and never runs the suite** — silently handing back traces from whenever
-that check was last built, quite possibly a CI runner under unknown load. Set it
-to a distinct value per measurement run to force a genuinely fresh build:
+Nix caches the e2e check derivations, so re-running `cargo xtask traces run` on
+an unchanged tree returns a **cached result and never runs the suite** —
+silently handing back traces from whenever that check was last built, quite
+possibly a CI runner under unknown load. Set the salt to a distinct value per
+measurement run to force a genuinely fresh build:
 
 ```nix
 e2eSalt = "run3";   # any distinct string; the value itself is never read
 ```
 
 The salt rides the combo's extra-env string into the VM test script, so it
-changes every e2e derivation hash — all four warm checks and all four cold
-packages. It does **not** change `packages.x86_64-linux.jaunder`: `flake.nix`
-sits outside the crane source filter, so a salted run re-runs the VM suite
-without rebuilding the Rust workspace.
+changes every e2e derivation hash — all four gate checks and all four
+single-worker packages. It does **not** change `packages.x86_64-linux.jaunder`:
+`flake.nix` sits outside the crane source filter, so a salted run re-runs the VM
+suite without rebuilding the Rust workspace.
 
-`e2eWarmup = true` — **the per-test warmup toggle**, used to build the no-warmup
-arm of an A/B at otherwise gate-identical settings. This is _not_ the same as
-the `-cold` packages above: those also pin `JAUNDER_E2E_WORKERS=1`, so comparing
-warm checks against cold packages conflates warmup with worker count.
-
-**Revert both before committing.** Neither fails anything on its own, which is
-precisely the problem: a committed salt costs every CI e2e job its cache
-(symptom: "CI got slow"), and a committed `e2eWarmup = false` silently stops the
-gate testing what it says it tests. Note this repo's worktrees may auto-stage
-edits, so revert with `git checkout HEAD -- flake.nix` **and**
+**Revert it before committing.** Nothing fails if you don't, which is precisely
+the problem: a committed salt costs every CI e2e job its cache, and the only
+symptom is "CI got slow". Note this repo's worktrees may auto-stage edits, so
+revert with `git checkout HEAD -- flake.nix` **and**
 `git reset HEAD -- flake.nix`, then confirm with `git diff HEAD -- flake.nix`.
+
+For how to run a measurement with it — matched arms, interleaving, what to
+record — see the worked example in `docs/observability.md` §"#792 — the per-test
+warmup A/B".
 
 If you only need one of the VM-backed checks, you can run it directly:
 
 ```bash
 nix build .#checks.x86_64-linux.e2e-sqlite-chromium
 nix build .#checks.x86_64-linux.e2e-postgres-firefox
-nix build .#packages.x86_64-linux.e2e-sqlite-firefox-cold
-nix build .#packages.x86_64-linux.e2e-postgres-firefox-cold
+nix build .#packages.x86_64-linux.e2e-sqlite-firefox-single-worker
+nix build .#packages.x86_64-linux.e2e-postgres-firefox-single-worker
 nix build .#checks.x86_64-linux.postgres-integration
 ```
 

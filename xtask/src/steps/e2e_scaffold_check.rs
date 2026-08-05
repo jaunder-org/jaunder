@@ -1,16 +1,11 @@
-//! The `e2e-scaffold` static check (#792): forbids committing the e2e measurement
-//! scaffolding in `flake.nix` — a non-empty `e2eSalt`, or `e2eWarmup` set to anything
-//! but `true`.
+//! The `e2e-scaffold` static check (#792): forbids committing a non-empty `e2eSalt` in
+//! `flake.nix`.
 //!
-//! Both literals exist so an A/B measurement run can be built at gate-identical
-//! settings (see `docs/superpowers/specs/2026-08-04-issue-792-e2e-warmup.md`), and both
-//! are **silent** when left set — which is exactly why they need a guard:
-//!
-//! - a non-empty `e2eSalt` changes every e2e derivation hash, so CI misses cache on all
-//!   four combos and rebuilds them from scratch. Nothing fails; CI just gets slower, and
-//!   "CI got slow" is not a symptom anyone traces back to a one-line diff.
-//! - `e2eWarmup = false` disables the per-test warmup on all four gate checks. Nothing
-//!   fails there either — the gate simply stops testing what it claims to test.
+//! The salt exists so an e2e measurement run can be built without nix serving a cached
+//! suite result — see `docs/observability.md` §"#792 — the per-test warmup A/B". Left
+//! set, it is **silent**: it changes every e2e derivation hash, so CI misses cache on
+//! all four combos and rebuilds them from scratch. Nothing fails; CI just gets slower,
+//! and "CI got slow" is not a symptom anyone traces back to a one-line diff.
 //!
 //! Deliberately a **host-side** xtask step, never wired into the e2e derivations: a
 //! salted local `nix build`/`traces run` must keep working, since that is the whole
@@ -27,27 +22,23 @@ use crate::result::{CommandResult, StepResult};
 /// Where the scaffolding literals live.
 const FLAKE: &str = "flake.nix";
 
-/// The committed (safe) form of each literal, matched against a whitespace-trimmed line.
+/// The committed (safe) form of the literal, matched against a whitespace-trimmed line.
 const SAFE_SALT: &str = r#"e2eSalt = "";"#;
-const SAFE_WARMUP: &str = "e2eWarmup = true;";
 
-/// Prefixes identifying a declaration line for each literal, so a *changed* value is
-/// distinguishable from an *absent* one. Comment lines are skipped by the caller, which
-/// is what keeps the explanatory comment block next to the literals from matching.
+/// Prefix identifying the declaration line, so a *changed* value is distinguishable from
+/// an *absent* one. Comment lines are skipped by the caller, which is what keeps the
+/// explanatory comment block beside the literal from matching.
 const SALT_DECL: &str = "e2eSalt =";
-const WARMUP_DECL: &str = "e2eWarmup =";
 
-/// The failure detail when #792's measurement scaffolding is left set, or `None` when
-/// both literals are present at their committed defaults. Pure given `flake.nix`'s
-/// source, so it is unit-tested directly.
+/// The failure detail when the measurement salt is left set, or `None` when it is at its
+/// committed default. Pure given `flake.nix`'s source, so it is unit-tested directly.
 ///
 /// A literal that is **missing entirely** is a failure, not a pass: renaming or deleting
-/// one must not quietly disable the guard (same reasoning as
+/// it must not quietly disable the guard (same reasoning as
 /// [`super::no_full_reload_check`]'s missing-root hard failure).
 pub fn problems(source: &str) -> Option<String> {
     let mut lines = Vec::new();
     let mut saw_salt = false;
-    let mut saw_warmup = false;
 
     for (i, raw) in source.lines().enumerate() {
         let line = raw.trim();
@@ -65,29 +56,13 @@ pub fn problems(source: &str) -> Option<String> {
                 ));
             }
         }
-        if line.starts_with(WARMUP_DECL) {
-            saw_warmup = true;
-            if line != SAFE_WARMUP {
-                lines.push(format!(
-                    "{FLAKE}:{}: `e2eWarmup` is not `true` — restore it before committing. \
-                     It disables the per-test warmup on all four gate checks, silently \
-                     changing what the gate tests (#792)",
-                    i + 1
-                ));
-            }
-        }
     }
 
     if !saw_salt {
         lines.push(format!(
-            "{FLAKE}: `e2eSalt` declaration not found — the guard cannot verify #792's \
-             measurement scaffolding is unset. If the literal was renamed or removed, update \
-             this check rather than leaving it matching nothing"
-        ));
-    }
-    if !saw_warmup {
-        lines.push(format!(
-            "{FLAKE}: `e2eWarmup` declaration not found — see the `e2eSalt` note above (#792)"
+            "{FLAKE}: `e2eSalt` declaration not found — the guard cannot verify the #792 \
+             measurement salt is unset. If the literal was renamed or removed, update this \
+             check rather than leaving it matching nothing"
         ));
     }
 
@@ -111,13 +86,10 @@ pub fn run(result: &mut CommandResult) {
 mod tests {
     use super::problems;
 
-    /// Both literals at their committed values, in the shape `flake.nix` actually uses.
+    /// The literal at its committed value, in the shape `flake.nix` actually uses.
     const CLEAN: &str = r#"
         # Cache-busting salt for e2e measurement runs (#792).
         e2eSalt = "";
-
-        # A/B scaffolding for #792.
-        e2eWarmup = true;
     "#;
 
     #[test]
@@ -129,53 +101,29 @@ mod tests {
     fn flags_non_empty_salt() {
         let detail = problems(&CLEAN.replace(r#"e2eSalt = "";"#, r#"e2eSalt = "run1";"#))
             .expect("a problem");
-        assert!(detail.contains("e2eSalt"), "{detail}");
-        assert!(detail.contains("#792"), "{detail}");
-        assert!(!detail.contains("e2eWarmup"), "{detail}");
-    }
-
-    #[test]
-    fn flags_disabled_warmup() {
-        let detail =
-            problems(&CLEAN.replace("e2eWarmup = true;", "e2eWarmup = false;")).expect("a problem");
-        assert!(detail.contains("e2eWarmup"), "{detail}");
-        assert!(!detail.contains("`e2eSalt` is set"), "{detail}");
-    }
-
-    #[test]
-    fn flags_both_when_both_set() {
-        let both = CLEAN
-            .replace(r#"e2eSalt = "";"#, r#"e2eSalt = "run1";"#)
-            .replace("e2eWarmup = true;", "e2eWarmup = false;");
-        let detail = problems(&both).expect("a problem");
         assert!(detail.contains("`e2eSalt` is set"), "{detail}");
-        assert!(detail.contains("`e2eWarmup` is not `true`"), "{detail}");
+        assert!(detail.contains("#792"), "{detail}");
     }
 
     /// A renamed or deleted literal must fail loudly — a guard that matches nothing is
     /// indistinguishable from a guard that passes.
     #[test]
-    fn missing_literals_fail_loudly() {
+    fn missing_literal_fails_loudly() {
         let detail = problems("        vmMemory = 3072;\n").expect("a problem");
         assert!(
             detail.contains("`e2eSalt` declaration not found"),
             "{detail}"
         );
-        assert!(
-            detail.contains("`e2eWarmup` declaration not found"),
-            "{detail}"
-        );
     }
 
-    /// The explanatory comment block beside the literals mentions both by name and must
-    /// not be mistaken for a declaration.
+    /// The explanatory comment block beside the literal names it, and a commented-out
+    /// leftover must not be mistaken for a declaration.
     #[test]
     fn ignores_comment_mentions() {
         let commented = r#"
-        # a committed `e2eWarmup = false` silently disables warmup
+        # a committed non-empty `e2eSalt` costs CI its cache
         # e2eSalt = "leftover";
         e2eSalt = "";
-        e2eWarmup = true;
         "#;
         assert_eq!(problems(commented), None);
     }
