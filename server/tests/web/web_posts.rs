@@ -343,7 +343,10 @@ async fn create_post_accepts_titleless_body(#[case] backend: Backend) {
         .unwrap()
         .expect("post should exist");
     assert_eq!(record.title, None);
-    assert_eq!(record.body, "Titleless note");
+    // A stored Markdown body now ends with exactly one newline: canonicalization applies
+    // to every format except HTML (#811). Rendering is unaffected — CommonMark treats a
+    // trailing newline as insignificant — but the stored bytes are canonical, not raw.
+    assert_eq!(record.body, "Titleless note\n");
 }
 
 #[apply(backends)]
@@ -377,8 +380,10 @@ Body text",
         .unwrap()
         .expect("post should exist");
     assert_eq!(record.title.as_deref(), Some("Extracted Title"));
-    // Body is stored verbatim including the heading
-    assert_eq!(record.body, "# Extracted Title\n\nBody text");
+    // The heading survives in the body — unlike Org, Markdown's title source is content,
+    // not a header line, so extracting the title does not consume it. Only whitespace is
+    // canonicalized (#811), hence the terminating newline.
+    assert_eq!(record.body, "# Extracted Title\n\nBody text\n");
     // Rendered HTML contains the heading because body is rendered verbatim
     assert!(
         record

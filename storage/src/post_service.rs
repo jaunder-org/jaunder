@@ -310,17 +310,12 @@ pub async fn perform_post_update(
     let (title, slug_seed) =
         derive_post_title(title, &body, &format).ok_or(PerformUpdateError::EmptyPost)?;
 
-    // Derive the title from the *original* body above, then canonicalize the stored
-    // Org body (ADR-0024): strip the title-source line, keep everything else. Web and
-    // AtomPub thus converge on one stored body. Non-Org bodies are stored verbatim.
-    // A title-only Org post canonicalizes to nothing, which no longer names a body
-    // (#811): there is nothing left to store, so it is the same rejection an empty
-    // post has always earned.
-    let body: PostBody = if matches!(format, PostFormat::Org) {
-        common::render::canonicalize_org_body(&body).map_err(|_| PerformUpdateError::EmptyPost)?
-    } else {
-        body
-    };
+    // Derive the title from the *original* body above, then canonicalize what gets
+    // stored. Web and AtomPub thus converge on one stored body. A title-only Org post
+    // canonicalizes to nothing, which no longer names a body (#811): there is nothing
+    // left to store, so it is the same rejection an empty post has always earned.
+    let body = common::render::canonicalize_body(&body, &format)
+        .map_err(|_| PerformUpdateError::EmptyPost)?;
 
     let slug = match slug_override {
         // Pre-validated at the boundary (wire/CLI); updates keep the slug as-is,
@@ -480,17 +475,12 @@ pub async fn perform_post_creation(
     let (title, derived_slug_seed) =
         derive_post_title(title, &body, &format).ok_or(PerformCreationError::EmptyPost)?;
 
-    // Derive the title from the *original* body above, then canonicalize the stored
-    // Org body (ADR-0024): strip the title-source line, keep everything else. Web and
-    // AtomPub thus converge on one stored body. Non-Org bodies are stored verbatim.
-    // A title-only Org post canonicalizes to nothing, which no longer names a body
-    // (#811): there is nothing left to store, so it is the same rejection an empty
-    // post has always earned.
-    let body: PostBody = if matches!(format, PostFormat::Org) {
-        common::render::canonicalize_org_body(&body).map_err(|_| PerformCreationError::EmptyPost)?
-    } else {
-        body
-    };
+    // Derive the title from the *original* body above, then canonicalize what gets
+    // stored. Web and AtomPub thus converge on one stored body. A title-only Org post
+    // canonicalizes to nothing, which no longer names a body (#811): there is nothing
+    // left to store, so it is the same rejection an empty post has always earned.
+    let body = common::render::canonicalize_body(&body, &format)
+        .map_err(|_| PerformCreationError::EmptyPost)?;
 
     let slug_seed: Slug = match slug_override {
         // Pre-validated at the boundary (wire/CLI); a valid override is still fed
@@ -591,7 +581,8 @@ mod tests {
 
         assert_eq!(record.user_id, user_id);
         assert_eq!(record.slug, "hello-world");
-        assert_eq!(record.body, "Hello, world!");
+        // Canonicalized on write (#811): the stored body carries a terminating newline.
+        assert_eq!(record.body, "Hello, world!\n");
         assert_eq!(record.format, PostFormat::Markdown);
         assert!(record.rendered_html.contains("<p>Hello, world!</p>"));
     }
@@ -1052,14 +1043,14 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn test_perform_post_creation_markdown_body_is_not_canonicalized(
-        #[case] backend: Backend,
-    ) {
+    async fn test_perform_post_creation_markdown_body_keeps_its_heading(#[case] backend: Backend) {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let storage = &*env.state.posts;
-        // Canonicalization is Org-only: a Markdown body with a leading `# H1` is
-        // stored verbatim (the `# H1` is not stripped).
+        // Since #811 every format canonicalizes, so this no longer pins "Markdown is not
+        // canonicalized" — it pins the part that still distinguishes the formats: only Org
+        // treats its title source as a *header* and strips it. A Markdown `# H1` is
+        // content and survives. Whitespace is canonicalized for both, hence the newline.
         let record = perform_post_creation(
             storage,
             PostCreation {
@@ -1078,7 +1069,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(record.body, "# H1\n\nBody text");
+        assert_eq!(record.body, "# H1\n\nBody text\n");
     }
 
     #[apply(backends)]

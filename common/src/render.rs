@@ -784,7 +784,63 @@ pub fn canonicalize_org_body(body: &PostBody) -> Result<PostBody, InvalidPostBod
         kept.push(line);
     }
 
-    kept.join("\n").trim_end().parse()
+    normalize_body_whitespace(&kept.join("\n")).parse()
+}
+
+/// The whitespace half of body canonicalization, shared by Markdown and Org: drop leading
+/// all-whitespace lines, trim the tail, and restore the single terminating newline.
+///
+/// Every clause was established by measuring real rendered output (#811), and each one is
+/// load-bearing:
+///
+/// - **Leading _horizontal_ whitespace on a content line is never touched.** Four leading
+///   spaces is a `CommonMark` indented code block; stripping them renders a `<p>` where the
+///   author wrote a `<pre><code>`.
+/// - **Interior blank lines are never touched.** They decide `CommonMark` loose-vs-tight
+///   lists — `"- a\n\n- b\n"` renders `<li><p>a</p></li>`, `"- a\n- b\n"` renders `<li>a</li>`.
+/// - **The terminating newline is restored**, because a bare `trim_end` eats it and it is
+///   significant inside `<pre><code>` and inside Org paragraphs.
+///
+/// One case is knowingly lossy: a body ending *inside an unclosed code region* has trailing
+/// blank lines that are content, and trimming drops them. Detecting that needs a format
+/// parser rather than a whitespace rule, so it is accepted — the input is malformed and the
+/// loss is confined to trailing blanks inside it. Pinned by
+/// `canonicalize_truncates_trailing_blanks_in_unclosed_fence`.
+fn normalize_body_whitespace(body: &str) -> String {
+    let mut out = String::with_capacity(body.len());
+    let mut started = false;
+    for line in body.trim_end().lines() {
+        if !started && line.trim().is_empty() {
+            continue;
+        }
+        started = true;
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+/// The stored form of an authored body: one seam over every [`PostFormat`], so a format is
+/// added by extending this match rather than by editing call sites in `storage`.
+///
+/// Markdown and Org share [`normalize_body_whitespace`]; Org additionally has its
+/// title-source line stripped (ADR-0024). **HTML is exempt** — it is verbatim passthrough,
+/// so any whitespace edit is a byte change, and a body ending inside an unclosed `<pre>`
+/// would lose content outright.
+///
+/// # Errors
+///
+/// Returns [`InvalidPostBody`] when canonicalization consumes the whole body — a title-only
+/// Org post. See #811 decision 2.
+pub fn canonicalize_body(
+    body: &PostBody,
+    format: &PostFormat,
+) -> Result<PostBody, InvalidPostBody> {
+    match format {
+        PostFormat::Html => Ok(body.clone()),
+        PostFormat::Markdown => normalize_body_whitespace(body).parse(),
+        PostFormat::Org => canonicalize_org_body(body),
+    }
 }
 
 #[cfg(test)]
@@ -1083,6 +1139,10 @@ mod tests {
     }
 
     // -- canonicalize_org_body tests (ADR-0024; load-bearing, user-flagged) --
+    //
+    // Every expectation below gained a terminating "\n" in #811. That is the fix, not
+    // drift: the old `trim_end()` ate the body's final newline, which is significant
+    // inside <pre><code> and inside Org paragraphs.
 
     /// Canonicalize a fixture that is expected to survive — the inputs below all keep
     /// some content, so a failure here is a bug rather than the title-only rejection.
@@ -1095,39 +1155,39 @@ mod tests {
     fn canon_strips_title_header_keeps_unknown_and_later_heading() {
         // #+TITLE: present → strip it; keep #+FOO:; a LATER * heading is content → keep.
         let out = canon("#+TITLE: My Post\n#+FOO: keepme\n\n* Section\nBody\n");
-        assert_eq!(out, "#+FOO: keepme\n\n* Section\nBody");
+        assert_eq!(out, "#+FOO: keepme\n\n* Section\nBody\n");
     }
 
     #[test]
     fn canon_strips_leading_heading_when_no_title_header() {
         // No #+TITLE: → the leading * heading IS the title source → strip it.
         let out = canon("* My Title\n\nBody line\n");
-        assert_eq!(out, "Body line");
+        assert_eq!(out, "Body line\n");
     }
 
     #[test]
     fn canon_strips_title_amidst_other_headers_and_leading_blanks() {
         let out = canon("\n\n#+FOO: x\n#+title: T\n#+BAR: y\n\nbody\n");
-        assert_eq!(out, "#+FOO: x\n#+BAR: y\n\nbody");
+        assert_eq!(out, "#+FOO: x\n#+BAR: y\n\nbody\n");
     }
 
     #[test]
     fn canon_no_title_source_preserves_headers_and_content() {
         let out = canon("#+FOO: x\n\njust content\n");
-        assert_eq!(out, "#+FOO: x\n\njust content");
+        assert_eq!(out, "#+FOO: x\n\njust content\n");
     }
 
     #[test]
     fn canon_non_top_level_heading_is_not_a_title_source() {
         // "** Sub" is not a top-level heading → not the title → keep.
         let out = canon("** Sub\n\nBody\n");
-        assert_eq!(out, "** Sub\n\nBody");
+        assert_eq!(out, "** Sub\n\nBody\n");
     }
 
     #[test]
     fn canon_heading_after_body_text_is_content_not_title() {
         let out = canon("intro\n* Later\nmore\n");
-        assert_eq!(out, "intro\n* Later\nmore");
+        assert_eq!(out, "intro\n* Later\nmore\n");
     }
 
     #[test]
@@ -1151,6 +1211,98 @@ mod tests {
         assert!(canonicalize_org_body(&body).is_err());
     }
 
+    // -- canonicalize_body: the one seam over every format (#811) --
+
+    fn canonicalized(body: &str, format: PostFormat) -> PostBody {
+        canonicalize_body(&crate::test_support::parse_post_body(body), &format)
+            .expect("fixture retains content after canonicalization")
+    }
+
+    #[test]
+    fn canonicalize_leaves_html_verbatim() {
+        // Verbatim passthrough, so normalization would be a byte change for no gain —
+        // and would eat content from a body ending inside an unclosed <pre>.
+        let raw = "\n\n  <pre>a\n\n\n";
+        assert_eq!(canonicalized(raw, PostFormat::Html), raw);
+    }
+
+    #[test]
+    fn canonicalize_drops_leading_blank_lines_but_not_leading_indent() {
+        // The indent on the first content line is a CommonMark code block; the blank
+        // lines above it are not content.
+        assert_eq!(
+            canonicalized("\n\n    fn main() {}\n", PostFormat::Markdown),
+            "    fn main() {}\n"
+        );
+    }
+
+    #[test]
+    fn canonicalize_restores_the_terminating_newline() {
+        // A bare trim_end eats it, and it is significant inside <pre><code>.
+        assert_eq!(
+            canonicalized("    code\n\n  \n", PostFormat::Markdown),
+            "    code\n"
+        );
+    }
+
+    #[test]
+    fn canonicalize_preserves_interior_blank_lines() {
+        // Interior blanks decide CommonMark loose-vs-tight lists, so "tidying" them
+        // would change rendered output. Only the leading and trailing runs go.
+        assert_eq!(
+            canonicalized("\n- a\n\n- b\n\n", PostFormat::Markdown),
+            "- a\n\n- b\n"
+        );
+    }
+
+    #[test]
+    fn canonicalize_preserves_interior_hard_line_break() {
+        // Two trailing spaces mid-body are a hard break; only the body's tail is trimmed.
+        assert_eq!(
+            canonicalized("foo  \nbar  \n", PostFormat::Markdown),
+            "foo  \nbar\n"
+        );
+    }
+
+    #[test]
+    fn canonicalize_truncates_trailing_blanks_in_unclosed_fence() {
+        // ACCEPTED LOSS, not a bug: these trailing blanks are inside an unclosed fence,
+        // so they are content, but seeing that needs a format parser rather than a
+        // whitespace rule. The input is malformed and the loss is confined to it (#811).
+        assert_eq!(
+            canonicalized("```\ncode\n\n\n", PostFormat::Markdown),
+            "```\ncode\n"
+        );
+    }
+
+    #[test]
+    fn canonicalize_is_idempotent_for_every_format() {
+        // This is what lets the sqlx decode door re-check a stored body without a second
+        // normalization pass.
+        for format in [PostFormat::Markdown, PostFormat::Org, PostFormat::Html] {
+            for body in [
+                "\n\n    indented\n\n",
+                "#+TITLE: T\n\nbody\n",
+                "* My Title\n\nBody\n",
+                "- a\n\n- b\n",
+                "  <pre>x</pre>  ",
+            ] {
+                let once = canonicalized(body, format);
+                let twice = canonicalize_body(&once, &format).expect("canonical stays a body");
+                assert_eq!(twice, once, "idempotent for {format:?} {body:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn canonicalize_rejects_title_only_org_through_the_seam() {
+        let body = crate::test_support::parse_post_body("* My Title\n");
+        assert!(canonicalize_body(&body, &PostFormat::Org).is_err());
+        // The same bytes are ordinary content in the other formats.
+        assert!(canonicalize_body(&body, &PostFormat::Markdown).is_ok());
+        assert!(canonicalize_body(&body, &PostFormat::Html).is_ok());
+    }
+
     /// Tests for the `sanitize`-gated half — grouped so the gate is written once here
     /// rather than on each of the ~50 items, mirroring the production `sanitized` module
     /// they exercise. `use super::*` reaches this file's items through the outer test
@@ -1163,6 +1315,40 @@ mod tests {
             SANITIZER, extract_media_refs_with, render_markdown, render_org,
         };
         use crate::test_support::parse_post_body;
+
+        // The load-bearing guard for the no-trim half of the whitespace rule (#811).
+        // Every test in `post_body.rs` still passes if a "tidy-up" trim is added to the
+        // constructor; this one does not, because it asserts on what the reader sees.
+        #[test]
+        fn markdown_body_with_leading_indent_still_renders_as_code_block() {
+            let body = parse_post_body("    fn main() {}\n");
+            let canonical = canonicalize_body(&body, &PostFormat::Markdown).expect("body survives");
+            let html = render(&canonical, &PostFormat::Markdown);
+            assert!(html.contains("<pre><code>"), "{html}");
+            assert!(!html.contains("<p>fn main()"), "{html}");
+        }
+
+        // The other half: canonicalization must not perturb what the reader sees. A bare
+        // trim_end would drop the newline inside the code block, and stripping leading
+        // blank lines must not disturb the indent that makes it a code block at all.
+        #[test]
+        fn canonicalizing_markdown_does_not_change_rendered_output() {
+            for raw in [
+                "\n\n    fn main() {}\n",
+                "- a\n\n- b\n\n",
+                "foo  \nbar\n",
+                "# Heading\n\ntext\n\n\n",
+            ] {
+                let body = parse_post_body(raw);
+                let canonical =
+                    canonicalize_body(&body, &PostFormat::Markdown).expect("body survives");
+                assert_eq!(
+                    render(&canonical, &PostFormat::Markdown),
+                    render(&body, &PostFormat::Markdown),
+                    "canonicalization changed rendered output for {raw:?}"
+                );
+            }
+        }
 
         // `sanitize` is the establishing door (#445): it is what makes the type's
         // invariant — "contains no active markup" — true rather than asserted. These

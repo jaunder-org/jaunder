@@ -518,7 +518,22 @@ cargo nextest run -p storage -p jaunder post_service
 
 Expected: PASS.
 
-- [ ] 5. One canonicalization seam over both formats
+- [x] 5. One canonicalization seam over both formats
+
+> **Sharper than the plan said: the newline is added unconditionally.** The rule
+> was framed as "restore the terminating newline `trim_end` eats", but the
+> approved algorithm appends one whenever the result is non-empty — so a body
+> that never had a terminating newline gains one (`"Titleless note"` stores as
+> `"Titleless note\n"`). Implemented as approved rather than narrowed, because
+> rendering is provably unaffected and the unconditional form is what makes the
+> canonical shape uniform and idempotency trivial. It **is** visible in stored
+> bytes and the content ETag. Four tests asserting exact stored bodies were
+> updated, each with a comment giving the reason.
+>
+> `test_perform_post_creation_markdown_body_is_not_canonicalized` →
+> `..._keeps_its_heading`: the old name became false. What it still pins is the
+> real distinction — only Org treats its title source as a _header_ and strips
+> it; a Markdown `# H1` is content and survives.
 
 ---
 
