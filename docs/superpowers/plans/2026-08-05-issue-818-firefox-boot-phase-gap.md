@@ -138,13 +138,22 @@ Spec D2/AC2. A pure function, so the invariant is provable without a browser.
   `export function mergeDocumentTiming(existing: DocumentTiming | undefined, incoming: DocumentTiming): DocumentTiming`
   — used by Task 3.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
-Create `end2end/tests/boot-marks.spec.ts`. These request no `page` fixture, so
-Playwright runs them without launching a browser.
+Create `end2end/tests/boot-marks.spec.ts`.
+
+**Import `test` from `./fixtures`, not `@playwright/test`** — even though these
+cases are pure. The `traced-context` gate
+(`xtask/src/steps/traced_context_check.rs`) scans **every** `.ts` under
+`end2end/tests` (only `fixtures.ts` is exempt) and rejects the upstream import,
+because a spec opening no `e2e.test` span makes everything it drives
+unattributable — silently. The blanket rule is the point. Cost: the harness
+`test` carries `_autoPerfSpan`, which depends on `page`, so these launch a
+browser they don't use. The assertions stay pure, so the invariant is still
+proven by their logic rather than by browser behavior.
 
 ```ts
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { mergeDocumentTiming, type DocumentTiming } from "./capture-trace";
 
 const wasm = { startTime: 10, durationMs: 5, responseEndMs: 15 };
@@ -199,19 +208,24 @@ test.describe("mergeDocumentTiming", () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 `end2end/node_modules` must exist; `devtool check tsc` provisions it, so run the
 gate once first if this is a fresh worktree.
 
+**`--project=chromium`, with the `=`.** `--project` takes multiple values, so
+`--project chromium boot-marks` parses the filter as a second project name and
+errors with "Project(s) "boot-marks" not found".
+
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-818-firefox-boot-phase-gap -- \
-  playwright test --config end2end/playwright.config.ts --project chromium boot-marks
+  playwright test --config end2end/playwright.config.ts --project=chromium boot-marks
 ```
 
 Expected: FAIL — `mergeDocumentTiming` is not exported from `./capture-trace`.
+**Observed:** 6 failed, all `mergeDocumentTiming is not a function`.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 Add to `capture-trace.ts`, immediately after the `DocumentTiming` type.
 Signature as in **Interfaces** above. Every branch is pinned by a Step 1 test —
@@ -235,15 +249,19 @@ correct:
  */
 ```
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
-Run: the Step 2 command. Expected: PASS (6 passed).
+Run: the Step 2 command. Expected: PASS (6 passed). **Observed:** 6 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
+
+Pass the message via `-F <file>`, never `-m` with backticks — bash
+command-substitutes them, and the words vanish from the message silently (caught
+here after the fact: two `` `load` `` mentions were eaten).
 
 ```bash
 git add end2end/tests/capture-trace.ts end2end/tests/boot-marks.spec.ts
-git commit -m "test(e2e): merge document harvests by completeness, not arrival order (#818)"
+git commit -F /tmp/msg.txt
 ```
 
 Run `cargo xtask check` first (**jaunder-commit**).
