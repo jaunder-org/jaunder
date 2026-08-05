@@ -83,6 +83,10 @@ coverage gate (Task 1 files it).
   silent coverage blackout.
 - Document-relative and Node-side (`Date.now()`) values are never mixed in one
   arithmetic expression (spec D8).
+- **`xtask` is its own workspace** (`Cargo.toml:14`, `exclude = ["xtask"]`), so
+  `cargo nextest run -p xtask …` fails with "package ID specification 'xtask'
+  did not match any packages". Use
+  `cargo nextest run --manifest-path xtask/Cargo.toml …`.
 
 ---
 
@@ -550,7 +554,7 @@ fn boot_coverage_sums_navigation_top_dropped_so_truncation_is_never_silent() {
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-818-firefox-boot-phase-gap -- \
-  cargo nextest run -p xtask boot_coverage
+  cargo nextest run --manifest-path xtask/Cargo.toml boot_coverage
 ```
 
 Expected: FAIL — `boot_coverage_rows` / `BootCoverageRow` not defined.
@@ -578,7 +582,7 @@ Add `pub boot_coverage: Vec<BootCoverageRow>` to `Analysis`, populate it in
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-818-firefox-boot-phase-gap -- \
-  cargo nextest run -p xtask traces
+  cargo nextest run --manifest-path xtask/Cargo.toml traces
 ```
 
 Expected: PASS (including the existing render tests).
@@ -644,11 +648,17 @@ and a pointer to #818. Outside the repo, so outside the commit below.
 
 - [ ] **Step 5: Format and commit**
 
+**The ADR draft is NOT staged.** Everything under `docs/adr/drafts/` except its
+`README.md` is gitignored, by design — a draft carries no number until
+`cargo xtask adr promote` assigns one at ship, which is also what stages it
+(`docs/adr/drafts/README.md`). Staging it here would either fail or commit a
+premature number.
+
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-818-firefox-boot-phase-gap -- \
   prettier -w docs/observability.md docs/adr/drafts/measurement-frames-are-not-mixed.md
-git add docs/observability.md docs/adr/drafts/measurement-frames-are-not-mixed.md
-git commit -m "docs(e2e): supersede the load-harvest description; record the frame rule (#818)"
+git add docs/observability.md
+git commit -F /tmp/msg.txt
 ```
 
 ---
@@ -784,7 +794,7 @@ fn medians_are_the_lower_of_the_two_middle_values_on_even_counts() {
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-818-firefox-boot-phase-gap -- \
-  cargo nextest run -p xtask boot_phase
+  cargo nextest run --manifest-path xtask/Cargo.toml boot_phase
 ```
 
 Expected: FAIL — module not defined.

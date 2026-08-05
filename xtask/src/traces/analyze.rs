@@ -108,6 +108,8 @@ pub struct Analysis {
     pub trace_totals: Vec<TraceTotalRow>,
     /// Action hotspots (`e2e.action_top_json`), `max_ms` desc. Section 3.
     pub action_hotspots: Vec<HotspotRow>,
+    /// Boot-decomposition coverage per `(trace file, project)`. All rows. Section 5 (#818).
+    pub boot_coverage: Vec<BootCoverageRow>,
     /// Navigation phase totals (`e2e.navigation_top_json`), `max_ms` desc. Section 4a.
     pub navigation_phase_hotspots: Vec<HotspotRow>,
     /// Slow navigation targets by URL path, `max_ms` desc. Section 4b.
@@ -181,6 +183,21 @@ pub struct ByProjectRow {
     pub max_ms: f64,
     pub avg_actions: f64,
     pub avg_requests: f64,
+}
+
+/// One row of "Boot decomposition coverage" (#818, spec D3) — how much of the boot
+/// decomposition a single `(trace file, project)` population actually captured.
+#[derive(Debug, Clone)]
+pub struct BootCoverageRow {
+    /// The trace file this came from. **Load-bearing:** `projectName` is the browser
+    /// and names no backend (`traces/run.rs:99-101`), so keying on `project` alone
+    /// pools sqlite with postgres into one row.
+    pub source: String,
+    pub project: String,
+    pub navigations: u64,
+    pub mounted: u64,
+    pub full_marks: u64,
+    pub dropped: u64,
 }
 
 /// One row of "Trace totals" (Node `printTraceTotals` :1070-1096).
@@ -337,6 +354,75 @@ fn navigation_sections(spans: &[Span]) -> (Vec<HotspotRow>, Vec<TargetRow>) {
         .collect();
     sort_desc_by(&mut target_rows, |r| r.max_ms);
     (phase_rows, target_rows)
+}
+
+/// The fewest `bootPhases` entries a fully decomposed navigation carries.
+/// `bootPhasesFrom` (`end2end/tests/fixtures.ts`) emits one phase per adjacent mark
+/// pair, so today's four `jaunder.*` marks yield three. **A floor, never an
+/// equality:** `client::perf` may gain a mark, and pinning the count would report
+/// that as a total coverage blackout — exactly the silent failure #818 exists to
+/// eliminate.
+const MIN_BOOT_PHASES: usize = 3;
+
+/// Section 5 — boot-decomposition coverage from `e2e.navigation_top_json` (#818).
+///
+/// Grouped by `(source, project)`, not by project: `projectName` is the browser and
+/// names no backend (`traces/run.rs:99-101`), so on `project` alone a sqlite run and
+/// a postgres run of the same browser pool into a single meaningless row. A
+/// `(source, project)` that produced no navigations still gets a zeroed row, so a
+/// combo that captured nothing is visible rather than absent.
+///
+/// `mounted` is **proxied** by a non-null `commitToMountMs` — an approximation, not
+/// an equivalence. That field is non-null iff *both* `committedMs` and `mountedMs`
+/// were set (`end2end/tests/fixtures.ts:618-621`), so a navigation that mounted but
+/// whose commit was never observed (the `state.pending.shift()` path in
+/// `capture-trace.ts`) drops out of both the numerator and the denominator.
+///
+/// `dropped` sums `e2e.navigation_top_dropped`, because `e2e.navigation_top_json`
+/// is the top 20 *by duration* per test — a biased sample, not a census. Without it
+/// a truncated capture reads as complete coverage.
+fn boot_coverage_rows(spans: &[Span]) -> Vec<BootCoverageRow> {
+    let mut rows: Vec<BootCoverageRow> = Vec::new();
+    for s in e2e_tests(spans) {
+        let project = project_label(&s.project);
+        let existing = rows
+            .iter()
+            .position(|r| r.source == s.source && r.project == project);
+        let idx = match existing {
+            Some(idx) => idx,
+            None => {
+                rows.push(BootCoverageRow {
+                    source: s.source.clone(),
+                    project,
+                    navigations: 0,
+                    mounted: 0,
+                    full_marks: 0,
+                    dropped: 0,
+                });
+                rows.len() - 1
+            }
+        };
+        let row = &mut rows[idx];
+        row.dropped += count(&s.raw, "e2e.navigation_top_dropped");
+        let navs = parse_json_attr(&s.raw, "e2e.navigation_top_json");
+        let Some(arr) = navs.as_array() else {
+            continue;
+        };
+        for nav in arr {
+            row.navigations += 1;
+            if field_f64(nav, "commitToMountMs").is_some() {
+                row.mounted += 1;
+            }
+            let phases = nav
+                .get("bootPhases")
+                .and_then(Value::as_object)
+                .map_or(0, |phases| phases.len());
+            if phases >= MIN_BOOT_PHASES && field_f64(nav, "wasmInstantiateMs").is_some() {
+                row.full_marks += 1;
+            }
+        }
+    }
+    rows
 }
 
 /// Section 6 — long-task hotspots by task name + per-project totals from
@@ -664,6 +750,7 @@ fn analyze_spans_inner(spans: Vec<Span>, project_filter: Option<String>) -> Anal
     // Sections 3, 4, 6, 7 — the JSON-attribute hotspots.
     let action_hotspots = action_hotspot_rows(&spans);
     let (navigation_phase_hotspots, navigation_targets) = navigation_sections(&spans);
+    let boot_coverage = boot_coverage_rows(&spans);
     let (long_task_hotspots, long_task_by_project) = long_task_sections(&spans);
     let (resource_initiators, resource_assets) = resource_sections(&spans);
 
@@ -675,6 +762,7 @@ fn analyze_spans_inner(spans: Vec<Span>, project_filter: Option<String>) -> Anal
         by_project,
         trace_totals,
         action_hotspots,
+        boot_coverage,
         navigation_phase_hotspots,
         navigation_targets,
         long_task_hotspots,
@@ -875,6 +963,183 @@ mod tests {
             span_coverage(&lifecycle_tree(), &only_retry_one).is_empty(),
             "a retry-0 span tree must not match a retry-1 report entry",
         );
+    }
+
+    // --- boot-decomposition coverage (#818) ---------------------------------
+
+    /// One navigation entry of `e2e.navigation_top_json`, carrying only the three
+    /// fields the coverage section reads. `phases` is a *count* — `bootPhasesFrom`
+    /// (`end2end/tests/fixtures.ts`) emits one entry per adjacent mark pair, and the
+    /// names are irrelevant here.
+    fn nav(
+        commit_to_mount_ms: Option<f64>,
+        phases: Option<usize>,
+        wasm_instantiate_ms: Option<f64>,
+    ) -> serde_json::Value {
+        let boot_phases = match phases {
+            None => serde_json::Value::Null,
+            Some(n) => serde_json::Value::Object(
+                (0..n)
+                    .map(|i| (format!("a{i}->a{}", i + 1), serde_json::json!(1.0)))
+                    .collect(),
+            ),
+        };
+        serde_json::json!({
+            "commitToMountMs": commit_to_mount_ms,
+            "bootPhases": boot_phases,
+            "wasmInstantiateMs": wasm_instantiate_ms,
+        })
+    }
+
+    /// A fully decomposed, mounted navigation (the post-fix steady state).
+    fn full_nav() -> serde_json::Value {
+        nav(Some(120.0), Some(3), Some(40.0))
+    }
+
+    /// One `e2e.test` span carrying `navs` as `e2e.navigation_top_json`, parsed out
+    /// of the trace file `source` — the identity `boot_coverage_rows` keys on
+    /// alongside the project.
+    fn boot_span(
+        source: &str,
+        project: &str,
+        dropped: u64,
+        navs: Vec<serde_json::Value>,
+    ) -> Vec<Span> {
+        let line = serde_json::json!({
+            "resourceSpans": [{
+                "scopeSpans": [{
+                    "spans": [{
+                        "name": "e2e.test",
+                        "attributes": [
+                            attr("e2e.project", serde_json::json!({ "stringValue": project })),
+                            attr(
+                                "e2e.navigation_top_json",
+                                serde_json::json!({
+                                    "stringValue": serde_json::Value::Array(navs).to_string()
+                                }),
+                            ),
+                            attr(
+                                "e2e.navigation_top_dropped",
+                                serde_json::json!({ "intValue": dropped.to_string() }),
+                            ),
+                        ],
+                    }]
+                }]
+            }]
+        });
+        parse_spans(&line.to_string(), &Filters::default(), source).unwrap()
+    }
+
+    fn row_for<'a>(rows: &'a [BootCoverageRow], project: &str) -> &'a BootCoverageRow {
+        rows.iter()
+            .find(|r| r.project == project)
+            .unwrap_or_else(|| panic!("no coverage row for {project}"))
+    }
+
+    #[test]
+    fn boot_coverage_counts_mounted_and_fully_marked_navigations_per_project() {
+        // firefox: 2 navigations, both mounted, neither decomposed — the #818 blackout.
+        // chromium: 2 navigations, 1 mounted and fully marked, 1 never mounted.
+        let mut spans = boot_span(
+            "sqlite",
+            "firefox",
+            0,
+            vec![nav(Some(300.0), None, None), nav(Some(280.0), None, None)],
+        );
+        spans.extend(boot_span(
+            "sqlite",
+            "chromium",
+            0,
+            vec![full_nav(), nav(None, None, None)],
+        ));
+
+        let rows = boot_coverage_rows(&spans);
+        let ff = row_for(&rows, "firefox");
+        assert_eq!((ff.navigations, ff.mounted, ff.full_marks), (2, 2, 0));
+        let chr = row_for(&rows, "chromium");
+        assert_eq!((chr.navigations, chr.mounted, chr.full_marks), (2, 1, 1));
+    }
+
+    #[test]
+    fn boot_coverage_separates_rows_by_source_file() {
+        // `projectName` is the browser and names no backend (`traces/run.rs:99-101`),
+        // so keying on project alone would pool sqlite navigations with postgres ones
+        // into a single, meaningless row.
+        let mut spans = boot_span("sqlite", "firefox", 0, vec![full_nav()]);
+        spans.extend(boot_span("postgres", "firefox", 0, vec![full_nav()]));
+
+        let rows = boot_coverage_rows(&spans);
+        assert_eq!(rows.len(), 2, "sqlite and postgres must not be pooled");
+        assert!(rows.iter().all(|r| r.project == "firefox"));
+        assert!(rows.iter().any(|r| r.source == "sqlite"));
+        assert!(rows.iter().any(|r| r.source == "postgres"));
+        assert!(rows.iter().all(|r| r.navigations == 1));
+    }
+
+    #[test]
+    fn a_navigation_is_mounted_iff_commit_to_mount_is_present() {
+        // `commitToMountMs` is non-null iff `committedMs` AND `mountedMs` were both
+        // set (`end2end/tests/fixtures.ts:618-621`), so it is the mounted proxy.
+        let spans = boot_span("sqlite", "firefox", 0, vec![nav(None, Some(3), Some(40.0))]);
+        let rows = boot_coverage_rows(&spans);
+        assert_eq!(rows[0].navigations, 1);
+        assert_eq!(
+            rows[0].mounted, 0,
+            "boot phases alone must not count as mounted",
+        );
+    }
+
+    #[test]
+    fn full_marks_accepts_extra_boot_phases_but_not_missing_ones() {
+        // A FOURTH phase means `client::perf` gained a mark. Requiring exactly three
+        // would read that as a total coverage blackout — the very class of silent
+        // failure #818 exists to eliminate.
+        let mut spans = boot_span(
+            "sqlite",
+            "firefox",
+            0,
+            vec![nav(Some(1.0), Some(4), Some(40.0))],
+        );
+        spans.extend(boot_span(
+            "sqlite",
+            "chromium",
+            0,
+            vec![nav(Some(1.0), Some(2), Some(40.0))],
+        ));
+        // Decomposed but with no derived instantiate span: not a full mark set.
+        spans.extend(boot_span(
+            "sqlite",
+            "webkit",
+            0,
+            vec![nav(Some(1.0), Some(3), None)],
+        ));
+
+        let rows = boot_coverage_rows(&spans);
+        assert_eq!(row_for(&rows, "firefox").full_marks, 1, "4 phases is full");
+        assert_eq!(
+            row_for(&rows, "chromium").full_marks,
+            0,
+            "2 phases is short",
+        );
+        assert_eq!(
+            row_for(&rows, "webkit").full_marks,
+            0,
+            "a null wasmInstantiateMs is short",
+        );
+    }
+
+    #[test]
+    fn boot_coverage_sums_navigation_top_dropped_so_truncation_is_never_silent() {
+        // `e2e.navigation_top_json` is the top 20 BY DURATION per test — a biased
+        // sample, not a census. Without the dropped count a truncated capture reads
+        // as complete coverage.
+        let mut spans = boot_span("sqlite", "firefox", 3, vec![full_nav()]);
+        spans.extend(boot_span("sqlite", "firefox", 5, vec![full_nav()]));
+
+        let rows = boot_coverage_rows(&spans);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].navigations, 2);
+        assert_eq!(rows[0].dropped, 8, "dropped accumulates across tests");
     }
 
     #[test]
