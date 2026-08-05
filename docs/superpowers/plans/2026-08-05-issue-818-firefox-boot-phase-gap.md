@@ -290,7 +290,7 @@ Spec AC1. The bug fix proper.
 - Produces: no new exports. `timingFor(navigationId)` gains full coverage on
   mounted navigations, which Tasks 4, 5 and 8 rely on.
 
-- [ ] **Step 1: Change `harvestDocument` to merge**
+- [x] **Step 1: Change `harvestDocument` to merge**
 
 At `capture-trace.ts:196`, replace the overwrite:
 
@@ -301,7 +301,7 @@ documentTimings.set(
 );
 ```
 
-- [ ] **Step 2: Harvest from the mount binding**
+- [x] **Step 2: Harvest from the mount binding**
 
 In the `exposeBinding("__jaunderRecordMount", ...)` callback, take the source
 rather than discarding it, and harvest the navigation the mount was just
@@ -323,7 +323,7 @@ Calling `page.evaluate` from a binding callback is safe — the callback is not
 `async` here, so Playwright resolves the binding immediately and the evaluate
 proceeds on the duplex connection without re-entering the page's JS thread.
 
-- [ ] **Step 3: Make `settle()` drain until stable**
+- [x] **Step 3: Make `settle()` drain until stable**
 
 `Promise.all(pendingHarvests)` snapshots the array synchronously, so anything
 pushed _during_ the await is never awaited. Until now every harvest came from a
@@ -345,7 +345,7 @@ async settle() {
 Without this, coverage is intermittently short — which looks like a partial fix
 and would survive a single-run check.
 
-- [ ] **Step 4: Correct the doc comments that name `load`**
+- [x] **Step 4: Correct the doc comments that name `load`**
 
 `:102` (`DocumentTiming` — "Everything harvested from a single document, at its
 `load`"), `:114-121` (`timingFor`), and `:161-170` (`harvestDocument`'s own
@@ -353,7 +353,7 @@ header). `timingFor`'s comment also frames the goal as decomposing
 `commit_to_mount`; per spec D8 that is a frame error, so restate the target as
 the document-relative boot total and note that `commit_to_mount` is Node-side.
 
-- [ ] **Step 5: Verify the harness typechecks**
+- [x] **Step 5: Verify the harness typechecks**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-818-firefox-boot-phase-gap -- \
@@ -363,7 +363,7 @@ devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-818-firefox-
 Expected: PASS, no diagnostics. (Behavioral verification is Task 7 — it needs a
 full e2e run.)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add end2end/tests/capture-trace.ts
@@ -401,7 +401,7 @@ into its own fixture would move its setup into exactly the interval
 pattern (`:69-71`): a module-level `Map` keyed by test span id, written by
 `_autoPerfSpan`, read at call time. Nothing is reordered.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `end2end/tests/boot-marks.spec.ts`:
 
@@ -436,7 +436,7 @@ harnessTest(
 
 `toBeGreaterThanOrEqual(4)`, never `toBe(4)` — see Global Constraints.
 
-- [ ] **Step 2: Run it, verify it fails**
+- [x] **Step 2: Run it, verify it fails**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-818-firefox-boot-phase-gap -- \
@@ -445,7 +445,7 @@ devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-818-firefox-
 
 Expected: FAIL — `bootTiming` is not a declared fixture.
 
-- [ ] **Step 3: Implement the registry and fixture**
+- [x] **Step 3: Implement the registry and fixture**
 
 1. Beside `tracedContextRecords`, add
    `const captureByTestSpanId = new Map<string, TraceCapture>();`
@@ -460,11 +460,11 @@ return the timing for the highest-id navigation whose `mountedMs` is non-null,
 or `undefined` when there is none. It must `settle()` before reading — the
 consumer-side half of Task 3 Step 3.
 
-- [ ] **Step 4: Run it, verify it passes**
+- [x] **Step 4: Run it, verify it passes**
 
 Run: the Step 2 command. Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add end2end/tests/fixtures.ts end2end/tests/boot-marks.spec.ts
@@ -509,7 +509,7 @@ pub struct BootCoverageRow {
 fn boot_coverage_rows(spans: &[Span]) -> Vec<BootCoverageRow>;
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `analyze.rs`'s `mod tests`, over synthetic `e2e.test` spans carrying
 `e2e.navigation_top_json` (follow the existing tests' span-construction helper):
@@ -550,7 +550,7 @@ fn boot_coverage_sums_navigation_top_dropped_so_truncation_is_never_silent() {
 }
 ```
 
-- [ ] **Step 2: Run them, verify they fail**
+- [x] **Step 2: Run them, verify they fail**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-818-firefox-boot-phase-gap -- \
@@ -558,8 +558,15 @@ devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-818-firefox-
 ```
 
 Expected: FAIL — `boot_coverage_rows` / `BootCoverageRow` not defined.
+**Observed:** exit 101, 7 compile errors, all "cannot find `BootCoverageRow`" /
+"cannot find function `boot_coverage_rows`". No test passed before
+implementation.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
+
+**`bootPhases` is a JSON object, not an array** — `fixtures.ts` types it
+`Record<string, number>`, keyed `"<from>-><to>"`. So "≥3 entries" is
+`as_object().len() >= 3`.
 
 `boot_coverage_rows` groups `e2e_tests(spans)` by `(source, project_label)`, and
 per navigation in `e2e.navigation_top_json` counts: always `navigations`;
@@ -578,16 +585,19 @@ Add `pub boot_coverage: Vec<BootCoverageRow>` to `Analysis`, populate it in
 `source | project | navigations | mounted | full marks | dropped`, following the
 `ByProjectDisplay` pattern exactly.
 
-- [ ] **Step 4: Run them, verify they pass**
+- [x] **Step 4: Run them, verify they pass**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-818-firefox-boot-phase-gap -- \
   cargo nextest run --manifest-path xtask/Cargo.toml traces
 ```
 
-Expected: PASS (including the existing render tests).
+Expected: PASS (including the existing render tests). **Observed:** 66 passed —
+the five named tests plus
+`render_shows_every_boot_coverage_row_with_its_source`, added to cover the
+display path since the Files block calls for tests in both files.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add xtask/src/traces/analyze.rs xtask/src/traces/render.rs
@@ -607,7 +617,7 @@ Spec AC8, plus the ADR flagged as my judgment call.
 - Modify: `~/measurements/jaunder/issue-792-warmup-ab/README.md` ("Known
   limits")
 
-- [ ] **Step 1: Rewrite the observability section**
+- [x] **Step 1: Rewrite the observability section**
 
 It currently describes the `load` harvest and its "73 navigations across 59 of
 127 tests" figure as the steady state. **Supersede, don't delete** — the figure
@@ -618,12 +628,13 @@ by construction (marks precede `data-mounted` synchronously in `csr`); that the
 that **the pre-#818 corpus contains no firefox decomposition at all** — 0 marks
 on 210/210 navigations per combo, both arms.
 
-- [ ] **Step 2: Cross-reference the coverage gate**
+- [x] **Step 2: Cross-reference the coverage gate**
 
 Note that coverage is _reported_ (Task 5) but not yet gated, pointing at
 **#831**.
 
-- [ ] **Step 3: Draft the ADR**
+- [x] **Step 3: Draft the ADR** →
+      `docs/adr/drafts/measurement-frames-are-not-mixed.md`
 
 `docs/adr/drafts/measurement-frames-are-not-mixed.md`, numberless (promoted at
 ship by `cargo xtask adr promote`) — see **jaunder-adr**.
@@ -639,14 +650,19 @@ engine-asymmetric, so decomposing across them charges harness overhead to app
 boot phases. Consequence: the analysis target is `mount_done.startTime`, whose
 segments close exactly; the frame skew is reported separately as a harness cost.
 
-- [ ] **Step 4: Update the preserved corpus README**
+- [x] **Step 4: Update the preserved corpus README**
 
 `~/measurements/jaunder/issue-792-warmup-ab/README.md` "Known limits" says boot
 decomposition is "often `null`". That corpus is **not re-collectable**, so amend
 it to record that firefox has _none at all_ and chromium ~34%, with the cause
 and a pointer to #818. Outside the repo, so outside the commit below.
 
-- [ ] **Step 5: Format and commit**
+- [x] **Step 5: Format and commit**
+
+**Check `git status` before every commit.** `observability.md` was already
+partially staged when Task 5 was committed and rode along in it; both commits
+were unpushed so they were re-split, but the lesson is to stage deliberately
+rather than assume the index is empty.
 
 **The ADR draft is NOT staged.** Everything under `docs/adr/drafts/` except its
 `README.md` is gitignored, by design — a draft carries no number until
@@ -668,7 +684,11 @@ git commit -F /tmp/msg.txt
 Spec AC3–AC5, AC10. **This task's numbers are coverage only** — valid on a
 non-quiescent host, unlike anything in Tasks 9–10.
 
-- [ ] **Step 1: Run both sqlite combos** (Bash background mode — long/cold)
+- [x] **Step 1: Run both sqlite combos** (Bash background mode — long/cold) Both
+      exit 0. Note this also exercises `boot-marks.spec.ts` **inside** the
+      firefox VM — it matches the `firefox` project's `testIgnore`-only filter —
+      so the run is simultaneously the coverage measurement and the regression
+      assertion's first firefox exercise.
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-818-firefox-boot-phase-gap -- \
@@ -677,7 +697,7 @@ devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-818-firefox-
   cargo xtask e2e sqlite chromium
 ```
 
-- [ ] **Step 2: Extract each capture and read the coverage section**
+- [x] **Step 2: Extract each capture and read the coverage section**
 
 ```bash
 tar -xzf .xtask/diagnostics/e2e-sqlite-firefox/capture-sqlite.tar.gz capture/otel-traces.jsonl
@@ -687,7 +707,36 @@ devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-818-firefox-
 
 Repeat for chromium, extracting to a distinct filename.
 
-- [ ] **Step 3: Check the acceptance condition**
+- [x] **Step 3: Check the acceptance condition**
+
+**Observed (2026-08-05, `cargo xtask e2e sqlite {firefox,chromium}`):**
+
+| project        | navigations | mounted | full marks | dropped |
+| -------------- | ----------- | ------- | ---------- | ------- |
+| firefox        | 199         | 196     | 196        | 0       |
+| firefox-admin  | 12          | 12      | 12         | 0       |
+| chromium       | 199         | 196     | 196        | 0       |
+| chromium-admin | 12          | 12      | 12         | 0       |
+
+`full marks == mounted` on both engines — AC3 and AC4 met. AC5's two
+denominators, against the pre-fix baseline:
+
+| engine   | full marks / mounted | full marks / all navigations | pre-fix (all navs) |
+| -------- | -------------------- | ---------------------------- | ------------------ |
+| firefox  | 208/208 = **100%**   | 208/211 = **98.6%**          | **0%** (0/210)     |
+| chromium | 208/208 = **100%**   | 208/211 = **98.6%**          | ~34% (72/210)      |
+
+`dropped = 0` everywhere, so the population is a census rather than a
+duration-biased top-20 slice.
+
+**Closure validated on real data** (load-independent, so valid despite a busy
+host): all 208 fully-decomposed firefox navigations sum to
+`mount_done.startTime` within 1 ms — **0 violations**. D8's decomposition closes
+by construction, which is what makes AC13's residual check meaningful.
+
+**Frame skew is real and bidirectional** — sampled at −137, +87, +119 ms on
+1200–2000 ms boots. Decomposing `commitToMountMs` into document-relative parts,
+as #794 intended, would have smeared that term across the app's boot phases.
 
 **AC3/AC4:** `full marks == mounted` for both engines.
 
