@@ -5,7 +5,7 @@
 > useful). Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Spec:**
-[`docs/superpowers/specs/2026-08-04-issue-691-tag-limit-wire-type.md`](../specs/2026-08-04-issue-691-tag-limit-wire-type.md)
+[`docs/archive/2026-08-04-issue-691-tag-limit-wire-type-spec.md`](2026-08-04-issue-691-tag-limit-wire-type-spec.md)
 **Issue:** [#691](https://github.com/jaunder-org/jaunder/issues/691) ·
 **Milestone** #13
 
@@ -260,7 +260,7 @@ git commit -m "refactor(web): type the list_tags wire limit as PageSize (#691)"
 **Interfaces:** consumes Task 1's committed change; produces the green signal
 `jaunder-ship` needs before opening the PR.
 
-- [ ] **Step 1: Run the verify-only gate first (spec A11)**
+- [x] **Step 1: Run the verify-only gate first (spec A11)**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-691-tag-limit -- cargo xtask validate --no-e2e`
@@ -271,7 +271,7 @@ _after_ the commit. `validate --no-e2e` is verify-only and never mutates, so it
 is the gate that actually proves the committed tree is clean. If it fails on
 formatting, the commit needs amending before Step 2.
 
-- [ ] **Step 2: Run the full local gate**
+- [x] **Step 2: Run the full local gate**
 
 Run (Bash background mode — this is long and cold):
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-691-tag-limit -- cargo xtask validate`
@@ -279,7 +279,7 @@ Run (Bash background mode — this is long and cold):
 Expected: **PASS**, `ok=true`, across all four
 `{sqlite,postgres}×{chromium,firefox}` e2e combos.
 
-- [ ] **Step 3: Confirm the e2e specs that cover this endpoint actually ran**
+- [x] **Step 3: Confirm the e2e specs that cover this endpoint actually ran**
 
 `docs/coverage/server-fns-evidence.json` maps `tags::list` to Playwright specs
 in `end2end/tests/posts.spec.ts` (`:870`, `:912`, `:933`, …). They are the only
@@ -289,6 +289,6 @@ reports the server-fn coverage step green, `tags::list` is still covered; if it
 flags `tags::list` as uncovered, that is a real regression from the caller
 change, not a flake — investigate before shipping.
 
-- [ ] **Step 4: Read the sidecar on any failure**
+- [x] **Step 4: Read the sidecar on any failure** — not needed; `ok: true`, `failed: []`.
 
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-691-tag-limit -- jq '.steps[] | select(.ok == false)' .xtask/last-result.json`
