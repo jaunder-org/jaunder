@@ -1,5 +1,3 @@
-use std::{fmt, str::FromStr};
-
 use common::mailbox::Mailbox;
 use common::smtp_password::SmtpPassword;
 use common::smtp_username::SmtpUsername;
@@ -7,48 +5,12 @@ use thiserror::Error;
 
 use crate::SiteConfigStorage;
 
-// ---------------------------------------------------------------------------
-// SmtpTlsMode
-// ---------------------------------------------------------------------------
-
-/// The TLS mode to use when connecting to the SMTP relay.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SmtpTlsMode {
-    /// Unencrypted plain SMTP connection.
-    Plain,
-    /// Upgrade to TLS using STARTTLS after connecting.
-    StartTls,
-    /// Connect using TLS from the start (implicit TLS / SMTPS).
-    Tls,
-}
-
-impl fmt::Display for SmtpTlsMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SmtpTlsMode::Plain => write!(f, "plain"),
-            SmtpTlsMode::StartTls => write!(f, "starttls"),
-            SmtpTlsMode::Tls => write!(f, "tls"),
-        }
-    }
-}
-
-/// Error returned when a string does not name a valid [`SmtpTlsMode`].
-#[derive(Debug, Error)]
-#[error("invalid SMTP TLS mode: {0:?}")]
-pub struct InvalidSmtpTlsMode(String);
-
-impl FromStr for SmtpTlsMode {
-    type Err = InvalidSmtpTlsMode;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "plain" => Ok(SmtpTlsMode::Plain),
-            "starttls" => Ok(SmtpTlsMode::StartTls),
-            "tls" => Ok(SmtpTlsMode::Tls),
-            other => Err(InvalidSmtpTlsMode(other.to_owned())),
-        }
-    }
-}
+// The TLS mode now lives in `common` beside the other SMTP value types, where the
+// `#[text_enum]` convention is reachable (`storage` depends on neither `strum` nor
+// `macros`, and the sqlx bridge is `#[cfg(feature = "sqlx")]` evaluated in the
+// *consuming* crate — see #687 D1a). Re-exported so `storage::smtp::SmtpTlsMode` keeps
+// resolving for call sites.
+pub use common::smtp_tls_mode::{InvalidSmtpTlsMode, SmtpTlsMode};
 
 // ---------------------------------------------------------------------------
 // SmtpConfig

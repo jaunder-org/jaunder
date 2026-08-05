@@ -14,7 +14,7 @@ pub use common::registration::RegistrationPolicy;
 use common::site::{SiteIdentity, SiteTitle};
 use common::smtp_password::SmtpPassword;
 use common::smtp_username::SmtpUsername;
-use common::visibility::AudienceTarget;
+use common::visibility::{default_audience_str, parse_default_audience, AudienceTarget};
 use sqlx::{Database, Pool};
 
 /// Async operations on the `site_config` key-value table.
@@ -308,28 +308,6 @@ pub const SITE_TITLE_KEY: &str = "site.title";
 /// trailing slash). Unset (or empty) means callers should emit
 /// root-relative URLs.
 pub const SITE_BASE_URL_KEY: &str = "site.base_url";
-
-/// Parses a stored site-wide default audience. Only the built-ins are valid:
-/// `Named` is per-author and has no instance-wide form, so it is rejected here
-/// (the caller falls back to `Public`).
-fn parse_default_audience(value: &str) -> Option<AudienceTarget> {
-    match value.trim() {
-        "public" => Some(AudienceTarget::Public),
-        "subscribers" => Some(AudienceTarget::Subscribers),
-        "private" => Some(AudienceTarget::Private),
-        _ => None,
-    }
-}
-
-/// String form for a site-wide default audience. `Named` has no instance-wide
-/// form, so it collapses to `public`.
-fn default_audience_str(audience: &AudienceTarget) -> &'static str {
-    match audience {
-        AudienceTarget::Public | AudienceTarget::Named(_) => "public",
-        AudienceTarget::Subscribers => "subscribers",
-        AudienceTarget::Private => "private",
-    }
-}
 
 /// Generic [`SiteConfigStorage`] backed by any [`Backend`] database.
 ///

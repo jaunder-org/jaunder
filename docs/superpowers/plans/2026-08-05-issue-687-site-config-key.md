@@ -98,8 +98,9 @@ accessors, the gate's `visit_trait_item_fn` blind spot (Task 1 files it).
 Task 11 cites.
 
 - [x] **Step 1: File the gate blind-spot issue** — already tracked as
-      [#787](https://github.com/jaunder-org/jaunder/issues/787) ("sqlx-newtype-decode never
-      scans trait default bodies"). No new issue filed.
+      [#787](https://github.com/jaunder-org/jaunder/issues/787)
+      ("sqlx-newtype-decode never scans trait default bodies"). No new issue
+      filed.
 
 Check first:
 `gh issue list --repo jaunder-org/jaunder --search "visit_trait_item_fn" --state all`
@@ -111,8 +112,8 @@ and `visit_impl_item_fn` but not `visit_trait_item_fn`, so trait **default**
 bodies are never scanned — a decode there is invisible rather than approved.
 Note #687 works around it by making `get_smtp_config` required.
 
-- [x] **Step 2: Confirm #827** — OPEN, type Task, milestone "Domain-value type safety
-      (newtypes)".
+- [x] **Step 2: Confirm #827** — OPEN, type Task, milestone "Domain-value type
+      safety (newtypes)".
 
 `gh issue view 827 --repo jaunder-org/jaunder --json number,issueType,milestone`
 Expected: Task, milestone "Domain-value type safety (newtypes)". Already filed.
@@ -156,10 +157,10 @@ mod tests {
 }
 ```
 
-- [x] **Step 2: Run it** — **PASSED.** Both halves hold: `#[macros::text_enum(sqlx, …)]`
-      survives `macro_rules!` expansion in first-attribute position, and `$lit` in
-      `#[strum(serialize = $lit)]` parses. No fallback needed; Task 5 builds the table on
-      this shape.
+- [x] **Step 2: Run it** — **PASSED.** Both halves hold:
+      `#[macros::text_enum(sqlx, …)]` survives `macro_rules!` expansion in
+      first-attribute position, and `$lit` in `#[strum(serialize = $lit)]`
+      parses. No fallback needed; Task 5 builds the table on this shape.
 
 `devtool run --cwd <worktree> -- cargo nextest run -p common spike_key_round_trips`
 Expected: **PASS.** Proves two things — `#[macros::text_enum]` survives as the
@@ -192,7 +193,7 @@ existing `#[cfg(test)] mod tests` (:41).
 - **Requires adding `attributes(sqlx_bridge)`** to the `proc_macro_derive` in
   `macros/src/lib.rs` — the derive currently parses no attributes at all.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Follow the file's existing style — **token-stream assertions**, because `macros`
 has no `sqlx` dependency (`macros/Cargo.toml:19-24` declares the feature as a
@@ -236,12 +237,16 @@ fn an_unknown_option_is_rejected() {
 Adapt `expand_ok`/`expand_err` to the helpers the file already uses; read :41-80
 first.
 
-- [ ] **Step 2: Run, verify FAIL**
+- [x] **Step 2: Run, verify FAIL** — red on exactly the two option-dependent
+      tests.
 
 `devtool run --cwd <worktree> -- cargo nextest run -p macros decode_inner`
 Expected: **FAIL** — the option is unparsed, so `expand_ok` errors.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement** — spelled `#[sqlx_bridge(text)]`, a bare flag,
+      **not** `decode_inner = <ty>`: a TEXT-stored value must move `Type`,
+      `Encode` **and** `Decode` together, so naming one of the three would
+      under-specify the intent. Deviation from spec A12's wording, deliberate.
 
 Parse the optional attribute; when present, pass `decode_inner` to the existing
 `macros::sqlx_bridge::bridge` (`sqlx_bridge.rs:43`, already `pub(crate)`;
@@ -249,17 +254,21 @@ Parse the optional attribute; when present, pass `decode_inner` to the existing
 `convert` at :39, so no plumbing is new) with a `FromStr`-routing convert. When
 absent, emit exactly today's tokens.
 
-- [ ] **Step 4: Run, verify PASS**
+- [x] **Step 4: Run, verify PASS** — 126/126 `macros` tests green.
 
 `devtool run --cwd <worktree> -- cargo nextest run -p macros` Expected: **PASS**
 — new tests plus every existing `macros` test, including the no-constructor
 charter test.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit** — `ca3bc74c`. **Note:** the auto-staging pre-commit
+      hook swept the (already-deleted) Task 2 spike file into this commit
+      despite an explicit `git add macros/…`. Its deletion lands in Task 5's
+      commit, so the end state is correct; the commit carries a transient file.
+      Watch for this on later tasks.
 
 ```bash
 git add macros/
-git commit -m "feat(macros): SqlxBridge decode_inner for text-stored scalars (#687)"
+git commit -m "feat(macros): SqlxBridge text option for text-stored scalars (#687)"
 ```
 
 ---
@@ -273,7 +282,7 @@ across the read path rewrite rather than being written to fit it.
 
 **Interfaces:** produces the regression lock Task 7 must keep green.
 
-- [ ] **Step 1: Rewrite the three assertions**
+- [x] **Step 1: Rewrite the three assertions**
 
 They assert only variant shape today (`:305,:317,:329`). Replace with
 **message** assertions. Per spec A14, do **not** assert the variant: Task 7
@@ -293,7 +302,9 @@ assert!(
 asserting its own seeded bad value. **Keep the existing seeds**; only the
 assertion changes.
 
-- [ ] **Step 2: Run, verify PASS**
+- [x] **Step 2: Run, verify PASS** — 5/5 green immediately; the values already
+      reach the messages, so no production error change was needed (the
+      stop-condition did not fire).
 
 `devtool run --cwd <worktree> -- devtool pg run -- cargo nextest run -p storage load_smtp_config_returns_err`
 Expected: **PASS** immediately — the variants already carry the value
@@ -303,7 +314,7 @@ it.
 **If any fails, stop.** It means the value is not actually reaching the message,
 and A14 needs the production error changed — a bigger change than this task.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit** — `aaf937c8`.
 
 ```bash
 git add storage/src/smtp.rs
@@ -340,7 +351,7 @@ independently verifiable.
   sqlx `Encode`/`Decode`.
 - Depends on Tasks 2 and 3.
 
-- [ ] **Step 1: Move `parse_default_audience` into `common`**
+- [x] **Step 1: Move `parse_default_audience` into `common`**
 
 It is a private fn in the **storage** crate (`site_config.rs:315`), and
 `AudienceTarget` (`common/src/visibility.rs:127`) has a `Named(_)` variant and
@@ -348,7 +359,7 @@ no `FromStr` — so a registry in `common` cannot reach its parser where it sits
 Move it (and `default_audience_str`, its inverse) beside the type. Not a cycle:
 `storage → common` is the only edge and this removes a use of it.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 ```rust
 #[test]
@@ -394,12 +405,20 @@ macro from a per-entry column. It exists because a single junk string cannot
 fail every validator — four of the value types reject only `""`, which is
 precisely what A5 covers.
 
-- [ ] **Step 3: Run, verify FAIL**
+- [x] **Step 3: Run, verify FAIL**
 
 `devtool run --cwd <worktree> -- cargo nextest run -p common config_key smtp`
 Expected: **FAIL** — nothing exists yet.
 
-- [ ] **Step 4: Write the types, the macro, and the table**
+- [x] **Step 4: Write the types, the macro, and the table** — 19 entries,
+      verified against this table. Row syntax is
+      `Variant => "dotted" : <value> { optional }?, bad: "…";` because
+      `macro_rules!` follow-set rules make the illustrative form below
+      unparseable next to the custom-parser escape; semantics are unchanged.
+      `InvalidSiteConfigValue` carries the key and a reason but **not** the
+      offending value — `smtp.password` is in the table, and echoing it would
+      leak a secret. `SmtpPort` also rejects `0` and gained a `value()` reader
+      (a bridge-only newtype with no reader is unusable).
 
 The `{ optional }` marker drives both the empty-accepting validator and
 `is_optional`, so the two cannot disagree. The 19 entries, with the type each
@@ -430,7 +449,8 @@ validator parses into:
 The table needs a custom-parser escape for `posts.default_audience` (it is not a
 `FromStr`) and a `known_bad_example` column per entry.
 
-- [ ] **Step 5: Run, verify PASS**
+- [x] **Step 5: Run, verify PASS** — 525/525 `common` tests green, including all
+      four required registry tests. Full `cargo xtask check` also green.
 
 `devtool run --cwd <worktree> -- cargo nextest run -p common` Expected:
 **PASS**, all four registry tests plus the SMTP type tests.

@@ -144,6 +144,35 @@ pub enum AudienceTarget {
     Named(AudienceId),
 }
 
+/// Parses a stored site-wide default audience. Only the built-ins are valid:
+/// [`AudienceTarget::Named`] is per-author and has no instance-wide form, so it is
+/// rejected here (the caller falls back to `Public`).
+///
+/// It lives beside [`AudienceTarget`] rather than in `storage` because the config-key
+/// registry (`crate::config_key`) needs it as a validator and `storage` is downstream of
+/// `common`, not upstream (#687).
+#[must_use]
+pub fn parse_default_audience(value: &str) -> Option<AudienceTarget> {
+    match value.trim() {
+        "public" => Some(AudienceTarget::Public),
+        "subscribers" => Some(AudienceTarget::Subscribers),
+        "private" => Some(AudienceTarget::Private),
+        _ => None,
+    }
+}
+
+/// String form for a site-wide default audience — the inverse of
+/// [`parse_default_audience`]. [`AudienceTarget::Named`] has no instance-wide form, so it
+/// collapses to `public`.
+#[must_use]
+pub fn default_audience_str(audience: &AudienceTarget) -> &'static str {
+    match audience {
+        AudienceTarget::Public | AudienceTarget::Named(_) => "public",
+        AudienceTarget::Subscribers => "subscribers",
+        AudienceTarget::Private => "private",
+    }
+}
+
 /// The audience-picker selection as it crosses the server-fn boundary.
 ///
 /// `base` is the mutually-exclusive built-in ([`AudienceBase::Public`],

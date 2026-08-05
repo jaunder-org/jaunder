@@ -243,13 +243,13 @@ removes one of the three test doubles, not two.
 
 - `common/` — the `site_config_keys!` and `user_config_keys!` tables;
   `SiteConfigKey`, `UserConfigKey`; `SmtpHost`, `SmtpSender`, `SmtpPort`;
-  `SmtpTlsMode` moved here and converted to `#[text_enum(sqlx, ...)]`.
-  **Also `parse_default_audience`**, today a private fn in the _storage_ crate
-  (`site_config.rs:315`). `AudienceTarget` (`common/src/visibility.rs:127`) has a
-  `Named(_)` variant and no `FromStr`, so the registry — which lives in `common` — cannot
-  reach its parser where it currently sits. The parser moves to `common` beside the type
-  it parses. (Not a dependency cycle: `storage → common` is the only edge, and this
-  removes a use of it.)
+  `SmtpTlsMode` moved here and converted to `#[text_enum(sqlx, ...)]`. **Also
+  `parse_default_audience`**, today a private fn in the _storage_ crate
+  (`site_config.rs:315`). `AudienceTarget` (`common/src/visibility.rs:127`) has
+  a `Named(_)` variant and no `FromStr`, so the registry — which lives in
+  `common` — cannot reach its parser where it currently sits. The parser moves
+  to `common` beside the type it parses. (Not a dependency cycle:
+  `storage → common` is the only edge, and this removes a use of it.)
 - `macros/src/sqlx_bridge_derive.rs` — the `decode_inner` option (D5).
 - `storage/src/site_config.rs` — `get`/`set`/`delete` retyped; 11 consts
   deleted; required `get_smtp_config`; `get_smtp_credentials` deleted.
@@ -320,9 +320,9 @@ at ship by `cargo xtask adr promote`:
 
 - **A1** `rg -n 'const [A-Z_]+_KEY' storage/src` returns exactly **one** hit —
   `TEMPLATE_LOCK_KEY: i64` (`test_support.rs:539`), which is a Postgres
-  advisory-lock id, not a config key. All **16** config-key consts are gone — 11 in
-  `site_config.rs`, 3 in `media.rs`, 2 in `user_config.rs`. (Baseline today: 17 hits,
-  being those 16 plus `TEMPLATE_LOCK_KEY`.)
+  advisory-lock id, not a config key. All **16** config-key consts are gone — 11
+  in `site_config.rs`, 3 in `media.rs`, 2 in `user_config.rs`. (Baseline today:
+  17 hits, being those 16 plus `TEMPLATE_LOCK_KEY`.)
 - **A2** `SiteConfigStorage::{get,set,delete}` and
   `UserConfigStorage::{get,set,delete}` take their key enum, not `&str`.
   `trybuild` is **not** a dependency of this workspace, so the compile-failure
@@ -358,20 +358,23 @@ at ship by `cargo xtask adr promote`:
 - **A13** `SmtpHost`, `SmtpSender`, `SmtpPort` exist in `common` with
   value-carrying errors; `SmtpTlsMode` is `#[text_enum(sqlx, ...)]` with no
   hand-written `Display`/`FromStr`.
-- **A14** The three SMTP error tests are **strengthened** to assert the offending value
-  appears in the error's **message** — the criterion the issue meant — and still pass
-  after the read path moves into the sqlx bridges.
+- **A14** The three SMTP error tests are **strengthened** to assert the
+  offending value appears in the error's **message** — the criterion the issue
+  meant — and still pass after the read path moves into the sqlx bridges.
 
-  **They must not assert the error's variant.** `SmtpConfigError::{InvalidPort,
-  InvalidTlsMode, InvalidSender}` are constructed only inside `load_smtp_config`'s own
-  parsing (`smtp.rs:145,152,175`); once that parsing moves into the bridges, a bad value
-  surfaces as a `ColumnDecode` whose `source` is the newtype's `FromStr` error, and those
-  three variants become unconstructible. That is a deliberate consequence of D5, not a
-  regression — **the value echo is the property being protected, not the variant identity.**
-  A test written as `matches!(err, InvalidPort(_))` would make D5 unimplementable, which is
-  precisely the trap the issue's own wording set. Whether the three variants are deleted or
-  retained as a mapped wrapper is an implementation choice; the message assertion holds
-  either way.
+  **They must not assert the error's variant.**
+  `SmtpConfigError::{InvalidPort, InvalidTlsMode, InvalidSender}` are
+  constructed only inside `load_smtp_config`'s own parsing
+  (`smtp.rs:145,152,175`); once that parsing moves into the bridges, a bad value
+  surfaces as a `ColumnDecode` whose `source` is the newtype's `FromStr` error,
+  and those three variants become unconstructible. That is a deliberate
+  consequence of D5, not a regression — **the value echo is the property being
+  protected, not the variant identity.** A test written as
+  `matches!(err, InvalidPort(_))` would make D5 unimplementable, which is
+  precisely the trap the issue's own wording set. Whether the three variants are
+  deleted or retained as a mapped wrapper is an implementation choice; the
+  message assertion holds either way.
+
 - **A15** `InMemorySiteConfig` does not exist; `rg -n 'InMemorySiteConfig'`
   returns zero hits outside `docs/archive/`.
 - **A16** The 10 tests moved onto the harness are `#[apply(backends)]` and pass
