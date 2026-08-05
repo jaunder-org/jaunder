@@ -1,9 +1,9 @@
 # Plan — issue #792, second half: remove the warmup
 
 Spec:
-[`2026-08-04-issue-792-e2e-warmup.md`](../specs/2026-08-04-issue-792-e2e-warmup.md)
+[`2026-08-04-issue-792-e2e-warmup.md`](./2026-08-04-issue-792-e2e-warmup-spec.md)
 First half:
-[`2026-08-04-issue-792-e2e-warmup.md`](./2026-08-04-issue-792-e2e-warmup.md)
+[`2026-08-04-issue-792-e2e-warmup-plan.md`](./2026-08-04-issue-792-e2e-warmup-plan.md)
 Verdict:
 https://github.com/jaunder-org/jaunder/issues/792#issuecomment-5186123216 For
 agentic workers: drive with **`jaunder-iterate`**.

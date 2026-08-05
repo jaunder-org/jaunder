@@ -1,7 +1,7 @@
 # Issue #792 — measurement notes
 
 Working notes for the plan
-[`2026-08-04-issue-792-e2e-warmup.md`](./2026-08-04-issue-792-e2e-warmup.md).
+[`2026-08-04-issue-792-e2e-warmup-plan.md`](./2026-08-04-issue-792-e2e-warmup-plan.md).
 Raw evidence lives here; the findings that survive go to `docs/observability.md`
 (spec AC-6) and the verdict comment (AC-7).
 

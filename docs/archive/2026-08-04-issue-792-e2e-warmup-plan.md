@@ -1,7 +1,7 @@
 # Plan — issue #792, first half: measure the per-test e2e warmup
 
 Spec:
-[`docs/superpowers/specs/2026-08-04-issue-792-e2e-warmup.md`](../specs/2026-08-04-issue-792-e2e-warmup.md)
+[`docs/superpowers/specs/2026-08-04-issue-792-e2e-warmup.md`](./2026-08-04-issue-792-e2e-warmup-spec.md)
 Issue: https://github.com/jaunder-org/jaunder/issues/792 (parent #788, lever 2)
 For agentic workers: drive with **`jaunder-iterate`**; delegate individual tasks
 via **`jaunder-dispatch`** where useful.
