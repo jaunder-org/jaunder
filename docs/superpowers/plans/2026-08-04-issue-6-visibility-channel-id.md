@@ -420,11 +420,11 @@ survives task 4 harmlessly (`subscriptions_ext` stays used by `.layer`).
 
 **Steps**
 
-- [ ] **Step 1.** Remove all three. Leave `server/src/context.rs:33`'s Leptos
+- [x] **Step 1.** Remove all three. Leave `server/src/context.rs:33`'s Leptos
       context alone — different seam, still needed by
       `web/src/subscriptions/api.rs:23,39` for the write path.
-- [ ] **Step 2.** `cargo nextest run -p jaunder --test atompub` → **PASS**.
-- [ ] **Step 3.** `cargo xtask check`; commit
+- [x] **Step 2.** `cargo nextest run -p jaunder --test atompub` → **PASS**.
+- [x] **Step 3.** `cargo xtask check`; commit
       `refactor(server): drop the AtomPub subscription-store extension (#6)`.
 
 ---
