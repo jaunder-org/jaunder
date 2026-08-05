@@ -15,8 +15,8 @@ use common::ids::{PostId, UserId};
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
-use common::render::{RenderOutput, derive_post_title};
-use common::slug::{InvalidSlug, Slug, slugify_title};
+use common::render::{RenderOutput, derive_post_naming};
+use common::slug::{InvalidSlug, Slug};
 use common::visibility::AudienceTarget;
 
 // ---------------------------------------------------------------------------
@@ -189,7 +189,10 @@ pub async fn update_rendered_post(
 /// Errors that can occur during a high-level post update.
 #[derive(Debug, Error)]
 pub enum PerformUpdateError {
-    #[error("post body or title is required")]
+    /// Reachable only through canonicalization (#811): a blank body cannot be
+    /// built at all any more, so the sole way to arrive here is a body that
+    /// *becomes* blank — an Org post whose title source is its entire content.
+    #[error("post body is only its title, leaving nothing to store")]
     EmptyPost,
     #[error("invalid slug")]
     InvalidSlug,
@@ -307,10 +310,9 @@ pub async fn perform_post_update(
         summary,
         audiences,
     } = input;
-    let (title, slug_seed) =
-        derive_post_title(title, &body, &format).ok_or(PerformUpdateError::EmptyPost)?;
+    let (title, derived_slug) = derive_post_naming(title, &body, &format);
 
-    // Derive the title from the *original* body above, then canonicalize what gets
+    // Derive the naming from the *original* body above, then canonicalize what gets
     // stored. Web and AtomPub thus converge on one stored body. A title-only Org post
     // canonicalizes to nothing, which no longer names a body (#811): there is nothing
     // left to store, so it is the same rejection an empty post has always earned.
@@ -321,9 +323,7 @@ pub async fn perform_post_update(
         // Pre-validated at the boundary (wire/CLI); updates keep the slug as-is,
         // no collision dedup.
         Some(slug) => slug.clone(),
-        None => slugify_title(&slug_seed)
-            .parse::<Slug>()
-            .map_err(|_| PerformUpdateError::InvalidSlug)?,
+        None => derived_slug,
     };
 
     let rendered = RenderOutput::render(&body, &format);
@@ -352,7 +352,10 @@ pub async fn perform_post_update(
 /// Errors that can occur during high-level post creation.
 #[derive(Debug, Error)]
 pub enum PerformCreationError {
-    #[error("post body is required")]
+    /// Reachable only through canonicalization (#811): a blank body cannot be
+    /// built at all any more, so the sole way to arrive here is a body that
+    /// *becomes* blank — an Org post whose title source is its entire content.
+    #[error("post body is only its title, leaving nothing to store")]
     EmptyPost,
     #[error(transparent)]
     InvalidSlug(#[from] InvalidSlug),
@@ -375,7 +378,9 @@ impl From<PerformCreationError> for host::error::InternalError {
     fn from(error: PerformCreationError) -> Self {
         use host::error::InternalError;
         match error {
-            PerformCreationError::EmptyPost => InternalError::validation("post body is required"),
+            // Single-sourced from the variant's `#[error]` so the public message
+            // cannot drift from the cause the variant documents.
+            PerformCreationError::EmptyPost => InternalError::validation(error.to_string()),
             PerformCreationError::InvalidSlug(_) => {
                 InternalError::validation_source(error.to_string(), error)
             }
@@ -471,11 +476,9 @@ pub async fn perform_post_creation(
         audiences,
         idempotency_key,
     } = input;
-    // The raw text a slug is generated from, before slugification and validation.
-    let (title, derived_slug_seed) =
-        derive_post_title(title, &body, &format).ok_or(PerformCreationError::EmptyPost)?;
+    let (title, derived_slug) = derive_post_naming(title, &body, &format);
 
-    // Derive the title from the *original* body above, then canonicalize what gets
+    // Derive the naming from the *original* body above, then canonicalize what gets
     // stored. Web and AtomPub thus converge on one stored body. A title-only Org post
     // canonicalizes to nothing, which no longer names a body (#811): there is nothing
     // left to store, so it is the same rejection an empty post has always earned.
@@ -486,11 +489,7 @@ pub async fn perform_post_creation(
         // Pre-validated at the boundary (wire/CLI); a valid override is still fed
         // through the collision-suffix generator below for uniqueness.
         Some(slug) => slug.clone(),
-        // slugify_title never fails, but funnel it through from_str (the single
-        // chokepoint) rather than bypass-constructing a Slug.
-        None => slugify_title(&derived_slug_seed)
-            .parse()
-            .map_err(PerformCreationError::InvalidSlug)?,
+        None => derived_slug,
     };
 
     for attempt in 0..max_attempts {
@@ -1360,7 +1359,10 @@ mod tests {
     #[test]
     fn test_perform_creation_error_display_and_debug() {
         let err = PerformCreationError::EmptyPost;
-        assert_eq!(err.to_string(), "post body is required");
+        assert_eq!(
+            err.to_string(),
+            "post body is only its title, leaving nothing to store"
+        );
         let debug = format!("{err:?}");
         assert!(debug.contains("EmptyPost"));
 
@@ -1393,9 +1395,12 @@ mod tests {
     // -- PerformUpdateError tests --
 
     #[test]
-    fn perform_update_error_empty_title_display() {
+    fn perform_update_error_empty_post_display() {
         let err = PerformUpdateError::EmptyPost;
-        assert_eq!(err.to_string(), "post body or title is required");
+        assert_eq!(
+            err.to_string(),
+            "post body is only its title, leaving nothing to store"
+        );
     }
 
     #[test]
@@ -1452,7 +1457,10 @@ mod tests {
 
         let empty: InternalError = PerformUpdateError::EmptyPost.into();
         assert_eq!(empty.kind(), ErrorKind::Validation);
-        assert_eq!(empty.public_message(), "post body or title is required");
+        assert_eq!(
+            empty.public_message(),
+            "post body is only its title, leaving nothing to store"
+        );
 
         let invalid_slug: InternalError = PerformUpdateError::InvalidSlug.into();
         assert_eq!(invalid_slug.kind(), ErrorKind::Validation);
@@ -1480,7 +1488,10 @@ mod tests {
 
         let empty: InternalError = PerformCreationError::EmptyPost.into();
         assert_eq!(empty.kind(), ErrorKind::Validation);
-        assert_eq!(empty.public_message(), "post body is required");
+        assert_eq!(
+            empty.public_message(),
+            "post body is only its title, leaving nothing to store"
+        );
 
         let invalid_slug: InternalError =
             PerformCreationError::InvalidSlug(common::slug::InvalidSlug).into();

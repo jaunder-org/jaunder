@@ -618,8 +618,25 @@ cargo nextest run -p common -p storage -p jaunder
 
 Expected: PASS.
 
-- [ ] 7. `derive_post_naming` total, returns `(Option<PostTitle>, Slug)`;
-     `EmptyPost` gone
+- [x] 7. `derive_post_naming` total, returns `(Option<PostTitle>, Slug)`
+
+> **`EmptyPost` is NOT gone — the plan was wrong.** Task 7 was written before
+> task 5 existed, and task 5 gave the variant a second, live job: rejecting a
+> title-only Org post whose canonicalization consumes the body, pinned by task
+> 6's tests. Only the `.ok_or(...)` on the _derive_ path went. Both variants
+> survive, are doc-commented as canonicalization-only, and were re-messaged —
+> the old "post body or title is required" became false the moment the type
+> required a body. They now read
+> `post body is only its title, leaving nothing to store`, and the creation
+> `From` arm single-sources that string from the variant instead of keeping its
+> own hardcoded copy.
+>
+> The `slugify_title(...).parse::<Slug>()` fold-in also removed
+> `PerformUpdateError::InvalidSlug`'s last production construction site — task
+> 9's question, answered early on the update path.
+>
+> ADR-0024 line 36 names this seam and already carried a rename trail
+> (`derive_post_metadata` → #569); extended rather than left stale.
 
 ---
 

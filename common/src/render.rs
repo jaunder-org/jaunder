@@ -1,12 +1,13 @@
 //! Pure post-body rendering and title derivation.
 //!
 //! Format-driven transformation of post bodies to HTML plus extraction of
-//! titles and slug seeds. No storage or database concerns.
+//! titles and slugs. No storage or database concerns.
 
 use std::fmt;
 
 use crate::post_body::{InvalidPostBody, PostBody};
 use crate::post_title::PostTitle;
+use crate::slug::{slugify_title, Slug};
 
 /// The format/markup language used to author a post body.
 ///
@@ -604,52 +605,72 @@ mod sanitized {
 #[cfg(feature = "sanitize")]
 pub use sanitized::{INERT_ATTRS, MEDIA_URL_ATTRS, RenderOutput, extract_media_refs, render};
 
-/// Derives a post's public title and the seed its slug is seeded from.
+/// Derives a post's public title and its slug.
 ///
-/// The body is stored verbatim by the caller — this function never mutates it.
-/// `None` means the post is empty: there is no title and no non-blank line to
-/// seed a slug from, so there is nothing to store.
-pub fn derive_post_title(
+/// Total: a body with no non-blank line is unrepresentable ([`PostBody`], #811),
+/// so the slug source can always be found and there is no nothing-to-store case
+/// left to report. Named for what it does — it has never derived only a title.
+///
+/// The body is stored by the caller — this function never mutates it, and the
+/// caller derives naming from the *original* body before canonicalizing, because
+/// Org's title source is stripped by canonicalization.
+#[must_use]
+pub fn derive_post_naming(
     explicit_title: Option<&str>,
-    body: &str,
+    body: &PostBody,
     format: &PostFormat,
-) -> Option<(Option<PostTitle>, String)> {
+) -> (Option<PostTitle>, Slug) {
     // This filter decides *presence*, not validity: a blank explicit title means the
     // client supplied none, so the body is consulted for one below. (`PostTitle`'s
     // `FromStr` enforces non-blankness itself — #830.)
     let explicit_title = explicit_title
         .map(str::trim)
         .filter(|title| !title.is_empty());
-    let body = body.trim();
+    let trimmed = body.trim();
 
     // An explicit title wins outright, so the body is only parsed for one when
     // there is none — hence `or_else`, not `or`.
     let title = explicit_title.map(str::to_owned).or_else(|| match format {
-        PostFormat::Markdown => extract_markdown_title(body).map(|(title, _)| title),
-        PostFormat::Org => extract_org_title(body).map(|(title, _)| title),
+        PostFormat::Markdown => extract_markdown_title(trimmed).map(|(title, _)| title),
+        PostFormat::Org => extract_org_title(trimmed).map(|(title, _)| title),
         PostFormat::Html => None,
     });
 
     // `title` is non-blank by construction — the explicit branch is filtered above,
     // and both extractors reject empty-after-trim — but the compiler cannot see that.
     // So a failed parse falls through to the untitled path rather than panicking on an
-    // invariant we believe but cannot prove here.
-    if let Some((Ok(parsed), seed)) = title.map(|t| (t.parse::<PostTitle>(), t)) {
-        return Some((Some(parsed), seed));
-    }
+    // invariant we believe but cannot prove here (#830).
+    //
+    // A titled post seeds its slug from the title; an untitled one — including one
+    // whose title failed that parse — from the body's first non-blank line.
+    let (title, seed) = match title.and_then(|t| t.parse::<PostTitle>().ok().map(|p| (p, t))) {
+        Some((parsed, seed)) => (Some(parsed), seed),
+        None => (None, first_meaningful_line(body)),
+    };
 
-    // An untitled post seeds its slug from the first non-blank line, so this call
-    // is also the empty-post gate: no such line means there is nothing to store.
-    let seed = first_meaningful_line(body)?;
-    Some((None, seed))
+    // `slugify_title` never fails (it falls back to "post") and emits an
+    // already-normalized value, so feeding it back through `Slug::from_str` is
+    // idempotent — see its rustdoc. Deriving the slug here rather than at each call
+    // site is what makes that guarantee usable (#785).
+    let Ok(slug) = slugify_title(&seed).parse::<Slug>() else {
+        unreachable!("slugify_title's output always re-parses as a Slug")
+    };
+
+    (title, slug)
 }
 
-fn first_meaningful_line(body: &str) -> Option<String> {
+/// The body's first non-blank line, trimmed and capped at 100 characters.
+///
+/// Total on a [`PostBody`]: the type's invariant is *exactly* this search's
+/// predicate — at least one line is non-empty after trimming (#811).
+fn first_meaningful_line(body: &PostBody) -> String {
     body.lines()
         .map(str::trim)
         .find(|line| !line.is_empty())
-        .map(|line| line.chars().take(100).collect::<String>())
-        .filter(|line| !line.is_empty())
+        .map_or_else(
+            || unreachable!("a PostBody always has a non-blank line"),
+            |line| line.chars().take(100).collect::<String>(),
+        )
 }
 
 fn extract_markdown_title(body: &str) -> Option<(String, String)> {
@@ -968,76 +989,79 @@ mod tests {
         assert_eq!(PostFormat::Html.get_message(), None); // renderer-internal → not offered
     }
 
+    /// A naming fixture. The bodies below are all valid `PostBody` values —
+    /// there is no empty case to test, because #811 made it unrepresentable.
+    fn naming(
+        explicit_title: Option<&str>,
+        body: &str,
+        format: PostFormat,
+    ) -> (Option<PostTitle>, Slug) {
+        derive_post_naming(
+            explicit_title,
+            &crate::test_support::parse_post_body(body),
+            &format,
+        )
+    }
+
     #[test]
-    fn derive_post_title_prefers_explicit_title() {
-        let (title, slug_seed) = derive_post_title(
+    fn derive_post_naming_prefers_explicit_title() {
+        let (title, slug) = naming(
             Some(" Explicit "),
             "# Body Heading\ntext",
-            &PostFormat::Markdown,
-        )
-        .unwrap();
-        assert_eq!(title.as_deref(), Some("Explicit"));
-        assert_eq!(slug_seed, "Explicit");
-    }
-
-    #[test]
-    fn derive_post_title_extracts_markdown_h1() {
-        let (title, slug_seed) = derive_post_title(
-            None,
-            "\n# Article Title\n\nBody text",
-            &PostFormat::Markdown,
-        )
-        .unwrap();
-        assert_eq!(title.as_deref(), Some("Article Title"));
-        assert_eq!(slug_seed, "Article Title");
-        // the body is not returned — the caller retains the original
-    }
-
-    #[test]
-    fn derive_post_title_extracts_org_title() {
-        let (title, slug_seed) =
-            derive_post_title(None, "#+title: Org Title\n\nBody text", &PostFormat::Org).unwrap();
-        assert_eq!(title.as_deref(), Some("Org Title"));
-        assert_eq!(slug_seed, "Org Title");
-        // the body is not returned — the caller retains the original
-    }
-
-    #[test]
-    fn derive_post_title_for_html_extracts_no_title_and_seeds_slug_from_the_body() {
-        let (title, slug_seed) =
-            derive_post_title(None, "<p>Hello world</p>", &PostFormat::Html).unwrap();
-        assert_eq!(title, None);
-        assert_eq!(slug_seed, "<p>Hello world</p>");
-    }
-
-    #[test]
-    fn derive_post_title_allows_titleless_notes() {
-        let (title, slug_seed) = derive_post_title(
-            None,
-            "A compact note\nwith more text",
-            &PostFormat::Markdown,
-        )
-        .unwrap();
-        assert_eq!(title, None);
-        assert_eq!(slug_seed, "A compact note");
-    }
-
-    #[test]
-    fn derive_post_title_treats_blank_explicit_title_as_absent() {
-        // A blank explicit title means "no title supplied", not an error (#830): the
-        // body is consulted instead, exactly as if the field had been omitted.
-        let (title, slug_seed) =
-            derive_post_title(Some("   "), "body line", &PostFormat::Markdown).unwrap();
-        assert_eq!(title, None);
-        assert_eq!(slug_seed, "body line");
-    }
-
-    #[test]
-    fn derive_post_title_rejects_empty_posts() {
-        assert_eq!(
-            derive_post_title(None, "   \n\t", &PostFormat::Markdown),
-            None
+            PostFormat::Markdown,
         );
+        assert_eq!(title.as_deref(), Some("Explicit"));
+        assert_eq!(slug, "explicit");
+    }
+
+    #[test]
+    fn derive_post_naming_extracts_markdown_h1() {
+        let (title, slug) = naming(None, "\n# Article Title\n\nBody text", PostFormat::Markdown);
+        assert_eq!(title.as_deref(), Some("Article Title"));
+        assert_eq!(slug, "article-title");
+        // the body is not returned — the caller retains the original
+    }
+
+    #[test]
+    fn derive_post_naming_extracts_org_title() {
+        let (title, slug) = naming(None, "#+title: Org Title\n\nBody text", PostFormat::Org);
+        assert_eq!(title.as_deref(), Some("Org Title"));
+        assert_eq!(slug, "org-title");
+        // the body is not returned — the caller retains the original
+    }
+
+    #[test]
+    fn derive_post_naming_for_html_extracts_no_title_and_slugs_the_body() {
+        let (title, slug) = naming(None, "<p>Hello world</p>", PostFormat::Html);
+        assert_eq!(title, None);
+        assert_eq!(slug, "p-hello-world-p");
+    }
+
+    #[test]
+    fn derive_post_naming_allows_titleless_notes() {
+        let (title, slug) = naming(None, "A compact note\nwith more text", PostFormat::Markdown);
+        assert_eq!(title, None);
+        assert_eq!(slug, "a-compact-note");
+    }
+
+    #[test]
+    fn derive_post_naming_treats_blank_explicit_title_as_absent() {
+        // A blank explicit title means "no title supplied", not an error (#830): the
+        // body is consulted instead, exactly as if the field had been omitted. Carried
+        // over from #830 and retargeted at the total signature.
+        let (title, slug) = naming(Some("   "), "body line", PostFormat::Markdown);
+        assert_eq!(title, None);
+        assert_eq!(slug, "body-line");
+    }
+
+    #[test]
+    fn derive_post_naming_falls_back_to_post_when_nothing_slugifies() {
+        // `slugify_title`'s fallback reached through the derivation: a body of
+        // symbols is a valid `PostBody` but yields no slug characters. The pair is
+        // still total — the caller's collision retry disambiguates the fallback.
+        let (title, slug) = naming(None, "🚀🎉\n", PostFormat::Markdown);
+        assert_eq!(title, None);
+        assert_eq!(slug, "post");
     }
 
     #[test]
@@ -1052,7 +1076,7 @@ mod tests {
     #[test]
     fn extract_markdown_title_skips_leading_blanks_then_finds_heading() {
         // Leading blank lines before the heading exercise the blank-skip branch.
-        // (`derive_post_title` trims the body first, so this branch is only
+        // (`derive_post_naming` trims the body first, so this branch is only
         // reachable by calling the helper directly.)
         let result = extract_markdown_title("\n\n# Title\n\nBody");
         assert_eq!(result, Some(("Title".to_string(), "Body".to_string())));
@@ -1107,11 +1131,10 @@ mod tests {
     }
 
     #[test]
-    fn derive_post_title_extracts_org_level1_heading() {
-        let (title, slug_seed) =
-            derive_post_title(None, "* Org Heading\n\nBody text", &PostFormat::Org).unwrap();
+    fn derive_post_naming_extracts_org_level1_heading() {
+        let (title, slug) = naming(None, "* Org Heading\n\nBody text", PostFormat::Org);
         assert_eq!(title.as_deref(), Some("Org Heading"));
-        assert_eq!(slug_seed, "Org Heading");
+        assert_eq!(slug, "org-heading");
     }
 
     #[test]
