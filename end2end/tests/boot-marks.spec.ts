@@ -7,6 +7,7 @@
 // merge invariant is proven by their logic, not by any browser behavior (#818).
 import { test, expect } from "./fixtures";
 import { mergeDocumentTiming, type DocumentTiming } from "./capture-trace";
+import { goto } from "./helpers";
 
 const wasm = { startTime: 10, durationMs: 5, responseEndMs: 15 };
 const marks = (count: number) =>
@@ -56,4 +57,37 @@ test.describe("mergeDocumentTiming", () => {
     const incoming: DocumentTiming = { marks: marks(4), wasm };
     expect(mergeDocumentTiming(existing, incoming)).toBe(existing);
   });
+});
+
+// The regression guard for #818's actual defect. Unthresholded on purpose: it
+// asserts the mechanism works at all, which needs no knowledge of the coverage
+// distribution and so can ship before the distribution exists. Gradual erosion is
+// #831's job.
+test("the harness captures the full boot mark set after mount", async ({
+  page,
+  bootTiming,
+}) => {
+  // `goto` awaits `waitForMount` itself, so the mount binding has already fired
+  // and its harvest is either done or in flight — which is what `bootTiming`'s
+  // `settle()` covers.
+  await goto(page, "/");
+
+  const timing = await bootTiming();
+  expect(
+    timing,
+    "no document timing was harvested for the mounted navigation",
+  ).toBeDefined();
+
+  // Assert the SHAPE, never the names: mark names live only in Rust and are
+  // discovered by prefix, so enumerating them here would reintroduce exactly the
+  // cross-language drift `MOUNTED_ATTR` suffers (#794). `>=`, never `===`, so
+  // adding a mark in `client::perf` extends the set instead of reddening the build.
+  const names = (timing?.marks ?? []).map((mark) => mark.name);
+  expect(names.length).toBeGreaterThanOrEqual(4);
+  expect(names.every((name) => name.startsWith("jaunder."))).toBe(true);
+  expect(new Set(names).size).toBe(names.length);
+
+  // The wasm resource entry is the other half of the decomposition — without it
+  // `wasmInstantiateMs` is null and the boot total cannot be closed.
+  expect(timing?.wasm ?? null).not.toBeNull();
 });

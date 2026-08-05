@@ -34,6 +34,7 @@ import {
 import {
   attachTraceCapture,
   type BootMark,
+  type DocumentTiming,
   type NavigationRecord,
   type PagePerfSummary,
   type RequestRecord,
@@ -69,6 +70,18 @@ type TracedContextRecord = {
 /** Handoff from the `tracedContext` fixture to `_autoPerfSpan`, keyed by the
  *  test's span id. Drained when the spans are built. */
 const tracedContextRecords = new Map<string, TracedContextRecord[]>();
+
+/**
+ * The default page's capture, published for the `bootTiming` fixture, keyed by the
+ * test's span id. Cleared by `_autoPerfSpan` on teardown.
+ *
+ * A module-level map rather than a `capture` fixture, deliberately. `capture` is
+ * built inside `_autoPerfSpan`'s body, and promoting it to a fixture of its own
+ * would move `attachTraceCapture` ahead of that body — into exactly the window
+ * `e2e.context_mint` measures (see the ordering note on `_lifecycleStart`). This
+ * mirrors `tracedContextRecords` above and changes no fixture ordering (#818).
+ */
+const captureByTestSpanId = new Map<string, TraceCapture>();
 
 type NavigationSummary = {
   id: number;
@@ -328,6 +341,7 @@ const test = base.extend<{
   _autoPerfSpan: void;
   testSpanId: string;
   tracedContext: NewTracedContext;
+  bootTiming: () => Promise<DocumentTiming | undefined>;
   firstNav: number;
   registeredPage: Page;
   user: TestUser;
@@ -364,6 +378,28 @@ const test = base.extend<{
 
   testSpanId: async ({}, use) => {
     await use(newSpanId());
+  },
+
+  // The boot decomposition the harness harvested for the most recent navigation
+  // that reached mount-ready, or `undefined` when none did.
+  //
+  // Resolved at CALL time, not at setup time: the capture is published by
+  // `_autoPerfSpan` (an auto fixture, so it has always run by the time a test body
+  // executes), and looking it up lazily is what keeps this fixture out of the
+  // ordering-sensitive setup chain. `settle()` first — a mount-ready harvest is
+  // dispatched asynchronously and may still be in flight (#818).
+  bootTiming: async ({ testSpanId }, use) => {
+    await use(async () => {
+      const capture = captureByTestSpanId.get(testSpanId);
+      if (capture === undefined) return undefined;
+      await capture.settle();
+      const navigations = [
+        ...capture.sinkFor("pretest").navigations,
+        ...capture.sinkFor("test").navigations,
+      ].filter((navigation) => navigation.mountedMs !== null);
+      const newest = navigations.at(-1);
+      return newest === undefined ? undefined : capture.timingFor(newest.id);
+    });
   },
 
   // The sanctioned way for a spec to open an extra browser context — see
@@ -520,6 +556,7 @@ const test = base.extend<{
       // concern and still waits — fusing the two is what once left the (since
       // removed, #792) per-test warmup's duration measured nowhere.
       const capture = await attachTraceCapture(page.context());
+      captureByTestSpanId.set(testSpanId, capture);
 
       const traceContext = traceContextFromEnvironment();
       // Records starting from here belong to the test. Switched at the same
@@ -889,6 +926,7 @@ const test = base.extend<{
         );
       }
       tracedContextRecords.delete(testSpanId);
+      captureByTestSpanId.delete(testSpanId);
 
       try {
         await exportSpans(spans);
