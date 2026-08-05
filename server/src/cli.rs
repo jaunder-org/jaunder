@@ -430,15 +430,8 @@ pub enum SiteConfigAction {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
-
     use super::*;
-    use common::test_support::{parse_display_name, parse_invite_ttl_hours};
-
-    /// Serializes all tests that read or write the env vars clap resolves at parse time.
-    /// `cargo test` runs tests in parallel threads within the same process, so concurrent
-    /// `set_var/remove_var` calls race against each other.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    use common::test_support::{parse_display_name, parse_invite_ttl_hours, with_env};
 
     fn parse(args: &[&str]) -> Cli {
         Cli::try_parse_from(std::iter::once("jaunder").chain(args.iter().copied()))
@@ -535,126 +528,132 @@ mod tests {
 
     #[test]
     fn storage_path_default() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("JAUNDER_STORAGE_PATH");
-        let cli = parse(&["init"]);
-        let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
-            unreachable!("parse yields Commands::Init")
-        };
-        assert_eq!(storage.storage_path, PathBuf::from("./data"));
+        with_env(|env| {
+            env.remove("JAUNDER_STORAGE_PATH");
+            let cli = parse(&["init"]);
+            let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
+                unreachable!("parse yields Commands::Init")
+            };
+            assert_eq!(storage.storage_path, PathBuf::from("./data"));
+        });
     }
 
     #[test]
     fn storage_path_from_flag() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let cli = parse(&["init", "--storage-path", "/tmp/mydata"]);
-        let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
-            unreachable!("parse yields Commands::Init")
-        };
-        assert_eq!(storage.storage_path, PathBuf::from("/tmp/mydata"));
+        with_env(|_env| {
+            let cli = parse(&["init", "--storage-path", "/tmp/mydata"]);
+            let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
+                unreachable!("parse yields Commands::Init")
+            };
+            assert_eq!(storage.storage_path, PathBuf::from("/tmp/mydata"));
+        });
     }
 
     #[test]
     fn storage_path_flag_beats_env() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("JAUNDER_STORAGE_PATH", "/tmp/from_env");
-        let cli = parse(&["init", "--storage-path", "/tmp/from_flag"]);
-        std::env::remove_var("JAUNDER_STORAGE_PATH");
-        let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
-            unreachable!("parse yields Commands::Init")
-        };
-        assert_eq!(storage.storage_path, PathBuf::from("/tmp/from_flag"));
+        with_env(|env| {
+            env.set("JAUNDER_STORAGE_PATH", "/tmp/from_env");
+            let cli = parse(&["init", "--storage-path", "/tmp/from_flag"]);
+            let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
+                unreachable!("parse yields Commands::Init")
+            };
+            assert_eq!(storage.storage_path, PathBuf::from("/tmp/from_flag"));
+        });
     }
 
     #[test]
     fn storage_path_env_beats_default() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("JAUNDER_STORAGE_PATH", "/tmp/from_env");
-        let cli = parse(&["init"]);
-        std::env::remove_var("JAUNDER_STORAGE_PATH");
-        let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
-            unreachable!("parse yields Commands::Init")
-        };
-        assert_eq!(storage.storage_path, PathBuf::from("/tmp/from_env"));
+        with_env(|env| {
+            env.set("JAUNDER_STORAGE_PATH", "/tmp/from_env");
+            let cli = parse(&["init"]);
+            let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
+                unreachable!("parse yields Commands::Init")
+            };
+            assert_eq!(storage.storage_path, PathBuf::from("/tmp/from_env"));
+        });
     }
 
     // --- bind precedence ---
 
     #[test]
     fn bind_default() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("JAUNDER_BIND");
-        let cli = parse(&["serve"]);
-        let Commands::Serve { bind, .. } = cli.command.expect("subcommand") else {
-            unreachable!("parse yields Commands::Serve")
-        };
-        assert_eq!(bind, "127.0.0.1:3000".parse::<SocketAddr>().unwrap());
+        with_env(|env| {
+            env.remove("JAUNDER_BIND");
+            let cli = parse(&["serve"]);
+            let Commands::Serve { bind, .. } = cli.command.expect("subcommand") else {
+                unreachable!("parse yields Commands::Serve")
+            };
+            assert_eq!(bind, "127.0.0.1:3000".parse::<SocketAddr>().unwrap());
+        });
     }
 
     #[test]
     fn bind_from_flag() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let cli = parse(&["serve", "--bind", "0.0.0.0:8080"]);
-        let Commands::Serve { bind, .. } = cli.command.expect("subcommand") else {
-            unreachable!("parse yields Commands::Serve")
-        };
-        assert_eq!(bind, "0.0.0.0:8080".parse::<SocketAddr>().unwrap());
+        with_env(|_env| {
+            let cli = parse(&["serve", "--bind", "0.0.0.0:8080"]);
+            let Commands::Serve { bind, .. } = cli.command.expect("subcommand") else {
+                unreachable!("parse yields Commands::Serve")
+            };
+            assert_eq!(bind, "0.0.0.0:8080".parse::<SocketAddr>().unwrap());
+        });
     }
 
     #[test]
     fn bind_flag_beats_env() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("JAUNDER_BIND", "0.0.0.0:9000");
-        let cli = parse(&["serve", "--bind", "0.0.0.0:8080"]);
-        std::env::remove_var("JAUNDER_BIND");
-        let Commands::Serve { bind, .. } = cli.command.expect("subcommand") else {
-            unreachable!("parse yields Commands::Serve")
-        };
-        assert_eq!(bind, "0.0.0.0:8080".parse::<SocketAddr>().unwrap());
+        with_env(|env| {
+            env.set("JAUNDER_BIND", "0.0.0.0:9000");
+            let cli = parse(&["serve", "--bind", "0.0.0.0:8080"]);
+            let Commands::Serve { bind, .. } = cli.command.expect("subcommand") else {
+                unreachable!("parse yields Commands::Serve")
+            };
+            assert_eq!(bind, "0.0.0.0:8080".parse::<SocketAddr>().unwrap());
+        });
     }
 
     #[test]
     fn bind_env_beats_default() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("JAUNDER_BIND", "0.0.0.0:9000");
-        let cli = parse(&["serve"]);
-        std::env::remove_var("JAUNDER_BIND");
-        let Commands::Serve { bind, .. } = cli.command.expect("subcommand") else {
-            unreachable!("parse yields Commands::Serve")
-        };
-        assert_eq!(bind, "0.0.0.0:9000".parse::<SocketAddr>().unwrap());
+        with_env(|env| {
+            env.set("JAUNDER_BIND", "0.0.0.0:9000");
+            let cli = parse(&["serve"]);
+            let Commands::Serve { bind, .. } = cli.command.expect("subcommand") else {
+                unreachable!("parse yields Commands::Serve")
+            };
+            assert_eq!(bind, "0.0.0.0:9000".parse::<SocketAddr>().unwrap());
+        });
     }
 
     #[test]
     fn environment_defaults_dev() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let cli = parse(&["serve"]);
-        let Commands::Serve { environment, .. } = cli.command.expect("subcommand") else {
-            unreachable!("parse yields Commands::Serve")
-        };
-        assert_eq!(environment, DeploymentEnv::Dev);
+        with_env(|_env| {
+            let cli = parse(&["serve"]);
+            let Commands::Serve { environment, .. } = cli.command.expect("subcommand") else {
+                unreachable!("parse yields Commands::Serve")
+            };
+            assert_eq!(environment, DeploymentEnv::Dev);
+        });
     }
 
     #[test]
     fn environment_from_flag() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let cli = parse(&["serve", "--environment", "prod"]);
-        let Commands::Serve { environment, .. } = cli.command.expect("subcommand") else {
-            unreachable!("parse yields Commands::Serve")
-        };
-        assert_eq!(environment, DeploymentEnv::Prod);
+        with_env(|_env| {
+            let cli = parse(&["serve", "--environment", "prod"]);
+            let Commands::Serve { environment, .. } = cli.command.expect("subcommand") else {
+                unreachable!("parse yields Commands::Serve")
+            };
+            assert_eq!(environment, DeploymentEnv::Prod);
+        });
     }
 
     #[test]
     fn environment_env_beats_default() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("JAUNDER_ENV", "prod");
-        let cli = parse(&["serve"]);
-        std::env::remove_var("JAUNDER_ENV");
-        let Commands::Serve { environment, .. } = cli.command.expect("subcommand") else {
-            unreachable!("parse yields Commands::Serve")
-        };
-        assert_eq!(environment, DeploymentEnv::Prod);
+        with_env(|env| {
+            env.set("JAUNDER_ENV", "prod");
+            let cli = parse(&["serve"]);
+            let Commands::Serve { environment, .. } = cli.command.expect("subcommand") else {
+                unreachable!("parse yields Commands::Serve")
+            };
+            assert_eq!(environment, DeploymentEnv::Prod);
+        });
     }
 
     // --- skip_if_exists flag ---
@@ -681,228 +680,245 @@ mod tests {
 
     #[test]
     fn db_default() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("JAUNDER_DB");
-        let cli = parse(&["init"]);
-        let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
-            unreachable!("parse yields Commands::Init")
-        };
-        assert_eq!(storage.db.to_string(), "sqlite:./data/jaunder.db");
+        with_env(|env| {
+            env.remove("JAUNDER_DB");
+            let cli = parse(&["init"]);
+            let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
+                unreachable!("parse yields Commands::Init")
+            };
+            assert_eq!(storage.db.to_string(), "sqlite:./data/jaunder.db");
+        });
     }
 
     #[test]
     fn db_from_flag() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let cli = parse(&["init", "--db", "sqlite:/tmp/test.db"]);
-        let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
-            unreachable!("parse yields Commands::Init")
-        };
-        assert_eq!(storage.db.to_string(), "sqlite:/tmp/test.db");
+        with_env(|_env| {
+            let cli = parse(&["init", "--db", "sqlite:/tmp/test.db"]);
+            let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
+                unreachable!("parse yields Commands::Init")
+            };
+            assert_eq!(storage.db.to_string(), "sqlite:/tmp/test.db");
+        });
     }
 
     #[test]
     fn postgres_db_from_flag() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let cli = parse(&["init", "--db", "postgres://jaunder@localhost/testdb"]);
-        let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
-            unreachable!("parse yields Commands::Init")
-        };
-        assert_eq!(
-            storage.db.to_string(),
-            "postgres://jaunder@localhost/testdb"
-        );
+        with_env(|_env| {
+            let cli = parse(&["init", "--db", "postgres://jaunder@localhost/testdb"]);
+            let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
+                unreachable!("parse yields Commands::Init")
+            };
+            assert_eq!(
+                storage.db.to_string(),
+                "postgres://jaunder@localhost/testdb"
+            );
+        });
     }
 
     #[test]
     fn db_flag_beats_env() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("JAUNDER_DB", "sqlite:/tmp/from_env.db");
-        let cli = parse(&["init", "--db", "sqlite:/tmp/from_flag.db"]);
-        std::env::remove_var("JAUNDER_DB");
-        let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
-            unreachable!("parse yields Commands::Init")
-        };
-        assert_eq!(storage.db.to_string(), "sqlite:/tmp/from_flag.db");
+        with_env(|env| {
+            env.set("JAUNDER_DB", "sqlite:/tmp/from_env.db");
+            let cli = parse(&["init", "--db", "sqlite:/tmp/from_flag.db"]);
+            let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
+                unreachable!("parse yields Commands::Init")
+            };
+            assert_eq!(storage.db.to_string(), "sqlite:/tmp/from_flag.db");
+        });
     }
 
     #[test]
     fn db_env_beats_default() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("JAUNDER_DB", "sqlite:/tmp/from_env.db");
-        let cli = parse(&["init"]);
-        std::env::remove_var("JAUNDER_DB");
-        let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
-            unreachable!("parse yields Commands::Init")
-        };
-        assert_eq!(storage.db.to_string(), "sqlite:/tmp/from_env.db");
+        with_env(|env| {
+            env.set("JAUNDER_DB", "sqlite:/tmp/from_env.db");
+            let cli = parse(&["init"]);
+            let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
+                unreachable!("parse yields Commands::Init")
+            };
+            assert_eq!(storage.db.to_string(), "sqlite:/tmp/from_env.db");
+        });
     }
 
     // --- user-create ---
 
     #[test]
     fn user_create_parses_username_and_password() {
-        let _guard = ENV_LOCK.lock().expect("env lock");
-        let cli = parse(&[
-            "user-create",
-            "--username",
-            "alice",
-            "--password",
-            "secret123",
-        ]);
-        let Commands::UserCreate {
-            username,
-            password,
-            display_name,
-            ..
-        } = cli.command.expect("subcommand")
-        else {
-            unreachable!("parse yields Commands::UserCreate")
-        };
-        assert_eq!(username, "alice");
-        assert_eq!(password, Some("secret123".to_owned()));
-        assert_eq!(display_name, None);
+        with_env(|_env| {
+            let cli = parse(&[
+                "user-create",
+                "--username",
+                "alice",
+                "--password",
+                "secret123",
+            ]);
+            let Commands::UserCreate {
+                username,
+                password,
+                display_name,
+                ..
+            } = cli.command.expect("subcommand")
+            else {
+                unreachable!("parse yields Commands::UserCreate")
+            };
+            assert_eq!(username, "alice");
+            assert_eq!(password, Some("secret123".to_owned()));
+            assert_eq!(display_name, None);
+        });
     }
 
     #[test]
     fn user_create_parses_display_name() {
-        let _guard = ENV_LOCK.lock().expect("env lock");
-        let cli = parse(&[
-            "user-create",
-            "--username",
-            "alice",
-            "--password",
-            "secret123",
-            "--display-name",
-            "Alice Smith",
-        ]);
-        let Commands::UserCreate { display_name, .. } = cli.command.expect("subcommand") else {
-            unreachable!("parse yields Commands::UserCreate")
-        };
-        assert_eq!(display_name, Some(parse_display_name("Alice Smith")));
+        with_env(|_env| {
+            let cli = parse(&[
+                "user-create",
+                "--username",
+                "alice",
+                "--password",
+                "secret123",
+                "--display-name",
+                "Alice Smith",
+            ]);
+            let Commands::UserCreate { display_name, .. } = cli.command.expect("subcommand") else {
+                unreachable!("parse yields Commands::UserCreate")
+            };
+            assert_eq!(display_name, Some(parse_display_name("Alice Smith")));
+        });
     }
 
     #[test]
     fn user_create_password_optional() {
-        let _guard = ENV_LOCK.lock().expect("env lock");
-        let cli = parse(&["user-create", "--username", "alice"]);
-        let Commands::UserCreate { password, .. } = cli.command.expect("subcommand") else {
-            unreachable!("parse yields Commands::UserCreate")
-        };
-        assert_eq!(password, None);
+        with_env(|_env| {
+            let cli = parse(&["user-create", "--username", "alice"]);
+            let Commands::UserCreate { password, .. } = cli.command.expect("subcommand") else {
+                unreachable!("parse yields Commands::UserCreate")
+            };
+            assert_eq!(password, None);
+        });
     }
 
     #[test]
     fn user_create_missing_username_is_clap_error() {
-        let _guard = ENV_LOCK.lock().expect("env lock");
-        let result = Cli::try_parse_from(["jaunder", "user-create", "--password", "secret123"]);
-        assert!(result.is_err());
+        with_env(|_env| {
+            let result = Cli::try_parse_from(["jaunder", "user-create", "--password", "secret123"]);
+            assert!(result.is_err());
+        });
     }
 
     #[test]
     fn user_create_malformed_username_is_clap_error() {
-        let _guard = ENV_LOCK.lock().expect("env lock");
-        // The `Username` value parser rejects a bad username at parse time, before
-        // any handler runs, rather than surfacing it as a later runtime error.
-        let result = Cli::try_parse_from(["jaunder", "user-create", "--username", "bad name"]);
-        assert!(result.is_err());
+        with_env(|_env| {
+            // The `Username` value parser rejects a bad username at parse time, before
+            // any handler runs, rather than surfacing it as a later runtime error.
+            let result = Cli::try_parse_from(["jaunder", "user-create", "--username", "bad name"]);
+            assert!(result.is_err());
+        });
     }
 
     // --- user-invite ---
 
     #[test]
     fn user_invite_parses_expires_in() {
-        let _guard = ENV_LOCK.lock().expect("env lock");
-        let cli = parse(&["user-invite", "--expires-in", "48"]);
-        let Commands::UserInvite { expires_in, .. } = cli.command.expect("subcommand") else {
-            unreachable!("parse yields Commands::UserInvite")
-        };
-        assert_eq!(expires_in, Some(parse_invite_ttl_hours("48")));
+        with_env(|_env| {
+            let cli = parse(&["user-invite", "--expires-in", "48"]);
+            let Commands::UserInvite { expires_in, .. } = cli.command.expect("subcommand") else {
+                unreachable!("parse yields Commands::UserInvite")
+            };
+            assert_eq!(expires_in, Some(parse_invite_ttl_hours("48")));
+        });
     }
 
     #[test]
     fn user_invite_expires_in_optional() {
-        let _guard = ENV_LOCK.lock().expect("env lock");
-        let cli = parse(&["user-invite"]);
-        let Commands::UserInvite { expires_in, .. } = cli.command.expect("subcommand") else {
-            unreachable!("parse yields Commands::UserInvite")
-        };
-        assert_eq!(expires_in, None);
+        with_env(|_env| {
+            let cli = parse(&["user-invite"]);
+            let Commands::UserInvite { expires_in, .. } = cli.command.expect("subcommand") else {
+                unreachable!("parse yields Commands::UserInvite")
+            };
+            assert_eq!(expires_in, None);
+        });
     }
 
     // --- smtp-test ---
 
     #[test]
     fn smtp_test_parses_to() {
-        let _guard = ENV_LOCK.lock().expect("env lock");
-        let cli = parse(&["smtp-test", "--to", "alice@example.com"]);
-        let Commands::SmtpTest { to, .. } = cli.command.expect("subcommand") else {
-            unreachable!("parse yields Commands::SmtpTest")
-        };
-        assert_eq!(to, "alice@example.com");
+        with_env(|_env| {
+            let cli = parse(&["smtp-test", "--to", "alice@example.com"]);
+            let Commands::SmtpTest { to, .. } = cli.command.expect("subcommand") else {
+                unreachable!("parse yields Commands::SmtpTest")
+            };
+            assert_eq!(to, "alice@example.com");
+        });
     }
 
     #[test]
     fn smtp_test_missing_to_is_clap_error() {
-        let _guard = ENV_LOCK.lock().expect("env lock");
-        let result = Cli::try_parse_from(["jaunder", "smtp-test"]);
-        assert!(result.is_err());
+        with_env(|_env| {
+            let result = Cli::try_parse_from(["jaunder", "smtp-test"]);
+            assert!(result.is_err());
+        });
     }
 
     // --- backup / restore ---
 
     #[test]
     fn backup_path_optional() {
-        let _guard = ENV_LOCK.lock().expect("env lock");
-        let cli = parse(&["backup"]);
-        let Commands::Backup { mode, path, .. } = cli.command.expect("subcommand") else {
-            unreachable!("parse yields Commands::Backup")
-        };
-        assert_eq!(mode, CliBackupMode::Directory);
-        assert_eq!(path, None);
+        with_env(|_env| {
+            let cli = parse(&["backup"]);
+            let Commands::Backup { mode, path, .. } = cli.command.expect("subcommand") else {
+                unreachable!("parse yields Commands::Backup")
+            };
+            assert_eq!(mode, CliBackupMode::Directory);
+            assert_eq!(path, None);
+        });
     }
 
     #[test]
     fn backup_parses_path() {
-        let _guard = ENV_LOCK.lock().expect("env lock");
-        let cli = parse(&["backup", "--path", "/tmp/backup"]);
-        let Commands::Backup { path, .. } = cli.command.expect("subcommand") else {
-            unreachable!("parse yields Commands::Backup")
-        };
-        assert_eq!(path, Some(PathBuf::from("/tmp/backup")));
+        with_env(|_env| {
+            let cli = parse(&["backup", "--path", "/tmp/backup"]);
+            let Commands::Backup { path, .. } = cli.command.expect("subcommand") else {
+                unreachable!("parse yields Commands::Backup")
+            };
+            assert_eq!(path, Some(PathBuf::from("/tmp/backup")));
+        });
     }
 
     #[test]
     fn backup_parses_archive_mode() {
-        let _guard = ENV_LOCK.lock().expect("env lock");
-        let cli = parse(&[
-            "backup",
-            "--mode",
-            "archive",
-            "--path",
-            "/tmp/backup.tar.gz",
-        ]);
-        let Commands::Backup { mode, path, .. } = cli.command.expect("subcommand") else {
-            unreachable!("parse yields Commands::Backup")
-        };
-        assert_eq!(mode, CliBackupMode::Archive);
-        assert_eq!(path, Some(PathBuf::from("/tmp/backup.tar.gz")));
+        with_env(|_env| {
+            let cli = parse(&[
+                "backup",
+                "--mode",
+                "archive",
+                "--path",
+                "/tmp/backup.tar.gz",
+            ]);
+            let Commands::Backup { mode, path, .. } = cli.command.expect("subcommand") else {
+                unreachable!("parse yields Commands::Backup")
+            };
+            assert_eq!(mode, CliBackupMode::Archive);
+            assert_eq!(path, Some(PathBuf::from("/tmp/backup.tar.gz")));
+        });
     }
 
     #[test]
     fn restore_parses_required_path() {
-        let _guard = ENV_LOCK.lock().expect("env lock");
-        let cli = parse(&["restore", "/tmp/backup"]);
-        let Commands::Restore { path, .. } = cli.command.expect("subcommand") else {
-            unreachable!("parse yields Commands::Restore")
-        };
-        assert_eq!(path, PathBuf::from("/tmp/backup"));
+        with_env(|_env| {
+            let cli = parse(&["restore", "/tmp/backup"]);
+            let Commands::Restore { path, .. } = cli.command.expect("subcommand") else {
+                unreachable!("parse yields Commands::Restore")
+            };
+            assert_eq!(path, PathBuf::from("/tmp/backup"));
+        });
     }
 
     #[test]
     fn restore_missing_path_is_clap_error() {
-        let _guard = ENV_LOCK.lock().expect("env lock");
-        let result = Cli::try_parse_from(["jaunder", "restore"]);
-        assert!(result.is_err());
+        with_env(|_env| {
+            let result = Cli::try_parse_from(["jaunder", "restore"]);
+            assert!(result.is_err());
+        });
     }
 
     // --- site-config ---
@@ -935,22 +951,23 @@ mod tests {
     #[test]
     fn site_config_set_accepts_db_flag_after_positionals() {
         // The allow_hyphen_values value must not swallow the flattened --db flag.
-        let _guard = ENV_LOCK.lock().expect("env lock");
-        let cli = parse(&[
-            "site-config",
-            "set",
-            "site.title",
-            "val",
-            "--db",
-            "sqlite:./x.db",
-        ]);
-        let Commands::SiteConfig { action } = cli.command.expect("subcommand") else {
-            unreachable!("parse yields site-config")
-        };
-        let SiteConfigAction::Set { key, value, .. } = action else {
-            unreachable!("parse yields set")
-        };
-        assert_eq!((key, value.as_str()), (SiteConfigKey::SiteTitle, "val"));
+        with_env(|_env| {
+            let cli = parse(&[
+                "site-config",
+                "set",
+                "site.title",
+                "val",
+                "--db",
+                "sqlite:./x.db",
+            ]);
+            let Commands::SiteConfig { action } = cli.command.expect("subcommand") else {
+                unreachable!("parse yields site-config")
+            };
+            let SiteConfigAction::Set { key, value, .. } = action else {
+                unreachable!("parse yields set")
+            };
+            assert_eq!((key, value.as_str()), (SiteConfigKey::SiteTitle, "val"));
+        });
     }
 
     #[test]
@@ -990,8 +1007,9 @@ mod tests {
 
     #[test]
     fn site_config_set_missing_value_is_clap_error() {
-        let _guard = ENV_LOCK.lock().expect("env lock");
-        assert!(Cli::try_parse_from(["jaunder", "site-config", "set", "site.title"]).is_err());
+        with_env(|_env| {
+            assert!(Cli::try_parse_from(["jaunder", "site-config", "set", "site.title"]).is_err());
+        });
     }
 
     /// The registry is closed at the CLI door (#687): a key it does not know is a clap
@@ -999,23 +1017,24 @@ mod tests {
     /// names the offending key so the operator can see which one it was.
     #[test]
     fn site_config_rejects_an_unknown_key() {
-        let _guard = ENV_LOCK.lock().expect("env lock");
-        for argv in [
-            vec!["jaunder", "site-config", "set", "site.nope", "v"],
-            vec!["jaunder", "site-config", "get", "site.nope"],
-            vec!["jaunder", "site-config", "unset", "site.nope"],
-        ] {
-            // `.err()` rather than `unwrap_err()`: `Cli` is not `Debug`, so the `Ok`
-            // side cannot be formatted for a panic message.
-            let rendered = Cli::try_parse_from(&argv)
-                .err()
-                .expect("an unknown key must not parse")
-                .to_string();
-            assert!(
-                rendered.contains("site.nope"),
-                "the parse error must name the offending key: {rendered}"
-            );
-        }
+        with_env(|_env| {
+            for argv in [
+                vec!["jaunder", "site-config", "set", "site.nope", "v"],
+                vec!["jaunder", "site-config", "get", "site.nope"],
+                vec!["jaunder", "site-config", "unset", "site.nope"],
+            ] {
+                // `.err()` rather than `unwrap_err()`: `Cli` is not `Debug`, so the `Ok`
+                // side cannot be formatted for a panic message.
+                let rendered = Cli::try_parse_from(&argv)
+                    .err()
+                    .expect("an unknown key must not parse")
+                    .to_string();
+                assert!(
+                    rendered.contains("site.nope"),
+                    "the parse error must name the offending key: {rendered}"
+                );
+            }
+        });
     }
 
     #[test]
