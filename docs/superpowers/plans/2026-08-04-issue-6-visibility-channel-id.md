@@ -396,15 +396,15 @@ free fn, `:266-285` test).
 
 **Steps**
 
-- [ ] **Step 1.** Confirm no production caller remains:
+- [x] **Step 1.** Confirm no production caller remains:
       `rg -n 'local_channel_id' --glob '!target'` — the only survivors must be
       the **trait** method, its two impls, `web/src/subscriptions/api.rs:27,43`
       (subscribe/unsubscribe — the write path), and tests.
-- [ ] **Step 2.** Delete the free fn, the `LOCAL_CHANNEL_ID` static, and the
+- [x] **Step 2.** Delete the free fn, the `LOCAL_CHANNEL_ID` static, and the
       test `local_channel_id_returns_the_seeded_local_channel`. Reword the trait
       method's doc comment (`:73-75`), which points at the deleted fn and claims
       the result is memoized per process.
-- [ ] **Step 3.** `cargo xtask check`; commit
+- [x] **Step 3.** `cargo xtask check`; commit
       `refactor(storage): drop the orphaned local-channel OnceLock (#6)`.
 
 ---

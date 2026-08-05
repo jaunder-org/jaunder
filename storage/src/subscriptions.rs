@@ -7,7 +7,7 @@
 //! touching this store. `is_subscriber` admits only `active` rows, so a row left
 //! `pending`/`blocked` by a stricter policy fails closed.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -69,36 +69,13 @@ pub trait SubscriptionStorage: Send + Sync {
 
     /// Returns the `channel_id` of the seeded `local` channel.
     ///
-    /// This is the production lookup the web `viewer_identity()` extractor and
-    /// `subscribe_to` use to build a [`ViewerIdentity::local`]. The read path
-    /// memoizes the result once per process (see [`local_channel_id`]) rather
-    /// than querying per request.
+    /// This serves the subscription **write** path only — `subscribe` and
+    /// `unsubscribe` key their rows by channel, so a caller inserting or
+    /// deleting one has to name it. Read paths must not use it: the resolution
+    /// filter and `is_subscriber` resolve the local channel inline in SQL
+    /// (#6), which is both cheaper than a round trip and impossible to point at
+    /// the wrong row.
     async fn local_channel_id(&self) -> sqlx::Result<ChannelId>;
-}
-
-/// Process-level cache of the seeded `local` channel id.
-///
-/// The `local` channel is created once by migration `0018` and never changes,
-/// so a single lookup is reused for the life of the process instead of querying
-/// `channels` on every read request.
-static LOCAL_CHANNEL_ID: OnceLock<ChannelId> = OnceLock::new();
-
-/// Looks up the seeded `local` channel id, memoizing it for the process.
-///
-/// The lookup runs at most once per process on the happy path: once the
-/// [`OnceLock`](std::sync::OnceLock) is populated it is returned without touching
-/// storage. A storage error leaves the cell empty (the next request retries) and
-/// yields `None` — **fail-closed**: the web `viewer_identity` adapter treats a
-/// viewer whose channel it cannot resolve as anonymous, so it sees only public
-/// content.
-pub async fn local_channel_id(subscriptions: &dyn SubscriptionStorage) -> Option<ChannelId> {
-    if let Some(id) = LOCAL_CHANNEL_ID.get() {
-        return Some(*id);
-    }
-    let id = subscriptions.local_channel_id().await.ok()?;
-    // Race-loser's value is identical (the row is immutable), so ignore the Err.
-    let _ = LOCAL_CHANNEL_ID.set(id);
-    Some(id)
 }
 
 /// Per-backend SQL for [`SubscriptionStore`]. The statements differ only in the
@@ -278,9 +255,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, Backend};
-    use rstest::*;
-    use rstest_reuse::*;
 
     /// Guards the two dialect constants against drifting apart — the failure mode
     /// where one backend gains the local-channel statement and the other is
@@ -305,34 +279,5 @@ mod tests {
                 "{name} must resolve the local channel inline: {sql}"
             );
         }
-    }
-
-    // Cross-*case* memoization is deliberately not asserted: `LOCAL_CHANNEL_ID`
-    // is a process-global `OnceLock`, so under a two-backends-one-process run the
-    // first backend's value would leak into the second. We compare the
-    // fail-closed helper against the same backend's direct trait lookup, which
-    // stays correct regardless of memoization — then call it a second time, which
-    // is guaranteed to take the already-populated cache branch whichever backend
-    // this case is.
-    #[apply(backends)]
-    #[tokio::test]
-    async fn local_channel_id_returns_the_seeded_local_channel(#[case] backend: Backend) {
-        let env = backend.setup().await;
-        let expected = env
-            .state
-            .subscriptions
-            .local_channel_id()
-            .await
-            .expect("migration seeds the local channel");
-        assert_eq!(
-            local_channel_id(env.state.subscriptions.as_ref()).await,
-            Some(expected),
-            "the fail-closed helper resolves the seeded local channel id",
-        );
-        assert_eq!(
-            local_channel_id(env.state.subscriptions.as_ref()).await,
-            Some(expected),
-            "the memoized second call yields the same id without re-querying",
-        );
     }
 }
