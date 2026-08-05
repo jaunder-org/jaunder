@@ -398,7 +398,7 @@ async fn login_with_label_creates_session_with_label(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
-async fn login_with_empty_label_creates_session_without_label(#[case] backend: Backend) {
+async fn login_with_empty_label_falls_back_to_user_agent_default(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
@@ -426,7 +426,9 @@ async fn login_with_empty_label_creates_session_without_label(#[case] backend: B
     assert_eq!(status, StatusCode::OK);
     let raw_token = extract_login(&body).0;
     let record = state.sessions.authenticate(&raw_token).await.unwrap();
-    // When no label provided, should default to "Unknown device"
+    // An empty `label=` decodes to `None` (the Option form layer absorbs it before
+    // SessionLabel's deserializer runs), so this takes the User-Agent branch — and
+    // no UA header is sent here, so `from_lossy` supplies its default.
     assert_eq!(record.label, "Unknown device");
 }
 

@@ -126,8 +126,8 @@ and tracing_, not about the arg's type.
 There is no commit for this task — the tracker is the deliverable. **Stage
 explicit paths; never `git add -A`** — what lands must be what the gate checked.
 (Observed in practice: the repo's pre-commit hook auto-stages, so the spec and
-plan rode along into Task 2's commit `71cc8aef` rather than waiting for ship-time
-archiving. The gate ran on the full tree, so the invariant holds.)
+plan rode along into Task 2's commit `71cc8aef` rather than waiting for
+ship-time archiving. The gate ran on the full tree, so the invariant holds.)
 
 ---
 
@@ -274,8 +274,8 @@ Three edits to `web/src/auth/api.rs`:
    stays about the type.
 
    **Use `if let`, not `match`.** A `match` on one destructured pattern with a
-   block arm trips `clippy::single_match_else`, which is `-D warnings` here — the
-   gate rejects it, and suppressing a lint needs user approval:
+   block arm trips `clippy::single_match_else`, which is `-D warnings` here —
+   the gate rejects it, and suppressing a lint needs user approval:
 
 ```rust
     // An explicit client-supplied label arrives already validated (typed wire arg),
@@ -339,7 +339,7 @@ git commit -m "refactor(web): type login's label as Option<SessionLabel> (#685)"
   produced.
 - Produces: nothing later tasks depend on (final task).
 
-- [ ] **Step 1: Update the test to the new bound**
+- [x] **Step 1: Update the test to the new bound**
 
 Replace `login_truncates_long_user_agent` (`:432-470`) — its stale `M2.9.12`
 comment and 200-char assertions included — with:
@@ -427,7 +427,8 @@ Add the import for the cap at the top of `server/tests/web/web_auth.rs`:
 use common::session_label::MAX_SESSION_LABEL_CHARS;
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail** — both failed as predicted
+      (200 vs 250, 200 vs 255).
 
 Run: `devtool run --cwd <worktree> -- cargo nextest run -p jaunder user_agent`
 
@@ -437,7 +438,10 @@ Expected: FAIL — **both** new tests fail against the hand-rolled 200-char cap:
 `MAX_SESSION_LABEL_CHARS` (255). Two failures here is the expected state, not a
 sign something is wrong.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests** — landed as the `else` arm (Task 2
+      switched `match` → `if let` for `clippy::single_match_else`). The comment
+      below was further reworded in `83003a7d` so it does not name the default
+      string at all — a comment restating it is a second thing to go stale.
 
 In `web/src/auth/api.rs`, replace the `None =>` arm's body with the version that
 hands the raw User-Agent straight to `from_lossy` — no `.take(200)`, no
@@ -468,7 +472,8 @@ hands the raw User-Agent straight to `from_lossy` — no `.take(200)`, no
 Also drop "capped at 200 chars with an `"Unknown device"` default" from the
 comment above the `match` if Task 2 left any trace of it.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass** — 27 sqlite `web_auth` tests
+      green.
 
 Run: `devtool run --cwd <worktree> -- cargo nextest run -p jaunder web_auth`
 
@@ -476,7 +481,7 @@ Expected: PASS — both UA tests, plus the unchanged
 `login_with_empty_label_creates_session_without_label` (no UA header is sent, so
 `unwrap_or_default()` yields `""` → `from_lossy` → `"Unknown device"`).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit** — `f2033ecb`, plus the comment follow-up `83003a7d`.
 
 Run `cargo xtask check` first (**`jaunder-commit`**).
 
@@ -493,7 +498,7 @@ git commit -m "refactor(web): let SessionLabel own login's UA bound and default 
       clippy + coverage + all four `{sqlite,postgres}×{chromium,firefox}` e2e
       combos. No e2e change is expected: the suite never sends a label and its
       seeded-auth path (ADR-0098) bypasses `login` entirely.
-- [ ] `rg 'Unknown device' web/src/auth/api.rs` returns nothing (AC8).
-- [ ] `rg 'take\(200\)|> 200' web/src/auth/api.rs` returns nothing (AC3). Match
+- [x] `rg 'Unknown device' web/src/auth/api.rs` returns nothing (AC8).
+- [x] `rg 'take\(200\)|> 200' web/src/auth/api.rs` returns nothing (AC3). Match
       the truncation shape, not a bare `200` — a future issue number containing
       those digits would make a bare-number grep a false positive.

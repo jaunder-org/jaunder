@@ -170,9 +170,14 @@ Each is observable — a reviewer can tell delivered from not.
   continues to pass.)
 - **AC5** An empty explicit label still means _absent_: posting `…&label=`
   returns `StatusCode::OK` and creates a session labelled from the User-Agent
-  (`"Unknown device"` when no UA header is sent). The existing
-  `login_with_empty_label_creates_session_without_label` test passes
-  **unchanged** — this behavior is preserved, not tightened.
+  (`"Unknown device"` when no UA header is sent). The existing empty-label
+  test's assertions pass **unchanged** — this behavior is preserved, not
+  tightened. (Post-review housekeeping: that test was _renamed_
+  `login_with_empty_label_creates_session_without_label` →
+  `login_with_empty_label_falls_back_to_user_agent_default`, because the old
+  name claimed a session "without label" while asserting one _with_ the default.
+  Only the identifier and its comment changed; every assertion is
+  byte-identical.)
 - **AC6** A whitespace-only explicit label (`…&label=%20%20`) is rejected at
   decode: the response is `StatusCode::INTERNAL_SERVER_ERROR` and **no session
   token is returned** (decode fails before the handler body runs, so no session
