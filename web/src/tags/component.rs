@@ -154,7 +154,7 @@ fn schedule_suggestion_fetch(
                 return;
             }
             spawn_local(async move {
-                if let Ok(results) = crate::tags::list(Some(prefix), Some(10)).await {
+                if let Ok(results) = crate::tags::list(Some(prefix), None).await {
                     if debounce_tick.get_untracked() == tick {
                         let open = !results.is_empty();
                         suggestions.set(results);

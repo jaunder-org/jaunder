@@ -101,16 +101,14 @@ async fn list_tags_filters_by_prefix_case_insensitive(#[case] backend: Backend) 
 
 #[apply(backends)]
 #[tokio::test]
-async fn list_tags_clamps_limit_to_max(#[case] backend: Backend) {
+async fn list_tags_rejects_out_of_range_limit(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let post = seed_user_and_tagged_post(&state, "post-3", &[]).await;
-    // 60 tags — exceeds the MAX_TAG_LIMIT of 50.
-    let labels: Vec<TagLabel> = (0..60)
-        .map(|n| format!("tag{n:02}").parse().expect("valid tag label"))
-        .collect();
-    state.posts.set_post_tags(post, &labels).await.unwrap();
 
-    let (status, body) = post_json(
+    // `limit=1000` is outside `PageSize`'s `1..=50`; the typed wire arg rejects it on
+    // deserialization instead of coercing it down to the cap (#691). Mirrors
+    // `list_my_media_rejects_out_of_range_limit`; the status is asserted only as
+    // "not OK" because this endpoint is `input = Json` and that one is form-encoded.
+    let (status, _body) = post_json(
         &state,
         <web::tags::List as ServerFn>::PATH,
         serde_json::json!({ "limit": 1000 }),
@@ -118,9 +116,11 @@ async fn list_tags_clamps_limit_to_max(#[case] backend: Backend) {
     )
     .await;
 
-    assert_eq!(status, StatusCode::OK, "body: {body}");
-    let tags: Vec<TagSummary> = serde_json::from_str(&body).unwrap();
-    assert_eq!(tags.len(), 50, "limit must be clamped to MAX_TAG_LIMIT");
+    assert_ne!(
+        status,
+        StatusCode::OK,
+        "out-of-range tag limit must be rejected"
+    );
 }
 
 #[apply(backends)]
@@ -143,5 +143,5 @@ async fn list_tags_uses_default_limit_when_unspecified(#[case] backend: Backend)
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let tags: Vec<TagSummary> = serde_json::from_str(&body).unwrap();
-    assert_eq!(tags.len(), 10, "DEFAULT_TAG_LIMIT is 10");
+    assert_eq!(tags.len(), 10, "the default limit is 10");
 }
