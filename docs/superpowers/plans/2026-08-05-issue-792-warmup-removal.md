@@ -92,13 +92,13 @@ Spec D9 deferred the ADR to the verdict; the verdict is in. Use
 **`jaunder-adr`** (numberless draft in `docs/adr/drafts/`, numbered by
 `cargo xtask adr promote` at ship).
 
-- [ ] **1a.** Draft `docs/adr/drafts/e2e-does-not-pre-warm.md` recording: the
+- [x] **1a.** Draft `docs/adr/drafts/e2e-does-not-pre-warm.md` recording: the
       decision (no per-test warmup), the measured basis (link the verdict
       comment and `docs/observability.md`'s findings section), and the
       consequence that every test's first navigation is now genuinely cold —
       which is the honest state, and which the trace now shows rather than
       hides.
-- [ ] **1b.** State the superseding relationship to ADR-0096 explicitly if that
+- [x] **1b.** State the superseding relationship to ADR-0096 explicitly if that
       ADR's warmup rationale is materially affected (it discusses warmup traffic
       and the orphan bucket) — supersede only if it is actually wrong now, not
       merely dated.
@@ -111,23 +111,23 @@ Spec D9 deferred the ADR to the verdict; the verdict is in. Use
 
 `end2end/tests/fixtures.ts`. Remove, checking each for other callers first:
 
-- [ ] **2a.** `warmupPageContext` (`:234-261`) and its call in `_autoPerfSpan`
+- [x] **2a.** `warmupPageContext` (`:234-261`) and its call in `_autoPerfSpan`
       (`:590`).
-- [ ] **2b.** `maybeWarmupPage` (`:263-268`) — **already dead** (zero callers
+- [x] **2b.** `maybeWarmupPage` (`:263-268`) — **already dead** (zero callers
       since `b6451579`), so this is cleanup the deletion makes obvious rather
       than a behaviour change.
-- [ ] **2c.** The `e2e.warmup` span emission (`:939-960`) and the
+- [x] **2c.** The `e2e.warmup` span emission (`:939-960`) and the
       `warmupStartMs`/`warmupEndMs` plumbing.
-- [ ] **2d.** `defaultWarmupUrl`, `defaultWarmupTimeoutMs`,
+- [x] **2d.** `defaultWarmupUrl`, `defaultWarmupTimeoutMs`,
       `parseWarmupTimeoutMs`, and the reads of `JAUNDER_E2E_WARMUP`,
       `JAUNDER_E2E_WARMUP_URL`, `JAUNDER_E2E_WARMUP_TIMEOUT_MS`. Grep the whole
       repo for each name — the env vars are documented in prose too (task 6).
-- [ ] **2e.** **Do not disturb the auto-fixture registration order.**
+- [x] **2e.** **Do not disturb the auto-fixture registration order.**
       `fixtures.ts:418-423` warns it is load-bearing and fragile: Playwright
       sets auto fixtures up in registration order, and reordering silently
       collapses `e2e.context_mint` to zero width. Removing code _inside_
       `_autoPerfSpan` is safe; changing the key order is not.
-- [ ] **2f.** `tsc` clean: `devtool run -- tsc` (or the gate's `tsc` step).
+- [x] **2f.** `tsc` clean: `devtool run -- tsc` (or the gate's `tsc` step).
 
 **Verify:** no `warmup` identifier remains in `end2end/`; `cargo xtask check`
 green; the span tree now has no `e2e.warmup` node.
@@ -136,15 +136,15 @@ green; the span tree now has no `e2e.warmup` node.
 
 ## Task 3 — Delete the flake-side warmup and rename `warmupEnv`
 
-- [ ] **3a.** Remove the `e2eWarmup` literal and its comment; in `e2eWarmChecks`
+- [x] **3a.** Remove the `e2eWarmup` literal and its comment; in `e2eWarmChecks`
       the env string becomes just `" JAUNDER_E2E_RETRIES=1"`. Keep the
       `RETRIES=1` comment — it explains a policy that still holds.
-- [ ] **3b.** Rename the `mkE2eCombo` / `mkE2e*Check` / `e2eRunAndCapture`
+- [x] **3b.** Rename the `mkE2eCombo` / `mkE2e*Check` / `e2eRunAndCapture`
       parameter `warmupEnv` → `extraEnv`. It was already a misnomer (the cold
       family used it for `WORKERS=1`, per its own apologetic comment at
       `flake.nix:947-948`); with warmup gone the name would be pure
       misdirection. The `e2eSalt` splice rides this same parameter — keep that.
-- [ ] **3c.** Re-check the salt still works after the rename:
+- [x] **3c.** Re-check the salt still works after the rename:
       `e2eSalt = "probe"` moves all eight attrs; empty is a no-op against the
       new baseline. (The baseline moves in this commit — that is expected and
       fine, since the warmup token genuinely changed. Record the new hashes.)
@@ -161,19 +161,19 @@ distinguishes anything — the family's only remaining difference is `WORKERS=1`
 isolation is genuinely useful and #801 needs it for clean per-navigation
 attribution.
 
-- [ ] **4a.** Rename `e2eColdPackages` → `e2eSingleWorkerPackages`, attrs
+- [x] **4a.** Rename `e2eColdPackages` → `e2eSingleWorkerPackages`, attrs
       `e2e-<backend>-<browser>-cold` → `e2e-<backend>-<browser>-single-worker`,
       and `nameSuffix` to match. Chosen over `-solo`/`-serial` for being
       unambiguous at a glance; these attrs are typed rarely, so length is cheap.
-- [ ] **4b.** Rewrite the family's comment (`flake.nix:957-965`): drop
+- [x] **4b.** Rewrite the family's comment (`flake.nix:957-965`): drop
       "cold-cache variants (no warmup)", state the real purpose — one worker, so
       per-navigation timings are free of contention — and keep the `#61`
       VM-memory and `#270` budget-scale notes, which are still true.
-- [ ] **4c.** `xtask`: rename the `traces run --cold` flag to `--single-worker`
+- [x] **4c.** `xtask`: rename the `traces run --cold` flag to `--single-worker`
       and `e2e_attr`'s `cold: bool` parameter with it
       (`xtask/src/lib.rs:335-353`, `traces/run.rs:29-40`, and the `after_help`
       example). Update the doc comment quoting the old attr paths.
-- [ ] **4d.** `rg -n 'cold' xtask/ flake.nix docs/ CONTRIBUTING.md` and fix
+- [x] **4d.** `rg -n 'cold' xtask/ flake.nix docs/ CONTRIBUTING.md` and fix
       every surviving reference that means the variant (leave genuine
       cache-warmth language like `cacheWarmth: "cold"` alone — that is a real,
       still-accurate concept, and after this change the gate produces _more_ of
@@ -186,15 +186,15 @@ attribution.
 
 ## Task 5 — Narrow the guard to `e2eSalt`
 
-- [ ] **5a.** Remove the `e2eWarmup` clause from `problems()` and its
+- [x] **5a.** Remove the `e2eWarmup` clause from `problems()` and its
       missing-literal check; keep the salt clause and the "missing literal fails
       loudly" behaviour for the salt.
-- [ ] **5b.** Update the unit tests: drop `flags_disabled_warmup` and the warmup
+- [x] **5b.** Update the unit tests: drop `flags_disabled_warmup` and the warmup
       half of `flags_both_when_both_set`; keep the comment-mention test (the
       salt's comment block still names it).
-- [ ] **5c.** Update the module doc comment — it currently explains both
+- [x] **5c.** Update the module doc comment — it currently explains both
       literals.
-- [ ] **5d.** `cargo test --manifest-path xtask/Cargo.toml e2e_scaffold`.
+- [x] **5d.** `cargo test --manifest-path xtask/Cargo.toml e2e_scaffold`.
 
 **Verify:** guard still fails a salted tree, passes clean.
 
@@ -202,23 +202,23 @@ attribution.
 
 ## Task 6 — Repair the prose
 
-- [ ] **6a.** `CONTRIBUTING.md:744-750` — the four gate checks are described as
+- [x] **6a.** `CONTRIBUTING.md:744-750` — the four gate checks are described as
       running "with `JAUNDER_E2E_WARMUP=1` (default)". Remove that clause.
-- [ ] **6b.** `CONTRIBUTING.md` — the cold-package list (`:757-764`) gets the
+- [x] **6b.** `CONTRIBUTING.md` — the cold-package list (`:757-764`) gets the
       new names and the new explanation; the `#792` scaffolding section loses
       its `e2eWarmup` paragraph and keeps the salt.
-- [ ] **6c.** `docs/observability.md` — the span tree (`:38-46`) loses the
+- [x] **6c.** `docs/observability.md` — the span tree (`:38-46`) loses the
       `e2e.warmup` line and its "only when JAUNDER_E2E_WARMUP is on" note; the
       spans list (`:24-26`) loses `e2e.warmup`; the warmup semantics paragraph
       (~`:601-615`) goes; `:294-295` and other `--cold` references get the new
       flag name. **Leave the #792 findings section intact** — it is a historical
       record of a measurement, and its `e2e.warmup` figures were true when
       taken.
-- [ ] **6d.** `docs/adr/0096-e2e-trace-capture-vs-attribution.md` — it states
+- [x] **6d.** `docs/adr/0096-e2e-trace-capture-vs-attribution.md` — it states
       the warmup's duration "is measured nowhere, which is what blocks #792".
       That is now resolved and the warmup is gone; update the rationale to past
       tense rather than deleting the reasoning, and cross-reference the new ADR.
-- [ ] **6e.** The `#681` orphan-bucket comments
+- [x] **6e.** The `#681` orphan-bucket comments
       (`xtask/src/server_fn_coverage/snapshot.rs:157,457`,
       `extract.rs:96,179,372`) explain orphan traffic _in terms of warmup_.
       **First establish whether the bucket still has a source** — if other
@@ -233,7 +233,7 @@ returns only the historical findings section and ADR history.
 
 ## Task 7 — Verify with a real run
 
-- [ ] **7a.** `cargo xtask validate` (full, all four e2e combos) in **background
+- [x] **7a.** `cargo xtask validate` (full, all four e2e combos) in **background
       mode**. This is the task that proves deleting the code is equivalent to
       arm B's env-flag flip — the A/B does not establish it.
 
@@ -248,10 +248,10 @@ returns only the historical findings section and ADR history.
       snapshot, and write the observability doc's "expect exactly these orphans"
       paragraph from the regenerated truth rather than from a prediction.
 
-- [ ] **7b.** Compare the four combo durations against arm B's medians (chromium
+- [x] **7b.** Compare the four combo durations against arm B's medians (chromium
       ~174 s, firefox ~256 s sqlite). A material regression means the deletion
       did something the flag did not, and is a stop-and-diagnose.
-- [ ] **7c.** Confirm `expected = 130`, `unexpected = 0` per combo.
+- [x] **7c.** Confirm `expected = 130`, `unexpected = 0` per combo.
 
 **Verify:** validate green; durations within noise of arm B.
 

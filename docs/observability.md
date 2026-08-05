@@ -293,11 +293,20 @@ Two properties, both deliberate:
 
 It is reported, not failed. Expect exactly the app-shell fns (`session`,
 `list_local_timeline`, and the two warning-visibility fns), each carrying the
-single reason `unknown-parent:` naming the run-wide traceparent's span id: that
-is the `_autoPerfSpan` warmup load, which applies the per-test traceparent only
-_after_ `warmupPageContext`, so warmup traffic stays out of attribution by
-design. A different reason, an unfamiliar parent id, or any other fn appearing
-means a context lost its traceparent or the capture is truncated.
+single reason `unknown-parent:` naming the run-wide traceparent's span id. That
+is app-shell traffic issued in the **pre-test window** — after the browser
+context exists but before `applyTestTraceparent` stamps it — which is
+deliberately unattributed per #681. A different reason, an unfamiliar parent id,
+or any other fn appearing means a context lost its traceparent or the capture is
+truncated.
+
+**These four survived #792**, which is worth recording because it was predicted
+they would not. The per-test warmup's `/` load was assumed to be the bucket's
+source, so removing the warmup should have emptied it and drifted this snapshot.
+It did neither: the byte-compare passed unchanged against a post-removal run.
+The orphan bucket's source is the pre-test window itself, not any particular
+thing that used to occupy it — which is exactly why the mechanism is structural
+and stays.
 
 ## Server-side scoped diagnostic log — look here first (#144)
 
@@ -386,6 +395,19 @@ The CSR client emits `performance.mark`s at its boot boundaries via
   microsecond-scale calls. Feature-gating them would mean the binary being
   measured is not the binary being shipped, which quietly invalidates every
   number they produce.
+
+**Measure from `traces run`, never from `cargo xtask validate`.** `validate`
+builds the `e2e-checks` aggregate, so nix realizes the four combo derivations
+**concurrently** — four VMs at two workers each on one host. `traces run` builds
+them one at a time (`traces/run.rs`'s nested loop). Measured 2026-08-05 on the
+same tree: sqlite-chromium reported **436 s** under `validate` against **191 s**
+serial, and all four `validate` combos started within 8 seconds of each other. A
+suite duration read out of a `validate` log is a contention artefact, inflated
+enough (~2.5×) to look like a catastrophic regression.
+
+Host quiescence matters for the same reason: sample `/proc/loadavg` before and
+after each run and discard any taken while other work — including other agent
+sessions — was on the box.
 
 To build both e2e VM checks and immediately analyze the produced traces, use:
 

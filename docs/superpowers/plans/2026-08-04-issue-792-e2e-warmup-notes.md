@@ -127,6 +127,39 @@ medians or percentiles, so it cannot produce the spec's p50 metrics.
 Full results, including the span-sum decomposition and the navigation warm/cold
 table, are in `docs/observability.md` §"#792 — the per-test warmup A/B".
 
+## Second half — post-removal verification (2026-08-05)
+
+**Functional equivalence: established.** `cargo xtask validate` green end to
+end, all four combos `expected = 130`, `unexpected = 0`, `flaky = 0`. A serial
+`traces run` on the same tree repeated that. Deleting the code path does what
+disabling it via the env flag did.
+
+**Timing equivalence: not cleanly established, and deliberately not claimed.**
+Two separate contaminations, both caught rather than reported:
+
+1. `validate` builds the four combos **concurrently** (all four started within 8
+   s of each other), so its per-combo durations are contention artefacts:
+   sqlite-chromium 436 s vs 191 s serial on the same tree. Comparing that
+   against arm B's 174 s would have read as a 2.5× regression from a change that
+   is a 23 % improvement.
+2. The serial confirmation run was taken with `/proc/loadavg` at **8.64** — four
+   other agent sessions and a live `cargo`/`rustdoc` were on the box, against
+   2.1–2.6 during the A/B. Its numbers (chromium 191 s vs arm B's 174 s, firefox
+   260 s vs 256 s, postgres-firefox 354 s vs 258 s) are consistent with the
+   verdict but the spread across combos is what host load looks like, not a
+   measurement.
+
+The A/B verdict stands on the six interleaved quiescent runs, not on these.
+Anyone wanting a clean post-removal number should re-run `traces run` with a
+fresh salt on an idle host.
+
+**Task 6e answered — and the prediction was wrong.** The plan expected the
+`server-fn-coverage` snapshot to drift, on the theory that the warmup's `/` load
+was the orphan bucket's source. It did not drift: the byte-compare passed
+unchanged, and the four app-shell orphans are still there. The bucket's source
+is the pre-test window itself, so the mechanism keeps its justification and only
+the explanation naming warmup needed fixing.
+
 ## Task 4 — guard evidence (2026-08-04)
 
 Unit tests: 6/6 pass —
