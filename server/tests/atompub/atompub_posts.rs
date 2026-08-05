@@ -834,6 +834,43 @@ async fn incoming_j_slug_is_ignored(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
+async fn create_with_blank_title_stores_an_untitled_post(#[case] backend: Backend) {
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+    let app = make_app(&state, &base);
+
+    // A whitespace-only <title> means the client supplied no title — it is absence,
+    // not a client error (#830). `PostTitle`'s FromStr rejects it and the mapping
+    // turns that into `None`, so the post is stored untitled with a body-derived
+    // slug rather than carrying a blank title or failing with a 400.
+    let xml = r#"<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>   </title>
+  <content type="text">first body line</content>
+</entry>"#;
+
+    let response = app
+        .clone()
+        .oneshot(atompub_post_xml(&session, "posts", xml))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let post_id = location_post_id(&response);
+
+    let viewer = common::visibility::ViewerIdentity::Anonymous;
+    let rec = state
+        .posts
+        .get_post_by_id(PostId::from(post_id), &viewer)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rec.title, None, "a blank <title> must store as untitled");
+    assert_eq!(rec.slug, "first-body-line");
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn create_skips_invalid_category(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;

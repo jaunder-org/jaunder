@@ -238,12 +238,15 @@ pub fn parse_raw_token(s: &str) -> RawToken {
     s.parse().expect("valid test raw token")
 }
 
-/// Build a [`PostTitle`] from `title` for tests — the single place a test title
-/// literal is wrapped, so the trimming `From<String>` isn't re-spelled at every feed
-/// fixture. `PostTitle` is infallible (no `FromStr`), so this cannot fail.
+/// Parse `title` into a valid [`PostTitle`] for tests — the single place a test title
+/// literal is parsed, so the validating `FromStr` isn't re-spelled at every fixture.
+///
+/// # Panics
+///
+/// Panics on a blank title, which no test should be constructing (#830).
 #[must_use]
 pub fn parse_post_title(title: &str) -> PostTitle {
-    PostTitle::from(title.to_owned())
+    title.parse().expect("valid test post title")
 }
 
 /// Parse `s` into a valid [`SiteTitle`] for tests — the single place a test site-title

@@ -483,8 +483,8 @@ mod tests {
     use chrono::Utc;
     use common::test_support::{
         parse_bio, parse_byte_size, parse_content_hash, parse_content_type, parse_display_name,
-        parse_email, parse_filename, parse_password, parse_session_label, parse_slug,
-        parse_token_hash, parse_username,
+        parse_email, parse_filename, parse_password, parse_post_title, parse_session_label,
+        parse_slug, parse_token_hash, parse_username,
     };
 
     #[test]
@@ -549,7 +549,7 @@ mod tests {
             post_id: PostId::from(10),
             user_id: UserId::from(20),
             username: parse_username("alice"),
-            title: Some("Hello".into()),
+            title: Some(parse_post_title("Hello")),
             slug: parse_slug("hello-world"),
             body: "Body".into(),
             format: PostFormat::Markdown,

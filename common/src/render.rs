@@ -604,6 +604,9 @@ pub fn derive_post_title(
     body: &str,
     format: &PostFormat,
 ) -> Option<(Option<PostTitle>, String)> {
+    // This filter decides *presence*, not validity: a blank explicit title means the
+    // client supplied none, so the body is consulted for one below. (`PostTitle`'s
+    // `FromStr` enforces non-blankness itself — #830.)
     let explicit_title = explicit_title
         .map(str::trim)
         .filter(|title| !title.is_empty());
@@ -617,8 +620,12 @@ pub fn derive_post_title(
         PostFormat::Html => None,
     });
 
-    if let Some(title) = title {
-        return Some((Some(PostTitle::from(title.clone())), title));
+    // `title` is non-blank by construction — the explicit branch is filtered above,
+    // and both extractors reject empty-after-trim — but the compiler cannot see that.
+    // So a failed parse falls through to the untitled path rather than panicking on an
+    // invariant we believe but cannot prove here.
+    if let Some((Ok(parsed), seed)) = title.map(|t| (t.parse::<PostTitle>(), t)) {
+        return Some((Some(parsed), seed));
     }
 
     // An untitled post seeds its slug from the first non-blank line, so this call
@@ -943,6 +950,16 @@ mod tests {
         .unwrap();
         assert_eq!(title, None);
         assert_eq!(slug_seed, "A compact note");
+    }
+
+    #[test]
+    fn derive_post_title_treats_blank_explicit_title_as_absent() {
+        // A blank explicit title means "no title supplied", not an error (#830): the
+        // body is consulted instead, exactly as if the field had been omitted.
+        let (title, slug_seed) =
+            derive_post_title(Some("   "), "body line", &PostFormat::Markdown).unwrap();
+        assert_eq!(title, None);
+        assert_eq!(slug_seed, "body line");
     }
 
     #[test]

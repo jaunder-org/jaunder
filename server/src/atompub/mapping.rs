@@ -83,11 +83,10 @@ pub fn entry_to_post_fields(entry: &Entry, default_format: PostFormat) -> PostFi
     let format = wire_to_format(ctype, default_format);
 
     let body = PostBody::from(value);
-    let title = {
-        // `PostTitle::from` trims; the local trim only decides presence (blank → None).
-        let raw = entry.title().as_str();
-        (!raw.trim().is_empty()).then(|| PostTitle::from(raw))
-    };
+    // A blank `<title>` means the client supplied no title: `PostTitle`'s `FromStr`
+    // rejects it and `ok()` turns that into absence, so the presence policy is the
+    // type's rule rather than a hand-rolled emptiness check beside it (#830).
+    let title = entry.title().as_str().parse::<PostTitle>().ok();
     // The entry's `<summary>` becomes a validated `PostSummary`. Like the invalid
     // `<category>` term below, an over-cap/blank summary is silently dropped rather
     // than failing the whole entry (lenient ingest, R5) — `entry_to_post_fields`
@@ -569,7 +568,7 @@ mod tests {
             post_id: PostId::from(post_id),
             user_id: UserId::from(1),
             author_username: "alice".parse().expect("parse username"),
-            title: title.map(PostTitle::from),
+            title: title.map(common::test_support::parse_post_title),
             slug: slug.parse().expect("parse slug"),
             body: body.into(),
             format,

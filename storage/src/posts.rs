@@ -10,7 +10,7 @@ use common::ids::{AudienceId, ChannelId, PostId, RevisionId, TagId, UserId};
 use common::media::MediaRef;
 use common::pagination::RowLimit;
 use common::post_body::PostBody;
-use common::post_summary::PostSummary;
+use common::post_summary::{PostSummary, SummarySeed};
 use common::post_title::PostTitle;
 use common::root_relative_url::RootRelativeUrl;
 use common::seed::PageCursor;
@@ -97,28 +97,29 @@ impl PostRecord {
         url
     }
 
-    /// Generates a fallback summary from the post's body, title, or slug. The
-    /// fallback chain always yields a non-empty label (first non-empty body line →
-    /// title → slug), which [`PostSummary::truncated`] length-caps into the newtype.
+    /// Generates a fallback summary from the post's body, title, or slug.
+    ///
+    /// The chain is a **preference order**, not a search for something non-blank:
+    /// the first body line is the most excerpt-like label, the title is the next
+    /// best, and the slug is the guaranteed floor. Each fallthrough is triggered by
+    /// *absence*, and for a different reason — the body has no non-blank line at all
+    /// (still possible: `PostBody` is infallible until #811), or the post is
+    /// legitimately untitled (permanent domain state, not a blankness question).
+    ///
+    /// Every candidate that *is* present is non-blank by construction, so the chain
+    /// cannot yield an empty label and [`PostSummary::truncated`] needs no emptiness
+    /// check of its own (#830).
+    ///
+    /// When #811 lands, `first_body_line` can no longer return `None`, and the title
+    /// and slug arms become unreachable — collapse this to the body line then, and
+    /// expect the two `fallback_summary_label_prefers_body_then_title_then_slug`
+    /// cases that blank the body to become unconstructible.
+    #[must_use]
     pub fn fallback_summary_label(&self) -> PostSummary {
-        let label = self
-            .body
-            .lines()
-            .map(str::trim)
-            .find(|line| !line.is_empty())
-            .map(|line| line.chars().take(100).collect::<String>())
-            .filter(|line| !line.is_empty())
-            // Guard the title branch too: `PostTitle` is infallible and may be
-            // empty-after-trim, so fall through to the always-non-empty slug rather
-            // than feed `truncated` an empty label (its one invariant gap).
-            .or_else(|| {
-                self.title
-                    .clone()
-                    .map(String::from)
-                    .filter(|t| !t.trim().is_empty())
-            })
-            .unwrap_or_else(|| self.slug.to_string());
-        PostSummary::truncated(&label)
+        let seed = SummarySeed::first_body_line(&self.body)
+            .or_else(|| self.title.as_ref().map(SummarySeed::from_title))
+            .unwrap_or_else(|| SummarySeed::from_slug(&self.slug));
+        PostSummary::truncated(&seed)
     }
 }
 
@@ -2616,8 +2617,8 @@ mod tests {
         UpdateRawPost, MEDIA_TEST_SHA256,
     };
     use common::test_support::{
-        parse_content_type, parse_etag, parse_post_summary, parse_row_limit, parse_slug, parse_tag,
-        parse_tag_label, parse_username, permalink_date,
+        parse_content_type, parse_etag, parse_post_summary, parse_post_title, parse_row_limit,
+        parse_slug, parse_tag, parse_tag_label, parse_username, permalink_date,
     };
     use rstest::*;
     use rstest_reuse::*;
@@ -3067,7 +3068,7 @@ mod tests {
             post_id: PostId::from(1),
             user_id: UserId::from(1),
             author_username: parse_username("author"),
-            title: Some("My Title".into()),
+            title: Some(parse_post_title("My Title")),
             slug: parse_slug("my-slug"),
             body: "\n\n   The first non-empty line of the body is here. \n\n Another line.".into(),
             format: PostFormat::Markdown,
@@ -3092,10 +3093,9 @@ mod tests {
         post.body = "".into();
         assert_eq!(post.fallback_summary_label(), "My Title");
 
-        // Case 2b: An empty-after-trim title (PostTitle is infallible) must not mint an
-        // empty PostSummary — it falls through to the always-non-empty slug.
-        post.title = Some("   ".into());
-        assert_eq!(post.fallback_summary_label(), "my-slug");
+        // (The former case 2b — an empty-after-trim title falling through to the slug —
+        // is gone with #830: `PostTitle` rejects blanks, so that state is
+        // unrepresentable and cannot be constructed to test.)
 
         // Case 3: Body and title are empty. It should use the slug.
         post.title = None;
@@ -3109,7 +3109,7 @@ mod tests {
             post_id: PostId::from(1),
             user_id: UserId::from(1),
             author_username: parse_username("author"),
-            title: Some("My Title".into()),
+            title: Some(parse_post_title("My Title")),
             slug: parse_slug("hello-world"),
             body: "My body".into(),
             format: PostFormat::Markdown,
@@ -3571,6 +3571,41 @@ mod tests {
         let overlong = "a".repeat(common::post_summary::MAX_POST_SUMMARY_CHARS + 1);
         let sql = format!(
             "UPDATE posts SET summary='{overlong}' WHERE post_id={}",
+            i64::from(post_id)
+        );
+        env.base.pool().execute(sql.as_str()).await.unwrap();
+
+        let result = posts
+            .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn reading_post_with_blank_title_in_db_errors(#[case] backend: Backend) {
+        // The title column is nullable TEXT with no CHECK, so a blank row is
+        // representable in the database even though `PostTitle` can no longer
+        // construct one (#830). It must fail closed at the strict read boundary
+        // through the validating `Decode`, never decode to an empty title. Forced in
+        // with raw SQL for the same reason as the overlong-summary test above.
+        //
+        // This also pins that `PostTitle` is on the *validating* sqlx bridge at all:
+        // a blank row can only fail here if `Decode` routes through `FromStr`. That
+        // bridge decodes a borrowed `&'r str` (`macros`'
+        // `validating_bridge_decodes_a_borrowed_str_without_allocating`), so the
+        // double allocation #758 reported is gone as a side effect of the retyping.
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let posts = &*env.state.posts;
+        let post_id = SeedRawPost::new(user_id)
+            .draft()
+            .seed(&env.state)
+            .await
+            .post_id;
+
+        let sql = format!(
+            "UPDATE posts SET title='' WHERE post_id={}",
             i64::from(post_id)
         );
         env.base.pool().execute(sql.as_str()).await.unwrap();
