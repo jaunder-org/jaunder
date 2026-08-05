@@ -82,9 +82,9 @@ pub async fn login(
     } else {
         // The User-Agent is an internally derived hint, not submitted input, so it
         // goes through the lossy door (ADR-0063 §2): `from_lossy` trims, bounds it at
-        // MAX_SESSION_LABEL_CHARS, and supplies the "Unknown device" default when
-        // there is no usable header. Both the cap and the default live in
-        // `SessionLabel` — never duplicated here.
+        // MAX_SESSION_LABEL_CHARS, and supplies its own fallback label when there is
+        // no usable header. Both the cap and the default live in `SessionLabel` —
+        // never duplicated here, not even as a comment that could go stale.
         let ua = leptos_axum::extract::<axum::http::HeaderMap>()
             .await
             .ok()
