@@ -606,7 +606,7 @@ this cycle. At ship, **after** the final rebase onto `main`,
 `accepted`, syncs the README table, and stages the result — and *that* is what gets
 committed. The ADR's first appearance in git history is already correctly numbered.
 
-Draft written: `docs/adr/drafts/infallible-kind-is-invariant-first.md`.
+Draft written: `docs/adr/0101-infallible-kind-is-invariant-first.md`.
 
 ---
 
