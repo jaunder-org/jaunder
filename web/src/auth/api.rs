@@ -4,11 +4,12 @@
 //! server-fn registrar keep the stable `crate::auth::…` paths.
 
 use crate::error::WebResult;
-// `Username` / `ProfferedPassword` are ungated: they are wire-arg types of `login`,
-// so the `#[server]`-generated arg struct references them on both the client and
-// server builds. `RawToken` is ungated for the same reason — it is `login`'s wire
-// *return* type, named in the `#[server]` signature on both builds.
+// `Username` / `ProfferedPassword` / `SessionLabel` are ungated: they are wire-arg
+// types of `login`, so the `#[server]`-generated arg struct references them on both
+// the client and server builds. `RawToken` is ungated for the same reason — it is
+// `login`'s wire *return* type, named in the `#[server]` signature on both builds.
 use common::password::ProfferedPassword;
+use common::session_label::SessionLabel;
 use common::token::RawToken;
 use common::username::Username;
 
@@ -18,7 +19,6 @@ use common::username::Username;
 use {
     super::server::{clear_session_cookie, require_auth, set_session_cookie},
     common::password::Password,
-    common::session_label::SessionLabel,
     leptos::prelude::*,
     std::sync::Arc,
     storage::{SessionStorage, UserStorage},
@@ -37,11 +37,21 @@ pub struct LoginResponse {
 
 /// Authenticates a user.  Returns a [`LoginResponse`] (the freshly minted session
 /// [`RawToken`] + the viewer's operator flag) and sets the `session` cookie.
+///
+/// `label` is a typed wire arg (ADR-0065): the [`SessionLabel`] serde bridge trims it
+/// and rejects whitespace-only or over-long values at decode. It has **no client-side
+/// `Field<SessionLabel>` on the login form** — that form collects only username and
+/// password, so a browser omits `label` entirely and always takes the User-Agent
+/// branch below. ADR-0065's client-pre-validation requirement is therefore vacuous
+/// here, not violated. (The app-password form, which *does* collect a label, has its
+/// `Field::<SessionLabel>` in `crate::sessions::component`.) An omitted *or empty*
+/// `label` decodes to `None`: the `Option` form layer absorbs a present-but-empty
+/// field before `SessionLabel`'s deserializer runs.
 #[macros::server(skip(password, label))]
 pub async fn login(
     username: Username,
     password: ProfferedPassword,
-    label: Option<String>,
+    label: Option<SessionLabel>,
 ) -> WebResult<LoginResponse> {
     let users = expect_context::<Arc<dyn UserStorage>>();
     let sessions = expect_context::<Arc<dyn SessionStorage>>();
@@ -65,10 +75,10 @@ pub async fn login(
         }
     };
 
-    // Prefer an explicit client-supplied label; otherwise a User-Agent-derived
-    // device name, capped at 200 chars with an "Unknown device" default.
-    let derived_label = if let Some(l) = label.and_then(common::text::non_empty_owned) {
-        l
+    // An explicit client-supplied label arrives already validated (typed wire arg),
+    // so it is used as-is; otherwise derive a device name from the User-Agent.
+    let session_label = if let Some(label) = label {
+        label
     } else {
         let ua = leptos_axum::extract::<axum::http::HeaderMap>()
             .await
@@ -80,15 +90,13 @@ pub async fn login(
                     .map(str::to_string)
             })
             .unwrap_or_else(|| "Unknown device".to_string());
-        if ua.len() > 200 {
+        let ua = if ua.len() > 200 {
             ua.chars().take(200).collect::<String>()
         } else {
             ua
-        }
+        };
+        SessionLabel::from_lossy(&ua)
     };
-    // `from_lossy` is the infallible String -> SessionLabel construction (the
-    // above already keeps `derived_label` valid, so this is a no-op safety net).
-    let session_label = SessionLabel::from_lossy(&derived_label);
 
     let raw_token = sessions
         .create_session(record.user_id, &session_label)

@@ -429,6 +429,75 @@ async fn login_with_empty_label_creates_session_without_label(#[case] backend: B
     assert_eq!(record.label, "Unknown device");
 }
 
+#[apply(backends)]
+#[tokio::test]
+async fn login_rejects_whitespace_only_label(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    state
+        .site_config
+        .set("site.registration_policy", "open")
+        .await
+        .unwrap();
+    post_form_with_secure_flag(
+        &state,
+        <web::registration::Register as ServerFn>::PATH,
+        "username=alice&password=password123",
+        None,
+        true,
+    )
+    .await;
+
+    // A whitespace-only label is rejected at the typed-wire-arg decode
+    // (SessionLabel's FromStr trims, then rejects empty) — it no longer falls
+    // through to the User-Agent branch. Surfaces as 500, the session-fn convention.
+    let (status, _, body) = post_form_with_secure_flag(
+        &state,
+        <web::auth::Login as ServerFn>::PATH,
+        "username=alice&password=password123&label=%20%20",
+        None,
+        true,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    // Decode fails before the handler body runs, so no session is minted.
+    assert!(!body.contains("\"token\""), "token minted: {body}");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn login_rejects_overlong_label(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    state
+        .site_config
+        .set("site.registration_policy", "open")
+        .await
+        .unwrap();
+    post_form_with_secure_flag(
+        &state,
+        <web::registration::Register as ServerFn>::PATH,
+        "username=alice&password=password123",
+        None,
+        true,
+    )
+    .await;
+
+    // Past MAX_SESSION_LABEL_CHARS (255) the label is rejected at decode rather
+    // than silently truncated, matching create_app_password_rejects_overlong_label.
+    let overlong = "a".repeat(256);
+    let (status, _, body) = post_form_with_secure_flag(
+        &state,
+        <web::auth::Login as ServerFn>::PATH,
+        format!("username=alice&password=password123&label={overlong}"),
+        None,
+        true,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(!body.contains("\"token\""), "token minted: {body}");
+}
+
 // M2.9.12: `login` with long User-Agent truncates to 200 chars.
 #[apply(backends)]
 #[tokio::test]
