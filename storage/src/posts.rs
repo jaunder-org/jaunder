@@ -97,10 +97,23 @@ impl PostRecord {
         url
     }
 
-    /// Generates a fallback summary from the post's body, title, or slug. Every
-    /// candidate is non-blank by construction — a selected body line, a `PostTitle`,
-    /// or a `Slug` — so the chain cannot yield an empty label and
-    /// [`PostSummary::truncated`] needs no emptiness check of its own (#830).
+    /// Generates a fallback summary from the post's body, title, or slug.
+    ///
+    /// The chain is a **preference order**, not a search for something non-blank:
+    /// the first body line is the most excerpt-like label, the title is the next
+    /// best, and the slug is the guaranteed floor. Each fallthrough is triggered by
+    /// *absence*, and for a different reason — the body has no non-blank line at all
+    /// (still possible: `PostBody` is infallible until #811), or the post is
+    /// legitimately untitled (permanent domain state, not a blankness question).
+    ///
+    /// Every candidate that *is* present is non-blank by construction, so the chain
+    /// cannot yield an empty label and [`PostSummary::truncated`] needs no emptiness
+    /// check of its own (#830).
+    ///
+    /// When #811 lands, `first_body_line` can no longer return `None`, and the title
+    /// and slug arms become unreachable — collapse this to the body line then, and
+    /// expect the two `fallback_summary_label_prefers_body_then_title_then_slug`
+    /// cases that blank the body to become unconstructible.
     #[must_use]
     pub fn fallback_summary_label(&self) -> PostSummary {
         let seed = SummarySeed::first_body_line(&self.body)
