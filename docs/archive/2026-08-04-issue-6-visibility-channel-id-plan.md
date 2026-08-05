@@ -460,16 +460,17 @@ survives task 4 harmlessly (`subscriptions_ext` stays used by `.layer`).
 
 ## Task 9 — full gate
 
-- [ ] **Step 1.**
+- [x] **Step 1.**
       `devtool run --cwd     /home/mdorman/src/jaunder/.claude/worktrees/issue-6-visibility-channel-id     -- cargo xtask validate`
       (Bash background mode — long/cold) → green, including all four
       `{sqlite,postgres}×{chromium,firefox}` e2e combos. **This runs first:**
       `server-fn-coverage regenerate` reads an e2e capture that must already
       exist (`xtask/src/lib.rs:623-629`; a missing capture is a hard error, not
       a no-op).
-- [ ] **Step 2.** If the byte-for-byte-gated `docs/coverage/server-fns.json`
+- [x] **Step 2.** (No movement, as expected — the tree was clean after
+      `validate`.) If the byte-for-byte-gated `docs/coverage/server-fns.json`
       moved, run `cargo xtask server-fn-coverage regenerate` and commit it, then
       re-run `validate`. Expect no movement: `viewer_identity` is not a
       `#[server]` fn and `is_subscribed` survives as one.
-- [ ] **Step 3.** Review the whole branch: `git diff wt-base-issue-6..HEAD`.
+- [x] **Step 3.** Review the whole branch: `git diff wt-base-issue-6..HEAD`.
       Re-read the spec's ACs 1-13 against it before handing to `jaunder-ship`.
