@@ -257,17 +257,17 @@ D4. **Only three code items go.**
 
 **Steps**
 
-- [ ] `git rm web/src/taglist/component.rs`.
-- [ ] Remove the `mod component` declaration (`taglist/mod.rs:6-7`) and
+- [x] `git rm web/src/taglist/component.rs`.
+- [x] Remove the `mod component` declaration (`taglist/mod.rs:6-7`) and
       `pub use component::TagList` (`:12`).
-- [ ] **Do not touch** `taglist/context.rs` (`TagCtx`) or `taglist/markup.rs`'s
+- [x] **Do not touch** `taglist/context.rs` (`TagCtx`) or `taglist/markup.rs`'s
       `render` — both are load-bearing on the ADR-0041 projector path and are
       used by `posts/render.rs`, `posts/component.rs:36`,
       `timeline/component.rs:20`, `timeline/state.rs`.
-- [ ] Rewrite the "reactive twin" prose in `taglist/mod.rs:1-4` and
+- [x] Rewrite the "reactive twin" prose in `taglist/mod.rs:1-4` and
       `markup.rs:10`, which name `TagList`: the renderer's only consumer is now
       the pure path.
-- [ ] `docs/web-style-guide.md` — three sites, and **two need a substitute
+- [x] `docs/web-style-guide.md` — three sites, and **two need a substitute
       example, not a repoint**: `:124` is a plain drop from the exported-widget
       list; `:147-151` cites `taglist/` as a canonical "`markup.rs` twin +
       wasm-only `component.rs`" pair, which it stops being (pick another leaf —
@@ -297,11 +297,11 @@ D2's table. **This task halts before committing any surviving suppression.**
 
 **Steps**
 
-- [ ] `RsdDiscovery::username` — attempt a genuine consuming form. **Barred:**
+- [x] `RsdDiscovery::username` — attempt a genuine consuming form. **Barred:**
       changing `rsd_href` to take an owned value purely to quiet the caller.
-- [ ] `FeedDiscovery::surface` — attempt a fix; four borrows across `Link` attrs
+- [x] `FeedDiscovery::surface` — attempt a fix; four borrows across `Link` attrs
       with no closure makes this the hardest of the three.
-- [ ] `Avatar::name` — **note the twin before touching this.**
+- [x] `Avatar::name` — **note the twin before touching this.**
       `avatar/component.rs:6-7` declares it the reactive half of a twin with
       `avatar/markup.rs::render` (`markup.rs:25`), and there are parity tests at
       `markup.rs:44-52`; `component.rs:18`'s integer `(size * 36 + 50) / 100`
@@ -312,16 +312,16 @@ D2's table. **This task halts before committing any surviving suppression.**
       clearly worth it, re-justify instead. `avatar_parts` takes `&str`
       (`markup.rs:10`), so D2 bars the pessimizing route; re-justification is
       the likely outcome and that is acceptable.
-- [ ] `PostDisplay::{post, banner, tag_context}` — keep the suppression, rewrite
+- [x] `PostDisplay::{post, banner, tag_context}` — keep the suppression, rewrite
       the reason per D3 (terminal owner; `PostView<'a>` borrows across
       `render_post_content`; ADR-0041 **§2**).
-- [ ] For **every** site that ends up keeping a suppression, verify the D1
+- [x] For **every** site that ends up keeping a suppression, verify the D1
       blanket string appears nowhere in `web/src/` and that the replacement
       names a concrete site-specific mechanism.
-- [ ] **HALT — present each surviving suppression with its proposed reason for
+- [x] **HALT — present each surviving suppression with its proposed reason for
       explicit approval** (`CONTRIBUTING.md:112-116`; criterion 2b). Do not
       commit reworded reasons before that approval.
-- [ ] Confirm no fix was achieved by artificial rebinding (`let x = x;`). If a
+- [x] Confirm no fix was achieved by artificial rebinding (`let x = x;`). If a
       site only goes quiet that way, it keeps a suppression instead — say so at
       the halt.
 
@@ -341,25 +341,25 @@ set remains.
 
 **Steps**
 
-- [ ] Split at the `if compact` seam (`:532`): the two branches are independent
+- [x] Split at the `if compact` seam (`:532`): the two branches are independent
       views over shared signal setup (`:491-530`).
-- [ ] Extract each branch as a **`#[component]`** (a plain `fn -> impl IntoView`
+- [x] Extract each branch as a **`#[component]`** (a plain `fn -> impl IntoView`
       does not count — `CONTRIBUTING.md:270-272`), private to the module per the
       `posts/mod.rs:68-70` convention unless an outside caller needs it.
-- [ ] Move pure logic to a host-compiled leaf where it helps the line count
+- [x] Move pure logic to a host-compiled leaf where it helps the line count
       (ADR-0070 §6; this is how #306 solved the same problem).
-- [ ] Delete the `#[expect(clippy::too_many_lines)]` at `:475-479`.
-- [ ] Check the `thin-components` budget on **each** new component, not only the
+- [x] Delete the `#[expect(clippy::too_many_lines)]` at `:475-479`.
+- [x] Check the `thin-components` budget on **each** new component, not only the
       parent. (Measured: both branches of the `if compact` seam currently
       contain **zero** control-flow units, so extraction leaves the parent at
       setup=1 and each child at 0. This task has headroom; task 7 does not.)
-- [ ] Update `web/src/posts/mod.rs:66-75`, whose comment enumerates the private
+- [x] Update `web/src/posts/mod.rs:66-75`, whose comment enumerates the private
       helpers and subcomponents by name.
-- [ ] **If an extracted component fires `needless_pass_by_value`** — likely,
+- [x] **If an extracted component fires `needless_pass_by_value`** — likely,
       since the lifted props include `Option<Username>` and callbacks — it needs
       a new suppression, which criterion 9 requires be approved **before**
       landing. Take it back to task 5's halt rather than committing it.
-- [ ] No markup change — the rendered output must be identical.
+- [x] No markup change — the rendered output must be identical.
 
 **Run:** WASM (threshold is clippy's default 100). Expected: no
 `too_many_lines`, no `thin-components` failure. Then `cargo xtask check`.
@@ -383,18 +383,18 @@ advance; find it against the unit counts before editing.
 
 **Steps**
 
-- [ ] Identify the seam by counting units per candidate region first. The two
+- [x] Identify the seam by counting units per candidate region first. The two
       existing units are the natural boundaries — extracting the `match` arms or
       the `if let Ok(selection)` body as `#[component]`s moves a unit out of the
       parent rather than adding one.
-- [ ] Continue the existing pattern: `EditSaveActions` (`:1287`) and
+- [x] Continue the existing pattern: `EditSaveActions` (`:1287`) and
       `EditSaveOutcome` (`:1344`) carry "Split out of [`EditPostPage`] (#306)"
       doc comments (`:1282`, `:1342`) — direct precedent for this page.
       (`DraftList` at `:1444` is precedent for the technique but was split out
       of `DraftsPage`. `render_draft_row` at `:1470` is **not** precedent — a
       plain builder fn.)
-- [ ] Delete the `#[expect(clippy::too_many_lines)]` at `:1075-1079`.
-- [ ] Same `thin-components` check per extracted component; same
+- [x] Delete the `#[expect(clippy::too_many_lines)]` at `:1075-1079`.
+- [x] Same `thin-components` check per extracted component; same
       no-markup-change rule.
 
 **Run:** WASM. Expected: no `too_many_lines`.
@@ -411,14 +411,14 @@ D8. **Five places, not two.**
 
 **Steps**
 
-- [ ] Remove `-A unfulfilled_lint_expectations` from the arg vector
+- [x] Remove `-A unfulfilled_lint_expectations` from the arg vector
       (`static_checks.rs:96-97`).
-- [ ] Remove the explanatory comment at `static_checks.rs:68-75` — it describes
+- [x] Remove the explanatory comment at `static_checks.rs:68-75` — it describes
       the since-deleted `pages/AudiencesPage` and no longer describes anything.
-- [ ] Update the unit test `wasm_clippy_lints_web_client_and_csr`
+- [x] Update the unit test `wasm_clippy_lints_web_client_and_csr`
       (`static_checks.rs:220-250`, string at `:246`), which asserts the exact
       arg vector.
-- [ ] Remove the flag from `flake.nix:1096` and its comment at `:1080`.
+- [x] Remove the flag from `flake.nix:1096` and its comment at `:1080`.
 
 **Run:** `cargo nextest run --manifest-path xtask/Cargo.toml` — expected
 **PASS**; then WASM — expected clean without the flag.
@@ -430,18 +430,68 @@ D8. **Five places, not two.**
 
 ## Task 9 — full gate and conformance
 
-- [ ] `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-301-web-lint-suppressions -- cargo xtask validate`
+- [x] `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-301-web-lint-suppressions -- cargo xtask validate`
       — **with e2e**, since this branch changes rendered components. ~25 min;
       Bash background mode.
-- [ ] Walk all ten spec criteria against `git diff wt-base-issue-301..HEAD`,
+- [x] Walk all ten spec criteria against `git diff wt-base-issue-301..HEAD`,
       checking each off explicitly. Criterion 1's `rg` is the authority, not the
       issue text.
-- [ ] Confirm `rg -n '\bTagList\b' web/src/ docs/web-style-guide.md` returns
+- [x] Confirm `rg -n '\bTagList\b' web/src/ docs/web-style-guide.md` returns
       nothing (criterion 4 — deliberately scoped; see task 4).
-- [ ] **Write the PR body**, which is where criteria 2b and 9 are discharged:
+- [x] **Write the PR body**, which is where criteria 2b and 9 are discharged:
       list every surviving and every newly-added suppression with its
       site-specific justification, and record that each was approved at task 5's
       halt. No other task produces this artifact.
+
+## Execution record — where this plan stopped describing what happened
+
+Every box above is ticked, but three of the tasks were overtaken by events. Read
+this section, not the predictions, for what was actually done.
+
+**#826 landed mid-branch, between tasks 4 and 5**, moving the whole workspace to
+edition 2024 and adding ADR-0104's `impl IntoView + use<>` idiom. The branch
+rebased onto it (one conflict: an import block reordered by the rustfmt 2024
+style edition).
+
+- **Task 5 split in two.** Its predicted outcome — three sites re-justified with
+  better wording — became "every site fixed in code, zero suppressions". `5a`
+  took references for the three read-only props; `5b` did `PostDisplay` by
+  borrowing through `PostCard` to `TimelineRows`. The plan's premise that
+  `PostDisplay` was structurally different was wrong: it was the same contingent
+  reason, and the relocation terminated one hop further than I first followed
+  it.
+- **Task 5's halt happened as designed**, and was where this surfaced: the four
+  proposed reasons went up for approval and were rejected in favour of fixing
+  the code, which is what the issue asked for all along.
+- **Tasks 6–7 found more than length.** Four near-identical `PostInputs`
+  constructions across both composer shapes and the editor; `ComposeState`
+  collapses them into one host-tested `inputs()`. That bundle is what made the
+  split cheap enough to also cover `EditPostPage`, for which this plan could
+  name no seam.
+- **Task 8's "already dead" measurement did not survive the rebase.** #826
+  touched the same step, and the comment being removed turned out to describe a
+  mechanism that no longer existed (it claimed the expects fire on host, but
+  `posts/component.rs` is wasm-only and never host-compiles).
+
+## Conformance walk (criterion 9's evidence)
+
+| Criterion | Check                                                                                               | Result                     |
+| --------- | --------------------------------------------------------------------------------------------------- | -------------------------- |
+| 1         | `rg 'clippy::(too_many_lines\|cast_precision_loss\|cast_possible_truncation)' web/src/ server/src/` | none                       |
+| 2         | `rg 'needless_pass_by_value' web/src/`; wasm pass with `--force-warn`                               | none; 0 warnings           |
+| 3         | wasm clippy, threshold 100; extracted views are `#[component]`s                                     | clean                      |
+| 4         | `rg '\bTagList\b' web/src/ docs/web-style-guide.md`; `TagCtx` + `render` still exported             | none; both present         |
+| 5         | `must_use_candidate` absent from `web/Cargo.toml`; 7 sites annotated + the new pure fn              | clean on all three configs |
+| 6         | no `-A unfulfilled_lint_expectations` in either arg vector or the xtask test                        | gone; test passes          |
+| 7         | four casts resolved by integer math / saturating conversion                                         | done                       |
+| 8         | 5 pre-existing `format_bytes` tests unchanged; boundary + 2^53 + tie tests added                    | 197 web tests pass         |
+| 9         | this table, plus the PR body                                                                        | —                          |
+| 10        | `cargo xtask validate` **with e2e**                                                                 | green                      |
+
+The e2e run is the load-bearing check here: this branch changed prop types
+across `PostDisplay` / `PostCard` / `TimelineRows` and split two forms into four
+components. Markup should be byte-identical and the unit tests agree, but only
+the browser run proves the rendered result and the reactive wiring survived.
 
 ## Self-review
 
